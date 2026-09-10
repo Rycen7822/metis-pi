@@ -97,16 +97,6 @@ npm run verify
 
 `test:host` 使用真正的 Pi `ToolExecutionComponent`，不以 mock 包替代依赖。当前交付环境未能下载该依赖；完整宿主检查及完整插件联合运行仍未验证。已经执行的检查、失败项目与环境记录见 [VALIDATION.md](VALIDATION.md)。
 
-## 创建 GitHub 仓库并推送
-
-本交付未执行远端建库或推送。在已有 GitHub CLI 登录的本地环境，进入刚解压的源码目录执行：
-
-```bash
-bash scripts/publish-github.sh
-```
-
-脚本验证账号为 `Rycen7822`，创建新的**私有** `pi-codex-appearance` 仓库并推送。它拒绝已有远端仓库及已有本地 Git 仓库，采用文件白名单，不收集 Pi 设置、密钥、会话或日志，不请求或嵌入访问令牌。GitHub Actions 文件只进行源码测试，不发布 npm 包。
-
 ## 来源与许可
 
 基于用户提供的 `pi-codex-style-master.zip` 修改，保留上游 MIT 许可。来源和归属见 [NOTICE](NOTICE)。本项目与 OpenAI、Pi 上游无官方关联。
