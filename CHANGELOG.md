@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.0
+
+Transcript presentation release: serial exploration grouping, the
+tool→assistant-text separator, and full-body output dimming. Display copy only
+— tool data, args, results, model context and session files are never touched.
+
+- Serial exploration grouping: consecutive builtin read/grep/find/ls calls
+  (serial or parallel, across any number of tool-call-only assistant messages)
+  share one `• Explored/Exploring` header. The first member owns the header and
+  `  └ ` gutter; later members draw a four-space row with no leading spacer.
+  Membership survives completion (the group stays open until a semantic
+  boundary), and the aggregated image notice (counted from real image blocks,
+  never filenames) prints once per group. Ownership checks (`sourceInfo`) keep
+  third-party renderers out; failures split the group and stay visible.
+- Tool→assistant-text separator: a light width-aware `─` rule (dim, ASCII
+  fallback for no-color) before the first non-empty assistant text that follows
+  tool activity. One line per boundary; streaming deltas, final replacements,
+  history replay and re-renders never duplicate it. Thinking is never moved or
+  hidden; conservative split on visible thinking keeps the structure honest.
+- Output body dimming: `renderShellResult` now dims the ENTIRE body (prefix +
+  text) through a small SGR state machine (`styleToolOutputLine`) instead of a
+  scoped prefix dim. Source colors (truecolor/256/16) survive; inner resets
+  (`0m`, empty `m`, `22m`) re-acquire our DIM; SGR parameters like
+  `38;2;0;22;39` are never misread as resets; no-color emits no SGR; DIM never
+  leaks past the row.
+- New modules: `transcript-state.ts` (pure display-order projection), 
+  `transcript-adapter.ts` (scoped, ownership-checked prototype decorations with
+  full restore), `output-style.ts` (SGR dim composition). `explore.ts` now
+  exposes separate header/member builders. New event listeners are read-only
+  (`message_start/update/end`): no context mutation, no new storage.
+
 ## 0.5.0
 
 Runtime correctness release: the two-slot combination contract, physical-row

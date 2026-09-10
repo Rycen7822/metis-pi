@@ -1,4 +1,15 @@
 • Explored
+  └ Read figures/all_results.png.png
+    Read figures/shampoo_results.png.png
+    Read figures/EMA_KL_results.png.png
+    Read figures/ema_results.png.png
+    Read figures/frob_results.png.png
+    Read figures/larger.png.png
+    Read figures/trace_results.png.png
+    Read figures/trace_comparison_results.png.png
+    8 images
+
+• Explored
   └ Read src/server.ts (lines 1–120)
 
 • Explored
@@ -15,19 +26,20 @@
 • Ran npm test
   └ > pi-codex-appearance@0.4.0 test
     Running unit tests...
-    … +6 lines (ctrl+o to expand)
-    tests 93
+    … +7 lines (ctrl+o to expand)
     pass 93
     fail 0
 
 • Ran python3 - <<'EOF'
   │ print(1)
-  │ … +1 command lines
+  │ EOF
   └ 1
 
 • Ran bash script.sh 2>&1 | tail -50
   └ script output line one
     script output line two
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 • Edited .work/EverTrace_development_plan.md
   2029

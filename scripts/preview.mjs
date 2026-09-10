@@ -7,6 +7,8 @@ import { stripVTControlCharacters } from "node:util";
 import { makeRenderers, safeText, languageForPath } from "../src/renderers.ts";
 import { renderDiffLines } from "../src/diff.ts";
 import { detectColorLevel } from "../src/palette.ts";
+import { TranscriptState } from "../src/transcript-state.ts";
+import { renderShellCall, renderShellResult } from "../src/shell.ts";
 const root = new URL("../", import.meta.url);
 const palette = JSON.parse(readFileSync(new URL("themes/codex-appearance.json", root), "utf8"));
 function hexColor(key) {
@@ -80,6 +82,8 @@ const makeTextComponent = (text) => ({
   render: (width) => text.split("\n").flatMap((line) => wrapCells(line, width)),
   setText: (next) => { text = next; },
 });
+const transcript = new TranscriptState();
+const resultImages = new Map();
 const renderers = makeRenderers(
   makeTextComponent,
   () => "ctrl+o to expand",
@@ -93,18 +97,51 @@ const renderers = makeRenderers(
       expanded: input.options.expanded === true, expandHint: input.expandHint ?? "ctrl+o to expand",
     }),
   }),
-  null,
-  { colorLevel },
+  // Width-aware shell factories — the SAME SGR-DIM output path as the live
+  // host (index.ts → CodexShellCall/ResultComponent → renderShellResult).
+  {
+    makeShellCall: (input) => ({
+      render: (width) => renderShellCall({
+        row: {
+          title: input.title, isError: false, isPartial: input.options.isPartial === true,
+          command: String(input.args.command ?? ""),
+          language: input.name === "powershell" ? "powershell" : "bash",
+          output: "", expanded: input.options.expanded === true, expandHint: "",
+        },
+        width, layout, colorLevel: input.colorLevel, bullet: input.bullet,
+        titlePainter: (t) => t,
+      }),
+    }),
+    makeShellResult: (input) => ({
+      render: (width) => {
+        const result = input.result ?? null;
+        const content = Array.isArray(result?.content) ? result.content : [];
+        const output = content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+        return renderShellResult({
+          row: {
+            title: "", isError: input.context.isError === true, isPartial: input.options.isPartial === true,
+            command: "", language: input.name === "powershell" ? "powershell" : "bash",
+            output, expanded: input.options.expanded === true, expandHint: input.expandHint,
+          },
+          width, layout, colorLevel: input.colorLevel, bullet: input.bullet,
+          titlePainter: (t) => t,
+        });
+      },
+    }),
+  },
+  { colorLevel, transcript, resultImages },
   layout,
 );
 const WIDTH = 112;
+const SEPARATOR_LINE = `─`.repeat(WIDTH); // light rule (dim in ANSI render)
 
 /** ToolLifecycleRenderer pair, exactly as the Pi adapter invokes them. */
 function lifecycle(name, args, value, context = {}) {
-  const callCtx = { args, state: {}, isPartial: context.isPartial ?? false, ...context };
+  const plan = transcript.explorationPlan?.(context.toolCallId ?? "");
+  const callCtx = { args, state: {}, isPartial: context.isPartial ?? false, explorationPlan: plan, ...context };
   const call = renderers[name].renderCall(args, theme, callCtx);
   const callLines = call ? call.render(WIDTH) : [];
-  const resultCtx = { args, state: {}, isPartial: false, ...context };
+  const resultCtx = { args, state: {}, isPartial: false, explorationPlan: plan, ...context };
   const res = renderers[name].renderResult(value, { expanded: context.expanded === true }, theme, resultCtx);
   const resultLines = res ? res.render(WIDTH) : [];
   return [...callLines, ...resultLines].filter((line) => line.length > 0).join("\n");
@@ -117,7 +154,35 @@ const testOutput = [
   "fixture 1", "fixture 2", "fixture 3", "fixture 4", "fixture 5", "fixture 6",
   "tests 93", "pass 93", "fail 0",
 ].join("\n");
+// --- 0.6.0: serial exploration grouping - 8 image reads across separate
+// tool-call-only assistant messages, replayed through TranscriptState.
+const GROUP_IMAGES = [
+"all_results.png.png", "shampoo_results.png.png", "EMA_KL_results.png.png",
+"ema_results.png.png", "frob_results.png.png", "larger.png.png",
+"trace_results.png.png", "trace_comparison_results.png.png"
+];
+for (let gi = 0; gi < GROUP_IMAGES.length; gi++) {
+transcript.apply({ type: "message_start", message: { role: "assistant", content: [{ type: "toolCall", id: `img${gi}` }] } });
+transcript.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: `img${gi}` }] } });
+transcript.apply({ type: "tool_execution_start", toolCallId: `img${gi}`, toolName: "read" });
+transcript.apply({ type: "tool_execution_end", toolCallId: `img${gi}`, toolName: "read", isError: false, imageCount: 1 });
+resultImages.set(`img${gi}`, 1);
+}
+
+const groupRows = [];
+for (let gi = 0; gi < GROUP_IMAGES.length; gi++) {
+  groupRows.push(lifecycle("read", { path: `figures/${GROUP_IMAGES[gi]}` }, { content: [{ type: "image", data: "omitted", mimeType: "image/png" }] }, { toolCallId: `img${gi}` }));
+}
+// Boundary text after the group (state replay drives takeTextPlan).
+transcript.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "compare" }] } });
+const sep1 = transcript.takeTextPlan().separatorBefore ? SEPARATOR_LINE : "";
+// bash segment
+transcript.apply({ type: "tool_execution_start", toolCallId: "pvbash", toolName: "bash" });
+transcript.apply({ type: "tool_execution_end", toolCallId: "pvbash", toolName: "bash", isError: false });
+transcript.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "next" }] } });
+const sep2 = transcript.takeTextPlan().separatorBefore ? SEPARATOR_LINE : "";
 const examples = [
+  groupRows.join("\n"),
   // Exploration rows (Codex: cyan titles, dim " in ").
   lifecycle("read", { path: "src/server.ts", offset: 1, limit: 120 }, result("This source text is folded, not removed from model context.")),
   lifecycle("grep", { pattern: "createServer|listen", path: "src" }, result("src/server.ts:12:createServer(...)")),
@@ -163,7 +228,10 @@ const examples = [
   lifecycle("bash", { command: "npm run check" }, result("Checking TypeScript..."), { isPartial: true }),
   lifecycle("bash", { command: "cat /protected/config.json" }, result("cat: /protected/config.json: Permission denied\nCommand exited with code 1", { isError: true }), { isError: true }),
 ];
-const transcript = examples.join("\n\n") + "\n";
+const transcriptOut = [examples[0], ...examples.slice(1).flatMap((e, i) => {
+  const isGroupTail = i === GROUP_IMAGES.length - 2; // last grouped read
+  return isGroupTail ? [e, sep1] : [e];
+})].join("\n\n") + "\n";
 const escaped = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function ansiHtml(text) {
   let html = "", last = 0;
@@ -195,9 +263,9 @@ function ansiHtml(text) {
 const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Codex appearance 0.5 — renderer snapshot</title>
 <style>body{margin:0;background:#0c0c0c;color:#e5e7eb;font:14px/1.55 ui-monospace,"DejaVu Sans Mono",Consolas,monospace}.label{padding:18px 28px;border-bottom:1px solid #27272a;color:#a1a1aa;font:12px/1.5 system-ui,sans-serif;letter-spacing:.03em}pre{white-space:pre;margin:0;padding:26px 28px 32px;tab-size:3;overflow:hidden}.note{padding:0 28px 24px;color:#888;font:12px/1.5 system-ui,sans-serif}</style>
 <div class="label">pi-codex-appearance 0.5.0 · GENERATED FORMATTER/LAYOUT SNAPSHOT · NOT A LIVE PI SESSION</div>
-<pre>${ansiHtml(transcript)}</pre><div class="note">Every row above goes through the production two-slot combination (renderCall = header, renderResult = body) — the same entry points the Pi adapter invokes. Shell rows use the width-aware Codex exec-cell layout (Mocha bash palette, "  │ " continuation, "  └ " output with middle truncation); write rows exercise Added/unchanged/unavailable/failed; the edit block uses the single diff renderer.</div></html>`;
+<pre>${ansiHtml(transcriptOut)}</pre><div class="note">Every row above goes through the production two-slot combination (renderCall = header, renderResult = body) — the same entry points the Pi adapter invokes. Shell rows use the width-aware Codex exec-cell layout (Mocha bash palette, "  │ " continuation, "  └ " output with middle truncation); write rows exercise Added/unchanged/unavailable/failed; the edit block uses the single diff renderer.</div></html>`;
 mkdirSync(new URL("docs/", root), { recursive: true });
-writeFileSync(new URL("docs/transcript.ansi", root), transcript);
-writeFileSync(new URL("docs/transcript.txt", root), stripVTControlCharacters(transcript));
+writeFileSync(new URL("docs/transcript.ansi", root), transcriptOut);
+writeFileSync(new URL("docs/transcript.txt", root), stripVTControlCharacters(transcriptOut));
 writeFileSync(new URL("docs/preview.html", root), html);
 console.log("Wrote docs/transcript.ansi, docs/transcript.txt and docs/preview.html through the production two-slot renderers.");

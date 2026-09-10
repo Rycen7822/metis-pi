@@ -21,6 +21,8 @@ export interface ViewContext {
   readonly lastComponent?: unknown;
   /** Real color capability, injected by the host (pi-tui getCapabilities). */
   readonly colorLevel?: import("./palette.ts").ColorLevel;
+  /** Transcript presentation plan for exploration grouping (host-injected). */
+  readonly explorationPlan?: unknown;
 }
 export interface ViewOptions { readonly expanded?: boolean; readonly isPartial?: boolean }
 export interface Component { render(width: number): string[] }

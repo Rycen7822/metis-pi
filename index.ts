@@ -128,9 +128,24 @@ class CodexShellResultComponent implements Tui.Component {
   }
 }
 
+/** Separator before assistant text that follows tool activity: a light
+ * horizontal rule sized to the live layout width (never a fixed column count). */
+class CodexSeparatorComponent implements Tui.Component {
+  render(width: number): string[] {
+    const usable = Math.max(1, Math.floor(width));
+    const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+    const line = "─".repeat(usable);
+    return [level.kind === "none" ? "-".repeat(usable) : `\x1b[2m${line}\x1b[22m`];
+  }
+  invalidate(): void {
+    // Stateless: recomputed per render.
+  }
+}
+
 /** Default entry: compact Codex-style transcript, without changing tool data. */
 export default function codexAppearance(pi: AppearanceAPI): void {
   const prototype = Pi.ToolExecutionComponent?.prototype;
+  const assistantComponent = Pi.AssistantMessageComponent as unknown as { prototype: object } | undefined;
   if (!prototype || typeof Tui.Text !== "function" || typeof Pi.keyHint !== "function"
       || typeof Tui.wrapTextWithAnsi !== "function" || typeof Tui.visibleWidth !== "function") {
     pi.on("session_start", (_event, ctx) => {
@@ -167,5 +182,8 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     highlight,
     colorLevel,
     layoutOps: layoutOps(),
+    assistantPrototype: assistantComponent?.prototype,
+    makeSeparator: () => new CodexSeparatorComponent(),
+    makeSpacer: () => new Tui.Spacer(1),
   });
 }

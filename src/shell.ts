@@ -8,6 +8,7 @@
 // Display-only: never touches tool data.
 
 import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
+import { styleToolOutputLine } from "./output-style.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 
 export const COMMAND_CONTINUATION_PREFIX = "  │ ";
@@ -325,18 +326,21 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
   const raw = row.output ? sanitizeShellLine(row.output).split("\n") : [];
   while (raw.length && raw.at(-1) === "") raw.pop();
   if (!raw.length) {
-    return [`${DIM_ON}${OUTPUT_INITIAL_PREFIX}(no output)${INTENSITY_RESET}`];
+    return [styleToolOutputLine(`${OUTPUT_INITIAL_PREFIX}(no output)`, { dim: true, colorLevel: input.colorLevel })];
   }
 
   // Wrap first (Codex), attach prefixes, then budget — a few very long lines
-  // cannot flood the viewport and "  └ " marks the block head.
+  // cannot flood the viewport and "  └ " marks the block head. The whole body
+  // (prefix + text) is dimmed through the SGR state machine: source colors
+  // survive, internal resets re-acquire DIM, and our DIM never leaks out.
+  const dimPolicy = { dim: true, colorLevel: input.colorLevel };
   const wrapped: VisualRow[] = [];
   raw.forEach((logical, lineIndex) => {
     const segments = wrapStyled(logical, outputWidth, layout);
     segments.forEach((segment, segmentIndex) => {
       const prefix = lineIndex === 0 && segmentIndex === 0 ? OUTPUT_INITIAL_PREFIX : OUTPUT_SUBSEQUENT_PREFIX;
       wrapped.push({
-        text: `${DIM_ON}${prefix}${INTENSITY_RESET}${segment}`,
+        text: styleToolOutputLine(`${prefix}${segment}`, dimPolicy),
         sourceLineIndex: lineIndex,
         continuation: lineIndex !== 0 || segmentIndex !== 0,
       });

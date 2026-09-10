@@ -7,7 +7,8 @@
 // One shared implementation per shape; the legacy string formatters are thin
 // wrappers over the same builders for non-component hosts and tests.
 
-import { renderExplorationLines, type ExplorationRow } from "./explore.ts";
+import { renderExplorationHeader, renderExplorationMember, renderExplorationImages, renderExplorationLines, explorationVerb, type ExplorationRow } from "./explore.ts";
+import type { ExplorationPlan } from "./transcript-state.ts";
 import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
 import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffRow, type DiffStats } from "./diff.ts";
 import type { WriteDiff } from "./write-tracker.ts";
@@ -82,12 +83,13 @@ export function languageForPath(filePath: string): string | undefined {
 // Shared title builders (the ONE title implementation for each shape).
 // ---------------------------------------------------------------------------
 
-/** Exploration rows: "• Explored" + cyan verb + dim " in " (call region). */
+/** Exploration rows: "• Explored" + cyan verb + dim " in " (call region).
+ * Grouped members query the transcript plan: the FIRST member owns the group
+ * header; later members render only their own row with a flat gutter. */
 export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palette, colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" }): string {
   const args = asRecord(ctx.args);
   const done = ctx.isPartial === false;
-  const verbs = { read: "Read", grep: "Search", find: "Find", ls: "List" } as const;
-  const verb = verbs[name as keyof typeof verbs] ?? "Read";
+  const verb = explorationVerb(name);
   const target = typeof args.pattern === "string" ? JSON.stringify(args.pattern) : path(args, ctx);
   const inPath = typeof args.pattern === "string" ? path(args, ctx) : undefined;
   let suffix = "";
@@ -96,11 +98,26 @@ export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palett
     suffix = ` (lines ${args.offset}${end})`;
   }
   const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
-  return renderExplorationLines(
-    { running: !done, isError: ctx.isError === true, rows },
-    ctx.colorLevel ?? colorLevel,
-    theme,
-  ).join("\n");
+  const level = ctx.colorLevel ?? colorLevel;
+  const plan: ExplorationPlan | undefined = ctx.explorationPlan as ExplorationPlan | undefined;
+  if (!plan) {
+    // Ungrouped (no transcript state / foreign host): full block with header.
+    return renderExplorationLines(
+      { running: !done, isError: ctx.isError === true, rows },
+      level,
+      theme,
+    ).join("\n");
+  }
+  // Grouped: header only on the first member; later members draw their row.
+  const header = plan.isHeaderOwner
+    ? `${renderExplorationHeader({ running: plan.running, isError: ctx.isError === true }, level, theme)}\n`
+    : "";
+  const memberLine = renderExplorationMember(rows[0]!, { first: plan.isFirstMember }, level);
+  // Aggregated image notice lives on the LAST member (once per group).
+  const images = plan.isLastMember && !plan.running
+    ? renderExplorationImages(plan.groupImages, level, ctx.showImages)
+    : undefined;
+  return [header + memberLine, images].filter(Boolean).join("\n");
 }
 
 /** Bullet + title for shell rows (call region). Errors keep the Ran label
@@ -207,7 +224,10 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   if (!lines.length && !error && options.isPartial) sections.push(gutter(["Running…"], theme, "dim"));
   if (SHELL.has(name) && !lines.length && !error && !options.isPartial) sections.push(gutter(["(no output)"], theme, "dim"));
   const images = blocks.filter((block) => block.type === "image").length;
-  if (images) sections.push(gutter([`${images} image${images === 1 ? "" : "s"}${ctx.showImages === false ? " (TUI preview disabled)" : ""}`], theme, "dim"));
+  // Grouped exploration members keep their raw result untouched but do not
+  // repeat the image notice — the group aggregates it once (call region).
+  const groupedMember = EXPLORATION.has(name) && ctx.explorationPlan !== undefined;
+  if (images && !groupedMember) sections.push(gutter([`${images} image${images === 1 ? "" : "s"}${ctx.showImages === false ? " (TUI preview disabled)" : ""}`], theme, "dim"));
   const other = blocks.filter((block) => block.type !== "text" && block.type !== "image");
   if (other.length) sections.push(gutter([`${other.length} additional non-text content block(s)`], theme, "dim"));
   return sections.filter(Boolean).join("\n");
@@ -355,7 +375,9 @@ export function makeRenderers(
         return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
       }
       if (EXPLORATION.has(name)) {
-        return component(explorationTitle(name, merged, theme, colorFor(merged)), ctx);
+        const plan = merged.explorationPlan
+          ?? session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
+        return component(explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)), ctx);
       }
       // edit: bullet + bold verb + path (+ stats once known)
       const done = merged.isPartial === false;

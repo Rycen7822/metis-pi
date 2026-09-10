@@ -164,6 +164,9 @@ test("lifecycle uses no tool registration, context middleware, editor, footer or
     "session_start",
     "tool_execution_start", // observe-only write tracking (0.4.0)
     "tool_execution_end",
+    "message_start", // read-only display-order observation (0.6.0 grouping)
+    "message_update",
+    "message_end",
     "session_shutdown",
   ]);
   const ctx = { hasUI: true, ui: { notify() { throw new Error("unexpected warning"); } } };
@@ -244,7 +247,7 @@ test("each completed read is a two-line Explored entry, and expansion recovers a
   const output = row.render(80).filter(Boolean);
   // 0.4.0: Codex exploration colors — dim bullet, cyan "Read" verb.
   assert.deepEqual(output, [
-    "\x1B[38;2;108;112;134m• Explored",
+    "\x1B[38;2;108;112;134m•\x1B[39m Explored",
     "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;148;226;213mRead\x1B[39m README.md",
   ]);
   row.setExpanded(true);
