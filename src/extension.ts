@@ -1,5 +1,5 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
-import { makeRenderers, type TextFactory, type Highlight, type DiffFactory } from "./renderers.ts";
+import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
 
@@ -17,7 +17,11 @@ export interface Bindings {
   expandHint(): string;
   highlight?: Highlight;
   makeDiff?: DiffFactory;
-  makeShell?: import("./renderers.ts").ShellFactory;
+  makeShell?: ShellFactories;
+  /** Pipeline color capability resolved from the live terminal (host-provided). */
+  colorLevel?: ColorLevel;
+  /** Real terminal layout ops (wrap/width) for fallback text paths. */
+  layoutOps?: import("./tool-names.ts").DiffLayoutOps;
 }
 
 /** Session-scoped presentation state (ephemeral, display-only). */
@@ -28,12 +32,15 @@ export interface AppearanceSession {
   readonly writeChanges: Map<string, WriteDiff>;
 }
 
+/** Bounded store for completed write diffs (entry + total budget). */
+const MAX_WRITE_CHANGES = 64;
+
 export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   let enabled = false;
   let handle: AdapterHandle | undefined;
   const session: AppearanceSession = {
     tracker: new WriteDiffTracker(),
-    colorLevel: detectColorLevel(),
+    colorLevel: bindings.colorLevel ?? detectColorLevel(),
     writeChanges: new Map<string, WriteDiff>(),
   };
 
@@ -42,23 +49,37 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
-      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, session),
+      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, session, bindings.layoutOps),
     });
     if (!handle.installed) ctx.ui.notify(`pi-codex-appearance: ${handle.reason}. Compact transcript was not installed.`, "warning");
   });
+
+  /** Look up a tool entry's sourceInfo (exact builtin ownership checks). */
+  function sourceInfoFor(toolName: string): unknown {
+    try {
+      const entry = pi.getAllTools().find((tool) =>
+        tool !== null && typeof tool === "object" && (tool as Record<string, unknown>).name === toolName);
+      return entry ? (entry as Record<string, unknown>).sourceInfo : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   // Write tracking observes lifecycle events only (never tool_call/tool_result
   // content). Reads the local file for an honest pre/post image; all state is
   // ephemeral presentation data dropped at session shutdown.
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled) return;
-    session.tracker.trackStart(event.toolCallId, event.toolName, event.args, (path) => resolveWritePath(path, ctx.cwd));
+    const info = sourceInfoFor(event.toolName);
+    session.tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveWritePath(path, ctx.cwd));
   });
   pi.on("tool_execution_end", (event) => {
     if (!enabled) return;
-    const change = session.tracker.trackEnd(event.toolCallId, event.toolName, event.isError);
+    const info = sourceInfoFor(event.toolName);
+    const change = session.tracker.trackEnd(event.toolCallId, event.toolName, info, event.isError);
     if (change) {
       session.writeChanges.set(event.toolCallId, change);
-      if (session.writeChanges.size > WriteDiffTracker.MAX_PENDING) {
+      if (session.writeChanges.size > MAX_WRITE_CHANGES) {
         const oldest = session.writeChanges.keys().next().value;
         if (oldest !== undefined) session.writeChanges.delete(oldest);
       }

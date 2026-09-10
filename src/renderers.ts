@@ -1,20 +1,23 @@
 // Renderer registration layer. Every transformation here affects a DISPLAY
 // string/component only; tool data, results and context are never modified.
-// Rendering internals live in shell.ts / diff.ts / explore.ts / file-change.ts.
+//
+// Combination contract (Pi native two slots):
+//   call region   -> title + command (shell) / title (others). NEVER output.
+//   result region -> output block / diff body / written content. NEVER a head.
+// One shared implementation per shape; the legacy string formatters are thin
+// wrappers over the same builders for non-component hosts and tests.
 
 import { renderExplorationLines, type ExplorationRow } from "./explore.ts";
 import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
-import { renderShellRow, type LayoutOps } from "./shell.ts";
-import { parseDisplayDiff, DIM_ON, INTENSITY_RESET, BG_RESET, CODEX_DIFF_DARK_ADD_BG, CODEX_DIFF_DARK_DEL_BG, DIFF_LEFT_INSET, type DiffStats } from "./diff.ts";
-import { fileChangeStats, changeVerb } from "./file-change.ts";
-import { foregroundAnsi, detectColorLevel } from "./palette.ts";
+import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffRow, type DiffStats } from "./diff.ts";
+import type { WriteDiff } from "./write-tracker.ts";
 
 export { asRecord, safeText, TOOL_NAMES } from "./tool-names.ts";
 export type {
   ToolName, RecordValue, Palette, ViewContext, ViewOptions, Component, TextComponent,
   TextFactory, Highlight, Renderers, DiffComponentInput, DiffFactory, DiffLayoutOps,
 } from "./tool-names.ts";
-export { parseDisplayDiff } from "./diff.ts";
+export { parseDisplayDiff, renderDiffLines } from "./diff.ts";
 export type { DiffRow, DiffRowKind, DiffStats } from "./diff.ts";
 export type { FileChange, FileChangeKind } from "./file-change.ts";
 
@@ -62,18 +65,106 @@ function highlight(text: string, language: string, theme: Palette, paint?: Highl
   return theme.fg("toolTitle", text);
 }
 
+export function languageForPath(filePath: string): string | undefined {
+  const match = /\.([A-Za-z0-9]+)$/.exec(filePath);
+  if (!match) return undefined;
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    py: "python", rs: "rust", go: "go", md: "markdown", json: "json",
+    sh: "bash", bash: "bash", ps1: "powershell", yaml: "yaml", yml: "yaml",
+    toml: "toml", css: "css", html: "html", rb: "ruby", java: "java", c: "c",
+    h: "c", cpp: "cpp", hpp: "cpp", sql: "sql",
+  };
+  return map[match[1]!.toLowerCase()];
+}
+
+// ---------------------------------------------------------------------------
+// Shared title builders (the ONE title implementation for each shape).
+// ---------------------------------------------------------------------------
+
+/** Exploration rows: "• Explored" + cyan verb + dim " in " (call region). */
+export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palette, colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" }): string {
+  const args = asRecord(ctx.args);
+  const done = ctx.isPartial === false;
+  const verbs = { read: "Read", grep: "Search", find: "Find", ls: "List" } as const;
+  const verb = verbs[name as keyof typeof verbs] ?? "Read";
+  const target = typeof args.pattern === "string" ? JSON.stringify(args.pattern) : path(args, ctx);
+  const inPath = typeof args.pattern === "string" ? path(args, ctx) : undefined;
+  let suffix = "";
+  if (name === "read" && typeof args.offset === "number" && Number.isFinite(args.offset)) {
+    const end = typeof args.limit === "number" && Number.isFinite(args.limit) ? `–${args.offset + args.limit - 1}` : " onward";
+    suffix = ` (lines ${args.offset}${end})`;
+  }
+  const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
+  return renderExplorationLines(
+    { running: !done, isError: ctx.isError === true, rows },
+    ctx.colorLevel ?? colorLevel,
+    theme,
+  ).join("\n");
+}
+
+/** Bullet + title for shell rows (call region). Errors keep the Ran label
+ * with a red bullet — the failure surfaces in color, not in the verb. */
+export function shellTitle(ctx: ViewContext, theme: Palette): { bullet: string; title: string } {
+  const done = ctx.isPartial === false;
+  const bullet = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
+  const title = done ? "Ran" : "Running";
+  return { bullet, title };
+}
+
+/**
+ * Write titles across the five states (Codex file-change verbs):
+ *   running "Writing", add "Added (+N -0)", update "Edited (+A -D)",
+ *   unchanged "Wrote (unchanged)", unavailable "Wrote (reason)", failed.
+ */
+export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff | undefined): string {
+  const args = asRecord(ctx.args);
+  const done = ctx.isPartial === false;
+  const target = theme.fg("toolTitle", shortened(safeText(path(args, ctx))));
+  if (!done) {
+    return `${theme.fg("dim", "•")} ${theme.bold("Writing")} ${target}`;
+  }
+  if (ctx.isError === true) {
+    return `${theme.fg("error", "•")} ${theme.bold("Failed")} ${target}`;
+  }
+  const bullet = theme.fg("success", "•");
+  if (!change || change.kind === "unavailable") {
+    const reason = change?.reason ? ` ${theme.fg("muted", `(${change.reason}; diff unavailable)`)}` : "";
+    return `${bullet} ${theme.bold("Wrote")} ${target}${reason}`;
+  }
+  if (change.kind === "add") {
+    return `${bullet} ${theme.bold("Added")} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", "-0")}`;
+  }
+  if (change.kind === "update") {
+    return `${bullet} ${theme.bold("Edited")} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", `-${change.removed}`)}`;
+  }
+  if (change.kind === "unchanged") {
+    return `${bullet} ${theme.bold("Wrote")} ${target} ${theme.fg("muted", "(unchanged)")}`;
+  }
+  return `${bullet} ${theme.bold("Failed")} ${target}`;
+}
+
 export function diffStats(value: unknown): DiffStats | undefined {
   const diff = asRecord(asRecord(value).details).diff;
   if (typeof diff !== "string") return undefined;
-  const rows = parseDisplayDiff(diff);
-  return {
-    added: rows.filter((row) => row.kind === "add").length,
-    removed: rows.filter((row) => row.kind === "remove").length,
-  };
+  return diffStatsFromRows(parseDisplayDiff(diff));
 }
 
-/** Plain fallback used by tests/non-rich hosts. The live Pi adapter supplies a
- * width-aware component that adds Codex's full-row diff backgrounds. */
+/** Shell call text for non-component hosts (title + command, never output). */
+export function shellCallText(bullet: string, title: string, args: Record<string, unknown>, ctx: ViewContext, theme: Palette, paint?: Highlight): string {
+  const value = string(args.command) || "…";
+  const all = cleanLines(value);
+  const expanded = ctx.expanded === true;
+  const visible = expanded ? all : all.slice(0, COMMAND_LINES).map(shortened);
+  if (!expanded && all.length > COMMAND_LINES) visible.push(`… +${all.length - COMMAND_LINES} command lines`);
+  const [head = "…", ...rest] = visible;
+  return `${bullet} ${theme.bold(title)} ${highlight(head, "bash", theme, paint)}`
+    + rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("");
+}
+
+// Legacy string formatters — thin wrappers kept for non-component hosts and
+// existing tests. Production goes through makeRenderers' components.
+
 export function formatDisplayDiff(diffText: string, theme: Palette): string {
   const rows = parseDisplayDiff(diffText);
   const width = Math.max(1, ...rows.map((row) => row.lineNumber === undefined ? 0 : String(row.lineNumber).length));
@@ -88,106 +179,6 @@ export function formatDisplayDiff(diffText: string, theme: Palette): string {
   }).join("\n");
 }
 
-export function renderCodexDiffLines(
-  diffText: string,
-  width: number,
-  theme: Palette,
-  layout: DiffLayoutOps,
-): string[] {
-  const usableWidth = Math.max(1, Math.floor(width));
-  const rows = parseDisplayDiff(diffText);
-  const numberWidth = Math.max(
-    1,
-    ...rows.map((row) => row.lineNumber === undefined ? 0 : String(row.lineNumber).length),
-  );
-  const prefixWidth = DIFF_LEFT_INSET + numberWidth + 2; // number + space + sign
-  const contentWidth = Math.max(1, usableWidth - prefixWidth);
-  const out: string[] = [];
-
-  const fillBackground = (line: string, rgb: readonly [number, number, number]): string => {
-    const visible = layout.visibleWidth(line);
-    const padded = `${line}${" ".repeat(Math.max(0, usableWidth - visible))}`;
-    return `\x1b[48;2;${rgb[0]};${rgb[1]};${rgb[2]}m${padded}${BG_RESET}`;
-  };
-
-  for (const row of rows) {
-    if (row.kind === "separator") {
-      out.push(theme.fg("dim", `${" ".repeat(prefixWidth)}…`));
-      continue;
-    }
-    if (row.kind === "metadata") {
-      const chunks = layout.wrap(row.content, Math.max(1, usableWidth - DIFF_LEFT_INSET));
-      for (const chunk of chunks.length ? chunks : [""]) {
-        out.push(theme.fg("dim", `${" ".repeat(DIFF_LEFT_INSET)}${chunk}`));
-      }
-      continue;
-    }
-
-    const number = row.lineNumber === undefined ? " ".repeat(numberWidth) : String(row.lineNumber).padStart(numberWidth);
-    const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
-    const signColor = row.kind === "add" ? "toolDiffAdded" : row.kind === "remove" ? "toolDiffRemoved" : "dim";
-    const chunks = layout.wrap(row.content, contentWidth);
-    const physical = chunks.length ? chunks : [""];
-
-    for (let i = 0; i < physical.length; i++) {
-      const prefix = i === 0
-        ? `${" ".repeat(DIFF_LEFT_INSET)}${theme.fg("dim", number)} ${theme.fg(signColor, sign)}`
-        : " ".repeat(prefixWidth);
-      let content = "";
-      if (physical[i]) {
-        if (row.kind === "remove") content = `${DIM_ON}${theme.fg("toolTitle", physical[i])}${INTENSITY_RESET}`;
-        else if (row.kind === "add") content = theme.fg("toolTitle", physical[i]);
-        else content = theme.fg("toolDiffContext", physical[i]);
-      }
-      const line = `${prefix}${content}`;
-      if (row.kind === "add") out.push(fillBackground(line, CODEX_DIFF_DARK_ADD_BG));
-      else if (row.kind === "remove") out.push(fillBackground(line, CODEX_DIFF_DARK_DEL_BG));
-      else out.push(line.trimEnd());
-    }
-  }
-  return out;
-}
-
-export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats, paint?: Highlight): string {
-  const args = asRecord(input);
-  const done = ctx.isPartial === false;
-  const marker = theme.fg(ctx.isError ? "error" : "dim", "•");
-  if (EXPLORATION.has(name)) {
-    const title = ctx.isError ? "Exploration failed" : done ? "Explored" : "Exploring";
-    const verbs = { read: "Read", grep: "Search", find: "Find", ls: "List" } as const;
-    const verb = verbs[name as keyof typeof verbs] ?? "Read";
-    const target = typeof args.pattern === "string" ? JSON.stringify(args.pattern) : path(args, ctx);
-    const inPath = typeof args.pattern === "string" ? path(args, ctx) : undefined;
-    let suffix = "";
-    if (name === "read" && typeof args.offset === "number" && Number.isFinite(args.offset)) {
-      const end = typeof args.limit === "number" && Number.isFinite(args.limit) ? `–${args.offset + args.limit - 1}` : " onward";
-      suffix = ` (lines ${args.offset}${end})`;
-    }
-    // Codex exploring_display_lines: cyan verb, dim " in " between query and path.
-    const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
-    return renderExplorationLines(
-      { running: !done, isError: ctx.isError === true, rows },
-      { kind: "truecolor" },
-      theme,
-    ).join("\n");
-  }
-  if (SHELL.has(name)) {
-    const value = string(args.command) || "…";
-    const all = cleanLines(value);
-    const visible = ctx.expanded ? all : all.slice(0, COMMAND_LINES).map(shortened);
-    if (!ctx.expanded && all.length > COMMAND_LINES) visible.push(`… +${all.length - COMMAND_LINES} command lines`);
-    const [head = "…", ...rest] = visible;
-    const language = name === "powershell" ? "powershell" : "bash";
-    const label = done ? "Ran" : "Running";
-    const shellMarker = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
-    return `${shellMarker} ${theme.bold(label)} ${highlight(head, language, theme, paint)}`
-      + rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, language, theme, paint)}`).join("");
-  }
-  const label = ctx.isError ? "Failed" : name === "edit" ? (done ? "Edited" : "Editing") : (done ? "Wrote" : "Writing");
-  let suffix = "";
-  if (name === "edit" && stats && !ctx.isError) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
-  return `${marker} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
-}
 export function formatResult(name: ToolName, value: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext, hint = "expand tool output"): string {
   const result = asRecord(value);
   const blocks = Array.isArray(result.content) ? result.content.map(asRecord) : [];
@@ -199,20 +190,14 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   const sections: string[] = [];
   const isDiff = name === "edit" && !error && typeof details.diff === "string";
   if (isDiff) {
-    // EditToolDetails.diff already contains a compact context window. Codex
-    // displays that window in full instead of applying a second arbitrary
-    // line-count truncation.
     sections.push(formatDisplayDiff(details.diff as string, theme));
   }
   if (name === "write" && !error && !options.isPartial && typeof asRecord(ctx.args).content === "string") {
-    // A write can overwrite an existing file: show written content, not a fabricated +N/-0 diff.
     const written = cleanLines(asRecord(ctx.args).content as string);
     sections.push(gutter([`Written content (${written.length} lines)`], theme, "muted"));
     const code = written.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
     sections.push(gutter(preview(code, 12, expanded, hint), theme));
   }
-  // Codex-like exploration rows are compact when completed. The native click/
-  // expand action still reveals ALL original text. Errors are never hidden.
   const foldedExploration = EXPLORATION.has(name) && !expanded && !error && !options.isPartial;
   if (lines.length && !foldedExploration && (!isDiff || expanded || !/^(Successfully replaced text|Successfully wrote)/.test(text.trim()))) {
     sections.push(gutter(preview(lines, PREVIEW_LINES, expanded, hint,
@@ -227,19 +212,50 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   if (other.length) sections.push(gutter([`${other.length} additional non-text content block(s)`], theme, "dim"));
   return sections.filter(Boolean).join("\n");
 }
-export interface ShellComponentInput {
-  readonly name: ToolName;
-  readonly args: Record<string, unknown>;
-  readonly result: unknown;
-  readonly options: ViewOptions;
-  readonly theme: Palette;
-  readonly context: ViewContext;
-  readonly expandHint: string;
-  readonly colorLevel: import("./palette.ts").ColorLevel;
-}
-export type ShellFactory = (input: ShellComponentInput) => Component;
 
-export function makeRenderers(makeText: TextFactory, expandHint: () => string, paint?: Highlight, makeDiff?: DiffFactory, makeShell?: ShellFactory, session?: import("./extension.ts").AppearanceSession): Record<ToolName, Renderers> {
+export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats, paint?: Highlight): string {
+  const args = asRecord(input);
+  const done = ctx.isPartial === false;
+  const marker = theme.fg(ctx.isError ? "error" : "dim", "•");
+  if (EXPLORATION.has(name)) {
+    return explorationTitle(name, { ...ctx, args: input }, theme);
+  }
+  if (SHELL.has(name)) {
+    const { bullet, title } = shellTitle(ctx, theme);
+    return shellCallText(bullet, title, args, ctx, theme, paint);
+  }
+  const label = ctx.isError ? "Failed" : name === "edit" ? (done ? "Edited" : "Editing") : (done ? "Wrote" : "Writing");
+  let suffix = "";
+  if (name === "edit" && stats && ctx.isError !== true) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
+  return `${marker} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
+}
+
+// ---------------------------------------------------------------------------
+// Component assembly (production path).
+// ---------------------------------------------------------------------------
+
+export interface ShellFactories {
+  makeShellCall?: (input: {
+    name: ToolName; bullet: string; title: string; args: Record<string, unknown>;
+    options: ViewOptions; theme: Palette; context: ViewContext; expandHint: string;
+    colorLevel: import("./palette.ts").ColorLevel;
+  }) => Component;
+  makeShellResult?: (input: {
+    name: ToolName; args: Record<string, unknown>; result: unknown;
+    options: ViewOptions; theme: Palette; context: ViewContext; expandHint: string;
+    colorLevel: import("./palette.ts").ColorLevel;
+  }) => Component;
+}
+
+export function makeRenderers(
+  makeText: TextFactory,
+  expandHint: () => string,
+  paint?: Highlight,
+  makeDiff?: DiffFactory,
+  makeShell?: ShellFactories,
+  session?: import("./extension.ts").AppearanceSession,
+  layoutOps?: DiffLayoutOps,
+): Record<ToolName, Renderers> {
   const ownComponents = new WeakSet<object>();
   const views = new WeakMap<object, { call?: TextComponent; stats?: DiffStats }>();
   function view(ctx: ViewContext) {
@@ -255,13 +271,102 @@ export function makeRenderers(makeText: TextFactory, expandHint: () => string, p
       return previous as TextComponent;
     }
     const created = makeText(text);
-    ownComponents.add(created);
+    if (created && typeof created === "object") ownComponents.add(created);
     return created;
   }
+  function writeChangeFor(ctx: ViewContext): WriteDiff | undefined {
+    // Injected change (tests/preview/host without tracker wiring) wins; then
+    // the tracker keyed by toolCallId.
+    if (ctx.writeChanges && typeof ctx.writeChanges === "object") return ctx.writeChanges as WriteDiff;
+    const toolCallId = typeof ctx.toolCallId === "string" ? ctx.toolCallId : undefined;
+    return toolCallId && session ? session.writeChanges.get(toolCallId) : undefined;
+  }
+  function colorFor(ctx: ViewContext): import("./palette.ts").ColorLevel {
+    return ctx.colorLevel ?? session?.colorLevel ?? { kind: "ansi16" };
+  }
+  const layout: DiffLayoutOps = layoutOps ?? { wrap: (text) => [text], visibleWidth: (text) => text.length };
+
+  function writeBody(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext): Component {
+    const args = asRecord(ctx.args);
+    const expanded = options.expanded === true;
+    const error = ctx.isError === true || asRecord(result).isError === true;
+    const hint = expandHint();
+    const contentArg = typeof args.content === "string" ? args.content : undefined;
+
+    if (error) {
+      const blocks = Array.isArray(asRecord(result).content) ? (asRecord(result).content as unknown[]).map(asRecord) : [];
+      const text = blocks.filter((block) => block.type === "text").map((block) => string(block.text)).join("\n");
+      const lines = cleanLines(text);
+      const head = gutter(["write failed"], theme, "error");
+      const body = lines.length ? gutter(preview(lines, PREVIEW_LINES, expanded, hint), theme, "error") : "";
+      const attempted = contentArg
+        ? gutter(expanded
+            ? ["attempted content (not written):", ...cleanLines(contentArg).map((line, i) => `${String(i + 1).padStart(4)} ${line}`)]
+            : ["attempted content (not written) — expand to view"], theme, "muted")
+        : "";
+      return component([head, body, attempted].filter(Boolean).join("\n"), ctx);
+    }
+
+    // Verified add/update: the ONE diff renderer (structured rows).
+    const change = writeChangeFor(ctx);
+    if (change && (change.kind === "add" || change.kind === "update") && change.rows?.length) {
+      const filePath = path(args, ctx);
+      if (makeDiff) {
+        return makeDiff({ rows: change.rows, filePath, theme, context: ctx, options, expandHint: hint });
+      }
+      const rendered = renderDiffLines({
+        rows: change.rows, width: 100, layout, colorLevel: colorFor(ctx),
+        language: languageForPath(filePath), paint, expanded, expandHint: hint,
+      });
+      return component(rendered.join("\n"), ctx);
+    }
+
+    // unchanged / unavailable / no tracker: content preview from the call's
+    // own args (never a fabricated +N/-0). Always expandable to full text.
+    if (contentArg === undefined) return component("", ctx);
+    const lines = cleanLines(contentArg);
+    const numbered = lines.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
+    const label = change?.kind === "unchanged"
+      ? "written content (unchanged)"
+      : `written content (${lines.length} lines)`;
+    const head = gutter([label], theme, "muted");
+    const body = gutter(preview(numbered, PREVIEW_LINES, expanded, hint), theme);
+    return component([head, body].filter(Boolean).join("\n"), ctx);
+  }
+
   return Object.fromEntries<Renderers>(TOOL_NAMES.map((name) => [name, {
     renderCall(args: unknown, theme: Palette, ctx: ViewContext) {
       const state = view(ctx);
-      const call = component(formatCall(name, args, theme, ctx, state?.stats, paint), ctx);
+      // Pi passes the same args in both slots; merge so title builders can
+      // read args from either the positional parameter or the context.
+      const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
+      if (SHELL.has(name)) {
+        const { bullet, title } = shellTitle(merged, theme);
+        if (makeShell?.makeShellCall) {
+          return makeShell.makeShellCall({
+            name, bullet, title, args: asRecord(args),
+            options: { isPartial: merged.isPartial, expanded: merged.expanded },
+            theme, context: merged, expandHint: expandHint(), colorLevel: colorFor(merged),
+          });
+        }
+        return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
+      }
+      if (name === "write") {
+        return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
+      }
+      if (EXPLORATION.has(name)) {
+        return component(explorationTitle(name, merged, theme, colorFor(merged)), ctx);
+      }
+      // edit: bullet + bold verb + path (+ stats once known)
+      const done = merged.isPartial === false;
+      const label = merged.isError ? "Failed" : done ? "Edited" : "Editing";
+      const stats = state?.stats;
+      let suffix = "";
+      if (name === "edit" && stats && merged.isError !== true) {
+        suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
+      }
+      const bullet = theme.fg(merged.isError ? "error" : "dim", "•");
+      const call = component(`${bullet} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(asRecord(args), merged))))}${suffix}`, ctx);
       if (state) state.call = call;
       return call;
     },
@@ -269,43 +374,39 @@ export function makeRenderers(makeText: TextFactory, expandHint: () => string, p
       const state = view(ctx);
       if (state && name === "edit") {
         state.stats = diffStats(result);
-        // Update only our own Text component, never ctx.state or a tool definition.
+        // Refresh the call title with the final stats (same component).
         state.call?.setText(formatCall(name, ctx.args, theme, ctx, state.stats, paint));
       }
-      if (name === "edit" && makeDiff && ctx.isError !== true) {
+      if (name === "edit" && ctx.isError !== true) {
         const details = asRecord(asRecord(result).details);
         if (typeof details.diff === "string") {
-          return makeDiff({
-            diff: details.diff, filePath: path(asRecord(ctx.args), ctx),
-            theme, context: ctx, options,
+          const rows = parseDisplayDiff(details.diff);
+          const filePath = path(asRecord(ctx.args), ctx);
+          if (makeDiff) {
+            return makeDiff({ rows, filePath, theme, context: ctx, options, expandHint: expandHint() });
+          }
+          // No component factory: render inline through the ONE diff renderer.
+          return component(renderDiffLines({
+            rows, width: 100, layout, colorLevel: colorFor(ctx),
+            language: languageForPath(filePath), paint,
+            expanded: options.expanded === true, expandHint: expandHint(),
+          }).join("\n"), ctx);
+        }
+      }
+      if (name === "write") {
+        if (options.isPartial) return component("", ctx);
+        return writeBody(result, options, theme, ctx);
+      }
+      if (SHELL.has(name)) {
+        if (makeShell?.makeShellResult) {
+          return makeShell.makeShellResult({
+            name, args: asRecord(ctx.args), result, options, theme, context: ctx,
+            expandHint: expandHint(), colorLevel: colorFor(ctx),
           });
         }
-      }
-      if (name === "write" && !options.isPartial && session) {
-        // Write rows prefer tracker-produced honest diffs; without a tracked
-        // change the written-content preview (formatResult) stays as fallback.
-        const toolCallId = typeof ctx.toolCallId === "string" ? ctx.toolCallId : undefined;
-        const change = toolCallId ? session.writeChanges.get(toolCallId) : undefined;
-        if (change && change.kind !== "unavailable" && change.diff !== undefined) {
-          return makeDiff
-            ? makeDiff({
-                diff: change.diff, filePath: path(asRecord(ctx.args), ctx),
-                theme, context: ctx, options,
-              })
-            : component(formatDisplayDiff(change.diff, theme), ctx);
-        }
-        if (change && change.kind === "add") {
-          // New file: Codex "Added path (+N -0)" + all-insert surface is
-          // rendered by the shell component from args.content; nothing to add
-          // here (result text is only a confirmation).
-          return component("", ctx);
-        }
-      }
-      if (SHELL.has(name) && makeShell && session) {
-        return makeShell({
-          name, args: asRecord(ctx.args), result, options, theme, context: ctx, expandHint: expandHint(),
-          colorLevel: session.colorLevel,
-        });
+        // Result region NEVER repeats the command head — the call region owns
+        // the title even when no shell component factory is present.
+        return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
       }
       return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
     },

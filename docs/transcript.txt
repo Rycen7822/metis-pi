@@ -15,32 +15,53 @@
 • Ran npm test
   └ > pi-codex-appearance@0.4.0 test
     Running unit tests...
-    … +7 lines (ctrl+o to expand)
-    pass 74
+    … +6 lines (ctrl+o to expand)
+    tests 93
+    pass 93
     fail 0
 
 • Ran python3 - <<'EOF'
   │ print(1)
-  │ EOF
+  │ … +1 command lines
   └ 1
 
 • Ran bash script.sh 2>&1 | tail -50
   └ script output line one
     script output line two
 
-• Edited .work/EverTrace_development_plan.md (+1 -1)
-  2029  
+• Edited .work/EverTrace_development_plan.md
+  2029
   2030 -来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，旧实现保留重复路径并把推断混入事
         实。                                                                                                    
   2030 +来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，不复制 provider 或调度逻辑，保持
         单一事实来源。                                                                                          
-  2031  
+  2031
+
+• Added docs/new-guide.md +4 -0
+    +# Guide                                                                                                    
+    +                                                                                                           
+    +Content lines.                                                                                             
+    +Final.                                                                                                     
+
+• Wrote docs/same.md (unchanged)
+  └ written content (unchanged)
+  └    1 Same text.
+
+• Wrote docs/legacy.md (no pre-image snapshot; diff unavailable)
+  └ written content (1 lines)
+  └    1 Recovered content line.
+
+• Failed /protected/config.json
+  └ write failed
+  └ Permission denied
+  └ attempted content (not written) — expand to view
 
 • Explored
   └ Read figures/teaser.png
-  └ 1 image (TUI preview disabled)
+  └ 1 image
 
 • Running npm run check
+  └ Checking TypeScript...
 
 • Ran cat /protected/config.json
   └ cat: /protected/config.json: Permission denied

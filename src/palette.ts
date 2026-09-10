@@ -26,21 +26,44 @@ export const DIFF_DEL_BG: Rgb = { r: 74, g: 34, b: 29 };   // #4A221D
 export const DIFF_ADD_BG_256 = 22;
 export const DIFF_DEL_BG_256 = 52;
 
+export type ColorLevelKind = "truecolor" | "ansi256" | "ansi16" | "none";
+
 export interface ColorLevel {
-  readonly kind: "truecolor" | "ansi256" | "ansi16";
+  readonly kind: ColorLevelKind;
 }
 
-/** Resolve the terminal color level once per process from the environment. */
-export function detectColorLevel(env: NodeJS.ProcessEnv = process.env): ColorLevel {
-  if (env.NO_COLOR) return { kind: "ansi16" };
+/**
+ * Pipeline-wide color context. One resolver, one source of truth: the live
+ * host passes pi-tui's real `getCapabilities()`; env vars only degrade.
+ *  - NO_COLOR / FORCE_COLOR=0        -> none (no SGR output at all)
+ *  - FORCE_COLOR=1|2                 -> at most ansi256
+ *  - FORCE_COLOR=3                   -> truecolor
+ *  - otherwise pi-tui's trueColor detection, then TERM=…256color, then ansi16.
+ */
+export function resolveColorContext(options?: {
+  env?: NodeJS.ProcessEnv;
+  terminalTrueColor?: boolean;
+}): ColorLevel {
+  const env = options?.env ?? process.env;
+  if (env.NO_COLOR) return { kind: "none" };
   const force = env.FORCE_COLOR;
-  if (force && force !== "0" && force !== "false") return { kind: "truecolor" };
+  if (force === "0" || force === "false") return { kind: "none" };
+  if (force === "1" || force === "2") {
+    return options?.terminalTrueColor ? { kind: "truecolor" } : { kind: "ansi256" };
+  }
+  if (force === "3") return { kind: "truecolor" };
+  if (options?.terminalTrueColor === true) return { kind: "truecolor" };
   const colorterm = env.COLORTERM ?? "";
   if (/truecolor|24bit/i.test(colorterm)) return { kind: "truecolor" };
   // Windows Terminal promotes to truecolor (WT_SESSION / TERM_PROGRAM).
   if (env.WT_SESSION || env.TERM_PROGRAM === "WindowsTerminal") return { kind: "truecolor" };
   if (env.TERM && /256color/.test(env.TERM)) return { kind: "ansi256" };
   return { kind: "ansi16" };
+}
+
+/** Back-compat alias used by older call sites/tests. */
+export function detectColorLevel(env: NodeJS.ProcessEnv = process.env): ColorLevel {
+  return resolveColorContext({ env, terminalTrueColor: false });
 }
 
 function hexToRgb(hex: string): Rgb {
@@ -104,6 +127,7 @@ export function foregroundAnsi(hex: string, level: ColorLevel): string {
     return `\x1b[38;2;${r};${g};${b}m`;
   }
   if (level.kind === "ansi256") return `\x1b[38;5;${ansi256FromHex(hex)}m`;
+  if (level.kind === "none") return "";
   return `\x1b[3${ansi16FromHex(hex)}m`;
 }
 
@@ -113,8 +137,8 @@ export function backgroundAnsi(rgb: Rgb, level: ColorLevel): string {
     const index = rgb === DIFF_ADD_BG ? DIFF_ADD_BG_256 : rgb === DIFF_DEL_BG ? DIFF_DEL_BG_256 : rgbToAnsi256(rgb);
     return `\x1b[48;5;${index}m`;
   }
-  // ANSI-16 cannot represent the diff surfaces; callers fall back to
-  // foreground-only styling (Codex behavior).
+  // ANSI-16 cannot represent the diff surfaces (foreground-only cues instead);
+  // "none" emits no SGR at all.
   return "";
 }
 

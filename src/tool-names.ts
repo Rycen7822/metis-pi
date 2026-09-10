@@ -16,7 +16,11 @@ export interface ViewContext {
   readonly executionStarted?: boolean;
   readonly expanded?: boolean;
   readonly showImages?: boolean;
+  /** Injected write change (tests/preview) — merged with tracker state. */
+  readonly writeChanges?: unknown;
   readonly lastComponent?: unknown;
+  /** Real color capability, injected by the host (pi-tui getCapabilities). */
+  readonly colorLevel?: import("./palette.ts").ColorLevel;
 }
 export interface ViewOptions { readonly expanded?: boolean; readonly isPartial?: boolean }
 export interface Component { render(width: number): string[] }
@@ -28,17 +32,35 @@ export interface Renderers {
   renderResult(result: unknown, options: ViewOptions, theme: Palette, context: ViewContext): Component;
 }
 export interface DiffComponentInput {
-  readonly diff: string;
+  readonly rows: readonly import("./diff.ts").DiffRow[];
   readonly filePath: string;
   readonly theme: Palette;
   readonly context: ViewContext;
   readonly options: ViewOptions;
+  /** Pi-bound expand hint for row-budget notices inside the diff body. */
+  readonly expandHint?: string;
 }
 export type DiffFactory = (input: DiffComponentInput) => Component;
 export interface DiffLayoutOps {
   wrap(text: string, width: number): string[];
   visibleWidth(text: string): number;
 }
+
+/** Shell model shared by the call-slot and result-slot components. */
+export interface ShellComponentInput {
+  readonly name: ToolName;
+  readonly args: Record<string, unknown>;
+  readonly result: unknown;
+  readonly options: ViewOptions;
+  readonly theme: Palette;
+  readonly context: ViewContext;
+  readonly expandHint: string;
+  readonly colorLevel: import("./palette.ts").ColorLevel;
+}
+/** Call region: title + command. Never output. */
+export type ShellCallFactory = (input: ShellComponentInput) => Component;
+/** Result region: output block. Never a command head. */
+export type ShellResultFactory = (input: ShellComponentInput) => Component;
 
 export function asRecord(value: unknown): RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};

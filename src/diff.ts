@@ -1,12 +1,14 @@
 // Codex diff rendering (openai/codex diff_render.rs): gutter + sign + content,
 // full-row background, hanging indent continuation, hunk separators, and the
-// truecolor/256/16 degradation chain. The diff payload parsed here is the
-// DISPLAY string Pi already produces (EditToolDetails.diff) plus write-tracker
-// file changes; tool results are never modified.
+// truecolor/256/16/none degradation chain.
+//
+// THE one diff renderer. Input is structured DiffRow[] produced by
+// write-tracker (structured rows) or parsed from Pi's edit display diff via
+// parseDisplayDiff. Tool results are never modified.
 
 import {
   DIFF_ADD_BG, DIFF_DEL_BG, MOCHA,
-  backgroundAnsi, foregroundAnsi, DIM_ON, INTENSITY_RESET, BG_RESET,
+  backgroundAnsi, DIM_ON, INTENSITY_RESET, BG_RESET,
   type ColorLevel,
 } from "./palette.ts";
 
@@ -32,34 +34,50 @@ export interface DiffRow {
 export interface DiffStats { added: number; removed: number }
 
 /**
- * Parse Pi's display diff ("- 10 old", "+ 10 new", "  9 ctx", "     ...").
- * Deliberately narrow: arbitrary text is never reinterpreted as a diff.
- * When both old/new numbers are present (write-tracker unified diffs) they
- * are preserved so the gutter matches Codex's dual numbering.
+ * Parse Pi's display diff: exactly `sign` + optional single line number + one
+ * separator space + content VERBATIM. Content-initial digits and leading
+ * indentation are never reinterpreted:
+ *   "+ 10 123 value"  => number=10, content="123 value"
+ *   "+ 10   return x" => number=10, content="  return x"
  */
 export function parseDisplayDiff(diffText: string): DiffRow[] {
   const rows: DiffRow[] = [];
   for (const raw of diffText.split("\n")) {
-    if (/^\s*\.\.\.\s*$/.test(raw)) {
+    if (/^\s*(\.\.\.|⋮)\s*$/.test(raw)) {
       rows.push({ kind: "separator", content: "…" });
       continue;
     }
-    const match = raw.match(/^([+\- ])\s*(\d*)(?:\s+(\d*))?\s(.*)$/);
-    if (match) {
-      const sign = match[1]!;
-      const first = match[2]!.trim();
-      const second = match[3] !== undefined ? match[3].trim() : undefined;
-      const content = match[4]!.replace(/\t/g, "    ");
-      const kind: DiffRowKind = sign === "+" ? "add" : sign === "-" ? "remove" : "context";
-      if (second !== undefined && second !== "") {
-        rows.push({ kind, oldNumber: Number(first), newNumber: Number(second), lineNumber: Number(second), content });
-      } else if (first) {
-        const number = Number(first);
-        rows.push({ kind, oldNumber: kind === "remove" ? number : undefined, newNumber: kind === "remove" ? undefined : number, lineNumber: number, content });
-      } else {
-        rows.push({ kind, content });
+    const sign = raw[0];
+    if (sign === "+" || sign === "-" || sign === " ") {
+      // After the sign: at most one separating space, optional digits, then
+      // exactly one space, then content VERBATIM (leading spaces survive).
+      let index = 1;
+      if (raw[index] === " " && /[0-9]/.test(raw[index + 1] ?? "")) index += 1;
+      let digits = "";
+      while (index < raw.length && raw[index]! >= "0" && raw[index]! <= "9") {
+        digits += raw[index]!;
+        index += 1;
       }
-      continue;
+      if (digits && index < raw.length && raw[index] === " ") {
+        const content = raw.slice(index + 1).replace(/\t/g, "    ");
+        const kind: DiffRowKind = sign === "+" ? "add" : sign === "-" ? "remove" : "context";
+        const number = Number(digits);
+        rows.push({
+          kind,
+          oldNumber: kind === "remove" ? number : undefined,
+          newNumber: kind === "remove" ? undefined : number,
+          lineNumber: number,
+          content,
+        });
+        continue;
+      }
+      if (!digits && index < raw.length && raw[index] === " ") {
+        // No line number: the first space was the separator.
+        const content = raw.slice(index + 1).replace(/\t/g, "    ");
+        const kind: DiffRowKind = sign === "+" ? "add" : sign === "-" ? "remove" : "context";
+        rows.push({ kind, content });
+        continue;
+      }
     }
     if (raw.length) rows.push({ kind: "metadata", content: raw.replace(/\t/g, "    ") });
   }
@@ -90,28 +108,27 @@ export interface DiffRenderInput {
   readonly expandHint: string;
 }
 
+/**
+ * Codex style_add/style_del: dark themes tint the full row and add a green/red
+ * foreground; ANSI-16 keeps foreground-only cues; "none" emits no SGR at all.
+ */
 interface SurfaceStyle {
   readonly lineBg: string;
   readonly signFg: string;
   readonly contentFg: (text: string) => string;
 }
 
-/**
- * Codex style_add/style_del: ANSI-16 keeps foreground-only green/red;
- * truecolor/256 tint the full row. Content keeps its own foreground over the
- * background (only SGR color + intensity are used so the background survives).
- */
 function surface(kind: "add" | "remove" | "context", level: ColorLevel): SurfaceStyle {
-  if (kind === "context") {
+  if (kind === "context" || level.kind === "none") {
     return { lineBg: "", signFg: "", contentFg: (text) => text };
   }
   const rgb = kind === "add" ? DIFF_ADD_BG : DIFF_DEL_BG;
   const bg = backgroundAnsi(rgb, level);
-  if (level.kind === "ansi16" || !bg) {
-    const fg = kind === "add" ? "\x1b[32m" : "\x1b[31m";
+  const fg = kind === "add" ? "\x1b[32m" : "\x1b[31m";
+  if (!bg) {
+    // ANSI-16: foreground-only cue (Codex behavior).
     return { lineBg: "", signFg: fg, contentFg: (text) => `${fg}${text}\x1b[39m` };
   }
-  const fg = kind === "add" ? "\x1b[32m" : "\x1b[31m";
   return {
     lineBg: bg,
     signFg: `${fg}${bg}`,
@@ -120,9 +137,9 @@ function surface(kind: "add" | "remove" | "context", level: ColorLevel): Surface
 }
 
 /**
- * Highlight diff body text with the Pi grammar, then rebuild the styled
- * string so the diff background (set per line) is never cleared: only
- * foreground resets are allowed inside content.
+ * Highlight diff body with the Pi grammar, then rebuild the styled string so
+ * the diff background survives: drop any background SGR the highlighter emits
+ * and translate bare full resets into foreground-only resets.
  */
 function highlightBody(text: string, language: string | undefined, paint: ((text: string, language: string) => string) | undefined, fallback: (text: string) => string): string {
   if (!text) return "";
@@ -130,86 +147,149 @@ function highlightBody(text: string, language: string | undefined, paint: ((text
     try {
       const painted = paint(text, language);
       if (typeof painted === "string") {
-        // Pi's highlighter returns per-line strings containing ANSI colors.
-        // Strip any background resets that would clear the diff surface and
-        // any background colors it may emit.
-        return painted.replace(/\x1b\[4[89][^m]*m/g, "").replace(/\x1b\[10[0-7]m/g, "");
+        return painted
+          // Background colors/resets would punch holes in the row surface.
+          .replace(/\x1b\[4[89][^m]*m/g, "")
+          .replace(/\x1b\[10[0-7]m/g, "")
+          // Full resets (0m) become foreground resets so the bg survives.
+          .replace(/\x1b\[0m/g, "\x1b[39m")
+          // Default-background resets are no-ops for us once bg is dropped.
+          .replace(/\x1b\[49m/g, "");
       }
     } catch { /* Syntax coloring is optional. */ }
   }
   return fallback(text);
 }
 
-/** Render diff rows Codex-style. */
+/**
+ * ANSI-aware hard wrap for diff content (Codex wrap_styled_spans equivalent):
+ * walks visible characters by display width; escape sequences ride along
+ * without width, never split mid-sequence, and stay active across the wrap so
+ * continuation rows keep the same style. A physical row never contains a
+ * partial escape sequence.
+ */
+export function wrapStyledContent(text: string, width: number): string[] {
+  const widthOf = (char: string): number => {
+    const code = char.codePointAt(0)!;
+    if (code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a
+      || (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f)
+      || (code >= 0xac00 && code <= 0xd7a3)
+      || (code >= 0xf900 && code <= 0xfaff)
+      || (code >= 0xfe30 && code <= 0xfe6f)
+      || (code >= 0xff00 && code <= 0xff60)
+      || (code >= 0xffe0 && code <= 0xffe6)
+      || (code >= 0x1f300 && code <= 0x1f64f)
+      || (code >= 0x1f900 && code <= 0x1f9ff)
+      || (code >= 0x20000 && code <= 0x3fffd))) return 2;
+    return 1;
+  };
+  const lines: string[] = [];
+  let current = "";
+  let cells = 0;
+  let index = 0;
+  // Style sequences seen since the last visible character; re-emitted at the
+  // start of a continuation row so the style state carries across the wrap.
+  let trailingStyles = "";
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === "\x1b") {
+      const match = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(text.slice(index));
+      if (match) {
+        current += match[0];
+        trailingStyles += match[0];
+        index += match[0].length;
+        continue;
+      }
+    }
+    const w = widthOf(char);
+    if (cells + w > width && cells > 0) {
+      lines.push(current);
+      current = trailingStyles;
+      cells = 0;
+    }
+    current += char;
+    cells += w;
+    trailingStyles = "";
+    index += 1;
+  }
+  lines.push(current);
+  // Drop a trailing row that is pure styling (nothing visible).
+  if (lines.length > 1 && lines.at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "") === "" && text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "") !== "") {
+    lines.pop();
+  }
+  return lines.length ? lines : [""];
+}
+
+/** Render diff rows Codex-style from structured rows. Never returns empty. */
 export function renderDiffLines(input: DiffRenderInput): string[] {
   const { rows, layout, colorLevel } = input;
   const usable = Math.max(1, Math.floor(input.width));
-  const out: string[] = [];
+  if (!rows.length) return [];
 
   const maxNew = Math.max(0, ...rows.map((row) => row.newNumber ?? 0));
   const maxOld = Math.max(0, ...rows.map((row) => row.oldNumber ?? 0));
   const numberWidth = lineNumberWidth(Math.max(maxNew, maxOld));
-  // Codex prefix: gutter(number + space) + sign char. Content hangs at
-  // prefix+1 columns on continuation rows.
-  const prefixCols = 2 + numberWidth + 1 + 1; // left inset + number + space + sign
+  // Codex prefix: left inset + gutter(number + space) + sign char.
+  const prefixCols = DIFF_LEFT_INSET + numberWidth + 1 + 1;
   const contentWidth = Math.max(1, usable - prefixCols);
+  const out: string[] = [];
 
-  let previousKind: DiffRowKind | undefined;
   for (const row of rows) {
     if (row.kind === "separator") {
       out.push(`${" ".repeat(prefixCols - 1)}…`);
-      previousKind = row.kind;
       continue;
     }
     if (row.kind === "metadata") {
-      for (const chunk of layout.wrap(row.content, Math.max(1, usable - 2))) {
-        out.push(`  ${chunk}`);
+      for (const chunk of layout.wrap(row.content, Math.max(1, usable - DIFF_LEFT_INSET))) {
+        out.push(`${" ".repeat(DIFF_LEFT_INSET)}${chunk}`);
       }
-      previousKind = row.kind;
       continue;
     }
-    // Hunk separators: Codex renders "⋮" between hunks. The Pi display diff
-    // carries no hunk boundaries; write-tracker diffs mark them explicitly
-    // via a metadata row of "⋮". (See file-change.ts.)
-    void previousKind;
 
     const style = surface(row.kind, colorLevel);
-    const numberText = row.newNumber !== undefined
-      ? String(row.newNumber)
-      : row.oldNumber !== undefined ? String(row.oldNumber) : "";
-    const gutter = `${" ".repeat(2)}${numberText.padStart(numberWidth)} `;
+    const numberText = row.lineNumber !== undefined
+      ? String(row.lineNumber)
+      : row.newNumber !== undefined
+        ? String(row.newNumber)
+        : row.oldNumber !== undefined ? String(row.oldNumber) : "";
     const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
-    const signStyled = row.kind === "context" ? sign : `\x1b[${style.signFg}${sign}\x1b[39m${style.lineBg}`;
-    void signStyled;
+    const gutter = `${" ".repeat(DIFF_LEFT_INSET)}${numberText.padStart(numberWidth)} `;
 
+    // Highlight the whole row content once, then wrap the styled string with
+    // the ANSI-aware wrap (never a naive string slice mid-sequence).
+    // Delete rows keep syntax colors and overlay dim (Codex behavior).
     let content = highlightBody(
       row.content,
-      row.kind === "remove" ? undefined : input.language,
+      input.language,
       input.paint,
       (text) => style.contentFg(text),
     );
-    if (row.kind === "remove") {
-      // Codex dims delete-line syntax so the removal cue wins.
+    if (row.kind === "remove" && content) {
+      // Codex dims delete-line syntax so the removal cue wins (overlay dim,
+      // never dropping the language colors).
       content = `${DIM_ON}${content}${INTENSITY_RESET}`;
     }
-    const chunks = layout.wrap(content, contentWidth);
+    const chunks = wrapStyledContent(content, contentWidth);
     const physical = chunks.length ? chunks : [""];
+
     for (let i = 0; i < physical.length; i++) {
       const head = i === 0
-        ? `${gutter}${style.signFg}${sign}\x1b[39m`
-        : `${" ".repeat(2)}${" ".repeat(numberWidth)}  `;
-      const line = style.lineBg
-        ? `${style.lineBg}${head}${physical[i]}${BG_RESET}`
-        : `${head}${physical[i]}`.trimEnd();
-      out.push(style.lineBg ? padToWidth(line, usable, layout) : line);
+        ? `${gutter}${style.signFg ? `${style.signFg}${sign}\x1b[39m` : sign}`
+        : `${" ".repeat(DIFF_LEFT_INSET)}${" ".repeat(numberWidth)}  `;
+      const body = physical[i]!;
+      if (style.lineBg) {
+        // Padding BEFORE the background reset: the surface reaches the right
+        // edge (Codex line-level bg). Layout: bg on, gutter+sign, content,
+        // pad, bg off.
+        const visible = layout.visibleWidth(head + body);
+        const pad = " ".repeat(Math.max(0, usable - visible));
+        out.push(`${style.lineBg}${head}${body}${pad}${BG_RESET}`);
+      } else {
+        out.push(`${head}${body}`.trimEnd());
+      }
     }
   }
-  return out;
-}
-
-function padToWidth(line: string, width: number, layout: LayoutOps): string {
-  const visible = layout.visibleWidth(line);
-  return visible >= width ? line : `${line}${" ".repeat(width - visible)}`;
+  return out.length ? out : [""];
 }
 
 /** Summarize rows for the header: "(+A -D)". */

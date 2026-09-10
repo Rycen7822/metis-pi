@@ -52,19 +52,19 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
   let wordStarted = false;
   let sawExpansion = false;
   let sawSlash = false;
-  let wordIsFirstOfCommand = atScriptStart && !afterControl === false; // start-of-line word is first
-  let isFirstWordOfLine = atScriptStart;
 
   const classifyCurrentWord = (word: string): MochaToken | "plain" => {
     if (!word) return "plain";
     if (word.startsWith("--")) return "parameter";
     if (sawExpansion) return "parameter";
     if (word.startsWith("-") && word.length > 1) return "parameter";
-    if (wordIsFirstOfCommand && (isFirstWordOfLine || afterControl)) {
+    // Command position: first word of the line or a word right after a
+    // control operator. FIXED: previously gated by a flag that was cleared
+    // on the first word end, so later command heads (a; echo b) went plain.
+    if (afterControl) {
       const bare = word.replace(/^\$\{?/, "").replace(/\}$/, "");
       if (BUILTINS.has(bare)) return "builtin";
-      if (sawSlash) return "function";
-      return "function";
+      return "function"; // executable (with or without a path)
     }
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) return "parameter";
     if (/^[0-9]+$/.test(word)) return "number";
@@ -79,7 +79,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
       wordStarted = false;
       sawExpansion = false;
       sawSlash = false;
-      wordIsFirstOfCommand = false;
       afterControl = false;
     }
   };
@@ -185,16 +184,24 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
   return raw.map((span) => ({ text: span.text, token: span.token }));
 }
 
-/** Highlight one line to an ANSI string with the Mocha palette. */
+/** Highlight one line to an ANSI string with the Mocha palette. Plain spans
+ * carry the Mocha base foreground so the palette stays consistent. */
 export function highlightBashLine(line: string, atScriptStart: boolean, level: ColorLevel): string {
-  return tokenizeBashLine(line, atScriptStart)
-    .map((span) => span.token === "plain" ? span.text : `${foregroundAnsi(MOCHA[span.token], level)}${span.text}\x1b[39m`)
+  void atScriptStart; // every line start is a command position
+  return tokenizeBashLine(line, true)
+    .map((span) => {
+      if (span.token === "plain") {
+        return level.kind === "none" ? span.text : `${foregroundAnsi(MOCHA.base, level)}${span.text}\x1b[39m`;
+      }
+      return level.kind === "none" ? span.text : `${foregroundAnsi(MOCHA[span.token], level)}${span.text}\x1b[39m`;
+    })
     .join("");
 }
 
 /**
  * Highlight a multi-line script. Carries heredoc state across lines so a
  * heredoc body is rendered as string content, not re-lexed as commands.
+ * Every non-heredoc line starts at a command position (newline = separator).
  */
 export function highlightBashScript(lines: readonly string[], level: ColorLevel): string[] {
   const out: string[] = [];
@@ -208,12 +215,12 @@ export function highlightBashScript(lines: readonly string[], level: ColorLevel)
         heredocDelimiter = null;
         out.push(line);
       } else {
-        out.push(`${foregroundAnsi(MOCHA.string, level)}${line}\x1b[39m`);
+        out.push(level.kind === "none" ? line : `${foregroundAnsi(MOCHA.string, level)}${line}\x1b[39m`);
       }
       continue;
     }
-    out.push(highlightBashLine(line, i === 0, level));
-    // Register heredoc start: <<-DELIM, <<DELIM, <<-'DELIM', <<-"DELIM".
+    out.push(highlightBashLine(line, true, level));
+    // Register heredoc start: <<-DELIM, <<DELIM, <<-'DELIM', <<"DELIM".
     // <<< here-strings do not open a heredoc body.
     const hereString = /<<<\s*\S/.test(line);
     if (!hereString) {

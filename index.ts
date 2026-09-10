@@ -1,8 +1,10 @@
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "./src/extension.ts";
-import { renderCodexDiffLines, type DiffComponentInput, type ShellComponentInput } from "./src/renderers.ts";
-import { renderShellRow, type LayoutOps } from "./src/shell.ts";
+import { renderCodexDiffComponent, type DiffComponentInput } from "./src/diff-component.ts";
+import { renderShellCall, renderShellResult, type LayoutOps } from "./src/shell.ts";
+import { resolveColorContext } from "./src/palette.ts";
+import type { ToolName } from "./src/tool-names.ts";
 
 function layoutOps(): LayoutOps {
   return {
@@ -11,27 +13,90 @@ function layoutOps(): LayoutOps {
   };
 }
 
+/** Result region of an edit/write diff: rows -> width-aware Codex renderer. */
 class CodexDiffComponent implements Tui.Component {
   readonly #input: DiffComponentInput;
+  #lastWidth = -1;
+  #cache: string[] | undefined;
 
   constructor(input: DiffComponentInput) {
     this.#input = input;
   }
 
   render(width: number): string[] {
-    return renderCodexDiffLines(this.#input.diff, width, this.#input.theme, layoutOps());
+    if (this.#cache && this.#lastWidth === width) return this.#cache;
+    this.#cache = renderCodexDiffComponent(this.#input, width, layoutOps());
+    this.#lastWidth = width;
+    return this.#cache;
   }
 
   invalidate(): void {
-    // Stateless renderer: nothing cached.
+    this.#cache = undefined;
+    this.#lastWidth = -1;
   }
 }
 
-class CodexExecShellComponent implements Tui.Component {
-  readonly #input: ShellComponentInput;
+/** Call region: bullet + bold title + highlighted command with "  │ "
+ * continuation. Never renders output — the result region owns that. */
+interface ShellCallInput {
+  name: ToolName; bullet: string; title: string; args: Record<string, unknown>;
+  options: { expanded?: boolean; isPartial?: boolean };
+  colorLevel: import("./src/palette.ts").ColorLevel;
+}
+class CodexShellCallComponent implements Tui.Component {
+  readonly #input: ShellCallInput;
 
-  constructor(input: ShellComponentInput) {
+  constructor(input: ShellCallInput) {
     this.#input = input;
+  }
+
+  render(width: number): string[] {
+    return renderShellCall({
+      row: {
+        title: this.#input.title,
+        isError: false,
+        isPartial: this.#input.options.isPartial === true,
+        command: String(this.#input.args.command ?? ""),
+        language: this.#input.name === "powershell" ? "powershell" : "bash",
+        output: "",
+        expanded: this.#input.options.expanded === true,
+        expandHint: "",
+      },
+      width,
+      layout: layoutOps(),
+      colorLevel: this.#input.colorLevel,
+      bullet: this.#input.bullet,
+      titlePainter: (title) => title,
+    });
+  }
+
+  invalidate(): void {
+    // Stateless: recomputed per render.
+  }
+}
+
+/**
+ * Result region: output block with "  └ "/"    " prefixes and the 5-screen-row
+ * budget. Never renders a command head.
+ */
+class CodexShellResultComponent implements Tui.Component {
+  readonly #input: {
+    name: ToolName; args: Record<string, unknown>; result: unknown;
+    options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
+    expandHint: string;
+    colorLevel: import("./src/palette.ts").ColorLevel;
+  };
+  #bullet = "";
+
+  constructor(input: {
+    name: ToolName; args: Record<string, unknown>; result: unknown;
+    options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
+    bullet: string;
+    expandHint: string;
+    colorLevel: import("./src/palette.ts").ColorLevel;
+  }) {
+    this.#input = input;
+    this.#bullet = input.bullet;
   }
 
   render(width: number): string[] {
@@ -39,17 +104,12 @@ class CodexExecShellComponent implements Tui.Component {
     const output = Array.isArray(result?.content)
       ? result!.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
       : "";
-    const bullet = this.#input.context.isError
-      ? this.#input.theme.fg("error", "•")
-      : this.#input.options.isPartial
-        ? this.#input.theme.fg("dim", "•")
-        : this.#input.theme.fg("success", "•");
-    return renderShellRow({
+    return renderShellResult({
       row: {
-        title: this.#input.options.isPartial ? "Running" : "Ran",
-        isError: this.#input.context.isError === true,
+        title: "",
+        isError: this.#input.isError,
         isPartial: this.#input.options.isPartial === true,
-        command: String(this.#input.args.command ?? ""),
+        command: "",
         language: this.#input.name === "powershell" ? "powershell" : "bash",
         output,
         expanded: this.#input.options.expanded === true,
@@ -58,13 +118,13 @@ class CodexExecShellComponent implements Tui.Component {
       width,
       layout: layoutOps(),
       colorLevel: this.#input.colorLevel,
-      bullet,
-      titlePainter: (title) => this.#input.theme.bold(title),
+      bullet: this.#bullet,
+      titlePainter: (title) => title,
     });
   }
 
   invalidate(): void {
-    // Stateless renderer: nothing cached.
+    // Stateless: recomputed per render.
   }
 }
 
@@ -78,15 +138,34 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     });
     return;
   }
+  const colorLevel = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+  const highlight = (text: string, language: string): string => {
+    const lines = Pi.highlightCode(text, language);
+    return Array.isArray(lines) ? lines.join("\n") : String(lines);
+  };
   activate(pi, {
     prototype,
     makeText: (text) => new Tui.Text(text, 0, 0),
-    makeDiff: (input) => new CodexDiffComponent(input),
-    makeShell: (input) => new CodexExecShellComponent(input),
-    expandHint: () => Pi.keyHint("app.tools.expand", "to expand"),
-    highlight: (text, language) => {
-      const lines = Pi.highlightCode(text, language);
-      return Array.isArray(lines) ? lines.join("\n") : String(lines);
+    makeDiff: (input) => new CodexDiffComponent({
+      rows: input.rows, filePath: input.filePath, paint: highlight,
+      colorLevel, expanded: input.options.expanded === true,
+      expandHint: input.expandHint ?? "",
+    }),
+    makeShell: {
+      makeShellCall: (input) => new CodexShellCallComponent({
+        name: input.name, bullet: input.bullet, title: input.title, args: input.args,
+        options: input.options, colorLevel: input.colorLevel,
+      }),
+      makeShellResult: (input) => new CodexShellResultComponent({
+        name: input.name, args: input.args, result: input.result,
+        options: input.options, isError: input.context.isError === true,
+        bullet: input.theme.fg(input.context.isError ? "error" : input.options.isPartial ? "dim" : "success", "•"),
+        expandHint: input.expandHint, colorLevel: input.colorLevel,
+      }),
     },
+    expandHint: () => Pi.keyHint("app.tools.expand", "to expand"),
+    highlight,
+    colorLevel,
+    layoutOps: layoutOps(),
   });
 }

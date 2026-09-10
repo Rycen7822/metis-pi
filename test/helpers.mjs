@@ -7,6 +7,12 @@ export class FakeText {
   render(_width) { return this.text ? this.text.split("\n") : []; }
 }
 export const bindings = { makeText: (s) => new FakeText(s), expandHint: () => "ctrl+o to expand" };
+/** Session stub with a fixed truecolor capability (Codex reference env). */
+export const sessionStub = {
+  tracker: { trackStart() {}, trackEnd() {} },
+  colorLevel: { kind: "truecolor" },
+  writeChanges: new Map(),
+};
 class FakeContainer {
   children = [];
   addChild(child) { this.children.push(child); }

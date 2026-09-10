@@ -1,10 +1,11 @@
-// Render the actual formatter/layout functions to ANSI/plain/HTML snapshots. No model calls.
-// The HTML is a renderer preview, not a screenshot of a running Pi installation.
-// 0.4.0 fixture: command structures from the user's Codex CLI reference screenshot.
+// Render the ACTUAL assembly path (renderers.makeRenderers → renderCall +
+// renderResult → shell/diff/write modules) to ANSI/plain/HTML snapshots.
+// No model calls. The HTML is a renderer preview, not a screenshot of a
+// running Pi installation — that role belongs to host-smoke (real components).
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
-import { formatCall, formatResult, diffStats, renderCodexDiffLines } from "../src/renderers.ts";
-import { renderShellRow } from "../src/shell.ts";
+import { makeRenderers, safeText, languageForPath } from "../src/renderers.ts";
+import { renderDiffLines } from "../src/diff.ts";
 import { detectColorLevel } from "../src/palette.ts";
 const root = new URL("../", import.meta.url);
 const palette = JSON.parse(readFileSync(new URL("themes/codex-appearance.json", root), "utf8"));
@@ -60,7 +61,7 @@ function wrapCells(text, width) {
   while (index < text.length) {
     const char = text[index];
     if (char === "\x1b") {
-      const match = /^\x1b\[[0-9;]*m/.exec(text.slice(index));
+      const match = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(text.slice(index));
       if (match) { current += match[0]; index += match[0].length; continue; }
     }
     const w = isWide(char.codePointAt(0)) ? 2 : 1;
@@ -73,62 +74,94 @@ function wrapCells(text, width) {
 const layout = { visibleWidth, wrap: wrapCells };
 const colorLevel = detectColorLevel({ COLORTERM: "truecolor" });
 
-/** Width-aware shell row (CodexExecComponent path). */
-function shellRow(command, outputText, { isPartial = false, isError = false, width = 112 } = {}) {
-  return renderShellRow({
-    row: {
-      title: isPartial ? "Running" : "Ran",
-      isError, isPartial,
-      command, language: "bash",
-      output: outputText ?? "",
-      expanded: false, expandHint: "ctrl+o to expand",
-    },
-    width, layout, colorLevel,
-    bullet: isError ? theme.fg("error", "•") : isPartial ? theme.fg("dim", "•") : theme.fg("success", "•"),
-    titlePainter: (title) => theme.bold(title),
-  }).join("\n");
+// The production renderers, driven through the same entry points Pi calls.
+const makeTextComponent = (text) => ({
+  text,
+  render: (width) => text.split("\n").flatMap((line) => wrapCells(line, width)),
+  setText: (next) => { text = next; },
+});
+const renderers = makeRenderers(
+  makeTextComponent,
+  () => "ctrl+o to expand",
+  null, // no external highlighter: shell rows use the built-in Mocha lexer
+  // Width-aware diff component factory — the same lazy-render shape index.ts
+  // hands to the live adapter, so diff width follows the preview width.
+  (input) => ({
+    render: (width) => renderDiffLines({
+      rows: input.rows, width, layout, colorLevel,
+      language: languageForPath(input.filePath), paint: undefined,
+      expanded: input.options.expanded === true, expandHint: input.expandHint ?? "ctrl+o to expand",
+    }),
+  }),
+  null,
+  { colorLevel },
+  layout,
+);
+const WIDTH = 112;
+
+/** ToolLifecycleRenderer pair, exactly as the Pi adapter invokes them. */
+function lifecycle(name, args, value, context = {}) {
+  const callCtx = { args, state: {}, isPartial: context.isPartial ?? false, ...context };
+  const call = renderers[name].renderCall(args, theme, callCtx);
+  const callLines = call ? call.render(WIDTH) : [];
+  const resultCtx = { args, state: {}, isPartial: false, ...context };
+  const res = renderers[name].renderResult(value, { expanded: context.expanded === true }, theme, resultCtx);
+  const resultLines = res ? res.render(WIDTH) : [];
+  return [...callLines, ...resultLines].filter((line) => line.length > 0).join("\n");
 }
-function row(name, args, value, context = {}) {
-  const ctx = { args, isPartial: false, showImages: false, ...context };
-  const call = formatCall(name, args, theme, ctx, diffStats(value));
-  let body;
-  if (name === "edit" && value?.details?.diff && !ctx.isError) {
-    body = renderCodexDiffLines(value.details.diff, 112, theme, layout).join("\n");
-  } else {
-    body = formatResult(name, value, { isPartial: ctx.isPartial, expanded: ctx.expanded }, theme, ctx, "ctrl+o to expand");
-  }
-  return [call, body].filter(Boolean).join("\n");
-}
+
 const longOld = "来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，旧实现保留重复路径并把推断混入事实。";
 const longNew = "来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，不复制 provider 或调度逻辑，保持单一事实来源。";
 const testOutput = [
   "> pi-codex-appearance@0.4.0 test", "Running unit tests...",
   "fixture 1", "fixture 2", "fixture 3", "fixture 4", "fixture 5", "fixture 6",
-  "tests 74", "pass 74", "fail 0",
+  "tests 93", "pass 93", "fail 0",
 ].join("\n");
 const examples = [
   // Exploration rows (Codex: cyan titles, dim " in ").
-  row("read", { path: "src/server.ts", offset: 1, limit: 120 }, result("This source text is folded, not removed from model context.")),
-  row("grep", { pattern: "createServer|listen", path: "src" }, result("src/server.ts:12:createServer(...)")),
+  lifecycle("read", { path: "src/server.ts", offset: 1, limit: 120 }, result("This source text is folded, not removed from model context.")),
+  lifecycle("grep", { pattern: "createServer|listen", path: "src" }, result("src/server.ts:12:createServer(...)")),
   // Golden command 1: rtk git diff --numstat -- ...
-  shellRow("rtk git diff --numstat -- src/renderers.ts", ["src/renderers.ts | 42 ++++++---", "1 file changed, 30 insertions(+), 12 deletions(-)"].join("\n")),
-  // Golden command 2: grep -n -e '略过' ... (CJK + options)
-  shellRow("grep -n -e '略过' src/*.ts", ["src/adapter.ts:73:  // 略过 non-builtin tool rows", "1 match"].join("\n")),
+  lifecycle("bash", { command: "rtk git diff --numstat -- src/renderers.ts" }, result(["src/renderers.ts | 42 ++++++---", "1 file changed, 30 insertions(+), 12 deletions(-)"].join("\n"), { details: { aggregatedOutput: "src/renderers.ts | 42 ++++++---\n1 file changed, 30 insertions(+), 12 deletions(-)" } })),
+  // Golden command 2: CJK + options.
+  lifecycle("bash", { command: "grep -n -e '略过' src/*.ts" }, result("src/adapter.ts:73:  // 略过 non-builtin tool rows\n1 match", { details: { aggregatedOutput: "src/adapter.ts:73:  // 略过 non-builtin tool rows\n1 match" } })),
   // Regular test run.
-  shellRow("npm test", testOutput),
+  lifecycle("bash", { command: "npm test" }, result(testOutput, { details: { aggregatedOutput: testOutput } })),
   // Golden command 3: python3 heredoc.
-  shellRow("python3 - <<'EOF'\nprint(1)\nEOF", ["1"].join("\n")),
-  // Golden command 4: bash script.sh 2>&1 | tail -50.
-  shellRow("bash script.sh 2>&1 | tail -50", ["script output line one", "script output line two"].join("\n")),
+  lifecycle("bash", { command: "python3 - <<'EOF'\nprint(1)\nEOF" }, result("1", { details: { aggregatedOutput: "1" } })),
+  // Golden command 4: pipes.
+  lifecycle("bash", { command: "bash script.sh 2>&1 | tail -50" }, result(["script output line one", "script output line two"].join("\n"), { details: { aggregatedOutput: "script output line one\nscript output line two" } })),
   // Edit diff with Codex full-row surfaces.
-  row("edit", { path: ".work/EverTrace_development_plan.md" }, result("Successfully replaced text.", { details: { diff: [
+  lifecycle("edit", { path: ".work/EverTrace_development_plan.md" }, result("Successfully replaced text.", { details: { diff: [
     "  2029 ", `- 2030 ${longOld}`, `+ 2030 ${longNew}`, "  2031 ",
   ].join("\n") } })),
+  // Write lifecycle: new file (Added) — rows from the tracker's structured diff.
+  lifecycle("write", { path: "docs/new-guide.md", content: "# Guide\n\nContent lines.\nFinal.\n" }, result("File created successfully: /tmp/project/docs/new-guide.md"), {
+    writeChanges: {
+      path: "docs/new-guide.md", kind: "add", added: 4, removed: 0,
+      rows: [
+        { kind: "add", number: 1, content: "# Guide" },
+        { kind: "add", number: 2, content: "" },
+        { kind: "add", number: 3, content: "Content lines." },
+        { kind: "add", number: 4, content: "Final." },
+      ],
+    },
+  }),
+  // Write lifecycle: unchanged content (expandable full text, not empty).
+  lifecycle("write", { path: "docs/same.md", content: "Same text.\n" }, result("File written successfully."), {
+    writeChanges: { path: "docs/same.md", kind: "unchanged", added: 0, removed: 0, lines: 1 },
+  }),
+  // Write lifecycle: unavailable snapshot (preview from args, no fake +N/-0).
+  lifecycle("write", { path: "docs/legacy.md", content: "Recovered content line.\n" }, result("File written successfully."), {
+    writeChanges: { path: "docs/legacy.md", kind: "unavailable", reason: "no pre-image snapshot" },
+  }),
+  // Failed write.
+  lifecycle("write", { path: "/protected/config.json", content: "{}\n" }, result("Permission denied", { isError: true }), { isError: true }),
   // Image preview disabled.
-  row("read", { path: "figures/teaser.png" }, { content: [{ type: "image", data: "never-written-to-preview", mimeType: "image/png" }] }),
+  lifecycle("read", { path: "figures/teaser.png" }, { content: [{ type: "image", data: "never-written-to-preview", mimeType: "image/png" }] }),
   // Running + error rows.
-  shellRow("npm run check", "Checking TypeScript...", { isPartial: true }),
-  shellRow("cat /protected/config.json", "cat: /protected/config.json: Permission denied\nCommand exited with code 1", { isError: true }),
+  lifecycle("bash", { command: "npm run check" }, result("Checking TypeScript..."), { isPartial: true }),
+  lifecycle("bash", { command: "cat /protected/config.json" }, result("cat: /protected/config.json: Permission denied\nCommand exited with code 1", { isError: true }), { isError: true }),
 ];
 const transcript = examples.join("\n\n") + "\n";
 const escaped = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -159,12 +192,12 @@ function ansiHtml(text) {
   }
   return html + span(text.slice(last));
 }
-const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Codex appearance 0.4 — renderer snapshot</title>
+const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Codex appearance 0.5 — renderer snapshot</title>
 <style>body{margin:0;background:#0c0c0c;color:#e5e7eb;font:14px/1.55 ui-monospace,"DejaVu Sans Mono",Consolas,monospace}.label{padding:18px 28px;border-bottom:1px solid #27272a;color:#a1a1aa;font:12px/1.5 system-ui,sans-serif;letter-spacing:.03em}pre{white-space:pre;margin:0;padding:26px 28px 32px;tab-size:3;overflow:hidden}.note{padding:0 28px 24px;color:#888;font:12px/1.5 system-ui,sans-serif}</style>
-<div class="label">pi-codex-appearance 0.4.0 · GENERATED FORMATTER/LAYOUT SNAPSHOT · NOT A LIVE PI SESSION</div>
-<pre>${ansiHtml(transcript)}</pre><div class="note">Shell rows use the width-aware Codex exec-cell layout (Catppuccin Mocha bash palette, "  │ " continuation, "  └ " output with middle truncation). The edit block uses the same width-aware diff layout function as the Pi runtime adapter.</div></html>`;
+<div class="label">pi-codex-appearance 0.5.0 · GENERATED FORMATTER/LAYOUT SNAPSHOT · NOT A LIVE PI SESSION</div>
+<pre>${ansiHtml(transcript)}</pre><div class="note">Every row above goes through the production two-slot combination (renderCall = header, renderResult = body) — the same entry points the Pi adapter invokes. Shell rows use the width-aware Codex exec-cell layout (Mocha bash palette, "  │ " continuation, "  └ " output with middle truncation); write rows exercise Added/unchanged/unavailable/failed; the edit block uses the single diff renderer.</div></html>`;
 mkdirSync(new URL("docs/", root), { recursive: true });
 writeFileSync(new URL("docs/transcript.ansi", root), transcript);
 writeFileSync(new URL("docs/transcript.txt", root), stripVTControlCharacters(transcript));
 writeFileSync(new URL("docs/preview.html", root), html);
-console.log("Wrote docs/transcript.ansi, docs/transcript.txt and docs/preview.html from the actual formatter/layout functions.");
+console.log("Wrote docs/transcript.ansi, docs/transcript.txt and docs/preview.html through the production two-slot renderers.");

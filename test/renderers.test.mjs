@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCall, formatResult, makeRenderers, safeText, parseDisplayDiff, renderCodexDiffLines } from "../src/renderers.ts";
-import { theme, FakeText, deepFreeze } from "./helpers.mjs";
+import { formatCall, formatResult, makeRenderers, safeText, parseDisplayDiff, renderDiffLines } from "../src/renderers.ts";
+import { theme, FakeText, deepFreeze, sessionStub } from "./helpers.mjs";
 
 const result = (text) => ({ content: [{ type: "text", text }] });
 const lines = (n) => Array.from({ length: n }, (_, i) => `LINE-${i}`).join("\n");
@@ -84,7 +84,8 @@ test("Codex rich diff uses exact dark backgrounds, full-row fill and hanging ind
     visibleWidth: (value) => strip(value).length,
     wrap: (value, width) => value ? Array.from({ length: Math.ceil(value.length / width) }, (_, i) => value.slice(i * width, (i + 1) * width)) : [],
   };
-  const rendered = renderCodexDiffLines("  2029 \n- 2030 1234567890\n+ 2030 abcdefghij\n  2031 ", 12, theme, layout);
+  const rows = parseDisplayDiff("  2029 \n- 2030 1234567890\n+ 2030 abcdefghij\n  2031 ");
+  const rendered = renderDiffLines({ rows, width: 12, layout, colorLevel: { kind: "truecolor" }, expanded: false, expandHint: "expand" });
   assert.equal(rendered[0], "  2029");
   assert.match(rendered[1], /^\x1b\[48;2;74;34;29m/);
   const firstAdd = rendered.findIndex((line) => /^\x1b\[48;2;33;58;43m/.test(line));
@@ -117,7 +118,7 @@ test("terminal escape sequences are stripped only from display text", () => {
 });
 
 test("custom components are never reused or mutated", () => {
-  const r = makeRenderers((text) => new FakeText(text), () => "expand");
+  const r = makeRenderers((text) => new FakeText(text), () => "expand", undefined, undefined, undefined, sessionStub);
   const foreign = { setText() { throw new Error("foreign component mutated"); }, render() { return ["foreign"]; } };
   const first = r.read.renderCall({ path: "a.ts" }, theme, { lastComponent: foreign });
   assert.notEqual(first, foreign);
@@ -141,7 +142,7 @@ test("successful exploration content folds by default, errors and full expansion
 });
 
 test("diff counters update an owned call component in the same redraw, without mutating host state", () => {
-  const r = makeRenderers((text) => new FakeText(text), () => "expand");
+  const r = makeRenderers((text) => new FakeText(text), () => "expand", undefined, undefined, undefined, sessionStub);
   const ctx = deepFreeze({ args: { path: "src/a.ts" }, state: {}, isPartial: false });
   const call = r.edit.renderCall(ctx.args, theme, ctx);
   r.edit.renderResult(deepFreeze({ content: [], details: { diff: " 1 context\n-2 old\n+2 new\n+3 added" } }), {}, theme, ctx);
@@ -184,7 +185,11 @@ test("edit renderer delegates only visual diff payload to the optional rich comp
   const component = r.edit.renderResult(payload, {}, theme, ctx);
   assert.equal(component, rich);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].diff, payload.details.diff);
+  // The rich factory receives structured rows (parsed from Pi's display diff).
+  assert.deepEqual(calls[0].rows.map((row) => [row.kind, row.lineNumber, row.content]), [
+    ["remove", 8, "old"],
+    ["add", 8, "new"],
+  ]);
   assert.equal(calls[0].filePath, "a.ts");
   assert.equal(payload.content[0].text, "Successfully replaced text");
 });
