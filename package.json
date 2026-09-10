@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/pi-codex-appearance",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,7 @@
     "docs"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "test": "node --experimental-strip-types --test test/*.test.mjs test/*.test.mts",
     "test:host": "node --experimental-strip-types scripts/host-smoke.mjs",
     "check": "tsc -p tsconfig.json",
     "check:core": "tsc -p tsconfig.core.json",

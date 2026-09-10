@@ -31,6 +31,14 @@ export interface Bindings {
   makeSeparator?: () => unknown;
   /** Build a 1-row spacer component (host TUI Spacer). */
   makeSpacer?: () => unknown;
+  /** Wrap a thinking display node with our rail (host TUI primitives). */
+  makeRail?: (child: unknown) => unknown;
+  /** Detect an external owner that already renders thinking rails. */
+  externalRailOwner?: () => boolean;
+  /** Build the live write-args preview component (host TUI primitives). */
+  makeWritePreview?: import("./renderers.ts").WritePreviewInput extends infer T
+    ? (input: T) => import("./tool-names.ts").Component | undefined
+    : never;
 }
 
 /** Session-scoped presentation state (ephemeral, display-only). */
@@ -97,12 +105,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
-      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, session, bindings.layoutOps),
+      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWritePreview, session, bindings.layoutOps),
     });
     if (!handle.installed) ctx.ui.notify(`pi-codex-appearance: ${handle.reason}. Compact transcript was not installed.`, "warning");
-    // Scoped transcript decorations (member spacing + assistant separator).
-    // Failure disables ONLY the advanced decorations; per-member rows, native
-    // text and the output dimming keep working.
+    // Scoped transcript decorations (member spacing + assistant separator +
+    // thinking rail). Failures are reported PER FEATURE; per-member rows,
+    // native text and the output dimming keep working regardless.
     if (bindings.assistantPrototype && bindings.makeSeparator) {
       decorations = installTranscriptDecorations({
         state: transcript,
@@ -110,10 +118,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         assistantPrototype: bindings.assistantPrototype,
         makeSeparator: bindings.makeSeparator,
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
+        makeRail: bindings.makeRail,
+        externalRailOwner: bindings.externalRailOwner,
         enabled: () => enabled,
       });
-      if (!decorations.installed) {
-        ctx.ui.notify(`pi-codex-appearance: ${decorations.reason}. Grouping decorations were not installed.`, "warning");
+      const failedFeatures = decorations.features.filter((f) => !f.installed);
+      if (failedFeatures.length) {
+        const detail = failedFeatures.map((f) => `${f.name}: ${f.reason}`).join("; ");
+        ctx.ui.notify(`pi-codex-appearance: decorations partially unavailable (${detail}).`, "warning");
       }
     }
   });

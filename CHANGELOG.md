@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.7.0
+
+Fixes and additions on top of 0.6.0, same display-only boundary: tool data,
+args, results, model context and session files are never touched.
+
+- Separator persistence fix (the 0.6.0 defect): the separator plan was consumed
+  once (takeTextPlan) and the inserted line was dropped by the host's next
+  `updateContent()` rebuild. Plans are now STABLE identities (`generation:seq`
+  message keys + open→sealed aliasing) resolved by display-order events; the
+  assistant coordination layer re-coordinates the rebuilt subtree after EVERY
+  `updateContent`, re-attaching exactly one separator per text run. 100
+  streaming updates → exactly one line throughout. The fragile host source
+  fingerprint check was replaced by a structural contract (descriptor shape +
+  verified host v0.85.1), so benign patches (e.g. zentui) no longer block
+  installation and diagnostics are per-feature.
+- Thinking rail: a narrow static `▏` rail (accent teal, `|` for no-color) on
+  every semantically-typed `thinking` block. Implemented as a width-aware
+  wrapper around the host's thinking component INSIDE the existing MouseRegion,
+  so click-to-collapse, streaming and geometry keep working; rail offset is
+  compensated for mouse coordinates. English text or "Writing…" strings are
+  never classified as thinking. If pi-zentui's thinking display takes over
+  (detected via its prototype patch registry), our rail stays passive.
+- Write live preview: while the model is still streaming a write tool call's
+  arguments, the call slot renders the received `args.content` prefix in
+  real time (host `updateArgs` → `renderCall`), with a dim stage label
+  (Receiving content / Content ready / Executing / Written / Failed-aborted ·
+  "preview, not yet committed"). Bounded rolling tail (8 logical lines,
+  ≤12 screen rows), CJK/ANSI-aware wrapping, incomplete-UTF-16-safe, expandable
+  to the full received prefix. Collapses to the verified-diff result on
+  completion. No disk writes, no extra tool executions; aborted runs keep the
+  received draft with an honest state label.
+- Duplicate image totals fix: with 0.6.0's grouping, stale per-member
+  components kept their own accumulated count (`1 image` repeated per member).
+  The aggregate notice now resolves through the shared plan (only the CURRENT
+  last member shows the total, refreshed on every append via dirty-view
+  invalidation); per-member payloads and expandability are unchanged.
+- Host field completion: `argsComplete`/`executionStarted` are read from the
+  real `ToolExecutionComponent.getRenderContext()` (verified v0.85.1).
+
 ## 0.6.0
 
 Transcript presentation release: serial exploration grouping, the

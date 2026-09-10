@@ -12,8 +12,13 @@ export interface ViewContext {
   readonly cwd?: string;
   readonly state?: unknown;
   readonly isPartial?: boolean;
-  readonly isError?: boolean;
+  /** Host lifecycle: args streaming finished (toolCall args complete). */
+  readonly argsComplete?: boolean;
+  /** Host lifecycle: tool execution started (markExecutionStarted). */
   readonly executionStarted?: boolean;
+  readonly isError?: boolean;
+  /** Host lifecycle: a final result exists (call slot may collapse). */
+  readonly hasResult?: boolean;
   readonly expanded?: boolean;
   readonly showImages?: boolean;
   /** Injected write change (tests/preview) — merged with tracker state. */

@@ -9,6 +9,7 @@ import { renderDiffLines } from "../src/diff.ts";
 import { detectColorLevel } from "../src/palette.ts";
 import { TranscriptState } from "../src/transcript-state.ts";
 import { renderShellCall, renderShellResult } from "../src/shell.ts";
+import { renderWritePreview } from "../src/write-preview.ts";
 const root = new URL("../", import.meta.url);
 const palette = JSON.parse(readFileSync(new URL("themes/codex-appearance.json", root), "utf8"));
 function hexColor(key) {
@@ -129,6 +130,15 @@ const renderers = makeRenderers(
       },
     }),
   },
+  // Live write-args preview — the same module the live CodexWritePreview
+  // component renders (bounded rolling tail, dim stage label).
+  (input) => ({
+    render: (width) => renderWritePreview(input.contentPrefix, {
+      width: Math.max(1, Math.floor(width) - 2),
+      stage: input.stage, expanded: input.expanded === true, theme,
+      colorLevel: input.colorLevel, layout, gutter: "  │ ",
+    }),
+  }),
   { colorLevel, transcript, resultImages },
   layout,
 );
@@ -173,14 +183,22 @@ const groupRows = [];
 for (let gi = 0; gi < GROUP_IMAGES.length; gi++) {
   groupRows.push(lifecycle("read", { path: `figures/${GROUP_IMAGES[gi]}` }, { content: [{ type: "image", data: "omitted", mimeType: "image/png" }] }, { toolCallId: `img${gi}` }));
 }
-// Boundary text after the group (state replay drives takeTextPlan).
+// Boundary text after the group (stable plan query — non-consuming, 0.7.0).
 transcript.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "compare" }] } });
-const sep1 = transcript.takeTextPlan().separatorBefore ? SEPARATOR_LINE : "";
+const sep1 = transcript.textRunPlan(`0:9:open`)?.separatorBefore ? SEPARATOR_LINE : "";
 // bash segment
 transcript.apply({ type: "tool_execution_start", toolCallId: "pvbash", toolName: "bash" });
 transcript.apply({ type: "tool_execution_end", toolCallId: "pvbash", toolName: "bash", isError: false });
 transcript.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "next" }] } });
-const sep2 = transcript.takeTextPlan().separatorBefore ? SEPARATOR_LINE : "";
+const sep2 = (() => {
+  // The bash text is a NEW logical message after tool activity: resolve it the
+  // way the coordinator does — the most recent open assistant plan.
+  for (let seq = 10; seq >= 1; seq--) {
+    const plan = transcript.textRunPlan(`0:${seq}:open`);
+    if (plan) return plan.separatorBefore ? SEPARATOR_LINE : "";
+  }
+  return "";
+})();
 const examples = [
   groupRows.join("\n"),
   // Exploration rows (Codex: cyan titles, dim " in ").
@@ -224,13 +242,29 @@ const examples = [
   lifecycle("write", { path: "/protected/config.json", content: "{}\n" }, result("Permission denied", { isError: true }), { isError: true }),
   // Image preview disabled.
   lifecycle("read", { path: "figures/teaser.png" }, { content: [{ type: "image", data: "never-written-to-preview", mimeType: "image/png" }] }),
+  // Write LIVE frames: the model is still streaming args.content (call slot
+  // only — no result exists yet). Three stages of the same call, exactly what
+  // host updateArgs → renderCall produces while receiving.
+  [Array.from({ length: 3 }, (_, fi) => {
+    const contents = [
+      "# 草稿：实验记录\n",
+      "# 草稿：实验记录\n\n## 方法\n样本在室温下静置 30 分钟，随后\n",
+      "# 草稿：实验记录\n\n## 方法\n样本在室温下静置 30 分钟，随后记录初始质量。\n\n## 观察\n",
+    ];
+    const callCtx = { args: { path: `notes/draft-${fi + 1}.md`, content: contents[fi] }, state: {}, isPartial: true, argsComplete: fi === 2, executionStarted: false, hasResult: false };
+    const call = renderers.write.renderCall(callCtx.args, theme, callCtx);
+    const rendered = call ? call.render(112).join("\n") : "";
+    console.error("LIVEFRAME", fi, "len", rendered.length, JSON.stringify(rendered.slice(0, 60)));
+    return rendered;
+  }).filter(Boolean).join("\n\n")],
   // Running + error rows.
   lifecycle("bash", { command: "npm run check" }, result("Checking TypeScript..."), { isPartial: true }),
   lifecycle("bash", { command: "cat /protected/config.json" }, result("cat: /protected/config.json: Permission denied\nCommand exited with code 1", { isError: true }), { isError: true }),
 ];
 const transcriptOut = [examples[0], ...examples.slice(1).flatMap((e, i) => {
-  const isGroupTail = i === GROUP_IMAGES.length - 2; // last grouped read
-  return isGroupTail ? [e, sep1] : [e];
+  const isGroupTail = i === GROUP_IMAGES.length - 2; // last grouped read → group boundary
+  const isBashTail = i === 3; // bash segment → second tool→text boundary
+  return isGroupTail ? [e, sep1] : isBashTail ? [e, sep2] : [e];
 })].join("\n\n") + "\n";
 const escaped = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function ansiHtml(text) {

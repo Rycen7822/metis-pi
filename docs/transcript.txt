@@ -23,6 +23,8 @@
   └ src/adapter.ts:73:  // 略过 non-builtin tool rows
     1 match
 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
 • Ran npm test
   └ > pi-codex-appearance@0.4.0 test
     Running unit tests...
@@ -71,6 +73,23 @@
 • Explored
   └ Read figures/teaser.png
   └ 1 image
+
+  │ Receiving content · preview, not yet committed
+  │ 1 # 草稿：实验记录
+
+  │ Receiving content · preview, not yet committed
+  │ 1 # 草稿：实验记录
+  │ 2 
+  │ 3 ## 方法
+  │ 4 样本在室温下静置 30 分钟，随后
+
+  │ Content ready · preview, not yet committed
+  │ 1 # 草稿：实验记录
+  │ 2 
+  │ 3 ## 方法
+  │ 4 样本在室温下静置 30 分钟，随后记录初始质量。
+  │ 5 
+  │ 6 ## 观察
 
 • Running npm run check
   └ Checking TypeScript...

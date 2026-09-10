@@ -12,6 +12,8 @@ export const sessionStub = {
   tracker: { trackStart() {}, trackEnd() {} },
   colorLevel: { kind: "truecolor" },
   writeChanges: new Map(),
+  transcript: undefined, // no grouping state in the generic stub
+  resultImages: new Map(),
 };
 class FakeContainer {
   children = [];

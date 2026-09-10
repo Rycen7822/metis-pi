@@ -8,7 +8,7 @@ import { fakeHost, toolInfo, bindings, deepFreeze, theme, sessionStub } from "./
 function setup(tools = TOOL_NAMES.map((name) => toolInfo(name))) {
   const Host = fakeHost();
   const state = { tools, enabled: true };
-  const renderers = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, sessionStub);
+  const renderers = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
   const original = Object.getOwnPropertyDescriptors(Host.prototype);
   const handle = installAdapter(Host.prototype, { getTools: () => state.tools, enabled: () => state.enabled, renderers });
   return { Host, state, renderers, original, handle };
@@ -140,7 +140,7 @@ test("registry failures fall back to the original renderer", () => {
   const Host = fakeHost();
   const handle = installAdapter(Host.prototype, {
     getTools() { throw new Error("registry not initialized"); }, enabled: () => true,
-    renderers: makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, sessionStub),
+    renderers: makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub),
   });
   const definition = { renderCall: () => "old" };
   assert.equal(new Host("bash", definition).getCallRenderer(), definition.renderCall);
@@ -273,7 +273,7 @@ test("historical rows created before installation are populated before their fir
   const row = new Host("bash", { renderCall: () => "stock" }, { command: "pwd" });
   assert.match(row.render(80).join("\n"), /BOX TOP/);
   const handle = installAdapter(Host.prototype, { getTools: () => [toolInfo("bash")], enabled: () => true,
-    renderers: makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, sessionStub) });
+    renderers: makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub) });
   const output = row.render(80).join("\n");
   assert.match(output, /• Running pwd/);
   assert.doesNotMatch(output, /BOX/);

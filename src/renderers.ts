@@ -12,6 +12,7 @@ import type { ExplorationPlan } from "./transcript-state.ts";
 import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
 import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffRow, type DiffStats } from "./diff.ts";
 import type { WriteDiff } from "./write-tracker.ts";
+import { resolveWriteStage, type WriteStage } from "./write-preview.ts";
 
 export { asRecord, safeText, TOOL_NAMES } from "./tool-names.ts";
 export type {
@@ -254,6 +255,12 @@ export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: 
 // Component assembly (production path).
 // ---------------------------------------------------------------------------
 
+export interface WritePreviewInput {
+  name: ToolName; args: Record<string, unknown>; stage: WriteStage; contentPrefix: string;
+  expanded: boolean; theme: Palette; context: ViewContext; expandHint: string;
+  colorLevel: import("./palette.ts").ColorLevel;
+}
+
 export interface ShellFactories {
   makeShellCall?: (input: {
     name: ToolName; bullet: string; title: string; args: Record<string, unknown>;
@@ -273,6 +280,7 @@ export function makeRenderers(
   paint?: Highlight,
   makeDiff?: DiffFactory,
   makeShell?: ShellFactories,
+  makeWritePreview?: (input: WritePreviewInput) => Component | undefined,
   session?: import("./extension.ts").AppearanceSession,
   layoutOps?: DiffLayoutOps,
 ): Record<ToolName, Renderers> {
@@ -372,6 +380,29 @@ export function makeRenderers(
         return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
       }
       if (name === "write") {
+        // Call slot = title + LIVE args.content preview while the model is
+        // still generating (host updateArgs → updateDisplay → renderCall).
+        // Once a result exists the call collapses to the final title and the
+        // result slot owns the verified diff / content (6.3).
+        // Host signal: a FINAL result exists iff isPartial flipped to false
+        // (updateResult sets isPartial=false; args streaming keeps it true).
+        const hasResult = merged.isPartial === false;
+        const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
+        const stage = resolveWriteStage({
+          argsComplete: merged.argsComplete === true,
+          executionStarted: merged.executionStarted === true,
+          isPartial: merged.isPartial === true,
+          isError: merged.isError === true,
+          hasResult: merged.isPartial === false,
+        });
+        if (makeWritePreview && !hasResult && contentPrefix) {
+          const previewComponent = makeWritePreview({
+            name, args: asRecord(args), stage, contentPrefix,
+            expanded: merged.expanded === true, theme, context: merged,
+            expandHint: expandHint(), colorLevel: colorFor(merged),
+          });
+          if (previewComponent) return previewComponent;
+        }
         return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
       }
       if (EXPLORATION.has(name)) {

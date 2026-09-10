@@ -4,6 +4,8 @@ import { activate, type AppearanceAPI } from "./src/extension.ts";
 import { renderCodexDiffComponent, type DiffComponentInput } from "./src/diff-component.ts";
 import { renderShellCall, renderShellResult, type LayoutOps } from "./src/shell.ts";
 import { resolveColorContext } from "./src/palette.ts";
+import { renderWritePreview } from "./src/write-preview.ts";
+import type { WritePreviewInput } from "./src/renderers.ts";
 import type { ToolName } from "./src/tool-names.ts";
 
 function layoutOps(): LayoutOps {
@@ -142,6 +144,82 @@ class CodexSeparatorComponent implements Tui.Component {
   }
 }
 
+/** Live preview of a write call's still-streaming args.content. Title line
+ * (from the stock writeTitle builder via the renderers) stays in the call
+ * region; this component renders the stage label + bounded rolling tail. */
+class CodexWritePreviewComponent implements Tui.Component {
+  readonly #input: WritePreviewInput & { layout: import("./src/tool-names.ts").DiffLayoutOps };
+  #lastWidth = -1;
+  #cache: string[] | undefined;
+
+  constructor(input: WritePreviewInput & { layout: import("./src/tool-names.ts").DiffLayoutOps }) {
+    this.#input = input;
+  }
+
+  render(width: number): string[] {
+    if (this.#cache && this.#lastWidth === width) return this.#cache;
+    this.#cache = renderWritePreview(this.#input.contentPrefix, {
+      width: Math.max(1, Math.floor(width) - 2),
+      stage: this.#input.stage,
+      expanded: this.#input.expanded,
+      theme: this.#input.theme,
+      colorLevel: this.#input.colorLevel,
+      layout: this.#input.layout,
+      gutter: "  │ ",
+    });
+    this.#lastWidth = width;
+    return this.#cache;
+  }
+
+  invalidate(): void {
+    this.#cache = undefined;
+    this.#lastWidth = -1;
+  }
+}
+
+/** Narrow static rail left of a thinking run. Wraps the host's thinking
+ * component (Markdown inside MouseRegion) so clicks keep working. */
+class CodexThinkingRailComponent implements Tui.Component {
+  readonly #child: Tui.Component;
+  #lastWidth = -1;
+  #cache: string[] | undefined;
+
+  constructor(child: Tui.Component) {
+    this.#child = child;
+  }
+
+  render(width: number): string[] {
+    if (this.#cache && this.#lastWidth === width) return this.#cache;
+    const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+    const rail = level.kind === "none" ? "| " : `\x1b[38;2;148;226;213m▏\x1b[39m `;
+    const railCells = 2;
+    const inner = Math.max(1, Math.floor(width) - railCells);
+    const childLines = this.#child.render(inner);
+    this.#cache = childLines.map((line) => {
+      const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
+      return stripped.startsWith("▏") || stripped.startsWith("| ") ? line : `${rail}${line}`;
+    });
+    this.#lastWidth = width;
+    return this.#cache;
+  }
+
+  handleMouse(event: Tui.TuiMouseEvent): Tui.TuiMouseEventResult | undefined {
+    if (event.type === "click" && event.button === "left") {
+      if (event.x < 2) return undefined; // rail column: not a toggle
+      const child = this.#child as unknown as { handleMouse?: (e: Tui.TuiMouseEvent) => Tui.TuiMouseEventResult | undefined };
+      return child.handleMouse?.({ ...event, x: event.x - 2 });
+    }
+    const child = this.#child as unknown as { handleMouse?: (e: Tui.TuiMouseEvent) => Tui.TuiMouseEventResult | undefined };
+    return child.handleMouse?.(event);
+  }
+
+  invalidate(): void {
+    this.#cache = undefined;
+    this.#lastWidth = -1;
+    this.#child.invalidate?.();
+  }
+}
+
 /** Default entry: compact Codex-style transcript, without changing tool data. */
 export default function codexAppearance(pi: AppearanceAPI): void {
   const prototype = Pi.ToolExecutionComponent?.prototype;
@@ -185,5 +263,21 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     assistantPrototype: assistantComponent?.prototype,
     makeSeparator: () => new CodexSeparatorComponent(),
     makeSpacer: () => new Tui.Spacer(1),
+    makeRail: (child) => new CodexThinkingRailComponent(child as Tui.Component),
+    externalRailOwner: () => {
+      // pi-zentui thinkingSteps (mode rail/tree) owns assistant thinking
+      // display when enabled. Detect its active wrapper marker on the same
+      // prototype without touching its internals.
+      try {
+        // pi-zentui registers prototype patches under a well-known symbol on
+        // the SAME prototype. Its presence means it owns thinking display.
+        const registry = Symbol.for("pi-zentui.prototype-patch-registry");
+        const patches = (assistantComponent?.prototype as Record<symbol, unknown> | undefined)?.[registry];
+        return Boolean(patches);
+      } catch {
+        return false;
+      }
+    },
+    makeWritePreview: (input) => new CodexWritePreviewComponent({ ...input, layout: layoutOps() }),
   });
 }
