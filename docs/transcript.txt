@@ -1,0 +1,32 @@
+• Explored
+  └ Read src/server.ts (lines 1–120)
+
+• Explored
+  └ Search "createServer|listen" in src
+
+• Ran npm test
+  └ > pi-codex-appearance test
+    Running unit tests...
+    … +6 lines (ctrl+o to expand)
+    tests 62
+    pass 62
+    fail 0
+
+• Edited .work/EverTrace_development_plan.md (+1 -1)
+  2029  
+  2030 -来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，旧实现保留重复路径并把推断混入事
+        实。                                                                                                    
+  2030 +来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，不复制 provider 或调度逻辑，保持
+        单一事实来源。                                                                                          
+  2031  
+
+• Explored
+  └ Read figures/teaser.png
+  └ 1 image (TUI preview disabled)
+
+• Running npm run check
+  └ Checking TypeScript...
+
+• Ran cat /protected/config.json
+  └ cat: /protected/config.json: Permission denied
+    Command exited with code 1

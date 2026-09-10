@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/v0.85.1/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "name": "codex-appearance",
+  "vars": {
+    "muted": "#a3a3a3", "dim": "#737373", "border": "#525252",
+    "accent": "#d4d4d4", "link": "#93c5fd", "green": "#86c995",
+    "red": "#ef8b8b", "yellow": "#e8c47a", "violet": "#c4b5fd",
+    "selection": "#303030"
+  },
+  "colors": {
+    "accent": "accent", "border": "border", "borderAccent": "accent", "borderMuted": "border",
+    "success": "green", "error": "red", "warning": "yellow", "muted": "muted", "dim": "dim",
+    "text": "", "thinkingText": "muted",
+    "selectedBg": "selection", "scrollbarTrack": "border", "scrollbarThumb": "muted",
+    "searchMatchBg": "selection", "searchMatchText": "",
+    "userMessageBg": "", "userMessageText": "", "customMessageBg": "", "customMessageText": "",
+    "customMessageLabel": "violet", "toolPendingBg": "", "toolSuccessBg": "", "toolErrorBg": "",
+    "toolTitle": "", "toolOutput": "muted",
+    "mdHeading": "", "mdLink": "link", "mdLinkUrl": "dim", "mdCode": "accent", "mdCodeBlock": "",
+    "mdCodeBlockBorder": "border", "mdQuote": "muted", "mdQuoteBorder": "border", "mdHr": "border", "mdListBullet": "accent",
+    "toolDiffAdded": "green", "toolDiffRemoved": "red", "toolDiffContext": "muted",
+    "syntaxComment": "dim", "syntaxKeyword": "violet", "syntaxFunction": "link", "syntaxVariable": "",
+    "syntaxString": "green", "syntaxNumber": "yellow", "syntaxType": "link", "syntaxOperator": "accent", "syntaxPunctuation": "muted",
+    "thinkingOff": "border", "thinkingMinimal": "dim", "thinkingLow": "muted", "thinkingMedium": "link",
+    "thinkingHigh": "violet", "thinkingXhigh": "#d8b4fe", "thinkingMax": "#e9d5ff", "bashMode": "yellow"
+  },
+  "export": { "pageBg": "#111111", "cardBg": "#171717", "infoBg": "#222222" }
+}

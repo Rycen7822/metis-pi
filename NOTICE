@@ -1,0 +1,30 @@
+pi-codex-appearance is derived from pi-codex-style-tools 0.2.0.
+Upstream: https://github.com/DanielSuhett/pi-codex-style
+Upstream copyright: Copyright (c) 2026 Suhett. MIT License (see LICENSE).
+
+The source basis for this modification was the user-provided archive:
+  pi-codex-style-master.zip
+  SHA-256: 80af002502dcb128785a69bde7348d3c76cce09c32d2f118b99544e0256a94cf
+
+Modifications: Copyright (c) 2026 Rycen7822. MIT License.
+- Replaced tool re-registration with a guarded, display-only selector adapter.
+- Removed all search-result rewriting and cross-call grouping.
+- Preserved compact headers, gutters, previews and diff display concepts.
+- Default installation enables the compact transcript via index.ts, plus a selectable theme.
+- Deferred self-shell activation preserves the stock constructor child tree.
+- Added lifecycle cleanup and compatibility tests.
+
+Pi API contracts inspected against earendil-works/pi tag v0.85.1:
+  packages/coding-agent/src/modes/interactive/components/tool-execution.ts
+  packages/coding-agent/src/core/source-info.ts
+  packages/coding-agent/src/modes/interactive/theme/dark.json
+Pi is copyright its contributors and licensed MIT. The test helper models the
+publicly inspected selector contract; it is not a copy of the complete Pi host.
+
+This project is not an OpenAI or Earendil product.
+
+Codex diff visual/behavior reference additionally inspected for 0.3.0:
+  openai/codex commit 94697375cb9d2aa8ae74d61957c6b396819bec94
+  codex-rs/tui/src/diff_render.rs
+The implementation here is an independent TypeScript renderer. No Codex Rust
+source is embedded or redistributed by this package.
