@@ -217,3 +217,37 @@ test("resolveWritePath: absolute stays, relative joins cwd", () => {
   assert.equal(resolveWritePath("/tmp/x", "/home/u"), "/tmp/x");
   assert.equal(resolveWritePath("x/y", "/home/u"), "/home/u/x/y");
 });
+
+test("buildDiffRows numbers one-sided middles and empty-file edges correctly (Myers)", () => {
+  // Pure tail insertion: the new line gets the next new-side number.
+  const tail = buildDiffRows("one\ntwo\n", "one\ntwo\nthree\n");
+  assert.ok(tail);
+  const tailAdd = tail.rows.find((row) => row.kind === "add");
+  assert.equal(tailAdd.newNumber, 3);
+
+  // Empty before: everything is an add starting at 1.
+  const fromEmpty = buildDiffRows("", "first\n");
+  assert.ok(fromEmpty);
+  assert.equal(fromEmpty.rows[0].newNumber, 1);
+  assert.equal(fromEmpty.added, 1);
+  assert.equal(fromEmpty.removed, 0);
+
+  // Empty after: everything is a remove starting at 1 (never oldNumber 0).
+  const toEmpty = buildDiffRows("x\n", "");
+  assert.ok(toEmpty);
+  assert.equal(toEmpty.rows[0].oldNumber, 1);
+  assert.equal(toEmpty.removed, 1);
+
+  // Multi-hunk: numbers stay per-side sequential across separated changes.
+  const multi = buildDiffRows(
+    "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n",
+    "alpha\nBETA2\ngamma\ndelta\nepsilon\nmu\nnu\neta\ntheta\n",
+  );
+  assert.ok(multi);
+  const adds = multi.rows.filter((row) => row.kind === "add");
+  const removes = multi.rows.filter((row) => row.kind === "remove");
+  assert.equal(multi.added, adds.length);
+  assert.equal(multi.removed, removes.length);
+  for (const row of adds) assert.ok(row.newNumber >= 1, "add rows carry new-side numbers");
+  for (const row of removes) assert.ok(row.oldNumber >= 1, "remove rows carry old-side numbers");
+});

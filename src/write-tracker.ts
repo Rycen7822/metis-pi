@@ -9,7 +9,6 @@
 // an explicit fallback — it never fabricates one.
 
 import * as fs from "node:fs";
-import { diffLines } from "diff";
 import type { DiffRow } from "./diff.ts";
 
 export interface WriteSnapshot {
@@ -132,6 +131,141 @@ interface HunkOp {
 }
 
 /**
+ * Zero-dependency Myers diff (the "diff" npm package is NOT installable in
+ * Pi's git-clone extension layout — a bare import there breaks extension
+ * loading entirely). Bounded by withinDiffBudget, so the O((N+M)·D) search
+ * stays small; anything bigger never reaches this function.
+ * Returns operations in document order: " ", "-", "+".
+ */
+function diffLineOps(before: readonly string[], after: readonly string[]): HunkOp[] {
+  const n = before.length;
+  const m = after.length;
+  // Trim common prefix/suffix so the search works on the changed middle.
+  let start = 0;
+  while (start < n && start < m && before[start] === after[start]) start += 1;
+  let endBefore = n;
+  let endAfter = m;
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore -= 1;
+    endAfter -= 1;
+  }
+  const ops: HunkOp[] = [];
+  for (let i = 0; i < start; i++) ops.push({ sign: " ", oldLine: i + 1, newLine: i + 1, text: before[i]! });
+  const midBefore = before.slice(start, endBefore);
+  const midAfter = after.slice(start, endAfter);
+
+  if (midBefore.length === 0 || midAfter.length === 0) {
+    // One-sided middle: number directly (old lines consume oldCursor, new
+    // lines consume newCursor — the same counters the Myers path uses).
+    let oldCursor = start;
+    let newCursor = start;
+    for (const text of midBefore) {
+      ops.push({ sign: "-", oldLine: oldCursor + 1, text });
+      oldCursor += 1;
+    }
+    for (const text of midAfter) {
+      ops.push({ sign: "+", newLine: newCursor + 1, text });
+      newCursor += 1;
+    }
+  } else {
+    // Myers O(ND) on the middle. V is indexed by k = -D..D (offset by max).
+    const max = midBefore.length + midAfter.length;
+    const offset = max;
+    const v = new Int32Array(2 * max + 1);
+    const trace: Int32Array[] = [];
+    let foundD = -1;
+    search: for (let d = 0; d <= max; d++) {
+      trace.push(v.slice());
+      for (let k = -d; k <= d; k += 2) {
+        let x: number;
+        if (k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!)) {
+          x = v[offset + k + 1]!;
+        } else {
+          x = v[offset + k - 1]! + 1;
+        }
+        let y = x - k;
+        while (x < midBefore.length && y < midAfter.length && midBefore[x] === midAfter[y]) {
+          x += 1;
+          y += 1;
+        }
+        v[offset + k] = x;
+        if (x >= midBefore.length && y >= midAfter.length) {
+          foundD = d;
+          break search;
+        }
+      }
+    }
+    if (foundD < 0) {
+      // Budget guard made this unreachable; fail safe to "unavailable".
+      return ops;
+    }
+    // Backtrack the shortest edit script into a list of middle ops.
+    const middle: Array<{ sign: "-" | "+" | " "; index: number; text: string }> = [];
+    let x = midBefore.length;
+    let y = midAfter.length;
+    for (let d = foundD; d > 0; d--) {
+      const vPrev = trace[d]!;
+      const k = x - y;
+      let prevK: number;
+      if (k === -d || (k !== d && vPrev[offset + k - 1]! < vPrev[offset + k + 1]!)) {
+        prevK = k + 1;
+      } else {
+        prevK = k - 1;
+      }
+      const prevX = vPrev[offset + prevK]!;
+      const prevY = prevX - prevK;
+      while (x > prevX && y > prevY) {
+        middle.push({ sign: " ", index: x - 1, text: midBefore[x - 1]! });
+        x -= 1;
+        y -= 1;
+      }
+      if (prevK === k - 1) {
+        middle.push({ sign: "-", index: x - 1, text: midBefore[x - 1]! });
+        x -= 1;
+      } else {
+        middle.push({ sign: "+", index: y - 1, text: midAfter[y - 1]! });
+        y -= 1;
+      }
+    }
+    while (x > 0 && y > 0) {
+      middle.push({ sign: " ", index: x - 1, text: midBefore[x - 1]! });
+      x -= 1;
+      y -= 1;
+    }
+    middle.reverse();
+    // Renumber in document order: "-" consumes old lines, "+" consumes new
+    // lines, " " consumes both. Interleaving keeps removals before insertions
+    // at the same position (matches the previous jsdiff output shape).
+    let oldCursor = start;
+    let newCursor = start;
+    const withNumbers: HunkOp[] = [];
+    for (const op of middle) {
+      if (op.sign === "-") {
+        withNumbers.push({ sign: "-", oldLine: oldCursor + 1, text: op.text });
+        oldCursor += 1;
+      } else if (op.sign === "+") {
+        withNumbers.push({ sign: "+", newLine: newCursor + 1, text: op.text });
+        newCursor += 1;
+      } else {
+        withNumbers.push({ sign: " ", oldLine: oldCursor + 1, newLine: newCursor + 1, text: op.text });
+        oldCursor += 1;
+        newCursor += 1;
+      }
+    }
+    ops.push(...withNumbers);
+  }
+  // Trailing common suffix.
+  let oldLine = endBefore;
+  let newLine = endAfter;
+  while (oldLine < n && newLine < m) {
+    ops.push({ sign: " ", oldLine: oldLine + 1, newLine: newLine + 1, text: before[oldLine]! });
+    oldLine += 1;
+    newLine += 1;
+  }
+  return ops;
+}
+
+/**
  * Build structured DiffRows with per-change context windows computed from
  * change indexes (no forward contagion; suffix context uses new-side numbers).
  */
@@ -140,26 +274,9 @@ export function buildDiffRows(beforeText: string, afterText: string): { rows: Di
   const after = toLines(normalizeLf(afterText));
   if (!withinDiffBudget(before, after)) return undefined;
 
-  const ops: HunkOp[] = [];
-  const parts = diffLines(
-    before.length ? `${before.join("\n")}\n` : "",
-    after.length ? `${after.join("\n")}\n` : "",
-  );
+  const ops = diffLineOps(before, after);
   let oldLine = 1;
   let newLine = 1;
-  for (const part of parts) {
-    const lines = toLines(part.value);
-    if (part.added) {
-      for (const text of lines) ops.push({ sign: "+", newLine: newLine++, text });
-    } else if (part.removed) {
-      for (const text of lines) ops.push({ sign: "-", oldLine: oldLine++, text });
-    } else {
-      for (const text of lines) {
-        ops.push({ sign: " ", oldLine: oldLine++, newLine: newLine, text });
-        newLine += 1;
-      }
-    }
-  }
 
   // Context windows from change indexes: mark, then merge intervals.
   const changeIndexes = ops.map((op, index) => op.sign !== " " ? index : -1).filter((index) => index >= 0);
