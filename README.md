@@ -2,11 +2,11 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.3.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.3.0 重点重写 `edit` diff：按 Codex 当前暗色 TUI 的行号/符号顺序、整行背景、长行悬挂缩进和完整 context-window 呈现。
+版本：**0.4.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.4.0 以 openai/codex 当前 main 为视觉与行为 reference：width-aware exec-cell 布局、Catppuccin Mocha bash 高亮、探索行 cyan 标题、`write` 的真实 pre/post diff，全部仅作用于显示层。
 
 ![由本项目渲染函数生成的预览，非真实 Pi 会话截图](docs/preview.png)
 
-上图由 `src/renderers.ts` 的同一 diff layout 函数生成 ANSI 文本，再渲染到 HTML。0.3.0 的预览包含整行 diff 背景和悬挂缩进；它仍不是完整 Pi 或用户全部插件的联合实测。
+上图由 `src/renderers.ts` 的同一 diff layout 函数生成 ANSI 文本，再渲染到 HTML。0.4.0 的预览包含整行 diff 背景、悬挂缩进与语法高亮 shell 行；它仍不是完整 Pi 或用户全部插件的联合实测。
 
 ## 默认显示
 
@@ -27,11 +27,12 @@
   15  }
 ```
 
-- **命令执行**：`Running → Ran`，命令高亮，续行 `│`，结果 `└`。运行中显示最新输出，完成后保留首尾预览，错误前景标红。
-- **文件探索**：`read/grep/find/ls` 使用 `Exploring → Explored` 与动作摘要。成功输出默认折叠；点击工具行或使用 Pi 当前的工具展开快捷键可查看所有文本块。快捷键提示来自 Pi，自定义键位不会被覆盖。
-- **文件修改**：`edit` 采用 Codex 式 `行号 + 空格 + +/- + 内容`：删除行整行背景 `#4A221D`，新增行整行背景 `#213A2B`；换行后内容悬挂对齐到正文列，context 行无背景，Pi 自带的 compact context window 不再二次截断。`write` 仍提供带行号的写入内容预览。
+- **命令执行**：`Running → Ran`，标题加粗。命令在换行**前**按 Codex Catppuccin Mocha 调色板做完整语法高亮（executable 蓝、keyword 紫、string 绿、number 橙、operator 青、parameter 红、builtin 红壳、comment/标点灰蓝）；continuation 行 `  │ ` 最多 2 个屏幕行。输出首行 `  └ `、后续行 4 空格，wrap 后最多 5 个屏幕行，超出做 middle truncation。错误前景标红。
+- **文件探索**：`read/grep/find/ls` 使用 `Exploring → Explored`，动作动词使用 ANSI cyan，查询与路径之间的 ` in ` 使用 dim。成功输出默认折叠；点击工具行或使用 Pi 当前的工具展开快捷键可查看所有文本块。快捷键提示来自 Pi，自定义键位不会被覆盖。
+- **文件修改**：`edit` 采用 Codex 式 `行号 + 空格 + +/- + 内容`：删除行整行背景 `#4A221D`，新增行整行背景 `#213A2B`（truecolor；ANSI-256 使用 22/52；ANSI-16 仅前景色），diff 正文按文件扩展名做语法高亮且前景 reset 不清除 diff 背景；换行后内容悬挂对齐到正文列，context 行无背景，Pi 自带的 compact context window 不再二次截断。
+- **写入（write）**：内建 `write` 工具在 `tool_execution_start` 读取 pre-image、`tool_execution_end` 验证 post-image，只在可靠时呈现结果：新文件显示 `Added path (+N -0)` 与全绿新增面，覆盖写显示 `Edited path (+A -D)` 与真实 diff；二进制、超大、不可读、post 不匹配或任何不确定场景一律 fallback 到原始内容预览，**绝不伪造 diff**。追踪状态是 ephemeral 的（进程内存），不写盘、不进会话记录。
 - **图像结果**：保留 Pi 原生图片显示路径，服从 `terminal.showImages`。关闭图片预览时显示轻量图片数量提示，不输出 Base64。
-- **配色**：中性文字、灰色层次、红绿 diff 和错误色；主题不强制终端背景色。
+- **配色**：中性文字、灰色层次、红绿 diff 和错误色；shell 输出保留安全 SGR 颜色序列、剥离其他控制序列；主题不强制终端背景色。
 
 每个工具调用保留独立的显示与展开状态，不跨调用合并结果。连续探索不会完全复现 Codex 的跨调用聚合。输入框、页脚、Working line、思考块、审批流程和快捷键沿用现有插件；本项目没有复制另一套完整终端客户端。
 

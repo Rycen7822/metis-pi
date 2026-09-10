@@ -9,7 +9,7 @@ const source = (name, builtin = true) => ({ name, sourceInfo: {
   source: builtin ? "builtin" : "npm:compatibility-test",
   path: builtin ? `<builtin:${name}>` : "/test/custom.ts",
 } });
-const definitions = [source("read"), source("bash"), source("grep", false)];
+const definitions = [source("read"), source("bash"), source("edit"), source("grep", false)];
 const pi = new Proxy({
   on: (event, handler) => handlers.set(event, handler),
   getAllTools: () => definitions,

@@ -1,16 +1,32 @@
-[38;2;115;115;115m•[39m [1mExplored[22m
-[38;2;115;115;115m  └ [39m[38;2;229;231;235mRead src/server.ts (lines 1–120)[39m
+[38;2;108;112;134m• [1mExplored[22m
+[38;2;108;112;134m  └ [39m[38;2;148;226;213mRead[39m src/server.ts (lines 1–120)
 
-[38;2;115;115;115m•[39m [1mExplored[22m
-[38;2;115;115;115m  └ [39m[38;2;229;231;235mSearch "createServer|listen" in src[39m
+[38;2;108;112;134m• [1mExplored[22m
+[38;2;108;112;134m  └ [39m[38;2;148;226;213mSearch[39m "createServer|listen" [38;2;108;112;134min[39m src
 
-[38;2;134;201;149m•[39m [1mRan[22m [38;2;229;231;235mnpm test[39m
-[38;2;115;115;115m  └ [39m[38;2;163;163;163m> pi-codex-appearance test[39m
-[38;2;115;115;115m    [39m[38;2;163;163;163mRunning unit tests...[39m
-[38;2;115;115;115m    [39m[38;2;163;163;163m… +6 lines (ctrl+o to expand)[39m
-[38;2;115;115;115m    [39m[38;2;163;163;163mtests 62[39m
-[38;2;115;115;115m    [39m[38;2;163;163;163mpass 62[39m
-[38;2;115;115;115m    [39m[38;2;163;163;163mfail 0[39m
+[38;2;134;201;149m•[39m [1mRan[22m [38;2;137;180;250mrtk[39m git diff [38;2;235;160;172m--numstat[39m [38;2;235;160;172m--[39m src/renderers.ts
+[2m  └ src/renderers.ts | 42 ++++++---[22m
+[2m    1 file changed, 30 insertions(+), 12 deletions(-)[22m
+
+[38;2;134;201;149m•[39m [1mRan[22m [38;2;137;180;250mgrep[39m [38;2;235;160;172m-n[39m [38;2;235;160;172m-e[39m [38;2;166;227;161m'略过'[39m src/*.ts
+[2m  └ src/adapter.ts:73:  // 略过 non-builtin tool rows[22m
+[2m    1 match[22m
+
+[38;2;134;201;149m•[39m [1mRan[22m [38;2;137;180;250mnpm[39m test
+[2m  └ > pi-codex-appearance@0.4.0 test[22m
+[2m    Running unit tests...[22m
+[2m    … +7 lines (ctrl+o to expand)[22m
+[2m    pass 74[22m
+[2m    fail 0[22m
+
+[38;2;134;201;149m•[39m [1mRan[22m [38;2;137;180;250mpython3[39m - [38;2;148;226;213m<<[39m[38;2;166;227;161m'EOF'[39m
+[2m  │ [22m[38;2;166;227;161mprint(1)[39m
+[2m  │ [22mEOF
+[2m  └ 1[22m
+
+[38;2;134;201;149m•[39m [1mRan[22m [38;2;137;180;250mbash[39m script.sh [38;2;250;179;135m2[39m[38;2;148;226;213m>&[39m[38;2;250;179;135m1[39m [38;2;148;226;213m|[39m tail [38;2;235;160;172m-50[39m
+[2m  └ script output line one[22m
+[2m    script output line two[22m
 
 [38;2;115;115;115m•[39m [1mEdited[22m [38;2;229;231;235m.work/EverTrace_development_plan.md[39m ([38;2;134;201;149m+1[39m [38;2;239;139;139m-1[39m)
   [38;2;115;115;115m2029[39m [38;2;115;115;115m [39m
@@ -20,13 +36,12 @@
 [48;2;33;58;43m        [38;2;229;231;235m单一事实来源。[39m                                                                                          [49m
   [38;2;115;115;115m2031[39m [38;2;115;115;115m [39m
 
-[38;2;115;115;115m•[39m [1mExplored[22m
-[38;2;115;115;115m  └ [39m[38;2;229;231;235mRead figures/teaser.png[39m
+[38;2;108;112;134m• [1mExplored[22m
+[38;2;108;112;134m  └ [39m[38;2;148;226;213mRead[39m figures/teaser.png
 [38;2;115;115;115m  └ [39m[38;2;115;115;115m1 image (TUI preview disabled)[39m
 
-[38;2;115;115;115m•[39m [1mRunning[22m [38;2;229;231;235mnpm run check[39m
-[38;2;115;115;115m  └ [39m[38;2;163;163;163mChecking TypeScript...[39m
+[38;2;115;115;115m•[39m [1mRunning[22m [38;2;137;180;250mnpm[39m run check
 
-[38;2;239;139;139m•[39m [1mRan[22m [38;2;229;231;235mcat /protected/config.json[39m
-[38;2;115;115;115m  └ [39m[38;2;239;139;139mcat: /protected/config.json: Permission denied[39m
-[38;2;115;115;115m    [39m[38;2;239;139;139mCommand exited with code 1[39m
+[38;2;239;139;139m•[39m [1mRan[22m [38;2;137;180;250mcat[39m /protected/config.json
+[2m  └ cat: /protected/config.json: Permission denied[22m
+[2m    Command exited with code 1[22m

@@ -70,11 +70,11 @@ test("edit diffs use line-number-first Codex ordering and are not arbitrarily tr
 
 test("Pi display diff parser keeps line numbers and hunk separators", () => {
   assert.deepEqual(parseDisplayDiff("  9 before\n-10 old\n+10 new\n     ...\n  20 after"), [
-    { kind: "context", lineNumber: 9, content: "before" },
-    { kind: "remove", lineNumber: 10, content: "old" },
-    { kind: "add", lineNumber: 10, content: "new" },
+    { kind: "context", oldNumber: undefined, newNumber: 9, lineNumber: 9, content: "before" },
+    { kind: "remove", oldNumber: 10, newNumber: undefined, lineNumber: 10, content: "old" },
+    { kind: "add", oldNumber: undefined, newNumber: 10, lineNumber: 10, content: "new" },
     { kind: "separator", content: "…" },
-    { kind: "context", lineNumber: 20, content: "after" },
+    { kind: "context", oldNumber: undefined, newNumber: 20, lineNumber: 20, content: "after" },
   ]);
 });
 

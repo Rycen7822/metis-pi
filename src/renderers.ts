@@ -1,73 +1,31 @@
-// Derived from DanielSuhett/pi-codex-style (MIT). See LICENSE and NOTICE.
-// Every transformation in this module affects a DISPLAY string/component only.
-export const TOOL_NAMES = ["bash", "powershell", "read", "grep", "find", "ls", "edit", "write"] as const;
-export type ToolName = typeof TOOL_NAMES[number];
-export type RecordValue = Readonly<Record<string, unknown>>;
-export interface Palette { fg(color: string, text: string): string; bold(text: string): string }
-export interface ViewContext {
-  readonly args?: unknown;
-  readonly cwd?: string;
-  readonly state?: unknown;
-  readonly isPartial?: boolean;
-  readonly isError?: boolean;
-  readonly executionStarted?: boolean;
-  readonly expanded?: boolean;
-  readonly showImages?: boolean;
-  readonly lastComponent?: unknown;
-}
-export interface ViewOptions { readonly expanded?: boolean; readonly isPartial?: boolean }
-export interface Component { render(width: number): string[] }
-export interface TextComponent extends Component { setText(text: string): void }
-export type TextFactory = (text: string) => TextComponent;
-export type Highlight = (text: string, language: string) => string;
-export interface Renderers {
-  renderCall(args: unknown, theme: Palette, context: ViewContext): Component;
-  renderResult(result: unknown, options: ViewOptions, theme: Palette, context: ViewContext): Component;
-}
-export interface DiffStats { added: number; removed: number }
-export type DiffRowKind = "add" | "remove" | "context" | "separator" | "metadata";
-export interface DiffRow {
-  readonly kind: DiffRowKind;
-  readonly lineNumber?: number;
-  readonly content: string;
-}
-export interface DiffComponentInput {
-  readonly diff: string;
-  readonly filePath: string;
-  readonly theme: Palette;
-  readonly context: ViewContext;
-  readonly options: ViewOptions;
-}
-export type DiffFactory = (input: DiffComponentInput) => Component;
+// Renderer registration layer. Every transformation here affects a DISPLAY
+// string/component only; tool data, results and context are never modified.
+// Rendering internals live in shell.ts / diff.ts / explore.ts / file-change.ts.
 
-export interface DiffLayoutOps {
-  wrap(text: string, width: number): string[];
-  visibleWidth(text: string): number;
-}
-export const CODEX_DIFF_DARK_ADD_BG = [33, 58, 43] as const; // #213A2B
-export const CODEX_DIFF_DARK_DEL_BG = [74, 34, 29] as const; // #4A221D
-const DIFF_LEFT_INSET = 2;
-const BG_RESET = "\x1b[49m";
-const DIM_ON = "\x1b[2m";
-const INTENSITY_RESET = "\x1b[22m";
+import { renderExplorationLines, type ExplorationRow } from "./explore.ts";
+import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
+import { renderShellRow, type LayoutOps } from "./shell.ts";
+import { parseDisplayDiff, DIM_ON, INTENSITY_RESET, BG_RESET, CODEX_DIFF_DARK_ADD_BG, CODEX_DIFF_DARK_DEL_BG, DIFF_LEFT_INSET, type DiffStats } from "./diff.ts";
+import { fileChangeStats, changeVerb } from "./file-change.ts";
+import { foregroundAnsi, detectColorLevel } from "./palette.ts";
+
+export { asRecord, safeText, TOOL_NAMES } from "./tool-names.ts";
+export type {
+  ToolName, RecordValue, Palette, ViewContext, ViewOptions, Component, TextComponent,
+  TextFactory, Highlight, Renderers, DiffComponentInput, DiffFactory, DiffLayoutOps,
+} from "./tool-names.ts";
+export { parseDisplayDiff } from "./diff.ts";
+export type { DiffRow, DiffRowKind, DiffStats } from "./diff.ts";
+export type { FileChange, FileChangeKind } from "./file-change.ts";
+
 const PREVIEW_LINES = 5;
 const COMMAND_LINES = 2;
 const MAX_PREVIEW_LINE_CHARS = 1200;
 const EXPLORATION = new Set<ToolName>(["read", "grep", "find", "ls"]);
 const SHELL = new Set<ToolName>(["bash", "powershell"]);
-export function asRecord(value: unknown): RecordValue {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
-}
-export function safeText(text: string): string {
-  return text
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b[P^_X][\s\S]*?\x1b\\/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
-}
+
 function string(value: unknown): string { return typeof value === "string" ? value : ""; }
-function path(args: RecordValue, ctx: ViewContext): string {
+function path(args: Record<string, unknown>, ctx: ViewContext): string {
   let value = string(args.path) || string(args.file_path) || ".";
   if (ctx.cwd && value.startsWith(`${ctx.cwd}/`)) value = value.slice(ctx.cwd.length + 1);
   return value;
@@ -103,32 +61,6 @@ function highlight(text: string, language: string, theme: Palette, paint?: Highl
   try { if (paint) return paint(text, language); } catch { /* Syntax colouring is optional. */ }
   return theme.fg("toolTitle", text);
 }
-export function parseDisplayDiff(diffText: string): DiffRow[] {
-  const rows: DiffRow[] = [];
-  for (const raw of safeText(diffText).split("\n")) {
-    if (/^\s*\.\.\.\s*$/.test(raw)) {
-      rows.push({ kind: "separator", content: "…" });
-      continue;
-    }
-    // Pi 0.85.x EditToolDetails.diff is display-oriented:
-    //   "- 2030 old", "+ 2030 new", "  2029 context".
-    // Keep the parser deliberately narrow so arbitrary tool text is never
-    // reinterpreted as a diff.
-    const match = raw.match(/^([+\- ])(\s*\d*)\s(.*)$/);
-    if (match) {
-      const lineNumberText = match[2].trim();
-      const lineNumber = lineNumberText ? Number(lineNumberText) : undefined;
-      rows.push({
-        kind: match[1] === "+" ? "add" : match[1] === "-" ? "remove" : "context",
-        lineNumber: Number.isFinite(lineNumber) ? lineNumber : undefined,
-        content: match[3].replace(/\t/g, "    "),
-      });
-      continue;
-    }
-    if (raw.length) rows.push({ kind: "metadata", content: raw.replace(/\t/g, "    ") });
-  }
-  return rows;
-}
 
 export function diffStats(value: unknown): DiffStats | undefined {
   const diff = asRecord(asRecord(value).details).diff;
@@ -155,6 +87,7 @@ export function formatDisplayDiff(diffText: string, theme: Palette): string {
     return `  ${theme.fg("dim", number)} ${theme.fg(signColor, sign)}${theme.fg(contentColor, row.content)}`.trimEnd();
   }).join("\n");
 }
+
 export function renderCodexDiffLines(
   diffText: string,
   width: number,
@@ -222,13 +155,21 @@ export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: 
   if (EXPLORATION.has(name)) {
     const title = ctx.isError ? "Exploration failed" : done ? "Explored" : "Exploring";
     const verbs = { read: "Read", grep: "Search", find: "Find", ls: "List" } as const;
-    let description = `${verbs[name as keyof typeof verbs]} ${path(args, ctx)}`;
-    if (name === "grep" || name === "find") description = `${verbs[name]} ${JSON.stringify(string(args.pattern))} in ${path(args, ctx)}`;
+    const verb = verbs[name as keyof typeof verbs] ?? "Read";
+    const target = typeof args.pattern === "string" ? JSON.stringify(args.pattern) : path(args, ctx);
+    const inPath = typeof args.pattern === "string" ? path(args, ctx) : undefined;
+    let suffix = "";
     if (name === "read" && typeof args.offset === "number" && Number.isFinite(args.offset)) {
       const end = typeof args.limit === "number" && Number.isFinite(args.limit) ? `–${args.offset + args.limit - 1}` : " onward";
-      description += ` (lines ${args.offset}${end})`;
+      suffix = ` (lines ${args.offset}${end})`;
     }
-    return `${marker} ${theme.bold(title)}\n${gutter([shortened(safeText(description))], theme, "toolTitle")}`;
+    // Codex exploring_display_lines: cyan verb, dim " in " between query and path.
+    const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
+    return renderExplorationLines(
+      { running: !done, isError: ctx.isError === true, rows },
+      { kind: "truecolor" },
+      theme,
+    ).join("\n");
   }
   if (SHELL.has(name)) {
     const value = string(args.command) || "…";
@@ -286,7 +227,19 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   if (other.length) sections.push(gutter([`${other.length} additional non-text content block(s)`], theme, "dim"));
   return sections.filter(Boolean).join("\n");
 }
-export function makeRenderers(makeText: TextFactory, expandHint: () => string, paint?: Highlight, makeDiff?: DiffFactory): Record<ToolName, Renderers> {
+export interface ShellComponentInput {
+  readonly name: ToolName;
+  readonly args: Record<string, unknown>;
+  readonly result: unknown;
+  readonly options: ViewOptions;
+  readonly theme: Palette;
+  readonly context: ViewContext;
+  readonly expandHint: string;
+  readonly colorLevel: import("./palette.ts").ColorLevel;
+}
+export type ShellFactory = (input: ShellComponentInput) => Component;
+
+export function makeRenderers(makeText: TextFactory, expandHint: () => string, paint?: Highlight, makeDiff?: DiffFactory, makeShell?: ShellFactory, session?: import("./extension.ts").AppearanceSession): Record<ToolName, Renderers> {
   const ownComponents = new WeakSet<object>();
   const views = new WeakMap<object, { call?: TextComponent; stats?: DiffStats }>();
   function view(ctx: ViewContext) {
@@ -327,6 +280,32 @@ export function makeRenderers(makeText: TextFactory, expandHint: () => string, p
             theme, context: ctx, options,
           });
         }
+      }
+      if (name === "write" && !options.isPartial && session) {
+        // Write rows prefer tracker-produced honest diffs; without a tracked
+        // change the written-content preview (formatResult) stays as fallback.
+        const toolCallId = typeof ctx.toolCallId === "string" ? ctx.toolCallId : undefined;
+        const change = toolCallId ? session.writeChanges.get(toolCallId) : undefined;
+        if (change && change.kind !== "unavailable" && change.diff !== undefined) {
+          return makeDiff
+            ? makeDiff({
+                diff: change.diff, filePath: path(asRecord(ctx.args), ctx),
+                theme, context: ctx, options,
+              })
+            : component(formatDisplayDiff(change.diff, theme), ctx);
+        }
+        if (change && change.kind === "add") {
+          // New file: Codex "Added path (+N -0)" + all-insert surface is
+          // rendered by the shell component from args.content; nothing to add
+          // here (result text is only a confirmation).
+          return component("", ctx);
+        }
+      }
+      if (SHELL.has(name) && makeShell && session) {
+        return makeShell({
+          name, args: asRecord(ctx.args), result, options, theme, context: ctx, expandHint: expandHint(),
+          colorLevel: session.colorLevel,
+        });
       }
       return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
     },
