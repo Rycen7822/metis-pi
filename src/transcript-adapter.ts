@@ -66,7 +66,8 @@ export interface TranscriptAdapterInput {
 
 /** Structural prefix of the stock updateDisplay (bg function head only —
  * resilient to trailing code changes, strict about its identity). */
-const UPDATE_DISPLAY_HEAD = "constbgFn=this.isPartial?(";
+const UPDATE_DISPLAY_HEAD = "letbgFn=this.isPartial?";
+const UPDATE_DISPLAY_HEAD_ALT = "constbgFn=this.isPartial?(";
 /** Structural prefix of the stock updateContent. */
 const UPDATE_CONTENT_HEAD = "this.lastMessage=message;this.isStreaming=isStreaming;this.contentContainer.clear();";
 
@@ -108,7 +109,9 @@ function decorateToolRows(input: TranscriptAdapterInput): { installed: boolean; 
     return { installed: false, reason: "Pi tool-row updateDisplay missing or read-only", dispose() {} };
   }
   const body = methodBody(descriptor.value);
-  if (!body.startsWith(UPDATE_DISPLAY_HEAD)) {
+  // Pi's TS loader strips type annotations AND the const declaration can be
+  // emitted as let; accept both stock shapes.
+  if (!body.startsWith(UPDATE_DISPLAY_HEAD) && !body.startsWith(UPDATE_DISPLAY_HEAD_ALT)) {
     return { installed: false, reason: "unrecognized Pi tool-row updateDisplay shape (host changed or patched)", dispose() {} };
   }
   const original = descriptor.value as (this: unknown) => void;
