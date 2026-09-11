@@ -80,9 +80,13 @@ frame cadence.
 - `npm run test:host` runs against the REAL installed
   `@earendil-works/pi-coding-agent` (0.85.1 dist) and real pi-tui through
   `index.ts`'s default export — component-level behavior above is not faked.
-- PTY-driven real `pi` TUI (user's own extension stack): fresh start frame,
-  `/codex-ui` output (`0.8.1 diagnostics:` incl. `config: thinking=full/full
-  rail=on writePreview=8 rows`), no crashes/warnings, extensions load cleanly.
+- PTY-driven real `pi` TUI (user's own extension stack), HEAD `ae09669`:
+  fresh start frame shows the `Pi 0.85.1 · codex-appearance 0.8.1` header and
+  native footer; `/codex-ui` reports `0.8.1 diagnostics:`, chrome applied,
+  transcript applied, `decorations: group-spacing=applied, separator=applied,
+  thinking-rail=applied`, clock idle (timers=0), and
+  `config: thinking=full/full rail=on writePreview=8 rows` — no crashes,
+  no appearance warnings.
 - `pi -p` print-mode smoke: extension loads without errors (chrome/`/codex-ui`
   are TUI-only by design; pre-existing third-party `pi-context-view` command
   error is unrelated to this package).
