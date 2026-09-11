@@ -86,17 +86,40 @@ export function createFooterComponent(
     branch = footerData?.getGitBranch?.();
     deps.requestRender();
   });
-  const paint = theme.fg ?? ((_k: string, t: string) => t);
+  // The host may pass a theme proxy that is not yet bound to a concrete Theme
+  // instance (early footer construction). Resolve the painter LAZILY at
+  // render time and fall back to plain text if the theme is unusable.
+  const paint = (): (key: string, text: string) => string => {
+    const probe = (fg: (k: string, t: string) => string): boolean => {
+      try {
+        const probeText = "\u0000probe";
+        return typeof fg("dim", probeText) === "string" && fg("dim", probeText) !== probeText;
+      } catch {
+        return false;
+      }
+    };
+    if (theme && typeof theme.fg === "function" && probe(theme.fg)) {
+      return (k, t) => (theme as { fg: (k: string, t: string) => string }).fg(k, t);
+    }
+    const globalTheme = (globalThis as Record<symbol, unknown>)[
+      Symbol.for("@earendil-works/pi-coding-agent:theme")
+    ] as { fg?: (k: string, t: string) => string } | undefined;
+    if (globalTheme && typeof globalTheme.fg === "function" && probe(globalTheme.fg)) {
+      return (k, t) => (globalTheme as { fg: (k: string, t: string) => string }).fg(k, t);
+    }
+    return (_k: string, t: string) => t;
+  };
 
   return {
     render(width: number): string[] {
+      const painter = paint();
       const left = footerLeft(deps.getModel(), deps.getCwd(), branch);
       const right = footerRight(deps.getContextUsage());
       const rows: string[] = [];
       const main = joinSides(left, right, width);
       if (main.trim()) rows.push(main);
       const ext = extensionStatusLine(footerData?.getExtensionStatuses?.());
-      if (ext) rows.push(truncate(paint("dim", ext), width));
+      if (ext) rows.push(truncate(painter("dim", ext), width));
       return rows;
     },
     invalidate(): void {
