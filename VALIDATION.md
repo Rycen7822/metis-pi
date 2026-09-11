@@ -1,3 +1,31 @@
+# Validation record — 0.8.2 (crash hotfix)
+
+Real-use crash captured by the user's `pi-capture` wrapper: every session
+that streamed write arguments died within ~3 minutes with
+`TypeError: Cannot read properties of undefined (reading 'visibleWidth')`
+at `write-preview.ts:129` via `CodexWriteCallComponent.render` — the host
+process exited through `uncaughtException` while tearing down the
+alt-screen, so the terminal showed nothing.
+
+Root cause: the renderers' `lastComponent` reuse path builds a PARTIAL
+input (it cannot know component-owned `layout`/`maxRows`);
+`CodexWriteCallComponent.update()` replaced `#input` wholesale, dropping
+`layout` for every frame after the first.
+
+Fix + verification:
+
+| Check | Result |
+| --- | --- |
+| `update()` merge semantics (partial input merged, component-owned fields kept) | applied |
+| `renderWritePreview` defensive layout fallback (never kill the host) | applied |
+| Regression test `write-stream-crash.test.mts` (real `ToolExecutionComponent.updateArgs` → `render` ×4) | pass; verified to reproduce the crash against the broken `update()` |
+| `npm test` | 148/148 |
+| `npm run test:chrome` | 7/7 |
+| `npm run check` | clean |
+| `npm run test:host` | PASS |
+
+---
+
 # Validation record — 0.8.1
 
 ## Scope

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.2
+
+Crash hotfix for a 0.8.1 regression (found in real use, captured by the
+user's `pi-capture` wrapper — thank you):
+
+- `CodexWriteCallComponent.update()` REPLACED its whole input with the
+  renderers' reuse-path input, which does not carry `layout`/`maxRows`
+  (those are component-owned). From the second `updateArgs` frame on,
+  `renderWritePreview` read `visibleWidth` off `undefined` and the
+  uncaughtException took the whole pi process down — every session that
+  streamed write arguments crashed within minutes, with no visible error
+  (the stack printed while the alt-screen was being torn down).
+- Fix: `update()` now MERGES the partial input over the existing one
+  (component-owned fields survive), plus a defensive fallback in
+  `renderWritePreview` that degrades to ASCII layout ops if `layout` is
+  ever missing — a display renderer must never kill the host process.
+- Regression test added (`write-stream-crash.test.mts`): the real host
+  flow (`ToolExecutionComponent.updateArgs` → `render` × 4 frames) no
+  longer crashes; verified to fail against the broken `update()`.
+
 ## 0.8.1
 
 Fix round on the 0.8.0 UI owner: structured Writing header, physical-row

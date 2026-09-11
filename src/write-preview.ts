@@ -122,9 +122,15 @@ export function renderWritePreview(
     maxRows?: number;
   },
 ): string[] {
-  const { width, stage, expanded, theme, colorLevel, layout, gutter } = options;
+  const { width, stage, expanded, theme, colorLevel, gutter } = options;
   const totalBudget = Math.max(1, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
   const headerRows = Math.max(0, options.headerRows ?? 0);
+  // Defensive fallback (0.8.1 crash lesson): a renderer must NEVER take the
+  // host process down. If layout ops are missing, degrade to ASCII ops.
+  const layout: DiffLayoutOps = options.layout ?? {
+    wrap: (text: string) => [text],
+    visibleWidth: (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "").length,
+  };
   // Full deduction: gutter + line-number column + one separator space.
   const gutterWidth = Math.max(0, layout.visibleWidth(gutter));
   const bodyBudget = Math.max(1, totalBudget - headerRows - 1 /* stage line */);

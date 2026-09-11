@@ -163,20 +163,40 @@ class CodexWriteCallComponent implements Tui.Component {
     this.#input = input;
   }
 
-  update(next: WritePreviewInput & { headerText: string; layout: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }): void {
-    const prev = this.#input;
-    this.#input = next;
+  update(next: WritePreviewInput & { headerText?: string; layout?: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }): void {
+    // The renderers' reuse path builds a PARTIAL input (no layout/maxRows -
+    // those are component-owned). Merge instead of replacing: a full replace
+    // dropped `layout` and crashed render on the next frame (0.8.1 crash).
+    this.#input = {
+      ...next,
+      headerText: next.headerText ?? this.#input.headerText,
+      layout: next.layout ?? this.#input.layout,
+      maxRows: next.maxRows ?? this.#input.maxRows,
+    };
     // Bump the revision only when VISIBLE state changed (content, stage,
-    // header, expansion, colors) — identical repeated snapshots keep the
+    // header, expansion, colors) - identical repeated snapshots keep the
     // old frame without a re-layout.
+    const prev = this.#prevVisible;
     if (prev.contentPrefix !== next.contentPrefix
         || prev.stage !== next.stage
-        || prev.headerText !== next.headerText
-        || prev.expanded !== next.expanded
-        || prev.colorLevel.kind !== next.colorLevel.kind) {
+        || (next.headerText ?? "") !== prev.headerText
+        || next.expanded !== prev.expanded
+        || next.colorLevel.kind !== prev.colorKind) {
       this.#revision += 1;
     }
+    this.#prevVisible = {
+      contentPrefix: next.contentPrefix,
+      stage: next.stage,
+      headerText: next.headerText ?? "",
+      expanded: next.expanded,
+      colorKind: next.colorLevel.kind,
+    };
   }
+
+  #prevVisible: {
+    contentPrefix: string; stage: string; headerText: string;
+    expanded: boolean; colorKind: string;
+  } = { contentPrefix: "", stage: "", headerText: "", expanded: false, colorKind: "" };
 
   render(width: number): string[] {
     const expanded = this.#input.expanded === true;

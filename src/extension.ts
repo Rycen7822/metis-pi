@@ -327,7 +327,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           ui.setHeader?.((_tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) =>
             createHeaderComponent(
               {
-                appearanceVersion: "0.8.1",
+                appearanceVersion: "0.8.2",
                 piVersion: "0.85.1",
                 getModel: () => hostContext?.model,
                 getCwd: () => hostContext?.cwd ?? "",
