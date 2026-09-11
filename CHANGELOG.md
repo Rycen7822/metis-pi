@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.3
+
+Write call/title fixes from real-use screenshots:
+
+- **Bare `write` fallback after completion**: after a write finished, the
+  call slot silently degraded to the host's bare tool-name fallback. The
+  renderers' `component()` reuse helper called `setText` on ANY of our
+  previous components — including the 0.8.1 write-call composite, which has
+  no `setText` → TypeError → host catch → `createCallFallback()`. The helper
+  now reuses only components that actually implement `setText`; completed
+  writes show `• Wrote/Added/Edited <path> (+N -M)` aligned with `• Ran`.
+- **`(path pending…)` placeholder**: content-first providers stream a
+  write's `content` before its `path`, so the streaming header showed a
+  misleading bare `.` (the old fallback). The header now shows
+  `• Writing (path pending…)` and re-renders with the real path the moment
+  the path frame arrives.
+
 ## 0.8.2
 
 Crash hotfix for a 0.8.1 regression (found in real use, captured by the

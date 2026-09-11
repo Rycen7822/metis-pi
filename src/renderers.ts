@@ -31,7 +31,7 @@ const SHELL = new Set<ToolName>(["bash", "powershell"]);
 
 function string(value: unknown): string { return typeof value === "string" ? value : ""; }
 function path(args: Record<string, unknown>, ctx: ViewContext): string {
-  let value = string(args.path) || string(args.file_path) || ".";
+  let value = string(args.path) || string(args.file_path);
   if (ctx.cwd && value.startsWith(`${ctx.cwd}/`)) value = value.slice(ctx.cwd.length + 1);
   return value;
 }
@@ -138,7 +138,14 @@ export function shellTitle(ctx: ViewContext, theme: Palette): { bullet: string; 
 export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff | undefined): string {
   const args = asRecord(ctx.args);
   const done = ctx.isPartial === false;
-  const target = theme.fg("toolTitle", shortened(safeText(path(args, ctx))));
+  // 0.8.2: while args stream, `path` may not have arrived yet (content-first
+  // providers). Show an explicit dim placeholder instead of the old bare "."
+  // that read like a stray bullet; once the path frame lands, updateArgs
+  // re-renders the header with the real path.
+  const rawPath = shortened(safeText(path(args, ctx)));
+  const target = rawPath
+    ? theme.fg("toolTitle", rawPath)
+    : theme.fg("dim", "(path pending…)");
   if (!done) {
     return `${theme.fg("dim", "•")} ${theme.bold("Writing")} ${target}`;
   }
@@ -296,7 +303,13 @@ export function makeRenderers(
   }
   function component(text: string, ctx: ViewContext): TextComponent {
     const previous = ctx.lastComponent;
-    if (previous && typeof previous === "object" && ownComponents.has(previous)) {
+    // 0.8.2: reuse only OUR Text components that actually have setText.
+    // The write-call composite (CodexWriteCallComponent) is ours but has no
+    // setText — calling it threw TypeError and the host silently fell back
+    // to the bare `write` call title after completion.
+    const reusable = previous && typeof previous === "object" && ownComponents.has(previous)
+      && typeof (previous as { setText?: unknown }).setText === "function";
+    if (reusable) {
       (previous as TextComponent).setText(text);
       return previous as TextComponent;
     }

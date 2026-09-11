@@ -1,3 +1,17 @@
+# Validation record — 0.8.3 (write title fixes)
+
+Two real-use screenshot findings, both reproduced in the real host
+component before fixing:
+
+| Finding | Root cause | Fix | Verified |
+| --- | --- | --- | --- |
+| Completed write showed a bare lowercase `write` with no bullet/path | `component()` reuse helper called `setText` on the 0.8.1 write-call composite (no such method) → TypeError → host catch → `createCallFallback()` | reuse only components implementing `setText` | final frame now `• Wrote <path>` + `└` result rows — identical shape to `• Ran` |
+| Streaming write header showed `• Writing .` (path not yet streamed) | content-first provider: `path` arrives after `content`; old `path()` fallback was `"."` | explicit dim `(path pending…)` placeholder; header re-renders with the real path when the frame lands | frame sequence: `• Writing (path pending…)` → `• Writing …/raw_body_draft.md` → `• Wrote …/raw_body_draft.md` |
+
+`npm test` 148/148 · `test:chrome` 7/7 · `check` clean · `test:host` PASS.
+
+---
+
 # Validation record — 0.8.2 (crash hotfix)
 
 Real-use crash captured by the user's `pi-capture` wrapper: every session
