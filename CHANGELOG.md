@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.1
+
+0.9.0 评审轮修复与清理（同一功能，无新表面）：
+
+- **shell 命令复制净化**：命令 content span 的文本不再携带语法高亮 ANSI。序列化器
+  逐 grapheme 切 span 文本并原样复制，彩色终端下此前会把转义字节写进剪贴板并错位。
+- **序列化失败回退修正**：catch 回退改用同一 `sourceLines`——scrollView 选区是内容
+  坐标，此前误用屏幕坐标的 `previousScreen` 会复制错行。
+- **空结果原生对齐**：纯装饰选区返回 `undefined`（stock 语义），`hasActiveSelection()`
+  与宿主 Esc/剪贴板路由完全一致；Ctrl+C 消费语义不变（编辑器钩子按选区几何判断）。
+- **流式尾窗拼接**：isPartial shell result 与折叠 write preview 仅对窗口首行强制
+  hard，窗内软拼接保留（含 elision 提示挤掉首行后暴露的新首行）。
+- **shorten 既有 bug**：行长度上限改按可见字符计——彩色命令此前会被完整渲染却多挂
+  一个假" …"（原始长度含 ANSI 触发了守卫）。
+- **健壮性**：mirror 缓存命中也为新数组注册 product；thinking rail 对已带 `▏`/`| `
+  前缀的 pass-through 行按 0 偏移；排队 Ctrl+C 复制当前选区而非旧快照；
+  `/codex-ui` copy-stats 增加产品缓存统计（`cache=hits/misses`）。
+- **清理（-88 行）**：删除恒等 `stripOwnPrefix`、别名 `visibleOfStyled`、未使用的
+  `rowsFromProvenance`/`buildCellTable`/`wide`/`ResolvedRow` 等；Box/Container 与
+  Markdown/Text 原型包装器各自合并为参数化实现；新增 copy-provenance 回归测试
+  （5 例：ANSI 净化、header-only strip、流式/折叠尾窗拼接）。
+
+验证：222/222 单元 + tsc 双配置 + chrome 14/14 + host smoke + PTY 真机（SGR 鼠标
+拖选 + Ctrl+C → exact=2、161 字符与回复等长）。
+
 ## 0.9.0
 
 逻辑选区复制（fullscreen）：去掉终端宽度造成的视觉折行，保留真实换行与缩进；有选区时

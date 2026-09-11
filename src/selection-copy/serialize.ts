@@ -178,7 +178,6 @@ export class SelectionSerializer {
       return;
     }
     onUpdate({ mapped: true });
-    if (resolved.row.breakBefore === "unknown") onUpdate({ soft: false });
     if (resolved.row.breakBefore !== "soft") onUpdate({ soft: false });
     if (resolved.row.bridge) onUpdate({ bridge: resolved.row.bridge });
     // Absolute position of a product column in the selection's space.
@@ -251,7 +250,9 @@ export class SelectionSerializer {
     return this.#fns.stripTerminalSequences(this.#fns.sliceByColumn(source, start, end - start, true)).trimEnd();
   }
 
-  /** Cut a span's visible text to the selected cell subrange. */
+  /** Cut a span's visible text to the selected cell subrange. localFrom/localTo
+   * come from the host's grapheme-snapped selection columns, so they align
+   * with grapheme edges here. */
   #sliceSpanText(text: string, localFrom: number, localTo: number): string {
     let cum = 0;
     let charPos = 0;
@@ -259,10 +260,9 @@ export class SelectionSerializer {
     for (const { segment } of GRAPHEMES.segment(text)) {
       const width = this.#fns.visibleWidth(segment);
       if (charStart === -1 && cum + width > localFrom) charStart = charPos;
-      if (cum + width > localTo) return text.slice(charStart === -1 ? 0 : charStart, charPos);
+      if (cum + width > localTo) return text.slice(charStart, charPos);
       cum += width;
       charPos += segment.length;
-      if (charStart === -1 && cum > localFrom) charStart = charPos;
     }
     return charStart === -1 ? "" : text.slice(charStart);
   }

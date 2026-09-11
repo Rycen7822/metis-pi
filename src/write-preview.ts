@@ -110,7 +110,7 @@ export function renderWritePreview(
   const { width, stage, expanded, theme, colorLevel, gutter } = options;
   const totalBudget = Math.max(1, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
   const headerRows = Math.max(0, options.headerRows ?? 0);
-  // Defensive fallback (0.8.1 crash lesson): a renderer must NEVER take the host process down — degrade to ASCII layout ops when missing.
+  // A renderer must never take the host process down — degrade to ASCII layout ops when missing.
   const layout: DiffLayoutOps = options.layout ?? {
     wrap: (text: string) => [text],
     visibleWidth: (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "").length,
@@ -178,7 +178,8 @@ export function renderWritePreview(
     });
   }
   const visibleRows = expanded ? rows : rows.slice(-bodyBudget);
-  const visibleCopy = expanded ? copyRows : copyRows.slice(-bodyBudget).map((row) => ({ ...row, breakBefore: "hard" as const }));
+  // Only the window's first row lost its predecessor; soft joins among kept rows stay valid.
+  const visibleCopy = expanded ? copyRows : copyRows.slice(-bodyBudget).map((row, index) => (index === 0 ? { ...row, breakBefore: "hard" as const } : row));
 
   const out: string[] = [stageRow, ...visibleRows];
   copy?.push({ spans: [{ colStart: 0, colEnd: width, kind: "decoration" }], breakBefore: "hard" });
@@ -191,6 +192,9 @@ export function renderWritePreview(
       if (out.length >= totalBudget) {
         out.splice(1, 1);
         copy?.splice(1, 1);
+        // The drop may expose a soft continuation as the new window head.
+        const head = copy?.[1];
+        if (copy && head) copy[1] = { ...head, breakBefore: "hard" };
       }
       const hint = `${dim}${gutter}… earlier output (${hiddenLogical} logical line${hiddenLogical === 1 ? "" : "s"}, physical rows elided)${dimOff}`;
       out.push(hint);

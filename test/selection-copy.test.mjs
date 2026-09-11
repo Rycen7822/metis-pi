@@ -4,7 +4,7 @@
 //      a corpus and widths (mirror builds must not degrade).
 //   C. Real TuiAltScreen: real SGR mouse press/motion/release through
 //      handleTerminalInput, then the instance serializer + editor Ctrl+C.
-// A (pure wrap fixtures) and property tests live in selection-wrap.test.mjs.
+// A (seeded property round-trip) lives at the bottom of this file.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -231,16 +231,19 @@ test("real TUI: Ctrl+C with selection consumes the key, copies, keeps the draft"
   assert.equal(cleared, true, "stock clear behavior without selection");
 });
 
-test("real TUI: decoration-only selection returns empty and never touches the clipboard", () => {
+test("real TUI: decoration-only selection returns undefined (stock parity) and never touches the clipboard", () => {
   const sys = makeSystem();
   sys.wrapPrototypes();
   const text = "tiny";
   const { tui } = buildAltScreen(sys, text, 60);
   tui.setCopyOnSelect(false);
-  // The padding band row is pure decoration: mapped spans, no content.
+  // The padding band row is pure decoration: mapped spans, no content. Stock
+  // maps empty extraction to undefined — hasActiveSelection stays false and
+  // host Esc/clipboard routing is untouched.
   tui.selectionAnchor = { row: 0, col: 0, scrollView: undefined, boundary: false };
   tui.selectionFocus = { row: 0, col: 30, scrollView: undefined, boundary: false };
-  assert.equal(tui.getActiveSelectionText(), "", "empty for decoration-only");
+  assert.equal(tui.getActiveSelectionText(), undefined, "undefined for decoration-only (stock parity)");
+  assert.equal(tui.hasActiveSelection(), false, "host hasActiveSelection matches stock");
   const d = sys.diagnostics();
   assert.ok(d.telemetry.emptyDecoration >= 1, "telemetry records empty-decoration");
 });

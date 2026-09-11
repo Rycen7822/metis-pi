@@ -35,8 +35,6 @@ export interface ProvenanceRow {
   bridge: string;
   /** Row starts a host input line (hard boundary), not a soft wrap. */
   hard: boolean;
-  /** Any visible grapheme wider than 1 cell (needs a cell table on copy). */
-  wide: boolean;
 }
 
 const CJK_BREAK = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]/u;
@@ -301,10 +299,9 @@ function tokenize(
   return tokens;
 }
 
-function spansFromGraphemes(graphemes: TaggedGrapheme[]): { spans: ProvenanceSpan[]; wide: boolean } {
+function spansFromGraphemes(graphemes: TaggedGrapheme[]): ProvenanceSpan[] {
   const spans: ProvenanceSpan[] = [];
   let col = 0;
-  let wide = false;
   let index = 0;
   while (index < graphemes.length) {
     const kind = graphemes[index]!.kind;
@@ -313,14 +310,13 @@ function spansFromGraphemes(graphemes: TaggedGrapheme[]): { spans: ProvenanceSpa
     let plainEnd = plainStart;
     while (index < graphemes.length && graphemes[index]!.kind === kind) {
       const g = graphemes[index]!;
-      if (g.cells > 1) wide = true;
       col += g.cells;
       plainEnd = g.plainIndex + g.text.length;
       index++;
     }
     spans.push({ colStart, colEnd: col, kind, plainStart, plainEnd });
   }
-  return { spans, wide };
+  return spans;
 }
 
 function styledFor(graphemes: TaggedGrapheme[]): string {
@@ -542,47 +538,19 @@ export function wrapWithProvenance(
       for (const code of ansiCodesOf(ansi.styled)) tracker.process(code);
     }
     if (rawRows.length === 0) {
-      rows.push({ styled: "", spans: [], bridge: "", hard: true, wide: false });
+      rows.push({ styled: "", spans: [], bridge: "", hard: true });
       continue;
     }
     for (let rowIndex = 0; rowIndex < rawRows.length; rowIndex++) {
       const raw = rawRows[rowIndex]!;
-      const { spans, wide } = spansFromGraphemes(raw.graphemes);
       rows.push({
         styled: raw.styled,
-        spans,
+        spans: spansFromGraphemes(raw.graphemes),
         bridge: raw.bridge,
         hard: rowIndex === 0,
-        wide,
       });
     }
   }
-  return rows.length > 0 ? rows : [{ styled: "", spans: [], bridge: "", hard: true, wide: false }];
+  return rows.length > 0 ? rows : [{ styled: "", spans: [], bridge: "", hard: true }];
 }
 
-/** Join visible text of a wrapped line (lossless through ANSI). */
-export function visibleOfStyled(styled: string): string {
-  return stripAnsi(styled);
-}
-
-/** Cumulative cell offset per visible char of a styled row (wide-char rows
- * need this to map selection cells to char positions). */
-export function buildCellTable(styledRow: string, visibleWidth: (s: string) => number): number[] {
-  const cells: number[] = [];
-  let total = 0;
-  let i = 0;
-  while (i < styledRow.length) {
-    const ansi = extractAnsiCode(styledRow, i);
-    if (ansi) {
-      i += ansi.length;
-      continue;
-    }
-    cells.push(total);
-    const code = styledRow.codePointAt(i) ?? 0;
-    const charLen = code >= 0x10000 ? 2 : 1;
-    const { segment } = [...GRAPHEMES.segment(styledRow.slice(i, i + Math.max(charLen, 2)))][0] ?? { segment: styledRow[i]! };
-    total += visibleWidth(segment);
-    i += segment.length;
-  }
-  return cells;
-}

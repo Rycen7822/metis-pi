@@ -45,7 +45,8 @@ const MAX_LOGICAL_LINE_CHARS = 1200;
  * against the cap. A trailing lone surrogate is dropped to avoid splits.
  */
 function shorten(line: string): string {
-  if (line.length <= MAX_LOGICAL_LINE_CHARS) return line;
+  // The cap counts visible chars only — raw length includes ANSI sequences.
+  if (stripAnsi(line).length <= MAX_LOGICAL_LINE_CHARS) return line;
   let out = "";
   let visible = 0;
   let index = 0;
@@ -236,12 +237,13 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
     colStart: start,
     colEnd: start + layout.visibleWidth(text),
     kind,
-    text: kind === "decoration" ? undefined : layout.visibleWidth(text) > 0 ? text : undefined,
+    // Span text must be plain visible text: the serializer slices and copies it verbatim.
+    text: kind === "decoration" ? undefined : layout.visibleWidth(text) > 0 ? stripAnsi(text) : undefined,
   });
   const pushGapRow = (text: string): void => {
     lines.push(text);
     copy?.push({
-      spans: [{ colStart: 0, colEnd: Math.max(1, layout.visibleWidth(text)), kind: "semantic", text: stripAnsiShell(text) }],
+      spans: [{ colStart: 0, colEnd: Math.max(1, layout.visibleWidth(text)), kind: "semantic", text: stripAnsi(text) }],
       breakBefore: "gap",
     });
   };
@@ -305,7 +307,7 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
     ? (usable - gutterWidth <= 0
       ? [{ text: "", sourceLineIndex: -1, continuation: false }]
       : continuationRows.flatMap((visual) =>
-        wrapStyled(stripOwnPrefix(visual.text), usable - gutterWidth, layout)
+        wrapStyled(visual.text, usable - gutterWidth, layout)
           .map((segment) => ({ text: segment, sourceLineIndex: visual.sourceLineIndex, continuation: true })),
       ))
     : continuationRows;
@@ -327,7 +329,7 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
   );
   let previousSource = 0;
   for (const visual of capped) {
-    const styled = `${DIM_ON}${gutter}${INTENSITY_RESET}${stripOwnPrefix(visual.text)}`;
+    const styled = `${DIM_ON}${gutter}${INTENSITY_RESET}${visual.text}`;
     if (visual.sourceLineIndex === -1 && visual !== gutterRows[0]) {
       // Ellipsis row: a visible hint; the hidden lines behind it are a gap.
       pushGapRow(styled);
@@ -349,24 +351,15 @@ function gutterCopyRow(
   input: ShellLayoutInput,
 ): CopyRow {
   const contentStart = gutterWidth;
-  const text = stripOwnPrefix(visual.text);
+  const text = visual.text;
   return {
     spans: [
       { colStart: 0, colEnd: gutterWidth, kind: "decoration" },
-      { colStart: contentStart, colEnd: contentStart + input.layout.visibleWidth(text), kind: "content", text },
+      // Plain text only: the segment may still carry syntax highlighting.
+      { colStart: contentStart, colEnd: contentStart + input.layout.visibleWidth(text), kind: "content", text: stripAnsi(text) },
     ],
     breakBefore: visual.sourceLineIndex === previousSource ? "soft" : "hard",
   };
-}
-
-function stripAnsiShell(text: string): string {
-  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function stripOwnPrefix(text: string): string {
-  // Ellipsis rows produced by limitFromStartRows already carry dim + "…";
-  // regular segments are re-prefixed with the continuation gutter.
-  return text;
 }
 
 /**
@@ -426,11 +419,11 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
     kept = wrapped; // wrapped, never truncated: full text remains reachable
     keptCopy = copyRows;
   } else if (row.isPartial) {
-    // Streaming: bounded tail (Codex shows the newest rows). The first kept
-    // row may be mid-logical-line: a hard boundary starts the visible window.
+    // Streaming: bounded tail (Codex shows the newest rows). Only the first
+    // kept row may be mid-logical-line; soft joins among kept rows stay valid.
     const from = Math.max(0, wrapped.length - OUTPUT_MAX_ROWS);
     kept = wrapped.slice(from);
-    keptCopy = copyRows.slice(from).map((row) => ({ ...row, breakBefore: "hard" as const }));
+    keptCopy = copyRows.slice(from).map((copyRow, index) => (index === 0 ? { ...copyRow, breakBefore: "hard" as const } : copyRow));
   } else {
     // Budget includes the ellipsis row's own cost.
     const truncated = truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, OUTPUT_SUBSEQUENT_PREFIX, usable);

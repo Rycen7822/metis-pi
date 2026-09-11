@@ -317,6 +317,7 @@ try {
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  provider err: summary Failed after (real terminal evidence)");
+  console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
 } finally {
   try { execFileSync("tmux", ["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* already gone */ }
   server.close();

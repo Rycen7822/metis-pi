@@ -8,13 +8,14 @@
 // Behavioral contract:
 // - No geometric selection → identical to the stock implementation.
 // - Selection with copyable content → exact logical text.
-// - Decoration-only selection → "" (never writes the clipboard, never
-//   triggers editor clear); hasActiveSelection() stays true because the
-//   geometry exists.
+// - Decoration-only selection → undefined, exactly like stock (stock maps
+//   empty text to undefined): hasActiveSelection() stays false and no
+//   clipboard write happens. Ctrl+C is STILL consumed by the editor hook,
+//   which keys off getSelectionBounds (geometry), not the text.
 // - Unmapped regions → native per-row extraction mixed with exact spans,
 //   separated by hard boundaries.
 
-import { SelectionSerializer, type LayoutFrameLike } from "./serialize.ts";
+import { SelectionSerializer, type LayoutBoxLike, type LayoutFrameLike } from "./serialize.ts";
 import type { SerializeHostFns } from "./serialize.ts";
 
 export interface CopyTelemetry {
@@ -96,7 +97,11 @@ export function installInstanceSerializer(tui: AltScreenLike, deps: CopyControll
       if (result.text.length === 0) {
         telemetry.emptyDecoration += 1;
         telemetry.lastMode = "empty-decoration";
-      } else if (result.nativeRows === 0) {
+        // Stock parity: empty extraction maps to undefined (hasActiveSelection
+        // false, no clipboard write, host Esc routing unchanged).
+        return undefined;
+      }
+      if (result.nativeRows === 0) {
         telemetry.exact += 1;
         telemetry.lastMode = "exact";
       } else if (result.mappedRows > 0) {
@@ -111,15 +116,16 @@ export function installInstanceSerializer(tui: AltScreenLike, deps: CopyControll
       deps.telemetry.failed += 1;
       deps.telemetry.lastMode = "failed";
       deps.telemetry.lastReason = error instanceof Error ? error.message : "serialize failed";
-      // Native fallback: stock per-row extraction (without heuristics).
+      // Native fallback over the same sourceLines — scrollView selections are
+      // content-space; previousScreen is screen-space and would copy wrong rows.
       const lines: string[] = [];
-      const source = this.previousScreen ?? [];
       for (let row = selection.start.row; row <= selection.end.row; row++) {
         const columns = columnsFor(row);
-        const line = source[row] ?? "";
+        const line = sourceLines[row] ?? "";
         lines.push(deps.fns.stripTerminalSequences(deps.fns.sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true)).trimEnd());
       }
-      return lines.join("\n");
+      const fallback = lines.join("\n");
+      return fallback.length === 0 ? undefined : fallback;
     }
   };
   Object.defineProperty(prototype, "getActiveSelectionText", {
@@ -147,7 +153,7 @@ function scrollContentLinesOf(tui: AltScreenLike, scrollView: unknown): readonly
   return box?.scrollContentLines;
 }
 
-function findScrollViewBox(box: import("./serialize.ts").LayoutBoxLike, scrollView: unknown): import("./serialize.ts").LayoutBoxLike | undefined {
+function findScrollViewBox(box: LayoutBoxLike, scrollView: unknown): LayoutBoxLike | undefined {
   if (box.scrollView === scrollView) return box;
   for (const child of box.children) {
     const found = findScrollViewBox(child, scrollView);
@@ -189,10 +195,11 @@ export function tryConsumeCopyKey(
   // Selection exists: consume the key regardless of copyability.
   const text = tui.getActiveSelectionText?.() ?? "";
   if (text.length === 0) return true;
-  // Bounded in-flight: snapshot is synchronous; at most one queued copy.
-  const run = (): void => {
+  // Bounded in-flight: snapshot is synchronous; at most one queued copy. A
+  // drained queue copies the CURRENT selection, not the stale first snapshot.
+  const run = (snapshot: string): void => {
     deps.state.inFlight = true;
-    void deps.clipboard(text)
+    void deps.clipboard(snapshot)
       .catch((error) => {
         deps.onError(error instanceof Error ? error.message : String(error));
       })
@@ -200,7 +207,8 @@ export function tryConsumeCopyKey(
         deps.state.inFlight = false;
         if (deps.state.queued > 0) {
           deps.state.queued -= 1;
-          run();
+          const fresh = tui.getActiveSelectionText?.() ?? "";
+          if (fresh.length > 0) run(fresh);
         }
       });
   };
@@ -208,6 +216,6 @@ export function tryConsumeCopyKey(
     if (deps.state.queued < 1) deps.state.queued += 1;
     return true;
   }
-  run();
+  run(text);
   return true;
 }

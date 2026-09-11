@@ -5,7 +5,8 @@
 import { wrapBoxPrototype, wrapContainerPrototype } from "./structure.ts";
 import { wrapMarkdownPrototype, wrapTextPrototype, setLatexPainter, type MarkdownDiagnostics, type WrapDeps } from "./markdown.ts";
 import { installInstanceSerializer, serializerIsLive, tryConsumeCopyKey, type AltScreenLike, type CopyTelemetry, type CopyControllerDeps } from "./controller.ts";
-import type { AdapterHostFns, SerializeHostFns } from "./shared.ts";
+import { cacheStats } from "./model.ts";
+import type { AdapterHostFns } from "./shared.ts";
 import { stripAnsi } from "./wrap.ts";
 import { createCopyLexer } from "./parser.ts";
 
@@ -37,6 +38,7 @@ export interface SelectionCopySystem {
     serializerInstalled: boolean;
     installBlocker: string;
     live: boolean;
+    cache: { hits: number; misses: number };
   };
 }
 
@@ -64,7 +66,6 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
   let serializerInstalled = false;
   let installBlocker = "not attempted (no live TUI captured)";
   let installedTui: AltScreenLike | undefined;
-  let clipboardExecutor: ((text: string) => Promise<boolean>) | undefined;
   const copyState = { inFlight: false, queued: 0 };
 
   const deps: WrapDeps | undefined = fns
@@ -87,17 +88,16 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
         return { installed: false, details: "host bindings unavailable" };
       }
       setLatexPainter(fns!.renderLatex);
-      const results: string[] = [];
-      let installed = true;
-      installed = wrapMarkdownPrototype(host.prototypes.Markdown, deps) && installed;
-      results.push(`markdown=${installed ? "on" : "already-owned"}`);
-      const textOk = wrapTextPrototype(host.prototypes.Text, deps);
-      results.push(`text=${textOk ? "on" : "already-owned"}`);
-      const boxOk = wrapBoxPrototype(host.prototypes.Box);
-      results.push(`box=${boxOk ? "on" : "already-owned"}`);
-      const containerOk = wrapContainerPrototype(host.prototypes.Container);
-      results.push(`container=${containerOk ? "on" : "already-owned"}`);
-      return { installed: true, details: results.join(" ") };
+      const wraps: [string, boolean][] = [
+        ["markdown", wrapMarkdownPrototype(host.prototypes.Markdown, deps)],
+        ["text", wrapTextPrototype(host.prototypes.Text, deps)],
+        ["box", wrapBoxPrototype(host.prototypes.Box)],
+        ["container", wrapContainerPrototype(host.prototypes.Container)],
+      ];
+      return {
+        installed: wraps.every(([, ok]) => ok),
+        details: wraps.map(([name, ok]) => `${name}=${ok ? "on" : "already-owned"}`).join(" "),
+      };
     },
 
     installOnTui(tui: unknown): boolean {
@@ -113,11 +113,6 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
         },
         telemetry,
         prototypePatchedByOther: () => externalPatch,
-      };
-      clipboardExecutor ??= async (text: string): Promise<boolean> => {
-        const copy = (tui as AltScreenLike & { copyTextToClipboard?: (text: string) => Promise<boolean> }).copyTextToClipboard;
-        if (typeof copy !== "function") return false;
-        return copy.call(tui, text);
       };
       serializerInstalled = installInstanceSerializer(tui as AltScreenLike, controllerDeps);
       if (serializerInstalled) installedTui = tui as AltScreenLike;
@@ -158,7 +153,7 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
     },
 
     diagnostics() {
-      return { telemetry, mirrors, externalPatch, serializerInstalled, installBlocker, live: installedTui ? serializerIsLive(installedTui) : false };
+      return { telemetry, mirrors, externalPatch, serializerInstalled, installBlocker, live: installedTui ? serializerIsLive(installedTui) : false, cache: cacheStats() };
     },
   };
 }

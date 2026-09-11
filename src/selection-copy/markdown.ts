@@ -19,11 +19,9 @@ import {
   type CopyProduct,
   type CopyRow,
 } from "./model.ts";
-import { visibleOfStyled, wrapWithProvenance } from "./wrap.ts";
+import { stripAnsi, wrapWithProvenance } from "./wrap.ts";
 import type { AdapterHostFns } from "./shared.ts";
 import type { CopyLexer, MarkdownToken } from "./parser.ts";
-
-type RenderFn = (this: MarkdownInstance, width: number) => string[];
 
 export interface MarkdownInstance {
   text: string;
@@ -400,7 +398,6 @@ interface PendingRow {
   styled: string;
   spans: { colStart: number; colEnd: number; kind: PendingSpanKind; plainStart?: number; plainEnd?: number; text?: string }[];
   breakBefore: BreakBefore;
-  wide: boolean;
   bridge?: string;
 }
 
@@ -422,12 +419,12 @@ function assembleRows(
           const prefix = line.inner
             ? (rowIndex === 0 && line.inner.firstOnRowZero ? line.inner.firstPrefix : line.inner.continuationPrefix)
             : undefined;
-          styledRows.push(prefix ? prefix.styled + wrapped : wrapped);
+          const styled = prefix ? prefix.styled + wrapped : wrapped;
+          styledRows.push(styled);
           pendingRows.push({
-            styled: styledRows[styledRows.length - 1]!,
+            styled,
             spans: [{ colStart: 0, colEnd: Math.max(1, contentWidth), kind: "unknown" as const }],
             breakBefore: "hard",
-            wide: false,
           });
           rowIndex += 1;
         }
@@ -446,7 +443,8 @@ function assembleRows(
       const prefix = line.inner
         ? (rowIndex === 0 && line.inner.firstOnRowZero ? line.inner.firstPrefix : line.inner.continuationPrefix)
         : undefined;
-      styledRows.push(prefix ? prefix.styled + row.styled : row.styled);
+      const styled = prefix ? prefix.styled + row.styled : row.styled;
+      styledRows.push(styled);
       const spans: PendingRow["spans"] = row.spans.map((span) => ({
         colStart: span.colStart + (prefix?.cells ?? 0),
         colEnd: span.colEnd + (prefix?.cells ?? 0),
@@ -458,7 +456,7 @@ function assembleRows(
         spans.unshift({ colStart: 0, colEnd: prefix.cells, kind: prefix.kind, text: prefix.text.length > 0 ? prefix.text : undefined });
       }
       const breakBefore: BreakBefore = rowIndex === 0 ? "hard" : row.hard ? "hard" : "soft";
-      const pending: PendingRow = { styled: styledRows[styledRows.length - 1]!, spans, breakBefore, wide: row.wide };
+      const pending: PendingRow = { styled, spans, breakBefore };
       if (breakBefore === "soft") pending.bridge = row.bridge;
       pendingRows.push(pending);
     }
@@ -480,7 +478,6 @@ function finalizeRows(pending: PendingRow[], plain: string): CopyRow[] {
           : "",
     })),
     breakBefore: row.breakBefore,
-    wide: row.wide,
     bridge: row.bridge,
   }));
 }
@@ -496,36 +493,53 @@ export interface WrapDeps {
   diagnostics: MarkdownDiagnostics;
 }
 
-export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolean {
-  const key = Symbol.for("Rycen7822.pi-codex-appearance.copy-markdown");
+/** Shared render-prototype wrapper: the host render runs untouched, then the
+ * mirror builds (and verifies) a provenance product for the returned array.
+ * Cache hits still register the product for the fresh array — products are
+ * resolved by array identity and the host may return a new array per render. */
+function wrapRenderPrototype<INST extends { text: string }>(
+  prototype: object,
+  key: symbol,
+  deps: WrapDeps,
+  build: (instance: INST, width: number, hostRows: readonly string[], deps: WrapDeps) => CopyProduct | undefined,
+  counters: { built: "markdownBuilt" | "textBuilt"; degraded: "markdownDegraded" | "textDegraded"; fallback: string },
+): boolean {
   if (Object.prototype.hasOwnProperty.call(prototype, key)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
     return false;
   }
-  const original = descriptor.value as RenderFn;
+  const original = descriptor.value as (this: INST, width: number) => string[];
   const cache = new WeakMap<object, { text: string; width: number; product: CopyProduct }>();
-  const wrapper = function (this: MarkdownInstance, width: number): string[] {
+  const wrapper = function (this: INST, width: number): string[] {
     const rows = original.call(this, width);
     try {
       const cached = cache.get(this);
-      if (cached && cached.text === this.text && cached.width === width) return rows;
-      const product = buildMarkdownProduct(this, width, rows, deps);
+      if (cached && cached.text === this.text && cached.width === width) {
+        registerProduct(rows, cached.product);
+        return rows;
+      }
+      const product = build(this, width, rows, deps);
       if (product) {
         registerProduct(rows, product);
         cache.set(this, { text: this.text, width, product });
-        deps.diagnostics.markdownBuilt += 1;
+        deps.diagnostics[counters.built] += 1;
       } else {
-        deps.diagnostics.markdownDegraded += 1;
+        deps.diagnostics[counters.degraded] += 1;
       }
     } catch (error) {
-      deps.diagnostics.markdownDegraded += 1;
-      deps.diagnostics.lastDegradedReason = error instanceof Error ? error.message : "mirror failed";
+      deps.diagnostics[counters.degraded] += 1;
+      deps.diagnostics.lastDegradedReason = error instanceof Error ? error.message : counters.fallback;
     }
     return rows;
   };
   Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
   return true;
+}
+
+export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolean {
+  return wrapRenderPrototype<MarkdownInstance>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-markdown"), deps,
+    buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", fallback: "mirror failed" });
 }
 
 /** The plain string must be assembled BEFORE slicing span texts; rebuild the
@@ -571,7 +585,7 @@ function buildMarkdownProduct(
   for (let i = 0; i < output.styledRows.length; i++) {
     const hostRow = hostRows[padY + i]!;
     const inner = fns.stripTerminalSequences(fns.sliceByColumn(hostRow, padX, contentWidth, true));
-    if (inner.trimEnd() !== visibleOfStyled(output.styledRows[i]!).trimEnd()) {
+    if (inner.trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
       deps.diagnostics.lastDegradedReason = `content mismatch at row ${i}`;
       return undefined;
     }
@@ -605,35 +619,8 @@ function marginRow(row: CopyRow, padX: number, width: number, contentWidth: numb
 }
 
 export function wrapTextPrototype(prototype: object, deps: WrapDeps): boolean {
-  const key = Symbol.for("Rycen7822.pi-codex-appearance.copy-text");
-  if (Object.prototype.hasOwnProperty.call(prototype, key)) return false;
-  const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
-  if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
-    return false;
-  }
-  const original = descriptor.value as RenderFn;
-  const cache = new WeakMap<object, { text: string; width: number; product: CopyProduct }>();
-  const wrapper = function (this: TextInstance, width: number): string[] {
-    const rows = original.call(this, width);
-    try {
-      const cached = cache.get(this);
-      if (cached && cached.text === this.text && cached.width === width) return rows;
-      const product = buildTextProduct(this, width, rows, deps);
-      if (product) {
-        registerProduct(rows, product);
-        cache.set(this, { text: this.text, width, product });
-        deps.diagnostics.textBuilt += 1;
-      } else {
-        deps.diagnostics.textDegraded += 1;
-      }
-    } catch (error) {
-      deps.diagnostics.textDegraded += 1;
-      deps.diagnostics.lastDegradedReason = error instanceof Error ? error.message : "text mirror failed";
-    }
-    return rows;
-  };
-  Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
-  return true;
+  return wrapRenderPrototype<TextInstance>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-text"), deps,
+    buildTextProduct, { built: "textBuilt", degraded: "textDegraded", fallback: "text mirror failed" });
 }
 
 function buildTextProduct(
@@ -667,7 +654,7 @@ function buildTextProduct(
   for (let i = 0; i < output.styledRows.length; i++) {
     const hostRow = hostRows[instance.paddingY + i]!;
     const inner = fns.stripTerminalSequences(fns.sliceByColumn(hostRow, paddingX, contentWidth, true));
-    if (inner.trimEnd() !== visibleOfStyled(output.styledRows[i]!).trimEnd()) {
+    if (inner.trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
       deps.diagnostics.lastDegradedReason = `text content mismatch at row ${i}`;
       return undefined;
     }

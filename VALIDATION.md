@@ -357,3 +357,62 @@ frame cadence.
 - The native edit self-shell takeover is gated on the EXACT builtin source
   (`source === "builtin"` AND `path === "<builtin:edit>"`). A third-party
   tool overriding edit with a self-shell keeps its renderer.
+
+## 0.9.1 — review round
+
+Scope: post-0.9.0 code review + simplification. No new surfaces; every change
+is a correctness fix, robustness fix, or dead-code/comment cleanup inside the
+0.9.0 feature.
+
+### Defects found and fixed
+
+- **P1 shell-call copy leaked ANSI** (src/shell.ts): command content spans
+  stored syntax-highlighted text; the serializer slices span text per
+  grapheme and copies it verbatim, so colored terminals pasted escape bytes
+  with broken offsets. All own-renderer span texts are now stripped at
+  construction (diff/write/shell-result were verified clean already).
+- **P2 serialize-failure fallback used wrong source** (controller.ts): the
+  catch path re-derived rows from `previousScreen` (screen space) even for
+  scrollView selections (content space). Now reuses the already-computed
+  `sourceLines`; empty fallback maps to `undefined` like stock.
+- **P2 empty extraction returned ""** (controller.ts): stock maps empty to
+  `undefined`; "" flipped `hasActiveSelection()` for single-row
+  decoration-only selections and diverged host Esc/clipboard routing.
+  Ctrl+C consumption is unchanged (the editor hook keys off
+  `getSelectionBounds`, not the text).
+- **P2 streaming tail forced "hard" on every kept row** (shell.ts isPartial,
+  write-preview collapsed): only the window's FIRST row lost its
+  predecessor; the all-hard override re-introduced per-visual-row newlines.
+  Also hardened the row newly exposed by the elision-hint splice.
+- **P1.5 pre-existing `shorten` bug** (surfaced by the new tests): the cap
+  guard compared RAW length (ANSI included) against a VISIBLE-char budget, so
+  fully-rendered colored commands grew a spurious " …". Guard now uses
+  `stripAnsi(line).length`.
+- **P3 batch**: mirror cache hit registers the product for the fresh array
+  (identity-keyed resolution); thinking-rail pass-through rows (already
+  carrying `▏`/`| `) shift by 0, not railCells; queued Ctrl+C drains the
+  CURRENT selection, not the first snapshot; `/codex-ui` copy-stats gained
+  `cache=hits/misses` (spec item); `wrapPrototypes` returns the real
+  all-wrapped result.
+
+### Cleanup (simplifier)
+
+Dead exports removed (`rowsFromProvenance`, `buildCellTable`,
+`resetCacheStats`, `ResolvedRow`, `unknownRows`, `visibleOfStyled`,
+write-only `wide` field, unused `clipboardExecutor`); identity
+`stripOwnPrefix` deleted; duplicated `stripAnsiShell` merged into the
+existing `stripAnsi`; Box/Container and Markdown/Text prototype wrappers
+consolidated into parameterized helpers; history-narrative comments dropped,
+host-semantics/constraint comments kept. Net -111 lines vs 0.9.0.
+
+### Checks executed
+
+- `npm test` 222/222 (adds test/copy-provenance.test.mjs: 5 regressions —
+  shell span ANSI-free under truecolor highlighting incl. a wrapping long
+  command, header-only strip, streaming-tail and collapsed-window join
+  semantics).
+- `npm run check` (tsc, both configs) clean; `test:host` PASS;
+  `test:chrome` 14/14; `npm pack --dry-run` OK.
+- `test:pty` real-tmux run: SGR mouse drag + single Ctrl+C → telemetry
+  `exact=2 mixed=0 native=0`, 161 chars matching the mock reply; app alive,
+  draft preserved.

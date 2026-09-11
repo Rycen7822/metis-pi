@@ -275,12 +275,15 @@ class CodexThinkingRailComponent implements Tui.Component {
     const railCells = 2;
     const inner = Math.max(1, Math.floor(width) - railCells);
     const childLines = this.#child.render(inner);
-    this.#cache = childLines.map((line) => {
+    // Per-row shift: rows already carrying a rail pass through WITHOUT the
+    // prefix, so their provenance shift is 0, not railCells.
+    const shifts = childLines.map((line) => {
       const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
-      return stripped.startsWith("▏") || stripped.startsWith("| ") ? line : `${rail}${line}`;
+      return stripped.startsWith("▏") || stripped.startsWith("| ") ? 0 : railCells;
     });
-    // Provenance: every rail row is the child's row shifted right by the 2
-    // rail cells (the rail itself is decoration). Resolves through the child
+    this.#cache = childLines.map((line, i) => (shifts[i] === 0 ? line : `${rail}${line}`));
+    // Provenance: every rail row is the child's row shifted right by its rail
+    // cells (the rail itself is decoration). Resolves through the child
     // product via array identity when one exists.
     const childProduct = productFor(childLines);
     if (childProduct) {
@@ -290,9 +293,9 @@ class CodexThinkingRailComponent implements Tui.Component {
         rows: [],
         children: this.#cache.map((_, i) => childProduct.children
           ? childProduct.children[i]
-            ? { ...childProduct.children[i]!, colShift: childProduct.children[i]!.colShift + railCells }
+            ? { ...childProduct.children[i]!, colShift: childProduct.children[i]!.colShift + shifts[i]! }
             : undefined
-          : { product: childProduct, rowIndex: i, colShift: railCells }),
+          : { product: childProduct, rowIndex: i, colShift: shifts[i]! }),
       });
     }
     this.#lastWidth = width;
