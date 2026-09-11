@@ -166,3 +166,30 @@ test("formatDuration is Codex-style compact", () => {
   assert.equal(formatTokensCompact(1_000), "1k");
   assert.equal(formatTokensCompact(1_234_567), "1235k"); // implementation keeps k below 10M
 });
+test("write arg streaming closes stale thinking (0.8.1): accumulated thinking must not keep Thinking lit", () => {
+  const fx = makeMetrics();
+  fx.metrics.agentStart();
+  // Old thinking block streamed and closed.
+  fx.metrics.thinkingStart();
+  fx.advance(2_000);
+  fx.metrics.thinkingEnd();
+  // Now the model streams a write tool call's arguments - the accumulated
+  // message still contains the old thinking block, but the CURRENT event is
+  // a toolcall delta for `write`. The production extension feed calls, in
+  // order: thinkingEnd (stale phase off) + writeStreaming.
+  fx.metrics.thinkingEnd();   // idempotent for already-closed run
+  fx.metrics.writeStreaming();
+  fx.advance(1_000);
+  const snap = fx.metrics.snapshot();
+  assert.equal(snap.phase, "writing");
+  assert.equal(snap.thinkingMs, 2_000, "thinking timer closed at thinking_end, not extended");
+  // A later text delta must fall back to plain working, never back to thinking.
+  fx.metrics.setPhase("working");
+  fx.advance(500);
+  assert.equal(fx.metrics.snapshot().phase, "working");
+  // writeStreaming keeps the writing phase while more args stream.
+  fx.metrics.writeStreaming();
+  fx.advance(500);
+  assert.equal(fx.metrics.snapshot().phase, "writing");
+  fx.metrics.agentSettled();
+});

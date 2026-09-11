@@ -67,7 +67,7 @@ for (const name of ["web_search", "get_search_content", "fetch_content", "mcp", 
   });
 }
 
-test("unknown source metadata, self-shell tools and absent definitions are skipped", () => {
+test("unknown source metadata, non-builtin self-shell and absent definitions are skipped", () => {
   for (const tools of [[{ name: "read" }], [{ name: "read", sourceInfo: { source: "builtin", path: "unknown" } }], []]) {
     const { Host, handle } = setup(tools);
     const definition = { renderCall: () => "stock" };
@@ -75,8 +75,16 @@ test("unknown source metadata, self-shell tools and absent definitions are skipp
     handle.dispose();
   }
   const { Host, handle } = setup();
-  const definition = { renderShell: "self", renderCall: () => "self" };
-  assert.equal(new Host("read", definition).getCallRenderer(), definition.renderCall);
+  // A self-shell whose sourceInfo does NOT resolve to the exact builtin
+  // (third-party override) still backs off — 0.8.1 takes over only the
+  // exact builtin self-shell (edit).
+  const foreign = setup([{ name: "read", sourceInfo: { source: "extension", path: "/x/y" } }]);
+  const foreignDef = { renderShell: "self", renderCall: () => "self" };
+  assert.equal(new foreign.Host("read", foreignDef).getCallRenderer(), foreignDef.renderCall);
+  foreign.handle.dispose();
+  // The EXACT builtin self-shell is now taken over (0.8.1 edit diff surface).
+  const builtinDef = { renderShell: "self", renderCall: () => "self" };
+  assert.notEqual(new Host("read", builtinDef).getCallRenderer(), builtinDef.renderCall, "our renderer replaces the builtin self-shell");
   assert.equal(new Host("read").getCallRenderer(), undefined);
   handle.dispose();
 });

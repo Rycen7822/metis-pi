@@ -259,6 +259,8 @@ export interface WritePreviewInput {
   name: ToolName; args: Record<string, unknown>; stage: WriteStage; contentPrefix: string;
   expanded: boolean; theme: Palette; context: ViewContext; expandHint: string;
   colorLevel: import("./palette.ts").ColorLevel;
+  /** 0.8.1: the call slot's structured header (always present above the body). */
+  headerText?: string;
 }
 
 export interface ShellFactories {
@@ -280,7 +282,7 @@ export function makeRenderers(
   paint?: Highlight,
   makeDiff?: DiffFactory,
   makeShell?: ShellFactories,
-  makeWritePreview?: (input: WritePreviewInput) => Component | undefined,
+  makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => Component | undefined,
   session?: import("./extension.ts").AppearanceSession,
   layoutOps?: DiffLayoutOps,
 ): Record<ToolName, Renderers> {
@@ -380,12 +382,11 @@ export function makeRenderers(
         return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
       }
       if (name === "write") {
-        // Call slot = title + LIVE args.content preview while the model is
-        // still generating (host updateArgs → updateDisplay → renderCall).
-        // Once a result exists the call collapses to the final title and the
-        // result slot owns the verified diff / content (6.3).
-        // Host signal: a FINAL result exists iff isPartial flipped to false
-        // (updateResult sets isPartial=false; args streaming keeps it true).
+        // Call slot ALWAYS owns a structured header (0.8.1): the Writing
+        // title stays visible through arg streaming, execution and
+        // completion; the live preview is a body UNDER it, never a
+        // replacement for it. A final result collapses the header to the
+        // settled verb and moves the body to the result slot (6.3).
         const hasResult = merged.isPartial === false;
         const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
         const stage = resolveWriteStage({
@@ -395,13 +396,27 @@ export function makeRenderers(
           isError: merged.isError === true,
           hasResult: merged.isPartial === false,
         });
-        if (makeWritePreview && !hasResult && contentPrefix) {
-          const previewComponent = makeWritePreview({
+        if (makeWriteCall && !hasResult) {
+          const input: WritePreviewInput & { headerText: string } = {
             name, args: asRecord(args), stage, contentPrefix,
+            headerText: writeTitle(merged, theme, writeChangeFor(merged)),
             expanded: merged.expanded === true, theme, context: merged,
             expandHint: expandHint(), colorLevel: colorFor(merged),
-          });
-          if (previewComponent) return previewComponent;
+          };
+          // Reuse OUR previous call component when the host hands it back
+          // (updateArgs → renderCall with lastComponent) — update in place,
+          // never mutate a foreign instance.
+          const previous = ctx.lastComponent;
+          if (previous && typeof previous === "object" && ownComponents.has(previous)
+              && typeof (previous as { update?: unknown }).update === "function") {
+            (previous as { update: (next: typeof input) => void }).update(input);
+            return previous as Component;
+          }
+          const callComponent = makeWriteCall(input);
+          if (callComponent && typeof callComponent === "object") {
+            ownComponents.add(callComponent);
+            return callComponent;
+          }
         }
         return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
       }

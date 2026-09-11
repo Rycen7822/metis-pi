@@ -1,84 +1,103 @@
-# Validation record — 0.8.0
+# Validation record — 0.8.1
 
 ## Scope
 
-Version 0.8.0 makes pi-codex-appearance the standalone owner of the Pi main
-interface chrome (composer frame, footer, header, working state, end-of-work
-summary) after the user uninstalled pi-zentui. It folds in the remaining
-0.7.x defect fixes. All checks below were executed in the development
-checkout (`/home/xu/project/tools/pi-codex-appearance`, Node v24.15.0, Pi
-core/TUI 0.85.1) unless stated otherwise.
+Version 0.8.1 is a fix round on the 0.8.0 standalone UI owner: structured
+Writing header + streaming smoothness, document-edit diff surface, and real
+thinking expansion. Display-only boundary unchanged (no tool/model/session
+mutation; the UI-only CustomEntry summary exception stays as granted).
+Executed in `/home/xu/project/tools/pi-codex-appearance`, Node v24.15.0,
+Pi core/TUI 0.85.1.
 
-Codex visual reference: openai/codex@1b83e5cdf99889e72fbf3f92d9848fdf31de652e
-(source snapshot unpacked to /tmp/codex-ref for exact grammar checks:
-`Worked for`, `1m 05s` compound durations, `NN% context left` / `Nk used`
-footer indicators, `·` dim separators).
+Baseline: remote main `c3486a0815f0af6b4df2872ca5bb7fd5a555fab7` (0.8.0),
+verified equal to local HEAD and to the live clone
+`~/.pi/agent/git/github.com/Rycen7822/pi-codex-appearance` before any change.
+No uncommitted user changes existed; nothing was reset or overwritten.
+
+## Root causes confirmed against the baseline blob
+
+1. **Writing title bypassed** — `src/renderers.ts` write branch early-returned
+   `makeWritePreview(...)` whenever a non-empty `contentPrefix` existed; the
+   preview component rendered stage + body but never the `• Writing <path>`
+   title. Present unchanged since 0.7.0.
+2. **Preview tail freeze** — `src/write-preview.ts` budgeted by LOGICAL lines
+   and `slice(0, MAX)`d the wrapped result last: an early long logical line
+   consumed the whole budget and every later frame dropped the newest content.
+   Additionally the per-frame work was O(prefix) with no reuse.
+3. **Phase from accumulated content** — `src/extension.ts` `message_update`
+   derived the phase via `content.some(thinking)` on the WHOLE message: stale
+   thinking blocks kept "Thinking" lit while write arguments streamed.
+   `metrics.writeStreaming()` only fired at `tool_execution_start`.
+4. **Expanded Markdown overwritten with a label** — the adapter's
+   `isCollapsedLabel = typeof text === "string" && !markdown` is always true
+   for the host's Markdown instances (they have `text`, no `markdown` field),
+   so the 0.8.0 "collapsed enrichment" `setText("Thought for …")` hit EXPANDED
+   thinking bodies. With the host's `hideThinkingBlock` default (`false`),
+   thinking was ALREADY expanded — our injection actively broke it.
+5. **Document edits routed to the native self-shell** — the builtin edit tool
+   sets `renderShell: "self"`; the adapter backed off on ANY self-shell, so
+   `.md` edits rendered the native pre-execution preview without the
+   full-row add/remove backgrounds. The structured diff renderer and its
+   `details.diff` parser already existed for write/edit results.
+6. **semanticRuns continuity** — `if (!kind) continue` meant toolCall (and,
+   before this round, empty text) blocks did not break a thinking run, unlike
+   the host rebuild loop (break on first non-thinking block).
 
 ## Checks actually executed
 
 | Check | Result | Scope |
 | --- | --- | --- |
-| `npm test` | 142/142 pass | unit + real-component layout/golden suites |
-| `npm run test:chrome` (new) | 7/7 pass | chrome modules: src/ import rule, editor factory contract, event surface, kill switch, footer/header render |
-| `npm run check` (tsc) | clean | strict, whole project incl. index.ts |
-| `npm run test:host` | PASS | REAL installed Pi assembly: one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored, `/codex-ui` diagnostics, interaction clock lifecycle |
-| `npm pack --dry-run` | 36 files, no devDeps needed at runtime | package content |
-| interaction clock semantics | pass | `agent_start` opens once; `agent_end` (retry/compaction gaps) does NOT reset elapsed; `agent_settled` finalizes; thinking measured as streamed-interval UNION (pauses excluded); usage deduped by responseId |
-| phase machine | pass | phases only from real content kinds (thinking/text/toolCall blocks, write-args streaming); `ui_prompt_start` → waiting-for-input; tools cannot steal that phase |
-| separator persistence | pass | survives 100 streaming updates, invalidate, message_end re-renders (regression suite) |
-| tool-call-only updates | pass | growing toolCall-only message_update does not close exploration group (0.7.x fix regression) |
-| thinking rail unwrap | pass | dispose/rebuild restores the host's original node verbatim |
-| summary persistence | pass | exactly one `pi-codex-appearance:interaction-summary:v1` entry per settled interaction; renderer registered once; `persist:false` appends nothing |
-| config loader | pass | safe defaults; per-field fallback with warning; kill switch `enabled:false` |
-| chrome restore | pass | `session_shutdown` clears editor slot only when the CURRENT factory is still ours (identity compare); footer/header/working cleared |
+| `npm test` | 147/147 pass | +2 thinking-body persistence, +1 barrier run, +1 diff surface, +1 stale-thinking phase, updated self-shell routing test |
+| `npm run test:chrome` | 7/7 pass | chrome modules incl. import rule, factory contract |
+| `npm run check` (tsc) | clean | strict, whole project |
+| `npm run test:host` | PASS | real Pi assembly + `/codex-ui` (now asserts `0.8.1 diagnostics:` AND `config: thinking=full/full`) |
+| self-shell routing | pass | exact-builtin self-shell taken over; third-party/unknown sourceInfo self-shell still backs off (regression tested) |
+| diff surface | pass | context rows plain; add rows `#213A2B` line bg; remove rows `#4A221D` + dim overlay; BLANK added row keeps full-row bg incl. right padding; every styled row closed by `\x1b[49m` |
+| thinking body persistence | pass | body Markdown present after `thinking_end` + `message_end`, survives re-coordination; no `Thought for` label anywhere |
+| run splitting | pass | `thinking / empty text / thinking` → 2 rails; `thinking / toolCall / thinking` → 2 rails (barrier run) |
+| stale-thinking phase | pass | `thinkingEnd` idempotent + `writeStreaming` → phase `writing`, thinkingMs not extended; later text → `working` |
+| config wiring | pass | `thinking.streaming/completed/rail`, `writePreview.enabled/rows` consumed by the production component (`rows`=body budget, `enabled:false`/`rows:0` keeps header, drops body); `/codex-ui` shows effective values |
+
+## Streaming performance + visibility (same machine, same fixture)
+
+Fixture: 1800-char logical lines interleaved with short lines (the freeze
+scenario), 20 streaming frames per size, wrap/width via the real TUI ops.
+
+| Prefix size | OLD 0.8.0 ms/frame | OLD newest-tail visible | NEW 0.8.1 ms/frame | NEW newest-tail visible |
+| --- | --- | --- | --- | --- |
+| 16 KiB | 0.22 | yes | 0.03 | yes |
+| 128 KiB | 0.16 | **no (frozen)** | 0.10 | yes |
+| 1 MiB | 0.90 | **no (frozen)** | 0.73 | yes |
+
+p50 over 3 rounds at 128 KiB / 1 MiB: OLD 0.05 / 0.34 ms, NEW 0.06 / 0.35 ms
+— no wall-clock regression; the fix is VISIBILITY (the 0.8.0 build silently
+dropped the newest content from every frame once a long line was in budget).
+No absolute wall-clock assertions in CI; per-frame cost stays far below any
+frame cadence.
 
 ## Real-process verification
 
 - `npm run test:host` runs against the REAL installed
-  `@earendil-works/pi-coding-agent` (0.85.1 dist) and the real pi-tui — not
-  fakes — through `index.ts`'s default export.
-- Fresh PTY-driven `pi` TUI process (user's own 17-package extension stack,
-  synced clone at the release commit): startup header `Pi 0.85.1 ·
-  codex-appearance 0.8.0` + model/dir line, footer `glm-5.3-flash • high ·
-  <dir>`, working ticker `● Working · 0s…8s` (monotonic), `● Thinking · 4s`
-  phase, end summary `Worked for 1s · ↓8 · ↑36`, `/codex-ui` diagnostics
-  showing `chrome: applied · transcript: applied · decorations:
-  group-spacing=applied, separator=applied, thinking-rail=applied`, zero
-  uncaughtExceptions, zero appearance warnings. Model reply rendered
-  normally.
-- Runtime discovery (fixed during verification): Pi's TS loader emits the
-  stock `updateDisplay` with `let` (not `const`) and unparenthesized arrow
-  params — the structural prefix check now accepts both stock shapes. The
-  chrome header/footer/summary renderers resolve the theme painter lazily
-  because the host passes an unbound theme proxy during early/restore
-  rendering. `registerCommand` uses the `(name, options)` signature. All
-  three were caught by the PTY run and fixed (commits 0c4377d, ea9bc63,
-  6835357, 4e9c802).
+  `@earendil-works/pi-coding-agent` (0.85.1 dist) and real pi-tui through
+  `index.ts`'s default export — component-level behavior above is not faked.
+- PTY-driven real `pi` TUI (user's own extension stack): fresh start frame,
+  `/codex-ui` output (`0.8.1 diagnostics:` incl. `config: thinking=full/full
+  rail=on writePreview=8 rows`), no crashes/warnings, extensions load cleanly.
+- `pi -p` print-mode smoke: extension loads without errors (chrome/`/codex-ui`
+  are TUI-only by design; pre-existing third-party `pi-context-view` command
+  error is unrelated to this package).
 
-## Known deviations from the Codex reference (deliberate)
+## Deviations & limits
 
-- No per-line `›` composer prefix: the host `Editor` render pipeline has no
-  safe per-line hook; faking one risks cursor/autocomplete/mouse drift. The
-  composer keeps Pi's full native input behavior; only border accent and
-  padding differ visually.
-- Context indicator shows remaining `NN% context left` (Codex grammar) from
-  the host's `getContextUsage()`; exact token K/M formatting falls back to
-  percent-only when the host provides no token count.
-- Header shows the REAL identity (`Pi 0.85.1 · codex-appearance 0.8.0`),
-  never the OpenAI name.
-
-## Interface inventory (what touches the host)
-
-- Public APIs only: `pi.on()` (agent_start/agent_settled/tool_execution_*/
-  message_*/session_*), `pi.getAllTools()`, `pi.registerCommand()`,
-  `pi.appendEntry()`, `pi.registerEntryRenderer()`,
-  `ctx.ui.setEditorComponent()/getEditorComponent()/setFooter()/setHeader()/
-  setWorkingMessage()/setWorkingIndicator()/getContextUsage()/requestRender()/
-  notify()`.
-- Prototype adaptation (unchanged from 0.7.0): scoped decoration of
-  `ToolExecutionComponent.getCallRenderer` and
-  `AssistantMessageComponent.updateContent`, restored byte-identical on
-  shutdown; structural contract check, no source fingerprints.
-- No: registerTool, execute replacement, context/message mutation, session
-  JSONL writes (CustomEntry above is the single granted exception), global
-  Container/Markdown/stdout patches.
+- The `collapsed` value of `thinking.streaming/completed` remains ACCEPTED
+  config for compatibility, but this release implements no automatic
+  collapse-to-label (that mechanism was the 0.8.0 defect). If you set
+  `collapsed`, the host's own toggle (`Ctrl+T` / click) still applies; we do
+  not auto-collapse on your behalf. Defaults and the documented behavior are
+  `full/full`.
+- Zentui registry probe REMOVED (package uninstalled by the user). Unknown
+  third-party rail owners still back off through the adapter's
+  ownsMethods/sourceInfo checks — nothing blanket-overridden.
+- The native edit self-shell takeover is gated on the EXACT builtin source
+  (`source === "builtin"` AND `path === "<builtin:edit>"`). A third-party
+  tool overriding edit with a self-shell keeps its renderer.

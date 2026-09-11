@@ -94,8 +94,16 @@ export function previewLines(contentPrefix: string, maxLines: number): { lines: 
 }
 
 /**
- * Render the live preview block: gutter + wrap + budget. Returns [] when
- * there is no content to show (caller then shows the "no content yet" line).
+ * Render the live preview block: stage line + PHYSICAL-ROW tail budget.
+ *
+ * 0.8.1 semantics: the budget counts TERMINAL SCREEN ROWS of the body, not
+ * logical lines. Lines are wrapped FIRST (gutter + line-number column fully
+ * deducted from the body width), then the newest physical rows are kept —
+ * an early long logical line can no longer freeze the tail, and the newest
+ * received character is always visible.
+ *
+ * `complete` reflects whether the logical line actually ended (trailing
+ * newline), independent of any truncation.
  */
 export function renderWritePreview(
   contentPrefix: string,
@@ -107,14 +115,28 @@ export function renderWritePreview(
     colorLevel: ColorLevel;
     layout: DiffLayoutOps;
     gutter: string;
+    /** Rows the CALLER already renders above the body (header). The stage
+     * line + hint live INSIDE this budget; the header does not. */
+    headerRows?: number;
+    /** Explicit physical-row budget for the body (default: WRITE_PREVIEW_MAX_ROWS). */
+    maxRows?: number;
   },
 ): string[] {
   const { width, stage, expanded, theme, colorLevel, layout, gutter } = options;
-  const gutterWidth = Math.max(1, layout.visibleWidth(gutter));
-  const bodyWidth = Math.max(1, width - gutterWidth);
-  const budget = expanded ? Number.MAX_SAFE_INTEGER : WRITE_PREVIEW_BODY_ROWS;
-  const { lines, totalLogicalLines, truncated } = previewLines(contentPrefix, budget);
-  const out: string[] = [];
+  const totalBudget = Math.max(1, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
+  const headerRows = Math.max(0, options.headerRows ?? 0);
+  // Full deduction: gutter + line-number column + one separator space.
+  const gutterWidth = Math.max(0, layout.visibleWidth(gutter));
+  const bodyBudget = Math.max(1, totalBudget - headerRows - 1 /* stage line */);
+  const maxNumber = Number.MAX_SAFE_INTEGER.toString().length;
+  // Number width from the ACTUAL last line number (not the total, which can
+  // differ once truncation starts) — bounded to 3+ digits per content size.
+  const raw = safePrefix(contentPrefix);
+  const normalized = raw ? (raw.endsWith("\n") ? raw.slice(0, -1) : raw) : "";
+  const allLines = normalized ? normalized.split("\n").map((line) => line.replace(/\r$/, "")) : [];
+  const totalLogicalLines = allLines.length;
+  const numberWidth = Math.min(maxNumber, Math.max(1, String(Math.max(1, totalLogicalLines)).length));
+  const bodyWidth = Math.max(1, width - gutterWidth - numberWidth - 1);
 
   const stageInfo = stageLabel(stage, theme);
   const dim = colorLevel.kind === "none" ? "" : "\x1b[2m";
@@ -122,28 +144,53 @@ export function renderWritePreview(
   const stageText = totalLogicalLines > 0
     ? stageInfo.label
     : stage === "receiving-arguments" ? "Receiving arguments…" : stageInfo.label;
-  out.push(`${dim}${gutter}${stageText}${dimOff}`);
+  const stageRow = `${dim}${gutter}${stageText}${dimOff}`;
 
-  const numberWidth = String(totalLogicalLines).length;
+  if (!allLines.length) return [stageRow];
+
+  // Logical tail large enough to fill the physical budget even if every
+  // line wraps: one physical row per logical line is the lower bound, but a
+  // single long line can consume the whole budget — walk BACKWARDS wrapping
+  // until the budget is filled or the first line is reached.
   const wrapOne = (text: string): string[] => {
     const wrapped = layout.wrap(text, bodyWidth);
     return wrapped.length ? wrapped : [""];
   };
 
-  if (!lines.length) return out;
+  interface RenderedLogical { number: number; segments: string[]; complete: boolean }
+  const rendered: RenderedLogical[] = [];
+  let used = 0;
+  const startIndex = Math.max(0, allLines.length - bodyBudget * 4); // sane upper bound for the backward walk
+  for (let i = allLines.length - 1; i >= startIndex && used < bodyBudget; i--) {
+    const segments = wrapOne(allLines[i]!);
+    rendered.unshift({ number: i + 1, segments, complete: i < allLines.length - 1 || raw.endsWith("\n") });
+    used += segments.length;
+  }
+  const truncated = startIndex > 0 || allLines.length > bodyBudget;
 
-  const shown = expanded ? previewLines(contentPrefix, Number.MAX_SAFE_INTEGER).lines : lines;
-  for (const line of shown) {
-    const number = String(line.number).padStart(numberWidth);
-    const segments = wrapOne(line.text);
-    segments.forEach((segment, i) => {
-      const prefix = i === 0 ? `${gutter}${number} ` : `${gutter}${" ".repeat(numberWidth)} `;
-      out.push(`${theme.fg("toolTitle", prefix)}${theme.fg("toolOutput", segment)}`);
+  // Compose rows, then keep only the LAST bodyBudget physical rows — the
+  // newest content (open tail line, latest characters) is always included.
+  const rows: string[] = [];
+  const pad = " ".repeat(numberWidth);
+  for (const logical of rendered) {
+    const number = String(logical.number).padStart(numberWidth);
+    logical.segments.forEach((segment, i) => {
+      const prefix = i === 0 ? `${gutter}${number} ` : `${gutter}${pad} `;
+      rows.push(`${theme.fg("toolTitle", prefix)}${theme.fg("toolOutput", segment)}`);
     });
   }
+  const visibleRows = expanded ? rows : rows.slice(-bodyBudget);
+
+  const out: string[] = [stageRow, ...visibleRows];
   if (truncated && !expanded) {
-    const hidden = totalLogicalLines - shown.length;
-    out.push(`${dim}${gutter}… first ${hidden} line${hidden === 1 ? "" : "s"} hidden (${WRITE_PREVIEW_MAX_ROWS - 1 - WRITE_PREVIEW_BODY_ROWS >= 0 ? "ctrl+o" : "expand"} for received prefix)${dimOff}`);
+    const firstShown = rendered.length ? rendered[0]!.number : 1;
+    const hiddenLogical = firstShown - 1;
+    if (hiddenLogical > 0) {
+      // The hint consumes body budget: drop the OLDEST rendered row to keep
+      // the newest content visible within the total bound.
+      if (out.length >= totalBudget) out.splice(1, 1);
+      out.push(`${dim}${gutter}… earlier output (${hiddenLogical} logical line${hiddenLogical === 1 ? "" : "s"}, physical rows elided)${dimOff}`);
+    }
   }
-  return out.slice(0, expanded ? out.length : WRITE_PREVIEW_MAX_ROWS);
+  return out;
 }

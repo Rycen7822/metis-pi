@@ -6,6 +6,7 @@ import { renderCodexDiffComponent, type DiffComponentInput } from "./src/diff-co
 import { renderShellCall, renderShellResult, type LayoutOps } from "./src/shell.ts";
 import { resolveColorContext } from "./src/palette.ts";
 import { renderWritePreview } from "./src/write-preview.ts";
+import { loadConfig } from "./src/config.ts";
 import type { WritePreviewInput } from "./src/renderers.ts";
 import type { ToolName } from "./src/tool-names.ts";
 
@@ -145,30 +146,63 @@ class CodexSeparatorComponent implements Tui.Component {
   }
 }
 
-/** Live preview of a write call's still-streaming args.content. Title line
- * (from the stock writeTitle builder via the renderers) stays in the call
- * region; this component renders the stage label + bounded rolling tail. */
-class CodexWritePreviewComponent implements Tui.Component {
-  readonly #input: WritePreviewInput & { layout: import("./src/tool-names.ts").DiffLayoutOps };
+/** Live write call: structured header (• Writing <path>) + stage line +
+ * bounded rolling tail of the real args.content prefix (0.8.1). The header
+ * is part of THIS component and can never be bypassed by the preview body.
+ * `update()` refreshes inputs in place so the host's lastComponent reuse
+ * path keeps one stable instance per call. */
+class CodexWriteCallComponent implements Tui.Component {
+  #input: WritePreviewInput & { headerText: string; layout: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number };
+  #revision = 0;
   #lastWidth = -1;
+  #lastRevision = -1;
+  #lastExpanded = false;
   #cache: string[] | undefined;
 
-  constructor(input: WritePreviewInput & { layout: import("./src/tool-names.ts").DiffLayoutOps }) {
+  constructor(input: WritePreviewInput & { headerText: string; layout: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }) {
     this.#input = input;
   }
 
+  update(next: WritePreviewInput & { headerText: string; layout: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }): void {
+    const prev = this.#input;
+    this.#input = next;
+    // Bump the revision only when VISIBLE state changed (content, stage,
+    // header, expansion, colors) — identical repeated snapshots keep the
+    // old frame without a re-layout.
+    if (prev.contentPrefix !== next.contentPrefix
+        || prev.stage !== next.stage
+        || prev.headerText !== next.headerText
+        || prev.expanded !== next.expanded
+        || prev.colorLevel.kind !== next.colorLevel.kind) {
+      this.#revision += 1;
+    }
+  }
+
   render(width: number): string[] {
-    if (this.#cache && this.#lastWidth === width) return this.#cache;
-    this.#cache = renderWritePreview(this.#input.contentPrefix, {
-      width: Math.max(1, Math.floor(width) - 2),
+    const expanded = this.#input.expanded === true;
+    if (this.#cache && this.#lastWidth === width && this.#lastRevision === this.#revision && this.#lastExpanded === expanded) {
+      return this.#cache;
+    }
+    const header = this.#input.headerText;
+    const out: string[] = [header];
+    // Live body: bounded tail with the full gutter accounted for. The body
+    // renderer owns its own physical-row budget; header width is independent.
+    const body = renderWritePreview(this.#input.contentPrefix, {
+      width: Math.max(1, Math.floor(width)),
       stage: this.#input.stage,
-      expanded: this.#input.expanded,
+      expanded,
       theme: this.#input.theme,
       colorLevel: this.#input.colorLevel,
       layout: this.#input.layout,
       gutter: "  │ ",
+      headerRows: 1, // the header line above is ours; body budget is separate
+      maxRows: this.#input.maxRows, // config.writePreview.rows (0 = body off)
     });
+    for (const line of body) out.push(line);
+    this.#cache = out;
     this.#lastWidth = width;
+    this.#lastRevision = this.#revision;
+    this.#lastExpanded = expanded;
     return this.#cache;
   }
 
@@ -265,21 +299,22 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     makeSeparator: () => new CodexSeparatorComponent(),
     makeSpacer: () => new Tui.Spacer(1),
     makeRail: (child) => new CodexThinkingRailComponent(child as Tui.Component),
-    externalRailOwner: () => {
-      // pi-zentui thinkingSteps (mode rail/tree) owns assistant thinking
-      // display when enabled. Detect its active wrapper marker on the same
-      // prototype without touching its internals.
+    // 0.8.1: pi-zentui is uninstalled; the Zentui registry probe is removed.
+    // Unknown third-party owners still back off through the adapter's
+    // ownsMethods/sourceInfo checks — no dedicated Zentui detection remains.
+    makeWriteCall: (input) => {
+      // Config-driven body budget (0.8.1): rows from codex-appearance.json;
+      // enabled=false collapses the live body to the header only.
+      let maxRows: number | undefined;
       try {
-        // pi-zentui registers prototype patches under a well-known symbol on
-        // the SAME prototype. Its presence means it owns thinking display.
-        const registry = Symbol.for("pi-zentui.prototype-patch-registry");
-        const patches = (assistantComponent?.prototype as Record<symbol, unknown> | undefined)?.[registry];
-        return Boolean(patches);
-      } catch {
-        return false;
-      }
+        const dir = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
+        if (dir) {
+          const { config } = loadConfig(dir, (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } });
+          maxRows = config.writePreview.enabled ? config.writePreview.rows : 0;
+        }
+      } catch { maxRows = undefined; }
+      return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
-    makeWritePreview: (input) => new CodexWritePreviewComponent({ ...input, layout: layoutOps() }),
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
     // ---- 0.8.0 chrome wiring ----
     api: pi,
@@ -297,13 +332,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       } catch {
         return undefined;
       }
-    },
-    thoughtLabel: (thinkingMs) => {
-      const seconds = Math.round(thinkingMs / 1000);
-      const duration = seconds >= 60
-        ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`
-        : `${seconds}s`;
-      return `Thought for ${duration} (ctrl+t to expand)`;
     },
   });
 }

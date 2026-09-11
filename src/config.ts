@@ -16,7 +16,7 @@ export const CONFIG_FILE = "codex-appearance.json";
 
 export const DEFAULT_CONFIG: AppearanceConfig = {
   enabled: true,
-  thinking: { streaming: "full", completed: "collapsed", rail: true },
+  thinking: { streaming: "full", completed: "full", rail: true },
   writePreview: { enabled: true, rows: 8 },
   working: { elapsed: true },
   summary: { enabled: true, persist: true },
@@ -56,7 +56,7 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
       if (t.streaming === "full" || t.streaming === "collapsed") cfg.thinking.streaming = t.streaming;
       else if (t.streaming !== undefined) problems.push(`thinking.streaming: unknown value ${JSON.stringify(t.streaming)} — using "full"`);
       if (t.completed === "collapsed" || t.completed === "full") cfg.thinking.completed = t.completed;
-      else if (t.completed !== undefined) problems.push(`thinking.completed: unknown value — using "collapsed"`);
+      else if (t.completed !== undefined) problems.push(`thinking.completed: unknown value — using "full"`);
       cfg.thinking.rail = bool(t.rail, cfg.thinking.rail, problems, "thinking.rail");
     } else {
       problems.push("thinking: expected object — using defaults");

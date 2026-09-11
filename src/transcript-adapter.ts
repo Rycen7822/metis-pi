@@ -58,7 +58,6 @@ export interface TranscriptAdapterInput {
   makeRail: ((child: unknown) => unknown) | undefined;
   /** Format the collapsed-run label with the measured duration ("Thought for 19s
    * (ctrl+t to expand)"). Absent → keep the host's own label. */
-  thoughtLabel?: (thinkingMs: number) => string | undefined;
   /** True when an external owner already renders thinking rails. */
   externalRailOwner?(): boolean;
   enabled(): boolean;
@@ -311,24 +310,17 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
       const inner = child && typeof child === "object" && "child" in child
         ? (child as { child: unknown }).child
         : child;
+      const innerRecord = inner !== null && typeof inner === "object" ? (inner as Record<string, unknown>) : undefined;
       if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]) continue;
 
-      // Collapsed runs (host Text) get their label enriched with the measured
-      // duration — display copy only; the host's own override map stays sole
-      // owner of VISIBILITY (user clicks beat our automatic collapse).
-      const innerText = (inner as { text?: unknown }).text;
-      const isCollapsedLabel = typeof innerText === "string" && !(inner as { markdown?: unknown }).markdown;
-      if (isCollapsedLabel && textRunPlan?.thinkingEnded && typeof input.thoughtLabel === "function") {
-        const label = input.thoughtLabel(textRunPlan.thinkingMs ?? 0);
-        if (label && typeof (inner as { setText?: unknown }).setText === "function") {
-          try {
-            (inner as { setText: (next: string) => void }).setText(label);
-          } catch {
-            // display-only enrichment; keep the host label on failure
-          }
-        }
-        continue; // no rail on the collapsed label row
-      }
+      // 0.8.1: the display layer NEVER rewrites a thinking body into a label.
+      // An open/expanded run is the host's Markdown (has `theme`); a truly
+      // hidden run is the host's own label Text and it stays untouched — the
+      // host's override map remains sole owner of visibility. Our automatic
+      // "collapse after end" behavior was removed (full/full default); the
+      // user's Ctrl+T / click toggles keep working through the host.
+      const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
+      if (!isExpandedMarkdown) continue; // unknown shape or host label row: never touch, never rail
 
       const wrapped = input.makeRail(inner);
       if (!wrapped) continue;
@@ -381,30 +373,39 @@ interface SemanticRun {
   kind: "text" | "thinking";
   firstContentIndex: number;
   nonEmpty: boolean;
+  /** 0.8.1: a toolCall/unknown block — produces no child but BREAKS runs. */
+  barrier?: boolean;
 }
 
 /** Contiguous same-kind visible runs of the message content. */
 function semanticRuns(content: Array<Record<string, unknown>>): SemanticRun[] {
-  // 0.8.0 semantics (mirrors the host rebuild): each NON-EMPTY text block is
-  // its own child; consecutive thinking blocks merge into ONE run ONLY when
-  // nothing breaks between them (a toolCall or a text block breaks the run —
-  // the host loop breaks on the first non-thinking block too). Blocks of the
-  // same kind separated by other kinds are separate runs.
+  // 0.8.1 semantics (host parity): each NON-EMPTY text block is its own
+  // child; consecutive thinking blocks merge into ONE run ONLY when truly
+  // adjacent. ANY other block breaks the run — including an EMPTY text
+  // block: the host's rebuild loop breaks on the first non-thinking block
+  // regardless of emptiness (empty text produces no child, but the
+  // thinking run still ends). toolCall/unknown kinds also break.
   const runs: SemanticRun[] = [];
   for (let i = 0; i < content.length; i++) {
     const block = content[i]!;
     const kind = block.type === "text" ? "text" : block.type === "thinking" ? "thinking" : null;
-    if (!kind) continue; // toolCall/unknown breaks any run
+    if (!kind) {
+      // toolCall/unknown: no visible run of its own, but it BREAKS any
+      // adjacent thinking run (host rebuild has one MouseRegion per
+      // contiguous thinking run between other blocks).
+      runs.push({ kind: "text", firstContentIndex: i, nonEmpty: false, barrier: true });
+      continue;
+    }
     const nonEmpty = kind === "text"
       ? (typeof block.text === "string" ? !!block.text.trim() : false)
       : (typeof block.thinking === "string" ? !!block.thinking.trim() : false);
     if (kind === "text") {
-      // One run per non-empty text block — the host emits one Markdown child each.
-      if (nonEmpty) runs.push({ kind, firstContentIndex: i, nonEmpty: true });
+      // Every text block (even empty) breaks a thinking run; only non-empty
+      // ones create a run of their own.
+      runs.push({ kind, firstContentIndex: i, nonEmpty });
       continue;
     }
-    // thinking: merge only consecutive thinking blocks (the host merges them
-    // into a single Markdown inside one MouseRegion).
+    // thinking: merge only truly consecutive thinking blocks.
     const last = runs.at(-1);
     if (last && last.kind === "thinking") {
       last.nonEmpty = last.nonEmpty || nonEmpty;

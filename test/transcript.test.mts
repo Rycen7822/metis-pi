@@ -13,6 +13,7 @@ import { TranscriptState, assistantHasVisibleText, assistantHasVisibleThinking }
 import { installTranscriptDecorations } from "../src/transcript-adapter.ts";
 import { makeRenderers } from "../src/renderers.ts";
 import { resolveWriteStage, previewLines, renderWritePreview } from "../src/write-preview.ts";
+import { renderDiffLines } from "../src/diff.ts";
 import { styleToolOutputLine, reapplyDimAfterResets } from "../src/output-style.ts";
 import { theme, FakeText, bindings } from "./helpers.mjs";
 
@@ -47,6 +48,10 @@ class FakeSpacer {
 class FakeMarkdown {
   text: string;
   pad = 1;
+  // Mirrors the real pi-tui Markdown instance shape (theme is ALWAYS set by
+  // the host constructor); the adapter's rail targets expanded Markdown by
+  // this structural marker, never by content.
+  theme: Record<string, unknown> = {};
   constructor(text: string, pad = 1) {
     this.text = text;
     this.pad = pad;
@@ -251,6 +256,76 @@ test("rail wraps thinking runs, never text runs", () => {
   assert.equal(wrapped.length, 2, "both thinking runs wrapped");
   const textChild = children.find((c) => c instanceof FakeMarkdown && (c as FakeMarkdown).text.includes("Thinking"));
   assert.ok(textChild, "text stays unwrapped");
+});
+
+test("0.8.1: expanded thinking Markdown keeps its body after thinking ends (never a label)", () => {
+  const state = new TranscriptState();
+  setup(state);
+  const messageObj = { role: "assistant", content: [
+    { type: "thinking", thinking: "deep reasoning body" },
+    { type: "text", text: "final answer" },
+  ] } as { role: string; content: Array<{ type: string; thinking?: string; text?: string }> };
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_end", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(messageObj);
+  component.updateContent(messageObj); // coordinate pass (same as host rebuild)
+  const unwrap = (c: unknown): unknown => {
+    if (c instanceof FakeMouseRegion) {
+      const inner = (c as FakeMouseRegion).child as { wrapped?: unknown } | undefined;
+      return inner && typeof inner === "object" && "wrapped" in inner ? inner.wrapped : c;
+    }
+    return c;
+  };
+  const findBody = (): FakeMarkdown | undefined =>
+    component.contentContainer.children
+      .map(unwrap)
+      .find((c) => c instanceof FakeMarkdown && (c as FakeMarkdown).text.includes("deep reasoning body")) as FakeMarkdown | undefined;
+  assert.ok(findBody(), "thinking body Markdown present");
+  // Rebuild path (host re-renders on click/refresh): body must survive verbatim.
+  component.updateContent(messageObj);
+  assert.ok(findBody(), "thinking body survives re-coordination");
+  const texts = component.contentContainer.children.map((c) => {
+    const inner = c instanceof FakeMouseRegion ? (c.child as FakeMarkdown) : (c as FakeMarkdown);
+    return typeof inner?.text === "string" ? inner.text : "";
+  }).join("\n");
+  assert.ok(!texts.includes("Thought for"), "no auto label anywhere");
+});
+
+test("0.8.1: empty text block breaks thinking continuity (host parity)", () => {
+  const state = new TranscriptState();
+  setup(state);
+  const messageObj = { role: "assistant", content: [
+    { type: "thinking", thinking: "a" },
+    { type: "text", text: "" },
+    { type: "thinking", thinking: "b" },
+  ] } as { role: string; content: Array<{ type: string; thinking?: string; text?: string }> };
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(messageObj);
+  component.updateContent(messageObj); // coordinate pass
+  // FakeAssistantComponent only creates MouseRegion children for non-empty
+  // thinking blocks — empty text creates NO child and must break the run,
+  // so both thinking blocks get their own rail (2 wrapped regions).
+  const wrapped = component.contentContainer.children
+    .filter((c) => c instanceof FakeMouseRegion && "wrapped" in ((c as FakeMouseRegion).child as object));
+  assert.equal(wrapped.length, 2, "empty text breaks the thinking run like the host loop does");
+});
+
+test("0.8.1: toolCall block breaks thinking continuity (barrier run)", () => {
+  const state = new TranscriptState();
+  setup(state);
+  const messageObj = { role: "assistant", content: [
+    { type: "thinking", thinking: "before tool" },
+    { type: "toolCall", id: "t1", name: "read" },
+    { type: "thinking", thinking: "after tool" },
+  ] } as { role: string; content: Array<{ type: string; thinking?: string; id?: string; name?: string }> };
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(messageObj);
+  component.updateContent(messageObj);
+  // Host rebuild: each thinking run = own MouseRegion; toolCall has NO child
+  // in the assistant component. Both thinking runs must be wrapped.
+  const wrapped = component.contentContainer.children
+    .filter((c) => c instanceof FakeMouseRegion && "wrapped" in ((c as FakeMouseRegion).child as object));
+  assert.equal(wrapped.length, 2, "toolCall breaks the thinking run (two rails, never one merged)");
 });
 
 test("plain English text never gets a rail (semantic typing only)", () => {
@@ -476,3 +551,27 @@ test("thinking timing projects onto textRunPlan and closes on phase transition",
   assert.equal(closedPlan!.thinkingEnded, true);
 });
 
+test("0.8.1 doc diff surface: full-row bg on add/remove incl. blank add, context plain", () => {
+  const rows = [
+    { kind: "context", oldNumber: 1, newNumber: 1, content: "original line" },
+    { kind: "add", newNumber: 2, content: "## Added heading" },
+    { kind: "add", newNumber: 3, content: "" },
+    { kind: "remove", oldNumber: 2, content: "old removed" },
+  ];
+  const out = renderDiffLines({
+    rows,
+    width: 60,
+    layout: { wrap: (t: string) => [t], visibleWidth: (t: string) => t.replace(/\x1b\[[0-9;]*m/g, "").length },
+    colorLevel: { kind: "truecolor" },
+    expanded: false,
+    expandHint: "",
+  });
+  const joined = out.join("\n");
+  assert.match(out[0]!, /^  1  original line$/, "context row: no bg, gutter+space+content");
+  assert.match(joined, /\x1b\[48;2;33;58;43m/, "add rows carry #213A2B line bg");
+  assert.match(joined, /\x1b\[48;2;74;34;29m/, "remove rows carry #4A221D line bg");
+  assert.match(out[2]!, /\x1b\[48;2;33;58;43m {2}3 \x1b\[32m\x1b\[48;2;33;58;43m\+\x1b\[39m +\x1b\[49m$/, "BLANK added row still has full-row bg incl. right padding");
+  assert.ok(!out[0]!.includes("48;2;"), "context row has no background");
+  // bg reset must close each styled row (surface never leaks past the row).
+  for (const line of out.slice(1)) assert.match(line, /\x1b\[49m$/, "bg reset closes the row");
+});

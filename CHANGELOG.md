@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.8.1
+
+Fix round on the 0.8.0 UI owner: structured Writing header, physical-row
+streaming preview, event-driven phase feed, real thinking expansion, and the
+document-edit diff surface. Display-only boundary unchanged.
+
+- Writing header restored: the write CALL slot always owns a structured
+  `• Writing <path>` header with a stage line (`Receiving content · preview,
+  not yet committed` → ready → writing file). The live preview is a body
+  UNDER the header — the 0.8.0 early-return that replaced the title with a
+  bare preview once the first content chunk arrived is gone. Final results
+  collapse to `Added/Edited/Wrote` with the result slot owning the body.
+- Physical-row tail budget: `renderWritePreview` now wraps FIRST (full
+  gutter + line-number deduction) and keeps the newest TERMINAL rows, so an
+  early 1800-char logical line can no longer freeze the tail — the newest
+  received character is always visible (0.8.0 measured: tail invisible at
+  ≥128 KiB prefixes; now visible at 16 KiB–1 MiB, same per-frame cost).
+- Event-driven phases: the Working line now follows the real
+  `assistantMessageEvent` stream (`thinking_start/delta/end`, `text_*`,
+  `toolcall_start/delta/end` + tool name at `contentIndex`). A stale
+  thinking block in the accumulated message no longer keeps "Thinking" lit
+  while write arguments stream — the status shows `Writing`.
+- Real thinking expansion: the automatic collapse-to-label behavior was
+  REMOVED. The default policy is `thinking: full/full` (config
+  `codex-appearance.json`); thinking bodies stay open after
+  `thinking_end`/text/tool start; Ctrl+T / clicks keep working through the
+  host. The 0.8.0 adapter bug that overwrote EXPANDED thinking Markdown with
+  a `Thought for …` label (broken `isCollapsedLabel` shape test) is fixed —
+  the display layer never rewrites a thinking body into a label.
+- semanticRuns host parity: an EMPTY text block now breaks a thinking run
+  (barrier run), like the host rebuild loop; toolCall blocks between
+  thinking blocks also split runs.
+- Document edits use the Codex diff surface: the EXACT builtin edit
+  tool's `renderShell: "self"` is now taken over (same structured
+  `• Editing/Edited <path>` + full-row add/remove backgrounds as code
+  edits). Third-party self-shells and unknown sourceInfo still back off;
+  the ownership checks were not relaxed for them.
+- Config wiring: `thinking.streaming/completed/rail` and
+  `writePreview.enabled/rows` are actually applied (`rows` = body budget,
+  `enabled: false` keeps the header and drops the live body). `/codex-ui`
+  surfaces the effective values. Zentui registry probe removed (uninstalled).
+
 ## 0.8.0
 
 The standalone Codex-style Pi UI. This release makes pi-codex-appearance the

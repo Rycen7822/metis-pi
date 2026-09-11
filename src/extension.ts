@@ -40,12 +40,12 @@ export interface Bindings {
   makeRail?: (child: unknown) => unknown;
   /** Detect an external owner that already renders thinking rails. */
   externalRailOwner?: () => boolean;
-  /** Build the live write-args preview component (host TUI primitives). */
-  makeWritePreview?: import("./renderers.ts").WritePreviewInput extends infer T
-    ? (input: T) => import("./tool-names.ts").Component | undefined
+  /** Build the live write call component (header + stage + preview body). */
+  makeWriteCall?: import("./renderers.ts").WritePreviewInput extends infer T
+    ? (input: T & { headerText: string }) => import("./tool-names.ts").Component | undefined
     : never;
+
   /** Format the collapsed-thinking label with the measured duration. */
-  thoughtLabel?: (thinkingMs: number) => string | undefined;
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
   editorHost?: { CustomEditor: unknown };
   // ---- 0.8.0 chrome bindings (public host APIs; resolved in index.ts) ----
@@ -208,7 +208,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
-      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWritePreview, session, bindings.layoutOps),
+      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps),
     });
     if (!handle.installed) ctx.ui.notify(`pi-codex-appearance: ${handle.reason}. Compact transcript was not installed.`, "warning");
     // Scoped transcript decorations (member spacing + assistant separator +
@@ -223,7 +223,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
         makeRail: bindings.makeRail,
         externalRailOwner: bindings.externalRailOwner,
-        thoughtLabel: bindings.thoughtLabel,
         enabled: () => enabled,
       });
       const failedFeatures = decorations.features.filter((f) => !f.installed);
@@ -251,12 +250,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
           : "unavailable (no assistant prototype binding)";
         const clock = metrics.snapshot();
+        const think = config.thinking;
+        const wp = config.writePreview;
         const lines = [
-          "pi-codex-appearance 0.8.0 diagnostics:",
+          "pi-codex-appearance 0.8.1 diagnostics:",
           `  chrome:  ${chrome}`,
           `  transcript: ${transcript}`,
           `  decorations: ${decor}`,
           `  interaction clock: ${clock.active ? `open ${Math.round(clock.elapsedMs / 1000)}s` : "idle"} (timers=${counters.timers})`,
+          `  config: thinking=${think.streaming}/${think.completed} rail=${think.rail ? "on" : "off"} writePreview=${wp.enabled ? `${wp.rows} rows` : "off"}`,
         ];
         text = lines.join("\n");
       }
@@ -418,18 +420,51 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);
     transcript.apply({ type: "message_update", message: stateMessage }, message);
-    if (!stateMessage || stateMessage.role !== "assistant") return;
-    // Phase feed for the Working line: real block types only (3.5).
-    const hasThinking = stateMessage.content.some((b) => b.type === "thinking" && b.thinking?.trim());
-    const hasText = stateMessage.content.some((b) => b.type === "text" && b.text?.trim());
-    const hasToolCall = stateMessage.content.some((b) => b.type === "toolCall");
-    if (hasThinking) metrics.thinkingStart();
-    else if (hasText) {
-      metrics.thinkingEnd();
-      metrics.setPhase("working");
-    } else if (hasToolCall) {
-      metrics.thinkingEnd();
-      metrics.setPhase("working");
+    // Phase feed for the Working line (0.8.1 fix): the CURRENT streaming
+    // event decides the phase — never the accumulated content. An old
+    // thinking block staying in the message must NOT keep "Thinking" lit
+    // while the model is streaming a write tool call's arguments.
+    const streamEvent = (event as { assistantMessageEvent?: { type?: string; contentIndex?: number; partial?: { content?: Array<Record<string, unknown>> } } }).assistantMessageEvent;
+    const eventType = typeof streamEvent?.type === "string" ? streamEvent.type : undefined;
+    if (stateMessage && stateMessage.role === "assistant" && eventType) {
+      const content = streamEvent?.partial?.content ?? [];
+      const at = (idx: number | undefined) => (typeof idx === "number" ? content[idx] : undefined);
+      switch (eventType) {
+        case "thinking_start":
+        case "thinking_delta":
+          metrics.thinkingStart();
+          break;
+        case "thinking_end":
+          metrics.thinkingEnd();
+          break;
+        case "text_start":
+        case "text_delta":
+        case "text_end":
+          metrics.thinkingEnd();
+          metrics.setPhase("working");
+          break;
+        case "toolcall_start":
+        case "toolcall_delta": {
+          metrics.thinkingEnd();
+          const block = at(streamEvent?.contentIndex);
+          const toolName = typeof block?.name === "string" ? block.name : undefined;
+          if (toolName === "write") metrics.writeStreaming();
+          else metrics.setPhase("working");
+          break;
+        }
+        case "toolcall_end": {
+          metrics.thinkingEnd();
+          const toolCall = (streamEvent as { toolCall?: { name?: unknown } }).toolCall;
+          const block = at(streamEvent?.contentIndex);
+          const toolName = typeof toolCall?.name === "string" ? toolCall.name
+            : typeof block?.name === "string" ? block.name : undefined;
+          if (toolName === "write") metrics.writeStreaming();
+          else metrics.setPhase("working");
+          break;
+        }
+        default:
+          break; // start/done/error: no phase change (done handled at message_end)
+      }
     }
   });
   (pi as unknown as {
