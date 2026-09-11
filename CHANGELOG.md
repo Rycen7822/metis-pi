@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.8
+
+Shimmer feel correction (user feedback: the 0.8.7 comet swept too fast —
+"high frame rate" should mean smoother motion, not a faster sweep):
+
+- **Continuous comet head**: the head now advances a fraction of a cell per
+  frame (0.25 cells/frame at the 32ms default → 128ms per cell, the leisurely
+  0.8.6 pace) while the high frame rate drives smooth sub-cell intensity
+  flow — the 8-level teal gradient interpolates per frame, so the trail
+  visibly melts instead of stepping.
+- Frame rate, cycle discipline (enter → sweep → exit → pause, no overlap)
+  and the bullet's own cadence are unchanged; frame cost stays ~0.003ms.
+
+`npm test` 209/209.
+
 ## 0.8.7
 
 Working shimmer polish (user feedback: make the sweep feel smoother):

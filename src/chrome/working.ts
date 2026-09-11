@@ -75,38 +75,61 @@ export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
 }
 
 /** Shimmer phase math (pure). Frame counter wraps — no state growth. */
-// Shimmer cycle: ENTER (gradient window slides in from the left edge) →
-// SWEEP → EXIT (fully off the right edge) → PAUSE (word at rest). One wave
-// always completes before the next begins — mixing mismatched cycle lengths
-// here made the second wave start while the first was mid-word (0.8.5 bug:
-// %12 inside a %16 loop cut the sweep short).
-// The highlight is a gradient comet: bright leading edge with a fading trail
-// (truecolor only, like the bullet pulse), one cell per frame.
-export const SHIMMER_WINDOW = 5; // gradient comet length in cells (lead + trail)
-export const SHIMMER_STEP_FRAMES = 1; // frames per highlight position
-export const SHIMMER_PAUSE = 6; // rest frames after the wave exits
+// Shimmer cycle: ENTER (comet head slides in from the left edge) → SWEEP →
+// EXIT (trail fully off the right edge) → PAUSE (word at rest). One wave
+// always completes before the next begins (0.8.5 bug: %12 inside a %16 loop
+// cut the sweep short).
+// The head moves CONTINUOUSLY (a fraction of a cell per frame): the wave
+// crosses at a leisurely pace while the 32ms frame rate drives smooth
+// sub-cell intensity flow — high frame rate ≠ fast sweep.
+export const SHIMMER_TRAIL = 5; // comet trail length in cells behind the head
+export const SHIMMER_CELLS_PER_FRAME = 0.25; // sweep speed (4 frames per cell @32ms)
+export const SHIMMER_PAUSE_FRAMES = 16; // rest frames after the wave exits
 export const BULLET_STEP_FRAMES = 2; // bullet brightness holds ~2 frames
 
-/** Front→back gradient shades for the comet (truecolor; teal accent ramp). */
-const SHIMMER_SHADES: ReadonlyArray<readonly [number, number, number]> = [
+/** Head→trail gradient ramp (truecolor; teal accent, 8 levels). */
+const SHIMMER_RAMP: ReadonlyArray<readonly [number, number, number]> = [
   [200, 255, 247],
-  [148, 226, 213],
-  [94, 180, 168],
-  [62, 132, 124],
-  [44, 92, 88],
+  [172, 242, 231],
+  [146, 228, 214],
+  [120, 209, 195],
+  [96, 186, 172],
+  [76, 160, 148],
+  [59, 130, 120],
+  [46, 99, 92],
 ];
 
-export function shimmerPhase(frame: number, wordLength: number): { bulletStep: number; highlightStart: number } {
-  const window = SHIMMER_WINDOW;
-  // highlightStart runs -window+1 … wordLength: enters at the left edge and
-  // exits fully past the right edge (window covers [start, start+window)).
-  const positions = wordLength + window; // entry → fully exited
-  const sweep = positions * SHIMMER_STEP_FRAMES;
-  const cycle = sweep + SHIMMER_PAUSE;
+export interface ShimmerPhase {
+  bulletStep: number;
+  /** Continuous comet head position in cells (-1 … wordLength + trail). */
+  head: number;
+}
+
+export function shimmerPhase(frame: number, wordLength: number): ShimmerPhase {
+  const travel = wordLength + SHIMMER_TRAIL + 1; // head: -1 → fully exited
+  const sweep = Math.ceil(travel / SHIMMER_CELLS_PER_FRAME);
+  const cycle = sweep + SHIMMER_PAUSE_FRAMES;
   const f = ((frame % cycle) + cycle) % cycle;
-  const step = Math.floor(f / SHIMMER_STEP_FRAMES);
   const bulletStep = [0, 1, 2, 1][Math.floor(f / BULLET_STEP_FRAMES) % 4]!;
-  return { bulletStep, highlightStart: step - window + 1 };
+  const head = Math.min(f * SHIMMER_CELLS_PER_FRAME, travel) - 1;
+  return { bulletStep, head };
+}
+
+/** Gradient color for a cell `dist` cells behind the head (0 = at the head).
+ * Returns undefined when the cell is outside the comet. */
+export function shimmerCellColor(dist: number): readonly [number, number, number] | undefined {
+  if (dist < 0 || dist >= SHIMMER_TRAIL) return undefined;
+  const t = dist / SHIMMER_TRAIL;
+  const pos = t * (SHIMMER_RAMP.length - 1);
+  const i = Math.floor(pos);
+  const frac = pos - i;
+  const a = SHIMMER_RAMP[i]!;
+  const b = SHIMMER_RAMP[Math.min(i + 1, SHIMMER_RAMP.length - 1)]!;
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * frac),
+    Math.round(a[1] + (b[1] - a[1]) * frac),
+    Math.round(a[2] + (b[2] - a[2]) * frac),
+  ];
 }
 
 export interface WorkingComponentInput {
@@ -168,14 +191,14 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
       }
       syncTimer(true);
       const f = workingFrame(snapshot, input.getShow());
-      const { bulletStep, highlightStart } = shimmerPhase(frame, f.message.length);
+      const { bulletStep, head } = shimmerPhase(frame, f.message.length);
 
       // Bullet: subtle intensity pulse (truecolor only; else static accent).
       const animated = input.colorKind === "truecolor" && input.getAnimation().enabled;
       const bullet = animated ? bulletPulse(bulletStep) : input.paint("•", "accent");
       // Message word with a 3-cell brightness window sweeping left→right
       // (truecolor only); static accent-adjacent text otherwise.
-      const message = animated ? shimmerText(f.message, highlightStart, input.paint) : input.paint(f.message, "normal");
+      const message = animated ? shimmerText(f.message, head, input.paint) : input.paint(f.message, "normal");
 
       // Codex rhythm: `• Working (details) · tool` — each span painted
       // exactly ONCE (no nested SGR wraps).
@@ -216,18 +239,15 @@ function bulletPulse(step: number): string {
   return `${shade}•\x1b[39m`;
 }
 
-function shimmerText(text: string, highlightStart: number, paint: WorkingComponentInput["paint"]): string {
-  // Gradient comet sweeping left→right: the leading cell is brightest and the
-  // trail fades back into the theme dim. Truecolor only (the render path
-  // gates on that).
+function shimmerText(text: string, head: number, paint: WorkingComponentInput["paint"]): string {
+  // Continuous comet: a cell's color depends on its distance BEHIND the head
+  // (0 = at the head, brightest; fading along the trail into the theme dim).
+  // The head advances a fraction of a cell per frame, so every frame shifts
+  // each trail cell's intensity smoothly — motion reads as fluid, not fast.
   const chars = [...text];
   let out = "";
   for (let i = 0; i < chars.length; i++) {
-    const front = highlightStart + SHIMMER_WINDOW - 1; // leading (rightmost) cell
-    const offsetFromFront = front - i; // 0 at the front, growing back along the trail
-    const shade = offsetFromFront >= 0 && offsetFromFront < SHIMMER_SHADES.length
-      ? SHIMMER_SHADES[offsetFromFront]!
-      : undefined;
+    const shade = shimmerCellColor(head - i);
     out += shade
       ? `\x1b[38;2;${shade[0]};${shade[1]};${shade[2]}m${chars[i]}\x1b[39m`
       : paint(chars[i]!, "dim");

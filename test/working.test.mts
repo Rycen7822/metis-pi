@@ -2,7 +2,7 @@
 // gating, shimmer animation lifecycle (fake clock), width guard. Spec 9 + 18.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { workingFrame, shimmerPhase, createWorkingComponent, WORKING_WIDGET_KEY, INTERRUPT_HINT } from "../src/chrome/working.ts";
+import { workingFrame, shimmerPhase, shimmerCellColor, createWorkingComponent, WORKING_WIDGET_KEY, INTERRUPT_HINT } from "../src/chrome/working.ts";
 
 const SHOW = { elapsed: true, thought: true, tool: true, tokens: false };
 
@@ -60,50 +60,77 @@ test("tokens default OFF in 0.8.5; opt-in renders the segment", () => {
 
 test("shimmer cycle: one wave fully exits before the next enters (no overlap)", () => {
   const word = "Working".length; // 7
-  const window = 5;
-  const stepFrames = 1;
-  const cycle = (word + window) * stepFrames + 6;
-  // Full timeline: litChars(f) = chars covered by the comet window.
+  const trail = 5;
+  const cycle = Math.ceil((word + trail + 1) / 0.25) + 16;
+  // Front-of-wave position per frame: rightmost cell with a comet color.
+  const frontAt = (f: number): number => {
+    const { head } = shimmerPhase(f, word);
+    return Math.ceil(head) - 1; // rightmost cell with dist >= 0
+  };
   const litAt = (f: number): number[] => {
-    const { highlightStart: start } = shimmerPhase(f, word);
+    const { head } = shimmerPhase(f, word);
     const out: number[] = [];
-    for (let i = 0; i < word; i++) if (i >= start && i < start + window) out.push(i);
+    for (let i = 0; i < word; i++) {
+      const dist = head - i;
+      if (dist >= 0 && dist < trail) out.push(i);
+    }
     return out;
   };
-  // The sweep moves monotonically forward: the FIRST lit char never goes
-  // backwards until the wave has fully exited the word.
+  // The head advances monotonically WITHIN a wave (the cycle wrap restarts
+  // at the left edge by design).
+  for (let f = 1; f < cycle * 2 + 7; f++) {
+    if (f % cycle === 0) continue;
+    assert.ok(shimmerPhase(f, word).head >= shimmerPhase(f - 1, word).head, `frame ${f}: head moved backwards mid-wave`);
+  }
+  // A wave fully exits before the next enters: once the word goes dark, it
+  // only lights up again exactly at the cycle boundary.
   let exited = false;
   for (let f = 1; f < cycle * 2 + 7; f++) {
     const prev = litAt(f - 1);
     const cur = litAt(f);
     if (prev.length > 0 && cur.length === 0) exited = true;
-    if (!exited && prev.length > 0 && cur.length > 0) {
-      assert.ok(cur[0]! >= prev[0]!, `frame ${f}: highlight moved backwards mid-wave (${prev} → ${cur})`);
-    }
-    if (exited && cur.length > 0 && litAt(f - 1).length === 0) {
-      // Re-entry only allowed via the cycle restart (f ≡ 0 mod cycle).
+    if (f % cycle === 0) exited = false; // cycle boundary = legitimate re-entry
+    if (exited && cur.length > 0) {
       assert.ok(f % cycle === 0, `frame ${f}: a new wave started before the previous one finished`);
       exited = false;
     }
   }
-  // Cycle wraps exactly: frame at cycle length equals frame 0.
+  // Cycle wraps exactly.
   assert.deepEqual(shimmerPhase(cycle, word), shimmerPhase(0, word));
-  // One cell per frame (gradient comet at full frame rate).
-  assert.equal(shimmerPhase(10 + 1, word).highlightStart - shimmerPhase(10, word).highlightStart, 1);
-  // Bullet steps still cycle through all three brightness levels (on their
-  // own 2-frame cadence, independent of the sweep).
+  // LEISURELY pace: the head advances 0.25 cells per frame (4 frames per
+  // cell) — the high frame rate drives intensity flow, not sweep speed.
+  assert.equal(shimmerPhase(4, word).head - shimmerPhase(0, word).head, 1);
+  // Consecutive frames still differ in intensity (smooth sub-cell flow):
+  // the cell just behind the head changes shade within 2 frames.
+  const { head: h0 } = shimmerPhase(8, word);
+  const c0 = shimmerCellColor(h0 - Math.floor(h0));
+  const { head: h1 } = shimmerPhase(9, word);
+  const c1 = shimmerCellColor(h1 - Math.floor(h1));
+  assert.notDeepEqual(c0, c1, "trail intensity flows frame-to-frame");
+  // Bullet steps cycle on their own 2-frame cadence.
   const steps = new Set();
   for (let i = 0; i < 64; i++) steps.add(shimmerPhase(i, word).bulletStep);
   assert.deepEqual([...steps].sort(), [0, 1, 2]);
   assert.equal(shimmerPhase(0, word).bulletStep, shimmerPhase(1, word).bulletStep, "bullet holds across frames");
 });
 
+test("shimmer gradient ramp interpolates smoothly toward the theme dim", () => {
+  const at = (d: number) => shimmerCellColor(d)!;
+  const headShade = at(0);
+  const tailShade = at(4.75);
+  assert.ok(headShade[0] > tailShade[0] && headShade[1] > tailShade[1], "head is brighter than the trail end");
+  assert.equal(at(5), undefined, "beyond the trail → unlit");
+  assert.equal(at(-0.1), undefined, "ahead of the head → unlit");
+  // Adjacent distances differ by a small step (interpolated, not quantized to 5 bins).
+  assert.ok(at(1)[0]! - at(1.25)[0]! > 0 && at(1)[0]! - at(1.25)[0]! < 12, "sub-level interpolation");
+});
+
 test("shimmer adapts to the message length (Writing is shorter than Working)", () => {
   const working = shimmerPhase(0, "Working".length);
   const writing = shimmerPhase(0, "Writing".length);
-  assert.deepEqual(working.highlightStart, writing.highlightStart, "both start entering at the left edge");
+  assert.deepEqual(working.head, writing.head, "both start entering at the left edge");
   // The longer message has a longer sweep: its cycle is longer.
-  assert.ok(("Waiting for input".length + 3) * 2 + 6 > ("Working".length + 3) * 2 + 6);
+  assert.ok(Math.ceil(("Waiting for input".length + 6) / 0.25) > Math.ceil(("Working".length + 6) / 0.25));
 });
 
 /** Component harness with a fake scheduler (no real timers). */
@@ -156,8 +183,11 @@ test("animation lifecycle: exactly one 64ms timer while active; stopped at idle/
 test("animation frames change the ANSI but not the semantic text", () => {
   const h = harness();
   const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  h.component.render(80); // first render starts the animation timer
+  // Tick until the comet head is on the word (head starts one cell before).
+  for (let i = 0; i < 6; i++) h.scheduled[0].fn();
   const frameA = h.component.render(80)[0] ?? "";
-  h.scheduled[0].fn(); // one frame = one comet position (32ms default)
+  h.scheduled[0].fn(); // one frame = 0.25 cells of head travel + intensity flow
   const frameB = h.component.render(80)[0] ?? "";
   assert.notEqual(frameA, frameB, "consecutive animation frames differ visually");
   assert.equal(strip(frameA), strip(frameB), "stripped text identical across frames");

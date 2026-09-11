@@ -1,3 +1,16 @@
+# Validation record — 0.8.8 (leisurely sweep, smooth intensity)
+
+User feedback on 0.8.7: "animation too fast — I want high frame rate, not a
+fast sweep." The comet head now travels 0.25 cells per frame (128ms/cell,
+matching the 0.8.6 pace) while the gradient intensity interpolates every
+frame across an 8-level ramp — per-frame trace shows the head holding ~4
+frames per cell with the trail shades flowing through intermediate colors
+(◒ ◔ ◕) between the base levels.
+
+`npm test` 209/209 · `check` clean.
+
+---
+
 # Validation record — 0.8.7 (gradient comet, 32ms shimmer)
 
 - Pure trace (component with tagged shades): head ▲ leads, trail ◆●○· fades
