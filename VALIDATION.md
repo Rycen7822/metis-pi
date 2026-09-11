@@ -1,3 +1,58 @@
+# Validation record — 0.8.5 (composer surface, Working rhythm, metadata split, codex quota)
+
+Method: unit suites + `host-smoke` (real Pi component assembly) +
+`pty-verify` (real `pi` in a real tmux PTY against a local mock
+OpenAI-compatible provider, screen-frame assertions) + a one-shot read-only
+probe against the REAL logged-in `codex app-server` (codex-cli 0.154.0).
+The protocol shape (`rateLimits.primary {usedPercent, windowDurationMins,
+resetsAt}` camelCase) was verified against the real binary before
+implementation; the reference repo (narumiruna/pi-extensions) was used for
+the framing only.
+
+Real-screen frames (tmux capture, HOME-isolated so the published copy cannot
+shadow the code under test):
+
+```text
+===== IDLE =====
+>  Ask anything...
+pcx-mock-model · high · pcx-mock          ctx 0/1.0M · 0%
+/tmp/pcx-vis-…/ws                                   ↑0
+
+===== MID-THINKING =====
+▏  嗯
+• Working (0s · thinking 0s · esc to interrupt)
+>  Ask anything...
+pcx-mock-model · high · pcx-mock          ctx 4/1.0M · 0%
+```
+
+- The purple full-width border is gone (no `─` border rows remain around the
+  composer); the surface bg paints every row including padding and right fill.
+- The `> ` prefix borrows the two padding cells — the host re-applies its own
+  `paddingX` (1) after install, which the subclass clamps to ≥2; cursor
+  geometry is unchanged (verified by the real-component tests and the
+  hardware cursor position in the PTY frames).
+- Metadata/footer split verified in the real TUI: the footer carries
+  cwd/session only — no model/context duplication.
+- Working line: Codex grammar with dual timers; shimmer frames differ in ANSI
+  while the stripped text stays identical (unit-tested with a fake scheduler;
+  0.003 ms/frame measured against the 64 ms budget).
+- Quota: real app-server read returned `planType=pro`, primary
+  `used 96% → remaining 4%` (window 10080min → rendered "Codex week 4%"),
+  credits `hasCredits=false`. No raw response, token or credential stored.
+
+Performance (spec 20): animation frame 0.003 ms; 30k-char write-preview
+frame 0.22 ms; 2000 animation frames leave no state growth; quota refresh is
+event/interval-driven and never runs in render.
+
+Not verified: real window mouse interaction on the surface editor beyond the
+host's own hit tests (geometry unchanged by construction + unit tests),
+per-provider reasoning-token display splits.
+
+`npm test` 207/207 · `check`/`check:core` clean · `test:host` PASS ·
+`test:pty` PASS (5 stages) · real codex app-server integration OK.
+
+---
+
 # Validation record — 0.8.4 (footer details, Working widget, runtime outcomes)
 
 Method: unit suites on REAL host data shapes + `host-smoke` (real Pi

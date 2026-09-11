@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.8.5
+
+Composer surface, Codex Working rhythm, OpenCode-style metadata, and a real
+Codex quota source (visual convergence round; all data read-only):
+
+- **Gray composer surface** (`src/chrome/editor.ts` + `src/surface.ts`): the
+  full-width accent borders are gone. `CodexSurfaceEditor` (still the host
+  `CustomEditor` — input buffer, wrapping, autocomplete, paste, history, undo
+  and mouse are untouched) replaces the top/bottom border with surface-
+  painted padding rows, keeps the `↑ N more`/`↓ N more` scroll indicators,
+  borrows the first row's two padding cells for a `> ` prompt prefix (same
+  cell count — cursor geometry, mouse hit tests and autocomplete anchors are
+  unchanged; `getText()` never contains the glyph), and shows a dim
+  `Ask anything...` placeholder on the empty editor. The host re-applies its
+  own `paddingX` after install, so the subclass clamps it to ≥2 — the prefix
+  needs the two cells. The background is painted per physical row with bg
+  re-assertion after inner resets (the cursor cell `\x1b[7m \x1b[0m` would
+  otherwise punch a hole); truecolor → `#1f1f1f`, ansi256 → nearest gray
+  (234), ansi16/NO_COLOR → no background, layout preserved.
+- **Composer metadata widget** (`src/chrome/composer-metadata.ts`): the
+  OpenCode-style `model · thinking level · provider    ctx used/capacity ·
+  percent` row installed through the public belowEditor widget slot, painted
+  with the SAME surface ops so editor + metadata read as one surface.
+  Model/effort switches update live (no restart). The footer no longer
+  duplicates model/context.
+- **Compact product footer** (`src/chrome/footer.ts`): one status line —
+  `dir (branch)   ↑in ↓out · cache NN% · Codex 5h 82% · week 64%` with R/W
+  and cost appearing at wide widths. Priority ladder under width pressure:
+  cost → R/W → shorter dir → wrap to two rows; P0 (cwd/branch, session I/O)
+  and P1 (cache, quota) always survive.
+- **Codex Working rhythm** (`src/chrome/working.ts`): the line is now
+  `• Working (3m 36s · thinking 24s · esc to interrupt) · read` — Codex
+  status grammar (layout/timing reference only, no identity copying), with
+  `Writing`/`Waiting for input` phases and `thought for Ns` after thinking
+  closes. Tokens moved out of the Working line (they live in the metadata/
+  footer; `working.tokens` defaults to false). A restrained shimmer: bullet
+  brightness pulse + a 3-cell highlight sweeping the message word, on its own
+  64ms timer (clamped 32..1000, config `working.animation*`), truecolor
+  only, static under NO_COLOR/ansi16. The timer runs only while active;
+  settle/dispose leave zero timers; a frame only bumps a bounded counter and
+  requests a render (measured: 0.003 ms/frame — no session scan, no fs, no
+  quota in the animation path).
+- **Real Codex quota** (`src/quota/*`): read-only subscription rate limits
+  from the locally logged-in Codex CLI — `codex app-server --listen stdio://`
+  (argv array, no shell), JSON-RPC `initialize` → `initialized` →
+  `account/rateLimits/read`, normalize, dispose. `remainingPercent` is always
+  derived (`100 − usedPercent`, clamped) — never swapped. Boundaries: startup
+  + per-RPC timeouts, bounded stderr with Bearer/access_token redaction,
+  early-exit rejection, single in-flight refresh, last-good snapshot + stale
+  marker, bounded error classes in diagnostics (`codex-missing`,
+  `startup-timeout`, `rpc-timeout`, `rpc-error`, `early-exit`, `malformed`,
+  `no-data`). No credentials are read, no private HTTP endpoint is contacted,
+  the Codex TUI is never scraped. Refresh: session_start, agent_settled
+  (when older than 30s), periodic ≤ `quota.refreshSeconds` (TUI only, unref'd
+  timer), manual `/codex-ui refresh-quota`. A quota failure is UI-auxiliary —
+  it never affects agent outcomes or the interaction verdict.
+- **Config** (backwards compatible, defaults for missing fields):
+  `composer.surface/promptPrefix/metadata`, `working.animation/
+  animationIntervalMs/tokens:false`, `footer.showCacheReadWrite/
+  showCodexQuota`, `quota.codex:auto|on|off/refreshSeconds/timeoutMs`.
+- **Tests**: chrome suite rebuilt for the surface split (metadata owns model/
+  context, footer owns cwd/session/quota), editor real-component tests
+  (border removal, bg on every row, prefix, placeholder, scroll indicators,
+  legacy fallback), Working format + animation lifecycle with a fake
+  scheduler (one timer, frames differ visually, stripped text stable, no
+  growth), quota suites (normalize math, protocol against a mock child,
+  failure classes, redaction, store coalescing). `scripts/pty-verify.mjs`
+  asserts the new real-TUI frames: composer placeholder + `> ` prefix,
+  metadata line, compact footer without model duplication, and the Codex
+  Working rhythm with dual timers.
+
+`npm test` 207/207 · `test:host` PASS · `test:pty` PASS (real TUI frames) ·
+real `codex app-server` integration verified read-only (plan pro, primary
+remaining 4%, window 10080min → "Codex week 4%").
+
 ## 0.8.4
 
 Footer details, standalone Working line, and runtime outcome verdicts

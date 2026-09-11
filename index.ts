@@ -5,6 +5,7 @@ import { activate, type AppearanceAPI } from "./src/extension.ts";
 import { renderCodexDiffComponent, type DiffComponentInput } from "./src/diff-component.ts";
 import { renderShellCall, renderShellResult, type LayoutOps } from "./src/shell.ts";
 import { resolveColorContext } from "./src/palette.ts";
+import { makeSurfaceOps } from "./src/surface.ts";
 import { renderWritePreview } from "./src/write-preview.ts";
 import { loadConfig } from "./src/config.ts";
 import type { WritePreviewInput } from "./src/renderers.ts";
@@ -303,6 +304,13 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     const lines = Pi.highlightCode(text, language);
     return Array.isArray(lines) ? lines.join("\n") : String(lines);
   };
+  // Gray composer surface painters, built from the REAL Tui helpers so src/
+  // keeps its no-host-import rule.
+  const surface = makeSurfaceOps(
+    colorLevel,
+    (text) => `\x1b[38;2;148;226;213m${text}\x1b[39m`,
+    (text) => `\x1b[2m${text}\x1b[22m`,
+  );
   activate(pi, {
     prototype,
     makeText: (text) => new Tui.Text(text, 0, 0),
@@ -345,6 +353,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
+    surface,
     api: pi,
     appearanceVersion: appearanceVersion(),
     piVersion: typeof (Pi as unknown as { VERSION?: unknown }).VERSION === "string"

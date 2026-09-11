@@ -1,10 +1,18 @@
 // The standalone Working line, installed as an above-editor widget through
 // the host's public ctx.ui.setWidget(key, factory, {placement:"aboveEditor"}).
-// Segment order follows the Zentui working line (reference only, no
-// dependency): Message · Tool · Elapsed · Thought · Tokens.
-// The native loader row is hidden ONLY after this widget installed
-// successfully (setWorkingVisible(false)); any failure keeps the native row.
-// Live width comes from the host render pass — no fixed column count.
+// 0.8.5: Codex status rhythm (openai/codex status_indicator_widget.rs is the
+// layout/timing reference — no identity or brand copying):
+//   • Working (3m 36s · thinking 24s · esc to interrupt) · read
+// Token/cache/quota stay OUT of the Working line (metadata + footer own
+// them). The native loader row is hidden ONLY after this widget installed
+// successfully; any failure keeps the native row.
+//
+// Animation: a restrained shimmer over the message word + bullet pulse, on
+// its OWN timer (default 64ms, clamped 32..1000) — separate from the 1s
+// elapsed ticker. A frame only bumps a counter and requests a render; it
+// never re-reads session usage, disk, or quota. NO_COLOR / ansi16 /
+// animation:false render static. The timer lives only while active; settle
+// and dispose stop it (idle must leave zero timers).
 
 import { formatDuration, formatTokensCompact, type ActivityPhase } from "../ui-metrics.ts";
 
@@ -14,12 +22,12 @@ export interface WorkingSnapshot {
   elapsedMs: number;
   thinkingMs: number;
   thinkingOpen: boolean;
-  usage: { input: number; output: number };
   tools: { first: string; count: number } | undefined;
 }
 
 /** Config-gated segments. `elapsed:false` removes ONLY the duration — the
- * thought/phase/tool/tokens segments keep updating. */
+ * thought/tool segments keep updating. `tokens` defaults false in 0.8.5
+ * (tokens live in the metadata/footer). */
 export interface WorkingShow {
   elapsed: boolean;
   thought: boolean;
@@ -27,87 +35,168 @@ export interface WorkingShow {
   tokens: boolean;
 }
 
-export const WORKING_WIDGET_KEY = "pi-codex-appearance:working";
+export interface WorkingAnimation {
+  enabled: boolean;
+  intervalMs: number; // clamped 32..1000
+}
 
-/** Pure line builder (testable without a terminal). Unknown/zero pieces are
- * omitted, never fabricated: no tools → no tool segment; zero tokens → no
- * token segment; thinking 0 & closed → no thought segment. */
-export function formatWorkingLine(s: WorkingSnapshot, show: WorkingShow): string {
-  const parts: string[] = [];
-  switch (s.phase) {
-    case "writing":
-      parts.push("Writing…");
-      break;
-    case "waiting-for-input":
-      parts.push("Waiting for input");
-      break;
-    default:
-      parts.push("Working…");
-      break;
-  }
-  if (show.tool && s.tools) {
-    parts.push(s.tools.count > 1 ? `${s.tools.first} +${s.tools.count - 1}` : s.tools.first);
-  }
-  if (show.elapsed) parts.push(formatDuration(s.elapsedMs));
+export const WORKING_WIDGET_KEY = "pi-codex-appearance:working";
+export const INTERRUPT_HINT = "esc to interrupt";
+
+export interface WorkingFrame {
+  /** Phase label inside the parens. */
+  message: string;
+  details: string[];
+  tool: string | undefined;
+}
+
+/** Pure segment builder (testable, no colors). */
+export function workingFrame(s: WorkingSnapshotWithUsage, show: WorkingShow): WorkingFrame {
+  const message = s.phase === "writing" ? "Writing" : s.phase === "waiting-for-input" ? "Waiting for input" : "Working";
+  const details: string[] = [];
+  if (show.elapsed) details.push(formatDuration(s.elapsedMs));
   if (show.thought) {
-    if (s.thinkingOpen && s.thinkingMs > 0) parts.push(`thinking ${formatDuration(s.thinkingMs)}`);
-    else if (!s.thinkingOpen && s.thinkingMs > 0) parts.push(`thought for ${formatDuration(s.thinkingMs)}`);
+    if (s.thinkingOpen && s.thinkingMs > 0) details.push(`thinking ${formatDuration(s.thinkingMs)}`);
+    else if (!s.thinkingOpen && s.thinkingMs > 0) details.push(`thought for ${formatDuration(s.thinkingMs)}`);
   }
-  if (show.tokens && (s.usage.input > 0 || s.usage.output > 0)) {
-    parts.push(`↑${formatTokensCompact(s.usage.input)} ↓${formatTokensCompact(s.usage.output)}`);
+  if (show.tokens && s.usage && (s.usage.input > 0 || s.usage.output > 0)) {
+    details.push(`↑${formatTokensCompact(s.usage.input)} ↓${formatTokensCompact(s.usage.output)}`);
   }
-  return parts.join(" · ");
+  details.push(INTERRUPT_HINT);
+  return {
+    message,
+    details,
+    tool: show.tool && s.tools ? (s.tools.count > 1 ? `${s.tools.first} +${s.tools.count - 1}` : s.tools.first) : undefined,
+  };
+}
+
+export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
+  usage?: { input: number; output: number };
+}
+
+/** Shimmer phase math (pure): brightness steps 0..3, highlight window of 3
+ * cells sweeping the message word. Frame counter wraps — no state growth. */
+export function shimmerPhase(frame: number): { bulletStep: number; highlightStart: number } {
+  const f = ((frame % 16) + 16) % 16;
+  const bulletStep = [0, 1, 2, 1][f % 4]!;
+  const highlightStart = f % 12; // sweep across "Working" (≤8 chars) + pause
+  return { bulletStep, highlightStart };
 }
 
 export interface WorkingComponentInput {
-  getSnapshot: () => WorkingSnapshot;
+  getSnapshot: () => WorkingSnapshotWithUsage;
   getShow: () => WorkingShow;
-  /** Accent painter for the marker (fallback: plain). */
-  accent?: (text: string) => string;
-  /** DIM painter for the body (fallback: plain). */
-  dim?: (text: string) => string;
+  getAnimation: () => WorkingAnimation;
+  /** Request a host frame from the animation timer (never in render). */
+  requestRender: () => void;
+  /** Color level kind for the degradation ladder. */
+  colorKind: "truecolor" | "ansi256" | "ansi16" | "none";
+  /** Bullet/message painters (accent/dim). */
+  paint: (text: string, tone: "accent" | "dim" | "normal") => string;
+  /** Injectable scheduler for tests (default: setInterval + unref). */
+  schedule?: (fn: () => void, ms: number) => () => void;
 }
 
-/** Host Component shape (structural — no host imports in src/). */
 export interface WorkingComponent {
   render(width: number): string[];
   invalidate(): void;
+  /** Stop the animation timer (settle/shutdown — idle leaves zero timers). */
+  stopAnimation(): void;
   dispose?(): void;
 }
 
-/** Marker: ✦ (accent) with ASCII fallback when the terminal/theme is plain. */
-function marker(accent: ((t: string) => string) | undefined): string {
-  const glyph = "✦";
-  if (!accent) return glyph;
-  try {
-    const painted = accent(glyph);
-    return painted === glyph ? "*" : painted;
-  } catch {
-    return "*";
-  }
-}
-
 export function createWorkingComponent(input: WorkingComponentInput): WorkingComponent {
+  let frame = 0;
+  let stopTimer: (() => void) | undefined;
+  let timerActive = false;
+
+  const schedule = input.schedule ?? ((fn, ms) => {
+    const t = setInterval(fn, ms);
+    (t as unknown as { unref?: () => void }).unref?.();
+    return () => clearInterval(t);
+  });
+
+  function syncTimer(active: boolean): void {
+    const anim = input.getAnimation();
+    const wants = active && anim.enabled && (input.colorKind === "truecolor" || input.colorKind === "ansi256") && anim.intervalMs >= 32 && anim.intervalMs <= 1000;
+    if (wants && !timerActive) {
+      timerActive = true;
+      stopTimer = schedule(() => {
+        frame += 1;
+        input.requestRender();
+      }, anim.intervalMs);
+    } else if (!wants && timerActive) {
+      timerActive = false;
+      stopTimer?.();
+      stopTimer = undefined;
+    }
+  }
+
   return {
     render(width: number): string[] {
       if (!Number.isFinite(width) || width < 1) return [];
       const snapshot = input.getSnapshot();
-      if (!snapshot.active) return [];
-      const line = formatWorkingLine(snapshot, input.getShow());
-      if (!line) return [];
-      const dim = input.dim ?? ((t: string) => t);
-      const head = marker(input.accent);
+      if (!snapshot.active) {
+        syncTimer(false);
+        return [];
+      }
+      syncTimer(true);
+      const f = workingFrame(snapshot, input.getShow());
+      const { bulletStep, highlightStart } = shimmerPhase(frame);
+
+      // Bullet: subtle intensity pulse (truecolor only; else static accent).
+      const animated = input.colorKind === "truecolor" && input.getAnimation().enabled;
+      const bullet = animated ? bulletPulse(bulletStep) : input.paint("•", "accent");
+      // Message word with a 3-cell brightness window sweeping left→right
+      // (truecolor only); static accent-adjacent text otherwise.
+      const message = animated ? shimmerText(f.message, highlightStart, input.paint) : input.paint(f.message, "normal");
+
+      // Codex rhythm: `• Working (details) · tool` — each span painted
+      // exactly ONCE (no nested SGR wraps).
+      const open = input.paint("(", "dim");
+      const close = input.paint(")", "dim");
+      const sep = input.paint(" · ", "dim");
+      const detailSpans = f.details.map((d) => input.paint(d, "dim"));
+      let line = `${bullet} ${message}`;
+      if (detailSpans.length > 0) {
+        line += ` ${open}${detailSpans.join(sep)}${close}`;
+      }
+      if (f.tool) line += `${sep}${input.paint(f.tool, "dim")}`;
+
       // Cell-width guard: hide decorations, never overflow the widget row.
       const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
-      if (plain.length + 2 > width) {
-        // Cell guard: head + space + ellipsis consume 3 columns.
-        const budget = width - 3;
-        return budget >= 1 ? [`${head} ${plain.slice(0, budget)}…`] : [head.slice(0, Math.max(1, width))];
+      if (plain.length > width) {
+        const budget = width - 3; // bullet + space + ellipsis
+        return budget >= 1 ? [`${bullet} ${plain.slice(0, budget)}…`] : [bullet.slice(0, Math.max(1, width))];
       }
-      return [`${head} ${dim(line)}`];
+      return [line];
     },
     invalidate(): void {
-      // Stateless per render — the snapshot getters own freshness.
+      // Stateless per render — the snapshot getter owns freshness.
+    },
+    stopAnimation(): void {
+      syncTimer(false);
+    },
+    dispose(): void {
+      syncTimer(false);
     },
   };
+}
+
+function bulletPulse(step: number): string {
+  // 3 brightness steps around the accent hue — restrained, no rainbow.
+  const shades = ["\x1b[38;2;124;130;150m", "\x1b[38;2;148;226;213m", "\x1b[38;2;190;240;230m", "\x1b[38;2;148;226;213m"];
+  const shade = shades[step] ?? "\x1b[38;2;148;226;213m";
+  return `${shade}•\x1b[39m`;
+}
+
+function shimmerText(text: string, highlightStart: number, paint: WorkingComponentInput["paint"]): string {
+  // 3-cell highlight sweeping left→right over the word, dim elsewhere.
+  const chars = [...text];
+  let out = "";
+  for (let i = 0; i < chars.length; i++) {
+    const inWindow = i >= highlightStart && i < highlightStart + 3;
+    out += inWindow ? paint(chars[i]!, "accent") : paint(chars[i]!, "dim");
+  }
+  return out;
 }

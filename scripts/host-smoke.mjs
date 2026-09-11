@@ -151,7 +151,7 @@ handlers.get("session_shutdown")({}, {});
 assert.deepEqual(Object.getOwnPropertyDescriptors(proto), before);
 assert.match(stripVTControlCharacters(row.render(100).join("\n")), /NATIVE/);
 assert.equal(row.getRenderShell(), "default");
-// ---- 9. 0.8.4 chrome: /codex-ui diagnostics + entry renderer registration ---
+// ---- 9. 0.8.5 chrome: /codex-ui diagnostics + entry renderer registration ---
 // Section 8 ran session_shutdown (host data unbound) — start a fresh session.
 handlers.get("session_start")({}, { hasUI: true, ui: { notify(text) { throw new Error(text); } } });
 const codexUi = registeredCommands.find((cmd) => cmd.name === "codex-ui");
@@ -160,11 +160,13 @@ const notified = [];
 codexUi.handler("", { ui: { notify: (t) => notified.push(t) } });
 const diagnostics = notified.join("\n");
 assert.match(diagnostics, /pi-codex-appearance [\w.-]+ diagnostics \(mode=\w+, pi=[\w.-]+/);
-assert.match(diagnostics, /config: enabled=true thinking=full\/full/, "effective thinking policy surfaced (full/full default)");
+assert.match(diagnostics, /thinking=full\/full/, "effective thinking policy surfaced (full/full default)");
+assert.match(diagnostics, /composer: surface=\S+.*prefix=\S+ metadata=\S+/);
+assert.match(diagnostics, /working: (idle|active) /);
+assert.match(diagnostics, /codex quota: mode=auto source=codex-app-server /);
 assert.match(diagnostics, /chrome: editor=\S+ footer=\S+ header=\S+ working=\S+/);
 assert.match(diagnostics, /transcript:/);
 assert.match(diagnostics, /decorations:/);
-assert.match(diagnostics, /interaction: (idle|open)/);
 assert.match(diagnostics, /outcome: /);
 assert.ok(registeredEntryRenderers.some((r) => r.type === "pi-codex-appearance:interaction-summary:v1"), "summary entry renderer registered");
 
@@ -196,10 +198,21 @@ handlers.get("session_start")({}, {
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
 assert.equal(chromeSlots.workingVisible.at(-1), false, "native loader hidden after widget install");
+assert.ok(chromeSlots.widgets.some((c) => c.key === "pi-codex-appearance:composer-meta" && c.content !== undefined),
+  "composer metadata widget installed below the editor");
+const metaComponent = chromeSlots.widgets.find((c) => c.key === "pi-codex-appearance:composer-meta" && c.content !== undefined)
+  .content({ requestRender() {} }, { fg: (_k, t) => t });
+const metaFrame = metaComponent.render(120).join("\n");
+const metaPlain = metaFrame.replace(/\x1b\[[0-9;]*m/g, "");
+assert.match(metaPlain, /smoke-model/, "metadata model from live host fields");
+assert.match(metaPlain, /high/, "metadata thinking level");
+assert.match(metaPlain, /smoke-provider/, "metadata provider");
+assert.match(metaPlain, /12k\/1\.0M/, "metadata context usage");
+assert.match(metaPlain, /1\.2%/, "metadata context percent");
 // While idle the widget row is hidden (setWidget(undefined)); agent_start
 // shows it for the active interaction.
 handlers.get("agent_start")({ type: "agent_start" }, {});
-const showCall = chromeSlots.widgets.find((c) => c.content !== undefined);
+const showCall = chromeSlots.widgets.find((c) => c.content !== undefined && c.key === "pi-codex-appearance:working");
 assert.ok(showCall, "widget shown for the active interaction");
 assert.equal(showCall.key, "pi-codex-appearance:working");
 assert.deepEqual(showCall.options, { placement: "aboveEditor" });
@@ -211,14 +224,13 @@ const footerComponent = chromeSlots.footers[0]({ requestRender() {} }, { fg: (_k
   onBranchChange: () => () => {},
 });
 const footerFrame = footerComponent.render(120).join("\n");
-assert.match(footerFrame, /smoke-model/);
-assert.match(footerFrame, /high/);
-assert.match(footerFrame, /smoke-provider/);
-assert.match(footerFrame, /12k\/1\.0M · 1\.2%/);
+assert.doesNotMatch(footerFrame, /smoke-model/, "model/context live in the composer surface, not the footer (0.8.5 split)");
+assert.doesNotMatch(footerFrame, /12k\/1\.0M/);
 // Working line through the real component path.
 const widgetComponent = showCall.content({ requestRender() {} }, { fg: (_k, t) => t });
 const workingFrame = widgetComponent.render(100).join("\n");
-assert.match(workingFrame, /Working…/);
+const workingPlain = workingFrame.replace(/\x1b\[[0-9;]*m/g, "");
+assert.match(workingPlain, /• Working \(\d+s · esc to interrupt\)/, "Codex status rhythm");
 handlers.get("agent_settled")({ type: "agent_settled" }, {});
 assert.equal(chromeSlots.widgets.at(-1).content, undefined, "widget cleared at settle");
 
@@ -238,4 +250,4 @@ assert.equal(lastSummary.schemaVersion, 2, "0.8.4 writes the v2 runtime verdict 
 assert.equal(lastSummary.outcome, "completed", "clean stop → Worked");
 
 fs.rmSync(dir, { recursive: true, force: true });
-console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.4 chrome (footer details, above-editor Working widget, v2 outcome summary) OK");
+console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");

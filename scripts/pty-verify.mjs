@@ -197,22 +197,26 @@ sendKeys(["Enter"]);
 const frames = {};
 try {
   // Stage 1: idle footer with REAL model/effort/provider/capacity visible.
-  // Wait for the FOOTER (ctx segment is footer-only; the header also shows
-  // the model id, so matching it too early would race the footer paint).
-  frames.idle = await waitFor(/ctx [0-9—]/, 30_000, "idle footer detail lines");
-  assert.match(frames.idle, /pcx-mock-model/, "model id in footer");
-  assert.match(frames.idle, /high/, "thinking level in footer");
-  assert.match(frames.idle, /pcx-mock/, "provider in footer");
-  assert.match(frames.idle, /1\.0M/, "context capacity in footer");
+  // Wait for the composer METADATA row (ctx segment lives there in 0.8.5).
+  frames.idle = await waitFor(/ctx [0-9—]/, 30_000, "idle composer metadata");
+  // 0.8.5 split: metadata (surface) owns model/effort/provider/context;
+  // the footer owns cwd/branch/session — no duplication.
+  assert.match(frames.idle, /pcx-mock-model · high · pcx-mock/, "metadata: model/effort/provider");
+  assert.match(frames.idle, /ctx 0\/1\.0M · 0%/, "metadata: context usage");
+  assert.match(frames.idle, /Ask anything\.\.\./, "composer placeholder on the gray surface");
+  assert.match(frames.idle, /(^|\n)\s*> /, "`> ` prompt prefix on the first input row");
+  const metaLine = frames.idle.split("\n").find((l) => l.includes("pcx-mock-model")) ?? "";
+  const footerLines = frames.idle.split("\n").filter((l) => l.trim() && !l.includes("pcx-mock-model") && !l.includes("Ask anything"));
+  assert.ok(footerLines.some((l) => l.includes("pcx-mock-pty") || (l.includes("/") && !l.includes("ctx "))), "footer carries cwd/branch rows");
+  assert.ok(!footerLines.some((l) => l.includes("pcx-mock-model ·")), "footer does NOT duplicate the model line");
 
   // Stage 2: a normal run — the Working line is live above the editor with
   // the elapsed timer; ends with a Worked summary (usage-backed tokens).
   type("say PCX_OK");
   sendKeys(["Enter"]);
-  frames.working = await waitFor(/Working…/, 15_000, "live Working line");
-  assert.match(frames.working, /Working…/, "Working… visible mid-run");
+  frames.working = await waitFor(/• Working \(/, 15_000, "live Working line");
+  assert.match(frames.working, /• Working \(\d+s · esc to interrupt\)/, "Codex status rhythm with elapsed");
   assert.match(frames.working, /\d+s/, "elapsed seconds ticking");
-  assert.match(frames.working, /↑\d/, "live tokens from the streaming usage");
   frames.worked = await waitFor(/PCX_OK/, 30_000, "assistant reply");
   frames.summary = await waitFor(/Worked for/, 30_000, "Worked summary");
   assert.match(frames.summary, /Worked for/);
@@ -225,8 +229,7 @@ try {
   type("please PCX_THINK now");
   sendKeys(["Enter"]);
   frames.thinking = await waitFor(/thinking \d+s/, 30_000, "live thinking timer");
-  assert.match(frames.thinking, /thinking \d+s/, "open thinking grows in real time");
-  assert.match(frames.thinking, /Working…/, "message segment stays stable while thinking");
+  assert.match(frames.thinking, /• Working \(\d+s · thinking \d+s · esc to interrupt\)/, "dual timers in the Codex paren group");
   await waitFor(/PCX_THINK_DONE/, 30_000, "post-thinking reply");
   frames.thinkSummary = await waitFor(/thought for \d+s/, 30_000, "closed thinking in summary");
   assert.match(frames.thinkSummary, /thought for \d+s/, "summary carries the accumulated thinking time");

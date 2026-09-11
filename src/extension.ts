@@ -4,15 +4,19 @@ import { TranscriptState, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
-import { UiMetrics, WORKING_PHASE_LABEL, formatDuration } from "./ui-metrics.ts";
+import { UiMetrics, formatDuration, formatTokensCompact } from "./ui-metrics.ts";
 import { TurnSummary, SUMMARY_CUSTOM_TYPE, formatSummaryLine } from "./turn-summary.ts";
 import { probeHost, type HostFacts } from "./host-compat.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
-import { WORKING_WIDGET_KEY, createWorkingComponent, type WorkingShow, type WorkingSnapshot } from "./chrome/working.ts";
-import type { FooterShow, FooterSnapshot } from "./chrome/footer.ts";
+import { WORKING_WIDGET_KEY, createWorkingComponent, type WorkingShow, type WorkingAnimation, type WorkingComponent } from "./chrome/working.ts";
+import { COMPOSER_META_WIDGET_KEY, createComposerMetaComponent, type ComposerMetaSnapshot } from "./chrome/composer-metadata.ts";
+import { createFooterComponent, type FooterShow, type FooterSnapshot } from "./chrome/footer.ts";
+import type { CodexSurfaceOps } from "./chrome/editor.ts";
+import { QuotaStore } from "./quota/quota-store.ts";
+import type { CodexQuotaSnapshot } from "./quota/types.ts";
 
 export interface AppearanceAPI {
   on(event: "session_start" | "session_shutdown", handler: (event: unknown, context: {
@@ -53,6 +57,8 @@ export interface Bindings {
 
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
   editorHost?: { CustomEditor: unknown };
+  /** Gray composer surface painters (index.ts, from real Tui helpers). */
+  surface?: CodexSurfaceOps;
   /** The full ExtensionAPI object (for appendEntry / registerEntryRenderer / registerCommand). */
   api?: unknown;
   /** Real package version of this extension (read from package.json at entry). */
@@ -63,6 +69,8 @@ export interface Bindings {
   getAgentDir?: () => string | undefined;
   /** Read a file (config loading; injected to keep tests filesystem-free). */
   readFile?: (path: string) => string | undefined;
+  /** Injectable Codex quota query (tests; default: real codex app-server). */
+  codexQuotaQuery?: (options: { timeoutMs: number; clientVersion?: string }) => Promise<CodexQuotaSnapshot>;
 }
 
 /** Session-scoped presentation state (ephemeral, display-only). */
@@ -165,21 +173,33 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   const outcome = new InteractionOutcomeTracker();
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
 
+  // Quota store: read-only Codex subscription quota (auxiliary UI data — a
+  // failure here must never touch agent outcomes).
+  const quotaStore = config.quota.codex !== "off"
+    ? new QuotaStore({ timeoutMs: config.quota.timeoutMs, clientVersion: bindings.appearanceVersion, query: bindings.codexQuotaQuery })
+    : undefined;
+  let quotaTimer: ReturnType<typeof setInterval> | undefined;
+  let lastQuotaRefreshAt = 0;
+
   // Chrome install state. `generation` invalidates late async installs:
   // a preload resolving after shutdown/new-session must not touch the new UI.
   const chrome = {
     generation: 0,
     editorFactory: undefined as object | undefined,
     editorInstalled: false,
+    surfaceApplied: false,
+    prefixApplied: false,
     footerInstalled: false,
     headerInstalled: false,
+    metaInstalled: false,
     widgetInstalled: false,
     widgetFactory: undefined as unknown,
+    workingComponent: undefined as WorkingComponent | undefined,
     nativeLoaderHidden: false,
     fallbackMessage: false,
     tui: undefined as { requestRender?: () => void } | undefined,
   };
-  type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts");
+  type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts") & typeof import("./chrome/composer-metadata.ts");
   let chromeMods: Promise<ChromeMods | undefined> | undefined;
   const preloadChrome = (): Promise<ChromeMods | undefined> => {
     chromeMods ??= Promise.all([
@@ -187,7 +207,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       import("./chrome/footer.ts"),
       import("./chrome/header.ts"),
       import("./chrome/working.ts"),
-    ]).then(([editor, footer, header, working]) => ({ ...editor, ...footer, ...header, ...working }))
+      import("./chrome/composer-metadata.ts"),
+    ]).then(([editor, footer, header, working, meta]) => ({ ...editor, ...footer, ...header, ...working, ...meta }))
       .catch(() => undefined);
     return chromeMods;
   };
@@ -210,7 +231,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   const footerShow = (): FooterShow => ({
     details: config.footer.details,
     showCache: config.footer.showCache,
+    showCacheReadWrite: config.footer.showCacheReadWrite,
     showCost: config.footer.showCost,
+    showCodexQuota: config.footer.showCodexQuota,
   });
   const workingShow = (): WorkingShow => ({
     elapsed: config.working.elapsed,
@@ -218,7 +241,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     tool: config.working.tool,
     tokens: config.working.tokens,
   });
-  const getWorkingSnapshot = (): WorkingSnapshot => {
+  const workingAnimation = (): WorkingAnimation => ({
+    enabled: config.working.animation,
+    intervalMs: config.working.animationIntervalMs,
+  });
+  const getWorkingSnapshot = () => {
     const s = metrics.snapshot();
     return {
       active: s.active,
@@ -226,18 +253,22 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       elapsedMs: s.elapsedMs,
       thinkingMs: s.thinkingMs,
       thinkingOpen: s.thinkingOpen,
-      usage: { input: s.usage.input, output: s.usage.output },
       tools: s.tools,
+      usage: { input: s.usage.input, output: s.usage.output },
     };
   };
-  const getFooterSnapshot = (): FooterSnapshot => ({
+  const getComposerMetaSnapshot = (): ComposerMetaSnapshot => ({
     model: hostData.getModel(),
     thinkingLevel: hostData.getThinkingLevel(),
     contextUsage: hostData.getContextUsage(),
+    revision: hostData.revision,
+  });
+  const getFooterSnapshot = (): FooterSnapshot => ({
     cwd: hostData.getCwd(),
     session: hostData.hasSessionManager ? ledger.totals() : undefined,
     cacheLastPct: ledger.cacheRateLast(),
-    cacheSessionPct: ledger.cacheRateSession(),
+    quota: quotaStore?.state().quota,
+    quotaStale: quotaStore?.state().stale ?? false,
     revision: hostData.revision,
   });
 
@@ -254,13 +285,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         }
         if (chrome.fallbackMessage && config.working.elapsed) {
           const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
-          const label = WORKING_PHASE_LABEL[snapshot.phase];
-          ui.setWorkingMessage?.(`${label} · ${formatDuration(snapshot.elapsedMs)}`);
+          const label = snapshot.phase === "writing" ? "Writing" : snapshot.phase === "waiting-for-input" ? "Waiting for input" : "Working";
+          ui.setWorkingMessage?.(`${label} (${formatDuration(snapshot.elapsedMs)})`);
         }
       },
       onSettled: (snapshot) => {
         if (!chromeEnabled) return;
-        // Hide the active widget; the transcript summary carries the result.
+        // Hide the active widget and stop its animation timer — idle leaves
+        // zero timers.
+        chrome.workingComponent?.stopAnimation();
         setWidgetVisible(false);
         const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
         ui.setWorkingMessage?.();
@@ -291,6 +324,28 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     wall: () => Date.now(),
   });
 
+  /** Quota refresh policy: session_start → once; agent_settled → when the
+   * last refresh is older than 30s; periodic ≤ refreshSeconds while TUI.
+   * `refresh` coalesces concurrent calls; failures keep the last-good state. */
+  const maybeRefreshQuota = (force = false): void => {
+    if (!quotaStore || !chromeEnabled) return;
+    const now = Date.now();
+    if (!force && now - lastQuotaRefreshAt < 5_000) return; // coalesce bursts
+    lastQuotaRefreshAt = now;
+    void quotaStore.refresh();
+  };
+  const startQuotaTimer = (): void => {
+    if (!quotaStore || quotaTimer) return;
+    quotaTimer = setInterval(() => maybeRefreshQuota(), Math.max(30, config.quota.refreshSeconds) * 1000);
+    (quotaTimer as unknown as { unref?: () => void }).unref?.();
+  };
+  const stopQuotaTimer = (): void => {
+    if (quotaTimer) {
+      clearInterval(quotaTimer);
+      quotaTimer = undefined;
+    }
+  };
+
   /** Show/hide the above-editor Working widget (undefined = hide). */
   function setWidgetVisible(visible: boolean): void {
     const ui = hostData.ui as { setWidget?: (key: string, content: unknown, options?: unknown) => void };
@@ -311,6 +366,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     ledger.reset();
     ledger.rebuild(hostData.getSessionEntries(), SUMMARY_CUSTOM_TYPE);
     outcome.reset();
+    quotaStore?.reset();
+    lastQuotaRefreshAt = 0;
     const facts: HostFacts = probeHost({ ui: hostData.ui as never, mode: hostData.mode, hasUI: hostData.hasUI });
     enabled = facts.isTui || full.hasUI === true;
     // Chrome/metrics/summary side effects only in the REAL TUI process and
@@ -318,6 +375,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     chromeEnabled = facts.isTui && config.enabled !== false;
     if (chromeEnabled) {
       void installChrome(facts, chrome.generation);
+      startQuotaTimer();
+      maybeRefreshQuota(true);
     }
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
@@ -347,6 +406,19 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   });
 
+  /** Tone painter for footer/metadata text (the theme may be an unbound
+   * proxy early on — degrade to plain text instead of crashing). */
+  const makeTonePainter = (theme: { fg?: (key: string, text: string) => string } | undefined) =>
+    (text: string, tone: "normal" | "dim" | "accent" | "warning"): string => {
+      if (tone === "normal" || !text) return text;
+      const key = tone === "warning" ? "warning" : tone;
+      try {
+        return typeof theme?.fg === "function" ? theme.fg(key as never, text) : text;
+      } catch {
+        return text;
+      }
+    };
+
   /** Install the Codex-style chrome through PUBLIC host APIs only. Preloaded
    * modules install synchronously when ready; a preload resolving after the
    * generation changed (shutdown/new session) is dropped. */
@@ -363,31 +435,57 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const mods = await preloadChrome();
     if (!mods || generation !== chrome.generation) return;
 
-    // Editor factory: Codex-look composer. embedWorkingStatus is OFF — the
-    // Working line lives in the above-editor widget, not the border.
+    // Editor factory: Codex surface composer. The gray surface (when the
+    // terminal can carry it and surface ops were injected) replaces the
+    // accent borders; embedWorkingStatus is OFF — the Working line lives in
+    // the above-editor widget.
     if (facts.available.setEditorComponent && !ui.getEditorComponent?.() && bindings.editorHost?.CustomEditor) {
       try {
+        const surface = config.composer.surface ? bindings.surface : undefined;
         const factory = mods.makeCodexEditorFactory({
           host: bindings.editorHost as never,
           paddingX: 2,
           embedWorkingStatus: false,
+          surface,
+          promptPrefix: config.composer.promptPrefix,
+          placeholder: "Ask anything...",
         });
         chrome.editorFactory = factory;
+        chrome.surfaceApplied = surface !== undefined;
+        chrome.prefixApplied = surface !== undefined && config.composer.promptPrefix;
         ui.setEditorComponent?.(factory as never);
         chrome.editorInstalled = true;
       } catch { /* editor stays native */ }
     }
 
-    // Footer: two detail lines (model/effort/provider/context + Σ tokens/cache).
+    // Composer metadata: same-surface belowEditor widget (model/effort/
+    // provider + context). Only when the editor surface is active, so the
+    // metadata never floats on a bare background.
+    if (typeof ui.setWidget === "function" && config.composer.metadata && config.composer.surface && bindings.surface) {
+      try {
+        ui.setWidget(COMPOSER_META_WIDGET_KEY, (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
+          captureTui(tui);
+          const surface = bindings.surface!;
+          return mods.createComposerMetaComponent({
+            getSnapshot: getComposerMetaSnapshot,
+            surface,
+            paint: (text, tone) => (tone === "normal" ? text : surface.paintGlyph(text, tone === "accent" ? "accent" : "dim")),
+          });
+        }, { placement: "belowEditor" });
+        chrome.metaInstalled = true;
+      } catch { /* metadata stays off; the footer still renders */ }
+    }
+
+    // Footer: compact product status (cwd/branch · session I/O · cache ·
+    // quota · optional R/W + cost).
     if (facts.available.setFooter && config.footer.enabled) {
       try {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
           captureTui(tui);
           return mods.createFooterComponent(
-            { getSnapshot: getFooterSnapshot, requestRender },
+            { getSnapshot: getFooterSnapshot, requestRender, show: footerShow() },
             footerData as never,
-            theme,
-            footerShow(),
+            makeTonePainter(theme),
           );
         });
         chrome.footerInstalled = true;
@@ -411,26 +509,31 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       } catch { /* header stays native */ }
     }
 
-    // Working: the standalone above-editor widget. The native loader row is
-    // hidden ONLY after the widget installed; without setWidget the old
-    // message-based fallback stays in place (never three Working copies).
+    // Working: the standalone above-editor widget with the Codex rhythm.
+    // The native loader row is hidden ONLY after the widget installed; without
+    // setWidget the old message-based fallback stays (never two Working rows).
     if (typeof ui.setWidget === "function") {
       try {
         const factory = (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
           captureTui(tui);
-          const paint = (key: string, text: string): string => {
+          const paint = (text: string, tone: "accent" | "dim" | "normal"): string => {
+            if (!text || tone === "normal") return text;
             try {
-              return typeof theme?.fg === "function" ? theme.fg(key as never, text) : text;
+              return typeof theme?.fg === "function" ? theme.fg(tone as never, text) : text;
             } catch {
               return text;
             }
           };
-          return mods.createWorkingComponent({
+          const component = mods.createWorkingComponent({
             getSnapshot: getWorkingSnapshot,
             getShow: workingShow,
-            accent: (text) => paint("accent", text),
-            dim: (text) => paint("dim", text),
+            getAnimation: workingAnimation,
+            requestRender,
+            colorKind: session.colorLevel.kind,
+            paint,
           });
+          chrome.workingComponent = component;
+          return component;
         };
         chrome.widgetFactory = factory;
         chrome.widgetInstalled = true;
@@ -455,34 +558,44 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // (installed/applied/disabled/fallback), never "capability exists".
   (bindings.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
     description: "pi-codex-appearance capability diagnostics",
-    handler: (_args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
+    handler: (args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
       let text: string;
       if (!hostData.bound) {
         text = "pi-codex-appearance: no active session";
       } else {
-        const facts = probeHost({ ui: hostData.ui as never, mode: hostData.mode, hasUI: hostData.hasUI });
+        if (typeof args === "string" && args.trim().toLowerCase() === "refresh-quota") {
+          maybeRefreshQuota(true);
+        }
         const model = hostData.getModel();
         const level = hostData.getThinkingLevel();
         const usage = hostData.getContextUsage();
         const snap = metrics.snapshot();
         const verdict = outcome.frozen ? outcome.freeze() : undefined;
         const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : String(v));
+        const quotaState = quotaStore?.state();
+        const quotaAge = quotaStore?.lastSuccessAgeMs(Date.now());
+        const quotaDetail = quotaState?.quota
+          ? `primary=${quotaState.quota.primary ? `${Math.round(quotaState.quota.primary.remainingPercent * 10) / 10}%${quotaState.quota.primary.windowMinutes ? `/${quotaState.quota.primary.windowMinutes}min` : ""}` : "—"} secondary=${quotaState.quota.secondary ? `${Math.round(quotaState.quota.secondary.remainingPercent * 10) / 10}%` : "—"}`
+          : "no snapshot";
         const lines = [
           `pi-codex-appearance ${bindings.appearanceVersion ?? "?"} diagnostics (mode=${hostData.mode}, pi=${bindings.piVersion ?? "?"}, revision=${hostData.revision}):`,
+          `  composer: surface=${chrome.surfaceApplied ? "applied" : config.composer.surface ? `fallback (${bindings.surface ? "color level" : "no surface binding"})` : "disabled(config)"} prefix=${chrome.prefixApplied ? "applied" : "off"} metadata=${chrome.metaInstalled ? "applied" : config.composer.metadata ? "fallback" : "disabled(config)"}`,
+          `  working: ${snap.active ? `active phase=${snap.phase} elapsed=${Math.round(snap.elapsedMs / 1000)}s thinking=${Math.round(snap.thinkingMs / 1000)}s${snap.thinkingOpen ? " (open)" : ""}` : "idle"} animation=${config.working.animation ? `on @${config.working.animationIntervalMs}ms` : "off"} interrupt-hint=esc (default fallback; host remap not exposed)`,
+          `  footer: model source=live ctx (composer surface) context source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd source=ctx.cwd`,
           `  model: id=${fmt(model?.id)} effort=${fmt(level)} provider=${fmt(model?.provider)} window=${fmt(model?.contextWindow)} (live ctx, rev ${hostData.revision})`,
           `  context: tokens=${fmt(usage?.tokens)}/${fmt(usage?.contextWindow)} percent=${fmt(usage?.percent)} — scope=live ctx`,
           `  session Σ: ${hostData.hasSessionManager
             ? `input=${ledger.totals().input} output=${ledger.totals().output} cacheRead=${ledger.totals().cacheRead} cacheWrite=${ledger.totals().cacheWrite} requests=${ledger.confirmedCount} — scope=this session file`
             : "unavailable (no sessionManager)"}`,
-          `  cache(last)=${ledger.cacheRateLast() === null ? "—" : `${Math.round(ledger.cacheRateLast()! * 10) / 10}%`} cache(session)=${ledger.cacheRateSession() === null ? "—" : `${Math.round(ledger.cacheRateSession()! * 10) / 10}%`} — scope=last confirmed request / session weighted`,
-          `  interaction: ${snap.active ? `open elapsed=${Math.round(snap.elapsedMs / 1000)}s phase=${snap.phase} tools=${snap.tools ? `${snap.tools.first}${snap.tools.count > 1 ? ` +${snap.tools.count - 1}` : ""}` : "—"} thinking=${Math.round(snap.thinkingMs / 1000)}s${snap.thinkingOpen ? " (open)" : ""}` : "idle"}`,
+          `  cache(last)=${ledger.cacheRateLast() === null ? "—" : `${Math.round(ledger.cacheRateLast()! * 10) / 10}%`} — scope=latest confirmed request; ↑=uncached input per Pi normalization`,
           `  interaction usage (confirmed): ↑${snap.usage.input} ↓${snap.usage.output} R${snap.usage.cacheRead} W${snap.usage.cacheWrite} — preview replaces, never sums`,
           `  outcome: ${verdict ? `${verdict.outcome} (evidence=${verdict.evidence}, attempt=${verdict.attempt}, toolErrors=${verdict.toolErrorsObserved}) — ${verdict.reason}` : `pending (attempts=${outcome.attemptCount}, toolErrors=${outcome.toolErrorsObserved})`}`,
-          `  chrome: editor=${chrome.editorInstalled ? "applied" : "native"} footer=${chrome.footerInstalled ? "applied" : facts.available.setFooter ? "native" : "unsupported"} header=${chrome.headerInstalled ? "applied" : "native"} working=${chrome.widgetInstalled ? "widget" : chrome.fallbackMessage ? "fallback(message)" : "native"}`,
+          `  codex quota: mode=${config.quota.codex} source=codex-app-server available=${quotaState?.quota ? "yes" : quotaState?.lastErrorClass ? "no" : "unknown"} lastSuccess=${quotaAge === undefined ? "never" : `${Math.round(quotaAge / 1000)}s ago`} ${quotaDetail} stale=${quotaState?.stale ? "yes" : "no"} lastError=${quotaState?.lastErrorClass ?? "—"}`,
+          `  chrome: editor=${chrome.editorInstalled ? "applied" : "native"} footer=${chrome.footerInstalled ? "applied" : "native/off"} header=${chrome.headerInstalled ? "applied" : "native"} working=${chrome.widgetInstalled ? "widget" : chrome.fallbackMessage ? "fallback(message)" : "native"}`,
           `  transcript: ${handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed"}`,
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
-          `  config: enabled=${config.enabled} thinking=${config.thinking.streaming}/${config.thinking.completed} rail=${config.thinking.rail} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},cost=${config.footer.showCost}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens}`} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
-          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
+          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
+          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
         ];
         text = lines.join("\n");
       }
@@ -501,14 +614,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       return undefined;
     }
   }
-
-  /** Exact builtin ownership (same rule as adapter.ts replacement()). */
-  function ownsBuiltin(toolName: string): boolean {
-    const source = sourceInfoFor(toolName) as Record<string, unknown> | undefined;
-    return source?.source === "builtin" && source?.path === `<builtin:${toolName}>`;
-  }
-  void ownsBuiltin;
-
 
   // Write tracking observes lifecycle events only (never tool_call/tool_result
   // content); all state is ephemeral presentation data dropped at shutdown.
@@ -534,10 +639,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (!chromeEnabled) return;
     metrics.agentSettled();
     outcome.reset();
+    // Quota: the interaction just consumed request capacity — refresh when
+    // the last refresh is older than 30s (coalesced inside the store).
+    if (quotaStore && Date.now() - lastQuotaRefreshAt > 30_000) maybeRefreshQuota(true);
   });
 
   // Model/effort switches and session-structure events refresh the snapshot
-  // revision; the footer reads everything from one revision per render.
+  // revision; the metadata/footer read everything from one revision per render.
   pi.on("model_select", () => {
     hostData.bump();
     requestRender();
@@ -733,6 +841,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     } catch { /* keep current editor */ }
     chrome.editorFactory = undefined;
     chrome.editorInstalled = false;
+    chrome.surfaceApplied = false;
+    chrome.prefixApplied = false;
     try {
       if (chrome.footerInstalled) ui.setFooter?.(undefined);
     } catch { /* keep current footer */ }
@@ -742,10 +852,16 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     } catch { /* keep current header */ }
     chrome.headerInstalled = false;
     try {
+      if (chrome.metaInstalled) ui.setWidget?.(COMPOSER_META_WIDGET_KEY, undefined);
+    } catch { /* keep widget slot */ }
+    chrome.metaInstalled = false;
+    try {
       if (chrome.widgetInstalled) ui.setWidget?.(WORKING_WIDGET_KEY, undefined);
     } catch { /* keep widget slot */ }
     chrome.widgetInstalled = false;
     chrome.widgetFactory = undefined;
+    chrome.workingComponent?.stopAnimation();
+    chrome.workingComponent = undefined;
     if (chrome.nativeLoaderHidden) {
       try {
         ui.setWorkingVisible?.(true);
@@ -758,6 +874,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       ui.setStatus?.(SUMMARY_STATUS_KEY, undefined);
     } catch { /* status slot is best-effort */ }
     chrome.tui = undefined;
+    stopQuotaTimer();
+    quotaStore?.reset();
+    lastQuotaRefreshAt = 0;
     session.writeChanges.clear();
     session.resultImages.clear();
     transcript.resetSession();
@@ -772,3 +891,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 function isUserMessage(message: unknown): boolean {
   return (message as Record<string, unknown> | undefined)?.role === "user";
 }
+
+// Re-exported for tests that verify display rules without the host.
+export { formatTokensCompact };
