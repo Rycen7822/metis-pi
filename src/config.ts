@@ -23,7 +23,7 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   thinking: { streaming: "full", completed: "full", rail: true },
   writePreview: { enabled: true, rows: 8 },
   composer: { surface: true, promptPrefix: true, metadata: true },
-  working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 64 },
+  working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 32 },
   footer: { enabled: true, details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true },
   quota: { codex: "auto", refreshSeconds: 120, timeoutMs: 8000 },
   summary: { enabled: true, persist: true },
@@ -112,7 +112,7 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
         if (typeof w.animationIntervalMs === "number" && Number.isFinite(w.animationIntervalMs)) {
           cfg.working.animationIntervalMs = Math.max(32, Math.min(1000, Math.floor(w.animationIntervalMs)));
         } else {
-          problems.push("working.animationIntervalMs: expected number 32..1000 — using 64");
+          problems.push("working.animationIntervalMs: expected number 32..1000 — using 32");
         }
       }
     } else {

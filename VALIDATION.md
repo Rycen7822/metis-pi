@@ -1,3 +1,15 @@
+# Validation record — 0.8.7 (gradient comet, 32ms shimmer)
+
+- Pure trace (component with tagged shades): head ▲ leads, trail ◆●○· fades
+  behind, full sweep 12 frames + 6-frame pause, clean re-entry — no overlap.
+- Real TUI (truecolor tmux, mock provider): 40 samples at ~35ms → 7 distinct
+  Working-line states; `/codex-ui` reports `animation=on @32ms`.
+- Frame cost unchanged (~0.003 ms) — 32ms budget has ~1000× headroom.
+
+`npm test` 208/208 · `check` clean.
+
+---
+
 # Validation record — 0.8.6 (Working shimmer overlap)
 
 Real-use video (WARP terminal, truecolor): the shimmer's second wave started

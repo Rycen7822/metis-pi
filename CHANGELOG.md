@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.7
+
+Working shimmer polish (user feedback: make the sweep feel smoother):
+
+- **Gradient comet**: the flat 3-cell highlight is now a 5-cell comet — a
+  bright leading edge with a trail fading through four teal shades back into
+  the theme dim (truecolor; other levels stay static as before). The head
+  leads in the direction of motion; each character lights up and decays as
+  the wave passes.
+- **Higher frame rate**: the animation interval default drops 64ms → 32ms
+  (config clamp unchanged at 32..1000, `working.animationIntervalMs`). One
+  comet position per frame; the bullet pulse keeps its own 2-frame cadence
+  so it stays readable at the higher rate.
+- Verified frame-by-frame in the real TUI (truecolor, mock provider): 40
+  samples at ~35ms produced 7 distinct line states — the comet advances
+  smoothly; the pure-math trace confirms head-first gradient orientation
+  (bright at the front, trail behind) and the 0.8.6 overlap-free cycle.
+
+`npm test` 208/208.
+
 ## 0.8.6
 
 Working shimmer fix (real-use video: the second wave started while the first

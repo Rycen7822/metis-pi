@@ -74,18 +74,27 @@ export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
   usage?: { input: number; output: number };
 }
 
-/** Shimmer phase math (pure): brightness steps 0..3, highlight window of 3
- * cells sweeping the message word. Frame counter wraps — no state growth. */
-// Shimmer cycle: ENTER (window slides in from the left edge) → SWEEP (across
-// the word) → EXIT (fully off the right edge) → PAUSE (word at rest). One wave
+/** Shimmer phase math (pure). Frame counter wraps — no state growth. */
+// Shimmer cycle: ENTER (gradient window slides in from the left edge) →
+// SWEEP → EXIT (fully off the right edge) → PAUSE (word at rest). One wave
 // always completes before the next begins — mixing mismatched cycle lengths
 // here made the second wave start while the first was mid-word (0.8.5 bug:
 // %12 inside a %16 loop cut the sweep short).
-// The highlight holds each position for SHIMMER_STEP_FRAMES frames: the host
-// coalesces renders, so one-position-per-frame read as stutter.
-export const SHIMMER_WINDOW = 3; // highlight width in cells
-export const SHIMMER_STEP_FRAMES = 2; // frames per highlight position (~128ms @64ms)
+// The highlight is a gradient comet: bright leading edge with a fading trail
+// (truecolor only, like the bullet pulse), one cell per frame.
+export const SHIMMER_WINDOW = 5; // gradient comet length in cells (lead + trail)
+export const SHIMMER_STEP_FRAMES = 1; // frames per highlight position
 export const SHIMMER_PAUSE = 6; // rest frames after the wave exits
+export const BULLET_STEP_FRAMES = 2; // bullet brightness holds ~2 frames
+
+/** Front→back gradient shades for the comet (truecolor; teal accent ramp). */
+const SHIMMER_SHADES: ReadonlyArray<readonly [number, number, number]> = [
+  [200, 255, 247],
+  [148, 226, 213],
+  [94, 180, 168],
+  [62, 132, 124],
+  [44, 92, 88],
+];
 
 export function shimmerPhase(frame: number, wordLength: number): { bulletStep: number; highlightStart: number } {
   const window = SHIMMER_WINDOW;
@@ -96,7 +105,7 @@ export function shimmerPhase(frame: number, wordLength: number): { bulletStep: n
   const cycle = sweep + SHIMMER_PAUSE;
   const f = ((frame % cycle) + cycle) % cycle;
   const step = Math.floor(f / SHIMMER_STEP_FRAMES);
-  const bulletStep = [0, 1, 2, 1][step % 4]!;
+  const bulletStep = [0, 1, 2, 1][Math.floor(f / BULLET_STEP_FRAMES) % 4]!;
   return { bulletStep, highlightStart: step - window + 1 };
 }
 
@@ -208,12 +217,20 @@ function bulletPulse(step: number): string {
 }
 
 function shimmerText(text: string, highlightStart: number, paint: WorkingComponentInput["paint"]): string {
-  // 3-cell highlight sweeping left→right over the word, dim elsewhere.
+  // Gradient comet sweeping left→right: the leading cell is brightest and the
+  // trail fades back into the theme dim. Truecolor only (the render path
+  // gates on that).
   const chars = [...text];
   let out = "";
   for (let i = 0; i < chars.length; i++) {
-    const inWindow = i >= highlightStart && i < highlightStart + 3;
-    out += inWindow ? paint(chars[i]!, "accent") : paint(chars[i]!, "dim");
+    const front = highlightStart + SHIMMER_WINDOW - 1; // leading (rightmost) cell
+    const offsetFromFront = front - i; // 0 at the front, growing back along the trail
+    const shade = offsetFromFront >= 0 && offsetFromFront < SHIMMER_SHADES.length
+      ? SHIMMER_SHADES[offsetFromFront]!
+      : undefined;
+    out += shade
+      ? `\x1b[38;2;${shade[0]};${shade[1]};${shade[2]}m${chars[i]}\x1b[39m`
+      : paint(chars[i]!, "dim");
   }
   return out;
 }

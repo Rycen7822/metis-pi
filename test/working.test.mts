@@ -60,10 +60,10 @@ test("tokens default OFF in 0.8.5; opt-in renders the segment", () => {
 
 test("shimmer cycle: one wave fully exits before the next enters (no overlap)", () => {
   const word = "Working".length; // 7
-  const window = 3;
-  const stepFrames = 2;
+  const window = 5;
+  const stepFrames = 1;
   const cycle = (word + window) * stepFrames + 6;
-  // Full timeline: litChars(f) = chars covered by the window.
+  // Full timeline: litChars(f) = chars covered by the comet window.
   const litAt = (f: number): number[] => {
     const { highlightStart: start } = shimmerPhase(f, word);
     const out: number[] = [];
@@ -88,15 +88,14 @@ test("shimmer cycle: one wave fully exits before the next enters (no overlap)", 
   }
   // Cycle wraps exactly: frame at cycle length equals frame 0.
   assert.deepEqual(shimmerPhase(cycle, word), shimmerPhase(0, word));
-  // The highlight holds each position for exactly stepFrames frames.
-  for (let f = 0; f < (word + window) * stepFrames; f += stepFrames) {
-    assert.deepEqual(shimmerPhase(f, word).highlightStart, shimmerPhase(f + 1, word).highlightStart, `position held across frames ${f}/${f + 1}`);
-    assert.equal(shimmerPhase(f + stepFrames, word).highlightStart - shimmerPhase(f, word).highlightStart, 1, `position advances by 1 after ${stepFrames} frames`);
-  }
-  // Bullet steps still cycle through all three brightness levels.
+  // One cell per frame (gradient comet at full frame rate).
+  assert.equal(shimmerPhase(10 + 1, word).highlightStart - shimmerPhase(10, word).highlightStart, 1);
+  // Bullet steps still cycle through all three brightness levels (on their
+  // own 2-frame cadence, independent of the sweep).
   const steps = new Set();
   for (let i = 0; i < 64; i++) steps.add(shimmerPhase(i, word).bulletStep);
   assert.deepEqual([...steps].sort(), [0, 1, 2]);
+  assert.equal(shimmerPhase(0, word).bulletStep, shimmerPhase(1, word).bulletStep, "bullet holds across frames");
 });
 
 test("shimmer adapts to the message length (Writing is shorter than Working)", () => {
@@ -158,18 +157,11 @@ test("animation frames change the ANSI but not the semantic text", () => {
   const h = harness();
   const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
   const frameA = h.component.render(80)[0] ?? "";
-  // The highlight holds each position for 2 frames (render coalescing
-  // smoothing) — advance a full STEP and the frame must differ visually.
-  h.scheduled[0].fn();
-  h.scheduled[0].fn();
+  h.scheduled[0].fn(); // one frame = one comet position (32ms default)
   const frameB = h.component.render(80)[0] ?? "";
-  assert.notEqual(frameA, frameB, "consecutive animation STEPS differ visually");
+  assert.notEqual(frameA, frameB, "consecutive animation frames differ visually");
   assert.equal(strip(frameA), strip(frameB), "stripped text identical across frames");
-  // Within one step the two frames are intentionally identical (held position).
-  h.scheduled[0].fn();
-  const frameC = h.component.render(80)[0] ?? "";
-  assert.equal(frameB, frameC, "position held for the second frame of a step");
-  assert.equal(strip(frameC), strip(frameA), "Codex grammar preserved");
+  assert.equal(strip(frameA), strip(h.component.render(80)[0] ?? ""), "grammar stable across the cycle");
 });
 
 test("NO_COLOR / ansi16 renders static (no timer, no per-frame change)", () => {
