@@ -37,8 +37,23 @@ footer indicators, `·` dim separators).
 - `npm run test:host` runs against the REAL installed
   `@earendil-works/pi-coding-agent` (0.85.1 dist) and the real pi-tui — not
   fakes — through `index.ts`'s default export.
-- Final in-Pi verification (fresh `pi` process with the user's own extension
-  stack, synced clone) is listed as a deployment step, not covered here.
+- Fresh PTY-driven `pi` TUI process (user's own 17-package extension stack,
+  synced clone at the release commit): startup header `Pi 0.85.1 ·
+  codex-appearance 0.8.0` + model/dir line, footer `glm-5.3-flash • high ·
+  <dir>`, working ticker `● Working · 0s…8s` (monotonic), `● Thinking · 4s`
+  phase, end summary `Worked for 1s · ↓8 · ↑36`, `/codex-ui` diagnostics
+  showing `chrome: applied · transcript: applied · decorations:
+  group-spacing=applied, separator=applied, thinking-rail=applied`, zero
+  uncaughtExceptions, zero appearance warnings. Model reply rendered
+  normally.
+- Runtime discovery (fixed during verification): Pi's TS loader emits the
+  stock `updateDisplay` with `let` (not `const`) and unparenthesized arrow
+  params — the structural prefix check now accepts both stock shapes. The
+  chrome header/footer/summary renderers resolve the theme painter lazily
+  because the host passes an unbound theme proxy during early/restore
+  rendering. `registerCommand` uses the `(name, options)` signature. All
+  three were caught by the PTY run and fixed (commits 0c4377d, ea9bc63,
+  6835357, 4e9c802).
 
 ## Known deviations from the Codex reference (deliberate)
 
