@@ -236,26 +236,32 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
   // /codex-ui — capability diagnostics (3.3): one line per feature with the
   // real cause; never hides partial failure behind a single reason.
-  (bindings.api as { registerCommand?: (cmd: unknown) => void } | undefined)?.registerCommand?.({
-    name: "codex-ui",
+  // Host signature: registerCommand(name, { description, handler }).
+  (bindings.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
     description: "pi-codex-appearance capability diagnostics",
-    handler: () => {
-      if (!hostContext) return "pi-codex-appearance: no active session";
-      const facts = probeHost({ ui: hostContext.ui as never, mode: hostContext.mode, hasUI: hostContext.hasUI });
-      const chrome = config.enabled === false ? "disabled(config)" : facts.isTui ? "applied" : "unsupported (not a TUI session)";
-      const transcript = handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed";
-      const decor = decorations
-        ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
-        : "unavailable (no assistant prototype binding)";
-      const clock = metrics.snapshot();
-      const lines = [
-        "pi-codex-appearance 0.8.0 diagnostics:",
-        `  chrome:  ${chrome}`,
-        `  transcript: ${transcript}`,
-        `  decorations: ${decor}`,
-        `  interaction clock: ${clock.active ? `open ${Math.round(clock.elapsedMs / 1000)}s` : "idle"} (timers=${counters.timers})`,
-      ];
-      return lines.join("\n");
+    handler: (args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
+      let text: string;
+      if (!hostContext) {
+        text = "pi-codex-appearance: no active session";
+      } else {
+        const facts = probeHost({ ui: hostContext.ui as never, mode: hostContext.mode, hasUI: hostContext.hasUI });
+        const chrome = config.enabled === false ? "disabled(config)" : facts.isTui ? "applied" : "unsupported (not a TUI session)";
+        const transcript = handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed";
+        const decor = decorations
+          ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
+          : "unavailable (no assistant prototype binding)";
+        const clock = metrics.snapshot();
+        const lines = [
+          "pi-codex-appearance 0.8.0 diagnostics:",
+          `  chrome:  ${chrome}`,
+          `  transcript: ${transcript}`,
+          `  decorations: ${decor}`,
+          `  interaction clock: ${clock.active ? `open ${Math.round(clock.elapsedMs / 1000)}s` : "idle"} (timers=${counters.timers})`,
+        ];
+        text = lines.join("\n");
+      }
+      // Return values are ignored by the host; surface via the command ctx.
+      commandCtx?.ui?.notify?.(text);
     },
   });
 

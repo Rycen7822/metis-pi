@@ -26,7 +26,7 @@ const pi = new Proxy({
   on: (event, handler) => handlers.set(event, handler),
   getAllTools: () => definitions,
   // 0.8.0 chrome APIs (public surface; guarded assertions below):
-  registerCommand: (cmd) => registeredCommands.push(cmd),
+  registerCommand: (name, options) => registeredCommands.push({ name, ...options }),
   appendEntry: (type, data) => appendedEntries.push({ type, data }),
   registerEntryRenderer: (type, renderer) => registeredEntryRenderers.push({ type, renderer }),
 }, { get(target, key) {
@@ -150,7 +150,9 @@ assert.equal(row.getRenderShell(), "default");
 // ---- 9. 0.8.0 chrome: /codex-ui command + entry renderer registration -------
 const codexUi = registeredCommands.find((cmd) => cmd.name === "codex-ui");
 assert.ok(codexUi, "/codex-ui command registered");
-const diagnostics = codexUi.handler();
+const notified = [];
+codexUi.handler("", { ui: { notify: (t) => notified.push(t) } });
+const diagnostics = notified.join("\n");
 assert.match(diagnostics, /pi-codex-appearance 0\.8\.0 diagnostics:/);
 assert.match(diagnostics, /chrome:/);
 assert.match(diagnostics, /transcript:/);
