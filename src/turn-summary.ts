@@ -151,10 +151,32 @@ export function makeEntryRenderer(makeText?: SummaryEntryRendererDeps["makeText"
     };
     const line = formatSummaryLine(snapshot, data.outcome === "completed-estimate" ? "completed" : data.outcome);
     if (!line) return undefined;
-    const paint = theme?.fg ?? ((_k: string, t: string) => t);
-    if (makeText) return makeText(paint("dim", line));
+    // The theme handed to entry renderers may be an unbound proxy (early
+    // restore rendering). Resolve lazily with the same probe as chrome.
+    const resolvePainter = (): (k: string, t: string) => string => {
+      const probe = (fg: (k: string, t: string) => string): boolean => {
+        try {
+          const probeText = "\u0000probe";
+          return typeof fg("dim", probeText) === "string" && fg("dim", probeText) !== probeText;
+        } catch {
+          return false;
+        }
+      };
+      if (theme && typeof theme.fg === "function" && probe(theme.fg)) {
+        return (k, t) => (theme as { fg: (k: string, t: string) => string }).fg(k, t);
+      }
+      const globalTheme = (globalThis as Record<symbol, unknown>)[
+        Symbol.for("@earendil-works/pi-coding-agent:theme")
+      ] as { fg?: (k: string, t: string) => string } | undefined;
+      if (globalTheme && typeof globalTheme.fg === "function" && probe(globalTheme.fg)) {
+        return (k, t) => (globalTheme as { fg: (k: string, t: string) => string }).fg(k, t);
+      }
+      return (_k: string, t: string) => t;
+    };
+    const painter = resolvePainter();
+    if (makeText) return makeText(painter("dim", line));
     return {
-      render: (width: number) => [paint("dim", line.slice(0, Math.max(0, width)))],
+      render: (width: number) => [painter("dim", line.slice(0, Math.max(0, width)))],
     };
   };
 }
