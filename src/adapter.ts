@@ -74,6 +74,8 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // 0.8.1: an EXACT builtin self-shell (edit renders its own rows) may be
     // taken over — we show the same structured diff surface as every other
     // text tool. Any third-party self-shell still backs off above.
+    // An EXACT builtin self-shell (edit renders its own rows) takes the same
+    // renderer as every other text tool; third-party self-shells back off above.
     if (definition.renderShell === "self") return options.renderers[name as ToolName];
     return options.renderers[name as ToolName];
   }

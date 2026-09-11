@@ -1,11 +1,4 @@
-// Width-aware Codex exec-cell layout (openai/codex exec_cell/render.rs,
-// EXEC_DISPLAY_LAYOUT: continuation "  │ " max 2 rows, output "  └ "/"    "
-// max 5 rows, middle truncation budgeted in screen rows).
-//
-// Physical-row model: logical text -> styled lines -> wrap (ANSI-aware) ->
-// VisualRow[] (each costs exactly 1) -> budget cut -> prefixes. Wrapped rows
-// and their costs can never disagree because they are the same array.
-// Display-only: never touches tool data.
+// Width-aware Codex exec-cell layout on a PHYSICAL-ROW model: wrapped VisualRows (each costs exactly 1 screen row) are what get budgeted, so wrap cost and budget can never disagree. Display-only.
 
 import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
 import { styleToolOutputLine } from "./output-style.ts";
@@ -109,7 +102,6 @@ export function truncateMiddleRows(
     );
   };
   if (ellipsisRows >= maxRows) {
-    // Budget only fits the ellipsis (possibly spanning rows): single notice.
     const total = countLogicalLines(rows);
     const text = `${DIM_ON}${ellipsisText(Math.max(total, 1))}${INTENSITY_RESET}`;
     return { rows: [{ text, sourceLineIndex: -1, continuation: false }], omittedLogicalLines: total };
@@ -254,8 +246,7 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
     return lines;
   }
 
-  // Wrap the full highlighted script BEFORE any budget (Codex order), then
-  // split into the header row and "│" rows. Every segment becomes a VisualRow.
+  // Wrap the full highlighted script BEFORE any budget (Codex order); every segment becomes a VisualRow.
   const firstWrapped = headerFits && usable - headerPrefixFinalWidth >= 1
     ? wrapStyled(highlighted[0]!, firstLineWidth, layout)
     : [""];
@@ -361,11 +352,7 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
   return kept.map((visual) => visual.text);
 }
 
-/**
- * Full single-component render (call + result in one). Kept for non-component
- * hosts and tests; the live Pi adapter uses renderShellCall/renderShellResult
- * in the two native slots. The composition is identical by construction.
- */
+/** Full single-component render (call + result) for non-component hosts and tests; the live Pi adapter uses the two slot functions (identical composition). */
 export function renderShellRow(input: ShellLayoutInput): string[] {
   return [...renderShellCall(input), ...renderShellResult(input)];
 }

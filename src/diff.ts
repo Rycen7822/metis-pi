@@ -1,10 +1,6 @@
-// Codex diff rendering (openai/codex diff_render.rs): gutter + sign + content,
-// full-row background, hanging indent continuation, hunk separators, and the
-// truecolor/256/16/none degradation chain.
-//
-// THE one diff renderer. Input is structured DiffRow[] produced by
-// write-tracker (structured rows) or parsed from Pi's edit display diff via
-// parseDisplayDiff. Tool results are never modified.
+// The one Codex-style diff renderer (structured DiffRow[] → gutter + sign +
+// content rows, full-row background, degradation chain); rows come from
+// write-tracker or parseDisplayDiff. Display-only.
 
 import {
   DIFF_ADD_BG, DIFF_DEL_BG, MOCHA,
@@ -49,8 +45,6 @@ export function parseDisplayDiff(diffText: string): DiffRow[] {
     }
     const sign = raw[0];
     if (sign === "+" || sign === "-" || sign === " ") {
-      // After the sign: at most one separating space, optional digits, then
-      // exactly one space, then content VERBATIM (leading spaces survive).
       let index = 1;
       if (raw[index] === " " && /[0-9]/.test(raw[index + 1] ?? "")) index += 1;
       let digits = "";
@@ -255,9 +249,8 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
     const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
     const gutter = `${" ".repeat(DIFF_LEFT_INSET)}${numberText.padStart(numberWidth)} `;
 
-    // Highlight the whole row content once, then wrap the styled string with
-    // the ANSI-aware wrap (never a naive string slice mid-sequence).
-    // Delete rows keep syntax colors and overlay dim (Codex behavior).
+    // Highlight the whole row once, then ANSI-aware wrap (never a naive slice
+    // mid-sequence). Delete rows keep syntax colors under an overlay dim.
     let content = highlightBody(
       row.content,
       input.language,

@@ -1,12 +1,9 @@
-// chrome/footer.ts — one compact Codex-style status line.
-//
-// Left: model · effort · cwd/branch — Right: context used (dim).
-// Extension statuses added via ctx.ui.setStatus() keep their own row so
-// third-party plugins never lose their state line (2.2).
-//
-// Data comes only from live host APIs: the factory arguments (tui/theme/
-// footerData), ctx.getContextUsage(), and the current ctx snapshot passed in
-// by index.ts. No paint-time I/O; branch updates arrive via onBranchChange.
+// One compact Codex-style status line: model · effort · cwd/branch left,
+// context used (dim) right. Data comes only from live host APIs (factory
+// args, ctx.getContextUsage(), snapshot passed by index.ts) — no paint-time
+// I/O; branch updates arrive via onBranchChange. Extension statuses added via
+// ctx.ui.setStatus() keep their own row so third-party plugins never lose
+// their state line.
 
 import { formatTokensCompact } from "../ui-metrics.ts";
 

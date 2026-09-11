@@ -1,11 +1,9 @@
-// Lexical-state-aware bash compatibility highlighter.
-//
-// Primary grammar ownership stays with Pi/highlight.js for file diffs. Shell
-// command rows need Codex's exact token classes (executable / option /
-// operator / parameter / builtin), which highlight.js does not emit for bash.
-// This pass is a real lexer: a character-level state machine tracks quoting,
-// escapes, substitutions and heredocs, so classification always has the
-// lexical state available. It is NOT a stateless global regex pass.
+// Lexical-state-aware bash highlighter. Grammar ownership stays with
+// Pi/highlight.js for file diffs; shell command rows need Codex's exact token
+// classes (executable / option / operator / parameter / builtin), which
+// highlight.js does not emit for bash. So this pass is a real lexer: a
+// character-level state machine tracks quoting, escapes, substitutions and
+// heredocs, not a stateless global regex pass.
 
 import { MOCHA, type MochaToken, foregroundAnsi, type ColorLevel } from "./palette.ts";
 
@@ -44,7 +42,7 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
     else raw.push({ text, token });
   };
 
-  // Lexer state (lexical-state-aware: classification reads this state).
+  // Lexer state.
   let quote: "none" | "single" | "double" = "none";
   let escape = false;
   let inComment = false;
@@ -59,8 +57,8 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
     if (sawExpansion) return "parameter";
     if (word.startsWith("-") && word.length > 1) return "parameter";
     // Command position: first word of the line or a word right after a
-    // control operator. FIXED: previously gated by a flag that was cleared
-    // on the first word end, so later command heads (a; echo b) went plain.
+    // control operator; the flag survives until the word ends so later
+    // command heads (a; echo b) still classify.
     if (afterControl) {
       const bare = word.replace(/^\$\{?/, "").replace(/\}$/, "");
       if (BUILTINS.has(bare)) return "builtin";
@@ -88,7 +86,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
     const char = line[index]!;
     if (inComment) { push(char, "comment"); index += 1; continue; }
     if (escape) {
-      // Escaped character: belongs to the current word/token context.
       if (quote === "double") push(char, "string");
       else if (quote === "single") push(char, "string");
       else { wordBuffer += char; push(char, "plain"); }
@@ -115,7 +112,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
       index += 1;
       continue;
     }
-    // quote === "none"
     if (isWhitespace(char)) {
       endWord();
       push(char, "plain");
@@ -168,8 +164,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
       index += 1;
       continue;
     }
-    // Regular word character: accumulate into the current word; classification
-    // happens once at the word boundary (endWord), never per character.
     if (!wordStarted) { wordStarted = true; }
     if (char === "/") sawSlash = true;
     wordBuffer += char;

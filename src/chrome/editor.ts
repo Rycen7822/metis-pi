@@ -1,18 +1,9 @@
-// chrome/editor.ts — the Codex-look composer FACTORY.
-//
-// Runs only inside index.ts's activation (which owns the host imports):
-// index.ts passes the host CustomEditor CLASS plus theme painters here, so
-// this module stays dependency-free (project rule: src/ never imports
-// @earendil-works/* directly).
-//
-// What changes vs the stock editor:
-//   · border painted with the Codex cyan accent instead of the default gray
-//   · paddingX 2 for the compact-but-breathing Codex density
-//   · embedWorkingStatus stays ON (the Working line lives in the top border)
-//
-// What intentionally does NOT change: per-line '›' prefix (the Editor render
-// pipeline has no safe per-line hook; faking it risks cursor/autocomplete
-// drift — recorded as a deliberate Codex deviation in VALIDATION.md).
+// Codex-look composer FACTORY. Runs only inside index.ts's activation: the
+// host CustomEditor class and theme painters are injected here so this module
+// stays dependency-free (project rule: src/ never imports @earendil-works/*
+// directly). embedWorkingStatus stays ON (the Working line lives in the top
+// border). Intentionally no per-line '›' prefix: the Editor render pipeline
+// has no safe per-line hook (deliberate Codex deviation, see VALIDATION.md).
 
 /** Minimal structural types for the host pieces we touch (no imports). */
 export interface CodexEditorHost {

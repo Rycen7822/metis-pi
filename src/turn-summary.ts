@@ -1,10 +1,8 @@
-// turn-summary.ts — the "Worked for …" end-of-interaction summary.
-//
 // The ONLY persistence exception granted to this extension: a UI-metrics
 // CustomEntry appended via the public pi.appendEntry() and rendered by
 // pi.registerEntryRenderer(). Custom entries never enter LLM context
-// (verified v0.85.1). Session JSONL is never edited directly; existing
-// entries are never rewritten; message bodies are never stored.
+// (verified v0.85.1); session JSONL is never edited directly, existing entries
+// are never rewritten, message bodies are never stored.
 
 import { formatDuration, formatTokensCompact, type InteractionSnapshot } from "./ui-metrics.ts";
 
@@ -118,8 +116,6 @@ export class TurnSummary {
     return this.#written.size;
   }
 }
-
-// ---- entry renderer (display-only; needs a Component factory from the host) ---
 
 export type SummaryEntryRendererDeps = {
   makeText: (text: string, paddingX?: number, paddingY?: number) => ComponentLike;

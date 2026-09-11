@@ -1,11 +1,4 @@
-// Renderer registration layer. Every transformation here affects a DISPLAY
-// string/component only; tool data, results and context are never modified.
-//
-// Combination contract (Pi native two slots):
-//   call region   -> title + command (shell) / title (others). NEVER output.
-//   result region -> output block / diff body / written content. NEVER a head.
-// One shared implementation per shape; the legacy string formatters are thin
-// wrappers over the same builders for non-component hosts and tests.
+// Display-only renderer registration for Pi's native two slots (call region = title/command, result region = output/diff body; never modifies tool data).
 
 import { renderExplorationHeader, renderExplorationMember, renderExplorationImages, renderExplorationLines, explorationVerb, type ExplorationRow } from "./explore.ts";
 import type { ExplorationPlan } from "./transcript-state.ts";
@@ -80,13 +73,7 @@ export function languageForPath(filePath: string): string | undefined {
   return map[match[1]!.toLowerCase()];
 }
 
-// ---------------------------------------------------------------------------
-// Shared title builders (the ONE title implementation for each shape).
-// ---------------------------------------------------------------------------
-
-/** Exploration rows: "• Explored" + cyan verb + dim " in " (call region).
- * Grouped members query the transcript plan: the FIRST member owns the group
- * header; later members render only their own row with a flat gutter. */
+/** Exploration title (call region): the FIRST grouped member owns the group header; later members render only their own row. */
 export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palette, colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" }): string {
   const args = asRecord(ctx.args);
   const done = ctx.isPartial === false;
@@ -102,14 +89,12 @@ export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palett
   const level = ctx.colorLevel ?? colorLevel;
   const plan: ExplorationPlan | undefined = ctx.explorationPlan as ExplorationPlan | undefined;
   if (!plan) {
-    // Ungrouped (no transcript state / foreign host): full block with header.
     return renderExplorationLines(
       { running: !done, isError: ctx.isError === true, rows },
       level,
       theme,
     ).join("\n");
   }
-  // Grouped: header only on the first member; later members draw their row.
   const header = plan.isHeaderOwner
     ? `${renderExplorationHeader({ running: plan.running, isError: ctx.isError === true }, level, theme)}\n`
     : "";
@@ -121,8 +106,7 @@ export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palett
   return [header + memberLine, images].filter(Boolean).join("\n");
 }
 
-/** Bullet + title for shell rows (call region). Errors keep the Ran label
- * with a red bullet — the failure surfaces in color, not in the verb. */
+/** Shell title (call region); errors keep "Ran" with a red bullet — failure surfaces in color, not the verb. */
 export function shellTitle(ctx: ViewContext, theme: Palette): { bullet: string; title: string } {
   const done = ctx.isPartial === false;
   const bullet = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
@@ -130,18 +114,10 @@ export function shellTitle(ctx: ViewContext, theme: Palette): { bullet: string; 
   return { bullet, title };
 }
 
-/**
- * Write titles across the five states (Codex file-change verbs):
- *   running "Writing", add "Added (+N -0)", update "Edited (+A -D)",
- *   unchanged "Wrote (unchanged)", unavailable "Wrote (reason)", failed.
- */
 export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff | undefined): string {
   const args = asRecord(ctx.args);
   const done = ctx.isPartial === false;
-  // 0.8.2: while args stream, `path` may not have arrived yet (content-first
-  // providers). Show an explicit dim placeholder instead of the old bare "."
-  // that read like a stray bullet; once the path frame lands, updateArgs
-  // re-renders the header with the real path.
+  // While args stream the path may not have arrived yet (content-first providers): show a dim placeholder until the path frame lands.
   const rawPath = shortened(safeText(path(args, ctx)));
   const target = rawPath
     ? theme.fg("toolTitle", rawPath)
@@ -187,8 +163,7 @@ export function shellCallText(bullet: string, title: string, args: Record<string
     + rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("");
 }
 
-// Legacy string formatters — thin wrappers kept for non-component hosts and
-// existing tests. Production goes through makeRenderers' components.
+// Legacy string formatters for non-component hosts and tests.
 
 export function formatDisplayDiff(diffText: string, theme: Palette): string {
   const rows = parseDisplayDiff(diffText);
@@ -232,8 +207,7 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   if (!lines.length && !error && options.isPartial) sections.push(gutter(["Running…"], theme, "dim"));
   if (SHELL.has(name) && !lines.length && !error && !options.isPartial) sections.push(gutter(["(no output)"], theme, "dim"));
   const images = blocks.filter((block) => block.type === "image").length;
-  // Grouped exploration members keep their raw result untouched but do not
-  // repeat the image notice — the group aggregates it once (call region).
+  // Grouped members don't repeat the image notice; the group aggregates it once (call region).
   const groupedMember = EXPLORATION.has(name) && ctx.explorationPlan !== undefined;
   if (images && !groupedMember) sections.push(gutter([`${images} image${images === 1 ? "" : "s"}${ctx.showImages === false ? " (TUI preview disabled)" : ""}`], theme, "dim"));
   const other = blocks.filter((block) => block.type !== "text" && block.type !== "image");
@@ -258,15 +232,11 @@ export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: 
   return `${marker} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
 }
 
-// ---------------------------------------------------------------------------
-// Component assembly (production path).
-// ---------------------------------------------------------------------------
-
 export interface WritePreviewInput {
   name: ToolName; args: Record<string, unknown>; stage: WriteStage; contentPrefix: string;
   expanded: boolean; theme: Palette; context: ViewContext; expandHint: string;
   colorLevel: import("./palette.ts").ColorLevel;
-  /** 0.8.1: the call slot's structured header (always present above the body). */
+  /** Call slot's structured header (always present above the body). */
   headerText?: string;
 }
 
@@ -303,10 +273,8 @@ export function makeRenderers(
   }
   function component(text: string, ctx: ViewContext): TextComponent {
     const previous = ctx.lastComponent;
-    // 0.8.2: reuse only OUR Text components that actually have setText.
-    // The write-call composite (CodexWriteCallComponent) is ours but has no
-    // setText — calling it threw TypeError and the host silently fell back
-    // to the bare `write` call title after completion.
+    // Reuse only OUR Text components that have setText; the write-call composite
+    // is ours but setText-less (calling it threw TypeError, host silently fell back).
     const reusable = previous && typeof previous === "object" && ownComponents.has(previous)
       && typeof (previous as { setText?: unknown }).setText === "function";
     if (reusable) {
@@ -318,8 +286,7 @@ export function makeRenderers(
     return created;
   }
   function writeChangeFor(ctx: ViewContext): WriteDiff | undefined {
-    // Injected change (tests/preview/host without tracker wiring) wins; then
-    // the tracker keyed by toolCallId.
+    // Injected change (tests/preview/host without tracker wiring) wins; then the tracker keyed by toolCallId.
     if (ctx.writeChanges && typeof ctx.writeChanges === "object") return ctx.writeChanges as WriteDiff;
     const toolCallId = typeof ctx.toolCallId === "string" ? ctx.toolCallId : undefined;
     return toolCallId && session ? session.writeChanges.get(toolCallId) : undefined;
@@ -350,7 +317,6 @@ export function makeRenderers(
       return component([head, body, attempted].filter(Boolean).join("\n"), ctx);
     }
 
-    // Verified add/update: the ONE diff renderer (structured rows).
     const change = writeChangeFor(ctx);
     if (change && (change.kind === "add" || change.kind === "update") && change.rows?.length) {
       const filePath = path(args, ctx);
@@ -364,8 +330,7 @@ export function makeRenderers(
       return component(rendered.join("\n"), ctx);
     }
 
-    // unchanged / unavailable / no tracker: content preview from the call's
-    // own args (never a fabricated +N/-0). Always expandable to full text.
+    // unchanged/unavailable/no tracker: preview from the call's own args — never a fabricated +N/-0.
     if (contentArg === undefined) return component("", ctx);
     const lines = cleanLines(contentArg);
     const numbered = lines.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
@@ -380,8 +345,7 @@ export function makeRenderers(
   return Object.fromEntries<Renderers>(TOOL_NAMES.map((name) => [name, {
     renderCall(args: unknown, theme: Palette, ctx: ViewContext) {
       const state = view(ctx);
-      // Pi passes the same args in both slots; merge so title builders can
-      // read args from either the positional parameter or the context.
+      // Pi passes the same args in both slots; merge so title builders can read args from either source.
       const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
       if (SHELL.has(name)) {
         const { bullet, title } = shellTitle(merged, theme);
@@ -395,11 +359,9 @@ export function makeRenderers(
         return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
       }
       if (name === "write") {
-        // Call slot ALWAYS owns a structured header (0.8.1): the Writing
-        // title stays visible through arg streaming, execution and
-        // completion; the live preview is a body UNDER it, never a
-        // replacement for it. A final result collapses the header to the
-        // settled verb and moves the body to the result slot (6.3).
+        // Call slot ALWAYS owns a structured header: it stays visible through
+        // arg streaming and completion; the live preview is a body UNDER it,
+        // never a replacement.
         const hasResult = merged.isPartial === false;
         const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
         const stage = resolveWriteStage({
@@ -416,9 +378,7 @@ export function makeRenderers(
             expanded: merged.expanded === true, theme, context: merged,
             expandHint: expandHint(), colorLevel: colorFor(merged),
           };
-          // Reuse OUR previous call component when the host hands it back
-          // (updateArgs → renderCall with lastComponent) — update in place,
-          // never mutate a foreign instance.
+          // Reuse our previous call component when the host hands it back (updateArgs → lastComponent); update in place, never mutate a foreign instance.
           const previous = ctx.lastComponent;
           if (previous && typeof previous === "object" && ownComponents.has(previous)
               && typeof (previous as { update?: unknown }).update === "function") {
@@ -438,7 +398,6 @@ export function makeRenderers(
           ?? session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
         return component(explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)), ctx);
       }
-      // edit: bullet + bold verb + path (+ stats once known)
       const done = merged.isPartial === false;
       const label = merged.isError ? "Failed" : done ? "Edited" : "Editing";
       const stats = state?.stats;
@@ -455,7 +414,6 @@ export function makeRenderers(
       const state = view(ctx);
       if (state && name === "edit") {
         state.stats = diffStats(result);
-        // Refresh the call title with the final stats (same component).
         state.call?.setText(formatCall(name, ctx.args, theme, ctx, state.stats, paint));
       }
       if (name === "edit" && ctx.isError !== true) {
@@ -466,7 +424,6 @@ export function makeRenderers(
           if (makeDiff) {
             return makeDiff({ rows, filePath, theme, context: ctx, options, expandHint: expandHint() });
           }
-          // No component factory: render inline through the ONE diff renderer.
           return component(renderDiffLines({
             rows, width: 100, layout, colorLevel: colorFor(ctx),
             language: languageForPath(filePath), paint,
@@ -485,8 +442,7 @@ export function makeRenderers(
             expandHint: expandHint(), colorLevel: colorFor(ctx),
           });
         }
-        // Result region NEVER repeats the command head — the call region owns
-        // the title even when no shell component factory is present.
+        // Result region NEVER repeats the command head — the call region owns the title even without a shell component factory.
         return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
       }
       return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);

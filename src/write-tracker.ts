@@ -1,12 +1,6 @@
-// Ephemeral write tracking (Codex file-change pre/post images).
-//
-// tool_execution_start captures the pre-image of the target path for EXACT
-// builtin `write` ownership (sourceInfo.source === "builtin" AND
-// sourceInfo.path === "<builtin:write>"); tool_execution_end verifies the
-// post-image byte-for-byte against the call's own expected content. Everything
-// is held in-process memory only (no persistence, no tool result
-// modification). When a reliable diff cannot be produced the tracker returns
-// an explicit fallback — it never fabricates one.
+// Ephemeral in-memory tracking of builtin `write` calls: pre-image captured at
+// tool start, post-image verified byte-for-byte against the call's own expected
+// content at end; any uncertainty fails closed to an explicit "unavailable" fallback.
 
 import * as fs from "node:fs";
 import type { DiffRow } from "./diff.ts";
@@ -140,7 +134,6 @@ interface HunkOp {
 function diffLineOps(before: readonly string[], after: readonly string[]): HunkOp[] {
   const n = before.length;
   const m = after.length;
-  // Trim common prefix/suffix so the search works on the changed middle.
   let start = 0;
   while (start < n && start < m && before[start] === after[start]) start += 1;
   let endBefore = n;
@@ -155,8 +148,7 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
   const midAfter = after.slice(start, endAfter);
 
   if (midBefore.length === 0 || midAfter.length === 0) {
-    // One-sided middle: number directly (old lines consume oldCursor, new
-    // lines consume newCursor — the same counters the Myers path uses).
+    // One-sided middle: number directly with the same old/new cursors the Myers path uses.
     let oldCursor = start;
     let newCursor = start;
     for (const text of midBefore) {
@@ -199,7 +191,6 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
       // Budget guard made this unreachable; fail safe to "unavailable".
       return ops;
     }
-    // Backtrack the shortest edit script into a list of middle ops.
     const middle: Array<{ sign: "-" | "+" | " "; index: number; text: string }> = [];
     let x = midBefore.length;
     let y = midAfter.length;
@@ -233,9 +224,7 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
       y -= 1;
     }
     middle.reverse();
-    // Renumber in document order: "-" consumes old lines, "+" consumes new
-    // lines, " " consumes both. Interleaving keeps removals before insertions
-    // at the same position (matches the previous jsdiff output shape).
+    // Renumber in document order; removals precede insertions at the same position (matches jsdiff output shape).
     let oldCursor = start;
     let newCursor = start;
     const withNumbers: HunkOp[] = [];
@@ -254,7 +243,6 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
     }
     ops.push(...withNumbers);
   }
-  // Trailing common suffix.
   let oldLine = endBefore;
   let newLine = endAfter;
   while (oldLine < n && newLine < m) {
@@ -278,7 +266,6 @@ export function buildDiffRows(beforeText: string, afterText: string): { rows: Di
   let oldLine = 1;
   let newLine = 1;
 
-  // Context windows from change indexes: mark, then merge intervals.
   const changeIndexes = ops.map((op, index) => op.sign !== " " ? index : -1).filter((index) => index >= 0);
   const intervals: Array<[number, number]> = [];
   for (const index of changeIndexes) {

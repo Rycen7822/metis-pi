@@ -1,10 +1,6 @@
-// write-preview.ts — LIVE preview of the args.content the model is still
-// generating for a write tool call.
-//
-// This is a DISPLAY of the in-flight arguments. It never writes to disk,
-// never triggers execution, never parses unfinished JSON (the host hands us
-// the already-parsed args object via ToolExecutionComponent.updateArgs), and
-// never mutates the args themselves.
+// Live display-only preview of the write args the model is still generating:
+// never writes to disk, never executes, never parses unfinished JSON (the host
+// hands already-parsed args), never mutates the args.
 
 import type { Palette } from "./tool-names.ts";
 import type { ColorLevel } from "./palette.ts";
@@ -53,12 +49,7 @@ export function stageLabel(stage: WriteStage, theme: Palette, aborted?: boolean)
   }
 }
 
-/**
- * Safe-prefix: cut a raw in-flight string to whole UTF-16 code points without
- * emitting a lone surrogate. The raw string may end mid-character only in the
- * sense of chunk boundaries; JS strings are already code-point-safe, but a
- * lone trailing surrogate (from a malformed provider chunk) must be dropped.
- */
+/** Cut a raw in-flight string to whole UTF-16 code points: a lone trailing surrogate (from a malformed provider chunk) is dropped. */
 export function safePrefix(text: string): string {
   if (!text) return "";
   const last = text.charCodeAt(text.length - 1);
@@ -72,11 +63,7 @@ export interface WritePreviewLine {
   readonly complete: boolean; // false = last line still open (no trailing \n)
 }
 
-/**
- * Build display lines from the raw content prefix. Preserves newlines, CRLF
- * (normalized for display only), tabs, fences — NO JSON parsing, NO escaping.
- * A final line without a trailing newline is marked incomplete.
- */
+/** Build display lines from the raw content prefix (no JSON parsing, no escaping). A final line without a trailing newline is marked incomplete. */
 export function previewLines(contentPrefix: string, maxLines: number): { lines: WritePreviewLine[]; totalLogicalLines: number; truncated: boolean } {
   const raw = safePrefix(contentPrefix);
   if (!raw) return { lines: [], totalLogicalLines: 0, truncated: false };
@@ -94,16 +81,11 @@ export function previewLines(contentPrefix: string, maxLines: number): { lines: 
 }
 
 /**
- * Render the live preview block: stage line + PHYSICAL-ROW tail budget.
- *
- * 0.8.1 semantics: the budget counts TERMINAL SCREEN ROWS of the body, not
- * logical lines. Lines are wrapped FIRST (gutter + line-number column fully
- * deducted from the body width), then the newest physical rows are kept —
- * an early long logical line can no longer freeze the tail, and the newest
- * received character is always visible.
- *
- * `complete` reflects whether the logical line actually ended (trailing
- * newline), independent of any truncation.
+ * Live preview: stage line + PHYSICAL-ROW tail budget (terminal screen rows,
+ * not logical lines). Lines wrap FIRST (gutter + line-number column deducted
+ * from body width), then the newest physical rows are kept — an early long
+ * logical line cannot freeze the tail and the newest character stays visible.
+ * `complete` reflects a real trailing newline, independent of truncation.
  */
 export function renderWritePreview(
   contentPrefix: string,
@@ -125,8 +107,7 @@ export function renderWritePreview(
   const { width, stage, expanded, theme, colorLevel, gutter } = options;
   const totalBudget = Math.max(1, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
   const headerRows = Math.max(0, options.headerRows ?? 0);
-  // Defensive fallback (0.8.1 crash lesson): a renderer must NEVER take the
-  // host process down. If layout ops are missing, degrade to ASCII ops.
+  // Defensive fallback (0.8.1 crash lesson): a renderer must NEVER take the host process down — degrade to ASCII layout ops when missing.
   const layout: DiffLayoutOps = options.layout ?? {
     wrap: (text: string) => [text],
     visibleWidth: (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "").length,
@@ -135,8 +116,7 @@ export function renderWritePreview(
   const gutterWidth = Math.max(0, layout.visibleWidth(gutter));
   const bodyBudget = Math.max(1, totalBudget - headerRows - 1 /* stage line */);
   const maxNumber = Number.MAX_SAFE_INTEGER.toString().length;
-  // Number width from the ACTUAL last line number (not the total, which can
-  // differ once truncation starts) — bounded to 3+ digits per content size.
+  // Number width from the ACTUAL last line number, not the total — they differ once truncation starts.
   const raw = safePrefix(contentPrefix);
   const normalized = raw ? (raw.endsWith("\n") ? raw.slice(0, -1) : raw) : "";
   const allLines = normalized ? normalized.split("\n").map((line) => line.replace(/\r$/, "")) : [];
@@ -154,10 +134,7 @@ export function renderWritePreview(
 
   if (!allLines.length) return [stageRow];
 
-  // Logical tail large enough to fill the physical budget even if every
-  // line wraps: one physical row per logical line is the lower bound, but a
-  // single long line can consume the whole budget — walk BACKWARDS wrapping
-  // until the budget is filled or the first line is reached.
+  // Walk BACKWARDS wrapping until the budget is filled: one physical row per logical line is only a lower bound — a single long line can consume the whole budget.
   const wrapOne = (text: string): string[] => {
     const wrapped = layout.wrap(text, bodyWidth);
     return wrapped.length ? wrapped : [""];
@@ -174,8 +151,7 @@ export function renderWritePreview(
   }
   const truncated = startIndex > 0 || allLines.length > bodyBudget;
 
-  // Compose rows, then keep only the LAST bodyBudget physical rows — the
-  // newest content (open tail line, latest characters) is always included.
+  // Keep only the LAST bodyBudget physical rows — the newest content (open tail line, latest chars) is always included.
   const rows: string[] = [];
   const pad = " ".repeat(numberWidth);
   for (const logical of rendered) {
@@ -192,8 +168,7 @@ export function renderWritePreview(
     const firstShown = rendered.length ? rendered[0]!.number : 1;
     const hiddenLogical = firstShown - 1;
     if (hiddenLogical > 0) {
-      // The hint consumes body budget: drop the OLDEST rendered row to keep
-      // the newest content visible within the total bound.
+      // The hint consumes body budget: drop the OLDEST rendered row to keep the newest content within the total bound.
       if (out.length >= totalBudget) out.splice(1, 1);
       out.push(`${dim}${gutter}… earlier output (${hiddenLogical} logical line${hiddenLogical === 1 ? "" : "s"}, physical rows elided)${dimOff}`);
     }

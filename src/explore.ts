@@ -1,11 +1,6 @@
-// Codex exploration rows (exec_cell/render.rs exploring_display_lines):
-// "• Explored" header, "  └ " gutter, cyan title, dim " in " between the
-// query and the path. Display-only.
-//
-// The header and member rows are separate builders: a group header is owned
-// by the FIRST member's component; later members render only their row with
-// a four-space gutter. renderExplorationLines keeps the original all-in-one
-// shape for single (ungrouped) calls and tests.
+// Codex "• Explored" exploration rows (exec_cell/render.rs exploring_display_lines).
+// A group header is owned by the FIRST member's component; later members render
+// with a four-space gutter. Display-only.
 
 import { foregroundAnsi, type ColorLevel } from "./palette.ts";
 

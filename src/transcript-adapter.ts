@@ -1,19 +1,16 @@
-// transcript-adapter.ts — connects the presentation state to the live Pi UI.
+// Transcript decoration: one assistant decoration layer coordinates BOTH the
+// separator line and the thinking rail against the rebuilt contentContainer
+// (they must not stack two unaware patches on the same updateContent).
 //
-// One assistant decoration layer coordinates BOTH the separator line and the
-// thinking rail against the rebuilt contentContainer (they must not stack two
-// unaware patches on the same updateContent). Tool-row decoration suppresses
-// the leading spacer of grouped exploration members.
-//
-// Coordination contract (5.3): call the approved predecessor ONCE, read the
+// Coordination contract: call the approved predecessor exactly ONCE, read the
 // REBUILT subtree, map text/thinking slots semantically, then re-attach the
 // decorations the current subtree needs. "Idempotent" means exactly one
-// matching decoration in the CURRENT subtree — not "insert once per parent
-// lifetime". Removed-by-clear() decorations are re-attached.
+// matching decoration in the CURRENT subtree — removed-by-clear() decorations
+// are re-attached.
 //
-// External owner awareness: pi-zentui's thinkingSteps (mode rail/tree) may
-// already own assistant thinking display. When its wrapper is detected, the
-// rail is skipped (external rail wins) while the separator stays active.
+// External owner awareness: an external wrapper (e.g. pi-zentui thinkingSteps)
+// may already own assistant thinking display; when detected the rail stays
+// passive while the separator stays active.
 
 import { asRecord } from "./renderers.ts";
 import { TranscriptState, type ExplorationPlan, type TextRunPlan } from "./transcript-state.ts";
@@ -21,7 +18,7 @@ import { TranscriptState, type ExplorationPlan, type TextRunPlan } from "./trans
 const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
 const ASSISTANT_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.assistant-deco.v2");
 
-/** Per-feature install diagnostics (3.3: never aggregate with .some()). */
+/** Per-feature install diagnostics (never aggregate with .some()). */
 export interface DecorationFeature {
   readonly name: "separator" | "thinking-rail" | "group-spacing";
   readonly installed: boolean;
@@ -56,8 +53,6 @@ export interface TranscriptAdapterInput {
    * host shape is not supported (the caller then leaves the node untouched).
    */
   makeRail: ((child: unknown) => unknown) | undefined;
-  /** Format the collapsed-run label with the measured duration ("Thought for 19s
-   * (ctrl+t to expand)"). Absent → keep the host's own label. */
   /** True when an external owner already renders thinking rails. */
   externalRailOwner?(): boolean;
   enabled(): boolean;
@@ -93,10 +88,7 @@ export function installTranscriptDecorations(input: TranscriptAdapterInput): Dec
   return { installed, features, dispose() { for (const d of disposers) d(); } };
 }
 
-// ---------------------------------------------------------------------------
-// Tool rows: suppress the leading spacer of non-first exploration members.
-// ---------------------------------------------------------------------------
-
+/** Suppress the leading spacer of non-first exploration group members. */
 function decorateToolRows(input: TranscriptAdapterInput): { installed: boolean; reason: string; dispose: () => void } {
   const prototype = input.toolPrototype!;
   if (Object.prototype.hasOwnProperty.call(prototype, TOOL_SLOT)) {
@@ -162,11 +154,8 @@ function decorateToolRows(input: TranscriptAdapterInput): { installed: boolean; 
   };
 }
 
-// ---------------------------------------------------------------------------
 // Assistant subtree: separator before the first text run + rail on thinking
 // runs, re-coordinated after EVERY rebuild.
-// ---------------------------------------------------------------------------
-
 function decorateAssistant(input: TranscriptAdapterInput): {
   installed: boolean; reason: string;
   railInstalled: boolean; railReason: string;
@@ -178,20 +167,17 @@ function decorateAssistant(input: TranscriptAdapterInput): {
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
     return { installed: false, reason: "Pi updateContent missing or read-only", railInstalled: false, railReason: "no updateContent access", dispose() {} };
   }
-  // Structural contract (3.3): the method exists, is writable/configurable,
-  // and the rebuilt subtree exposes the host's contentContainer. String
-  // fingerprints are deliberately NOT used — comments, minification or
-  // benign patches (e.g. zentui's wrapper) must not block installation.
+  // Structural contract: the method exists, is writable/configurable, and the
+  // rebuilt subtree exposes the host's contentContainer. String fingerprints
+  // are deliberately NOT used — comments, minification or benign patches
+  // (e.g. zentui's wrapper) must not block installation.
   const original = descriptor.value as (this: unknown, ...args: unknown[]) => void;
   const owner = {};
 
-  // zentui's thinking wrapper chains on the same method. If an outer wrapper
-  // was installed AFTER ours, our dispose keeps the outer wrapper but makes
-  // this layer transparent (still calling through). If zentui installed
-  // BEFORE us, the descriptor we captured is already ITS wrapper and our
-  // decoration sits on top — chain order works either way; ownership is per
-  // descriptor, and later installers fail closed on the shape check only when
-  // the body actually diverges.
+  // zentui's thinking wrapper may chain on the same method. Ownership is per
+  // descriptor, so chain order works either way: an outer wrapper installed
+  // after ours is kept by our dispose (this layer goes transparent), and a
+  // wrapper installed before us is captured as the descriptor we decorate.
   let active = true;
 
   const wrapper = function (this: unknown, ...args: unknown[]): void {
@@ -263,7 +249,6 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
       children.splice(i, 1);
       continue;
     }
-    // MouseRegion with our wrapper inside: unwrap in place.
     if ((child as Record<string, unknown>).child && ((child as Record<string, unknown>).child as Record<symbol, unknown> | undefined)?.[RAIL_SYMBOL]) {
       const region = child as { child: Record<symbol, unknown> };
       const wrapper = region.child;
@@ -281,7 +266,6 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
   //    visible children against content runs — never by string content.
   const runs = semanticRuns(content);
   const slots = mapChildrenToRuns(children, runs, spacerProto);
-  // slots: array of { child, run } pairs (skipping structural Spacers).
 
   // 3) Attach the separator before the FIRST text-run slot (not message top).
   if (textRunPlan?.separatorBefore) {
@@ -313,20 +297,17 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
       const innerRecord = inner !== null && typeof inner === "object" ? (inner as Record<string, unknown>) : undefined;
       if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]) continue;
 
-      // 0.8.1: the display layer NEVER rewrites a thinking body into a label.
-      // An open/expanded run is the host's Markdown (has `theme`); a truly
+      // The display layer NEVER rewrites a thinking body into a label. An
+      // open/expanded run is the host's Markdown (has `theme`); a truly
       // hidden run is the host's own label Text and it stays untouched — the
-      // host's override map remains sole owner of visibility. Our automatic
-      // "collapse after end" behavior was removed (full/full default); the
-      // user's Ctrl+T / click toggles keep working through the host.
+      // host's override map remains sole owner of visibility.
       const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
       if (!isExpandedMarkdown) continue; // unknown shape or host label row: never touch, never rail
 
       const wrapped = input.makeRail(inner);
       if (!wrapped) continue;
       ((wrapped as Record<symbol, unknown>))[RAIL_SYMBOL] = true;
-      // Remember the original child so the unwrap pass (step 1) can restore
-      // the host's own node verbatim on dispose/rebuild.
+      // Remember the original child so the unwrap pass (step 1) can restore it.
       (wrapped as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
         (child as { child: unknown }).child = wrapped;
@@ -348,9 +329,8 @@ function resolveTextRunPlan(
   const known = input.state.identityOf(component);
   if (known) return input.state.textRunPlan(known);
   // History/finalized components without a streaming anchor: the state may
-  // already hold the OPEN plan for this message (message_update ran without
-  // a component reference). Reuse it instead of sealing a second plan whose
-  // followsTools flag would be wrong (lastNode is already assistant-text).
+  // already hold the OPEN plan for this message; reuse it instead of sealing
+  // a second plan whose followsTools flag would be wrong.
   const contentBlocks = content.map((b) => ({ type: String(b.type ?? ""), text: typeof b.text === "string" ? b.text : undefined, thinking: typeof b.thinking === "string" ? b.thinking : undefined }));
   const hasText = content.some((block) => block.type === "text" && typeof block.text === "string" && block.text.trim() !== "");
   if (!hasText) return undefined;
@@ -358,8 +338,7 @@ function resolveTextRunPlan(
   if (openKey) return input.state.textRunPlan(openKey);
   // Truly unknown message (history replay, cold start): register a sealed
   // plan. The boundary decision belongs to the STATE (display-order
-  // projection), not to the render path — followsTools comes from the
-  // state's own lastNode.
+  // projection), not to the render path.
   const followsTools = input.state.lastNodeKind() === "exploration" || input.state.lastNodeKind() === "other-tool";
   const key = input.state.registerFinalizedMessage(
     { role: "assistant", content: contentBlocks, stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined },
@@ -373,26 +352,24 @@ interface SemanticRun {
   kind: "text" | "thinking";
   firstContentIndex: number;
   nonEmpty: boolean;
-  /** 0.8.1: a toolCall/unknown block — produces no child but BREAKS runs. */
+  /** A toolCall/unknown block — produces no child but BREAKS runs. */
   barrier?: boolean;
 }
 
 /** Contiguous same-kind visible runs of the message content. */
 function semanticRuns(content: Array<Record<string, unknown>>): SemanticRun[] {
-  // 0.8.1 semantics (host parity): each NON-EMPTY text block is its own
-  // child; consecutive thinking blocks merge into ONE run ONLY when truly
-  // adjacent. ANY other block breaks the run — including an EMPTY text
-  // block: the host's rebuild loop breaks on the first non-thinking block
-  // regardless of emptiness (empty text produces no child, but the
-  // thinking run still ends). toolCall/unknown kinds also break.
+  // Host parity: each NON-EMPTY text block is its own child; consecutive
+  // thinking blocks merge into ONE run ONLY when truly adjacent. ANY other
+  // block breaks the run — including an EMPTY text block: the host's rebuild
+  // loop breaks on the first non-thinking block regardless of emptiness.
   const runs: SemanticRun[] = [];
   for (let i = 0; i < content.length; i++) {
     const block = content[i]!;
     const kind = block.type === "text" ? "text" : block.type === "thinking" ? "thinking" : null;
     if (!kind) {
-      // toolCall/unknown: no visible run of its own, but it BREAKS any
-      // adjacent thinking run (host rebuild has one MouseRegion per
-      // contiguous thinking run between other blocks).
+      // toolCall/unknown: no visible run of its own, but BREAKS any adjacent
+      // thinking run (host rebuild has one MouseRegion per contiguous
+      // thinking run between other blocks).
       runs.push({ kind: "text", firstContentIndex: i, nonEmpty: false, barrier: true });
       continue;
     }
@@ -405,7 +382,6 @@ function semanticRuns(content: Array<Record<string, unknown>>): SemanticRun[] {
       runs.push({ kind, firstContentIndex: i, nonEmpty });
       continue;
     }
-    // thinking: merge only truly consecutive thinking blocks.
     const last = runs.at(-1);
     if (last && last.kind === "thinking") {
       last.nonEmpty = last.nonEmpty || nonEmpty;
@@ -434,7 +410,6 @@ function mapChildrenToRuns(
   let runIndex = 0;
   for (const child of children) {
     if (!child || typeof child !== "object" || isSpacer(child)) continue;
-    // Advance to the next non-empty run for this visible child.
     while (runIndex < runs.length && !runs[runIndex]!.nonEmpty) runIndex += 1;
     const run = runs[runIndex];
     if (!run) break;

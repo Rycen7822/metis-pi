@@ -1,5 +1,4 @@
-// Codex dark syntax palette (Catppuccin Mocha), aligned with openai/codex main.
-// Colors are presentation-only constants; they never feed back into tool data.
+// Catppuccin Mocha syntax palette aligned with openai/codex main; presentation-only constants.
 
 export interface Rgb { readonly r: number; readonly g: number; readonly b: number }
 
@@ -108,9 +107,8 @@ function ansi256FromHex(hex: string): number {
 }
 
 function ansi16FromHex(hex: string): number {
-  // Codex ANSI-16 degradation keeps only the green/red cue; other syntax
-  // colors collapse to the default foreground. The palette hues map to the
-  // nearest of the 8 base colors to keep some distinction without pastels.
+  // Codex ANSI-16 degradation keeps only the green/red cue; palette hues map
+  // to the nearest of the 8 base colors to avoid pastels.
   const { r, g, b } = hexToRgb(hex);
   const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
   if (luminance > 200) return 7; // white

@@ -45,10 +45,8 @@ export interface Bindings {
     ? (input: T & { headerText: string }) => import("./tool-names.ts").Component | undefined
     : never;
 
-  /** Format the collapsed-thinking label with the measured duration. */
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
   editorHost?: { CustomEditor: unknown };
-  // ---- 0.8.0 chrome bindings (public host APIs; resolved in index.ts) ----
   /** The full ExtensionAPI object (for appendEntry / registerEntryRenderer / registerCommand). */
   api?: unknown;
   /** Host extension context captured at session_start (mode/hasUI/ui/model/cwd). */
@@ -150,7 +148,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     resultImages: new Map<string, number>(),
   };
 
-  // ---- 0.8.0 chrome/metrics state -----------------------------------------
+  // Chrome/metrics state.
   const counters: ResourceCounters = { timers: 0, subscriptions: 0, widgets: 0, pendingBounded: 0, snapshot() { return { timers: this.timers, subscriptions: this.subscriptions, widgets: this.widgets, pendingBounded: this.pendingBounded }; } };
   let hostContext: AppearanceHostContext | undefined;
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
@@ -186,8 +184,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     persist: config.summary.persist,
     wall: () => Date.now(),
   });
-
-  // ---- lifecycle ------------------------------------------------------------
 
   pi.on("session_start", (_event, ctx) => {
     const full = ctx as unknown as { mode?: string; hasUI?: boolean; model?: unknown; cwd?: string; ui?: AppearanceHostContext["ui"] };
@@ -233,7 +229,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   });
 
-  // /codex-ui — capability diagnostics (3.3): one line per feature with the
+  // /codex-ui — capability diagnostics: one line per feature with the
   // real cause; never hides partial failure behind a single reason.
   // Host signature: registerCommand(name, { description, handler }).
   (bindings.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
@@ -301,7 +297,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       } catch { /* editor stays native */ }
     }
 
-    // Footer factory (model · effort · cwd/branch — context right).
+    // Footer: model · effort · cwd/branch — context right.
     if (facts.available.setFooter) {
       try {
         void import("./chrome/footer.ts").then(({ createFooterComponent }) => {
@@ -320,7 +316,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       } catch { /* footer stays native */ }
     }
 
-    // Header factory (real identity line).
+    // Header: real identity line.
     if (facts.available.setHeader) {
       try {
         void import("./chrome/header.ts").then(({ createHeaderComponent }) => {
@@ -358,8 +354,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   }
 
   // Write tracking observes lifecycle events only (never tool_call/tool_result
-  // content). Reads the local file for an honest pre/post image; all state is
-  // ephemeral presentation data dropped at session shutdown.
+  // content); all state is ephemeral presentation data dropped at shutdown.
   // Interaction clock: opens on the first agent_start of a chain, closes on
   // agent_settled (auto-retry/compaction/queued follow-ups never reset it).
   (pi as unknown as AppearanceAPI).on("agent_start", () => {
@@ -373,7 +368,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (!enabled) return;
     const info = sourceInfoFor(event.toolName);
     session.tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveWritePath(path, ctx.cwd));
-    // Transcript projection: exploration grouping + separator boundary.
     transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
     metrics.toolStart();
     if (event.toolName === "write") metrics.writeStreaming();
@@ -403,8 +397,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   });
   // Wire the real message handlers (typed loosely above to avoid importing
   // host event types; only read-only content-shape fields are read). The
-  // event's message OBJECT is passed as the identity anchor (0.8.0 fix) so
-  // the state machine can key plans by the host's own object identity.
+  // event's message OBJECT is passed as the identity anchor so the state
+  // machine can key plans by the host's own object identity.
   (pi as unknown as {
     on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
   }).on("message_start", (event) => {
@@ -420,10 +414,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);
     transcript.apply({ type: "message_update", message: stateMessage }, message);
-    // Phase feed for the Working line (0.8.1 fix): the CURRENT streaming
-    // event decides the phase — never the accumulated content. An old
-    // thinking block staying in the message must NOT keep "Thinking" lit
-    // while the model is streaming a write tool call's arguments.
+    // Phase feed for the Working line: the CURRENT streaming event decides
+    // the phase — never the accumulated content. An old thinking block must
+    // NOT keep "Thinking" lit while the model streams a write tool call.
     const streamEvent = (event as { assistantMessageEvent?: { type?: string; contentIndex?: number; partial?: { content?: Array<Record<string, unknown>> } } }).assistantMessageEvent;
     const eventType = typeof streamEvent?.type === "string" ? streamEvent.type : undefined;
     if (stateMessage && stateMessage.role === "assistant" && eventType) {
@@ -476,8 +469,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     transcript.apply({ type: "message_end", message: stateMessage }, message);
     metrics.thinkingEnd();
     if (stateMessage?.stopReason === "aborted") lastRunInterrupted = true;
-    // Usage totals (read-only): the assistant message carries the provider
-    // usage. requestKey = responseId (stable across replays).
+    // Usage totals (read-only): requestKey = responseId (stable across replays).
     if (message && typeof message === "object") {
       const record = message as Record<string, unknown>;
       const usage = record.usage as Record<string, number> | undefined;

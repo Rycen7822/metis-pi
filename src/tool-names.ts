@@ -1,5 +1,4 @@
-// Shared types and small helpers used across renderer modules.
-// Every transformation here affects a DISPLAY string/component only.
+// Shared display-only types and small helpers used across renderer modules.
 
 export const TOOL_NAMES = ["bash", "powershell", "read", "grep", "find", "ls", "edit", "write"] as const;
 export type ToolName = typeof TOOL_NAMES[number];

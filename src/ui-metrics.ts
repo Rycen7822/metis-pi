@@ -1,13 +1,9 @@
-// ui-metrics.ts — ONE monotonic clock per user-visible interaction.
-//
+// ONE monotonic interaction clock per user-visible interaction.
 // Pi semantics (verified v0.85.1): `agent_end` fires when ONE underlying run
 // finishes, but auto-retry / auto-compaction / queued follow-ups may start the
-// next `agent_start` afterwards. `agent_settled` means nothing will auto-
-// continue. So the interaction clock opens on the FIRST agent_start of a
-// chain and only closes on agent_settled — turn loops never reset it.
-//
-// Timing uses a monotonic clock (performance.now via injectable now());
-// Date is used only for wall-clock stamps persisted in the summary entry.
+// next `agent_start` afterwards; only `agent_settled` finalizes. So the clock
+// opens on the FIRST agent_start of a chain and never resets mid-chain. Date
+// is used only for wall-clock stamps persisted in the summary entry.
 
 export type ActivityPhase =
   | "idle"
@@ -96,8 +92,6 @@ export class UiMetrics {
     return this.#interactionStart !== undefined;
   }
 
-  // ---- interaction lifecycle ------------------------------------------------
-
   /** agent_start: open the interaction on the FIRST start of a chain; later
    * starts inside the same chain keep the original clock. */
   agentStart(): void {
@@ -126,7 +120,6 @@ export class UiMetrics {
   /** agent_settled: nothing will auto-continue. Close the interaction. */
   agentSettled(): void {
     if (this.#interactionStart === undefined) return;
-    // Close any open thinking interval conservatively.
     const open = this.#thinking.at(-1);
     if (open && open.endMs === OPEN_END) open.endMs = this.#opts.now();
     this.setPhase("idle");
@@ -152,8 +145,6 @@ export class UiMetrics {
   get generation(): number {
     return this.#generation;
   }
-
-  // ---- phase transitions ----------------------------------------------------
 
   setPhase(phase: ActivityPhase): void {
     if (phase === this.#phase) return;
@@ -196,8 +187,6 @@ export class UiMetrics {
     if (this.active && this.#phase === "waiting-for-input") this.setPhase("working");
   }
 
-  // ---- usage ------------------------------------------------------------------
-
   /** Record usage for a completed request. `requestKey` must identify the
    * request/message so replays and duplicate completions don't double-count.
    * Unknown (unidentifiable) usage is attributed conservatively ONLY when
@@ -214,8 +203,6 @@ export class UiMetrics {
     this.#usage.cacheWrite += Math.max(0, usage.cacheWrite ?? 0);
   }
 
-  // ---- snapshots ---------------------------------------------------------------
-
   snapshot(): InteractionSnapshot {
     const nowMs = this.#opts.now();
     const open = this.#thinking.at(-1);
@@ -230,8 +217,6 @@ export class UiMetrics {
       usage: { ...this.#usage },
     };
   }
-
-  // ---- ticker -------------------------------------------------------------------
 
   #ensureTicker(): void {
     if (this.#timer !== undefined) return;
@@ -263,8 +248,6 @@ export class UiMetrics {
     this.#emit();
   }
 }
-
-// ---- formatting (Codex-style durations) ---------------------------------------
 
 /** Codex duration grammar: "38s" / "1m 08s" / "1h 02m 03s" (leading-zero
  * minutes/seconds in compound forms, matching the reference's `1m 08s`). */

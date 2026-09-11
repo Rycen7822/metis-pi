@@ -1,7 +1,6 @@
-// chrome/header.ts — minimal 1–2 line startup header through setHeader().
-//
-// Shows the REAL identity (Pi + this extension + model/dir when available).
-// Never impersonates OpenAI/Codex. Omitted fields simply render no line.
+// Minimal 1–2 line startup header: shows the REAL identity (Pi + this
+// extension + model/dir). Never impersonates OpenAI/Codex; omitted fields
+// render no line.
 
 export interface HeaderDeps {
   appearanceVersion: string;

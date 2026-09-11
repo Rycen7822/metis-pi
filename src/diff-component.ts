@@ -1,7 +1,4 @@
-// Diff component renderer: the single runtime path from structured rows to
-// Codex-styled display lines. Used by index.ts's CodexDiffComponent (edit and
-// write). Syntax highlighting uses the Pi grammar; color depth comes from the
-// session ColorContext.
+// Single runtime path from structured rows to Codex-styled diff lines (edit and write components).
 
 import { renderDiffLines, type DiffRow } from "./diff.ts";
 import { languageForPath } from "./renderers.ts";

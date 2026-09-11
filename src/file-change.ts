@@ -1,6 +1,4 @@
-// Codex file-change model (diff_render.rs FileChange): Add / Update /
-// Delete rows feeding the diff renderer, plus the Codex header format
-// "Added path (+N -0)" / "Edited path (+A -D)".
+// Codex file-change model (FileChange): Add/Update/Delete rows feeding the diff renderer plus the "Added/Edited path (+N -M)" header format.
 
 import { parseDisplayDiff, diffStatsFromRows, type DiffRow, type DiffStats } from "./diff.ts";
 
@@ -18,7 +16,6 @@ export interface FileChange {
   readonly unavailable?: string;
 }
 
-/** Codex verb per change kind for single-file headers. */
 export function changeVerb(kind: FileChangeKind): string {
   return kind === "add" ? "Added" : kind === "delete" ? "Deleted" : "Edited";
 }
@@ -52,7 +49,6 @@ export function addFileRows(content: string): DiffRow[] {
   }));
 }
 
-/** Parse a unified diff (+old new pairs in Pi display format) into rows. */
 export function unifiedDiffRows(diff: string): DiffRow[] {
   return parseDisplayDiff(diff);
 }

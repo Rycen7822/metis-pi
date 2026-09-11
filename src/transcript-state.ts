@@ -3,13 +3,9 @@
 // thinking/text run distinction.
 //
 // It consumes read-only lifecycle events (no message content mutation, no
-// session storage) and answers STABLE queries:
-//   - exploration plan for a toolCallId (group, header owner, gutter shape)
-//   - per-message text-run plans keyed by a stable logical message identity
-//
-// Rendering NEVER mutates membership or boundaries. Queries are pure reads of
-// precomputed plans; repaints, invalidate() storms and history rebuilds all
-// get the same answer for the same logical message.
+// session storage) and answers STABLE queries. Rendering NEVER mutates
+// membership or boundaries: repaints, invalidate() storms and history
+// rebuilds all get the same answer for the same logical message.
 
 export type PresentationKind = "exploration" | "other-tool" | "assistant-text" | "transparent" | "barrier";
 
@@ -84,7 +80,7 @@ export interface TranscriptEvent {
 
 /**
  * True when a message contains NON-EMPTY visible TEXT (thinking does not
- * count: 3.5 — thinking must not steal the separator's text qualification).
+ * count: thinking must not steal the separator's text qualification).
  */
 export function assistantHasVisibleText(message: TranscriptEvent["message"]): boolean {
   if (!message || message.role !== "assistant") return false;
@@ -220,12 +216,9 @@ export class TranscriptState {
         }
         if (message.role === "assistant") {
           // A NEW logical message: ALWAYS a fresh plan — message_start is a
-          // message boundary by definition. (messageKeyFor's "continue the
-          // open plan" fallback must not glue distinct messages together.)
-          // The group is NOT closed here — tool-call-only assistant messages
-          // are transparent (4.2): the group must survive them and keep
-          // accepting members. closeOpenGroup happens when the message
-          // actually shows text/thinking (message_update below).
+          // message boundary by definition. The group is NOT closed here —
+          // tool-call-only assistant messages are transparent: the group must
+          // survive them (closeOpenGroup happens in message_update below).
           const key = sourceObject && this.identityByObject.get(sourceObject)
             ? this.identityByObject.get(sourceObject)!
             : `${this.generation}:${this.nextMessageSeq++}:open`;
@@ -250,9 +243,9 @@ export class TranscriptState {
         }
         const grew = message.content.length > plan.blockCount;
         plan.blockCount = Math.max(plan.blockCount, message.content.length);
-        // ONLY VISIBLE content is a boundary (0.8.0 fix): a tool-call-only
-        // message_update that merely appends toolCall blocks grows the array
-        // but must NOT close the exploration group or mark assistant-text.
+        // ONLY VISIBLE content is a boundary: a tool-call-only message_update
+        // that merely appends toolCall blocks must NOT close the exploration
+        // group or mark assistant-text.
         const hasThinking = assistantHasVisibleThinking(message);
         const visible = assistantHasVisibleText(message) || hasThinking;
         if (hasThinking && plan.thinkingStartedAt === undefined) {
@@ -282,11 +275,9 @@ export class TranscriptState {
         if (message.role === "assistant") {
           const key = this.messageKeyFor(message, sourceObject);
           const plan = this.messagePlans.get(key);
-          // Seal identity: further updates with the same object map here, but
-          // the key loses its ":open" marker meaning nothing else joins it.
-          // Components that ADOPTED the open plan keep their identity: the
+          // Seal identity: further updates with the same object map here; the
           // open key becomes an alias of the sealed one (WeakMap is not
-          // iterable, so rewrite happens via the alias table).
+          // iterable, so rewrites go through the alias table).
           const sealedKey = key.replace(/:open$/, ":sealed");
           if (plan) {
             // Conservative close: a run still streaming at message_end ends here.
@@ -408,8 +399,7 @@ export class TranscriptState {
   /**
    * STABLE per-run query for the assistant decoration layer. Pure read: safe
    * to call on every updateContent rebuild; the answer never flips for the
-   * same logical message (3.1/3.2 fix — the old takeTextPlan() consumed
-   * global pending state here, so the line vanished after the first rebuild).
+   * same logical message.
    */
   textRunPlan(messageKey: MessageViewKey, runIndex = 0): TextRunPlan | undefined {
     const plan = this.messagePlans.get(messageKey);

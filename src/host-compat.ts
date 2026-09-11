@@ -1,9 +1,6 @@
-// host-compat.ts — the single place that touches Pi's public UI surface and
-// reports what is actually available/applied. TUI-only guards live here.
-//
-// Principle: public APIs first (ctx.ui.*), factory-identity checks for
-// restore, no getters invented where the host doesn't expose them, and a
-// capability matrix for /codex-ui status.
+// Sole touchpoint for Pi's public UI surface. Principles: public APIs first
+// (ctx.ui.*), factory-identity restore, no getters invented where the host
+// exposes none, TUI-only guards.
 
 /** The public UI surface we rely on (verified against Pi v0.85.1 types). */
 export interface UiSurface {

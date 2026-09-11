@@ -147,7 +147,7 @@ class CodexSeparatorComponent implements Tui.Component {
 }
 
 /** Live write call: structured header (• Writing <path>) + stage line +
- * bounded rolling tail of the real args.content prefix (0.8.1). The header
+ * bounded rolling tail of the real args.content prefix. The header
  * is part of THIS component and can never be bypassed by the preview body.
  * `update()` refreshes inputs in place so the host's lastComponent reuse
  * path keeps one stable instance per call. */
@@ -166,7 +166,7 @@ class CodexWriteCallComponent implements Tui.Component {
   update(next: WritePreviewInput & { headerText?: string; layout?: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }): void {
     // The renderers' reuse path builds a PARTIAL input (no layout/maxRows -
     // those are component-owned). Merge instead of replacing: a full replace
-    // dropped `layout` and crashed render on the next frame (0.8.1 crash).
+    // dropped `layout` and crashed render on the next frame.
     this.#input = {
       ...next,
       headerText: next.headerText ?? this.#input.headerText,
@@ -205,8 +205,8 @@ class CodexWriteCallComponent implements Tui.Component {
     }
     const header = this.#input.headerText;
     const out: string[] = [header];
-    // Live body: bounded tail with the full gutter accounted for. The body
-    // renderer owns its own physical-row budget; header width is independent.
+    // Live body: bounded tail; the body renderer owns its own physical-row
+    // budget, header width is independent.
     const body = renderWritePreview(this.#input.contentPrefix, {
       width: Math.max(1, Math.floor(width)),
       stage: this.#input.stage,
@@ -319,12 +319,9 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     makeSeparator: () => new CodexSeparatorComponent(),
     makeSpacer: () => new Tui.Spacer(1),
     makeRail: (child) => new CodexThinkingRailComponent(child as Tui.Component),
-    // 0.8.1: pi-zentui is uninstalled; the Zentui registry probe is removed.
-    // Unknown third-party owners still back off through the adapter's
-    // ownsMethods/sourceInfo checks — no dedicated Zentui detection remains.
     makeWriteCall: (input) => {
-      // Config-driven body budget (0.8.1): rows from codex-appearance.json;
-      // enabled=false collapses the live body to the header only.
+      // Body budget from codex-appearance.json; enabled=false collapses the
+      // live body to the header only.
       let maxRows: number | undefined;
       try {
         const dir = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
@@ -336,11 +333,9 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
-    // ---- 0.8.0 chrome wiring ----
     api: pi,
     getAgentDir: () => {
-      // Public host config dir (PI_AGENT_DIR override respected by Pi itself;
-      // we only need the PATH, never auth contents).
+      // PI_AGENT_DIR override is respected by Pi itself; we only need the PATH, never auth contents.
       const fromEnv = process.env.PI_AGENT_DIR;
       if (fromEnv) return fromEnv;
       const fromOs = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();

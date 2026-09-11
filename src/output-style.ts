@@ -1,11 +1,8 @@
 // SGR state machine for tool-output dimming (Codex Modifier::DIM semantics).
-//
-// Codex dims result output by parsing the source ANSI into spans and applying
-// Modifier::DIM to every span; raw colors survive. A stateless "wrap the whole
-// line in \x1b[2m…\x1b[22m" is NOT equivalent: any reset inside the source
-// (0m, empty m, 22m, a later 39m after a color, etc.) would clear our DIM for
-// the remainder. This module re-issues DIM after every SGR that could have
-// cleared it, and never misreads SGR *parameters* as commands
+// A stateless "wrap the whole line in \x1b[2m…\x1b[22m" is NOT equivalent: any
+// reset inside the source (0m, empty m, 22m, a later 39m …) would clear our
+// DIM for the remainder. This module re-issues DIM after every SGR that could
+// have cleared it, and never misreads SGR *parameters* as commands
 // (38;2;0;22;39m — the 0/22/39 are RGB components, not resets).
 
 import { DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
@@ -19,13 +16,12 @@ export interface OutputDimPolicy {
  * Re-emit DIM after intensity-clearing resets inside `segment`.
  * `dim` false returns the input unchanged (policy off).
  *
- * Single-pass scanner: for each SGR …m sequence, parse parameters one by one
- * (extended-color prefixes 38/48/58 consume their arguments so component
- * values like 0/22/39 can never read as resets). After a sequence that clears
- * intensity (0 / empty / 22 / 21), our DIM is re-asserted unless the same
- * sequence set a stronger intensity. After non-clearing color SGRs the DIM is
- * re-asserted conservatively (harmless in every real terminal, survives
- * emulators that treat any SGR as a fresh attribute list).
+ * Single pass: extended-color prefixes 38/48/58 consume their arguments so
+ * component values like 0/22/39 can never read as resets; after a clearing
+ * sequence (0 / empty / 22 / 21) DIM is re-asserted unless the same sequence
+ * set a stronger intensity, and after non-clearing SGRs it is re-asserted
+ * conservatively (harmless in real terminals, survives emulators that treat
+ * any SGR as a fresh attribute list).
  */
 export function reapplyDimAfterResets(segment: string): string {
   if (!segment.includes("\x1b")) return segment;

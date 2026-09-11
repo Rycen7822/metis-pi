@@ -1,8 +1,4 @@
-// config.ts — small namespaced configuration for the Codex appearance UI.
-//
-// Loaded once at activation and on explicit reload from <agentDir>/codex-appearance.json.
-// Rendering never reads the file. Invalid values fall back to safe defaults
-// (reported once via the /codex-ui status panel); the user's file is never rewritten.
+// Config for the Codex appearance UI — rendering never reads the file, invalid values fall back to defaults, the user's file is never rewritten.
 
 export interface AppearanceConfig {
   enabled: boolean;
