@@ -275,6 +275,18 @@ class CodexThinkingRailComponent implements Tui.Component {
   }
 }
 
+/** Real package version, read once from package.json next to this entry —
+ * never hardcoded (diagnostics and the header show this value). */
+function appearanceVersion(): string {
+  try {
+    const raw = readFileSync(new URL("./package.json", import.meta.url), "utf8");
+    const version = (JSON.parse(raw) as { version?: unknown }).version;
+    return typeof version === "string" && version ? version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Default entry: compact Codex-style transcript, without changing tool data. */
 export default function codexAppearance(pi: AppearanceAPI): void {
   const prototype = Pi.ToolExecutionComponent?.prototype;
@@ -334,6 +346,10 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
     api: pi,
+    appearanceVersion: appearanceVersion(),
+    piVersion: typeof (Pi as unknown as { VERSION?: unknown }).VERSION === "string"
+      ? (Pi as unknown as { VERSION: string }).VERSION
+      : "unknown",
     getAgentDir: () => {
       // PI_AGENT_DIR override is respected by Pi itself; we only need the PATH, never auth contents.
       const fromEnv = process.env.PI_AGENT_DIR;

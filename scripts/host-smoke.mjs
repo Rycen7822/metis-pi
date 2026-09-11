@@ -1,6 +1,10 @@
 // Requires the actual Pi peers. This never substitutes the test layout harness.
 // Exercises the REAL assembly path: index.ts default export + Pi's
 // ToolExecutionComponent + real pi-tui width tools, zero model calls.
+// The diff-surface assertions expect the Codex RGB palette; without a TTY
+// the auto-detection resolves to 256-color, so force truecolor deterministically.
+process.env.FORCE_COLOR ??= "3";
+process.env.COLORTERM ??= "truecolor";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -147,28 +151,91 @@ handlers.get("session_shutdown")({}, {});
 assert.deepEqual(Object.getOwnPropertyDescriptors(proto), before);
 assert.match(stripVTControlCharacters(row.render(100).join("\n")), /NATIVE/);
 assert.equal(row.getRenderShell(), "default");
-// ---- 9. 0.8.0 chrome: /codex-ui command + entry renderer registration -------
+// ---- 9. 0.8.4 chrome: /codex-ui diagnostics + entry renderer registration ---
+// Section 8 ran session_shutdown (host data unbound) — start a fresh session.
+handlers.get("session_start")({}, { hasUI: true, ui: { notify(text) { throw new Error(text); } } });
 const codexUi = registeredCommands.find((cmd) => cmd.name === "codex-ui");
 assert.ok(codexUi, "/codex-ui command registered");
 const notified = [];
 codexUi.handler("", { ui: { notify: (t) => notified.push(t) } });
 const diagnostics = notified.join("\n");
-assert.match(diagnostics, /pi-codex-appearance 0\.8\.1 diagnostics:/);
-assert.match(diagnostics, /config: thinking=full\/full/, "effective thinking policy surfaced (0.8.1 full/full default)");
-assert.match(diagnostics, /chrome:/);
+assert.match(diagnostics, /pi-codex-appearance [\w.-]+ diagnostics \(mode=\w+, pi=[\w.-]+/);
+assert.match(diagnostics, /config: enabled=true thinking=full\/full/, "effective thinking policy surfaced (full/full default)");
+assert.match(diagnostics, /chrome: editor=\S+ footer=\S+ header=\S+ working=\S+/);
 assert.match(diagnostics, /transcript:/);
 assert.match(diagnostics, /decorations:/);
-assert.match(diagnostics, /interaction clock:/);
+assert.match(diagnostics, /interaction: (idle|open)/);
+assert.match(diagnostics, /outcome: /);
 assert.ok(registeredEntryRenderers.some((r) => r.type === "pi-codex-appearance:interaction-summary:v1"), "summary entry renderer registered");
 
-// ---- 10. agent lifecycle drives the interaction clock ------------------------
+// ---- 9b. TUI-mode chrome install: widget above editor, native loader hidden --
+const chromeSlots = {
+  widgets: [], workingVisible: [], footers: [], editors: [], headers: [], statuses: [],
+};
+const tuiUi = {
+  notify(text) { throw new Error(text); },
+  setWidget: (key, content, options) => chromeSlots.widgets.push({ key, content, options }),
+  setWorkingVisible: (v) => chromeSlots.workingVisible.push(v),
+  setWorkingIndicator: () => {},
+  setWorkingMessage: () => {},
+  setStatus: (key, text) => chromeSlots.statuses.push({ key, text }),
+  setFooter: (factory) => chromeSlots.footers.push(factory),
+  setHeader: (factory) => chromeSlots.headers.push(factory),
+  setEditorComponent: (factory) => chromeSlots.editors.push(factory),
+  getEditorComponent: () => chromeSlots.editors.at(-1),
+};
+handlers.get("session_start")({}, {
+  mode: "tui",
+  hasUI: true,
+  cwd: process.cwd(),
+  model: { id: "smoke-model", name: "Smoke", provider: "smoke-provider", contextWindow: 1_000_000 },
+  thinkingLevel: "high",
+  getContextUsage: () => ({ tokens: 12_000, contextWindow: 1_000_000, percent: 1.2 }),
+  sessionManager: { getEntries: () => [] },
+  ui: tuiUi,
+});
+await new Promise((resolve) => setTimeout(resolve, 50));
+assert.equal(chromeSlots.workingVisible.at(-1), false, "native loader hidden after widget install");
+// While idle the widget row is hidden (setWidget(undefined)); agent_start
+// shows it for the active interaction.
 handlers.get("agent_start")({ type: "agent_start" }, {});
+const showCall = chromeSlots.widgets.find((c) => c.content !== undefined);
+assert.ok(showCall, "widget shown for the active interaction");
+assert.equal(showCall.key, "pi-codex-appearance:working");
+assert.deepEqual(showCall.options, { placement: "aboveEditor" });
+// The installed footer renders the REAL host fields.
+assert.ok(chromeSlots.footers.length >= 1, "footer factory installed");
+const footerComponent = chromeSlots.footers[0]({ requestRender() {} }, { fg: (_k, t) => t }, {
+  getGitBranch: () => "smoke-branch",
+  getExtensionStatuses: () => new Map(),
+  onBranchChange: () => () => {},
+});
+const footerFrame = footerComponent.render(120).join("\n");
+assert.match(footerFrame, /smoke-model/);
+assert.match(footerFrame, /high/);
+assert.match(footerFrame, /smoke-provider/);
+assert.match(footerFrame, /12k\/1\.0M · 1\.2%/);
+// Working line through the real component path.
+const widgetComponent = showCall.content({ requestRender() {} }, { fg: (_k, t) => t });
+const workingFrame = widgetComponent.render(100).join("\n");
+assert.match(workingFrame, /Working…/);
+handlers.get("agent_settled")({ type: "agent_settled" }, {});
+assert.equal(chromeSlots.widgets.at(-1).content, undefined, "widget cleared at settle");
+
+// ---- 10. agent lifecycle drives the interaction clock ------------------------
+const summariesBefore = appendedEntries.filter((e) => e.type === "pi-codex-appearance:interaction-summary:v1").length;
+handlers.get("agent_start")({ type: "agent_start" }, {});
+handlers.get("message_start")({ type: "message_start", message: { role: "assistant", content: [] } }, {});
 handlers.get("message_update")({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] } }, {});
+handlers.get("message_end")({ type: "message_end", message: { role: "assistant", content: [], stopReason: "stop", usage: { input: 50, output: 10, cacheRead: 0, cacheWrite: 0 } } });
 handlers.get("agent_settled")({ type: "agent_settled" }, {});
 // Summary recorded only when config.summary.enabled — default config in the
 // smoke path has no codex-appearance.json, so defaults apply.
-const summaryCount = appendedEntries.filter((e) => e.type === "pi-codex-appearance:interaction-summary:v1").length;
-assert.ok(summaryCount <= 1, "at most one summary per settled interaction");
+const summariesAfter = appendedEntries.filter((e) => e.type === "pi-codex-appearance:interaction-summary:v1").length;
+assert.equal(summariesAfter - summariesBefore, 1, "exactly one summary per settled interaction");
+const lastSummary = appendedEntries.at(-1).data;
+assert.equal(lastSummary.schemaVersion, 2, "0.8.4 writes the v2 runtime verdict schema");
+assert.equal(lastSummary.outcome, "completed", "clean stop → Worked");
 
 fs.rmSync(dir, { recursive: true, force: true });
-console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.0 chrome diagnostics + interaction clock OK");
+console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.4 chrome (footer details, above-editor Working widget, v2 outcome summary) OK");

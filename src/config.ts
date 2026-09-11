@@ -4,7 +4,11 @@ export interface AppearanceConfig {
   enabled: boolean;
   thinking: { streaming: "full" | "collapsed"; completed: "collapsed" | "full"; rail: boolean };
   writePreview: { enabled: boolean; rows: number };
-  working: { elapsed: boolean };
+  /** Working widget segments. `elapsed:false` removes ONLY the duration —
+   * thought/phase/tool/tokens keep updating. */
+  working: { elapsed: boolean; thought: boolean; tool: boolean; tokens: boolean };
+  /** Footer detail lines. */
+  footer: { enabled: boolean; details: boolean; showCache: boolean; showCost: boolean };
   summary: { enabled: boolean; persist: boolean };
 }
 
@@ -14,7 +18,8 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   enabled: true,
   thinking: { streaming: "full", completed: "full", rail: true },
   writePreview: { enabled: true, rows: 8 },
-  working: { elapsed: true },
+  working: { elapsed: true, thought: true, tool: true, tokens: true },
+  footer: { enabled: true, details: true, showCache: true, showCost: true },
   summary: { enabled: true, persist: true },
 };
 
@@ -79,9 +84,26 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
   const working = root.working;
   if (working !== undefined && working !== null) {
     if (typeof working === "object") {
-      cfg.working.elapsed = bool((working as Record<string, unknown>).elapsed, cfg.working.elapsed, problems, "working.elapsed");
+      const w = working as Record<string, unknown>;
+      cfg.working.elapsed = bool(w.elapsed, cfg.working.elapsed, problems, "working.elapsed");
+      cfg.working.thought = bool(w.thought, cfg.working.thought, problems, "working.thought");
+      cfg.working.tool = bool(w.tool, cfg.working.tool, problems, "working.tool");
+      cfg.working.tokens = bool(w.tokens, cfg.working.tokens, problems, "working.tokens");
     } else {
       problems.push("working: expected object — using defaults");
+    }
+  }
+
+  const footer = root.footer;
+  if (footer !== undefined && footer !== null) {
+    if (typeof footer === "object") {
+      const f = footer as Record<string, unknown>;
+      cfg.footer.enabled = bool(f.enabled, cfg.footer.enabled, problems, "footer.enabled");
+      cfg.footer.details = bool(f.details, cfg.footer.details, problems, "footer.details");
+      cfg.footer.showCache = bool(f.showCache, cfg.footer.showCache, problems, "footer.showCache");
+      cfg.footer.showCost = bool(f.showCost, cfg.footer.showCost, problems, "footer.showCost");
+    } else {
+      problems.push("footer: expected object — using defaults");
     }
   }
 

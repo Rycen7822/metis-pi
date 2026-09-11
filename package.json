@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/pi-codex-appearance",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",
@@ -36,7 +36,8 @@
     "check": "tsc -p tsconfig.json",
     "check:core": "tsc -p tsconfig.core.json",
     "verify": "npm test && npm run check && npm run test:host && npm pack --dry-run --ignore-scripts",
-    "preview": "node --experimental-strip-types scripts/preview.mjs"
+    "preview": "node --experimental-strip-types scripts/preview.mjs",
+    "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

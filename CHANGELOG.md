@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.8.4
+
+Footer details, standalone Working line, and runtime outcome verdicts
+(spec-reviewed against the real Pi 0.85.1 API surface):
+
+- **Real host data bridge** (`src/host-data.ts`): the 0.8.3 footer read
+  `model.label/displayName/effort` and `ctx.ui.getContextUsage().percentUsed`
+  — none of which exist on Pi 0.85.1 — so a standard model rendered as
+  nothing and the footer degraded to a bare directory. All display data now
+  flows through one validated bridge: `ctx.model.id/name/provider/
+  contextWindow`, `ctx.thinkingLevel` (`off` shown explicitly), and
+  `ctx.getContextUsage()` (`tokens/contextWindow/percent`). Reads go through
+  the LIVE context — a model/effort switch shows up without a restart, and
+  one revision covers model + usage together.
+- **Two-line footer details** (`src/chrome/footer.ts`): line 1
+  `model · effort · provider` left, `ctx used/capacity · percent` right;
+  line 2 `dir (branch)` left, session `Σ↑input ↓output · cache(last) rate ·
+  Rread Wwrite` (+ known cost) right. Layout is computed on plain segment
+  text at cell width (CJK-aware) and painted afterwards — final ANSI strings
+  are never `.slice()`d. Narrow widths wrap groups onto their own rows
+  instead of deleting the right-side stats; 0/1/2 columns render nothing and
+  recover when width returns.
+- **Session usage ledger** (`src/usage-ledger.ts`): session-scope totals
+  from the session file's standard entries (assistant messages +
+  compaction/branch_summary usage; our own summary CustomEntry excluded),
+  deduped by `${provider}:${responseId}` / entry identity so live events and
+  rebuilds never double-count. `cache(last)` is the most recent confirmed
+  request's `cacheRead/(input+cacheRead+cacheWrite)`; the session-weighted
+  rate is in `/codex-ui`. Streaming usage replaces (never sums) per request;
+  unknown values render `—`.
+- **Standalone Working line** (`src/chrome/working.ts`): an above-editor
+  widget via the public `setWidget(key, factory, {placement:"aboveEditor"})`
+  in the Zentui segment order `Message · Tool · Elapsed · Thought · Tokens`
+  (Zentui is a layout reference only — not a dependency, not installed).
+  `embedWorkingStatus` is now `false` on our editor; the native loader row is
+  hidden only after the widget installed successfully, and the old
+  message-based fallback stays when `setWidget` is unavailable — never three
+  Working copies. Active tools render by real toolCallId (`bash +2` for
+  parallel runs) and clear on completion.
+- **Runtime outcome verdicts** (`src/interaction-outcome.ts`): the sticky
+  `lastRunFailed` flag is gone. A mid-run tool error only increments a
+  diagnostic counter; the verdict comes from terminal evidence — the final
+  assistant attempt's `stopReason` (stop → `Worked for …`, error →
+  `Failed after …`, aborted → `Interrupted after …`, length →
+  `Ended after … · output limit`, no reliable evidence → `Ended after …`).
+  Retry/continuation semantics: the highest attempt with terminal evidence
+  wins, so a stale late error cannot override a newer clean stop, and an
+  unfinished newer attempt yields `unknown`, never guessed success. Summary
+  entries are written as schemaVersion 2 (outcome + evidence + attempt +
+  toolErrorsObserved); v1 entries stay readable, and v1 `failed` (written by
+  the old sticky-flag bug) renders `Ended after … · legacy status unverified`
+  — history is never rewritten in either direction.
+  `summary.persist:false` now has a real transient path: the settled line
+  lives in the footer status row until the next interaction (no third
+  transcript patch).
+- **Lifecycle hardening**: chrome modules preload once and install through a
+  generation guard — a late preload resolution after shutdown/new session
+  can no longer install stale UI; shutdown restores only our own factories
+  (identity-compared editor) and re-shows the native loader only when we hid
+  it. Chrome/metrics/summary side effects are gated on the real
+  `ctx.mode === "tui"` (not `hasUI`), so print/json/rpc never get timers or
+  ANSI. Diagnostics (`/codex-ui`) report real states (installed/applied/
+  disabled/fallback), per-value sources and scopes, confirmed-vs-preview
+  usage, terminal evidence, and the versions read at runtime from
+  package.json / `Pi.VERSION` — no more hardcoded 0.8.1/0.85.1.
+- **Tests**: chrome tests rebuilt on the REAL host data shapes (the old ones
+  injected the plugin's own wrong assumptions); new unit suites for the
+  bridge, ledger math (spec formula: session 5000/300/10000/0 → cache(last)
+  20.0%, cache(session) 66.7%), outcome sequences (14 cases through the
+  reducer), Working formatting and footer layouts at 40/60/80/120/160 plus
+  0/1/2 columns. `scripts/pty-verify.mjs` drives the real `pi` binary in a
+  real tmux PTY against a local mock OpenAI-compatible provider (zero paid
+  requests) and asserts screen frames per stage: idle footer details, live
+  `Working…` with growing elapsed/thinking timers, real bash tool output
+  with a `Worked` summary, and a forced provider error ending in
+  `Failed after`.
+
+`npm test` 193/193 · `test:host` PASS · `test:pty` PASS (real TUI frames).
+
 ## 0.8.3
 
 Write call/title fixes from real-use screenshots:

@@ -1,3 +1,32 @@
+# Validation record — 0.8.4 (footer details, Working widget, runtime outcomes)
+
+Method: unit suites on REAL host data shapes + `host-smoke` (real Pi
+component assembly) + `pty-verify` (the real `pi` binary in a real tmux PTY,
+driven by a local mock OpenAI-compatible provider — zero paid requests;
+screen frames asserted with `tmux capture-pane`, not raw byte-stream
+greping). The PTY run uses HOME isolation so the published 0.8.3 copy in the
+user's `~/.pi/agent` cannot shadow the code under test.
+
+| Stage | Frame evidence (real TUI) |
+| --- | --- |
+| Idle footer | `pcx-mock-model · high · pcx-mock    ctx 0/1.0M · 0%` + `…/workspace    Σ↑0 · R0 W0` — model/effort/provider/capacity all from real host fields (0.8.3 showed a bare directory here because it read nonexistent `label/percentUsed`) |
+| Live Working | `✦ Working… · … · Ns · ↑…` above the editor mid-stream; elapsed + token preview grow; editor border carries no second Working; native loader row hidden only after widget install |
+| Thinking | `thinking Ns` grows while the mock streams `reasoning_content`; after the run the summary shows `thought for Ns` (same interaction-scope ledger) |
+| Tool run | mock tool call → real `bash` executed (`PCX_TOOL_MARK` in output) → summary still `Worked for …` (a mid-run tool error no longer brands the run Failed — covered separately by the outcome unit suite: error→retry→stop = Worked, error→settle = Failed, abort = Interrupted, length = Ended·output limit, no evidence = Ended) |
+| Provider error | forced HTTP 500 → summary `Failed after …` (real terminal evidence) |
+| Footer after runs | `ctx 1.3k/1.0M · 0.1%` + `Σ↑200 ↓80 · cache(last) 83.3% · R1.0k W0 · $0.00` — Pi normalizes usage (input = uncached prompt tokens, 1200−1000 cached = 200; cacheRead = 1000 → 1000/1200 = 83.3%) |
+
+Not verified (environment limits): real window mouse clicks, IME input,
+paid-provider-specific reasoning splits. Unknown values render `—`
+(verified in unit tests for null/NaN/negative/missing usage).
+
+`npm test` 193/193 · `check`/`check:core` clean · `test:host` PASS (needs
+`COLORTERM=truecolor` on hosts whose palette resolves to 256-color for the
+diff-surface assertions — an environment property, not a code regression;
+it fails identically on the 0.8.3 tree) · `test:pty` PASS (5 stages).
+
+---
+
 # Validation record — 0.8.3 (write title fixes)
 
 Two real-use screenshot findings, both reproduced in the real host

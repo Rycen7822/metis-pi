@@ -3,13 +3,22 @@
 // pi.registerEntryRenderer(). Custom entries never enter LLM context
 // (verified v0.85.1); session JSONL is never edited directly, existing entries
 // are never rewritten, message bodies are never stored.
+//
+// schemaVersion 2 records the RUNTIME verdict: outcome + terminal evidence +
+// attempt order + toolErrorsObserved. v1 entries remain readable; a v1
+// "failed" was written by the old sticky-flag bug and lacks verifiable
+// terminal evidence, so it renders as "legacy status unverified" — history is
+// never rewritten in either direction.
 
 import { formatDuration, formatTokensCompact, type InteractionSnapshot } from "./ui-metrics.ts";
+import type { InteractionOutcome, TerminalEvidence } from "./interaction-outcome.ts";
 
 export const SUMMARY_CUSTOM_TYPE = "pi-codex-appearance:interaction-summary:v1";
 
+export type SummaryOutcome = InteractionOutcome | "completed-estimate";
+
 export interface InteractionSummaryData {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   /** Interaction identity: the metrics generation + wall-clock start. */
   interactionId: string;
   /** Branch anchor: entry id this interaction started after (stable host
@@ -25,7 +34,17 @@ export interface InteractionSummaryData {
     cacheRead?: number;
     cacheWrite?: number;
   };
-  outcome: "completed" | "interrupted" | "failed" | "completed-estimate";
+  /** v2 runtime verdict (v1: completed|interrupted|failed|completed-estimate). */
+  outcome: SummaryOutcome;
+  /** v2: what actually ended the run. */
+  evidence?: TerminalEvidence;
+  /** v2: diagnostics-safe reason (no message bodies). */
+  reason?: string;
+  /** v2: attempts observed; v1 readers ignore. */
+  attempt?: number;
+  /** Tool errors seen during the run — diagnostic count only, never the
+   * verdict basis. Not appended to the default summary line. */
+  toolErrorsObserved?: number;
 }
 
 export interface TurnSummaryDeps {
@@ -37,18 +56,32 @@ export interface TurnSummaryDeps {
   persist: boolean;
   /** Wall clock. */
   wall: () => number;
-  /** Theme for rendering (injected at register time by index.ts). */
 }
 
-/** Build the summary line text (Codex grammar). Unknown pieces are omitted. */
+/** v1 outcomes mapped through the legacy lens: the old failed flag was set by
+ * ANY tool error, so it is NOT trustworthy terminal evidence. */
+function legacyOutcome(outcome: SummaryOutcome): { outcome: InteractionOutcome; legacyUnverified: boolean } {
+  if (outcome === "failed") return { outcome: "failed", legacyUnverified: true };
+  if (outcome === "completed-estimate") return { outcome: "completed", legacyUnverified: false };
+  return { outcome, legacyUnverified: false };
+}
+
+/** Build the summary line text (Codex grammar). Unknown pieces are omitted.
+ * "Worked for" states the RUN ended normally — never business acceptance. */
 export function formatSummaryLine(
-  snapshot: InteractionSnapshot,
-  outcome: InteractionSummaryData["outcome"],
+  snapshot: Pick<InteractionSnapshot, "elapsedMs" | "thinkingMs" | "usage">,
+  outcome: InteractionOutcome,
+  options: { legacyUnverified?: boolean } = {},
 ): string {
   const parts: string[] = [];
   const dur = formatDuration(snapshot.elapsedMs);
-  if (outcome === "interrupted") parts.push(`Interrupted after ${dur}`);
+  if (options.legacyUnverified) {
+    parts.push(`Ended after ${dur}`);
+    parts.push("legacy status unverified");
+  } else if (outcome === "interrupted") parts.push(`Interrupted after ${dur}`);
   else if (outcome === "failed") parts.push(`Failed after ${dur}`);
+  else if (outcome === "incomplete") parts.push(`Ended after ${dur} · output limit`);
+  else if (outcome === "unknown") parts.push(`Ended after ${dur}`);
   else parts.push(`Worked for ${dur}`);
   if (snapshot.thinkingMs > 0) parts.push(`thought for ${formatDuration(snapshot.thinkingMs)}`);
   const { input, output } = snapshot.usage;
@@ -68,8 +101,12 @@ export class TurnSummary {
     this.#deps.registerEntryRenderer?.(SUMMARY_CUSTOM_TYPE, makeEntryRenderer());
   }
 
-  /** Called from the metrics onSettled callback. */
-  record(snapshot: InteractionSnapshot, outcome: InteractionSummaryData["outcome"], branchAnchor?: string): void {
+  /** Called from the metrics onSettled callback with the frozen verdict. */
+  record(
+    snapshot: InteractionSnapshot,
+    verdict: { outcome: InteractionOutcome; evidence: TerminalEvidence; reason: string; attempt: number; toolErrorsObserved: number },
+    branchAnchor?: string,
+  ): void {
     const interactionId = `i${snapshot.startedAt ?? 0}`;
     if (this.#written.has(interactionId)) return;
     this.#written.add(interactionId);
@@ -80,13 +117,17 @@ export class TurnSummary {
     }
 
     const data: InteractionSummaryData = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       interactionId,
       branchAnchor,
       startedAt: snapshot.startedAt ?? this.#deps.wall() - snapshot.elapsedMs,
       settledAt: this.#deps.wall(),
       elapsedMs: snapshot.elapsedMs,
-      outcome,
+      outcome: verdict.outcome,
+      evidence: verdict.evidence,
+      reason: verdict.reason,
+      attempt: verdict.attempt,
+      toolErrorsObserved: verdict.toolErrorsObserved,
     };
     if (snapshot.thinkingMs > 0) data.thinkingMs = snapshot.thinkingMs;
     const u = snapshot.usage;
@@ -125,19 +166,15 @@ export interface ComponentLike {
   render(width: number): string[];
 }
 
-/** The renderer registered for our custom type. Receives the entry data and
+/** The renderer registered for our custom type. Handles v1 (legacy) and v2;
  * returns a small dim component — display copy only. */
 export function makeEntryRenderer(makeText?: SummaryEntryRendererDeps["makeText"]) {
   return (entry: { customType: string; data?: unknown }, _options: unknown, theme?: { fg?: (k: string, t: string) => string }) => {
     const data = entry?.data as InteractionSummaryData | undefined;
-    if (!data || data.schemaVersion !== 1) return undefined;
-    const snapshot: InteractionSnapshot = {
-      active: false,
-      phase: "idle",
-      startedAt: data.startedAt,
+    if (!data || (data.schemaVersion !== 1 && data.schemaVersion !== 2)) return undefined;
+    const snapshot: Pick<InteractionSnapshot, "elapsedMs" | "thinkingMs" | "usage"> = {
       elapsedMs: data.elapsedMs,
       thinkingMs: data.thinkingMs ?? 0,
-      thinkingOpen: false,
       usage: {
         input: data.usage?.input ?? 0,
         output: data.usage?.output ?? 0,
@@ -145,7 +182,10 @@ export function makeEntryRenderer(makeText?: SummaryEntryRendererDeps["makeText"
         cacheWrite: data.usage?.cacheWrite ?? 0,
       },
     };
-    const line = formatSummaryLine(snapshot, data.outcome === "completed-estimate" ? "completed" : data.outcome);
+    const legacy = data.schemaVersion === 1
+      ? legacyOutcome(data.outcome)
+      : { outcome: data.outcome as InteractionOutcome, legacyUnverified: false };
+    const line = formatSummaryLine(snapshot, legacy.outcome, { legacyUnverified: legacy.legacyUnverified });
     if (!line) return undefined;
     // The theme handed to entry renderers may be an unbound proxy (early
     // restore rendering). Resolve lazily with the same probe as chrome.

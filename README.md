@@ -2,9 +2,17 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.8.1**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）：Codex 风格 composer 外框、状态行（model · effort · cwd · context%）、极简真实身份启动头、`Working · 38s` 工作计时（`agent_start`→`agent_settled` 单一交互时钟，重试/压缩续接不重置；0.8.1 起相位由真实 `assistantMessageEvent` 驱动，write 参数流显示 `Writing`）、结束后的 `Worked for …` 摘要（可随会话恢复）、thinking 光条（0.8.1 起默认全程自动展开 `full/full`，Ctrl+T/点击手动切换仍有效，不再自动折叠成标签）、write 实时预览（0.8.1 起始终带结构化 `• Writing <path>` 标题 + 物理行尾部预算，长行不再冻结最新内容）、文档 edit 与代码 edit 共用整行背景 diff surface、探索分组、工具行全部在本包内完成。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
+版本：**0.8.4**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.4 起：
 
-配置：`~/.pi/agent/codex-appearance.json`（可省略）。`enabled: false` 为总开关；`thinking.rail` / `thinking.autoCollapse` / `writePreview.enabled` / `working.elapsed` / `summary.enabled` / `summary.persist` 可分别关闭。诊断命令：`/codex-ui`。
+- **输入区上方两行详情底栏**（公开 `setFooter` 区域）：第一行 `模型 · 推理等级 · provider`，右侧 `ctx 已用/容量 · 占用%`；第二行 `目录 (分支)`，右侧 session 累计 `Σ↑input ↓output · cache(last) 命中率 · R读 W写`（可选已知花费）。数据全部来自 Pi 真实公开接口（`ctx.model.id/name/provider/contextWindow`、`ctx.thinkingLevel`、`ctx.getContextUsage()` 的 `tokens/contextWindow/percent`、session entries 的标准 usage 字段），窄窗口按组换行、不丢统计，宽窗口自动恢复。
+- **独立 Working 行**（公开 `setWidget(…, {placement:"aboveEditor"})`，Zentui 分段布局为参考、非依赖）：`✦ Working… · 活动工具 · 总耗时 · thinking/thought for · ↑↓ tokens`，总耗时与思考耗时时并列实时增长；editor 边框不再嵌入 Working（`embedWorkingStatus:false`），widget 安装成功后才隐藏原生 Loader 行，失败保留原生行，绝不同时存在三份。
+- **运行时终止证据判定**（v2 摘要 schema）：中途工具报错只计入诊断计数，不再把整轮永久标成 `Failed`；最终结论只看终止证据——主 assistant 的最终 `stopReason`（stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended），retry 续接后正常收尾即为 Worked。旧 v1 条目保持可读，`failed` 因缺乏可验证证据显示 `legacy status unverified`，历史数据不改写。
+
+既有能力保留：Codex 风格 composer 外框、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟（重试/压缩续接不重置；相位由真实 `assistantMessageEvent` 驱动，write 参数流显示 `Writing…`）、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 时走 footer 状态行的临时摘要路径）、thinking 光条（默认全程 `full/full`，Ctrl+T/点击手动切换）、write 实时预览（结构化 `• Writing <path>` 标题 + 物理行尾部预算）、文档 edit 与代码 edit 共用整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
+
+配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`thinking.rail` / `writePreview.enabled` / `writePreview.rows` / `working.elapsed`（仅关闭耗时项，thought/tool/tokens 仍更新）/ `working.thought` / `working.tool` / `working.tokens` / `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCost` / `summary.enabled` / `summary.persist` 可分别关闭。诊断命令：`/codex-ui`（显示各数值来源、统计范围、终止证据与组件真实状态）。
+
+**统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入，R/W 单独列缓存读写）。未知值显示 `—`，从不伪造为 0。
 
 ![由本项目渲染函数生成的预览，非真实 Pi 会话截图](docs/preview.png)
 

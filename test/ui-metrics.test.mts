@@ -163,8 +163,12 @@ test("formatDuration is Codex-style compact", () => {
   assert.equal(formatDuration(59_000), "59s");
   assert.equal(formatDuration(61_000), "1m 01s"); // leading zero in compound form (Codex reference)
   assert.equal(formatDuration(3_600_000), "1h 00m 00s");
-  assert.equal(formatTokensCompact(1_000), "1k");
-  assert.equal(formatTokensCompact(1_234_567), "1235k"); // implementation keeps k below 10M
+  assert.equal(formatTokensCompact(1_000), "1.0k");
+  assert.equal(formatTokensCompact(5_000), "5.0k");
+  assert.equal(formatTokensCompact(9_200), "9.2k");
+  assert.equal(formatTokensCompact(19_200), "19.2k");
+  assert.equal(formatTokensCompact(131_000), "131k");
+  assert.equal(formatTokensCompact(1_234_567), "1235k"); // k rounds at >=100k
 });
 test("write arg streaming closes stale thinking (0.8.1): accumulated thinking must not keep Thinking lit", () => {
   const fx = makeMetrics();

@@ -5,14 +5,15 @@
 export interface HeaderDeps {
   appearanceVersion: string;
   piVersion: string;
-  getModel: () => { label: string } | undefined;
+  /** Real model snapshot (id is the display value). */
+  getModel: () => { id: string; name?: string } | undefined;
   getCwd: () => string;
 }
 
 export function headerLines(deps: HeaderDeps): string[] {
   const lines: string[] = [];
   lines.push(`Pi ${deps.piVersion} · codex-appearance ${deps.appearanceVersion}`);
-  const model = deps.getModel()?.label;
+  const model = deps.getModel()?.id;
   const dir = deps.getCwd();
   const second = [model, dir].filter(Boolean).join(" · ");
   if (second) lines.push(second);

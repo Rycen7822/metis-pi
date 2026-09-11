@@ -171,7 +171,15 @@ test("lifecycle uses no tool registration, context middleware, editor, footer or
   assert.deepEqual([...handlers.keys()], [
     "session_start",
     "agent_start", // interaction clock (0.8.0 working/summary)
+    "agent_end",
     "agent_settled",
+    "model_select", // live footer snapshot refresh (0.8.4)
+    "thinking_level_select",
+    "session_tree", // session-scope ledger rebuild (0.8.4)
+    "session_compact",
+    "session_compact_failed",
+    "ui_prompt_start", // Waiting-for-input phase (0.8.4)
+    "ui_prompt_end",
     "tool_execution_start", // observe-only write tracking (0.4.0)
     "tool_execution_end",
     "message_start", // read-only display-order observation (0.6.0 grouping)

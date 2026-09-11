@@ -24,6 +24,12 @@ export interface UsageTotals {
   cacheWrite: number;
 }
 
+export interface ActiveTools {
+  /** Name of the (oldest) active tool; parallel runs show "name +N". */
+  first: string;
+  count: number;
+}
+
 export interface InteractionSnapshot {
   active: boolean;
   phase: ActivityPhase;
@@ -32,6 +38,8 @@ export interface InteractionSnapshot {
   thinkingMs: number; // union of intervals
   thinkingOpen: boolean;
   usage: UsageTotals;
+  /** Active tool calls (undefined when none). */
+  tools: ActiveTools | undefined;
 }
 
 export interface UiMetricsCallbacks {
@@ -82,6 +90,12 @@ export class UiMetrics {
   #thinking: ThinkingInterval[] = [];
   #usage: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   #usageRequests = new Set<string>();
+  /** In-flight request preview: streaming usage is a cumulative snapshot per
+   * request — it REPLACES this contribution, never sums per delta. */
+  #previewSeq: number | undefined;
+  #preview: UsageTotals | undefined;
+  /** Live tool calls by toolCallId (parallel-safe; ids never reused by host). */
+  #activeTools = new Map<string, string>();
 
   constructor(opts: UiMetricsOptions, cb: UiMetricsCallbacks = {}) {
     this.#opts = opts;
@@ -101,6 +115,9 @@ export class UiMetrics {
       this.#thinking = [];
       this.#usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       this.#usageRequests.clear();
+      this.#previewSeq = undefined;
+      this.#preview = undefined;
+      this.#activeTools.clear();
       this.#generation += 1;
     }
     this.setPhase("working");
@@ -139,6 +156,9 @@ export class UiMetrics {
     this.#thinking = [];
     this.#usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     this.#usageRequests.clear();
+    this.#previewSeq = undefined;
+    this.#preview = undefined;
+    this.#activeTools.clear();
     this.#generation += 1;
   }
 
@@ -153,9 +173,19 @@ export class UiMetrics {
     this.#emit();
   }
 
-  /** tool_execution_start: tools run while the interaction is working. */
-  toolStart(): void {
+  /** tool_execution_start: track the ACTIVE call by id (parallel-safe) and
+   * keep the phase on "working". */
+  toolStart(toolCallId?: string, toolName?: string): void {
+    if (toolCallId && typeof toolName === "string" && toolName) {
+      this.#activeTools.set(toolCallId, toolName);
+    }
     if (this.active && this.#phase !== "waiting-for-input") this.setPhase("working");
+  }
+
+  /** tool_execution_end: the call leaves the active set (completion or error
+   * — both end the ACTIVITY; outcome is judged elsewhere). */
+  toolEnd(toolCallId?: string): void {
+    if (toolCallId) this.#activeTools.delete(toolCallId);
   }
 
   /** write args streaming detected (toolCall blocks in a message_update). */
@@ -190,7 +220,8 @@ export class UiMetrics {
   /** Record usage for a completed request. `requestKey` must identify the
    * request/message so replays and duplicate completions don't double-count.
    * Unknown (unidentifiable) usage is attributed conservatively ONLY when
-   * `identified` is true. */
+   * `identified` is true. Confirmation replaces any preview contribution of
+   * the same attempt — the final value corrects the streamed partial. */
   recordUsage(requestKey: string, usage: Partial<UsageTotals>, identified = true): void {
     if (!this.active) return;
     if (identified) {
@@ -203,10 +234,43 @@ export class UiMetrics {
     this.#usage.cacheWrite += Math.max(0, usage.cacheWrite ?? 0);
   }
 
+  /** Streaming cumulative usage for the in-flight attempt `seq`; replaces the
+   * previous preview for that attempt (per-delta summing is forbidden). */
+  previewUsage(seq: number, usage: Partial<UsageTotals>): void {
+    if (!this.active) return;
+    this.#previewSeq = seq;
+    this.#preview = {
+      input: Math.max(0, usage.input ?? 0),
+      output: Math.max(0, usage.output ?? 0),
+      cacheRead: Math.max(0, usage.cacheRead ?? 0),
+      cacheWrite: Math.max(0, usage.cacheWrite ?? 0),
+    };
+  }
+
+  clearPreviewUsage(seq: number): void {
+    if (this.#previewSeq === seq) {
+      this.#previewSeq = undefined;
+      this.#preview = undefined;
+    }
+  }
+
   snapshot(): InteractionSnapshot {
     const nowMs = this.#opts.now();
     const open = this.#thinking.at(-1);
     const thinkingOpen = open !== undefined && open.endMs === OPEN_END;
+    const preview = this.#preview;
+    const usage: UsageTotals = preview
+      ? {
+          input: this.#usage.input + preview.input,
+          output: this.#usage.output + preview.output,
+          cacheRead: this.#usage.cacheRead + preview.cacheRead,
+          cacheWrite: this.#usage.cacheWrite + preview.cacheWrite,
+        }
+      : { ...this.#usage };
+    let first: string | undefined;
+    for (const name of this.#activeTools.values()) {
+      if (first === undefined) first = name;
+    }
     return {
       active: this.active,
       phase: this.#phase,
@@ -214,7 +278,8 @@ export class UiMetrics {
       elapsedMs: this.active ? Math.max(0, nowMs - this.#interactionStart!) : 0,
       thinkingMs: unionMs(this.#thinking, nowMs),
       thinkingOpen,
-      usage: { ...this.#usage },
+      usage,
+      tools: first === undefined ? undefined : { first, count: this.#activeTools.size },
     };
   }
 
@@ -261,13 +326,15 @@ export function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
-/** Codex compact tokens: 143000 → "143k", 9200 → "9.2k". */
+/** Codex compact tokens: 143000 → "143k", 9200 → "9.2k", 5000 → "5.0k"
+ * (one decimal kept below 10k for stable column alignment). */
 export function formatTokensCompact(tokens: number): string {
   if (!Number.isFinite(tokens) || tokens <= 0) return "0";
   if (tokens >= 1000) {
     const k = tokens / 1000;
-    const value = k >= 100 ? Math.round(k) : Math.round(k * 10) / 10;
-    return `${value}k`;
+    if (k >= 100) return `${Math.round(k)}k`;
+    if (k >= 10) return `${Math.round(k * 10) / 10}k`;
+    return `${k.toFixed(1)}k`;
   }
   return String(Math.round(tokens));
 }
