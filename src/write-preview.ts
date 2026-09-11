@@ -5,6 +5,7 @@
 import type { Palette } from "./tool-names.ts";
 import type { ColorLevel } from "./palette.ts";
 import type { DiffLayoutOps } from "./tool-names.ts";
+import type { CopyRow } from "./selection-copy/model.ts";
 
 /** Write call stage, resolved from host context fields (not just isPartial). */
 export type WriteStage =
@@ -102,6 +103,8 @@ export function renderWritePreview(
     headerRows?: number;
     /** Explicit physical-row budget for the body (default: WRITE_PREVIEW_MAX_ROWS). */
     maxRows?: number;
+    /** Selection-copy provenance: one CopyRow per emitted row. */
+    copyOut?: CopyRow[];
   },
 ): string[] {
   const { width, stage, expanded, theme, colorLevel, gutter } = options;
@@ -131,8 +134,13 @@ export function renderWritePreview(
     ? stageInfo.label
     : stage === "receiving-arguments" ? "Receiving arguments…" : stageInfo.label;
   const stageRow = `${dim}${gutter}${stageText}${dimOff}`;
+  const copy = options.copyOut;
+  const prefixWidth = gutterWidth + numberWidth + 1;
 
-  if (!allLines.length) return [stageRow];
+  if (!allLines.length) {
+    copy?.push({ spans: [{ colStart: 0, colEnd: width, kind: "decoration" }], breakBefore: "hard" });
+    return [stageRow];
+  }
 
   // Walk BACKWARDS wrapping until the budget is filled: one physical row per logical line is only a lower bound — a single long line can consume the whole budget.
   const wrapOne = (text: string): string[] => {
@@ -153,24 +161,43 @@ export function renderWritePreview(
 
   // Keep only the LAST bodyBudget physical rows — the newest content (open tail line, latest chars) is always included.
   const rows: string[] = [];
+  const copyRows: CopyRow[] = [];
   const pad = " ".repeat(numberWidth);
   for (const logical of rendered) {
     const number = String(logical.number).padStart(numberWidth);
     logical.segments.forEach((segment, i) => {
       const prefix = i === 0 ? `${gutter}${number} ` : `${gutter}${pad} `;
       rows.push(`${theme.fg("toolTitle", prefix)}${theme.fg("toolOutput", segment)}`);
+      copyRows.push({
+        spans: [
+          { colStart: 0, colEnd: prefixWidth, kind: "decoration" },
+          { colStart: prefixWidth, colEnd: prefixWidth + layout.visibleWidth(segment), kind: "content", text: segment },
+        ],
+        breakBefore: i === 0 ? "hard" : "soft",
+      });
     });
   }
   const visibleRows = expanded ? rows : rows.slice(-bodyBudget);
+  const visibleCopy = expanded ? copyRows : copyRows.slice(-bodyBudget).map((row) => ({ ...row, breakBefore: "hard" as const }));
 
   const out: string[] = [stageRow, ...visibleRows];
+  copy?.push({ spans: [{ colStart: 0, colEnd: width, kind: "decoration" }], breakBefore: "hard" });
+  copy?.push(...visibleCopy);
   if (truncated && !expanded) {
     const firstShown = rendered.length ? rendered[0]!.number : 1;
     const hiddenLogical = firstShown - 1;
     if (hiddenLogical > 0) {
       // The hint consumes body budget: drop the OLDEST rendered row to keep the newest content within the total bound.
-      if (out.length >= totalBudget) out.splice(1, 1);
-      out.push(`${dim}${gutter}… earlier output (${hiddenLogical} logical line${hiddenLogical === 1 ? "" : "s"}, physical rows elided)${dimOff}`);
+      if (out.length >= totalBudget) {
+        out.splice(1, 1);
+        copy?.splice(1, 1);
+      }
+      const hint = `${dim}${gutter}… earlier output (${hiddenLogical} logical line${hiddenLogical === 1 ? "" : "s"}, physical rows elided)${dimOff}`;
+      out.push(hint);
+      copy?.push({
+        spans: [{ colStart: 0, colEnd: width, kind: "semantic", text: hint.replace(/\x1b\[[0-9;]*m/g, "") }],
+        breakBefore: "gap",
+      });
     }
   }
   return out;

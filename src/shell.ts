@@ -3,6 +3,7 @@
 import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
 import { styleToolOutputLine } from "./output-style.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
+import type { CopyRow } from "./selection-copy/model.ts";
 
 export const COMMAND_CONTINUATION_PREFIX = "  │ ";
 export const OUTPUT_INITIAL_PREFIX = "  └ ";
@@ -202,6 +203,9 @@ export interface ShellLayoutInput {
   /** Bullet character already colored by the caller (theme-aware). */
   readonly bullet: string;
   readonly titlePainter: (title: string) => string;
+  /** Selection-copy provenance collector: one CopyRow per returned visual
+   * row, appended in render order. Absent = no provenance (all native). */
+  readonly copyOut?: CopyRow[];
 }
 
 function highlightCommandLines(row: ExecRowModel, colorLevel: ColorLevel): string[] {
@@ -227,6 +231,20 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
   const { row, width, layout } = input;
   const usable = Math.max(1, Math.floor(width));
   const lines: string[] = [];
+  const copy = input.copyOut;
+  const styledSpan = (start: number, text: string, kind: CopyRow["spans"][number]["kind"]): CopyRow["spans"][number] => ({
+    colStart: start,
+    colEnd: start + layout.visibleWidth(text),
+    kind,
+    text: kind === "decoration" ? undefined : layout.visibleWidth(text) > 0 ? text : undefined,
+  });
+  const pushGapRow = (text: string): void => {
+    lines.push(text);
+    copy?.push({
+      spans: [{ colStart: 0, colEnd: Math.max(1, layout.visibleWidth(text)), kind: "semantic", text: stripAnsiShell(text) }],
+      breakBefore: "gap",
+    });
+  };
 
   const titleStyled = row.title ? `${input.titlePainter(row.title)} ` : "";
   const headerPrefix = `${input.bullet} ${titleStyled}`;
@@ -242,7 +260,12 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
   const firstLineWidth = Math.max(1, usable - headerPrefixFinalWidth);
 
   if (!highlighted.length) {
-    lines.push(`${headerPrefixFinal}`.trimEnd());
+    const header = `${headerPrefixFinal}`.trimEnd();
+    lines.push(header);
+    copy?.push({
+      spans: [styledSpan(0, header, "content")],
+      breakBefore: "hard",
+    });
     return lines;
   }
 
@@ -257,7 +280,16 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
     }
   }
 
-  lines.push(`${headerPrefixFinal}${firstWrapped[0]!}`.trimEnd());
+  const header = `${headerPrefixFinal}${firstWrapped[0]!}`.trimEnd();
+  lines.push(header);
+  copy?.push({
+    spans: [
+      styledSpan(0, input.bullet + " ", "decoration"),
+      styledSpan(layout.visibleWidth(`${input.bullet} `), titleStyled, "decoration"),
+      styledSpan(headerPrefixFinalWidth, firstWrapped[0]!, "content"),
+    ],
+    breakBefore: "hard",
+  });
 
   const continuationRows: VisualRow[] = firstWrapped.slice(1)
     .map((segment) => ({ text: segment, sourceLineIndex: 0, continuation: true }));
@@ -279,8 +311,11 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
     : continuationRows;
 
   if (row.expanded) {
+    let previousSource = 0;
     for (const visual of gutterRows) {
       lines.push(`${DIM_ON}${gutter}${INTENSITY_RESET}${visual.text}`);
+      copy?.push(gutterCopyRow(visual, gutterWidth, previousSource, input));
+      previousSource = visual.sourceLineIndex;
     }
     return lines;
   }
@@ -290,10 +325,42 @@ export function renderShellCall(input: ShellLayoutInput): string[] {
     `… more command lines`,
     usable,
   );
+  let previousSource = 0;
   for (const visual of capped) {
-    lines.push(`${DIM_ON}${gutter}${INTENSITY_RESET}${stripOwnPrefix(visual.text)}`);
+    const styled = `${DIM_ON}${gutter}${INTENSITY_RESET}${stripOwnPrefix(visual.text)}`;
+    if (visual.sourceLineIndex === -1 && visual !== gutterRows[0]) {
+      // Ellipsis row: a visible hint; the hidden lines behind it are a gap.
+      pushGapRow(styled);
+    } else {
+      lines.push(styled);
+      copy?.push(gutterCopyRow(visual, gutterWidth, previousSource, input));
+    }
+    previousSource = visual.sourceLineIndex;
   }
   return lines;
+}
+
+/** Copy metadata for one gutter row: decoration gutter + command content,
+ * soft within one command line, hard across real command lines. */
+function gutterCopyRow(
+  visual: VisualRow,
+  gutterWidth: number,
+  previousSource: number,
+  input: ShellLayoutInput,
+): CopyRow {
+  const contentStart = gutterWidth;
+  const text = stripOwnPrefix(visual.text);
+  return {
+    spans: [
+      { colStart: 0, colEnd: gutterWidth, kind: "decoration" },
+      { colStart: contentStart, colEnd: contentStart + input.layout.visibleWidth(text), kind: "content", text },
+    ],
+    breakBefore: visual.sourceLineIndex === previousSource ? "soft" : "hard",
+  };
+}
+
+function stripAnsiShell(text: string): string {
+  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function stripOwnPrefix(text: string): string {
@@ -313,11 +380,16 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
   const { row, width, layout } = input;
   const usable = Math.max(1, Math.floor(width));
   const outputWidth = Math.max(1, usable - layout.visibleWidth(OUTPUT_SUBSEQUENT_PREFIX));
+  const copy = input.copyOut;
+  const initialPrefixWidth = layout.visibleWidth(OUTPUT_INITIAL_PREFIX);
+  const subsequentPrefixWidth = layout.visibleWidth(OUTPUT_SUBSEQUENT_PREFIX);
 
   const raw = row.output ? sanitizeShellLine(row.output).split("\n") : [];
   while (raw.length && raw.at(-1) === "") raw.pop();
   if (!raw.length) {
-    return [styleToolOutputLine(`${OUTPUT_INITIAL_PREFIX}(no output)`, { dim: true, colorLevel: input.colorLevel })];
+    const noOutput = styleToolOutputLine(`${OUTPUT_INITIAL_PREFIX}(no output)`, { dim: true, colorLevel: input.colorLevel });
+    copy?.push({ spans: [{ colStart: 0, colEnd: usable, kind: "decoration" }], breakBefore: "hard" });
+    return [noOutput];
   }
 
   // Wrap first (Codex), attach prefixes, then budget — a few very long lines
@@ -326,29 +398,64 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
   // survive, internal resets re-acquire DIM, and our DIM never leaks out.
   const dimPolicy = { dim: true, colorLevel: input.colorLevel };
   const wrapped: VisualRow[] = [];
+  const copyRows: CopyRow[] = [];
   raw.forEach((logical, lineIndex) => {
     const segments = wrapStyled(logical, outputWidth, layout);
     segments.forEach((segment, segmentIndex) => {
-      const prefix = lineIndex === 0 && segmentIndex === 0 ? OUTPUT_INITIAL_PREFIX : OUTPUT_SUBSEQUENT_PREFIX;
+      const isFirst = lineIndex === 0 && segmentIndex === 0;
+      const prefix = isFirst ? OUTPUT_INITIAL_PREFIX : OUTPUT_SUBSEQUENT_PREFIX;
+      const prefixWidth = isFirst ? initialPrefixWidth : subsequentPrefixWidth;
       wrapped.push({
         text: styleToolOutputLine(`${prefix}${segment}`, dimPolicy),
         sourceLineIndex: lineIndex,
         continuation: lineIndex !== 0 || segmentIndex !== 0,
       });
+      copyRows.push({
+        spans: [
+          { colStart: 0, colEnd: prefixWidth, kind: "decoration" },
+          { colStart: prefixWidth, colEnd: prefixWidth + layout.visibleWidth(segment), kind: "content", text: segment },
+        ],
+        breakBefore: segmentIndex === 0 && lineIndex === 0 ? "hard" : segmentIndex === 0 ? "hard" : "soft",
+      });
     });
   });
 
   let kept: VisualRow[];
+  let keptCopy: CopyRow[];
   if (row.expanded) {
     kept = wrapped; // wrapped, never truncated: full text remains reachable
+    keptCopy = copyRows;
   } else if (row.isPartial) {
-    // Streaming: bounded tail (Codex shows the newest rows).
-    kept = wrapped.slice(-OUTPUT_MAX_ROWS);
+    // Streaming: bounded tail (Codex shows the newest rows). The first kept
+    // row may be mid-logical-line: a hard boundary starts the visible window.
+    const from = Math.max(0, wrapped.length - OUTPUT_MAX_ROWS);
+    kept = wrapped.slice(from);
+    keptCopy = copyRows.slice(from).map((row) => ({ ...row, breakBefore: "hard" as const }));
   } else {
     // Budget includes the ellipsis row's own cost.
-    kept = truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, OUTPUT_SUBSEQUENT_PREFIX, usable).rows;
+    const truncated = truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, OUTPUT_SUBSEQUENT_PREFIX, usable);
+    kept = truncated.rows;
+    keptCopy = [];
+    let afterGap = false;
+    for (const visual of truncated.rows) {
+      if (visual.sourceLineIndex === -1) {
+        // Ellipsis row: visible hint; the hidden lines behind it are a gap.
+        keptCopy.push({
+          spans: [{ colStart: 0, colEnd: usable, kind: "semantic", text: stripAnsi(visual.text) }],
+          breakBefore: "gap",
+        });
+        afterGap = true;
+        continue;
+      }
+      const original = copyRows[wrapped.indexOf(visual)];
+      if (original) {
+        keptCopy.push(afterGap ? { ...original, breakBefore: "gap" } : original);
+      }
+      afterGap = false;
+    }
   }
 
+  copy?.push(...keptCopy);
   return kept.map((visual) => visual.text);
 }
 

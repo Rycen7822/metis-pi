@@ -21,7 +21,10 @@ test("package defaults to the compact transcript entry, with no added runtime de
   assert.equal(existsSync(new URL("../index.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions", import.meta.url)), false);
   assert.deepEqual(pkg.pi.themes, ["./themes/codex-appearance.json"]);
-  assert.equal(pkg.dependencies, undefined);
+  // The ONE allowed runtime dependency: marked, pinned to the exact version
+  // pi-tui itself uses (the copy-provenance lexer must see the host's token
+  // stream). Any other dependency, or a version drift against pi-tui, fails.
+  assert.deepEqual(pkg.dependencies, { marked: load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked });
   assert.equal(pkg.pi.skills, undefined);
   assert.equal(pkg.pi.prompts, undefined);
 });

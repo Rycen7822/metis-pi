@@ -1,3 +1,84 @@
+# Validation record — 0.9.0 (logical selection copy)
+
+## Scope
+
+Fullscreen TUI 选区复制：Ctrl+C 复制已选显示内容的逻辑文本；软折行合并、真实换行保留、
+decoration 排除、semantic 前缀按列包含；无选区原生行为不变。基线：插件 0.8.8 @ 4185395，
+Pi 0.85.1（dev-dep 与运行宿主一致），pi-copy-soft-wrap 0.1.2 仍在用户环境加载。
+
+## Root causes confirmed against host dist (0.85.1)
+
+- `tui-alt-screen.js getActiveSelectionText`：逐行 `stripTerminalSequences(sliceByColumn(...)).trimEnd()`
+  + `join("\n")` —— 软折行变真换行、行尾空白丢失（P01 属实）。
+- `hasActiveSelection()` 复用同一序列化（P03 属实）；剪贴板通道为实例注入 `copySelection`。
+- 软换行来源：Text/Markdown 外层 wrap + renderList（itemWidth）+ blockquote（width-2）三层；
+  表格按 cell wrap（回退依据，P08-P11 属实）。
+- `this.ui` 是 `createInteractiveTuiReference` Proxy —— 实例级属性赋值不可见，原型（经
+  getPrototypeOf trap）是唯一接缝。
+- TuiMainScreen（regular 模式）无选区 API —— 特性仅在 fullscreen 生效（保守正确）。
+
+## Architecture (as implemented)
+
+- `src/selection-copy/wrap.ts`：宿主 wrapTextWithAnsi 复刻（token 化/长词断行/ANSI tracker/
+  OSC8 跨行携带），逐字形带 plain 偏移与 span kind；soft 断点记录被消费空白为 bridge。
+- `src/selection-copy/markdown.ts`：Text/Markdown 原型包装。Markdown 镜像 = marked@18.0.5
+  lexer（复刻 StrictStrikethrough + latex 扩展，parser.ts 带来源说明）+ renderToken 结构镜像
+  （inline 层调宿主实例方法；表格/未知 token 调实例 renderToken 产精确行但标 unknown）；
+  生成后与宿主真实行位置 diff，不一致即整块降级。Text/Box/Container 对齐链同理由
+  mouseLayout 高度校验兜底。
+- `src/selection-copy/serialize.ts`：布局遍历（compositor 语义，后画者胜），内容空间行经
+  content-box anchor 换算子树行；span 交插提取 + native 混合回退 + soft/hard/gap 连接规则。
+- `src/selection-copy/controller.ts`：原型安装（owner symbol 幂等）+ 编辑器 Ctrl+C 分流
+  （选区存在即消费；有内容复制、纯装饰只消费；无选区原生；有界 in-flight）。
+- 自有 renderer：shell.ts/diff.ts/write-preview.ts 以 `copyOut` 出参在行构建点同步产
+  CopyRow；rail/容器 product 以子链（colShift）组合。
+
+## Checks actually executed
+
+- `npm test`：217/217（含 selection-copy 8 项：differential 语料×4 宽度 0 降级、Text 镜像、
+  Box>Markdown 用户消息路径、真实 TuiAltScreen 真实 SGR 按下/拖动/释放 → 精确 CJK 逻辑行、
+  Ctrl+C 消费+复制+草稿保持+无选区原生对照、纯装饰选区空串+遥测 empty-decoration、外部
+  原型 wrapper 检测与绕过、种子 property round-trip 24 语料×3 宽度）。
+- `npm run check` / `check:core`：tsc 干净。`test:host`、`test:chrome`：PASS（无回归）。
+- `npm run test:pty`（真实 pi fullscreen + mock provider，零真实额度）：真实 SGR 鼠标序列经
+  tmux 注入 → Ctrl+C → 屏幕出现 `Copied!` flash；`/codex-ui` 遥测
+  `calls=2 exact=2 native=0`，`chars=164` 与 mock 回复长度精确相等；应用存活、草稿未被清空。
+- `npm pack --dry-run --ignore-scripts`：包内容 0.9.0 正常。
+
+## Performance (scripts/copy-perf.mjs, WSL2, node 24)
+
+- 热（缓存命中）帧：1k 行 0.16ms / 10k 行 0.78ms —— 远低于 32ms 动画帧预算；对齐 pass 只在
+  容器渲染时运行，叶子组件命中宿主内部缓存。
+- 复制：屏幕级（20–40 行）0.1–1.7ms；10k 行全选 63ms（17µs/行，随选区规模线性；仅复制时
+  付出，渲染路径零分摊）。
+
+## Coverage table (component × mode)
+
+| 组件 | 模式 |
+|---|---|
+| assistant Markdown 段落/标题/列表/引用/代码围栏（highlight 行数一致）| exact |
+| inline（bold/em/codespan/link/del/br）| exact（只复制显示文本，无隐藏 URL）|
+| user message（Box > Markdown）| exact |
+| thinking 展开正文（经 CodexThinkingRail，rail=decoration 链）| exact |
+| 宿主 Text（隐藏 thinking 标签/状态行/提示）| exact |
+| 自有 shell call（bullet/title=decoration，命令=content，`  │ ` gutter=decoration）| exact |
+| 自有 shell result（`  └ `/`    ` 前缀=decoration，输出=content，省略行=semantic+gap）| exact/gap |
+| 自有 diff（行号/gutter=decoration，+/−/context=semantic，正文=content，分隔=semantic+gap）| exact/gap |
+| 自有 write preview（行号/stage=decoration，正文=content，elision=semantic+gap）| exact/gap |
+| Markdown 表格 / 未知 block token / 图片行 | native-fallback（unknown 行，硬边界隔离）|
+| highlight 行数漂移的代码块 | native-fallback |
+| Spacer / 结构空行 | native（空行，作为换行边界）|
+| regular（非 fullscreen）模式 | 特性关闭（无 TUI 选区）|
+
+## Deviations & limits
+
+- 表格未做单元格级映射（§4.5 允许的 v1 回退）；"宽度不同结果相同"性质不适用于表格。
+- 跨 resize 的选区按当前帧坐标解析；无法安全重投影的行按原生提取（未实现选区重投影/清空提示）。
+- 差异化 wrapped-code 断点空格：diff/write 的软断点 bridge 未记录（被 trimEnd 消费的源空格
+  在跨行 join 时可能丢失一个空格）；Markdown/wrap 模块路径已精确处理。已记录为后续项。
+- 未实现：macOS/SSH 平台手动剪贴板实测（本机 WSL2 手动 Ctrl+C→粘贴由用户确认）；PTY 断言以
+  /codex-ui 遥测与 flash 为准，不读用户剪贴板。
+
 # Validation record — 0.8.8 (leisurely sweep, smooth intensity)
 
 User feedback on 0.8.7: "animation too fast — I want high frame rate, not a

@@ -12,6 +12,7 @@ export { DIM_ON, INTENSITY_RESET, BG_RESET };
 export const CODEX_DIFF_DARK_ADD_BG = [DIFF_ADD_BG.r, DIFF_ADD_BG.g, DIFF_ADD_BG.b] as const;
 export const CODEX_DIFF_DARK_DEL_BG = [DIFF_DEL_BG.r, DIFF_DEL_BG.g, DIFF_DEL_BG.b] as const;
 import type { LayoutOps } from "./shell.ts";
+import type { CopyRow } from "./selection-copy/model.ts";
 
 const DIFF_LEFT_INSET = 2;
 export { DIFF_LEFT_INSET };
@@ -100,6 +101,8 @@ export interface DiffRenderInput {
   readonly paint?: (text: string, language: string) => string;
   readonly expanded: boolean;
   readonly expandHint: string;
+  /** Selection-copy provenance: one CopyRow per emitted visual row. */
+  readonly copyOut?: CopyRow[];
 }
 
 /**
@@ -215,6 +218,10 @@ export function wrapStyledContent(text: string, width: number): string[] {
 }
 
 /** Render diff rows Codex-style from structured rows. Never returns empty. */
+function stripAnsiDiff(text: string): string {
+  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
 export function renderDiffLines(input: DiffRenderInput): string[] {
   const { rows, layout, colorLevel } = input;
   const usable = Math.max(1, Math.floor(input.width));
@@ -230,12 +237,24 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
 
   for (const row of rows) {
     if (row.kind === "separator") {
-      out.push(`${" ".repeat(prefixCols - 1)}…`);
+      const line = `${" ".repeat(prefixCols - 1)}…`;
+      out.push(line);
+      input.copyOut?.push({
+        spans: [{ colStart: 0, colEnd: usable, kind: "semantic", text: "…" }],
+        breakBefore: "gap",
+      });
       continue;
     }
     if (row.kind === "metadata") {
       for (const chunk of layout.wrap(row.content, Math.max(1, usable - DIFF_LEFT_INSET))) {
         out.push(`${" ".repeat(DIFF_LEFT_INSET)}${chunk}`);
+        input.copyOut?.push({
+          spans: [
+            { colStart: 0, colEnd: DIFF_LEFT_INSET, kind: "decoration" },
+            { colStart: DIFF_LEFT_INSET, colEnd: DIFF_LEFT_INSET + layout.visibleWidth(chunk), kind: "content", text: chunk },
+          ],
+          breakBefore: "hard",
+        });
       }
       continue;
     }
@@ -279,6 +298,25 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         out.push(`${style.lineBg}${head}${body}${pad}${BG_RESET}`);
       } else {
         out.push(`${head}${body}`.trimEnd());
+      }
+      const signCell = DIFF_LEFT_INSET + numberWidth + 1;
+      if (i === 0) {
+        input.copyOut?.push({
+          spans: [
+            { colStart: 0, colEnd: signCell, kind: "decoration" },
+            { colStart: signCell, colEnd: signCell + 1, kind: "semantic", text: sign === " " ? undefined : sign },
+            { colStart: prefixCols, colEnd: prefixCols + layout.visibleWidth(body), kind: "content", text: stripAnsiDiff(body) },
+          ],
+          breakBefore: "hard",
+        });
+      } else {
+        input.copyOut?.push({
+          spans: [
+            { colStart: 0, colEnd: prefixCols, kind: "decoration" },
+            { colStart: prefixCols, colEnd: prefixCols + layout.visibleWidth(body), kind: "content", text: stripAnsiDiff(body) },
+          ],
+          breakBefore: "soft",
+        });
       }
     }
   }

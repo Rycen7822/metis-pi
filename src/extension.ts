@@ -16,6 +16,7 @@ import { COMPOSER_META_WIDGET_KEY, createComposerMetaComponent, type ComposerMet
 import { createFooterComponent, type FooterShow, type FooterSnapshot } from "./chrome/footer.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { QuotaStore } from "./quota/quota-store.ts";
+import { createSelectionCopySystem, detectExternalSerializerPatch, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
 import type { CodexQuotaSnapshot } from "./quota/types.ts";
 
 export interface AppearanceAPI {
@@ -71,6 +72,8 @@ export interface Bindings {
   readFile?: (path: string) => string | undefined;
   /** Injectable Codex quota query (tests; default: real codex app-server). */
   codexQuotaQuery?: (options: { timeoutMs: number; clientVersion?: string }) => Promise<CodexQuotaSnapshot>;
+  /** Host TUI classes/primitives for the selection-copy system (index.ts). */
+  selectionCopyHost?: SelectionCopyHost;
 }
 
 /** Session-scoped presentation state (ephemeral, display-only). */
@@ -199,6 +202,16 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     fallbackMessage: false,
     tui: undefined as { requestRender?: () => void } | undefined,
   };
+  const selectionCopy: SelectionCopySystem | undefined = bindings.selectionCopyHost && config.enabled && config.selectionCopy.enabled
+    ? createSelectionCopySystem(bindings.selectionCopyHost, undefined)
+    : undefined;
+  if (selectionCopy) {
+    const wrap = selectionCopy.wrapPrototypes();
+    if (!wrap.installed) {
+      // Wrapping failed: keep native copy semantics, no half-applied state.
+      process.stderr.write(`pi-codex-appearance: selection-copy prototypes unavailable (${wrap.details})\n`);
+    }
+  }
   type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts") & typeof import("./chrome/composer-metadata.ts");
   let chromeMods: Promise<ChromeMods | undefined> | undefined;
   const preloadChrome = (): Promise<ChromeMods | undefined> => {
@@ -222,10 +235,19 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   };
 
   /** The factory-time tui is the only reliable requestRender source. */
+  /** The extension receives the TUI through a Proxy facade; the underlying
+   * renderer may still be the main screen at first capture, so the prototype
+   * install retries on every capture and on agent activity (idempotent via an
+   * owner symbol on the resolved prototype). */
+  let serializerHost: unknown = undefined;
   const captureTui = (tui: unknown): void => {
-    if (chrome.tui || !tui || typeof tui !== "object") return;
-    const rr = (tui as { requestRender?: unknown }).requestRender;
-    if (typeof rr === "function") chrome.tui = tui as { requestRender?: () => void };
+    if (!tui || typeof tui !== "object") return;
+    if (!chrome.tui) {
+      const rr = (tui as { requestRender?: unknown }).requestRender;
+      if (typeof rr === "function") chrome.tui = tui as { requestRender?: () => void };
+    }
+    serializerHost ??= tui;
+    if (selectionCopy) selectionCopy.installOnTui(serializerHost);
   };
 
   const footerShow = (): FooterShow => ({
@@ -449,6 +471,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           surface,
           promptPrefix: config.composer.promptPrefix,
           placeholder: "Ask anything...",
+          selectionCopy: config.selectionCopy.ctrlC ? selectionCopy?.editorHook() : undefined,
         });
         chrome.editorFactory = factory;
         chrome.surfaceApplied = surface !== undefined;
@@ -554,6 +577,20 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   }
 
+  const selectionCopyLine = (): string[] => {
+    if (!selectionCopy) {
+      return [`  selection-copy: ${config.selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`];
+    }
+    const d = selectionCopy.diagnostics();
+    const t = d.telemetry;
+    const m = d.mirrors;
+    const lines = [
+      `  selection-copy: serializer=${d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${m.markdownDegraded + m.textDegraded} degraded${m.lastDegradedReason ? ` (${m.lastDegradedReason})` : ""} other-wrapper=${d.externalPatch ?? "none"}`,
+      `  copy-stats: calls=${t.calls ?? 0} exact=${t.exact} mixed=${t.mixed} native=${t.nativeFallback} empty=${t.emptyDecoration} failed=${t.failed} last=${t.lastMode} chars=${t.lastCharCount} ms=${t.lastDurationMs}${t.lastReason ? ` lastError=${t.lastReason}` : ""}`,
+    ];
+    return lines;
+  };
+
   // /codex-ui — capability + data diagnostics. States are REAL outcomes
   // (installed/applied/disabled/fallback), never "capability exists".
   (bindings.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
@@ -596,6 +633,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
+          ...selectionCopyLine(),
         ];
         text = lines.join("\n");
       }
@@ -619,6 +657,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // content); all state is ephemeral presentation data dropped at shutdown.
   (pi as unknown as AppearanceAPI).on("agent_start", () => {
     if (!chromeEnabled) return;
+    if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
     if (!metrics.active) {
       // First start of a chain: a genuinely new interaction — no outcome or
       // tool-error state may leak across interactions.

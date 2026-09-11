@@ -8,6 +8,8 @@ import { resolveColorContext } from "./src/palette.ts";
 import { makeSurfaceOps } from "./src/surface.ts";
 import { renderWritePreview } from "./src/write-preview.ts";
 import { loadConfig } from "./src/config.ts";
+import { registerProduct, productFor } from "./src/selection-copy/model.ts";
+import type { CopyRow } from "./src/selection-copy/model.ts";
 import type { WritePreviewInput } from "./src/renderers.ts";
 import type { ToolName } from "./src/tool-names.ts";
 
@@ -30,7 +32,12 @@ class CodexDiffComponent implements Tui.Component {
 
   render(width: number): string[] {
     if (this.#cache && this.#lastWidth === width) return this.#cache;
-    this.#cache = renderCodexDiffComponent(this.#input, width, layoutOps());
+    const copyOut: CopyRow[] = [];
+    const rows = renderCodexDiffComponent(this.#input, width, layoutOps(), copyOut);
+    if (copyOut.length === rows.length) {
+      registerProduct(rows, { componentId: "diff", width, rows: copyOut });
+    }
+    this.#cache = rows;
     this.#lastWidth = width;
     return this.#cache;
   }
@@ -56,7 +63,8 @@ class CodexShellCallComponent implements Tui.Component {
   }
 
   render(width: number): string[] {
-    return renderShellCall({
+    const copyOut: CopyRow[] = [];
+    const rows = renderShellCall({
       row: {
         title: this.#input.title,
         isError: false,
@@ -72,7 +80,12 @@ class CodexShellCallComponent implements Tui.Component {
       colorLevel: this.#input.colorLevel,
       bullet: this.#input.bullet,
       titlePainter: (title) => title,
+      copyOut,
     });
+    if (copyOut.length === rows.length) {
+      registerProduct(rows, { componentId: "shell-call", width, rows: copyOut });
+    }
+    return rows;
   }
 
   invalidate(): void {
@@ -109,7 +122,8 @@ class CodexShellResultComponent implements Tui.Component {
     const output = Array.isArray(result?.content)
       ? result!.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
       : "";
-    return renderShellResult({
+    const copyOut: CopyRow[] = [];
+    const rows = renderShellResult({
       row: {
         title: "",
         isError: this.#input.isError,
@@ -125,7 +139,12 @@ class CodexShellResultComponent implements Tui.Component {
       colorLevel: this.#input.colorLevel,
       bullet: this.#bullet,
       titlePainter: (title) => title,
+      copyOut,
     });
+    if (copyOut.length === rows.length) {
+      registerProduct(rows, { componentId: "shell-result", width, rows: copyOut });
+    }
+    return rows;
   }
 
   invalidate(): void {
@@ -206,6 +225,7 @@ class CodexWriteCallComponent implements Tui.Component {
     }
     const header = this.#input.headerText;
     const out: string[] = [header];
+    const copyOut: CopyRow[] = [{ spans: [{ colStart: 0, colEnd: width, kind: "decoration" }], breakBefore: "hard" }];
     // Live body: bounded tail; the body renderer owns its own physical-row
     // budget, header width is independent.
     const body = renderWritePreview(this.#input.contentPrefix, {
@@ -218,8 +238,12 @@ class CodexWriteCallComponent implements Tui.Component {
       gutter: "  │ ",
       headerRows: 1, // the header line above is ours; body budget is separate
       maxRows: this.#input.maxRows, // config.writePreview.rows (0 = body off)
+      copyOut,
     });
     for (const line of body) out.push(line);
+    if (copyOut.length === out.length) {
+      registerProduct(out, { componentId: "write-call", width, rows: copyOut });
+    }
     this.#cache = out;
     this.#lastWidth = width;
     this.#lastRevision = this.#revision;
@@ -255,6 +279,22 @@ class CodexThinkingRailComponent implements Tui.Component {
       const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
       return stripped.startsWith("▏") || stripped.startsWith("| ") ? line : `${rail}${line}`;
     });
+    // Provenance: every rail row is the child's row shifted right by the 2
+    // rail cells (the rail itself is decoration). Resolves through the child
+    // product via array identity when one exists.
+    const childProduct = productFor(childLines);
+    if (childProduct) {
+      registerProduct(this.#cache, {
+        componentId: "thinking-rail",
+        width,
+        rows: [],
+        children: this.#cache.map((_, i) => childProduct.children
+          ? childProduct.children[i]
+            ? { ...childProduct.children[i]!, colShift: childProduct.children[i]!.colShift + railCells }
+            : undefined
+          : { product: childProduct, rowIndex: i, colShift: railCells }),
+      });
+    }
     this.#lastWidth = width;
     return this.#cache;
   }
@@ -353,6 +393,21 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
+    selectionCopyHost: {
+      prototypes: {
+        Text: Tui.Text.prototype,
+        Markdown: Tui.Markdown.prototype,
+        Box: Tui.Box.prototype,
+        Container: Tui.Container.prototype,
+      },
+      fns: {
+        visibleWidth: Tui.visibleWidth,
+        sliceByColumn: Tui.sliceByColumn,
+        stripTerminalSequences: Tui.stripTerminalSequences,
+        wrapTextWithAnsi: Tui.wrapTextWithAnsi,
+        renderLatex: (text, options) => Tui.renderLatex(text, options) ?? null,
+      },
+    },
     surface,
     api: pi,
     appearanceVersion: appearanceVersion(),

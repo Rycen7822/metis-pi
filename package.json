@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/pi-codex-appearance",
-  "version": "0.8.8",
+  "version": "0.9.0",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",
@@ -64,5 +64,8 @@
     "themes": [
       "./themes/codex-appearance.json"
     ]
+  },
+  "dependencies": {
+    "marked": "18.0.5"
   }
 }

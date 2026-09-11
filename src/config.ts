@@ -14,6 +14,9 @@ export interface AppearanceConfig {
   /** Codex quota source (read-only app-server). */
   quota: { codex: "auto" | "on" | "off"; refreshSeconds: number; timeoutMs: number };
   summary: { enabled: boolean; persist: boolean };
+  /** Selection copy (fullscreen TUI). Ctrl+C copies the selection instead of
+   * clearing the editor; no selection keeps stock behavior. */
+  selectionCopy: { enabled: boolean; ctrlC: boolean };
 }
 
 export const CONFIG_FILE = "codex-appearance.json";
@@ -27,6 +30,7 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   footer: { enabled: true, details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true },
   quota: { codex: "auto", refreshSeconds: 120, timeoutMs: 8000 },
   summary: { enabled: true, persist: true },
+  selectionCopy: { enabled: true, ctrlC: true },
 };
 
 const SUMMARY_ENTRY_TYPE = "pi-codex-appearance:interaction-summary:v1";
@@ -168,6 +172,17 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
       cfg.summary.persist = bool(s.persist, cfg.summary.persist, problems, "summary.persist");
     } else {
       problems.push("summary: expected object — using defaults");
+    }
+  }
+
+  const selectionCopy = root.selectionCopy;
+  if (selectionCopy !== undefined && selectionCopy !== null) {
+    if (typeof selectionCopy === "object") {
+      const sc = selectionCopy as Record<string, unknown>;
+      cfg.selectionCopy.enabled = bool(sc.enabled, cfg.selectionCopy.enabled, problems, "selectionCopy.enabled");
+      cfg.selectionCopy.ctrlC = bool(sc.ctrlC, cfg.selectionCopy.ctrlC, problems, "selectionCopy.ctrlC");
+    } else {
+      problems.push("selectionCopy: expected object — using defaults");
     }
   }
 

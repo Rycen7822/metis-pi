@@ -24,6 +24,7 @@ export interface CodexEditorRowHost {
   getText: () => string;
   getPaddingX(): number;
   setPaddingX(padding: number): void;
+  handleInput(data: string): void;
 }
 
 export interface CodexEditorHost {
@@ -54,6 +55,9 @@ export interface CodexEditorFactoryInput {
   accent?: (s: string) => string;
   paddingX?: number;
   embedWorkingStatus?: boolean;
+  /** Selection-aware Ctrl+C: consume the key when the fullscreen TUI has a
+   * selection (copy if copyable, consume-only when decoration-only). */
+  selectionCopy?: { tryConsume: (data: string, editor: unknown) => boolean };
 }
 
 const CURSOR_CELL = "\x1b[7m \x1b[0m";
@@ -71,6 +75,15 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
     // keep every geometry consumer (render/handleMouse) on the same value.
     override setPaddingX(value: number): void {
       super.setPaddingX(Math.max(2, value));
+    }
+
+    // Selection-aware Ctrl+C. Runs BEFORE the app-action dispatch so a
+    // selection copies instead of clearing the draft; without a selection the
+    // stock path (including the double-press-to-exit logic) is untouched.
+    override handleInput(data: string): void {
+      const hook = input.selectionCopy;
+      if (hook && hook.tryConsume(data, this)) return;
+      super.handleInput(data);
     }
 
     override renderTopBorder(width: number, hiddenLineCount: number): string {

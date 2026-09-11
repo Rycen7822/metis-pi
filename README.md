@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.8.5**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.9.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -10,9 +10,11 @@
 - **Codex 式 Working 行**（aboveEditor widget）：`• Working (3m 36s · thinking 24s · esc to interrupt) · read`，`Writing…`/`Waiting for input` 相位，思考结束后 `thought for Ns`；克制的渐变彗尾 shimmer（亮头 + 连续渐隐尾：彗头 128ms/格悠闲扫过，32ms 高帧率驱动亚格强度渐变，truecolor only，NO_COLOR/ansi16 静态）；计时与动画分用两个定时器，settle 后归零；动画帧不扫 session、不读盘、不查 quota（实测 0.003ms/帧）。
 - **真实 Codex 额度**（只读）：经本机已登录 Codex CLI 的 `codex app-server`（stdio JSON-RPC：initialize → initialized → account/rateLimits/read），`remaining = 100 − used`（永不混用方向）；超时/退出/异常全部有界并按类别进 `/codex-ui`；不读任何凭据文件、不请求私有 HTTP、不 scrape Codex TUI；quota 失败绝不影响 agent 交互与 outcome 判定。
 
+- **逻辑选区复制（0.9.0，fullscreen）**：鼠标选区后 Ctrl+C 复制**已选显示内容的逻辑文本** —— 视觉软折行合并（中文不补空格、英文按源空格桥接）、真实换行/空行保留、代码源缩进保留（宿主展示缩进与 diff 行号/gutter 不混入）、列表 marker / 引用首行边框 / diff 增删符号 / 代码围栏按所选列决定是否包含（语义前缀，不凭字符猜测）。无选区时 Ctrl+C 保持原生行为（清空草稿、双击退出）；纯装饰选区不写剪贴板、不清草稿；剪贴板失败保留选区与草稿。渲染时逐组件生成带来源映射的 sidecar（WeakMap 以渲染数组身份为键，天然绑定已提交帧），并与宿主真实输出逐行 diff —— 任何漂移只降级为原生提取，绝不猜。表格/未知 token/图片行按 conservative 回退；与 `pi-copy-soft-wrap` 共存时精确路径优先生效（加载顺序无关），`/codex-ui` 报告其存在。选区复制零新按键注入、零 prototype 工具执行改动；`selectionCopy.enabled` / `selectionCopy.ctrlC` 可关闭。
+
 既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（默认 `full/full`，Ctrl+T/点击手动切换）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
 
-配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showCost` / `footer.showCodexQuota` / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
+配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showCost` / `footer.showCodexQuota` / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
 
 **统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入，R/W 单独列缓存读写）。未知值显示 `—`，从不伪造为 0。
 
@@ -69,6 +71,31 @@ pi install /绝对路径/pi-codex-appearance
 若已经安装上游 `pi-codex-style-tools`，先移除上游包，避免它继续注册同名工具及改写搜索结果。移除旧包后重新启动。0.1.0 用户应移除自己额外添加的 `optional/format-tools.ts` 条目；0.2.0/0.3.0 都自动加载 `index.ts`。
 
 ## 与现有插件的边界
+
+### 与 pi-copy-soft-wrap 共存（0.9.0）
+
+旧复制插件在 `TuiAltScreen.prototype.getActiveSelectionText` 上做启发式 unwrap。本插件的精确
+serializer 安装在原型层并整体接管该入口（先加载者的启发式被精确路径替代，与扩展加载顺序无关）：
+复制结果不再经过启发式正规化，因此二者能力重叠但结果以本插件为准。建议停用旧插件避免重复工作：
+
+```bash
+pi remove pi-copy-soft-wrap   # 或从 ~/.pi/agent/settings.json 的 packages 移除
+```
+
+`/codex-ui` 的 `selection-copy` 行报告 `other-wrapper=` 检测结果与最近复制的模式/字符数。
+
+### 选区复制的边界（诚实清单）
+
+- **exact**：assistant/user Markdown（段落/标题/列表/引用/代码围栏）、宿主 Text、thinking 展开正文
+  （经 rail）、自有 shell/diff/write 渲染器（gutter/行号=装饰，增删符号=语义前缀，截断=gap）。
+- **native-fallback（mixed）**：Markdown 表格（v1 无单元格级映射）、未知 token、图片行、
+  highlight 行数漂移的代码块、Spacer/结构空行；fallback 行与相邻内容之间按硬边界断开，不猜。
+- **不受支持**：regular（非 fullscreen）模式无 TUI 选区，不拦截任何按键；终端原生选区（按住
+  Shift 拖拽等）绕过应用，属终端行为；跨 resize 的旧选区按当前帧坐标解析，无法安全重投影的
+  行按原生保守提取。CRLF 统一为 LF；tab 遵循宿主显示归一化（3 空格）；链接只复制显示文本，
+  不追加 OSC8 隐藏 URL；数学块复制渲染后的 Unicode 文本。
+
+
 
 工具来源通过 Pi 的 `sourceInfo` 核对。**只有明确来自 Pi 内建实现的工具会使用新的 renderer。** FFF/LSP 等插件即便覆盖相同的 `read/grep/find/edit` 名称，也会保留其 renderer。
 

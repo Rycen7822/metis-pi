@@ -1,6 +1,7 @@
 // Single runtime path from structured rows to Codex-styled diff lines (edit and write components).
 
 import { renderDiffLines, type DiffRow } from "./diff.ts";
+import type { CopyRow } from "./selection-copy/model.ts";
 import { languageForPath } from "./renderers.ts";
 import type { DiffLayoutOps } from "./tool-names.ts";
 import type { ColorLevel } from "./palette.ts";
@@ -19,6 +20,7 @@ export function renderCodexDiffComponent(
   input: DiffComponentInput,
   width: number,
   layout: DiffLayoutOps,
+  copyOut?: CopyRow[],
 ): string[] {
   const lines = renderDiffLines({
     rows: input.rows,
@@ -29,6 +31,7 @@ export function renderCodexDiffComponent(
     paint: input.paint,
     expanded: input.expanded,
     expandHint: input.expandHint,
+    copyOut,
   });
   return lines.length ? lines : [""];
 }

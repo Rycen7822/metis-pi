@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.0
+
+逻辑选区复制（fullscreen）：去掉终端宽度造成的视觉折行，保留真实换行与缩进；有选区时
+Ctrl+C 复制，无选区保持原生行为。
+
+- **序列化点替换**：宿主 `getActiveSelectionText` 的逐行 `trimEnd()+join` 是根因；精确
+  serializer 安装在 TuiAltScreen 原型层（经扩展可见的 Proxy 门面拿真实原型），全部内部调用
+  （copy-on-select / Ctrl+X / Ctrl+C / hasActiveSelection）走同一入口。选区几何
+  （getSelectionBounds/getSelectionColumns）保持宿主原生。
+- **渲染时 provenance**：Text/Markdown/Box/Container 原型包装 + 自有 shell/diff/write/rail
+  组件内生成，product 以渲染数组身份为键（WeakMap）——天然绑定已提交帧，放弃帧/重绘安全。
+  Markdown 镜像复刻结构管线（lexer + 各层 wrap），inline 层直接调用宿主实例方法保证样式逐
+  字节一致；每次生成与宿主真实行做位置 diff，漂移只降级 native，绝不猜。
+- **边界语义**：soft 断点记录被包装器消费的空白（bridge，仅两侧都选中时补）；decoration
+  （gutter/行号/rail/padding）永不复制；semantic 前缀（列表 marker/引用首行边框/diff 符号/
+  围栏）选中才复制；gap/unknown 保守硬断开。表格/图片/未知 token 回退原生。
+- **Ctrl+C 分流**：编辑器 handleInput 覆盖 —— 选区存在即消费按键（有内容复制、纯装饰只消费
+  不写剪贴板、失败保留选区与草稿），无选区完全走原生（清空/双击退出不变）；焦点在模态时天然
+  让位。有界 in-flight 合并。
+- **共存**：`pi-copy-soft-wrap` 检测进 `/codex-ui`（`other-wrapper=`）；精确路径优先，启发式
+  不再作用于本插件实例。marked 以与 pi-tui 相同的 18.0.5 pin 加入（package 测试含版本漂移守卫）。
+- **性能实测**（scripts/copy-perf.mjs）：带 provenance 的热帧 0.16ms（1k 行）/0.78ms（10k 行）
+  终端帧；复制 20 行 0.1–1.7ms，10k 行全选 63ms（17µs/行，随选区规模线性）。
+- **验证**：单元 fixture + 种子 property（镜像行与宿主逐行相等 + 全选 round-trip）、真实
+  TuiAltScreen 真实 SGR 鼠标按下/拖动/释放 + Ctrl+C 草稿保持、外部 wrapper 绕过、PTY 真实
+  pi fullscreen + 真实鼠标序列 + /codex-ui 遥测（exact=2，字符数与源文相等）。217/217。
+
 ## 0.8.8
 
 Shimmer feel correction (user feedback: the 0.8.7 comet swept too fast —

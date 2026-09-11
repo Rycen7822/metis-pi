@@ -101,7 +101,9 @@ const server = http.createServer((req, res) => {
         };
         return;
       }
-      const reply = "PCX_OK";
+      const reply = /PCX_SELECT/.test(text)
+        ? "SELECT_BEGIN_MARK\n这一段很长的中文回答会在终端宽度下软折行显示成多个屏幕行，复制时应当保持为一行逻辑文本，不添加多余的换行或空格。\nselect alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\nSELECT_END_MARK"
+        : "PCX_OK";
       send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
       let i = 0;
       const timer = setInterval(() => {
@@ -159,6 +161,7 @@ fs.writeFileSync(path.join(AGENT_DIR, "settings.json"), JSON.stringify({
   defaultModel: "pcx-mock-model",
   defaultThinkingLevel: "high",
   quietStartup: true,
+  tuiMode: "fullscreen",
   packages: [],
 }));
 // Install THIS repo (the code under test), not the published one.
@@ -248,6 +251,65 @@ try {
   sendKeys(["Enter"]);
   frames.failed = await waitFor(/Failed after/, 60_000, "Failed summary");
   assert.match(frames.failed, /Failed after/);
+
+  // Stage 5: selection copy — REAL SGR mouse sequences through the PTY, then
+  // Ctrl+C. The /codex-ui telemetry (not the OS clipboard) is the oracle: it
+  // records the serializer's mode and the exact char count without touching
+  // the user's clipboard.
+  type("please PCX_SELECT now");
+  sendKeys(["Enter"]);
+  frames.selectReply = await waitFor(/SELECT_END_MARK/, 60_000, "selectable reply");
+  await new Promise((resolve) => setTimeout(resolve, 800)); // settle render
+  const selectReply = "SELECT_BEGIN_MARK\n这一段很长的中文回答会在终端宽度下软折行显示成多个屏幕行，复制时应当保持为一行逻辑文本，不添加多余的换行或空格。\nselect alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\nSELECT_END_MARK";
+  const paneSize = (() => {
+    const out = execFileSync("tmux", ["display-message", "-p", "-t", SESSION, "#{pane_width} #{pane_height}"], { encoding: "utf8" });
+    const [w, h] = out.trim().split(" ").map(Number);
+    return { w, h };
+  })();
+  // capture-pane -S -200 includes scrollback; mouse rows are SCREEN rows —
+  // use only the last pane_height lines (the live viewport).
+  const visibleRows = frames.selectReply.split("\n").slice(-paneSize.h);
+  const beginRow = visibleRows.findIndex((l) => l.includes("SELECT_BEGIN_MARK"));
+  const endRow = visibleRows.findIndex((l) => l.includes("SELECT_END_MARK"));
+  assert.ok(beginRow >= 0 && endRow > beginRow, "both markers visible in the viewport");
+  const cellOf = (rowText, needle, offset) => {
+    // 1-based tmux column: sum display widths up to the needle (CJK = 2 cells).
+    let cells = 0;
+    const at = rowText.indexOf(needle) + offset;
+    for (const ch of rowText.slice(0, at)) cells += ch.charCodeAt(0) > 0x2e80 ? 2 : 1;
+    return cells + 1;
+  };
+  const beginLine = visibleRows[beginRow];
+  const endLine = visibleRows[endRow];
+  const pressX = cellOf(beginLine, "SELECT_BEGIN_MARK", 0);
+  // Drag to the end of the END marker row (past its last cell → boundary).
+  const endX = cellOf(endLine, "SELECT_END_MARK", "SELECT_END_MARK".length);
+  const sgrSeq = (button, x, y, release) => {
+    const s = `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
+    return [...Buffer.from(s, "utf8")].map((b) => b.toString(16).padStart(2, "0"));
+  };
+  sendKeys(["-H", ...sgrSeq(0, pressX, beginRow + 1)]);
+  sendKeys(["-H", ...sgrSeq(32, endX, endRow + 1)]);
+  sendKeys(["-H", ...sgrSeq(0, endX, endRow + 1, true)]);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  // Ctrl+C through the PTY: with a selection this copies (consumed), the
+  // draft and the app survive; a second Ctrl+C would clear — send exactly one.
+  sendKeys(["C-c"]);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  frames.aliveAfterCopy = capture();
+  const flashLine = frames.aliveAfterCopy.split("\n").find((l) => /Copied|Copy failed/.test(l));
+  assert.ok(flashLine, "copy flash (Copied!) visible on screen");
+  assert.doesNotMatch(frames.aliveAfterCopy, /exited|Goodbye/, "app must survive copy Ctrl+C");
+  type("/codex-ui");
+  sendKeys(["Enter"]);
+  frames.diag = await waitFor(/selection-copy: serializer=installed/, 15_000, "selection-copy diagnostics");
+  const expectedChars = selectReply.length;
+  // The 120-col pane wraps long diagnostic rows; whitespace-insensitive match.
+  const flat = frames.diag.replace(/\s+/g, "");
+  const copyStats = flat.match(/copy-stats:calls=(\d+)exact=(\d+)mixed=(\d+)native=(\d+)empty=(\d+)failed=(\d+)last=(\S+?)chars=(\d+)/);
+  assert.ok(copyStats, "copy telemetry present");
+  assert.ok(Number(copyStats[2]) >= 1, `at least one exact copy (got ${copyStats[2]})`);
+  assert.equal(Number(copyStats[8]), expectedChars, `copied char count matches the reply length (${expectedChars})`);
 
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
