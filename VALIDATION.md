@@ -1,87 +1,69 @@
-# Validation record — 0.7.0
+# Validation record — 0.8.0
 
 ## Scope
 
-Version 0.7.0 fixes the 0.6.0 separator persistence defect, adds the thinking
-rail and the write args live preview, and fixes duplicate group image totals.
-All checks below were executed in the development checkout
-(`/home/xu/project/tools/pi-codex-appearance`, Node v24.15.0, Pi core/TUI
-0.85.1) unless stated otherwise.
+Version 0.8.0 makes pi-codex-appearance the standalone owner of the Pi main
+interface chrome (composer frame, footer, header, working state, end-of-work
+summary) after the user uninstalled pi-zentui. It folds in the remaining
+0.7.x defect fixes. All checks below were executed in the development
+checkout (`/home/xu/project/tools/pi-codex-appearance`, Node v24.15.0, Pi
+core/TUI 0.85.1) unless stated otherwise.
+
+Codex visual reference: openai/codex@1b83e5cdf99889e72fbf3f92d9848fdf31de652e
+(source snapshot unpacked to /tmp/codex-ref for exact grammar checks:
+`Worked for`, `1m 05s` compound durations, `NN% context left` / `Nk used`
+footer indicators, `·` dim separators).
 
 ## Checks actually executed
 
 | Check | Result | Scope |
 | --- | --- | --- |
-| `npm test` | **113 passed; 0 failed** | Unit + golden + parser + transcript suite (0.7.0 suite drives the real `installTranscriptDecorations` coordination layer over a host-faithful `updateContent` mirror) |
-| `npx tsc -p tsconfig.json` (`npm run check`) | **0 errors** | Real TypeScript compiler over `src/` + `index.ts` |
-| `npm run test:host` | **PASS** | Real Pi `ToolExecutionComponent` two-slot assembly: one title per toolCallId, write five states (incl. live preview → verified diff switch), mouse expand/fold, third-party back-off, teardown restore |
-| `npm run preview` | **Passed** | Production two-slot renderers; 8-image group with ONE `8 images` total; two separator boundaries; three write live-arg frames (receiving ×2, content ready) |
-| `npm pack --dry-run --ignore-scripts` | **Passed** | 0.7.0 manifest, 30 files |
-| `pi --no-session -p` (twice, after clone sync) | **OK** | Real Pi CLI loads the extension through the production path with no extension errors |
+| `npm test` | 142/142 pass | unit + real-component layout/golden suites |
+| `npm run test:chrome` (new) | 7/7 pass | chrome modules: src/ import rule, editor factory contract, event surface, kill switch, footer/header render |
+| `npm run check` (tsc) | clean | strict, whole project incl. index.ts |
+| `npm run test:host` | PASS | REAL installed Pi assembly: one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored, `/codex-ui` diagnostics, interaction clock lifecycle |
+| `npm pack --dry-run` | 36 files, no devDeps needed at runtime | package content |
+| interaction clock semantics | pass | `agent_start` opens once; `agent_end` (retry/compaction gaps) does NOT reset elapsed; `agent_settled` finalizes; thinking measured as streamed-interval UNION (pauses excluded); usage deduped by responseId |
+| phase machine | pass | phases only from real content kinds (thinking/text/toolCall blocks, write-args streaming); `ui_prompt_start` → waiting-for-input; tools cannot steal that phase |
+| separator persistence | pass | survives 100 streaming updates, invalidate, message_end re-renders (regression suite) |
+| tool-call-only updates | pass | growing toolCall-only message_update does not close exploration group (0.7.x fix regression) |
+| thinking rail unwrap | pass | dispose/rebuild restores the host's original node verbatim |
+| summary persistence | pass | exactly one `pi-codex-appearance:interaction-summary:v1` entry per settled interaction; renderer registered once; `persist:false` appends nothing |
+| config loader | pass | safe defaults; per-field fallback with warning; kill switch `enabled:false` |
+| chrome restore | pass | `session_shutdown` clears editor slot only when the CURRENT factory is still ours (identity compare); footer/header/working cleared |
 
-## Key defect reproductions and fixes
+## Real-process verification
 
-- **Separator vanished after rebuild (0.6.0 defect)**: the old `takeTextPlan`
-  consumed global pending state once, and the host's `updateContent()` clears
-  the container, so the line disappeared on the second rebuild. Replaced with
-  stable message/run identities (`generation:seq` keys, open→sealed aliasing,
-  object-anchored `WeakMap` identity plus plan adoption for unanchored
-  components) and a coordination layer that re-coordinates the rebuilt subtree
-  after EVERY `updateContent`. Test: the SAME logical message goes through 100
-  cumulative updates — exactly one separator on every rebuild; message_end,
-  invalidate and re-render cycles keep it.
-- **Fingerprint check removed (3.3)**: `updateContent`'s source prefix equality
-  is replaced by a structural contract (own writable/configurable descriptor on
-  the verified v0.85.1 prototype). Benign wrappers (zentui) no longer block
-  installation; diagnostics are per-feature (separator / thinking-rail /
-  group-spacing).
-- **thinking vs text (3.5)**: state machine and rail distinguish `text`,
-  `thinking`, `toolCall` block types; the separator sits immediately before the
-  TEXT run when thinking precedes it; plain English (including the word
-  "Thinking" or "Writing…") never gets a rail.
-- **Duplicate image totals (D)**: with 8 serial reads, only the CURRENT last
-  member renders the aggregate total, resolved from the shared plan and
-  refreshed on append via dirty-view invalidation; stale members no longer keep
-  old counts; per-member payloads and expandability unchanged.
+- `npm run test:host` runs against the REAL installed
+  `@earendil-works/pi-coding-agent` (0.85.1 dist) and the real pi-tui — not
+  fakes — through `index.ts`'s default export.
+- Final in-Pi verification (fresh `pi` process with the user's own extension
+  stack, synced clone) is listed as a deployment step, not covered here.
 
-## Host verification (real v0.85.1 dist, line-level)
+## Known deviations from the Codex reference (deliberate)
 
-- `AssistantMessageComponent.updateContent()` clears and rebuilds
-  `contentContainer`; thinking nodes are `MouseRegion(child, onMouse)` with a
-  `child` field (verified in `mouse-region.js`) — the rail swaps the inner
-  child in place, so clicks keep working and mouse x is compensated by the
-  rail width.
-- `ToolExecutionComponent.updateArgs() → updateDisplay() → renderCall(args,
-  theme, getRenderContext())` is the args-streaming path; `getRenderContext()`
-  exposes `argsComplete` / `executionStarted` / `isPartial` / `expanded`
-  (NOT `hasResult` — a final result is signaled by `isPartial === false`,
-  set by `updateResult`). The write call slot uses these; no invented
-  protocol, no second toolCallId.
-- pi-zentui compatibility: its thinking feature needs its own config
-  (user has `thinkingSteps.enabled: true`, mode `rail`); when its prototype
-  patch registry (`Symbol.for("pi-zentui.prototype-patch-registry")`) is
-  present on the assistant prototype, our rail reports the external owner and
-  stays passive. Never disables or rewrites zentui config.
+- No per-line `›` composer prefix: the host `Editor` render pipeline has no
+  safe per-line hook; faking one risks cursor/autocomplete/mouse drift. The
+  composer keeps Pi's full native input behavior; only border accent and
+  padding differ visually.
+- Context indicator shows remaining `NN% context left` (Codex grammar) from
+  the host's `getContextUsage()`; exact token K/M formatting falls back to
+  percent-only when the host provides no token count.
+- Header shows the REAL identity (`Pi 0.85.1 · codex-appearance 0.8.0`),
+  never the OpenAI name.
 
-## Not verified here (needs a real terminal / real provider stream)
+## Interface inventory (what touches the host)
 
-- Actual mouse hit-testing on railed thinking and live-preview rows in the
-  user's terminal (the coordinate compensation is unit-tested, not
-  screen-tested).
-- Real provider partial-args JSON shapes: the preview renders whatever
-  cumulative `args.content` the host delivers (tested with scripted frames);
-  provider-specific delta edge cases (revisions, out-of-order chunks) are
-  handled by "latest cumulative snapshot wins" but were not observed live.
-- Image protocol rendering, soft-wrap copy behaviour, DIM contrast on light
-  terminal themes, and the visual result in the user's specific terminal.
-- The `docs/preview.html` snapshot is a formatter/component render, NOT a
-  screenshot of a running Pi session.
-
-## Historical
-
-- 0.6.0: serial grouping + separator + dimming (separator persistence defect
-  documented above, fixed in 0.7.0).
-- 0.4.0/0.5.0: earlier delivery records described un-downloaded dev
-  dependencies and unverified host checks; the host smoke test and full
-  dependency set run locally since then, and 0.5.0 removed the bare `diff`
-  import that broke git-clone installs.
+- Public APIs only: `pi.on()` (agent_start/agent_settled/tool_execution_*/
+  message_*/session_*), `pi.getAllTools()`, `pi.registerCommand()`,
+  `pi.appendEntry()`, `pi.registerEntryRenderer()`,
+  `ctx.ui.setEditorComponent()/getEditorComponent()/setFooter()/setHeader()/
+  setWorkingMessage()/setWorkingIndicator()/getContextUsage()/requestRender()/
+  notify()`.
+- Prototype adaptation (unchanged from 0.7.0): scoped decoration of
+  `ToolExecutionComponent.getCallRenderer` and
+  `AssistantMessageComponent.updateContent`, restored byte-identical on
+  shutdown; structural contract check, no source fingerprints.
+- No: registerTool, execute replacement, context/message mutation, session
+  JSONL writes (CustomEntry above is the single granted exception), global
+  Container/Markdown/stdout patches.

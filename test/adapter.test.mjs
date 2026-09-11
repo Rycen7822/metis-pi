@@ -162,6 +162,8 @@ test("lifecycle uses no tool registration, context middleware, editor, footer or
   activate(pi, { ...bindings, prototype: Host.prototype });
   assert.deepEqual([...handlers.keys()], [
     "session_start",
+    "agent_start", // interaction clock (0.8.0 working/summary)
+    "agent_settled",
     "tool_execution_start", // observe-only write tracking (0.4.0)
     "tool_execution_end",
     "message_start", // read-only display-order observation (0.6.0 grouping)

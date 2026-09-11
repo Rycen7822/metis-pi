@@ -2,7 +2,9 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.4.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.4.0 以 openai/codex 当前 main 为视觉与行为 reference：width-aware exec-cell 布局、Catppuccin Mocha bash 高亮、探索行 cyan 标题、`write` 的真实 pre/post diff，全部仅作用于显示层。
+版本：**0.8.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）：Codex 风格 composer 外框、状态行（model · effort · cwd · context%）、极简真实身份启动头、`Working · 38s` 工作计时（`agent_start`→`agent_settled` 单一交互时钟，重试/压缩续接不重置）、结束后的 `Worked for …` 摘要（可随会话恢复）、thinking 光条与 `Thought for Xs` 自动折叠标签、write 实时预览、探索分组、工具行与 diff 全部在本包内完成。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
+
+配置：`~/.pi/agent/codex-appearance.json`（可省略）。`enabled: false` 为总开关；`thinking.rail` / `thinking.autoCollapse` / `writePreview.enabled` / `working.elapsed` / `summary.enabled` / `summary.persist` 可分别关闭。诊断命令：`/codex-ui`。
 
 ![由本项目渲染函数生成的预览，非真实 Pi 会话截图](docs/preview.png)
 

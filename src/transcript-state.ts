@@ -55,6 +55,10 @@ export interface TextRunPlan {
   readonly firstContentIndex: number;
   /** True when real tool activity preceded this message in the segment. */
   readonly separatorBefore: boolean;
+  /** Observed thinking-stream duration for this message (ms), when any. */
+  readonly thinkingMs?: number;
+  /** True when the thinking run has closed (phase transition or message_end). */
+  readonly thinkingEnded?: boolean;
 }
 
 export interface TranscriptEvent {
@@ -132,6 +136,11 @@ interface MessagePlan {
   separatorBefore: boolean;
   /** Number of content blocks seen so far (update-count independent). */
   blockCount: number;
+  /** Wall-clock ms when the first thinking content appeared in this message. */
+  thinkingStartedAt?: number;
+  /** Wall-clock ms when thinking ended: first visible text/toolCall after
+   * thinking, or message_end (conservative close). */
+  thinkingEndedAt?: number;
 }
 
 const EXPLORATION_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -241,9 +250,24 @@ export class TranscriptState {
         }
         const grew = message.content.length > plan.blockCount;
         plan.blockCount = Math.max(plan.blockCount, message.content.length);
-        if (grew || assistantHasVisibleText(message) || assistantHasVisibleThinking(message)) {
+        // ONLY VISIBLE content is a boundary (0.8.0 fix): a tool-call-only
+        // message_update that merely appends toolCall blocks grows the array
+        // but must NOT close the exploration group or mark assistant-text.
+        const hasThinking = assistantHasVisibleThinking(message);
+        const visible = assistantHasVisibleText(message) || hasThinking;
+        if (hasThinking && plan.thinkingStartedAt === undefined) {
+          plan.thinkingStartedAt = Date.now();
+        }
+        // Text or toolCall after thinking closes the thinking run (conservative
+        // phase transition — providers may not send an explicit end).
+        if (plan.thinkingStartedAt !== undefined && plan.thinkingEndedAt === undefined && (assistantHasVisibleText(message) || !hasThinking)) {
+          plan.thinkingEndedAt = Date.now();
+        }
+        if (visible) {
           this.closeOpenGroup();
           this.lastNode = "assistant-text";
+          this.dirtyViews.add(key);
+        } else if (grew) {
           this.dirtyViews.add(key);
         }
         break;
@@ -264,7 +288,14 @@ export class TranscriptState {
           // open key becomes an alias of the sealed one (WeakMap is not
           // iterable, so rewrite happens via the alias table).
           const sealedKey = key.replace(/:open$/, ":sealed");
-          if (plan) this.messagePlans.set(sealedKey, { ...plan, key: sealedKey });
+          if (plan) {
+            // Conservative close: a run still streaming at message_end ends here.
+            const sealed: MessagePlan = { ...plan, key: sealedKey };
+            if (sealed.thinkingStartedAt !== undefined && sealed.thinkingEndedAt === undefined) {
+              sealed.thinkingEndedAt = Date.now();
+            }
+            this.messagePlans.set(sealedKey, sealed);
+          }
           this.openKeyAliases.set(key, sealedKey);
           this.messagePlans.delete(key);
           if (!assistantHasVisibleText(message) && !assistantHasVisibleThinking(message)) {
@@ -389,6 +420,10 @@ export class TranscriptState {
       runIndex,
       firstContentIndex: 0,
       separatorBefore: plan.separatorBefore,
+      thinkingMs: plan.thinkingStartedAt !== undefined
+        ? Math.max(0, (plan.thinkingEndedAt ?? Date.now()) - plan.thinkingStartedAt)
+        : undefined,
+      thinkingEnded: plan.thinkingEndedAt !== undefined,
     };
   }
 

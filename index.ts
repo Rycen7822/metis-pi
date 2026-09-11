@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "./src/extension.ts";
@@ -279,5 +280,30 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       }
     },
     makeWritePreview: (input) => new CodexWritePreviewComponent({ ...input, layout: layoutOps() }),
+    editorHost: { CustomEditor: Pi.CustomEditor as unknown },
+    // ---- 0.8.0 chrome wiring ----
+    api: pi,
+    getAgentDir: () => {
+      // Public host config dir (PI_AGENT_DIR override respected by Pi itself;
+      // we only need the PATH, never auth contents).
+      const fromEnv = process.env.PI_AGENT_DIR;
+      if (fromEnv) return fromEnv;
+      const fromOs = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
+      return fromOs ?? `${process.env.HOME ?? ""}/.pi/agent`;
+    },
+    readFile: (path) => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+    thoughtLabel: (thinkingMs) => {
+      const seconds = Math.round(thinkingMs / 1000);
+      const duration = seconds >= 60
+        ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`
+        : `${seconds}s`;
+      return `Thought for ${duration} (ctrl+t to expand)`;
+    },
   });
 }

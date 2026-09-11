@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.8.0
+
+The standalone Codex-style Pi UI. This release makes pi-codex-appearance the
+single owner of the main-interface chrome (composer frame, footer, header,
+working state) after the user uninstalled pi-zentui — no co-ownership designs,
+no zentui fallbacks. Same display-only boundary as before: tool data, args,
+results, model context and session message content are never touched.
+
+- Interaction clock: ONE monotonic clock per user-visible interaction, opened
+  on the first `agent_start` of a chain and closed on `agent_settled`.
+  Auto-retries, compaction gaps and queued continuations do NOT reset it
+  (`agent_end` only closes the open thinking interval). Phases (Thinking /
+  Writing / Working / Waiting for input) derive ONLY from real content kinds
+  (thinking/text/toolCall blocks, real write-args streaming), never from text
+  heuristics. A 1s ticker drives `Working · 38s` in the native working-status
+  slot; the timer is unref'd and torn down on settle/shutdown.
+- Worked-for summary: after `agent_settled`, a dim Codex-grammar summary line
+  (`Worked for 1m 05s · thought for 19s · ↓1.2k ↑8k`, `Interrupted after …`,
+  `Failed after …`) is shown and — via the single granted UI exception —
+  persisted as a namespaced CustomEntry (`pi-codex-appearance:interaction-
+  summary:v1`) with its own registered renderer, so it survives session
+  restore. Deduped per interaction; `summary.persist: false` or `--no-session`
+  degrade to volatile display only.
+- Chrome slots through public host APIs only, each identity-tracked for a
+  clean hand-back: editor factory (Codex-look composer: accent border,
+  paddingX 2, working status stays embedded; stock input behavior, IME,
+  autocomplete and keybindings untouched — the Codex '›' per-line prefix is a
+  recorded deviation: the Editor pipeline has no safe per-line hook), footer
+  (model · effort · cwd, context % right, external `setStatus` items kept),
+  minimal real-identity header (Pi + codex-appearance + model/dir; never
+  impersonates OpenAI).
+- Config: `<agentDir>/codex-appearance.json` (safe defaults; kill switch
+  `enabled: false`; feature toggles `thinking`, `writePreview`, `working`,
+  `summary`; malformed values fall back per-field with a warning).
+- `/codex-ui` diagnostics: per-feature status (chrome / transcript /
+  decorations / interaction clock) with the real cause per feature; no
+  single-reason masking of partial failures.
+- Thinking automation: once a thinking run closes (first text/toolCall after
+  thinking, or message_end), the collapsed label is enriched with the measured
+  duration (`Thought for 19s (ctrl+t to expand)`). The host's own visibility
+  override map stays the sole owner of collapse state — user clicks always
+  beat the automatic default.
+- 0.7.x defect fixes folded in: tool-call-only `message_update` growth no
+  longer closes the exploration group or marks assistant text; every non-empty
+  text block is its own semantic run (consecutive thinking merges only when
+  truly adjacent); thinking rail unwrap restores the host's original node
+  verbatim on dispose/rebuild.
+
 ## 0.7.0
 
 Fixes and additions on top of 0.6.0, same display-only boundary: tool data,

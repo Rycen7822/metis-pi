@@ -56,6 +56,9 @@ export interface TranscriptAdapterInput {
    * host shape is not supported (the caller then leaves the node untouched).
    */
   makeRail: ((child: unknown) => unknown) | undefined;
+  /** Format the collapsed-run label with the measured duration ("Thought for 19s
+   * (ctrl+t to expand)"). Absent → keep the host's own label. */
+  thoughtLabel?: (thinkingMs: number) => string | undefined;
   /** True when an external owner already renders thinking rails. */
   externalRailOwner?(): boolean;
   enabled(): boolean;
@@ -248,9 +251,26 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
   // 1) Remove OUR stale decorations from the current subtree (they get
   //    re-added below at the right slots). Components removed by clear() lose
   //    container membership but stay usable — reuse keeps identity stable.
+  //    Rails are UNWRAPPED, not deleted: a MouseRegion whose inner child we
+  //    wrapped keeps its click semantics; restore the original child so the
+  //    decoration never rides along after dispose.
   for (let i = children.length - 1; i >= 0; i--) {
     const child = children[i] as Record<string, unknown> | null;
-    if (child && ((child as Record<symbol, unknown>)[SEP_SYMBOL] || (child as Record<symbol, unknown>)[RAIL_SYMBOL])) children.splice(i, 1);
+    if (!child || typeof child !== "object") continue;
+    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL]) {
+      children.splice(i, 1);
+      continue;
+    }
+    // MouseRegion with our wrapper inside: unwrap in place.
+    if ((child as Record<string, unknown>).child && ((child as Record<string, unknown>).child as Record<symbol, unknown> | undefined)?.[RAIL_SYMBOL]) {
+      const region = child as { child: Record<symbol, unknown> };
+      const wrapper = region.child;
+      const original = (wrapper as Record<symbol | string, unknown>)?.["original"];
+      if (original !== undefined) {
+        region.child = original as Record<symbol, unknown>;
+      }
+    }
+    if ((child as Record<symbol, unknown>)[SEP_SYMBOL]) children.splice(i, 1);
   }
 
   // 2) Walk the rebuilt children and match them to semantic runs. The host
@@ -274,7 +294,10 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
     }
   }
 
-  // 4) Wrap thinking runs with the rail (skip when an external owner exists).
+  // 4) Thinking runs: rail + "Thought for Xs" label. The host renders a
+  //    HIDDEN (collapsed) run as a plain Text with `hiddenThinkingLabel` and
+  //    an OPEN run as Markdown inside a MouseRegion. Distinguish by node
+  //    shape (Text vs Markdown), never by content strings.
   if (input.makeRail && !railBlocked) {
     for (const slot of slots) {
       if (slot.run.kind !== "thinking") continue;
@@ -286,9 +309,30 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
         ? (child as { child: unknown }).child
         : child;
       if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]) continue;
+
+      // Collapsed runs (host Text) get their label enriched with the measured
+      // duration — display copy only; the host's own override map stays sole
+      // owner of VISIBILITY (user clicks beat our automatic collapse).
+      const innerText = (inner as { text?: unknown }).text;
+      const isCollapsedLabel = typeof innerText === "string" && !(inner as { markdown?: unknown }).markdown;
+      if (isCollapsedLabel && textRunPlan?.thinkingEnded && typeof input.thoughtLabel === "function") {
+        const label = input.thoughtLabel(textRunPlan.thinkingMs ?? 0);
+        if (label && typeof (inner as { setText?: unknown }).setText === "function") {
+          try {
+            (inner as { setText: (next: string) => void }).setText(label);
+          } catch {
+            // display-only enrichment; keep the host label on failure
+          }
+        }
+        continue; // no rail on the collapsed label row
+      }
+
       const wrapped = input.makeRail(inner);
       if (!wrapped) continue;
       ((wrapped as Record<symbol, unknown>))[RAIL_SYMBOL] = true;
+      // Remember the original child so the unwrap pass (step 1) can restore
+      // the host's own node verbatim on dispose/rebuild.
+      (wrapped as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
         (child as { child: unknown }).child = wrapped;
       } else {
@@ -338,16 +382,28 @@ interface SemanticRun {
 
 /** Contiguous same-kind visible runs of the message content. */
 function semanticRuns(content: Array<Record<string, unknown>>): SemanticRun[] {
+  // 0.8.0 semantics (mirrors the host rebuild): each NON-EMPTY text block is
+  // its own child; consecutive thinking blocks merge into ONE run ONLY when
+  // nothing breaks between them (a toolCall or a text block breaks the run —
+  // the host loop breaks on the first non-thinking block too). Blocks of the
+  // same kind separated by other kinds are separate runs.
   const runs: SemanticRun[] = [];
   for (let i = 0; i < content.length; i++) {
     const block = content[i]!;
     const kind = block.type === "text" ? "text" : block.type === "thinking" ? "thinking" : null;
-    if (!kind) continue;
+    if (!kind) continue; // toolCall/unknown breaks any run
     const nonEmpty = kind === "text"
       ? (typeof block.text === "string" ? !!block.text.trim() : false)
       : (typeof block.thinking === "string" ? !!block.thinking.trim() : false);
+    if (kind === "text") {
+      // One run per non-empty text block — the host emits one Markdown child each.
+      if (nonEmpty) runs.push({ kind, firstContentIndex: i, nonEmpty: true });
+      continue;
+    }
+    // thinking: merge only consecutive thinking blocks (the host merges them
+    // into a single Markdown inside one MouseRegion).
     const last = runs.at(-1);
-    if (last && last.kind === kind) {
+    if (last && last.kind === "thinking") {
       last.nonEmpty = last.nonEmpty || nonEmpty;
       continue;
     }

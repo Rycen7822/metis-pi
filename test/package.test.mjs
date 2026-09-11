@@ -26,12 +26,28 @@ test("package defaults to the compact transcript entry, with no added runtime de
   assert.equal(pkg.pi.prompts, undefined);
 });
 
-test("runtime has no registration, result mutation, tool activation or global UI takeover calls", () => {
-  const files = ["index.ts", ...readdirSync(new URL("../src", import.meta.url)).map((name) => `src/${name}`)];
-  const forbidden = /\b(?:registerTool|setActiveTools|sendMessage|sendUserMessage|appendEntry|setSystemPrompt|setEditorComponent|setFooter|setHeader|setWorkingMessage|registerShortcut|setTheme)\s*\(/;
+test("runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
+  const rootUrl = new URL("../src", import.meta.url);
+  const files = ["index.ts"];
+  const walk = (url, prefix) => {
+    for (const name of readdirSync(url)) {
+      if (name.endsWith(".ts") || name.endsWith(".mjs")) files.push(`${prefix}${name}`);
+      else {
+        try {
+          walk(new URL(`${name}/`, url), `${prefix}${name}/`);
+        } catch { /* not a directory */ }
+      }
+    }
+  };
+  walk(rootUrl, "src/");
+  // appendEntry is allowed ONLY in turn-summary.ts (the audited persistence
+  // exception). Everything else stays forbidden everywhere.
+  const forbidden = /\b(?:registerTool|setActiveTools|sendMessage|sendUserMessage|setSystemPrompt|registerShortcut|setTheme)\s*\(/;
+  const appendEntryRe = /\bappendEntry\s*\(/;
   for (const file of files) {
     const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
     assert.doesNotMatch(text, forbidden, file);
+    if (file !== "src/turn-summary.ts") assert.doesNotMatch(text, appendEntryRe, file);
     assert.doesNotMatch(text, /\.on\(\s*["'](?:tool_result|tool_call|context|before_agent_start)["']/);
   }
 });

@@ -4,6 +4,10 @@ import { TranscriptState, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
+import { UiMetrics, WORKING_PHASE_LABEL, formatDuration } from "./ui-metrics.ts";
+import { TurnSummary } from "./turn-summary.ts";
+import { probeHost, type HostFacts, type ResourceCounters } from "./host-compat.ts";
+import { loadConfig, type AppearanceConfig } from "./config.ts";
 
 export interface AppearanceAPI {
   on(event: "session_start" | "session_shutdown", handler: (event: unknown, context: {
@@ -12,6 +16,7 @@ export interface AppearanceAPI {
   on(event: "tool_execution_start", handler: (event: { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }, context: { cwd: string }) => void): void;
   on(event: "tool_execution_end", handler: (event: { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }, context: { cwd: string }) => void): void;
   on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
+  on(event: "agent_start" | "agent_settled" | "agent_end", handler: (event: { type: string }, context: unknown) => void): void;
   getAllTools(): readonly unknown[];
 }
 export interface Bindings {
@@ -39,6 +44,39 @@ export interface Bindings {
   makeWritePreview?: import("./renderers.ts").WritePreviewInput extends infer T
     ? (input: T) => import("./tool-names.ts").Component | undefined
     : never;
+  /** Format the collapsed-thinking label with the measured duration. */
+  thoughtLabel?: (thinkingMs: number) => string | undefined;
+  /** Host CustomEditor class for the chrome editor factory (index.ts only). */
+  editorHost?: { CustomEditor: unknown };
+  // ---- 0.8.0 chrome bindings (public host APIs; resolved in index.ts) ----
+  /** The full ExtensionAPI object (for appendEntry / registerEntryRenderer / registerCommand). */
+  api?: unknown;
+  /** Host extension context captured at session_start (mode/hasUI/ui/model/cwd). */
+  onContext?: (context: AppearanceHostContext) => void;
+  /** Read the agent config dir (host getAgentDir or ~/.pi/agent). */
+  getAgentDir?: () => string | undefined;
+  /** Read a file (config loading; injected to keep tests filesystem-free). */
+  readFile?: (path: string) => string | undefined;
+}
+
+export interface AppearanceHostContext {
+  mode: string;
+  hasUI: boolean;
+  model?: { label: string; effort?: string } | undefined;
+  cwd: string;
+  ui: {
+    setEditorComponent?: (factory: unknown) => void;
+    getEditorComponent?: () => unknown;
+    setFooter?: (factory: unknown) => void;
+    setHeader?: (factory: unknown) => void;
+    setWidget?: (key: string, content: unknown, options?: unknown) => void;
+    setWorkingMessage?: (message?: string) => void;
+    setWorkingVisible?: (visible: boolean) => void;
+    setWorkingIndicator?: (options?: unknown) => void;
+    getContextUsage?: () => { percentUsed?: number; input?: number; capacity?: number } | undefined;
+    requestRender?: () => void;
+    notify?: (text: string, level?: string) => void;
+  };
 }
 
 /** Session-scoped presentation state (ephemeral, display-only). */
@@ -87,6 +125,18 @@ function toStateMessage(message: unknown): TranscriptEvent["message"] {
   };
 }
 
+/** Normalize the host model snapshot into the footer's display shape. */
+function normalizeModel(model: unknown): { label: string; effort?: string } | undefined {
+  if (!model || typeof model !== "object") return undefined;
+  const record = model as Record<string, unknown>;
+  const label = typeof record.label === "string" && record.label
+    ? record.label
+    : typeof record.displayName === "string" && record.displayName ? record.displayName : undefined;
+  if (!label) return undefined;
+  const effort = typeof record.effort === "string" && record.effort ? record.effort : undefined;
+  return { label, effort };
+}
+
 export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   let enabled = false;
   let handle: AdapterHandle | undefined;
@@ -100,8 +150,61 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     resultImages: new Map<string, number>(),
   };
 
+  // ---- 0.8.0 chrome/metrics state -----------------------------------------
+  const counters: ResourceCounters = { timers: 0, subscriptions: 0, widgets: 0, pendingBounded: 0, snapshot() { return { timers: this.timers, subscriptions: this.subscriptions, widgets: this.widgets, pendingBounded: this.pendingBounded }; } };
+  let hostContext: AppearanceHostContext | undefined;
+  let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
+  const metrics = new UiMetrics(
+    { now: () => performance.now(), wall: () => Date.now() },
+    {
+      onTick: (snapshot) => {
+        if (!hostContext || !config.working.elapsed) return;
+        const label = WORKING_PHASE_LABEL[snapshot.phase];
+        hostContext.ui.setWorkingMessage?.(`${label} · ${formatDuration(snapshot.elapsedMs)}`);
+      },
+      onSettled: (snapshot) => {
+        hostContext?.ui.setWorkingMessage?.();
+        if (config.summary.enabled) {
+          const outcome = lastRunFailed ? "failed" : lastRunInterrupted ? "interrupted" : "completed";
+          turnSummary.record(snapshot, outcome);
+        }
+        lastRunFailed = false;
+        lastRunInterrupted = false;
+      },
+    },
+  );
+  let ourEditorFactory: object | undefined;
+  let lastRunFailed = false;
+  let lastRunInterrupted = false;
+  const turnSummary = new TurnSummary({
+    appendEntry: (type, data) => {
+      (bindings.api as { appendEntry?: (t: string, d?: unknown) => void } | undefined)?.appendEntry?.(type, data);
+    },
+    registerEntryRenderer: (type, renderer) => {
+      (bindings.api as { registerEntryRenderer?: (t: string, r: unknown) => void } | undefined)?.registerEntryRenderer?.(type, renderer);
+    },
+    persist: config.summary.persist,
+    wall: () => Date.now(),
+  });
+
+  // ---- lifecycle ------------------------------------------------------------
+
   pi.on("session_start", (_event, ctx) => {
-    enabled = ctx.hasUI;
+    const full = ctx as unknown as { mode?: string; hasUI?: boolean; model?: unknown; cwd?: string; ui?: AppearanceHostContext["ui"] };
+    hostContext = {
+      mode: typeof full.mode === "string" ? full.mode : (full.hasUI ? "tui" : "unknown"),
+      hasUI: full.hasUI === true,
+      cwd: typeof full.cwd === "string" ? full.cwd : "",
+      model: normalizeModel(full.model),
+      ui: (full.ui ?? {}) as AppearanceHostContext["ui"],
+    };
+    bindings.onContext?.(hostContext);
+    const facts: HostFacts = probeHost({ ui: hostContext.ui as never, mode: hostContext.mode, hasUI: hostContext.hasUI });
+    enabled = facts.isTui || ctx.hasUI;
+    // Chrome (editor/footer/header/working) only in the REAL TUI process.
+    if (facts.isTui) {
+      installChrome(facts);
+    }
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
@@ -120,6 +223,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
         makeRail: bindings.makeRail,
         externalRailOwner: bindings.externalRailOwner,
+        thoughtLabel: bindings.thoughtLabel,
         enabled: () => enabled,
       });
       const failedFeatures = decorations.features.filter((f) => !f.installed);
@@ -129,6 +233,104 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       }
     }
   });
+
+  // /codex-ui — capability diagnostics (3.3): one line per feature with the
+  // real cause; never hides partial failure behind a single reason.
+  (bindings.api as { registerCommand?: (cmd: unknown) => void } | undefined)?.registerCommand?.({
+    name: "codex-ui",
+    description: "pi-codex-appearance capability diagnostics",
+    handler: () => {
+      if (!hostContext) return "pi-codex-appearance: no active session";
+      const facts = probeHost({ ui: hostContext.ui as never, mode: hostContext.mode, hasUI: hostContext.hasUI });
+      const chrome = config.enabled === false ? "disabled(config)" : facts.isTui ? "applied" : "unsupported (not a TUI session)";
+      const transcript = handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed";
+      const decor = decorations
+        ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
+        : "unavailable (no assistant prototype binding)";
+      const clock = metrics.snapshot();
+      const lines = [
+        "pi-codex-appearance 0.8.0 diagnostics:",
+        `  chrome:  ${chrome}`,
+        `  transcript: ${transcript}`,
+        `  decorations: ${decor}`,
+        `  interaction clock: ${clock.active ? `open ${Math.round(clock.elapsedMs / 1000)}s` : "idle"} (timers=${counters.timers})`,
+      ];
+      return lines.join("\n");
+    },
+  });
+
+  /** Install the Codex-style chrome through PUBLIC host APIs only. Each slot
+   * is tracked by factory identity so restore never removes a successor's
+   * component. */
+  function installChrome(facts: HostFacts): void {
+    const ui = hostContext?.ui;
+    if (!ui) return;
+    if (config.enabled === false) return;
+
+    // Working indicator: static dot, we drive the MESSAGE text (with elapsed)
+    // from the metrics ticker. One status position — the native indicator row.
+    if (facts.available.setWorkingIndicator) {
+      try {
+        ui.setWorkingIndicator?.({ frames: ["●"], intervalMs: 1000 });
+      } catch { /* native spinner keeps its default */ }
+    }
+
+    // Editor factory: Codex-look composer through the host's custom-editor
+    // hook. Identity-tracked: on restore we compare factory identity and only
+    // clear the slot when the CURRENT factory is still ours (a successor
+    // extension's editor is never removed).
+    if (facts.available.setEditorComponent && !ui.getEditorComponent?.() && bindings.editorHost?.CustomEditor) {
+      try {
+        void import("./chrome/editor.ts").then(({ makeCodexEditorFactory }) => {
+          const factory = makeCodexEditorFactory({
+            host: bindings.editorHost as never,
+            paddingX: 2,
+            embedWorkingStatus: true,
+          });
+          ourEditorFactory = factory;
+          ui.setEditorComponent?.(factory as never);
+        });
+      } catch { /* editor stays native */ }
+    }
+
+    // Footer factory (model · effort · cwd/branch — context right).
+    if (facts.available.setFooter) {
+      try {
+        void import("./chrome/footer.ts").then(({ createFooterComponent }) => {
+          ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) =>
+            createFooterComponent(
+              {
+                getContextUsage: () => hostContext?.ui.getContextUsage?.(),
+                getModel: () => hostContext?.model,
+                getCwd: () => hostContext?.cwd ?? "",
+                requestRender: () => hostContext?.ui.requestRender?.(),
+              },
+              footerData as never,
+              theme,
+            ));
+        });
+      } catch { /* footer stays native */ }
+    }
+
+    // Header factory (real identity line).
+    if (facts.available.setHeader) {
+      try {
+        void import("./chrome/header.ts").then(({ createHeaderComponent }) => {
+          ui.setHeader?.((_tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) =>
+            createHeaderComponent(
+              {
+                appearanceVersion: "0.8.0",
+                piVersion: "0.85.1",
+                getModel: () => hostContext?.model,
+                getCwd: () => hostContext?.cwd ?? "",
+              },
+              theme,
+            ));
+        });
+      } catch { /* header stays native */ }
+    }
+    void counters;
+  }
 
   /** Look up a tool entry's sourceInfo (exact builtin ownership checks). */
   function sourceInfoFor(toolName: string): unknown {
@@ -150,15 +352,27 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // Write tracking observes lifecycle events only (never tool_call/tool_result
   // content). Reads the local file for an honest pre/post image; all state is
   // ephemeral presentation data dropped at session shutdown.
+  // Interaction clock: opens on the first agent_start of a chain, closes on
+  // agent_settled (auto-retry/compaction/queued follow-ups never reset it).
+  (pi as unknown as AppearanceAPI).on("agent_start", () => {
+    metrics.agentStart();
+  });
+  (pi as unknown as AppearanceAPI).on("agent_settled", () => {
+    metrics.agentSettled();
+  });
+
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled) return;
     const info = sourceInfoFor(event.toolName);
     session.tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveWritePath(path, ctx.cwd));
     // Transcript projection: exploration grouping + separator boundary.
     transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
+    metrics.toolStart();
+    if (event.toolName === "write") metrics.writeStreaming();
   });
   pi.on("tool_execution_end", (event) => {
     if (!enabled) return;
+    if (event.isError === true) lastRunFailed = true;
     const info = sourceInfoFor(event.toolName);
     const change = session.tracker.trackEnd(event.toolCallId, event.toolName, info, event.isError);
     if (change) {
@@ -180,24 +394,59 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     transcript.apply({ type: "tool_execution_end", toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError === true, imageCount: images });
   });
   // Wire the real message handlers (typed loosely above to avoid importing
-  // host event types; only read-only content-shape fields are read).
+  // host event types; only read-only content-shape fields are read). The
+  // event's message OBJECT is passed as the identity anchor (0.8.0 fix) so
+  // the state machine can key plans by the host's own object identity.
   (pi as unknown as {
     on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
   }).on("message_start", (event) => {
     if (!enabled) return;
-    transcript.apply({ type: "message_start", message: toStateMessage(event.message) });
+    const message = event.message as object | undefined;
+    transcript.apply({ type: "message_start", message: toStateMessage(message) }, message);
+    if (isUserMessage(message)) metrics.uiPromptEnd();
   });
   (pi as unknown as {
     on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
   }).on("message_update", (event) => {
     if (!enabled) return;
-    transcript.apply({ type: "message_update", message: toStateMessage(event.message) });
+    const message = event.message as object | undefined;
+    const stateMessage = toStateMessage(message);
+    transcript.apply({ type: "message_update", message: stateMessage }, message);
+    if (!stateMessage || stateMessage.role !== "assistant") return;
+    // Phase feed for the Working line: real block types only (3.5).
+    const hasThinking = stateMessage.content.some((b) => b.type === "thinking" && b.thinking?.trim());
+    const hasText = stateMessage.content.some((b) => b.type === "text" && b.text?.trim());
+    const hasToolCall = stateMessage.content.some((b) => b.type === "toolCall");
+    if (hasThinking) metrics.thinkingStart();
+    else if (hasText) {
+      metrics.thinkingEnd();
+      metrics.setPhase("working");
+    } else if (hasToolCall) {
+      metrics.thinkingEnd();
+      metrics.setPhase("working");
+    }
   });
   (pi as unknown as {
     on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
   }).on("message_end", (event) => {
     if (!enabled) return;
-    transcript.apply({ type: "message_end", message: toStateMessage(event.message) });
+    const message = event.message as object | undefined;
+    const stateMessage = toStateMessage(message);
+    transcript.apply({ type: "message_end", message: stateMessage }, message);
+    metrics.thinkingEnd();
+    if (stateMessage?.stopReason === "aborted") lastRunInterrupted = true;
+    // Usage totals (read-only): the assistant message carries the provider
+    // usage. requestKey = responseId (stable across replays).
+    if (message && typeof message === "object") {
+      const record = message as Record<string, unknown>;
+      const usage = record.usage as Record<string, number> | undefined;
+      if (usage) {
+        const key = typeof record.responseId === "string" && record.responseId
+          ? record.responseId
+          : `m-${record.timestamp ?? record.id ?? metrics.generation}`;
+        metrics.recordUsage(key, usage);
+      }
+    }
   });
   pi.on("session_shutdown", () => {
     enabled = false;
@@ -205,8 +454,28 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     handle = undefined;
     decorations?.dispose();
     decorations = undefined;
+    // Chrome restore: only OUR factories are removed (identity comparison);
+    // a successor extension's editor/footer/header is left untouched.
+    const ui = hostContext?.ui;
+    if (ui) {
+      try {
+        if (ourEditorFactory && ui.getEditorComponent?.() === ourEditorFactory) {
+          ui.setEditorComponent?.(undefined);
+        }
+      } catch { /* keep current editor */ }
+      ourEditorFactory = undefined;
+      ui.setFooter?.(undefined as never);
+      ui.setHeader?.(undefined as never);
+      ui.setWorkingMessage?.();
+    }
     session.writeChanges.clear();
     session.resultImages.clear();
     transcript.resetSession();
+    metrics.reset();
+    turnSummary.forgetSession();
   });
+}
+
+function isUserMessage(message: unknown): boolean {
+  return (message as Record<string, unknown> | undefined)?.role === "user";
 }

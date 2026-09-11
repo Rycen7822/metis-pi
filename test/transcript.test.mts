@@ -455,3 +455,24 @@ test("DIM: source colors survive, resets re-acquire DIM, RGB untouched", () => {
   // no-color: no SGR at all.
   assert.equal(styleToolOutputLine("\x1b[31mred\x1b[0m", { dim: true, colorLevel: { kind: "none" } }), "\x1b[31mred\x1b[0m");
 });
+
+
+test("thinking timing projects onto textRunPlan and closes on phase transition", () => {
+  const state = new TranscriptState();
+  const messageObj = { role: "assistant", content: [] as Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: [] } }, messageObj);
+  const key = state.messageKeyFor({ role: "assistant", content: [] }, messageObj);
+  messageObj.content = [{ type: "thinking", thinking: "hmm" }];
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const openPlan = state.textRunPlan(key);
+  assert.ok(openPlan, "plan exists while open");
+  assert.equal(openPlan!.thinkingEnded, false);
+  assert.ok(openPlan!.thinkingMs !== undefined);
+  // Phase transition: text after thinking closes the interval.
+  messageObj.content = [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Answer." }];
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const closedPlan = state.textRunPlan(state.messageKeyFor(messageObj, messageObj));
+  assert.ok(closedPlan, "sealed plan exists");
+  assert.equal(closedPlan!.thinkingEnded, true);
+});
+

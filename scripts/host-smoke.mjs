@@ -11,6 +11,9 @@ import { Text } from "@earendil-works/pi-tui";
 import extension from "../index.ts";
 
 const handlers = new Map();
+const registeredCommands = [];
+const appendedEntries = [];
+const registeredEntryRenderers = [];
 const sourceInfo = (builtin) => builtin
   ? { source: "builtin", path: "<PLACEHOLDER>" }
   : { source: "npm:compatibility-test", path: "/test/custom.ts" };
@@ -22,6 +25,10 @@ const definitions = [source("read"), source("bash"), source("write"), source("ed
 const pi = new Proxy({
   on: (event, handler) => handlers.set(event, handler),
   getAllTools: () => definitions,
+  // 0.8.0 chrome APIs (public surface; guarded assertions below):
+  registerCommand: (cmd) => registeredCommands.push(cmd),
+  appendEntry: (type, data) => appendedEntries.push({ type, data }),
+  registerEntryRenderer: (type, renderer) => registeredEntryRenderers.push({ type, renderer }),
 }, { get(target, key) {
   if (!(key in target)) throw new Error(`Forbidden extension API: ${String(key)}`);
   return target[key];
@@ -140,5 +147,25 @@ handlers.get("session_shutdown")({}, {});
 assert.deepEqual(Object.getOwnPropertyDescriptors(proto), before);
 assert.match(stripVTControlCharacters(row.render(100).join("\n")), /NATIVE/);
 assert.equal(row.getRenderShell(), "default");
+// ---- 9. 0.8.0 chrome: /codex-ui command + entry renderer registration -------
+const codexUi = registeredCommands.find((cmd) => cmd.name === "codex-ui");
+assert.ok(codexUi, "/codex-ui command registered");
+const diagnostics = codexUi.handler();
+assert.match(diagnostics, /pi-codex-appearance 0\.8\.0 diagnostics:/);
+assert.match(diagnostics, /chrome:/);
+assert.match(diagnostics, /transcript:/);
+assert.match(diagnostics, /decorations:/);
+assert.match(diagnostics, /interaction clock:/);
+assert.ok(registeredEntryRenderers.some((r) => r.type === "pi-codex-appearance:interaction-summary:v1"), "summary entry renderer registered");
+
+// ---- 10. agent lifecycle drives the interaction clock ------------------------
+handlers.get("agent_start")({ type: "agent_start" }, {});
+handlers.get("message_update")({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] } }, {});
+handlers.get("agent_settled")({ type: "agent_settled" }, {});
+// Summary recorded only when config.summary.enabled — default config in the
+// smoke path has no codex-appearance.json, so defaults apply.
+const summaryCount = appendedEntries.filter((e) => e.type === "pi-codex-appearance:interaction-summary:v1").length;
+assert.ok(summaryCount <= 1, "at most one summary per settled interaction");
+
 fs.rmSync(dir, { recursive: true, force: true });
-console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored");
+console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.0 chrome diagnostics + interaction clock OK");
