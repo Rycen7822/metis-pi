@@ -58,15 +58,53 @@ test("tokens default OFF in 0.8.5; opt-in renders the segment", () => {
   assert.ok(withTokens.details.some((d) => d.includes("↑131k ↓5.0k")), "opt-in tokens segment");
 });
 
-test("shimmerPhase wraps: bullet cycles 0..1..2..1, highlight sweeps without growth", () => {
-  const steps = new Set();
-  for (let i = 0; i < 64; i++) {
-    const { bulletStep, highlightStart } = shimmerPhase(i);
-    steps.add(bulletStep);
-    assert.ok(highlightStart >= 0 && highlightStart < 12);
+test("shimmer cycle: one wave fully exits before the next enters (no overlap)", () => {
+  const word = "Working".length; // 7
+  const window = 3;
+  const stepFrames = 2;
+  const cycle = (word + window) * stepFrames + 6;
+  // Full timeline: litChars(f) = chars covered by the window.
+  const litAt = (f: number): number[] => {
+    const { highlightStart: start } = shimmerPhase(f, word);
+    const out: number[] = [];
+    for (let i = 0; i < word; i++) if (i >= start && i < start + window) out.push(i);
+    return out;
+  };
+  // The sweep moves monotonically forward: the FIRST lit char never goes
+  // backwards until the wave has fully exited the word.
+  let exited = false;
+  for (let f = 1; f < cycle * 2 + 7; f++) {
+    const prev = litAt(f - 1);
+    const cur = litAt(f);
+    if (prev.length > 0 && cur.length === 0) exited = true;
+    if (!exited && prev.length > 0 && cur.length > 0) {
+      assert.ok(cur[0]! >= prev[0]!, `frame ${f}: highlight moved backwards mid-wave (${prev} → ${cur})`);
+    }
+    if (exited && cur.length > 0 && litAt(f - 1).length === 0) {
+      // Re-entry only allowed via the cycle restart (f ≡ 0 mod cycle).
+      assert.ok(f % cycle === 0, `frame ${f}: a new wave started before the previous one finished`);
+      exited = false;
+    }
   }
+  // Cycle wraps exactly: frame at cycle length equals frame 0.
+  assert.deepEqual(shimmerPhase(cycle, word), shimmerPhase(0, word));
+  // The highlight holds each position for exactly stepFrames frames.
+  for (let f = 0; f < (word + window) * stepFrames; f += stepFrames) {
+    assert.deepEqual(shimmerPhase(f, word).highlightStart, shimmerPhase(f + 1, word).highlightStart, `position held across frames ${f}/${f + 1}`);
+    assert.equal(shimmerPhase(f + stepFrames, word).highlightStart - shimmerPhase(f, word).highlightStart, 1, `position advances by 1 after ${stepFrames} frames`);
+  }
+  // Bullet steps still cycle through all three brightness levels.
+  const steps = new Set();
+  for (let i = 0; i < 64; i++) steps.add(shimmerPhase(i, word).bulletStep);
   assert.deepEqual([...steps].sort(), [0, 1, 2]);
-  assert.deepEqual(shimmerPhase(16), shimmerPhase(0), "16-frame cycle wraps exactly");
+});
+
+test("shimmer adapts to the message length (Writing is shorter than Working)", () => {
+  const working = shimmerPhase(0, "Working".length);
+  const writing = shimmerPhase(0, "Writing".length);
+  assert.deepEqual(working.highlightStart, writing.highlightStart, "both start entering at the left edge");
+  // The longer message has a longer sweep: its cycle is longer.
+  assert.ok(("Waiting for input".length + 3) * 2 + 6 > ("Working".length + 3) * 2 + 6);
 });
 
 /** Component harness with a fake scheduler (no real timers). */
@@ -118,16 +156,20 @@ test("animation lifecycle: exactly one 64ms timer while active; stopped at idle/
 
 test("animation frames change the ANSI but not the semantic text", () => {
   const h = harness();
+  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
   const frameA = h.component.render(80)[0] ?? "";
-  h.scheduled[0].fn(); // frame++
+  // The highlight holds each position for 2 frames (render coalescing
+  // smoothing) — advance a full STEP and the frame must differ visually.
+  h.scheduled[0].fn();
+  h.scheduled[0].fn();
   const frameB = h.component.render(80)[0] ?? "";
+  assert.notEqual(frameA, frameB, "consecutive animation STEPS differ visually");
+  assert.equal(strip(frameA), strip(frameB), "stripped text identical across frames");
+  // Within one step the two frames are intentionally identical (held position).
   h.scheduled[0].fn();
   const frameC = h.component.render(80)[0] ?? "";
-  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
-  assert.notEqual(frameA, frameB, "consecutive animation frames differ visually");
-  assert.equal(strip(frameA), strip(frameB), "stripped text identical across frames");
-  assert.equal(strip(frameC), strip(frameA));
-  assert.ok(strip(frameA).startsWith("• Working ("), "Codex grammar preserved");
+  assert.equal(frameB, frameC, "position held for the second frame of a step");
+  assert.equal(strip(frameC), strip(frameA), "Codex grammar preserved");
 });
 
 test("NO_COLOR / ansi16 renders static (no timer, no per-frame change)", () => {

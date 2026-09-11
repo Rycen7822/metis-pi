@@ -76,11 +76,28 @@ export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
 
 /** Shimmer phase math (pure): brightness steps 0..3, highlight window of 3
  * cells sweeping the message word. Frame counter wraps — no state growth. */
-export function shimmerPhase(frame: number): { bulletStep: number; highlightStart: number } {
-  const f = ((frame % 16) + 16) % 16;
-  const bulletStep = [0, 1, 2, 1][f % 4]!;
-  const highlightStart = f % 12; // sweep across "Working" (≤8 chars) + pause
-  return { bulletStep, highlightStart };
+// Shimmer cycle: ENTER (window slides in from the left edge) → SWEEP (across
+// the word) → EXIT (fully off the right edge) → PAUSE (word at rest). One wave
+// always completes before the next begins — mixing mismatched cycle lengths
+// here made the second wave start while the first was mid-word (0.8.5 bug:
+// %12 inside a %16 loop cut the sweep short).
+// The highlight holds each position for SHIMMER_STEP_FRAMES frames: the host
+// coalesces renders, so one-position-per-frame read as stutter.
+export const SHIMMER_WINDOW = 3; // highlight width in cells
+export const SHIMMER_STEP_FRAMES = 2; // frames per highlight position (~128ms @64ms)
+export const SHIMMER_PAUSE = 6; // rest frames after the wave exits
+
+export function shimmerPhase(frame: number, wordLength: number): { bulletStep: number; highlightStart: number } {
+  const window = SHIMMER_WINDOW;
+  // highlightStart runs -window+1 … wordLength: enters at the left edge and
+  // exits fully past the right edge (window covers [start, start+window)).
+  const positions = wordLength + window; // entry → fully exited
+  const sweep = positions * SHIMMER_STEP_FRAMES;
+  const cycle = sweep + SHIMMER_PAUSE;
+  const f = ((frame % cycle) + cycle) % cycle;
+  const step = Math.floor(f / SHIMMER_STEP_FRAMES);
+  const bulletStep = [0, 1, 2, 1][step % 4]!;
+  return { bulletStep, highlightStart: step - window + 1 };
 }
 
 export interface WorkingComponentInput {
@@ -142,7 +159,7 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
       }
       syncTimer(true);
       const f = workingFrame(snapshot, input.getShow());
-      const { bulletStep, highlightStart } = shimmerPhase(frame);
+      const { bulletStep, highlightStart } = shimmerPhase(frame, f.message.length);
 
       // Bullet: subtle intensity pulse (truecolor only; else static accent).
       const animated = input.colorKind === "truecolor" && input.getAnimation().enabled;

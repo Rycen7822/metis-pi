@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.6
+
+Working shimmer fix (real-use video: the second wave started while the first
+was still mid-word):
+
+- **Root cause**: two mismatched cycle lengths — the highlight position used
+  `frame % 12` inside a `frame % 16` loop, so the sweep restarted at position
+  0 after 12 frames while the outer cycle cut it off again at 16. A wave
+  entering the word therefore chopped the previous one mid-sweep.
+- **Fix** (`src/chrome/working.ts`): one consistent cycle — ENTER (window
+  slides in from the left edge) → SWEEP → EXIT (fully off the right edge) →
+  PAUSE — parameterized by the actual message length, so a wave always
+  completes before the next begins. The highlight now holds each position for
+  2 frames (~128ms at the default 64ms tick): the host coalesces renders, and
+  one-position-per-frame read as stutter. The bullet pulse keeps its own
+  4-step cycle. A unit test now walks the full timeline and asserts the
+  highlight never moves backwards mid-wave and re-entry happens only at the
+  cycle boundary; the real-TUI wiring was verified frame-by-frame (tagged
+  tones: `W→o→r→k→i→n→g` advancing with held positions).
+
+`npm test` 208/208.
+
 ## 0.8.5
 
 Composer surface, Codex Working rhythm, OpenCode-style metadata, and a real

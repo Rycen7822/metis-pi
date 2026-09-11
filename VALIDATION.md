@@ -1,3 +1,23 @@
+# Validation record — 0.8.6 (Working shimmer overlap)
+
+Real-use video (WARP terminal, truecolor): the shimmer's second wave started
+while the first was still mid-word. Root cause: `frame % 12` highlight
+position inside a `frame % 16` cycle — the outer wrap cut sweeps short and
+restarted them mid-word.
+
+Fix verified two ways:
+
+1. **Timeline unit test**: walks two full cycles and asserts the lit window
+   never moves backwards mid-wave and only re-enters at the cycle boundary;
+   each position is held exactly 2 frames (render-coalescing smoothing).
+2. **Real wiring trace** (extension activation + tagged theme tones, real
+   timer): frames advance `W→o→r→k→i→n→g` monotonically, positions held,
+   bullet cycling independently — no mid-word restarts.
+
+`npm test` 208/208 · `check` clean.
+
+---
+
 # Validation record — 0.8.5 (composer surface, Working rhythm, metadata split, codex quota)
 
 Method: unit suites + `host-smoke` (real Pi component assembly) +
