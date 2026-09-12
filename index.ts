@@ -266,7 +266,7 @@ class CodexThinkingRailComponent implements Tui.Component {
   render(width: number): string[] {
     if (this.#cache && this.#lastWidth === width) return this.#cache;
     const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
-    const rail = level.kind === "none" ? "| " : `\x1b[38;2;137;180;250m▏\x1b[39m `;
+    const rail = level.kind === "none" ? "| " : `\x1b[38;2;58;150;221m▏\x1b[39m `;
     const railCells = 2;
     const inner = Math.max(1, Math.floor(width) - railCells);
     const childLines = this.#child.render(inner);
@@ -369,7 +369,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   // keeps its no-host-import rule.
   const surface = makeSurfaceOps(
     colorLevel,
-    (text) => `\x1b[38;2;137;180;250m${text}\x1b[39m`,
+    (text) => `\x1b[38;2;58;150;221m${text}\x1b[39m`,
     (text) => `\x1b[2m${text}\x1b[22m`,
   );
   activate(pi, {

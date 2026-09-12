@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.7
+
+深入对照 openai/codex 官方源码（tui/src/style.rs、markdown_render.rs、diff_render.rs、
+exec_cell/render.rs、render/highlight.rs）逐项对齐颜色体系。Codex 的双层结构：
+**状态/accent/markdown 内联 = 终端 ANSI 调色板**（用户终端实测 Campbell：绿 #13A10E、
+红 #C50F1F、黄 #C19C00、青 #3A96DD，四种采样逐一吻合），**语法高亮 = syntect
+Catppuccin Mocha**（深色终端默认主题）。据此修正：
+
+- **accent #89b4fa → #3a96dd（ANSI cyan）**：codex `accent_style()` = `Color::Cyan.bold()`。
+  影响内联代码（codex `code: cyan`）、列表符号、accent 边框、composer 提示符/footer accent、
+  思考 rail、编辑器默认 accent。
+- **探索行动词 → #3a96dd**：codex `exploring_display_lines` 里 `title.cyan()`。
+- **error 红 #ef8b8b → #c50f1f（ANSI red）**：codex `"•".red().bold()` / `Color::Red`。
+  影响错误圆点、Failed、diff 删除文本/计数。
+- **diff 增绿 #86c995 → #13a10e（ANSI green）**：codex `style_add` 内容 `Color::Green`。
+- **warning 黄 #e8c47a → #c19c00（ANSI yellow）**：codex `StatusTone::Attention = Color::Yellow`。
+- **markdown**：链接 = cyan（`link: cyan().underlined()`，URL 段也用 link 色）；引用块 =
+  绿色（`blockquote: green()`）；标题/加粗/斜体 codex 不加色，维持原样。
+- **代码块语法高亮 → Catppuccin Mocha**（codex `adaptive_default_theme_selection`：深色终端
+  默认 catppuccin-mocha）：keyword #cba6f7、function #89b4fa、variable #cdd6f4、string
+  #a6e3a1、number #fab387、type #f9e2af、comment #6c7086、punctuation #9399b2。
+  此前是 VS Code Dark+ 系（#569cd6/#dcdcaa/#9cdcfe…）。
+- **保持不变**：diff 背景板 #213A2B/#4A221D（与 codex `DARK_TC_*_LINE_BG_RGB` 一致）、
+  bash lexer 的 MOCHA 调色板（本来就是 Mocha）、Working 动画的 Mocha 蓝（codex 的
+  working shimmer 无色相，蓝色是本插件保留的 accent 选择）、标题金色（codex 标题无色，
+  属可选项）。
+
 ## 0.9.6
 
 工具圆点状态色对齐 Codex（用户反馈：Ran/Explored 左侧小点饱和度太低；取样 Codex 圆点 = #13A10E 高饱和绿）：

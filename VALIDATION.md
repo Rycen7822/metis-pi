@@ -789,3 +789,50 @@ run state; match Codex's vivid dots.
   success once done, for shell and exploration paths; adapter Explored
   expectation updated to the state-tone bullet).
 - `npm run check` + `check:core` clean; `test:chrome` 14/14; `test:host` PASS.
+
+## 0.9.7 — deep alignment with openai/codex color sources
+
+### Requirement
+
+User: read the Codex official source, find every remaining element where Codex
+uses high-saturation colors, and align this project's colors with them.
+
+### Codex source evidence (fetched from openai/codex main)
+
+- `tui/src/style.rs`: status tones are ANSI palette colors —
+  `Success = Color::Green`, `Failure = Color::Red`, `Attention = Color::Yellow`
+  (all bold); `accent_style()` = `Color::Cyan.bold()` on dark backgrounds.
+- `tui/src/exec_cell/render.rs`: exec bullets `"•".green().bold()` /
+  `"•".red().bold()`; exploration header bullet `"•".dim()` when done;
+  member verbs `title.cyan()`.
+- `tui/src/markdown_render.rs` (`MarkdownStyles::default`): `code: cyan`,
+  `link: cyan().underlined()`, `ordered_list_marker: light_blue`,
+  `blockquote: green`, headings/emphasis = modifiers only (no color).
+- `tui/src/diff_render.rs`: dark truecolor backgrounds
+  `DARK_TC_ADD_LINE_BG_RGB #213A2B` / `DARK_TC_DEL_LINE_BG_RGB #4A221D`
+  (ours already matched); content fg ANSI Green/Red.
+- `tui/src/render/highlight.rs` + `adaptive_default_theme_selection`: dark
+  terminals default to syntect **Catppuccin Mocha**.
+- `tui/src/shimmer.rs`: the working indicator is hueless (bg→fg white blend).
+
+The user's terminal ANSI palette was verified to be Campbell by four exact
+pixel matches (#13A10E green, #C50F1F red, #3A96DD cyan, #881798 magenta), so
+the ANSI references are materialized as those hex values.
+
+### Changes
+
+- Theme: `accent`/`link` → `#3a96dd`; `red` → `#c50f1f`; `green` → `#13a10e`;
+  `yellow` → `#c19c00`; `mdLinkUrl: link`; `mdQuote: green`; syntax keys →
+  Catppuccin Mocha (keyword #cba6f7, function #89b4fa, variable #cdd6f4,
+  string #a6e3a1, number #fab387, type #f9e2af, comment #6c7086,
+  punctuation #9399b2).
+- Source: exploration verbs → `#3a96dd` (codex `title.cyan()`); thinking rail,
+  surface accent painter, editor fallback accent → `58;150;221`.
+- Kept: working-widget Mocha blue (codex's is hueless; deliberate accent),
+  heading gold, diff backgrounds, MOCHA bash lexer palette.
+
+### Checks executed
+
+- `npm test` 254/254; `npm run check` + `check:core` clean; `test:chrome`
+  14/14; `test:host` PASS; adapter verb SGR expectation updated to
+  `58;150;221`.

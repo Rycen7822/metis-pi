@@ -4,7 +4,7 @@
 
 import { foregroundAnsi, type ColorLevel } from "./palette.ts";
 
-const EXPLORATION_BLUE = "#89b4fa"; // Mocha blue for member verbs
+const EXPLORATION_CYAN = "#3a96dd"; // Codex paints member verbs with ANSI cyan ("Read".cyan())
 const DIM_GRAY = "#6c7086"; // Mocha overlay0 for the " in " hint
 
 export type ExplorationVerb = "Read" | "Search" | "Find" | "List" | "Run";
@@ -38,10 +38,10 @@ export function renderExplorationHeader(render: { running: boolean; isError: boo
 
 /** One member row: "  └ " (first) or "    " (later) + cyan verb + target. */
 export function renderExplorationMember(row: ExplorationRow, options: { first: boolean; isError?: boolean }, colorLevel: ColorLevel): string {
-  const blue = foregroundAnsi(EXPLORATION_BLUE, colorLevel);
+  const cyan = foregroundAnsi(EXPLORATION_CYAN, colorLevel);
   const dim = foregroundAnsi(DIM_GRAY, colorLevel);
   const gutter = options.first ? "  └ " : "    ";
-  const head = `${blue}${row.verb}\x1b[39m `;
+  const head = `${cyan}${row.verb}\x1b[39m `;
   const body = row.inPath !== undefined
     ? `${row.target} ${dim}in\x1b[39m ${row.inPath}`
     : row.target;

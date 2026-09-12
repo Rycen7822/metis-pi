@@ -267,7 +267,7 @@ test("each completed read is a two-line Explored entry, and expansion recovers a
   // identity, so the bullet is plain), dim gutter, blue "Read" verb.
   assert.deepEqual(output, [
     "• Explored",
-    "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;137;180;250mRead\x1B[39m README.md",
+    "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;58;150;221mRead\x1B[39m README.md",
   ]);
   row.setExpanded(true);
   assert.match(row.render(80).join("\n"), /FULL FILE CONTENT/);
