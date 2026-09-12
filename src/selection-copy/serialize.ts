@@ -88,16 +88,14 @@ export class SelectionSerializer {
       const { pieces, soft, bridge, mapped, native } = this.#rowPieces(frame, row, columns, selection, anchor);
       const text = pieces.join("");
       if (text.length > 0) {
-        // The join to the PREVIOUS row is soft when THIS row's product row
-        // declares a soft continuation; the bridge is the whitespace the
-        // wrapper consumed at that break (recorded on this row).
+        // Soft join decided by THIS row's product; the bridge is the
+        // whitespace the wrapper consumed at that break (recorded on this row).
         if (parts.length > 0) parts.push(previousHadText && soft ? bridge : "\n");
         parts.push(text);
         previousHadText = true;
         if (native) nativeRows += 1;
         else mappedRows += 1;
       } else {
-        // Selected row without copyable text: a real line boundary either way.
         if (parts.length > 0) parts.push("\n");
         previousHadText = false;
       }
@@ -105,12 +103,14 @@ export class SelectionSerializer {
     return { text: parts.join(""), mappedRows, nativeRows };
   }
 
-  /** Content-space anchor: the scroll content box's rect.y, or 0 for screen
-   * space. Content row r maps to subtree row r + anchor. */
-  #anchorFor(frame: LayoutFrameLike, scrollView: unknown): number | undefined {
-    if (scrollView === undefined) return 0;
+  /** Content-space anchor (scroll content box rect; origin for screen space):
+   * column c maps to screen c + anchor.x, row r to subtree r + anchor.y.
+   * anchor.x is 0 unless the scroll viewport sits off the left edge (side
+   * gutters). */
+  #anchorFor(frame: LayoutFrameLike, scrollView: unknown): { x: number; y: number } | undefined {
+    if (scrollView === undefined) return { x: 0, y: 0 };
     const content = this.#findScrollViewContent(frame.root, scrollView);
-    return content?.rect.y;
+    return content ? { x: content.rect.x, y: content.rect.y } : undefined;
   }
 
   #findScrollViewContent(box: LayoutBoxLike, scrollView: unknown): LayoutBoxLike | undefined {
@@ -127,7 +127,7 @@ export class SelectionSerializer {
     row: number,
     columns: { start: number; end: number },
     selection: SelectionSpec,
-    anchor: number,
+    anchor: { x: number; y: number },
   ): { pieces: string[]; soft: boolean; bridge: string; mapped: boolean; native: boolean } {
     const pieces: string[] = [];
     let soft = true;
@@ -135,14 +135,13 @@ export class SelectionSerializer {
     const owners = this.#ownershipFor(frame, row, anchor, selection.scrollView !== undefined, columns.end);
     let mapped = false;
     let native = false;
-    // Group selected columns into runs by owning leaf box.
     let runStart = columns.start;
     let runHit = owners[columns.start];
     for (let col = columns.start + 1; ; col++) {
       const atEnd = col >= columns.end;
       const hit = atEnd ? undefined : owners[col];
       if (atEnd || hit !== runHit) {
-        this.#pushRun(runHit, runStart, col, row, selection, pieces, (update) => {
+        this.#pushRun(runHit, runStart, col, row, selection, anchor.x, pieces, (update) => {
           if (update.soft === false) soft = false;
           if (update.bridge && !bridge) bridge = update.bridge;
           if (update.mapped) mapped = true;
@@ -162,13 +161,20 @@ export class SelectionSerializer {
     end: number,
     row: number,
     selection: SelectionSpec,
+    anchorX: number,
     pieces: string[],
     onUpdate: (update: { soft?: boolean; bridge?: string; mapped?: boolean; native?: boolean }) => void,
   ): void {
     if (end <= start) return;
     if (!hit) {
-      pieces.push(this.#nativeSlice(selection.sourceLines[row], start, end));
-      onUpdate({ soft: false, native: true });
+      // Unowned cells with real text (foreign overlays, box gaps) fall back to
+      // native extraction and break softness; BLANK unowned cells (side
+      // gutters, spacing) contribute nothing so mapped runs decide the join.
+      const slice = this.#nativeSlice(selection.sourceLines[row], start, end);
+      if (slice.length > 0) {
+        pieces.push(slice);
+        onUpdate({ soft: false, native: true });
+      }
       return;
     }
     const resolved = this.#resolveProductRow(hit);
@@ -180,15 +186,14 @@ export class SelectionSerializer {
     onUpdate({ mapped: true });
     if (resolved.row.breakBefore !== "soft") onUpdate({ soft: false });
     if (resolved.row.bridge) onUpdate({ bridge: resolved.row.bridge });
-    // Absolute position of a product column in the selection's space.
-    const origin = hit.box.rect.x + resolved.colShift;
+    // Box rects are screen-space; the content origin's x comes back out.
+    const origin = hit.box.rect.x - anchorX + resolved.colShift;
     for (const span of resolved.row.spans) {
       const from = Math.max(span.colStart + origin, start);
       const to = Math.min(span.colEnd + origin, end);
       if (to <= from) continue;
       if (span.kind === "decoration") continue;
       if (span.kind === "gap" || span.kind === "unknown" || span.text === undefined) {
-        // Unmapped cells inside a mapped row: native extraction for them.
         pieces.push(this.#nativeSlice(selection.sourceLines[row], from, to));
         onUpdate({ soft: false, native: true });
         continue;
@@ -197,7 +202,6 @@ export class SelectionSerializer {
     }
   }
 
-  /** Walk container-product chains down to a concrete leaf row. */
   #resolveProductRow(hit: LeafHit): ResolvedPiece | undefined {
     const product = productFor(hit.box.lines);
     if (!product) return undefined;
@@ -219,13 +223,13 @@ export class SelectionSerializer {
     return undefined;
   }
 
-  /** Which leaf boxes own each column of a row (compositor semantics: later
-   * paints overwrite earlier ones). In content space the row converts to the
-   * subtree's coordinate frame via the content-box anchor first — box rects
-   * and clips are screen-space even inside a scrolled subtree. */
-  #ownershipFor(frame: LayoutFrameLike, row: number, anchor: number, contentSpace: boolean, maxCol: number): (LeafHit | undefined)[] {
+  /** Which leaf owns each column (compositor semantics: later paints win).
+   * Box rects/clips are screen-space even inside a scrolled subtree, so the
+   * content origin's x/y come out when converting the content-space row and
+   * clip range. */
+  #ownershipFor(frame: LayoutFrameLike, row: number, anchor: { x: number; y: number }, contentSpace: boolean, maxCol: number): (LeafHit | undefined)[] {
     const cells: (LeafHit | undefined)[] = new Array(maxCol).fill(undefined);
-    const subtreeRow = contentSpace ? row + anchor : row;
+    const subtreeRow = contentSpace ? row + anchor.y : row;
     const visit = (box: LayoutBoxLike): void => {
       if (box.lines !== undefined
           && subtreeRow >= box.rect.y && subtreeRow < box.rect.y + box.rect.height
@@ -233,8 +237,8 @@ export class SelectionSerializer {
         const lineIndex = subtreeRow - box.rect.y + (box.lineOffset ?? 0);
         if (lineIndex >= 0 && lineIndex < box.lines.length) {
           const hit: LeafHit = { box, lineIndex };
-          const from = Math.max(0, box.clip.x);
-          const to = Math.min(maxCol, box.clip.x + box.clip.width);
+          const from = Math.max(0, box.clip.x - anchor.x);
+          const to = Math.min(maxCol, box.clip.x + box.clip.width - anchor.x);
           for (let col = from; col < to; col++) cells[col] = hit;
         }
       }

@@ -17,6 +17,8 @@ export interface AppearanceConfig {
   /** Selection copy (fullscreen TUI). Ctrl+C copies the selection instead of
    * clearing the editor; no selection keeps stock behavior. */
   selectionCopy: { enabled: boolean; ctrlC: boolean };
+  /** Fullscreen side gutters; marginX 0 disables, gutters vanish below minWidth. */
+  fullscreen: { marginX: number; minWidth: number };
 }
 
 export const CONFIG_FILE = "codex-appearance.json";
@@ -31,6 +33,7 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   quota: { codex: "auto", refreshSeconds: 120, timeoutMs: 8000 },
   summary: { enabled: true, persist: true },
   selectionCopy: { enabled: true, ctrlC: true },
+  fullscreen: { marginX: 2, minWidth: 72 },
 };
 
 const SUMMARY_ENTRY_TYPE = "pi-codex-appearance:interaction-summary:v1";
@@ -183,6 +186,29 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
       cfg.selectionCopy.ctrlC = bool(sc.ctrlC, cfg.selectionCopy.ctrlC, problems, "selectionCopy.ctrlC");
     } else {
       problems.push("selectionCopy: expected object — using defaults");
+    }
+  }
+
+  const fullscreen = root.fullscreen;
+  if (fullscreen !== undefined && fullscreen !== null) {
+    if (typeof fullscreen === "object") {
+      const fs = fullscreen as Record<string, unknown>;
+      if (fs.marginX !== undefined && fs.marginX !== null) {
+        if (typeof fs.marginX === "number" && Number.isFinite(fs.marginX) && fs.marginX >= 0 && fs.marginX <= 8) {
+          cfg.fullscreen.marginX = Math.floor(fs.marginX);
+        } else {
+          problems.push("fullscreen.marginX: expected number 0..8 — using 2");
+        }
+      }
+      if (fs.minWidth !== undefined && fs.minWidth !== null) {
+        if (typeof fs.minWidth === "number" && Number.isFinite(fs.minWidth) && fs.minWidth >= 40 && fs.minWidth <= 400) {
+          cfg.fullscreen.minWidth = Math.floor(fs.minWidth);
+        } else {
+          problems.push("fullscreen.minWidth: expected number 40..400 — using 72");
+        }
+      }
+    } else {
+      problems.push("fullscreen: expected object — using defaults");
     }
   }
 

@@ -350,6 +350,12 @@ try {
   assert.ok(Number(copyStats[2]) >= 1, `at least one exact copy (got ${copyStats[2]})`);
   assert.equal(Number(copyStats[8]), expectedChars, `copied char count matches the reply length (${expectedChars})`);
 
+  // 0.9.4: fullscreen side gutters are active in this same run — transcript
+  // rows are inset past margin (2) + outputPad (1) columns, clicks and the
+  // exact copy above already prove the shifted frame stays coherent.
+  assert.match(beginLine, /^\s{3,}SELECT_BEGIN_MARK/, `transcript content inset by margin + outputPad, got ${JSON.stringify(beginLine)}`);
+  assert.ok(flat.includes("fullscreen-margin:applied(margin=2"), "margin diagnostics report applied");
+
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
@@ -358,6 +364,7 @@ try {
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
+  console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");
 } finally {
   try { execFileSync("tmux", ["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* already gone */ }
   server.close();

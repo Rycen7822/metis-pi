@@ -17,6 +17,7 @@ import { createFooterComponent, type FooterShow, type FooterSnapshot } from "./c
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { QuotaStore } from "./quota/quota-store.ts";
 import { createSelectionCopySystem, detectExternalSerializerPatch, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
+import { createFullscreenMargin, type FullscreenMarginHost, type FullscreenMarginSystem } from "./chrome/fullscreen-margin.ts";
 import type { CodexQuotaSnapshot } from "./quota/types.ts";
 
 export interface AppearanceAPI {
@@ -81,6 +82,8 @@ export interface Bindings {
   codexQuotaQuery?: (options: { timeoutMs: number; clientVersion?: string }) => Promise<CodexQuotaSnapshot>;
   /** Host TUI classes/primitives for the selection-copy system (index.ts). */
   selectionCopyHost?: SelectionCopyHost;
+  /** Host TUI HStack/Spacer constructors for the fullscreen margin (index.ts). */
+  marginHost?: FullscreenMarginHost;
 }
 
 /** Session-scoped presentation state (ephemeral, display-only). */
@@ -219,6 +222,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       process.stderr.write(`pi-codex-appearance: selection-copy prototypes unavailable (${wrap.details})\n`);
     }
   }
+  // Fullscreen gutters: install retries ride captureTui / agent_start — the
+  // captured renderer may still be the main screen at first.
+  const fullscreenMargin: FullscreenMarginSystem | undefined = bindings.marginHost && config.enabled && config.fullscreen.marginX > 0
+    ? createFullscreenMargin(bindings.marginHost, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
+    : undefined;
   type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts") & typeof import("./chrome/composer-metadata.ts");
   let chromeMods: Promise<ChromeMods | undefined> | undefined;
   const preloadChrome = (): Promise<ChromeMods | undefined> => {
@@ -241,11 +249,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     } catch { /* render happens on the next host cycle */ }
   };
 
-  /** The factory-time tui is the only reliable requestRender source. */
-  /** The extension receives the TUI through a Proxy facade; the underlying
-   * renderer may still be the main screen at first capture, so the prototype
-   * install retries on every capture and on agent activity (idempotent via an
-   * owner symbol on the resolved prototype). */
+  // The factory-time tui is the only reliable requestRender source. Prototype
+  // installs retry on every capture and agent activity — the captured
+  // renderer may still be the main screen at first (owner-symbol idempotent).
   let serializerHost: unknown = undefined;
   const captureTui = (tui: unknown): void => {
     if (!tui || typeof tui !== "object") return;
@@ -255,6 +261,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
     serializerHost ??= tui;
     if (selectionCopy) selectionCopy.installOnTui(serializerHost);
+    fullscreenMargin?.installOnTui(tui);
   };
 
   const footerShow = (): FooterShow => ({
@@ -646,6 +653,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  transcript: ${handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed"}`,
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
           `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
+          `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
           ...selectionCopyLine(),
@@ -673,6 +681,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   (pi as unknown as AppearanceAPI).on("agent_start", () => {
     if (!chromeEnabled) return;
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
+    if (fullscreenMargin && serializerHost) fullscreenMargin.installOnTui(serializerHost);
     if (!metrics.active) {
       // First start of a chain: a genuinely new interaction — no outcome or
       // tool-error state may leak across interactions.
@@ -876,6 +885,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     handle = undefined;
     decorations?.dispose();
     decorations = undefined;
+    fullscreenMargin?.dispose();
     // Chrome restore: only OUR factories are removed (identity comparison);
     // a successor extension's editor/footer/header is left untouched.
     const ui = hostData.ui as Partial<{

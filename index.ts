@@ -89,9 +89,7 @@ class CodexShellCallComponent implements Tui.Component {
     return rows;
   }
 
-  invalidate(): void {
-    // Stateless: recomputed per render.
-  }
+  invalidate(): void {}
 }
 
 /**
@@ -148,9 +146,7 @@ class CodexShellResultComponent implements Tui.Component {
     return rows;
   }
 
-  invalidate(): void {
-    // Stateless: recomputed per render.
-  }
+  invalidate(): void {}
 }
 
 /** Separator before assistant text that follows tool activity: a light
@@ -162,9 +158,7 @@ class CodexSeparatorComponent implements Tui.Component {
     const line = "─".repeat(usable);
     return [level.kind === "none" ? "-".repeat(usable) : `\x1b[2m${line}\x1b[22m`];
   }
-  invalidate(): void {
-    // Stateless: recomputed per render.
-  }
+  invalidate(): void {}
 }
 
 /** Live write call: structured header (• Writing <path>) + stage line +
@@ -416,8 +410,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     },
     isCollapsedLabel: (node) => node instanceof Tui.Text,
     makeWriteCall: (input) => {
-      // Body budget from codex-appearance.json; enabled=false collapses the
-      // live body to the header only.
       let maxRows: number | undefined;
       try {
         const dir = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
@@ -429,6 +421,10 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
+    marginHost: {
+      HStack: typeof Tui.HStack === "function" ? Tui.HStack : undefined,
+      Spacer: typeof Tui.Spacer === "function" ? Tui.Spacer : undefined,
+    },
     selectionCopyHost: {
       prototypes: {
         Text: Tui.Text.prototype,

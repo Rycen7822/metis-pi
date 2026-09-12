@@ -614,3 +614,92 @@ host-semantics/constraint comments kept. Net -111 lines vs 0.9.0.
   changing within the last 200ms) uses native extraction: correct text, but
   soft-wrap joins and decoration exclusion are the host's native semantics for
   that copy. The settled frame that follows always carries a full product.
+
+## 0.9.4 — fullscreen side gutters (Codex-style margins), plugin-only
+
+### Requirement
+
+Fullscreen mode should inset the whole UI with symmetric blank side columns
+(like Codex / like Pi's own regular mode), instead of running content flush
+against both screen edges — without giving up any fullscreen interaction
+(mouse click-to-expand, wheel scroll, scrollbar, selection copy). No host
+changes allowed.
+
+### Host facts verified (pi 0.85.1 dist, pi-tui)
+
+- Fullscreen layout: `createChatViewport` builds `VStack[ScrollView(document),
+  dock(editor/widgets/footer)]` and hands it to `TuiAltScreen.setLayoutRoot`;
+  `renderLayoutFrame` (layout.js) computes every component's rect `{x,y,w,h}`
+  recursively — horizontal offsets propagate to all descendants.
+- Mouse dispatch (`dispatchMouseToLayout`) hit-tests screen coordinates
+  against frame rects (`getLayoutBoxesAt`) and translates to per-box local
+  coordinates, so correctly-offset rects keep clicks correct automatically.
+- The extension's captured `tui` is the `createInteractiveTuiReference` Proxy:
+  get/set/getPrototypeOf all forward to the live renderer; the renderer may be
+  the main screen (`mode === "regular"`) at first capture, and is swapped on
+  mode changes → install must retry and must be prototype-level (the same seam
+  the selection-copy mirrors already use).
+- `HStack`/`VStack`/`Spacer` are public pi-tui exports; stack entries support
+  `{basis, grow, shrink, minSize, visible(viewport)}`, and `visible` is
+  re-evaluated by the layout engine every frame (used for the narrow-terminal
+  fallback).
+- The host's own padding settings do not cover this: `outputPad` is 0/1
+  left-only transcript padding, `editorPaddingX` caps at 3 and is editor-only.
+
+### Implementation
+
+- `src/chrome/fullscreen-margin.ts`: wraps the fullscreen renderer PROTOTYPE's
+  `setLayoutRoot` (owner-symbol idempotent, foreign wrappers compose), and
+  wraps every root in `HStack[Spacer(basis=m, grow=0) | root(grow=1) |
+  Spacer(basis=m)]`. A root mounted before install is re-dispatched through
+  the wrapped setter (retroactive wrap); dispose restores the prototype method
+  and unwraps a live root. Only renderers with `mode === "fullscreen"` are
+  touched; regular mode is deliberately untouched (the terminal emulator owns
+  the mouse there — native drag-select copy must keep working).
+- Config: `fullscreen.marginX` (0..8, default 2; 0 disables),
+  `fullscreen.minWidth` (40..400, default 72) — below the threshold the gutter
+  spacers' `visible` callback hides them and content keeps full width.
+- `/codex-ui` gained a `fullscreen-margin` status line.
+
+### Selection-copy serializer fixes (0.9.0-semantics strengthenings uncovered by the gutter frame)
+
+1. **Content-space x anchor.** Scroll-view selections use content-space rows
+   AND columns, and the serializer already translated rows by the content
+   box's `rect.y` but implicitly assumed content `x = 0` (true before the
+   gutters). The anchor now carries both axes: ownership fill translates the
+   clip range by `anchor.x`, and span origins subtract it. Pre-gutter behavior
+   (`x = 0`) is numerically unchanged. Symptom before the fix: every copied
+   row was shifted — duplicated first cell, lost wrap-boundary cells, mixed
+   mode (reproduced with margin + ScrollView, no scrollbar needed).
+2. **Blank unowned cells are neutral.** Columns no component paints (the
+   gutters, overlay gaps) previously forced native extraction and broke the
+   soft-wrap join even when the cells were pure whitespace. Now: an unowned
+   run whose native slice trims to empty contributes nothing and does not
+   touch the join decision; unowned runs with real text keep the old native
+   fallback.
+
+### Checks executed
+
+- `npm test` 253/253 — new `test/fullscreen-margin.test.mjs` against the REAL
+  TuiAltScreen: render inset, retroactive wrap, MouseRegion click through the
+  shifted frame + gutter no-op, narrow-terminal fallback, idempotent
+  re-install, dispose, `margin 0` no-op, regular-renderer skip, exact
+  selection copy through the offset frame (plain container AND
+  scroll-view-with-scrollbar structure); config validation cases added.
+- `npm run check` + `check:core` clean; `test:chrome` 14/14; `test:host` PASS.
+- `test:pty` real-tmux PASS with the feature ACTIVE (margin=2): all prior
+  stages green (idle footer, live Working, thinking timers, auto-collapse +
+  real mouse click expand/collapse through the shifted frame, tool run,
+  provider error), selection copy stays `exact=2 mixed=0 native=0` at 161
+  chars, plus new assertions: transcript rows inset past margin+outputPad
+  columns and `/codex-ui` reports `fullscreen-margin: applied (margin=2)`.
+
+### Trade-offs / limits (accepted)
+
+- `setLayoutRoot` is a non-public seam (instance/prototype wrap, owner-symbol
+  guarded) — same risk class as the existing selection-copy mirrors; worst
+  case on host refactors is the gutters silently not applying, never a crash.
+- Fullscreen overlays (autocomplete, dialogs, search) do not go through the
+  layout root and stay full-width — consistent with how Codex overlays behave.
+- Native (non-extension) fullscreen selection over a gutter row can include
+  the blank gutter cells visually; the Ctrl+C logical copy path is unaffected.

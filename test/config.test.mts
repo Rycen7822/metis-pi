@@ -40,3 +40,17 @@ test("top-level enabled=false is the kill switch", () => {
   const { config } = loadConfig("/agent", () => JSON.stringify({ enabled: false }));
   assert.equal(config.enabled, false);
 });
+
+test("fullscreen margin: valid values accepted, out-of-range clamped to defaults", () => {
+  const ok = loadConfig("/agent", () => JSON.stringify({ fullscreen: { marginX: 3, minWidth: 100 } }));
+  assert.equal(ok.config.fullscreen.marginX, 3);
+  assert.equal(ok.config.fullscreen.minWidth, 100);
+  assert.equal(ok.problems.length, 0);
+  const bad = loadConfig("/agent", () => JSON.stringify({ fullscreen: { marginX: 99, minWidth: 3 } }));
+  assert.equal(bad.config.fullscreen.marginX, DEFAULT_CONFIG.fullscreen.marginX);
+  assert.equal(bad.config.fullscreen.minWidth, DEFAULT_CONFIG.fullscreen.minWidth);
+  assert.equal(bad.problems.length, 2);
+  const zero = loadConfig("/agent", () => JSON.stringify({ fullscreen: { marginX: 0 } }));
+  assert.equal(zero.config.fullscreen.marginX, 0, "marginX 0 is a valid disable");
+  assert.equal(zero.problems.length, 0);
+});
