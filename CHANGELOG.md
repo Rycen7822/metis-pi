@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.6
+
+工具圆点状态色对齐 Codex（用户反馈：Ran/Explored 左侧小点饱和度太低；取样 Codex 圆点 = #13A10E 高饱和绿）：
+
+- 主题 `success` `#86c995`（淡彩绿）→ `#13a10e`：`Ran`/`Wrote`/`Added`/`Edited`/`Explored`
+  等完成态圆点变为 Codex 的高饱和绿；Writing 头部的 "Written" 阶段标签随之同色。
+  `toolDiffAdded` 仍用原 `green` 变量，diff 文本色不变。
+- `Explored` 头部圆点此前永远是灰色、`Edited`/`Wrote` 完成态也没有 success 分支——现在
+  三态清晰：运行中 = dim、完成 = 高饱和绿、错误 = error 红。
+- 顺带修复 `formatCall` 在探索/shell 早退前就绘制 marker 的重复圆点绘制。
+
 ## 0.9.5
 
 青色高亮统一改为 Codex 蓝（两张截图逐像素取样：pi 青 = #94E2D5 / 主题 accent #8abeb7，

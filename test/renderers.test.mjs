@@ -13,6 +13,16 @@ test("completion and error labels do not rely on mutating shared renderer state"
   assert.match(formatCall("bash", args, theme, { isError: true, isPartial: false }), /• Ran/);
 });
 
+test("cell bullets carry the run state: dim while running, success tone once done", () => {
+  const tones = [];
+  const stateTheme = { fg: (key, text) => { if (text === "•") tones.push(key); return text; }, bold: (text) => text };
+  formatCall("bash", { command: "x" }, stateTheme, { isPartial: true });
+  formatCall("bash", { command: "x" }, stateTheme, { isPartial: false });
+  formatCall("read", { path: "a" }, stateTheme, { isPartial: true });
+  formatCall("read", { path: "a" }, stateTheme, { isPartial: false });
+  assert.deepEqual(tones, ["dim", "success", "dim", "success"]);
+});
+
 test("each file operation retains its own row; there is no cross-call grouping", () => {
   for (const name of ["read", "write", "edit"]) {
     assert.match(formatCall(name, { path: "a.ts" }, theme, {}), /a\.ts/);

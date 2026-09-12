@@ -218,7 +218,6 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
 export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats, paint?: Highlight): string {
   const args = asRecord(input);
   const done = ctx.isPartial === false;
-  const marker = theme.fg(ctx.isError ? "error" : "dim", "•");
   if (EXPLORATION.has(name)) {
     return explorationTitle(name, { ...ctx, args: input }, theme);
   }
@@ -226,6 +225,7 @@ export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: 
     const { bullet, title } = shellTitle(ctx, theme);
     return shellCallText(bullet, title, args, ctx, theme, paint);
   }
+  const marker = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
   const label = ctx.isError ? "Failed" : name === "edit" ? (done ? "Edited" : "Editing") : (done ? "Wrote" : "Writing");
   let suffix = "";
   if (name === "edit" && stats && ctx.isError !== true) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
@@ -405,7 +405,7 @@ export function makeRenderers(
       if (name === "edit" && stats && merged.isError !== true) {
         suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
       }
-      const bullet = theme.fg(merged.isError ? "error" : "dim", "•");
+      const bullet = theme.fg(merged.isError ? "error" : done ? "success" : "dim", "•");
       const call = component(`${bullet} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(asRecord(args), merged))))}${suffix}`, ctx);
       if (state) state.call = call;
       return call;

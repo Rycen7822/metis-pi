@@ -751,3 +751,41 @@ every cyan highlight to the Codex blue.
   over per-element shade matching.
 - `MOCHA.operator` now equals `MOCHA.function` (`#89b4fa`) — `&&` reads as
   part of the command, matching how Codex renders command tokens.
+
+## 0.9.6 — tool-cell bullets → Codex state colors
+
+### Requirement
+
+User: the small dots left of "Ran"/"Explored" are too desaturated to read the
+run state; match Codex's vivid dots.
+
+### Evidence (pixel sampling)
+
+- Codex done bullets ("• Ran" ×5 rows) = `#13A10E` (vivid green, Campbell ANSI
+  green); codex delete text = `#C50F1F` (same ANSI family), running status dot
+  = pale gold `#F0DCB2`.
+- pi before: "Ran" bullet = theme success `#86C995` (muted pastel);
+  "Explored" header bullet = plain dim gray `#6c7086` (no state tone at all);
+  "Edited" done cells = dim gray (no success branch in the write/edit paths).
+
+### Changes
+
+- Theme `success` `#86c995` → `#13a10e` (`themes/codex-appearance.json`): all
+  done-state bullets (Ran/Wrote/Added/Edited/Explored) and the Writing
+  "Written" stage label turn vivid green. `toolDiffAdded` keeps the `green`
+  var — diff text color unchanged.
+- Exploration header bullet is now state-aware (error → error tone, running →
+  dim, done → success); write/edit cell paths gained the missing
+  `done → success` branch (previously always dim when done).
+- Running stays dim, error stays error — three states clearly distinguishable.
+- Side fix: `formatCall` painted its marker bullet before the exploration/
+  shell early returns, double-painting "•" per call (harmless with a real
+  theme, visible as duplicate paints in tests). Marker now lives after the
+  early returns.
+
+### Checks executed
+
+- `npm test` 254/254 (new: bullet tone dispatch test — dim while running,
+  success once done, for shell and exploration paths; adapter Explored
+  expectation updated to the state-tone bullet).
+- `npm run check` + `check:core` clean; `test:chrome` 14/14; `test:host` PASS.

@@ -24,7 +24,7 @@
     "border": "border",
     "borderAccent": "accent",
     "borderMuted": "border",
-    "success": "green",
+    "success": "#13a10e",
     "error": "red",
     "warning": "yellow",
     "muted": "muted",
