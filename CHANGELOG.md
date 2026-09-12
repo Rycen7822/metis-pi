@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.2
+
+用户消息灰底卡片 + thinking 完成后自动折叠（带时长）：
+
+- **用户消息灰底**：主题新增 `userMessageSurface: #292929`，经原生
+  `userMessageBg` 槽位生效——宿主 `UserMessageComponent` 本来就用背景 Box 渲染，
+  不打补丁、不改消息文本。
+- **每轮 thinking 计时**：`ThinkingRunPlan` 按宿主语义分轮（连续 thinking 块为一轮、
+  任何非 thinking 块断轮、全空轮不占 runIndex）；起点 = 首个非空 thinking 文本且
+  只记一次，终点 = 轮后首个非 thinking 块或 `message_end`，重复更新不重置也不延长。
+- **自动折叠一次**：完全复用宿主的 `thinkingVisibilityOverrides`（可点击、可 Ctrl+T），
+  每个生命周期转换只写一次——手动切换与全局开关永不被对抗；`completed=full` 只在
+  存在覆盖项时强制展开，不与全局隐藏打架。
+- **折叠标签带时长**：`Thought for 13s` / `1m 04s` / `1h 02m 03s`（与 Working 行同一
+  格式约定）；只在已结束的轮上替换宿主自身折叠 Text（原生 MouseRegion 点击保留），
+  活跃轮保持宿主 `Thinking...`；无计时证据显示 `Thought`，绝不伪造 0s。
+- **克隆重渲染兼容**：宿主用 message 克隆对象重渲染已结束的 transcript，sealed 计划
+  按"规范化内容+stopReason"指纹复用，真实计时不丢失。
+- **默认值**：`thinking.completed` 默认改为 `collapsed`（`streaming` 仍 `full`）；
+  `/codex-ui` 显示策略与已应用的可见性转换数。
+- **复制不回归**：折叠标签是真 Tui.Text，经 0.9.1 镜像只复制 `Thought for 13s`，
+  隐藏的思考正文不可能被复制；灰底卡片在 60/80/120 列下复制文本逐字一致、无背景 ANSI。
+
 ## 0.9.1
 
 0.9.0 评审轮修复与清理（同一功能，无新表面）：

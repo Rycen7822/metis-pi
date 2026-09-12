@@ -23,7 +23,7 @@ export const CONFIG_FILE = "codex-appearance.json";
 
 export const DEFAULT_CONFIG: AppearanceConfig = {
   enabled: true,
-  thinking: { streaming: "full", completed: "full", rail: true },
+  thinking: { streaming: "full", completed: "collapsed", rail: true },
   writePreview: { enabled: true, rows: 8 },
   composer: { surface: true, promptPrefix: true, metadata: true },
   working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 32 },

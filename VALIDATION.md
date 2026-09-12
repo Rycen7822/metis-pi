@@ -416,3 +416,122 @@ host-semantics/constraint comments kept. Net -111 lines vs 0.9.0.
 - `test:pty` real-tmux run: SGR mouse drag + single Ctrl+C → telemetry
   `exact=2 mixed=0 native=0`, 161 chars matching the mock reply; app alive,
   draft preserved.
+
+## 0.9.2 — user-message surface + auto-collapse thinking with duration
+
+### Root causes addressed
+
+1. User messages were plain because `userMessageBg` was "" in the theme. The
+   native `UserMessageComponent` already paints its Markdown inside a
+   `theme.bg("userMessageBg", …)` Box — the fix is theme-only
+   (`userMessageSurface: #292929` var wired to `userMessageBg`);
+   `UserMessageComponent` is NOT patched, user text is never touched.
+2. Auto-collapse was absent by the deliberate 0.8.1 policy. 0.9.2 restores it
+   through the HOST's own `thinkingVisibilityOverrides` — never by mutating an
+   expanded Markdown body.
+3. The old 0.8.0 auto-label implementation was unsafe because it could call
+   `setText` on an expanded Markdown. There is still NO path that writes into
+   a Markdown body; the collapsed side only swaps the host's OWN label Text
+   inside its native MouseRegion (tagged, and step 1 of every coordination
+   pass restores the original so a later pass re-decides from the native node).
+
+### Implementation
+
+- `themes/codex-appearance.json`: `userMessageSurface` var + `userMessageBg`
+  wiring (theme-only Part A).
+- `src/transcript-state.ts`: per-run `ThinkingRunPlan` clocks (host-parity
+  `renderedThinkingRuns`: consecutive thinking blocks = one run, any
+  non-thinking block breaks it, all-empty runs consume no runIndex); start
+  recorded once at first non-empty text, end at the first boundary or
+  message_end; `thinkingRunPlan(s)` query API; `TranscriptState` takes an
+  injectable clock for deterministic tests; `TextRunPlan` is separator-only
+  now (single timing source); sealed plans are fingerprint-indexed
+  (normalized content + stopReason) so the host's message-CLONE re-render of
+  finalized transcripts reuses the real clocks.
+- `src/transcript-adapter.ts`: the assistant decoration layer now applies the
+  thinking visibility policy around `updateContent` — host rebuild first, then
+  AT MOST ONE extra captured-`original` rebuild only when the override map
+  actually changed; streaming policy fires once per run when it first renders
+  ACTIVE; completion policy fires once on active→ended; `completed=full` only
+  forces a run open when an override entry already exists (never fights
+  Ctrl+T's map-clearing global hide); collapsed labels of ENDED runs swap to
+  duration summaries inside the native MouseRegion; `thinkingAutoApplied()`
+  count + `thinking-policy` feature surfaced for diagnostics.
+- `src/thinking-summary.ts` + `index.ts`: `Thought for Xs` / `Thought` label
+  (same formatDuration convention as the Working line), painted italic +
+  active-theme `thinkingText` via `getResolvedThemeColors` (deep theme imports
+  are exports-blocked), built as a real `Tui.Text` so the 0.9.1 selection-copy
+  mirror covers it; `isCollapsedLabel` guard is `instanceof Tui.Text`.
+- `src/config.ts`: `thinking.completed` default `collapsed`.
+- `/codex-ui`: `thinking: policy=…/… autoVisibility=N` line.
+
+### Key host facts verified (pi 0.85.1 dist)
+
+- `_handleAgentEvent` emits extension events BEFORE session subscribers, but
+  the host's FIRST `updateContent` for a message can still precede our apply
+  of that update (observed for message_start with content already present) —
+  hence resolution anchors by the message OBJECT first (anchored at
+  message_start), heuristics second, and the finalized-clone re-render is
+  covered by the sealed-plan fingerprint.
+- The host re-renders a finalized message through a CLONED message object
+  (~1.7 s after message_end in the PTY run) — the clone has no object anchor;
+  fingerprint reuse keeps the duration honest.
+- Click toggling in the fullscreen transcript goes through the selection
+  gesture's same-point release → synthesized click → layout dispatch →
+  MouseRegion (verified live in the PTY).
+
+### Tests (238 unit / 14 chrome / host smoke / PTY)
+
+- `test/transcript.test.mts`: the fake assistant component now mirrors the
+  FULL host rebuild semantics (override map, hideThinkingBlock, host run
+  grouping, click rebuild); policy matrix: A live full→auto-collapse ONCE
+  (+1 rebuild exactly on the transition, duration 7s), manual collapse during
+  streaming kept + completion only adds the duration, E Ctrl+T show/hide never
+  fought (incl. `full/full` never forces open under global hide), F two runs
+  independent clocks/durations/visibility, streaming=collapsed once, history
+  rebuild → `Thought` (never fabricated 0s) with click restoring the verbatim
+  body, aborted messages keep the duration, plain text never becomes a
+  summary; per-run plan clocks (start once, boundary close, message_end tail,
+  no timing without evidence); `renderedThinkingRuns` host-parity table.
+- `test/host-surface.test.mjs` (new, production path): REAL
+  `UserMessageComponent` paints the #292929 surface on every wrapped row with
+  per-row bg reset (theme activated through the host's own loader via
+  `PI_CODING_AGENT_DIR` custom themes); REAL `AssistantMessageComponent`
+  prototype: auto-collapse once through the HOST override map, duration label
+  inside the native MouseRegion, native click expand/collapse with the
+  sentinel body verbatim, Ctrl+T respected, history clone → `Thought`.
+- `test/selection-copy.test.mjs`: user-message card copies IDENTICALLY at
+  60/80/120 columns with the #292929 background rendered and ZERO ANSI in the
+  copied text; collapsed label copies exactly `Thought for 13s` (hidden
+  reasoning is not rendered anywhere, so it cannot leak).
+- `test/package.test.mjs`: theme contract for the surface slot.
+- `scripts/host-smoke.mjs`: section 11 drives the REAL prototype through the
+  extension's own event handlers — expand→collapse→click→Ctrl+T ordering plus
+  the user-surface assertion; diagnostics now assert
+  `thinking=full/collapsed` and the autoVisibility counter.
+- `scripts/pty-verify.mjs`: stage 2b now verifies on a REAL tmux TUI: the
+  transcript shows `Thought for Ns` (per-run duration), the reasoning body is
+  hidden while collapsed, a REAL SGR mouse click re-expands it, another click
+  re-collapses (click attempts re-locate the row from a fresh capture and
+  sweep ±1 rows because the region hit rows sit off the capture rows; misses
+  are no-ops so sweeping never double-toggles).
+
+### Checks executed
+
+- `npm test` 238/238; `test:chrome` 14/14; `check` + `check:core` clean;
+  `test:host` PASS; `preview` OK; `npm pack --dry-run` OK.
+- `test:pty` real-tmux PASS: idle footer, dual timers, `Thought for Ns`
+  auto-collapse + click expand/collapse, tool run, provider error, and the
+  0.9.1 selection-copy regression (`exact=2 mixed=0 native=0`, 161 chars).
+
+### Limitations
+
+- Restored-history thinking shows `Thought` (no duration): UI-only timing is
+  not persisted, and fabricating one is forbidden. Live-session durations are
+  exact.
+- If the host's message_start ever stops carrying content (or its clone
+  re-render changes shape), resolution degrades to the timing-less sealed
+  plan: collapse still works, labels fall back to `Thought` — never crashes.
+- With `streaming=full`, a NEW thinking run becomes visible while streaming
+  even if the user's global Ctrl+T hide is active (spec 4.3/4.6: new runs get
+  the current automatic defaults); it auto-collapses on completion.

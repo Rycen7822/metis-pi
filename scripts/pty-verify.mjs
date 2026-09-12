@@ -193,6 +193,31 @@ const waitFor = async (pattern, timeoutMs, label) => {
   }
 };
 
+// Shared viewport/mouse helpers: capture-pane includes scrollback, so mouse
+// rows are SCREEN rows — always index through the last pane_height lines.
+const paneSize = () => {
+  const out = execFileSync("tmux", ["display-message", "-p", "-t", SESSION, "#{pane_width} #{pane_height}"], { encoding: "utf8" });
+  const [w, h] = out.trim().split(" ").map(Number);
+  return { w, h };
+};
+const visibleRows = (frame) => frame.split("\n").slice(-paneSize().h);
+const cellOf = (rowText, needle, offset = 0) => {
+  // 1-based tmux column: sum display widths up to the needle (CJK = 2 cells).
+  let cells = 0;
+  const at = rowText.indexOf(needle) + offset;
+  for (const ch of rowText.slice(0, at)) cells += ch.charCodeAt(0) > 0x2e80 ? 2 : 1;
+  return cells + 1;
+};
+const sgrSeq = (button, x, y, release) => {
+  const s = `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
+  return [...Buffer.from(s, "utf8")].map((b) => b.toString(16).padStart(2, "0"));
+};
+/** Left click on a viewport row (0-based within the live screen). */
+const clickRow = (rowIndex0, col) => {
+  sendKeys(["-H", ...sgrSeq(0, col, rowIndex0 + 1)]);
+  sendKeys(["-H", ...sgrSeq(0, col, rowIndex0 + 1, true)]);
+};
+
 execFileSync("tmux", ["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
 sendKeys(["-l", `env HOME=${HOME_DIR} ${PI_BIN}`]);
 sendKeys(["Enter"]);
@@ -237,6 +262,38 @@ try {
   frames.thinkSummary = await waitFor(/thought for \d+s/, 30_000, "closed thinking in summary");
   assert.match(frames.thinkSummary, /thought for \d+s/, "summary carries the accumulated thinking time");
 
+  // 0.9.2: the completed thinking run auto-collapses in the transcript with
+  // its own duration; clicking the summary re-expands the original reasoning
+  // through the native MouseRegion; clicking again re-collapses. The chat
+  // shifts as the Working widget retires at settle AND the TUI's region hit
+  // rows sit ±1 against the capture rows, so every attempt re-locates the row
+  // from a FRESH capture and sweeps small row offsets until the expected
+  // frame appears (each miss is a no-op, so sweeping never double-toggles).
+  frames.collapsed = await waitFor(/Thought for \d+s/, 30_000, "auto-collapsed thinking label");
+  assert.ok(!visibleRows(frames.collapsed).some((l) => l.includes("pondering")), "reasoning body hidden while collapsed");
+  const clickUntil = async (needle, pattern, timeoutMs, label) => {
+    const start = Date.now();
+    let attempt = 0;
+    while (Date.now() - start < timeoutMs) {
+      const rows = visibleRows(capture());
+      const idx = rows.findIndex((l) => l.includes(needle));
+      const dRow = [0, 1, -1][attempt % 3];
+      const row = idx + dRow;
+      if (idx >= 0 && row >= 0 && row < rows.length) {
+        clickRow(row, cellOf(rows[idx], needle) + 1);
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        if (pattern.test(capture())) return capture();
+      }
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    assert.fail(`timeout waiting for ${label}:\n${capture().slice(-2200)}`);
+  };
+  frames.expanded = await clickUntil("Thought for", /pondering/, 15_000, "click re-expands the reasoning");
+  assert.ok(visibleRows(frames.expanded).some((l) => l.includes("pondering")), "reasoning visible after expansion");
+  frames.recollapsed = await clickUntil("pondering", /Thought for \d+s/, 15_000, "second click re-collapses");
+  assert.ok(!visibleRows(frames.recollapsed).some((l) => l.includes("pondering")), "reasoning hidden again");
+
   // Stage 3: tool run — real bash execution through the mock's tool call,
   // still Worked (proves the tool path doesn't brand Failed).
   type("please PCX_TOOL now");
@@ -261,33 +318,15 @@ try {
   frames.selectReply = await waitFor(/SELECT_END_MARK/, 60_000, "selectable reply");
   await new Promise((resolve) => setTimeout(resolve, 800)); // settle render
   const selectReply = "SELECT_BEGIN_MARK\n这一段很长的中文回答会在终端宽度下软折行显示成多个屏幕行，复制时应当保持为一行逻辑文本，不添加多余的换行或空格。\nselect alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\nSELECT_END_MARK";
-  const paneSize = (() => {
-    const out = execFileSync("tmux", ["display-message", "-p", "-t", SESSION, "#{pane_width} #{pane_height}"], { encoding: "utf8" });
-    const [w, h] = out.trim().split(" ").map(Number);
-    return { w, h };
-  })();
-  // capture-pane -S -200 includes scrollback; mouse rows are SCREEN rows —
-  // use only the last pane_height lines (the live viewport).
-  const visibleRows = frames.selectReply.split("\n").slice(-paneSize.h);
-  const beginRow = visibleRows.findIndex((l) => l.includes("SELECT_BEGIN_MARK"));
-  const endRow = visibleRows.findIndex((l) => l.includes("SELECT_END_MARK"));
+  const selectRows = visibleRows(frames.selectReply);
+  const beginRow = selectRows.findIndex((l) => l.includes("SELECT_BEGIN_MARK"));
+  const endRow = selectRows.findIndex((l) => l.includes("SELECT_END_MARK"));
   assert.ok(beginRow >= 0 && endRow > beginRow, "both markers visible in the viewport");
-  const cellOf = (rowText, needle, offset) => {
-    // 1-based tmux column: sum display widths up to the needle (CJK = 2 cells).
-    let cells = 0;
-    const at = rowText.indexOf(needle) + offset;
-    for (const ch of rowText.slice(0, at)) cells += ch.charCodeAt(0) > 0x2e80 ? 2 : 1;
-    return cells + 1;
-  };
-  const beginLine = visibleRows[beginRow];
-  const endLine = visibleRows[endRow];
+  const beginLine = selectRows[beginRow];
+  const endLine = selectRows[endRow];
   const pressX = cellOf(beginLine, "SELECT_BEGIN_MARK", 0);
   // Drag to the end of the END marker row (past its last cell → boundary).
   const endX = cellOf(endLine, "SELECT_END_MARK", "SELECT_END_MARK".length);
-  const sgrSeq = (button, x, y, release) => {
-    const s = `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
-    return [...Buffer.from(s, "utf8")].map((b) => b.toString(16).padStart(2, "0"));
-  };
   sendKeys(["-H", ...sgrSeq(0, pressX, beginRow + 1)]);
   sendKeys(["-H", ...sgrSeq(32, endX, endRow + 1)]);
   sendKeys(["-H", ...sgrSeq(0, endX, endRow + 1, true)]);
@@ -315,6 +354,7 @@ try {
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
+  console.log("  auto-collapse: 'Thought for Ns' label; mouse click expands/collapses the reasoning");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);

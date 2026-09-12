@@ -15,6 +15,15 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
+test("user messages regain the Codex gray surface through the native theme slot", () => {
+  const theme = load("themes/codex-appearance.json");
+  // 0.9.2: userMessageBg resolves to a non-empty low-contrast surface via a
+  // vars entry (the host's UserMessageComponent paints it through a Box).
+  assert.equal(theme.colors.userMessageBg, "userMessageSurface");
+  assert.match(theme.vars.userMessageSurface, /^#[0-9a-f]{6}$/i);
+  assert.notEqual(theme.vars.userMessageSurface.toLowerCase(), "#000000");
+});
+
 test("package defaults to the compact transcript entry, with no added runtime dependencies", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./index.ts"]);

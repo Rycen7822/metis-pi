@@ -9,8 +9,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TranscriptState, assistantHasVisibleText, assistantHasVisibleThinking } from "../src/transcript-state.ts";
+import { TranscriptState, assistantHasVisibleText, assistantHasVisibleThinking, renderedThinkingRuns } from "../src/transcript-state.ts";
 import { installTranscriptDecorations } from "../src/transcript-adapter.ts";
+import { thoughtSummaryText } from "../src/thinking-summary.ts";
 import { makeRenderers } from "../src/renderers.ts";
 import { resolveWriteStage, previewLines, renderWritePreview } from "../src/write-preview.ts";
 import { renderDiffLines } from "../src/diff.ts";
@@ -71,26 +72,58 @@ class FakeMouseRegion {
   handleMouse(event: unknown) { return this.onMouse(event); }
 }
 
-/** Mirrors pi AssistantMessageComponent: updateContent CLEARS the container
- * and rebuilds children from message.content every call. */
+/** Mirrors pi AssistantMessageComponent with FULL rebuild semantics:
+ * override map, hideThinkingBlock, host run grouping (consecutive thinking
+ * blocks = one run; all-empty runs consume no runIndex), collapsed Text
+ * labels and the native click toggle that rebuilds via updateContent. */
 class FakeAssistantComponent {
   contentContainer = { children: [] as unknown[] };
   lastMessage: unknown;
+  hideThinkingBlock = false;
+  hiddenThinkingLabel = "Thinking...";
+  thinkingVisibilityOverrides = new Map<number, boolean>();
+  isStreaming = false;
+  /** Number of ORIGINAL rebuilds (wrapper +1s observable here). */
+  updateCalls = 0;
   constructor(message: unknown) {
     this.lastMessage = message;
-    this.updateContent(message);
+    if (message) this.updateContent(message);
   }
-  updateContent(message: unknown, isStreaming = false) {
+  setHideThinkingBlock(hide: boolean) {
+    this.hideThinkingBlock = hide;
+    this.thinkingVisibilityOverrides.clear();
+    if (this.lastMessage) this.updateContent(this.lastMessage);
+  }
+  updateContent(message: unknown, isStreaming = this.isStreaming) {
+    this.updateCalls += 1;
     this.lastMessage = message;
-    const content = (Array.isArray((message as { content?: unknown[] })?.content) ? (message as { content: Array<Record<string, unknown>> }).content : []);
+    this.isStreaming = isStreaming;
+    const content = Array.isArray((message as { content?: unknown[] })?.content) ? (message as { content: Array<Record<string, unknown>> }).content : [];
     const children: unknown[] = [];
     const hasVisible = content.some((b) => (b.type === "text" && typeof b.text === "string" && b.text.trim()) || (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim()));
     if (hasVisible) children.push(new FakeSpacer());
-    for (const block of content) {
+    let thinkingRunIndex = 0;
+    for (let i = 0; i < content.length; i++) {
+      const block = content[i]!;
       if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
         children.push(new FakeMarkdown(block.text));
-      } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
-        children.push(new FakeMouseRegion(new FakeMarkdown(block.thinking), () => ({ handled: true })));
+      } else if (block.type === "thinking") {
+        const thinkingBlocks: string[] = [];
+        for (; i < content.length; i++) {
+          const t = content[i]!;
+          if (t.type !== "thinking") break;
+          if (typeof t.thinking === "string" && t.thinking.trim()) thinkingBlocks.push(t.thinking);
+        }
+        i--;
+        if (thinkingBlocks.length === 0) continue;
+        const runIndex = thinkingRunIndex++;
+        const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+        const inner: unknown = hidden ? new FakeText(this.hiddenThinkingLabel) : new FakeMarkdown(thinkingBlocks.join("\n\n"));
+        children.push(new FakeMouseRegion(inner, () => {
+          this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+          if (this.lastMessage) this.updateContent(this.lastMessage);
+          return { handled: true };
+        }));
       }
     }
     this.contentContainer.children = children;
@@ -532,23 +565,77 @@ test("DIM: source colors survive, resets re-acquire DIM, RGB untouched", () => {
 });
 
 
-test("thinking timing projects onto textRunPlan and closes on phase transition", () => {
-  const state = new TranscriptState();
+test("per-run plans: clock starts once at first text, closes on the text boundary", () => {
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
   const messageObj = { role: "assistant", content: [] as Array<Record<string, unknown>> };
   state.apply({ type: "message_start", message: { role: "assistant", content: [] } }, messageObj);
-  const key = state.messageKeyFor({ role: "assistant", content: [] }, messageObj);
   messageObj.content = [{ type: "thinking", thinking: "hmm" }];
   state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
-  const openPlan = state.textRunPlan(key);
-  assert.ok(openPlan, "plan exists while open");
-  assert.equal(openPlan!.thinkingEnded, false);
-  assert.ok(openPlan!.thinkingMs !== undefined);
-  // Phase transition: text after thinking closes the interval.
-  messageObj.content = [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Answer." }];
+  let plan = state.thinkingRunPlan(state.messageKeyFor(messageObj, messageObj), 0);
+  assert.ok(plan, "run plan exists while streaming");
+  assert.equal(plan!.ended, false);
+  assert.equal(plan!.startedAt, 1_000);
+  clock += 7_000;
   state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
-  const closedPlan = state.textRunPlan(state.messageKeyFor(messageObj, messageObj));
-  assert.ok(closedPlan, "sealed plan exists");
-  assert.equal(closedPlan!.thinkingEnded, true);
+  plan = state.thinkingRunPlan(state.messageKeyFor(messageObj, messageObj), 0);
+  assert.equal(plan!.startedAt, 1_000, "cumulative updates never reset the start clock");
+  messageObj.content = [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Answer." }];
+  clock += 2_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  plan = state.thinkingRunPlan(state.messageKeyFor(messageObj, messageObj), 0);
+  assert.equal(plan!.ended, true, "a non-thinking block after the run closes its clock");
+  assert.equal(plan!.endedAt, 10_000);
+  assert.equal(plan!.thinkingMs, 9_000);
+  // textRunPlan is separator-only now (single timing source lives per run).
+  const textPlan = state.textRunPlan(state.messageKeyFor(messageObj, messageObj));
+  assert.equal(textPlan?.thinkingMs, undefined);
+  assert.equal("thinkingEnded" in (textPlan ?? {}), false);
+});
+
+test("per-run plans: toolCall splits runs with independent clocks; message_end closes the tail", () => {
+  let clock = 0;
+  const state = new TranscriptState(() => clock);
+  const messageObj = { role: "assistant", content: [] as Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: [] } }, messageObj);
+  messageObj.content = [{ type: "thinking", thinking: "run zero" }];
+  clock = 1_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  messageObj.content = [
+    { type: "thinking", thinking: "run zero" },
+    { type: "toolCall", id: "t1", name: "read" },
+    { type: "thinking", thinking: "run one" },
+  ];
+  clock = 6_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const key = state.messageKeyFor(messageObj, messageObj);
+  const runs = state.thinkingRunPlans(key);
+  assert.equal(runs.length, 2, "toolCall splits the runs");
+  assert.equal(runs[0]!.ended, true, "run 0 closed by the toolCall boundary");
+  assert.equal(runs[0]!.endedAt, 6_000);
+  assert.equal(runs[0]!.thinkingMs, 5_000);
+  assert.equal(runs[1]!.ended, false, "run 1 still streaming");
+  clock = 9_500;
+  state.apply({ type: "message_end", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const sealed = state.thinkingRunPlans(state.identityOf(messageObj)!);
+  assert.equal(sealed[1]!.ended, true, "message_end closes the trailing run");
+  assert.equal(sealed[1]!.endedAt, 9_500);
+  assert.equal(sealed[1]!.thinkingMs, 3_500);
+  assert.equal(sealed[0]!.endedAt, 6_000, "closed runs never extend at message_end");
+});
+
+test("per-run plans: all-empty runs consume no host runIndex; no timing without evidence", () => {
+  const state = new TranscriptState();
+  const message = { role: "assistant" as const, content: [
+    { type: "thinking", thinking: "" },
+    { type: "thinking", thinking: "real thought" },
+  ] };
+  const key = state.registerFinalizedMessage(message, false);
+  const runs = state.thinkingRunPlans(key);
+  assert.equal(runs.length, 1, "empty block merges into one rendered run");
+  assert.equal(runs[0]!.runIndex, 0);
+  assert.equal(runs[0]!.ended, true, "finalized history runs count as ended");
+  assert.equal(runs[0]!.thinkingMs, undefined, "no fabricated duration for history");
 });
 
 test("0.8.1 doc diff surface: full-row bg on add/remove incl. blank add, context plain", () => {
@@ -574,4 +661,316 @@ test("0.8.1 doc diff surface: full-row bg on add/remove incl. blank add, context
   assert.ok(!out[0]!.includes("48;2;"), "context row has no background");
   // bg reset must close each styled row (surface never leaks past the row).
   for (const line of out.slice(1)) assert.match(line, /\x1b\[49m$/, "bg reset closes the row");
+});
+
+// ---------------------------------------------------------------------------
+// E. thinking visibility policy (0.9.2): auto-collapse via the HOST's
+// thinkingVisibilityOverrides, applied once per transition; native click
+// toggle and Ctrl+T stay in charge; duration labels only on ended runs.
+// ---------------------------------------------------------------------------
+
+interface Policy {
+  streaming: "full" | "collapsed";
+  completed: "full" | "collapsed";
+}
+
+let activePolicyHandle: { dispose(): void } | undefined;
+
+function setupWithPolicy(state: TranscriptState, policy: Policy) {
+  // One live install at a time: tests run sequentially on the SHARED fake
+  // prototype, and a leaked policy wrapper would keep writing overrides.
+  activePolicyHandle?.dispose();
+  const summaries: FakeText[] = [];
+  const rails: unknown[] = [];
+  const separators: unknown[] = [];
+  const handle = installTranscriptDecorations({
+    state,
+    toolPrototype: undefined,
+    assistantPrototype: FakeAssistantComponent.prototype as unknown as object,
+    makeSeparator: () => {
+      const sep = new FakeMarkdown("─".repeat(80));
+      separators.push(sep);
+      return sep;
+    },
+    makeSpacer: () => new FakeSpacer(),
+    makeRail: (child) => {
+      const rail = createTestRail(child);
+      rails.push(rail);
+      return rail;
+    },
+    thinkingPolicy: () => policy,
+    makeThoughtSummary: (input) => {
+      const label = new FakeText(thoughtSummaryText(input.durationMs));
+      summaries.push(label);
+      return label;
+    },
+    isCollapsedLabel: (node) => node instanceof FakeText,
+    enabled: () => true,
+  });
+  activePolicyHandle = handle;
+  return { handle, summaries, rails, separators };
+}
+
+const regionsOf = (component: FakeAssistantComponent): FakeMouseRegion[] =>
+  component.contentContainer.children.filter((c): c is FakeMouseRegion => c instanceof FakeMouseRegion);
+
+/** Inner display node of a region, unwrapping a rail wrapper when present. */
+function innerOf(region: FakeMouseRegion): unknown {
+  const child = region.child as { wrapped?: unknown } | undefined;
+  return child && typeof child === "object" && "wrapped" in child ? child.wrapped : region.child;
+}
+
+const summaryLabels = (component: FakeAssistantComponent, summaries: FakeText[]): FakeText[] =>
+  regionsOf(component)
+    .map((region) => region.child)
+    .filter((child): child is FakeText => summaries.includes(child as FakeText));
+
+const click = (region: FakeMouseRegion): void => {
+  region.handleMouse({ type: "click", button: "left" });
+};
+
+test("policy: streaming stays expanded, auto-collapse fires ONCE with the run duration", () => {
+  let clock = 5_000;
+  const state = new TranscriptState(() => clock);
+  const { handle, summaries } = setupWithPolicy(state, { streaming: "full", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [] as Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: [] } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  messageObj.content = [{ type: "thinking", thinking: "deep thought" }];
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, true);
+  assert.ok(innerOf(regionsOf(component)[0]!) instanceof FakeMarkdown, "expanded while streaming");
+  assert.equal(component.thinkingVisibilityOverrides.size, 0, "full policy needs no override for new runs");
+
+  messageObj.content = [{ type: "thinking", thinking: "deep thought" }, { type: "text", text: "Answer." }];
+  clock = 12_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const before = component.updateCalls;
+  component.updateContent(messageObj, true);
+  assert.equal(component.updateCalls - before, 2, "exactly ONE extra host rebuild on the transition");
+  const labels = summaryLabels(component, summaries);
+  assert.equal(labels.length, 1, "collapsed run shows the duration summary");
+  assert.equal(labels[0]!.text, "Thought for 7s");
+
+  const steady = component.updateCalls;
+  component.updateContent(messageObj, true);
+  assert.equal(component.updateCalls - steady, 1, "steady updates never re-apply the policy");
+  assert.equal(handle.thinkingAutoApplied(), 1, "one applied visibility transition total");
+
+  // Native toggle: click the summary → the full body returns (with rail).
+  click(regionsOf(component)[0]!);
+  assert.equal(component.thinkingVisibilityOverrides.get(0), false, "host map owns the manual state");
+  assert.ok((innerOf(regionsOf(component)[0]!) as FakeMarkdown).text.includes("deep thought"), "body restored verbatim");
+  // Click the expanded body → collapsed again; the policy stays out of the way.
+  click(regionsOf(component)[0]!);
+  assert.equal(summaryLabels(component, summaries).length, 1, "summary restored after second click");
+  assert.equal(handle.thinkingAutoApplied(), 1);
+});
+
+test("policy: manual collapse during streaming is kept; completion only adds the duration", () => {
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setupWithPolicy(state, { streaming: "full", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "work in progress" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+  // User collapses the ACTIVE run manually.
+  click(regionsOf(component)[0]!);
+  assert.ok(regionsOf(component)[0]!.child instanceof FakeText, "hidden while active");
+  assert.equal(summaryLabels(component, summaries).length, 0, "ACTIVE hidden run keeps the host's own label");
+
+  messageObj.content = [{ type: "thinking", thinking: "work in progress" }, { type: "text", text: "done" }];
+  clock = 4_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const before = component.updateCalls;
+  component.updateContent(messageObj, true);
+  assert.equal(component.updateCalls - before, 1, "already-hidden run: completion adds no rebuild");
+  const labels = summaryLabels(component, summaries);
+  assert.equal(labels.length, 1, "ended run shows the duration");
+  assert.equal(labels[0]!.text, "Thought for 3s");
+});
+
+test("policy: Ctrl+T show is not undone; hide keeps working; full/full never collapses", () => {
+  let clock = 0;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setupWithPolicy(state, { streaming: "full", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "reasoned" }, { type: "text", text: "reply" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_end", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj);
+  assert.equal(summaryLabels(component, summaries).length, 1, "auto-collapsed at rest");
+
+  // Ctrl+T show: host clears the map; the applied-once state must not re-collapse.
+  component.setHideThinkingBlock(false);
+  assert.equal(component.thinkingVisibilityOverrides.size, 0, "host cleared the map");
+  assert.ok(innerOf(regionsOf(component)[0]!) instanceof FakeMarkdown, "expanded after global show");
+  component.updateContent(messageObj);
+  component.updateContent(messageObj);
+  assert.ok(innerOf(regionsOf(component)[0]!) instanceof FakeMarkdown, "redraws keep it expanded");
+  // Manual collapse then global show again: still expanded.
+  click(regionsOf(component)[0]!);
+  component.setHideThinkingBlock(false);
+  assert.ok(innerOf(regionsOf(component)[0]!) instanceof FakeMarkdown);
+  // Global hide: host label comes back (ended run gets the duration swap).
+  component.setHideThinkingBlock(true);
+  assert.equal(summaryLabels(component, summaries).length, 1, "ended run keeps the duration label under global hide");
+
+  // completed=full must never force a collapse of runs hidden only by hideAll.
+  const fullState = new TranscriptState(() => clock);
+  const full = setupWithPolicy(fullState, { streaming: "full", completed: "full" });
+  fullState.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  fullState.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const fullComponent = new FakeAssistantComponent(undefined);
+  fullComponent.hideThinkingBlock = true;
+  fullComponent.updateContent(messageObj);
+  assert.equal(fullComponent.thinkingVisibilityOverrides.size, 0, "no override written against global hide");
+  assert.equal(summaryLabels(fullComponent, full.summaries).length, 1, "ended run keeps the duration label under global hide");
+});
+
+test("policy: two runs collapse independently with their own durations", () => {
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setupWithPolicy(state, { streaming: "full", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "run zero" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+  messageObj.content = [
+    { type: "thinking", thinking: "run zero" },
+    { type: "toolCall", id: "t1", name: "read" },
+    { type: "thinking", thinking: "run one" },
+  ];
+  clock = 6_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, true);
+  assert.equal(regionsOf(component).length, 2, "toolCall keeps two regions");
+  assert.equal((regionsOf(component)[0]!.child as FakeText).text, "Thought for 5s", "run 0 duration from its own clock");
+  assert.ok(innerOf(regionsOf(component)[1]!) instanceof FakeMarkdown, "run 1 still expanded");
+
+  messageObj.content = [
+    { type: "thinking", thinking: "run zero" },
+    { type: "toolCall", id: "t1", name: "read" },
+    { type: "thinking", thinking: "run one" },
+    { type: "text", text: "final" },
+  ];
+  clock = 9_500;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, true);
+  assert.equal((regionsOf(component)[1]!.child as FakeText).text, "Thought for 3s", "run 1 collapses on the text boundary");
+  // Clicking run 0 does not disturb run 1.
+  click(regionsOf(component)[0]!);
+  assert.ok((innerOf(regionsOf(component)[0]!) as FakeMarkdown).text.includes("run zero"), "run 0 expanded");
+  assert.ok(regionsOf(component)[1]!.child instanceof FakeText, "run 1 stays collapsed");
+});
+
+test("policy: streaming=collapsed hides active runs once; duration appears at completion", () => {
+  let clock = 2_000;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setupWithPolicy(state, { streaming: "collapsed", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "quiet work" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+  assert.equal(component.thinkingVisibilityOverrides.get(0), true, "streaming policy applied once");
+  assert.ok(regionsOf(component)[0]!.child instanceof FakeText, "hidden while streaming");
+  assert.equal(summaryLabels(component, summaries).length, 0, "host label kept while active");
+
+  messageObj.content = [{ type: "thinking", thinking: "quiet work" }, { type: "text", text: "out" }];
+  clock = 4_500;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, true);
+  const labels = summaryLabels(component, summaries);
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0]!.text, "Thought for 2s");
+});
+
+test("policy: history rebuild collapses without timing evidence ('Thought', never 0s)", () => {
+  const state = new TranscriptState();
+  const { summaries } = setupWithPolicy(state, { streaming: "full", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [
+    { type: "thinking", thinking: "EXPANDED_THINKING_SENTINEL old reasoning" },
+    { type: "text", text: "old answer" },
+  ] } as { role: string; content: Array<Record<string, unknown>> };
+  // No transcript events: the component resolves a finalized plan itself.
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj);
+  const labels = summaryLabels(component, summaries);
+  assert.equal(labels.length, 1, "history run auto-collapsed once");
+  assert.equal(labels[0]!.text, "Thought", "honest fallback without timing");
+  click(regionsOf(component)[0]!);
+  assert.ok((innerOf(regionsOf(component)[0]!) as FakeMarkdown).text.includes("EXPANDED_THINKING_SENTINEL"), "click restores the full original body");
+});
+
+test("policy: aborted message still collapses its run; plain text is never a summary", () => {
+  let clock = 3_000;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setupWithPolicy(state, { streaming: "full", completed: "collapsed" });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "interrupted thought" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+  messageObj.stopReason = "aborted";
+  state.apply({ type: "message_end", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, false);
+  const labels = summaryLabels(component, summaries);
+  assert.equal(labels.length, 1, "run that existed keeps its duration across abort");
+  assert.equal(labels[0]!.text, "Thought for 0s", "same-tick close is honest 0s, not fabricated");
+
+  const plain = { role: "assistant", content: [{ type: "text", text: "Thinking about it. Writing the body draft now." }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: plain.content } }, plain);
+  state.apply({ type: "message_update", message: { role: "assistant", content: plain.content } }, plain);
+  const plainComponent = new FakeAssistantComponent(undefined);
+  plainComponent.updateContent(plain);
+  assert.equal(summaryLabels(plainComponent, summaries).length, 0, "text-only message never produces a summary");
+  assert.equal(regionsOf(plainComponent).length, 0, "no thinking regions for plain text");
+});
+
+test("renderedThinkingRuns: host parity for empty runs, barriers and boundaries", () => {
+  assert.deepEqual(renderedThinkingRuns([{ type: "thinking", thinking: "a" }]), [
+    { runIndex: 0, firstContentIndex: 0, endedInContent: false },
+  ]);
+  assert.deepEqual(renderedThinkingRuns([{ type: "thinking", thinking: "" }]), [], "all-empty run consumes no runIndex");
+  assert.deepEqual(renderedThinkingRuns([
+    { type: "thinking", thinking: "" },
+    { type: "thinking", thinking: "b" },
+  ]), [{ runIndex: 0, firstContentIndex: 0, endedInContent: false }], "empty block merges forward");
+  assert.deepEqual(renderedThinkingRuns([
+    { type: "thinking", thinking: "a" },
+    { type: "toolCall", id: "t" },
+    { type: "thinking", thinking: "b" },
+  ]), [
+    { runIndex: 0, firstContentIndex: 0, endedInContent: true },
+    { runIndex: 1, firstContentIndex: 2, endedInContent: false },
+  ], "non-thinking blocks split runs and end the earlier one");
+  assert.deepEqual(renderedThinkingRuns([
+    { type: "thinking", thinking: "a" },
+    { type: "text", text: "" },
+    { type: "thinking", thinking: "b" },
+  ])[1]!.runIndex, 1, "an EMPTY text block still breaks the run (host loop)");
+});
+
+test("policy: collapsed/full opens the run once at completion via its own override", () => {
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setupWithPolicy(state, { streaming: "collapsed", completed: "full" });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "quiet then loud" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+  assert.equal(component.thinkingVisibilityOverrides.get(0), true, "hidden while streaming");
+  messageObj.content = [{ type: "thinking", thinking: "quiet then loud" }, { type: "text", text: "out" }];
+  clock = 3_500;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, true);
+  assert.equal(component.thinkingVisibilityOverrides.get(0), false, "completion policy opens the run it hid");
+  assert.ok(innerOf(regionsOf(component)[0]!) instanceof FakeMarkdown, "expanded after completion (full policy)");
+  assert.equal(summaryLabels(component, summaries).length, 0, "no duration label on an expanded run");
 });

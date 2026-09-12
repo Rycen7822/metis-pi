@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, MouseRegion } from "@earendil-works/pi-tui";
 import extension from "../index.ts";
 
 const handlers = new Map();
@@ -160,7 +160,8 @@ const notified = [];
 codexUi.handler("", { ui: { notify: (t) => notified.push(t) } });
 const diagnostics = notified.join("\n");
 assert.match(diagnostics, /pi-codex-appearance [\w.-]+ diagnostics \(mode=\w+, pi=[\w.-]+/);
-assert.match(diagnostics, /thinking=full\/full/, "effective thinking policy surfaced (full/full default)");
+assert.match(diagnostics, /thinking=full\/collapsed/, "effective thinking policy surfaced (full/collapsed default)");
+assert.match(diagnostics, /thinking: policy=full\/collapsed autoVisibility=\d+/, "0.9.2 thinking policy + applied-transition count");
 assert.match(diagnostics, /composer: surface=\S+.*prefix=\S+ metadata=\S+/);
 assert.match(diagnostics, /working: (idle|active) /);
 assert.match(diagnostics, /codex quota: mode=auto source=codex-app-server /);
@@ -248,6 +249,42 @@ assert.equal(summariesAfter - summariesBefore, 1, "exactly one summary per settl
 const lastSummary = appendedEntries.at(-1).data;
 assert.equal(lastSummary.schemaVersion, 2, "0.8.4 writes the v2 runtime verdict schema");
 assert.equal(lastSummary.outcome, "completed", "clean stop → Worked");
+
+// ---- 11. 0.9.2 thinking policy on the REAL prototype: collapse once, native
+// click toggle, Ctrl+T respected. Assertions go through the RENDERED frame —
+// the rail (makeRail) legitimately wraps the expanded Markdown, so class
+// identity of the inner node is not the user-visible contract.
+const thinkMessage = { role: "assistant", content: [], stopReason: null };
+handlers.get("message_start")({ type: "message_start", message: thinkMessage }, {});
+const thinkComp = new Core.AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, []);
+const regionOf = (comp) => comp.contentContainer.children.find((c) => c instanceof MouseRegion);
+const thinkFrame = (comp) => stripVTControlCharacters(comp.render(80).join("\n"));
+thinkMessage.content = [{ type: "thinking", thinking: "EXPANDED_THINKING_SENTINEL" }];
+handlers.get("message_update")({ type: "message_update", message: thinkMessage }, {});
+thinkComp.updateContent(thinkMessage, true);
+assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "thinking expanded while streaming");
+thinkMessage.content = [
+  { type: "thinking", thinking: "EXPANDED_THINKING_SENTINEL" },
+  { type: "text", text: "Answer." },
+];
+handlers.get("message_update")({ type: "message_update", message: thinkMessage }, {});
+thinkComp.updateContent(thinkMessage, true);
+assert.match(thinkFrame(thinkComp), /Thought for \d+s/, "collapsed with a duration after the text boundary");
+assert.doesNotMatch(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "body hidden once collapsed");
+regionOf(thinkComp).handleMouse({ type: "click", button: "left", x: 5, y: 0 });
+assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "native click expands the original body");
+thinkComp.setHideThinkingBlock(false);
+assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "Ctrl+T show not fought by the policy");
+thinkComp.updateContent(thinkMessage);
+assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "redraws keep manual/global expansion");
+// The user message card: UserMessageComponent paints a surface via the
+// native userMessageBg slot (the builtin dark theme also carries one — the
+// mechanism is what this asserts; the codex value is covered by unit tests).
+const userSurface = new Core.UserMessageComponent("surface smoke test");
+assert.ok(
+  userSurface.render(80).some((row) => /\x1b\[48;[0-9;]*m/.test(row)),
+  "user message rows carry the theme surface",
+);
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");

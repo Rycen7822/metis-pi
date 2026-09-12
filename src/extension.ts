@@ -1,5 +1,5 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
-import { installTranscriptDecorations, type DecorationHandle } from "./transcript-adapter.ts";
+import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy } from "./transcript-adapter.ts";
 import { TranscriptState, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
@@ -49,6 +49,13 @@ export interface Bindings {
   makeSpacer?: () => unknown;
   /** Wrap a thinking display node with our rail (host TUI primitives). */
   makeRail?: (child: unknown) => unknown;
+  /**
+   * Build the collapsed-run summary label ("Thought for 13s") as a
+   * display-only host Text (index.ts owns host styling).
+   */
+  makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number }) => unknown;
+  /** Structural guard for the host's collapsed-label Text (real class check). */
+  isCollapsedLabel?: (node: unknown) => boolean;
   /** Detect an external owner that already renders thinking rails. */
   externalRailOwner?: () => boolean;
   /** Build the live write call component (header + stage + preview body). */
@@ -410,6 +417,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // thinking rail). Failures are reported PER FEATURE; per-member rows,
     // native text and the output dimming keep working regardless.
     if (bindings.assistantPrototype && bindings.makeSeparator) {
+      const thinkingPolicy = (): ThinkingPolicy => ({
+        streaming: config.thinking.streaming,
+        completed: config.thinking.completed,
+      });
       decorations = installTranscriptDecorations({
         state: transcript,
         toolPrototype: bindings.prototype,
@@ -418,6 +429,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
         makeRail: bindings.makeRail,
         externalRailOwner: bindings.externalRailOwner,
+        thinkingPolicy,
+        makeThoughtSummary: bindings.makeThoughtSummary,
+        isCollapsedLabel: bindings.isCollapsedLabel,
         enabled: () => enabled,
       });
       const failedFeatures = decorations.features.filter((f) => !f.installed);
@@ -631,6 +645,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  chrome: editor=${chrome.editorInstalled ? "applied" : "native"} footer=${chrome.footerInstalled ? "applied" : "native/off"} header=${chrome.headerInstalled ? "applied" : "native"} working=${chrome.widgetInstalled ? "widget" : chrome.fallbackMessage ? "fallback(message)" : "native"}`,
           `  transcript: ${handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed"}`,
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
+          `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
           ...selectionCopyLine(),

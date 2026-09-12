@@ -335,3 +335,52 @@ test("property: mirrored render equals host rows and full selection round-trips 
   const d = diagnostics(sys);
   assert.equal(d.degraded, 0, `mirror degraded during property run: ${d.reason}`);
 });
+
+// ---------------------------------------------------------------------------
+// 0.9.2: user-message card surface + collapsed thought label — the gray
+// background is presentation-only and the label must never leak hidden
+// reasoning into a selection copy.
+// ---------------------------------------------------------------------------
+
+test("user message card: copied logical text identical across widths, background never copied", () => {
+  const sys = makeSystem();
+  const text = "帮我看看这个很长的中文问题在窗口变窄的时候软折行复制是否保持为一行不添加多余换行或空格，同时灰色卡片背景绝对不能混进复制结果里。";
+  const bgPaint = (line) => `\x1b[48;2;41;41;41m${line}\x1b[49m`;
+  const copies = [];
+  for (const width of [60, 80, 120]) {
+    const box = new Tui.Box(1, 1, bgPaint);
+    box.addChild(new Tui.Markdown(text, 0, 0, theme, { color: (t) => t }, { preserveOrderedListMarkers: true, preserveBackslashEscapes: true }));
+    const rows = box.render(width);
+    assert.ok(rows.length > 3, `message wraps at ${width}`);
+    assert.ok(rows.some((row) => row.includes("\x1b[48;2;41;41;41m")), `surface rendered at ${width}`);
+    const result = serializeFrame(
+      { root: { component: box, rect: { x: 0, y: 0, width, height: rows.length }, clip: { x: 0, y: 0, width, height: rows.length }, children: [], lines: rows } },
+      rows, 1, rows.length - 2,
+    );
+    assert.ok(!/\x1b/.test(result.text), `no ANSI (background included) in copied text at ${width}`);
+    copies.push(result.text);
+  }
+  assert.equal(copies[0], copies[1], "60 vs 80 columns: identical logical copy");
+  assert.equal(copies[1], copies[2], "80 vs 120 columns: identical logical copy");
+  assert.ok(copies[0].replace(/\n/g, "").includes("软折行复制"), "content present");
+});
+
+test("collapsed thought summary copies its label only — hidden reasoning is not rendered anywhere", () => {
+  makeSystem();
+  // The real label as index.ts paints it: italic + thinkingText color.
+  const label = new Tui.Text("\x1b[3m\x1b[38;2;163;163;163mThought for 13s\x1b[39m\x1b[23m", 1, 0);
+  const rows = label.render(40);
+  const product = productFor(rows);
+  assert.ok(product, "Text mirror builds for the summary label");
+  const copied = product.rows
+    .map((row) => row.spans
+      .filter((span) => span.kind !== "decoration")
+      .map((span) => span.text ?? "")
+      .join(""))
+    .filter((text) => text.length > 0)
+    .join("\n");
+  assert.equal(copied, "Thought for 13s");
+  assert.ok(!/\x1b/.test(copied), "label styling stays out of the copy");
+});
+
+import { productFor } from "../src/selection-copy/model.ts";

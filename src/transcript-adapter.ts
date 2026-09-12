@@ -1,6 +1,7 @@
-// Transcript decoration: one assistant decoration layer coordinates BOTH the
-// separator line and the thinking rail against the rebuilt contentContainer
-// (they must not stack two unaware patches on the same updateContent).
+// Transcript decoration: one assistant decoration layer coordinates the
+// separator line, the thinking rail, the thinking visibility policy and the
+// collapsed-run summary labels against the rebuilt contentContainer (they
+// must not stack two unaware patches on the same updateContent).
 //
 // Coordination contract: call the approved predecessor exactly ONCE, read the
 // REBUILT subtree, map text/thinking slots semantically, then re-attach the
@@ -8,19 +9,30 @@
 // matching decoration in the CURRENT subtree — removed-by-clear() decorations
 // are re-attached.
 //
+// Thinking visibility policy: the host owns hidden-vs-expanded rendering, the
+// MouseRegion click toggle and the override map (`thinkingVisibilityOverrides`
+// on the component instance). The policy writes that map AT MOST ONCE per
+// lifecycle transition (run becomes active / run becomes ended) and NEVER
+// fights a later manual toggle or a Ctrl+T global toggle (whose
+// setHideThinkingBlock clears the map — already-applied transitions are
+// remembered per component and never re-applied). The expanded Markdown body
+// is never rewritten into a label; the collapsed side only swaps the host's
+// own label Text inside its MouseRegion for a duration summary.
+//
 // External owner awareness: an external wrapper (e.g. pi-zentui thinkingSteps)
 // may already own assistant thinking display; when detected the rail stays
 // passive while the separator stays active.
 
 import { asRecord } from "./renderers.ts";
-import { TranscriptState, type ExplorationPlan, type TextRunPlan } from "./transcript-state.ts";
+import { TranscriptState, renderedThinkingRuns, type MessageViewKey } from "./transcript-state.ts";
 
 const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
 const ASSISTANT_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.assistant-deco.v2");
+const THOUGHT_LABEL = Symbol.for("Rycen7822.pi-codex-appearance.thought-label.v1");
 
 /** Per-feature install diagnostics (never aggregate with .some()). */
 export interface DecorationFeature {
-  readonly name: "separator" | "thinking-rail" | "group-spacing";
+  readonly name: "separator" | "thinking-rail" | "group-spacing" | "thinking-policy";
   readonly installed: boolean;
   readonly reason: string;
 }
@@ -28,7 +40,14 @@ export interface DecorationFeature {
 export interface DecorationHandle {
   readonly installed: boolean;
   readonly features: readonly DecorationFeature[];
+  /** Visibility transitions the policy has applied so far (diagnostics). */
+  readonly thinkingAutoApplied: () => number;
   dispose(): void;
+}
+
+export interface ThinkingPolicy {
+  streaming: "full" | "collapsed";
+  completed: "full" | "collapsed";
 }
 
 function methodBody(fn: Function): string {
@@ -37,7 +56,7 @@ function methodBody(fn: Function): string {
 }
 
 function failed(features: DecorationFeature[]): DecorationHandle {
-  return { installed: false, features, dispose() {} };
+  return { installed: false, features, thinkingAutoApplied: () => 0, dispose() {} };
 }
 
 export interface TranscriptAdapterInput {
@@ -55,6 +74,23 @@ export interface TranscriptAdapterInput {
   makeRail: ((child: unknown) => unknown) | undefined;
   /** True when an external owner already renders thinking rails. */
   externalRailOwner?(): boolean;
+  /**
+   * Thinking display policy (config). When absent, NO automatic visibility
+   * transition is ever applied — the host's own defaults stay in charge.
+   */
+  thinkingPolicy?(): ThinkingPolicy;
+  /**
+   * Build the collapsed-run summary label ("Thought for 13s") as a display-only
+   * component. Only ever used to replace the host's OWN collapsed label Text
+   * inside its MouseRegion; never applied to an expanded Markdown body.
+   */
+  makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number }) => unknown;
+  /**
+   * Structural guard: is this node the host's collapsed-label Text? Must be a
+   * real class/shape check from the host (e.g. `instanceof Tui.Text`) — never
+   * a `.text` field sniff.
+   */
+  isCollapsedLabel?: (node: unknown) => boolean;
   enabled(): boolean;
 }
 
@@ -71,21 +107,33 @@ const SEP_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.separator");
 export function installTranscriptDecorations(input: TranscriptAdapterInput): DecorationHandle {
   const features: DecorationFeature[] = [];
   const disposers: Array<() => void> = [];
+  const autoApplied = { count: 0 };
   if (input.toolPrototype) {
     const result = decorateToolRows(input);
     features.push({ name: "group-spacing", installed: result.installed, reason: result.reason });
     if (result.installed) disposers.push(result.dispose);
   }
   if (input.assistantPrototype) {
-    const result = decorateAssistant(input);
+    const result = decorateAssistant(input, autoApplied);
     features.push(
       { name: "separator", installed: result.installed, reason: result.reason },
       { name: "thinking-rail", installed: result.railInstalled, reason: result.railReason },
+      {
+        name: "thinking-policy",
+        installed: result.installed && input.thinkingPolicy !== undefined,
+        reason: !result.installed
+          ? "assistant decoration unavailable"
+          : input.thinkingPolicy !== undefined
+            ? input.makeThoughtSummary && input.isCollapsedLabel
+              ? "auto-collapse + duration labels enabled"
+              : "auto-collapse enabled; duration labels unavailable (no summary factory)"
+            : "no policy binding — host defaults stay in charge",
+      },
     );
     if (result.installed || result.railInstalled) disposers.push(result.dispose);
   }
   const installed = features.some((f) => f.installed);
-  return { installed, features, dispose() { for (const d of disposers) d(); } };
+  return { installed, features, thinkingAutoApplied: () => autoApplied.count, dispose() { for (const d of disposers) d(); } };
 }
 
 /** Suppress the leading spacer of non-first exploration group members. */
@@ -154,9 +202,10 @@ function decorateToolRows(input: TranscriptAdapterInput): { installed: boolean; 
   };
 }
 
-// Assistant subtree: separator before the first text run + rail on thinking
-// runs, re-coordinated after EVERY rebuild.
-function decorateAssistant(input: TranscriptAdapterInput): {
+// Assistant subtree: separator before the first text run, rail on expanded
+// thinking runs, auto visibility policy + duration labels on collapsed ones —
+// re-coordinated after EVERY rebuild.
+function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: number }): {
   installed: boolean; reason: string;
   railInstalled: boolean; railReason: string;
   dispose: () => void;
@@ -165,7 +214,7 @@ function decorateAssistant(input: TranscriptAdapterInput): {
   const key = "updateContent";
   const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
-    return { installed: false, reason: "Pi updateContent missing or read-only", railInstalled: false, railReason: "no updateContent access", dispose() {} };
+    return { installed: false, reason: "Pi updateContent missing or read-only", railInstalled: false, railReason: "no updateContent access", dispose: () => {} };
   }
   // Structural contract: the method exists, is writable/configurable, and the
   // rebuilt subtree exposes the host's contentContainer. String fingerprints
@@ -180,9 +229,26 @@ function decorateAssistant(input: TranscriptAdapterInput): {
   // wrapper installed before us is captured as the descriptor we decorate.
   let active = true;
 
+  // Auto policy state: applied transitions are remembered PER COMPONENT and
+  // PER RUN so the policy fires once per lifecycle transition — never on every
+  // repaint. This is what keeps manual toggles and Ctrl+T sticky.
+  const streamingApplied = new WeakMap<object, Set<number>>();
+  const completionApplied = new WeakMap<object, Set<number>>();
+
   const wrapper = function (this: unknown, ...args: unknown[]): void {
     original.apply(this, args);
     if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
+    try {
+      // A visibility transition needs the host to REBUILD so the run renders
+      // under its new hidden state. Call the CAPTURED original (never
+      // this.updateContent — no wrapper recursion), at most ONE extra rebuild,
+      // only when the override map actually changed.
+      if (input.thinkingPolicy && applyThinkingPolicy(input, this as object, streamingApplied, completionApplied, autoApplied)) {
+        original.apply(this, args);
+      }
+    } catch {
+      // A policy failure must not break the original message display.
+    }
     try {
       coordinateSubtree(input, this as object);
     } catch {
@@ -218,9 +284,88 @@ function decorateAssistant(input: TranscriptAdapterInput): {
 }
 
 /**
+ * Apply the thinking visibility policy to the host's override map. Each
+ * transition (a run first renders while active; a run becomes ended) is
+ * applied AT MOST ONCE per (component, run) — later manual toggles and
+ * Ctrl+T's map-clearing setHideThinkingBlock are never fought. The completed
+ * policy only FORCES a run open when a plugin/user override entry already
+ * exists; a run hidden solely by the host's global hideThinkingBlock stays
+ * hidden. Returns true when the map changed and the host must rebuild once.
+ */
+function applyThinkingPolicy(
+  input: TranscriptAdapterInput,
+  component: object,
+  streamingApplied: WeakMap<object, Set<number>>,
+  completionApplied: WeakMap<object, Set<number>>,
+  autoApplied: { count: number },
+): boolean {
+  const record = asRecord(component);
+  const message = asRecord(record.lastMessage);
+  if (!message || message.role !== "assistant") return false;
+  const overrides = record.thinkingVisibilityOverrides;
+  if (!overrides || typeof (overrides as Map<number, boolean>).get !== "function" || typeof (overrides as Map<number, boolean>).set !== "function") {
+    return false; // host shape changed — native visibility stays in charge
+  }
+  const map = overrides as Map<number, boolean>;
+  const policy = input.thinkingPolicy!();
+  const hideAll = record.hideThinkingBlock === true;
+  const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : [];
+  const key = resolveMessagePlan(input, component, message, content);
+  const apply = (runIndex: number, desired: boolean): boolean => {
+    if ((map.get(runIndex) ?? hideAll) !== desired) {
+      map.set(runIndex, desired);
+      autoApplied.count += 1;
+      return true;
+    }
+    return false;
+  };
+  let changed = false;
+  for (const run of renderedThinkingRuns(normalizeBlocks(content))) {
+    const plan = key !== undefined ? input.state.thinkingRunPlan(key, run.runIndex) : undefined;
+    const ended = plan ? plan.ended : run.endedInContent;
+    // Streaming policy: fires when the run first renders WHILE ACTIVE — an
+    // already-ended run (restored history) goes straight to the completion
+    // policy instead.
+    let streaming = streamingApplied.get(component);
+    if (!streaming) streamingApplied.set(component, (streaming = new Set()));
+    if (!streaming.has(run.runIndex)) {
+      streaming.add(run.runIndex);
+      if (!ended && apply(run.runIndex, policy.streaming === "collapsed")) changed = true;
+    }
+    // Completion policy: fires once on the active→ended transition. A forced
+    // open (completed=full) only happens when an override entry already exists.
+    if (ended) {
+      let completion = completionApplied.get(component);
+      if (!completion) completionApplied.set(component, (completion = new Set()));
+      if (!completion.has(run.runIndex)) {
+        completion.add(run.runIndex);
+        const desired = policy.completed === "collapsed";
+        if ((desired || map.has(run.runIndex)) && apply(run.runIndex, desired)) changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+function normalizeBlocks(content: Array<Record<string, unknown>>): Array<{ type: string; text?: string; thinking?: string }> {
+  return content.map((block) => ({
+    type: String(block.type ?? ""),
+    text: typeof block.text === "string" ? block.text : undefined,
+    thinking: typeof block.thinking === "string" ? block.thinking : undefined,
+  }));
+}
+
+/** True when a non-thinking block exists after the run's first block — the
+ * host's rebuild loop breaks there, so the run cannot grow anymore. */
+function contentEndedAfter(content: Array<Record<string, unknown>>, firstContentIndex: number): boolean {
+  return content.slice(firstContentIndex + 1).some((block) => String(block.type ?? "") !== "thinking");
+}
+
+/**
  * Re-coordinate the freshly rebuilt contentContainer: map semantic slots,
- * attach ONE separator before the first text run (when the plan says so) and
- * wrap thinking runs with our rail (unless an external owner did it).
+ * attach ONE separator before the first text run (when the plan says so),
+ * wrap expanded thinking runs with our rail (unless an external owner did it)
+ * and swap the host's collapsed labels for duration summaries.
  * Runs on every rebuild; each pass leaves exactly one matching decoration.
  */
 function coordinateSubtree(input: TranscriptAdapterInput, component: object): void {
@@ -232,7 +377,8 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
   if (!Array.isArray(children)) return;
 
   const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : [];
-  const textRunPlan = resolveTextRunPlan(input, component, message, content);
+  const planKey = resolveMessagePlan(input, component, message, content);
+  const textRunPlan = planKey !== undefined ? input.state.textRunPlan(planKey) : undefined;
   const railBlocked = input.externalRailOwner?.() === true;
   const spacerProto = input.makeSpacer ? Object.getPrototypeOf(input.makeSpacer()) : undefined;
 
@@ -249,12 +395,15 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
       children.splice(i, 1);
       continue;
     }
-    if ((child as Record<string, unknown>).child && ((child as Record<string, unknown>).child as Record<symbol, unknown> | undefined)?.[RAIL_SYMBOL]) {
-      const region = child as { child: Record<symbol, unknown> };
-      const wrapper = region.child;
-      const original = (wrapper as Record<symbol | string, unknown>)?.["original"];
+    // Rails AND thought summaries ride inside the region's child slot; both
+    // remember the original so the unwrap pass can restore it — a later pass
+    // (or a successor install) must re-decide from the NATIVE node, never
+    // inherit a stale summary.
+    const innerWrapper = (child as Record<string, unknown>).child as (Record<symbol | string, unknown> & { original?: unknown }) | undefined;
+    if (innerWrapper && typeof innerWrapper === "object" && (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL])) {
+      const original = innerWrapper["original"];
       if (original !== undefined) {
-        region.child = original as Record<symbol, unknown>;
+        (child as { child: unknown }).child = original;
       }
     }
     if ((child as Record<symbol, unknown>)[SEP_SYMBOL]) children.splice(i, 1);
@@ -265,6 +414,12 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
   //    (thinking) with optional Spacers between. We match by ORDER of
   //    visible children against content runs — never by string content.
   const runs = semanticRuns(content);
+  // Host parity: the host's thinkingRunIndex counts only RENDERED (non-empty)
+  // thinking runs, in content order.
+  let thinkingOrdinal = 0;
+  for (const run of runs) {
+    if (run.kind === "thinking" && run.nonEmpty) run.thinkingRunIndex = thinkingOrdinal++;
+  }
   const slots = mapChildrenToRuns(children, runs, spacerProto);
 
   // 3) Attach the separator before the FIRST text-run slot (not message top).
@@ -280,72 +435,95 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
     }
   }
 
-  // 4) Thinking runs: rail + "Thought for Xs" label. The host renders a
-  //    HIDDEN (collapsed) run as a plain Text with `hiddenThinkingLabel` and
-  //    an OPEN run as Markdown inside a MouseRegion. Distinguish by node
-  //    shape (Text vs Markdown), never by content strings.
-  if (input.makeRail && !railBlocked) {
+  // 4) Thinking runs. The host renders an expanded run as Markdown and a
+  //    hidden run as its label Text, both inside the SAME MouseRegion.
+  //    Distinguish by node shape (never by content strings). Expanded: rail
+  //    only — the body is NEVER rewritten into a label. Collapsed: swap ONLY
+  //    the host's own label Text for a duration summary (the region's native
+  //    click handler stays; the next host rebuild restores the native label
+  //    and this pass re-coordinates). An ACTIVE hidden run keeps the host's
+  //    own "Thinking..." label — durations exist only for ended runs.
+  if ((input.makeRail && !railBlocked) || (input.makeThoughtSummary && input.isCollapsedLabel)) {
     for (const slot of slots) {
-      if (slot.run.kind !== "thinking") continue;
+      if (slot.run.kind !== "thinking" || !slot.run.nonEmpty) continue;
       const child = slot.child as Record<string, unknown>;
       // Host shape (pi-tui MouseRegion): `child` field holds the wrapped
       // component. Swap the region's inner child in place: the region keeps
-      // its own click semantics and geometry; the rail decorates the render.
+      // its own click semantics and geometry.
       const inner = child && typeof child === "object" && "child" in child
         ? (child as { child: unknown }).child
         : child;
       const innerRecord = inner !== null && typeof inner === "object" ? (inner as Record<string, unknown>) : undefined;
-      if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]) continue;
+      if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL] || ((inner as Record<symbol, unknown>))[THOUGHT_LABEL]) continue;
 
-      // The display layer NEVER rewrites a thinking body into a label. An
-      // open/expanded run is the host's Markdown (has `theme`); a truly
-      // hidden run is the host's own label Text and it stays untouched — the
-      // host's override map remains sole owner of visibility.
       const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
-      if (!isExpandedMarkdown) continue; // unknown shape or host label row: never touch, never rail
+      if (isExpandedMarkdown) {
+        if (!input.makeRail || railBlocked) continue;
+        const wrapped = input.makeRail(inner);
+        if (!wrapped) continue;
+        ((wrapped as Record<symbol, unknown>))[RAIL_SYMBOL] = true;
+        // Remember the original child so the unwrap pass (step 1) can restore it.
+        (wrapped as Record<symbol | string, unknown>)["original"] = inner;
+        if (inner !== child) {
+          (child as { child: unknown }).child = wrapped;
+        } else {
+          const index = children.indexOf(child);
+          if (index >= 0) children[index] = wrapped;
+        }
+        continue;
+      }
 
-      const wrapped = input.makeRail(inner);
-      if (!wrapped) continue;
-      ((wrapped as Record<symbol, unknown>))[RAIL_SYMBOL] = true;
+      if (!input.makeThoughtSummary || !input.isCollapsedLabel?.(inner)) continue;
+      const ordinal = slot.run.thinkingRunIndex;
+      if (ordinal === undefined) continue;
+      const plan = planKey !== undefined ? input.state.thinkingRunPlan(planKey, ordinal) : undefined;
+      const ended = plan ? plan.ended : contentEndedAfter(content, slot.run.firstContentIndex);
+      if (!ended) continue;
+      const paddingX = typeof record.outputPad === "number" ? record.outputPad : 1;
+      const summary = input.makeThoughtSummary({ durationMs: plan?.thinkingMs, runIndex: ordinal, ended: true, paddingX });
+      if (!summary || typeof summary !== "object") continue;
+      ((summary as Record<symbol, unknown>))[THOUGHT_LABEL] = true;
       // Remember the original child so the unwrap pass (step 1) can restore it.
-      (wrapped as Record<symbol | string, unknown>)["original"] = inner;
+      (summary as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
-        (child as { child: unknown }).child = wrapped;
+        (child as { child: unknown }).child = summary;
       } else {
         const index = children.indexOf(child);
-        if (index >= 0) children[index] = wrapped;
+        if (index >= 0) children[index] = summary;
       }
     }
   }
 }
 
-/** Resolve the stable TextRunPlan for the component's current message. */
-function resolveTextRunPlan(
+/** Resolve the stable message key for the component's current message. */
+function resolveMessagePlan(
   input: TranscriptAdapterInput,
   component: object,
   message: Record<string, unknown>,
   content: Array<Record<string, unknown>>,
-): TextRunPlan | undefined {
-  const known = input.state.identityOf(component);
-  if (known) return input.state.textRunPlan(known);
-  // History/finalized components without a streaming anchor: the state may
-  // already hold the OPEN plan for this message; reuse it instead of sealing
-  // a second plan whose followsTools flag would be wrong.
-  const contentBlocks = content.map((b) => ({ type: String(b.type ?? ""), text: typeof b.text === "string" ? b.text : undefined, thinking: typeof b.thinking === "string" ? b.thinking : undefined }));
-  const hasText = content.some((block) => block.type === "text" && typeof block.text === "string" && block.text.trim() !== "");
-  if (!hasText) return undefined;
+): MessageViewKey | undefined {
+  const known = input.state.identityOf(component) ?? input.state.identityOf(message);
+  if (known) return known;
+  // The host passes the SAME message object it handed to the extension
+  // events, and the state anchors it at message_start — so the object lookup
+  // above is the PRIMARY path. The heuristics below only serve components
+  // whose message object was never anchored (history replay, cold start):
+  // the state may already hold the OPEN plan for this message; reuse it
+  // instead of sealing a second plan whose followsTools flag would be wrong.
+  const contentBlocks = normalizeBlocks(content);
+  const hasText = contentBlocks.some((block) => block.type === "text" && block.text?.trim() !== "");
+  const hasThinking = contentBlocks.some((block) => block.type === "thinking" && block.thinking?.trim() !== "");
+  if (!hasText && !hasThinking) return undefined;
   const openKey = input.state.adoptOpenAssistantPlan(contentBlocks, component);
-  if (openKey) return input.state.textRunPlan(openKey);
-  // Truly unknown message (history replay, cold start): register a sealed
-  // plan. The boundary decision belongs to the STATE (display-order
-  // projection), not to the render path.
+  if (openKey) return openKey;
+  // Truly unknown message: register a sealed plan. The boundary decision
+  // belongs to the STATE (display-order projection), not to the render path.
   const followsTools = input.state.lastNodeKind() === "exploration" || input.state.lastNodeKind() === "other-tool";
-  const key = input.state.registerFinalizedMessage(
+  return input.state.registerFinalizedMessage(
     { role: "assistant", content: contentBlocks, stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined },
     followsTools,
     component,
   );
-  return input.state.textRunPlan(key);
 }
 
 interface SemanticRun {
@@ -354,6 +532,8 @@ interface SemanticRun {
   nonEmpty: boolean;
   /** A toolCall/unknown block — produces no child but BREAKS runs. */
   barrier?: boolean;
+  /** Host thinkingRunIndex (ordinal of rendered thinking runs); thinking runs only. */
+  thinkingRunIndex?: number;
 }
 
 /** Contiguous same-kind visible runs of the message content. */

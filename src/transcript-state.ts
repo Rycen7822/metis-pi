@@ -51,10 +51,24 @@ export interface TextRunPlan {
   readonly firstContentIndex: number;
   /** True when real tool activity preceded this message in the segment. */
   readonly separatorBefore: boolean;
-  /** Observed thinking-stream duration for this message (ms), when any. */
+}
+
+/** One thinking run's display lifecycle (host-parity: consecutive thinking
+ * blocks are ONE run; the runIndex is the host's ordinal of RENDERED runs —
+ * an all-empty run consumes no ordinal). */
+export interface ThinkingRunPlan {
+  readonly messageKey: MessageViewKey;
+  readonly runIndex: number;
+  /** Index of the run's first content block within message.content. */
+  readonly firstContentIndex: number;
+  /** Wall-clock ms when the run first contained non-empty thinking text. */
+  readonly startedAt?: number;
+  /** Wall-clock ms when the run closed (later non-thinking block or
+   * message_end). Runs of restored history have no timing evidence. */
+  readonly endedAt?: number;
+  /** endedAt - startedAt when both are known; never fabricated. */
   readonly thinkingMs?: number;
-  /** True when the thinking run has closed (phase transition or message_end). */
-  readonly thinkingEnded?: boolean;
+  readonly ended: boolean;
 }
 
 export interface TranscriptEvent {
@@ -102,28 +116,45 @@ export function isToolCallOnlyAssistant(message: TranscriptEvent["message"]): bo
 }
 
 /** Content-shape runs of one message: contiguous same-kind blocks. */
-export function contentRuns(message: NonNullable<TranscriptEvent["message"]>): Array<{
-  kind: "text" | "thinking";
-  firstContentIndex: number;
-  nonEmpty: boolean;
-}> {
-  const runs: Array<{ kind: "text" | "thinking"; firstContentIndex: number; nonEmpty: boolean }> = [];
-  for (let i = 0; i < message.content.length; i++) {
-    const block = message.content[i]!;
-    const kind = block.type === "text" ? "text" : block.type === "thinking" ? "thinking" : null;
-    if (!kind) continue;
-    const last = runs.at(-1);
-    if (last && last.kind === kind) {
-      if ((kind === "text" ? block.text : block.thinking)?.trim()) last.nonEmpty = true;
+export interface ThinkingRunSlot {
+  readonly runIndex: number;
+  readonly firstContentIndex: number;
+  /** True when a non-thinking block follows the run (the host's rebuild loop
+   * breaks there — the same boundary that closes the run's clock). */
+  readonly endedInContent: boolean;
+}
+
+/**
+ * Thinking runs of one message content, matching the host rebuild exactly:
+ * consecutive thinking blocks merge into ONE run; a run whose blocks are ALL
+ * empty produces no child and consumes no runIndex; ANY non-thinking block
+ * (text, even empty, toolCall, …) breaks the run.
+ */
+export function renderedThinkingRuns(
+  content: Array<{ type: string; thinking?: string }>,
+): ThinkingRunSlot[] {
+  const slots: ThinkingRunSlot[] = [];
+  let runIndex = 0;
+  for (let i = 0; i < content.length; ) {
+    if (content[i]!.type !== "thinking") {
+      i += 1;
       continue;
     }
-    runs.push({
-      kind,
-      firstContentIndex: i,
-      nonEmpty: !!((kind === "text" ? block.text : block.thinking)?.trim()),
-    });
+    const firstContentIndex = i;
+    let nonEmpty = false;
+    for (; i < content.length && content[i]!.type === "thinking"; i += 1) {
+      if (content[i]!.thinking?.trim()) nonEmpty = true;
+    }
+    if (nonEmpty) slots.push({ runIndex: runIndex++, firstContentIndex, endedInContent: i < content.length });
   }
-  return runs;
+  return slots;
+}
+
+interface ThinkingRunState {
+  runIndex: number;
+  firstContentIndex: number;
+  startedAt?: number;
+  endedAt?: number;
 }
 
 interface MessagePlan {
@@ -132,12 +163,21 @@ interface MessagePlan {
   separatorBefore: boolean;
   /** Number of content blocks seen so far (update-count independent). */
   blockCount: number;
-  /** Wall-clock ms when the first thinking content appeared in this message. */
-  thinkingStartedAt?: number;
-  /** Wall-clock ms when thinking ended: first visible text/toolCall after
-   * thinking, or message_end (conservative close). */
-  thinkingEndedAt?: number;
+  /** Per-thinking-run clocks; entries appear as runs render and never reset. */
+  thinkingRuns: ThinkingRunState[];
 }
+
+/** Canonical fingerprint of a finalized message's content: the host
+ * re-renders finalized transcripts through message clones, so sealed-plan
+ * reuse is keyed by normalized content + stopReason (never object identity). */
+function sealedFingerprint(content: Array<{ type: string; text?: string; thinking?: string }>, stopReason?: string): string {
+  return `${stopReason ?? ""}|${JSON.stringify(content)}`;
+}
+
+/** Bounded store for sealed-plan fingerprints (long sessions must not grow
+ * the content-JSON map without limit; an evicted entry only costs the honest
+ * timing-less fallback if that message is re-rendered later). */
+const MAX_SEALED_FINGERPRINTS = 256;
 
 const EXPLORATION_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
@@ -160,9 +200,23 @@ export class TranscriptState {
   private readonly identityByObject = new WeakMap<object, MessageViewKey>();
   /** open→sealed key aliases so adopted components survive message_end. */
   private readonly openKeyAliases = new Map<string, MessageViewKey>();
+  /**
+   * Content fingerprints of sealed plans. The host re-renders FINALIZED
+   * transcripts through a message CLONE (a different object), so the object
+   * anchor cannot match; the fingerprint lets the clone reuse the original
+   * sealed plan — with its real thinking clocks — instead of registering a
+   * timing-less duplicate.
+   */
+  private readonly sealedFingerprints = new Map<string, MessageViewKey>();
   private sessionKey = "default";
   /** Views (groups/heads) whose plan changed since the last takeDirtyViews. */
   private dirtyViews = new Set<string>();
+
+  /** Wall clock is injectable so tests can drive run durations deterministically. */
+  private readonly now: () => number;
+  constructor(now: () => number = () => Date.now()) {
+    this.now = now;
+  }
 
   resetSession(sessionKey = "default"): void {
     this.generation += 1;
@@ -173,6 +227,7 @@ export class TranscriptState {
     this.openGroupId = undefined;
     this.messagePlans.clear();
     this.nextMessageSeq = 1;
+    this.sealedFingerprints.clear();
     this.dirtyViews.clear();
   }
 
@@ -225,7 +280,7 @@ export class TranscriptState {
           if (sourceObject) this.identityByObject.set(sourceObject, key);
           if (!this.messagePlans.has(key)) {
             const followsTools = this.lastNode === "exploration" || this.lastNode === "other-tool";
-            this.messagePlans.set(key, { key, separatorBefore: followsTools, blockCount: 0 });
+            this.messagePlans.set(key, { key, separatorBefore: followsTools, blockCount: 0, thinkingRuns: [] });
           }
         }
         break;
@@ -238,7 +293,7 @@ export class TranscriptState {
         let plan = this.messagePlans.get(key);
         if (!plan) {
           const followsTools = this.lastNode === "exploration" || this.lastNode === "other-tool";
-          plan = { key, separatorBefore: followsTools, blockCount: 0 };
+          plan = { key, separatorBefore: followsTools, blockCount: 0, thinkingRuns: [] };
           this.messagePlans.set(key, plan);
         }
         const grew = message.content.length > plan.blockCount;
@@ -248,13 +303,17 @@ export class TranscriptState {
         // group or mark assistant-text.
         const hasThinking = assistantHasVisibleThinking(message);
         const visible = assistantHasVisibleText(message) || hasThinking;
-        if (hasThinking && plan.thinkingStartedAt === undefined) {
-          plan.thinkingStartedAt = Date.now();
-        }
-        // Text or toolCall after thinking closes the thinking run (conservative
-        // phase transition — providers may not send an explicit end).
-        if (plan.thinkingStartedAt !== undefined && plan.thinkingEndedAt === undefined && (assistantHasVisibleText(message) || !hasThinking)) {
-          plan.thinkingEndedAt = Date.now();
+        // Per-run clocks (host-parity runs). Start: first sighting of a
+        // rendered run — repeated cumulative updates never reset it. End: the
+        // first non-thinking block after the run; message_end closes the rest.
+        for (const run of renderedThinkingRuns(message.content)) {
+          let state = plan.thinkingRuns.find((r) => r.runIndex === run.runIndex);
+          if (!state) {
+            state = { runIndex: run.runIndex, firstContentIndex: run.firstContentIndex };
+            plan.thinkingRuns.push(state);
+          }
+          if (state.startedAt === undefined) state.startedAt = this.now();
+          if (state.endedAt === undefined && run.endedInContent) state.endedAt = this.now();
         }
         if (visible) {
           this.closeOpenGroup();
@@ -280,12 +339,19 @@ export class TranscriptState {
           // iterable, so rewrites go through the alias table).
           const sealedKey = key.replace(/:open$/, ":sealed");
           if (plan) {
-            // Conservative close: a run still streaming at message_end ends here.
-            const sealed: MessagePlan = { ...plan, key: sealedKey };
-            if (sealed.thinkingStartedAt !== undefined && sealed.thinkingEndedAt === undefined) {
-              sealed.thinkingEndedAt = Date.now();
-            }
+            // A run still streaming at message_end ends here (conservative
+            // close). Runs are copied so the sealed plan owns its clocks.
+            const sealed: MessagePlan = {
+              ...plan,
+              key: sealedKey,
+              thinkingRuns: plan.thinkingRuns.map((run) => {
+                const copy = { ...run };
+                if (copy.endedAt === undefined) copy.endedAt = this.now();
+                return copy;
+              }),
+            };
             this.messagePlans.set(sealedKey, sealed);
+            this.sealedFingerprints.set(sealedFingerprint(message.content, message.stopReason), sealedKey);
           }
           this.openKeyAliases.set(key, sealedKey);
           this.messagePlans.delete(key);
@@ -410,11 +476,34 @@ export class TranscriptState {
       runIndex,
       firstContentIndex: 0,
       separatorBefore: plan.separatorBefore,
-      thinkingMs: plan.thinkingStartedAt !== undefined
-        ? Math.max(0, (plan.thinkingEndedAt ?? Date.now()) - plan.thinkingStartedAt)
-        : undefined,
-      thinkingEnded: plan.thinkingEndedAt !== undefined,
     };
+  }
+
+  /** One thinking run's lifecycle for a message (host runIndex semantics). */
+  thinkingRunPlan(messageKey: MessageViewKey, runIndex: number): ThinkingRunPlan | undefined {
+    const plan = this.messagePlans.get(messageKey);
+    const state = plan?.thinkingRuns.find((run) => run.runIndex === runIndex);
+    if (!plan || !state) return undefined;
+    return {
+      messageKey: plan.key,
+      runIndex: state.runIndex,
+      firstContentIndex: state.firstContentIndex,
+      startedAt: state.startedAt,
+      endedAt: state.endedAt,
+      thinkingMs: state.startedAt !== undefined
+        ? Math.max(0, (state.endedAt ?? this.now()) - state.startedAt)
+        : undefined,
+      ended: state.endedAt !== undefined,
+    };
+  }
+
+  /** All thinking runs of a message, in host runIndex order. */
+  thinkingRunPlans(messageKey: MessageViewKey): readonly ThinkingRunPlan[] {
+    const plan = this.messagePlans.get(messageKey);
+    if (!plan) return [];
+    return [...plan.thinkingRuns]
+      .sort((a, b) => a.runIndex - b.runIndex)
+      .map((run) => this.thinkingRunPlan(messageKey, run.runIndex)!);
   }
 
   /**
@@ -427,10 +516,36 @@ export class TranscriptState {
     return this.openKeyAliases.get(direct) ?? direct;
   }
 
-  /** Convenience for tests/history: register a finalized message explicitly. */
+  /** Convenience for tests/history: register a finalized message explicitly.
+   * Thinking runs are synthesized from the content with no timing evidence —
+   * they count as ended (the message is final) but carry no duration. A
+   * message whose content fingerprint already has a sealed plan (the host
+   * re-renders finalized messages through clones) reuses that plan so real
+   * thinking clocks survive the re-render. */
   registerFinalizedMessage(message: NonNullable<TranscriptEvent["message"]>, followsTools: boolean, sourceObject?: object): MessageViewKey {
+    const fingerprint = sealedFingerprint(message.content, message.stopReason);
+    const existing = this.sealedFingerprints.get(fingerprint);
+    if (existing && this.messagePlans.has(existing)) {
+      if (sourceObject) this.identityByObject.set(sourceObject, existing);
+      return existing;
+    }
     const key = `${this.generation}:${this.nextMessageSeq++}:sealed`;
-    this.messagePlans.set(key, { key, separatorBefore: followsTools, blockCount: message.content.length });
+    this.messagePlans.set(key, {
+      key,
+      separatorBefore: followsTools,
+      blockCount: message.content.length,
+      thinkingRuns: renderedThinkingRuns(message.content).map((run) => ({
+        runIndex: run.runIndex,
+        firstContentIndex: run.firstContentIndex,
+        endedAt: this.now(),
+      })),
+    });
+    while (this.sealedFingerprints.size >= MAX_SEALED_FINGERPRINTS) {
+      const oldest = this.sealedFingerprints.keys().next().value;
+      if (oldest === undefined) break;
+      this.sealedFingerprints.delete(oldest);
+    }
+    this.sealedFingerprints.set(fingerprint, key);
     if (sourceObject) this.identityByObject.set(sourceObject, key);
     return key;
   }
