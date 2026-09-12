@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.5
+
+青色高亮统一改为 Codex 蓝（两张截图逐像素取样：pi 青 = #94E2D5 / 主题 accent #8abeb7，
+Codex 命令高亮蓝 = #89B4FA）：
+
+- **换色清单**：探索行动词（Read/Search…）、bash `&&` 操作符（MOCHA.operator）、Working 动画
+  （圆点脉冲 + shimmer 彗星 ramp）、思考 rail、composer 提示符/元信息/footer 的 accent、
+  编辑器默认 accent：#94E2D5 → #89B4FA。
+- **主题 accent** `#8abeb7`（灰青）→ `#89b4fa`：markdown 内联代码、列表符号、语法操作符、
+  Working 圆点（theme.fg("accent")）随之变蓝。
+- shimmer 高光档用 Mocha lavender `#b4befe`；渐变 ramp 8 档整体重造为蓝系，亮度曲线与原
+  teal ramp 对齐（结构测试只断言头亮于尾 + 平滑插值，不锁具体 RGB）。
+
 ## 0.9.4
 
 Fullscreen 左右留白（Codex 式侧沟），纯插件实现、不改宿主：

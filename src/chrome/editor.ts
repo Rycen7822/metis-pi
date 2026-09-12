@@ -63,7 +63,7 @@ export interface CodexEditorFactoryInput {
 const CURSOR_CELL = "\x1b[7m \x1b[0m";
 
 export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
-  const accent = input.accent ?? ((s: string) => `\x1b[38;2;148;226;213m${s}\x1b[39m`);
+  const accent = input.accent ?? ((s: string) => `\x1b[38;2;137;180;250m${s}\x1b[39m`);
   const surface = input.surface;
   const paddingX = input.paddingX ?? 2;
   const placeholder = input.placeholder ?? "Ask anything...";

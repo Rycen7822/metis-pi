@@ -703,3 +703,51 @@ changes allowed.
   layout root and stay full-width — consistent with how Codex overlays behave.
 - Native (non-extension) fullscreen selection over a gutter row can include
   the blank gutter cells visually; the Ctrl+C logical copy path is unaffected.
+
+## 0.9.5 — cyan highlights → Codex blue
+
+### Requirement
+
+User screenshots: pi still shows cyan accents where Codex shows blue. Change
+every cyan highlight to the Codex blue.
+
+### Evidence (pixel sampling of both screenshots)
+
+- pi cyan = `#94E2D5` (and its antialiasing ramp), plus the theme accent
+  `#8abeb7` (muted teal). Sources: surface accent painter, thinking rail,
+  editor fallback accent, Working bullet-pulse/shimmer shades, exploration
+  verbs, `MOCHA.operator` (bash `&&`), theme `accent` var.
+- Codex blues: command tokens (`conda run -n test python -c`, `rg -n -m 1`)
+  = `#89B4FA` (Mocha blue); markdown inline code = `#3A96DD`. Chose the
+  `#89B4FA` family for all accent replacements (same Mocha palette the plugin
+  already uses).
+
+### Changes
+
+- `#94E2D5` → `#89B4FA` (`137;180;250`): exploration verbs (`explore.ts`),
+  bash operator token (`palette.ts` MOCHA.operator), thinking rail and the
+  surface accent painter (`index.ts`), editor fallback accent (`editor.ts`),
+  Working bullet-pulse shades (`working.ts`).
+- Working shimmer comet: 8-level teal `SHIMMER_RAMP` rebuilt around the blue
+  anchor with the same lightness curve (head `205,228,255` → tail
+  `50,74,142`); highlight step uses Mocha lavender `#b4befe`.
+- Theme package `accent` `#8abeb7` → `#89b4fa` (`themes/codex-appearance.json`):
+  markdown inline code, list bullets, syntax operators, Working bullet
+  (`theme.fg("accent")`) and any accent borders turn blue with the same change.
+
+### Checks executed
+
+- `npm test` 253/253 (adapter exploration-verb SGR assertion updated to the
+  blue; working tests assert ramp structure only, no RGB lock; working test
+  fake accent updated to stay truthful).
+- `npm run check` + `check:core` clean; `test:chrome` 14/14.
+- Grep confirms no `#94e2d5` / `148;226;213` / `#8abeb7` remains in src/,
+  index.ts, or themes/.
+
+### Trade-offs / limits (accepted)
+
+- Codex's inline-code blue is a different shade (`#3A96DD`); our inline code
+  follows the theme accent (`#89b4fa`). One accent hue everywhere was chosen
+  over per-element shade matching.
+- `MOCHA.operator` now equals `MOCHA.function` (`#89b4fa`) — `&&` reads as
+  part of the command, matching how Codex renders command tokens.

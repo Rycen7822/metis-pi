@@ -9,7 +9,7 @@ export const MOCHA = {
   keyword: "#cba6f7",
   string: "#a6e3a1",
   number: "#fab387",
-  operator: "#94e2d5",
+  operator: "#89b4fa",
   parameter: "#eba0ac",
   builtin: "#f38ba8",
   punctuation: "#9399b2",

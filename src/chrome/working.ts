@@ -87,16 +87,16 @@ export const SHIMMER_CELLS_PER_FRAME = 0.25; // sweep speed (4 frames per cell @
 export const SHIMMER_PAUSE_FRAMES = 16; // rest frames after the wave exits
 export const BULLET_STEP_FRAMES = 2; // bullet brightness holds ~2 frames
 
-/** Head→trail gradient ramp (truecolor; teal accent, 8 levels). */
+/** Head→trail gradient ramp (truecolor; blue accent, 8 levels). */
 const SHIMMER_RAMP: ReadonlyArray<readonly [number, number, number]> = [
-  [200, 255, 247],
-  [172, 242, 231],
-  [146, 228, 214],
-  [120, 209, 195],
-  [96, 186, 172],
-  [76, 160, 148],
-  [59, 130, 120],
-  [46, 99, 92],
+  [205, 228, 255],
+  [178, 210, 254],
+  [152, 192, 252],
+  [137, 180, 250],
+  [112, 156, 240],
+  [88, 127, 217],
+  [67, 99, 183],
+  [50, 74, 142],
 ];
 
 export interface ShimmerPhase {
@@ -234,8 +234,8 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
 
 function bulletPulse(step: number): string {
   // 3 brightness steps around the accent hue — restrained, no rainbow.
-  const shades = ["\x1b[38;2;124;130;150m", "\x1b[38;2;148;226;213m", "\x1b[38;2;190;240;230m", "\x1b[38;2;148;226;213m"];
-  const shade = shades[step] ?? "\x1b[38;2;148;226;213m";
+  const shades = ["\x1b[38;2;124;130;150m", "\x1b[38;2;137;180;250m", "\x1b[38;2;180;190;254m", "\x1b[38;2;137;180;250m"];
+  const shade = shades[step] ?? "\x1b[38;2;137;180;250m";
   return `${shade}•\x1b[39m`;
 }
 

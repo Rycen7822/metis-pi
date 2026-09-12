@@ -150,7 +150,7 @@ function harness(overrides = {}) {
     // Real ANSI paints (the width guard measures visible cells; tag-style
     // fake paints would inflate it).
     paint: (text, tone) => (tone === "normal" ? text
-      : tone === "accent" ? `\x1b[38;2;148;226;213m${text}\x1b[39m`
+      : tone === "accent" ? `\x1b[38;2;137;180;250m${text}\x1b[39m`
       : `\x1b[2m${text}\x1b[22m`),
     schedule: (fn, ms) => {
       scheduled.push({ fn, ms });

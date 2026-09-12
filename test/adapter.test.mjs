@@ -263,10 +263,10 @@ test("each completed read is a two-line Explored entry, and expansion recovers a
   const row = new Host("read", { renderCall: () => "stock" }, { path: "README.md" });
   row.updateResult({ content: [{ type: "text", text: "FULL FILE CONTENT" }], isError: false });
   const output = row.render(80).filter(Boolean);
-  // 0.4.0: Codex exploration colors — dim bullet, cyan "Read" verb.
+  // 0.4.0: Codex exploration colors — dim bullet, blue "Read" verb.
   assert.deepEqual(output, [
     "\x1B[38;2;108;112;134m•\x1B[39m Explored",
-    "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;148;226;213mRead\x1B[39m README.md",
+    "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;137;180;250mRead\x1B[39m README.md",
   ]);
   row.setExpanded(true);
   assert.match(row.render(80).join("\n"), /FULL FILE CONTENT/);
