@@ -39,6 +39,10 @@ export interface ProvenanceRow {
 
 const CJK_BREAK = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]/u;
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** Printable ASCII runs: every char is a single-cell grapheme and never a CJK
+ * breakpoint, so the Segmenter + per-grapheme width calls can be skipped
+ * entirely (the common case: English prose and code). */
+const ASCII_RUN = /^[\x20-\x7e]+$/;
 
 interface ExtractedAnsi {
   code: string;
@@ -255,7 +259,26 @@ function tokenize(
       }
       let end = i;
       while (end < segment.styled.length && !extractAnsiCode(segment.styled, end)) end++;
-      for (const { segment: grapheme } of GRAPHEMES.segment(segment.styled.slice(i, end))) {
+      const run = segment.styled.slice(i, end);
+      if (ASCII_RUN.test(run)) {
+        for (let k = 0; k < run.length; k++) {
+          const ch = run[k]!;
+          const nextGroup: TokenGroup = ch === " " ? "space" : "word";
+          if (graphemes.length > 0 && (group !== nextGroup || kind !== segment.kind)) flush();
+          if (pendingAnsi) {
+            styled += pendingAnsi;
+            pendingAnsi = "";
+          }
+          group = nextGroup;
+          kind = segment.kind;
+          styled += ch;
+          graphemes.push({ text: ch, cells: 1, kind: segment.kind, plainIndex });
+          plainIndex += 1;
+        }
+        i = end;
+        continue;
+      }
+      for (const { segment: grapheme } of GRAPHEMES.segment(run)) {
         const isSpace = grapheme === " ";
         if (!isSpace && CJK_BREAK.test(grapheme)) {
           flush();
@@ -354,8 +377,13 @@ function* styledParts(styled: string): Generator<{ ansi?: string; grapheme?: str
     }
     let end = i;
     while (end < styled.length && !extractAnsiCode(styled, end)) end++;
-    for (const { segment } of GRAPHEMES.segment(styled.slice(i, end))) {
-      yield { grapheme: segment };
+    const run = styled.slice(i, end);
+    if (ASCII_RUN.test(run)) {
+      for (let k = 0; k < run.length; k++) yield { grapheme: run[k]! };
+    } else {
+      for (const { segment } of GRAPHEMES.segment(run)) {
+        yield { grapheme: segment };
+      }
     }
     i = end;
   }

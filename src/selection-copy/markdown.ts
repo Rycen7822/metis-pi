@@ -14,6 +14,7 @@
 
 import {
   decorationRow,
+  publishRows,
   registerProduct,
   type BreakBefore,
   type CopyProduct,
@@ -47,6 +48,9 @@ export interface MarkdownDiagnostics {
   markdownDegraded: number;
   textBuilt: number;
   textDegraded: number;
+  /** Builds skipped by the streaming throttle (frame had no product → native copy). */
+  markdownThrottled: number;
+  textThrottled: number;
   lastDegradedReason: string;
 }
 
@@ -491,7 +495,22 @@ export interface WrapDeps {
   lexer: CopyLexer;
   hostWrap: (text: string, width: number) => string[];
   diagnostics: MarkdownDiagnostics;
+  /** Clock for the streaming throttle (tests inject a fake). */
+  now?: () => number;
 }
+
+/**
+ * Streaming throttle: while a component's text keeps CHANGING at an unchanged
+ * width (the streaming case), rebuild the mirror at most once per interval
+ * instead of on every frame — a full rebuild costs several times the host's
+ * own render. Skipped frames publish no product, so a copy taken from exactly
+ * that frame degrades to native extraction (never corrupt). The first build,
+ * any width change and any render where the text has STOPPED changing build
+ * immediately, so the final frame of a stream always gets a product on its
+ * next render. The interval is measured from the last build ATTEMPT (failed
+ * builds count too — an always-degrading component never retries per frame).
+ */
+export const MIRROR_REBUILD_INTERVAL_MS = 200;
 
 /** Shared render-prototype wrapper: the host render runs untouched, then the
  * mirror builds (and verifies) a provenance product for the returned array.
@@ -502,7 +521,12 @@ function wrapRenderPrototype<INST extends { text: string }>(
   key: symbol,
   deps: WrapDeps,
   build: (instance: INST, width: number, hostRows: readonly string[], deps: WrapDeps) => CopyProduct | undefined,
-  counters: { built: "markdownBuilt" | "textBuilt"; degraded: "markdownDegraded" | "textDegraded"; fallback: string },
+  counters: {
+    built: "markdownBuilt" | "textBuilt";
+    degraded: "markdownDegraded" | "textDegraded";
+    throttled: "markdownThrottled" | "textThrottled";
+    fallback: string;
+  },
 ): boolean {
   if (Object.prototype.hasOwnProperty.call(prototype, key)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
@@ -511,12 +535,26 @@ function wrapRenderPrototype<INST extends { text: string }>(
   }
   const original = descriptor.value as (this: INST, width: number) => string[];
   const cache = new WeakMap<object, { text: string; width: number; product: CopyProduct }>();
+  /** Per-component stream state: the text/width seen on the last miss render
+   * and the time of the last build ATTEMPT (success or failure — an
+   * always-degrading component must not retry the full mirror per frame). */
+  const seen = new WeakMap<object, { text: string; width: number; attemptAt: number }>();
+  const now = deps.now ?? (() => Date.now());
   const wrapper = function (this: INST, width: number): string[] {
     const rows = original.call(this, width);
     try {
+      publishRows(this, rows);
       const cached = cache.get(this);
       if (cached && cached.text === this.text && cached.width === width) {
         registerProduct(rows, cached.product);
+        return rows;
+      }
+      const previous = seen.get(this);
+      const changing = previous !== undefined && previous.width === width && previous.text !== this.text;
+      const throttled = changing && now() - previous.attemptAt < MIRROR_REBUILD_INTERVAL_MS;
+      seen.set(this, { text: this.text, width, attemptAt: throttled ? previous.attemptAt : now() });
+      if (throttled) {
+        deps.diagnostics[counters.throttled] += 1;
         return rows;
       }
       const product = build(this, width, rows, deps);
@@ -539,7 +577,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
 
 export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolean {
   return wrapRenderPrototype<MarkdownInstance>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-markdown"), deps,
-    buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", fallback: "mirror failed" });
+    buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" });
 }
 
 /** The plain string must be assembled BEFORE slicing span texts; rebuild the
@@ -584,8 +622,7 @@ function buildMarkdownProduct(
   }
   for (let i = 0; i < output.styledRows.length; i++) {
     const hostRow = hostRows[padY + i]!;
-    const inner = fns.stripTerminalSequences(fns.sliceByColumn(hostRow, padX, contentWidth, true));
-    if (inner.trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
+    if (hostRowInner(hostRow, padX, contentWidth, fns).trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
       deps.diagnostics.lastDegradedReason = `content mismatch at row ${i}`;
       return undefined;
     }
@@ -606,6 +643,23 @@ function transformText(instance: MarkdownInstance, contentWidth: number): string
   }
 }
 
+/**
+ * Visible content of a host row inside its left margin. The slow path is the
+ * column-correct slice (ANSI-preserving sliceByColumn + strip); the fast path
+ * strips ANSI first and cuts the known run of margin spaces by chars, which is
+ * identical for the well-formed rows the host produces (margins are plain
+ * spaces; the comparison callers trimEnd, so the right margin needs no slice).
+ * A non-conforming row falls back to the slow slice — a wrong answer here
+ * would corrupt copy, a fallback only costs fidelity.
+ */
+function hostRowInner(hostRow: string, padX: number, contentWidth: number, fns: AdapterHostFns): string {
+  const plain = fns.stripAnsi(hostRow);
+  let margin = 0;
+  while (margin < padX && plain.charCodeAt(margin) === 0x20) margin++;
+  if (margin === padX) return plain.slice(padX);
+  return fns.stripTerminalSequences(fns.sliceByColumn(hostRow, padX, contentWidth, true));
+}
+
 /** Add left/right margin decoration spans and shift content spans. */
 function marginRow(row: CopyRow, padX: number, width: number, contentWidth: number): CopyRow {
   return {
@@ -620,7 +674,7 @@ function marginRow(row: CopyRow, padX: number, width: number, contentWidth: numb
 
 export function wrapTextPrototype(prototype: object, deps: WrapDeps): boolean {
   return wrapRenderPrototype<TextInstance>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-text"), deps,
-    buildTextProduct, { built: "textBuilt", degraded: "textDegraded", fallback: "text mirror failed" });
+    buildTextProduct, { built: "textBuilt", degraded: "textDegraded", throttled: "textThrottled", fallback: "text mirror failed" });
 }
 
 function buildTextProduct(
@@ -653,8 +707,7 @@ function buildTextProduct(
   }
   for (let i = 0; i < output.styledRows.length; i++) {
     const hostRow = hostRows[instance.paddingY + i]!;
-    const inner = fns.stripTerminalSequences(fns.sliceByColumn(hostRow, paddingX, contentWidth, true));
-    if (inner.trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
+    if (hostRowInner(hostRow, paddingX, contentWidth, fns).trimEnd() !== stripAnsi(output.styledRows[i]!).trimEnd()) {
       deps.diagnostics.lastDegradedReason = `text content mismatch at row ${i}`;
       return undefined;
     }

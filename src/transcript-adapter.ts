@@ -235,6 +235,18 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   const streamingApplied = new WeakMap<object, Set<number>>();
   const completionApplied = new WeakMap<object, Set<number>>();
 
+  // The spacer prototype is stable for the session — build one probe spacer
+  // lazily instead of allocating one per rebuild.
+  let spacerProto: object | undefined;
+  let spacerProtoKnown = false;
+  const getSpacerProto = (): object | undefined => {
+    if (!spacerProtoKnown) {
+      spacerProtoKnown = true;
+      spacerProto = input.makeSpacer ? Object.getPrototypeOf(input.makeSpacer()) : undefined;
+    }
+    return spacerProto;
+  };
+
   const wrapper = function (this: unknown, ...args: unknown[]): void {
     original.apply(this, args);
     if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
@@ -250,7 +262,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       // A policy failure must not break the original message display.
     }
     try {
-      coordinateSubtree(input, this as object);
+      coordinateSubtree(input, this as object, getSpacerProto());
     } catch {
       // A presentation failure must not break the original message display.
     }
@@ -368,7 +380,7 @@ function contentEndedAfter(content: Array<Record<string, unknown>>, firstContent
  * and swap the host's collapsed labels for duration summaries.
  * Runs on every rebuild; each pass leaves exactly one matching decoration.
  */
-function coordinateSubtree(input: TranscriptAdapterInput, component: object): void {
+function coordinateSubtree(input: TranscriptAdapterInput, component: object, spacerProto: object | undefined): void {
   const record = component as Record<string, unknown>;
   const message = asRecord(record.lastMessage);
   if (!message || message.role !== "assistant") return;
@@ -380,7 +392,6 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object): vo
   const planKey = resolveMessagePlan(input, component, message, content);
   const textRunPlan = planKey !== undefined ? input.state.textRunPlan(planKey) : undefined;
   const railBlocked = input.externalRailOwner?.() === true;
-  const spacerProto = input.makeSpacer ? Object.getPrototypeOf(input.makeSpacer()) : undefined;
 
   // 1) Remove OUR stale decorations from the current subtree (they get
   //    re-added below at the right slots). Components removed by clear() lose

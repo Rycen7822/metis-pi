@@ -5,8 +5,8 @@
 // is structural (child heights must match the host's own mouseLayout), and
 // any mismatch simply leaves rows unmapped → native extraction.
 
-import { productFor, registerProduct } from "./model.ts";
-import type { ChildPlacement } from "./model.ts";
+import { productFor, publishRows, publishedRowsOf, registerProduct } from "./model.ts";
+import type { ChildPlacement, CopyProduct } from "./model.ts";
 
 interface MouseChild {
   component: unknown;
@@ -39,7 +39,13 @@ function childRowsOf(component: unknown, width: number): readonly string[] | und
  * content width and stack vertically between padY bg rows, each prefixed by
  * colShift cells. The product is a per-row placement chain into child
  * products; any structural mismatch (child heights vs the host's own
- * mouseLayout, re-render width drift) leaves rows unmapped → native. */
+ * mouseLayout, re-render width drift) leaves rows unmapped → native.
+ *
+ * Child rows come from the LAST_ROWS slot each wrapped prototype publishes —
+ * the parent render pass just produced those exact arrays, so re-rendering
+ * children here would be pure waste (and compounds across nested containers:
+ * 2^depth leaf renders per frame). Only children of UNWRAPPED component types
+ * (no slot) are re-rendered, purely to verify their height. */
 function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
   prototype: object,
   key: symbol,
@@ -57,30 +63,41 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
   const wrapper = function (this: SELF, width: number): string[] {
     const rows = original.call(this, width);
     try {
+      publishRows(this, rows);
       if (rows.length === 0) return rows;
       const { contentWidth, padY, colShift } = metrics(this, width);
       const mouse = this.mouseLayout;
       if (!mouse || mouse.width !== contentWidth) return rows;
+      let total = padY * 2;
+      for (const child of mouse.children) total += child.height;
+      if (total !== rows.length) return rows;
+      // Resolve child products first; allocate the placements table only when
+      // at least one child actually has a product (otherwise the whole array
+      // would be undefined — the same native outcome with no allocation).
+      const childProducts: (CopyProduct | undefined)[] = new Array(mouse.children.length);
+      let anyProduct = false;
+      for (let c = 0; c < mouse.children.length; c++) {
+        const child = mouse.children[c]!;
+        let childRows = publishedRowsOf(child.component);
+        if (!childRows) childRows = childRowsOf(child.component, contentWidth);
+        if (!childRows || childRows.length !== child.height) return rows;
+        const product = productFor(childRows);
+        childProducts[c] = product;
+        if (product) anyProduct = true;
+      }
+      if (!anyProduct) return rows;
       const placements: (ChildPlacement | undefined)[] = new Array(rows.length).fill(undefined);
       let row = padY;
-      let aligned = padY * 2 + mouse.children.reduce((sum, c) => sum + c.height, 0) === rows.length;
-      if (aligned) {
-        for (const child of mouse.children) {
-          const childRows = childRowsOf(child.component, contentWidth);
-          if (!childRows || childRows.length !== child.height) {
-            aligned = false;
-            break;
+      for (let c = 0; c < mouse.children.length; c++) {
+        const product = childProducts[c];
+        if (product) {
+          for (let i = 0; i < mouse.children[c]!.height; i++) {
+            placements[row + i] = { product, rowIndex: i, colShift };
           }
-          const product = productFor(childRows);
-          for (let i = 0; i < child.height; i++) {
-            placements[row + i] = product ? { product, rowIndex: i, colShift } : undefined;
-          }
-          row += child.height;
         }
+        row += mouse.children[c]!.height;
       }
-      if (aligned) {
-        registerProduct(rows, { componentId, width, rows: [], children: placements });
-      }
+      registerProduct(rows, { componentId, width, rows: [], children: placements });
     } catch {
       // Provenance must never break rendering.
     }

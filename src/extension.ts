@@ -599,7 +599,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const t = d.telemetry;
     const m = d.mirrors;
     const lines = [
-      `  selection-copy: serializer=${d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${m.markdownDegraded + m.textDegraded} degraded${m.lastDegradedReason ? ` (${m.lastDegradedReason})` : ""} other-wrapper=${d.externalPatch ?? "none"}`,
+      `  selection-copy: serializer=${d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${m.markdownDegraded + m.textDegraded} degraded, ${m.markdownThrottled + m.textThrottled} throttled${m.lastDegradedReason ? ` (${m.lastDegradedReason})` : ""} other-wrapper=${d.externalPatch ?? "none"}`,
       `  copy-stats: calls=${t.calls ?? 0} exact=${t.exact} mixed=${t.mixed} native=${t.nativeFallback} empty=${t.emptyDecoration} failed=${t.failed} last=${t.lastMode} chars=${t.lastCharCount} ms=${t.lastDurationMs} cache=${d.cache.hits}/${d.cache.misses}${t.lastReason ? ` lastError=${t.lastReason}` : ""}`,
     ];
     return lines;

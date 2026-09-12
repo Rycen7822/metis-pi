@@ -535,3 +535,82 @@ host-semantics/constraint comments kept. Net -111 lines vs 0.9.0.
 - With `streaming=full`, a NEW thinking run becomes visible while streaming
   even if the user's global Ctrl+T hide is active (spec 4.3/4.6: new runs get
   the current automatic defaults); it auto-collapses on completion.
+
+## 0.9.3 — render-performance round (evidence-driven)
+
+### Findings (measured with real host components, pi-tui 0.85.1, node 24, WSL2)
+
+1. **Selection-copy mirror rebuilt on every streaming frame.** Markdown/Text
+   prototype wrappers re-ran the full mirror pipeline (lexer → token mirror →
+   provenance wrap → positional verify) on every cache miss; streaming text
+   changes every frame. Measured at 40KB markdown: host render 7.5ms → wrapped
+   50ms per frame (+566%); 30KB Text: 0.22ms → 8.5ms. Sub-cost profile: host
+   lexer re-run 1.4ms, token mirror ~5ms, provenance wrap ~16ms, per-row verify
+   ~19ms.
+2. **Container/Box alignment re-rendered every child per frame.** The
+   alignment pass called `child.render()` again per child to obtain row arrays;
+   nested containers compounded this to 2^depth leaf renders per frame
+   (measured 24 → 192 leaf renders on a 12-message tree, depth 3). A 150-message
+   transcript (7050 rows): 0.115ms → 1.18ms per frame (+930%), plus a
+   transcript-length placements allocation per container per frame.
+3. Negligible and deliberately unchanged: the assistant decoration layer
+   (0.002ms per updateContent; 400-delta stream = 2.9ms total) and the
+   adapter's per-render `getAllTools()` (~0.03µs per call).
+
+### Fixes
+
+- **Streaming throttle** (`markdown.ts` `wrapRenderPrototype`): while a
+  component's text keeps changing at an unchanged width, the mirror rebuilds at
+  most once per 200ms (`MIRROR_REBUILD_INTERVAL_MS`). First render, width
+  changes and any render where the text has STOPPED changing all build
+  immediately, so a stream's settled frame always gets a product on its next
+  render. Skipped frames publish no product → a copy taken from exactly that
+  frame uses native extraction (degrade, never corrupt). Failed builds count as
+  attempts, so a permanently-degrading component stops retrying per frame too.
+  Clock is injectable (`WrapDeps.now`) for deterministic tests.
+- **Constant factor** (`wrap.ts`): pure-ASCII runs skip `Intl.Segmenter` and
+  per-grapheme `visibleWidth` (printable ASCII is provably one cell, one
+  grapheme, never a CJK breakpoint — token output identical to the slow path).
+  Verify fast path (`markdown.ts` `hostRowInner`): stripAnsi + char-cut of the
+  known left margin replaces column-aware `sliceByColumn` +
+  `stripTerminalSequences`; non-conforming rows fall back to the slow slice.
+  Single 40KB mirror build: ~41ms → ~13ms.
+- **Container/Box alignment without re-rendering** (`model.ts` `LAST_ROWS` +
+  `structure.ts`): every wrapped render prototype publishes the row array it
+  just returned to an instance slot; alignment resolves child products by that
+  array identity — the slot always holds the CURRENT pass's array, so a stale
+  product can never attach to new rows. Only children of unwrapped component
+  types (e.g. MouseRegion) are still re-rendered, purely to verify height.
+  The placements table is allocated only when at least one child product
+  resolves (an all-undefined table is the same native outcome with no
+  allocation).
+- **Minor**: spacer-prototype probe in the assistant decoration layer is cached
+  per session instead of one allocation per updateContent; `/codex-ui` mirror
+  diagnostics gained a `throttled` counter.
+
+### Measured results (same harness, after)
+
+- Mirror build: 40KB markdown 50.4ms → 20.3ms wrapped (host alone 7.5ms);
+  10KB 13.9ms → 6.2ms.
+- Streaming simulation (40KB over 300 frames at 16ms spacing): 300 builds →
+  24 builds (276 throttled) — mirror CPU during streaming cut ~12×.
+- Full 150-message transcript per frame: 1.18ms → 0.119ms (bare host:
+  0.112ms) — the per-frame container overhead is effectively eliminated.
+
+### Checks executed
+
+- `npm test` 242/242 (adds: throttle lifecycle — build/throttle/stable-
+  rebuild/interval-expiry/width-change; container alignment performs no child
+  re-renders and still resolves placements; unwrapped-child fallback alignment;
+  all pre-existing differential/parity suites unchanged and green).
+- `npm run check` + `check:core` clean; `test:chrome` 14/14; `test:host` PASS.
+- `test:pty` real-tmux PASS — including the selection-copy regression:
+  SGR drag + Ctrl+C → `exact=2 mixed=0 native=0`, 161 chars, so the throttle
+  and LAST_ROWS resolution did not change copy outcomes on settled frames.
+
+### Trade-offs (accepted)
+
+- A copy taken from a frame whose component was mid-throttle (text actively
+  changing within the last 200ms) uses native extraction: correct text, but
+  soft-wrap joins and decoration exclusion are the host's native semantics for
+  that copy. The settled frame that follows always carries a full product.

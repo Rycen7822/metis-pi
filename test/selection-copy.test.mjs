@@ -384,3 +384,133 @@ test("collapsed thought summary copies its label only — hidden reasoning is no
 });
 
 import { productFor } from "../src/selection-copy/model.ts";
+
+// ---------------------------------------------------------------------------
+// 0.9.3: render-performance safeguards. The streaming throttle bounds mirror
+// rebuilds for CHANGING text; container alignment must resolve child products
+// from the published row arrays without re-rendering subtrees.
+// ---------------------------------------------------------------------------
+
+import { wrapTextPrototype, MIRROR_REBUILD_INTERVAL_MS } from "../src/selection-copy/markdown.ts";
+import { createCopyLexer } from "../src/selection-copy/parser.ts";
+import { stripAnsi } from "../src/selection-copy/wrap.ts";
+import { publishedRowsOf } from "../src/selection-copy/model.ts";
+
+function freshTextDeps(now) {
+  return {
+    fns: {
+      visibleWidth: Tui.visibleWidth,
+      sliceByColumn: Tui.sliceByColumn,
+      stripTerminalSequences: Tui.stripTerminalSequences,
+      stripAnsi,
+    },
+    lexer: createCopyLexer(),
+    hostWrap: Tui.wrapTextWithAnsi,
+    diagnostics: { markdownBuilt: 0, markdownDegraded: 0, textBuilt: 0, textDegraded: 0, markdownThrottled: 0, textThrottled: 0, lastDegradedReason: "" },
+    now,
+  };
+}
+
+test("throttle: changing text at one width rebuilds at most once per interval; stable text rebuilds immediately", () => {
+  let fakeNow = 10_000;
+  const deps = freshTextDeps(() => fakeNow);
+  class MiniText {
+    constructor(text) { this.text = text; this.paddingX = 0; this.paddingY = 0; }
+    render(width) { return Tui.wrapTextWithAnsi(this.text, width); }
+  }
+  assert.equal(wrapTextPrototype(MiniText.prototype, deps), true, "fresh prototype wraps");
+  const line = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+  const comp = new MiniText(line);
+
+  const rows1 = comp.render(60);
+  assert.equal(deps.diagnostics.textBuilt, 1, "first render builds");
+  assert.ok(productFor(rows1), "first render has a product");
+  assert.ok(publishedRowsOf(comp) === rows1, "rows published for container alignment");
+
+  // Same text again: cache hit registers the product for the fresh array.
+  const rows1b = comp.render(60);
+  assert.equal(deps.diagnostics.textBuilt, 1, "cache hit does not rebuild");
+  assert.ok(productFor(rows1b), "cache hit still registers the fresh array");
+
+  // Text changes inside the interval → throttled: no product for that frame.
+  comp.text = line + " STREAMING";
+  fakeNow += 50;
+  const rows2 = comp.render(60);
+  assert.equal(deps.diagnostics.textBuilt, 1, "throttled frame does not rebuild");
+  assert.equal(deps.diagnostics.textThrottled, 1, "throttle counted");
+  assert.equal(productFor(rows2), undefined, "throttled frame degrades to native copy");
+
+  // Text STOPS changing: the very next render rebuilds immediately, even
+  // inside the interval — the settled frame of a stream always gets a product.
+  fakeNow += 50;
+  const rows3 = comp.render(60);
+  assert.equal(deps.diagnostics.textBuilt, 2, "stable text rebuilds immediately");
+  assert.ok(productFor(rows3), "settled frame has a product");
+
+  // Changing again inside the NEW interval → throttled once more.
+  comp.text = line + " STREAMING MORE";
+  fakeNow += 50;
+  comp.render(60);
+  assert.equal(deps.diagnostics.textThrottled, 2, "second throttle window");
+
+  // Interval expired while still changing → rebuild.
+  fakeNow += MIRROR_REBUILD_INTERVAL_MS + 50;
+  comp.text = line + " STREAMING MORE AND MORE";
+  const rows5 = comp.render(60);
+  assert.equal(deps.diagnostics.textBuilt, 3, "rebuild after the interval");
+  assert.ok(productFor(rows5), "product for the rebuilt frame");
+
+  // Width change inside the interval → rebuild immediately (resize storms are
+  // not throttled; each distinct width gets its product).
+  comp.text = line + " WIDTH CHANGED";
+  fakeNow += 10;
+  const rows6 = comp.render(80);
+  assert.equal(deps.diagnostics.textBuilt, 4, "width change bypasses the throttle");
+  assert.ok(productFor(rows6), "product at the new width");
+});
+
+test("container alignment resolves child products WITHOUT re-rendering children", () => {
+  const sys = makeSystem();
+  sys.wrapPrototypes();
+  const inner = new Tui.Container();
+  inner.addChild(new Tui.Markdown("steady child content", 0, 0, theme, undefined, {}));
+  inner.addChild(new Tui.Text("a label", 1, 0));
+  const chat = new Tui.Container();
+  chat.addChild(inner);
+  chat.render(60); // first pass: builds products
+
+  // Count leaf renders during one steady-state frame.
+  for (const proto of [Tui.Markdown.prototype, Tui.Text.prototype]) {
+    const desc = Object.getOwnPropertyDescriptor(proto, "render");
+    let calls = 0;
+    Object.defineProperty(proto, "render", {
+      ...desc,
+      value: function (w) { calls++; return desc.value.call(this, w); },
+    });
+    try {
+      chat.render(60);
+      assert.equal(calls, 1, "exactly one render per leaf per frame (no alignment re-render)");
+    } finally {
+      Object.defineProperty(proto, "render", desc);
+    }
+  }
+  // And the steady frame still produced a resolvable container product.
+  const rows = chat.render(60);
+  const product = productFor(rows);
+  assert.ok(product?.children, "container product registered");
+  assert.ok(product.children.some((p) => p !== undefined), "placements resolve through the chain");
+});
+
+test("container alignment: child of an unwrapped component type still aligns via fallback render", () => {
+  const sys = makeSystem();
+  sys.wrapPrototypes();
+  const plain = { render: (w) => ["foreign".slice(0, Math.min(7, w))] };
+  const chat = new Tui.Container();
+  chat.addChild(new Tui.Text("wrapped child", 0, 0));
+  chat.addChild(plain);
+  const rows = chat.render(40);
+  const product = productFor(rows);
+  assert.ok(product?.children, "container aligns with a foreign child present");
+  assert.ok(product.children[0] !== undefined, "wrapped child resolves");
+  assert.equal(product.children[1], undefined, "foreign child rows stay native");
+});
