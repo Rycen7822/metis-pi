@@ -71,10 +71,6 @@ function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
-function isWhitespaceOnly(text: string): boolean {
-  return stripAnsi(text).trim() === "";
-}
-
 /**
  * Codex truncate_lines_middle on VisualRows: head/tail around an ellipsis
  * row, budgeted in physical rows. The ellipsis row itself costs 1 and its

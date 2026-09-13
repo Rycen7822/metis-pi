@@ -7,7 +7,7 @@
 // tokens/cache/quota are the footer's job; no duplication).
 
 import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
-import { formatCount, joined, realizeRow, segmentsToText, type RowPlan, type Segment } from "../segments.ts";
+import { formatCount, joined, realizeRow, type RowPlan, type Segment } from "../segments.ts";
 
 export const COMPOSER_META_WIDGET_KEY = "pi-codex-appearance:composer-meta";
 
@@ -78,7 +78,6 @@ export function createComposerMetaComponent(deps: ComposerMetaDeps): ComposerMet
       const rows = layoutComposerMeta(snapshot, width);
       return rows.map((row) => {
         // The context right-block pads with plain spaces painted as surface.
-        const line = segmentsToText(row);
         return deps.surface.paintRow(
           row.map((seg) => (seg.tone === "normal" ? seg.text : deps.paint(seg.text, seg.tone))).join(""),
           width,

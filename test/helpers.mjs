@@ -1,6 +1,17 @@
 // Minimal, explicit layout harness, NOT an installed Pi host.
 // The selector/self-shell layout contract is based on Pi v0.85.1 (MIT).
 export const theme = { fg: (_key, text) => text, bold: (text) => text };
+
+export function fakeTerminal(columns, rows = 24) {
+  const writes = [];
+  return { columns, rows, write: (text) => writes.push(text), writes };
+}
+
+/** One-based terminal coordinates, including mouse release events. */
+export function sgr(button, x, y, release = false) {
+  return `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
+}
+
 export class FakeText {
   constructor(text) { this.text = text; }
   setText(text) { this.text = text; }
@@ -9,11 +20,9 @@ export class FakeText {
 export const bindings = { makeText: (s) => new FakeText(s), expandHint: () => "ctrl+o to expand" };
 /** Session stub with a fixed truecolor capability (Codex reference env). */
 export const sessionStub = {
-  tracker: { trackStart() {}, trackEnd() {} },
   colorLevel: { kind: "truecolor" },
   writeChanges: new Map(),
   transcript: undefined, // no grouping state in the generic stub
-  resultImages: new Map(),
 };
 class FakeContainer {
   children = [];

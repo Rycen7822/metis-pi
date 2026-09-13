@@ -356,6 +356,7 @@ try {
   assert.match(beginLine, /^\s{3,}SELECT_BEGIN_MARK/, `transcript content inset by margin + outputPad, got ${JSON.stringify(beginLine)}`);
   assert.ok(flat.includes("fullscreen-margin:applied(margin=2"), "margin diagnostics report applied");
 
+  assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");

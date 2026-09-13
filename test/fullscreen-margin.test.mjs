@@ -8,13 +8,9 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { createFullscreenMargin, FULLSCREEN_MARGIN_OWNER } from "../src/chrome/fullscreen-margin.ts";
 import { createSelectionCopySystem } from "../src/selection-copy/index.ts";
+import { fakeTerminal, sgr } from "./helpers.mjs";
 
 const MARGIN_HOST = { HStack: Tui.HStack, Spacer: Tui.Spacer };
-
-function fakeTerminal(columns, rows = 24) {
-  const writes = [];
-  return { columns, rows, write: (s) => writes.push(s), writes };
-}
 
 function makeAltScreen(width) {
   const terminal = fakeTerminal(width);
@@ -26,10 +22,6 @@ function makeAltScreen(width) {
 
 function screenLines(tui) {
   return tui.previousScreen.map((line) => Tui.stripTerminalSequences(line).trimEnd());
-}
-
-function sgr(button, x, y, release = false) {
-  return `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
 }
 
 test("install wraps setLayoutRoot: content is inset by the margin, gutters blank", (t) => {

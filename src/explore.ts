@@ -30,7 +30,7 @@ export function explorationVerb(name: string): ExplorationVerb {
 
 /** "• Explored|Exploring" group title line. Bullet tone = run state (dim while
  * running, vivid success green once done — Codex's #13a10e state dot). */
-export function renderExplorationHeader(render: { running: boolean; isError: boolean }, colorLevel: ColorLevel, theme: { bold(text: string): string; fg(key: string, text: string): string }): string {
+export function renderExplorationHeader(render: { running: boolean; isError: boolean }, _colorLevel: ColorLevel, theme: { bold(text: string): string; fg(key: string, text: string): string }): string {
   const title = render.isError ? "Exploration failed" : render.running ? "Exploring" : "Explored";
   const bullet = render.isError ? "error" : render.running ? "dim" : "success";
   return `${theme.fg(bullet, "•")} ${theme.bold(title)}`;

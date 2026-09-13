@@ -1,3 +1,22 @@
+# Validation record — 0.9.9 (bounded history and code simplification)
+
+The fullscreen transcript retains at most 5,000 display rows, including page notices. Scrolling beyond a window edge loads the adjacent history and releases component render caches and copy mirrors at the opposite edge. Raw session records remain owned by Pi. Native start/end navigation crosses windows; incoming output preserves the old-history reading position, and an active selection pins the committed window until cleared.
+
+Recovery and width changes assemble rows only until the window budget is filled. The host exposes whole-component `render()`, so a single oversized boundary component may still render in full once before its rows are sliced and its full cache is released. The retained-row bound is not a per-component CPU, byte, or time limit. Native transcript search covers the loaded window.
+
+The cleanup shares tool row-cache construction, narrows renderer dependencies, removes unused state and APIs, merges identical event handlers, and caches usage totals until ledger changes. Test fixtures and overlapping cases were simplified while preserving behavioral assertions; the package source scan now checks subdirectories, and core TypeScript checks reject unused declarations.
+
+Verification on Node 24.15.0 and Pi 0.85.1:
+
+- `env -u NO_COLOR npm test`: 265/265 pass, including nine real-host history-window regressions.
+- `npm run check` and `npm run check:core`: pass.
+- `env -u NO_COLOR npm run test:host`: pass.
+- `env -u NO_COLOR npm run test:pty`: real tmux pass for Working, thinking timers, expansion/collapse, bash output and failures, fullscreen gutters, history-window installation, and selection copy (161 characters; exact=2, mixed=0, native=0).
+- `node --check scripts/preview.mjs` and `git diff --check`: pass.
+- Release metadata check: package tests 4/4 pass; `npm pack --dry-run --ignore-scripts --json` includes `src/chrome/history-window.ts` and excludes the local `CODEX_STATE.md` index.
+
+A local ledger microbenchmark with 20,000 confirmed requests and 1,000 warm totals reads measured 72.81 ms before caching and 0.10 ms after, with the same 200,000 input-token total. This measures only repeated ledger reads, not terminal frame time. Workspace verification logs are under `/tmp/pi-simplify2-{tests,focused,adapter,check,core,host,pty}.log`; regression tests do not require private sessions or model requests.
+
 # Validation record — 0.9.8 (shell scroll performance)
 
 The reported session `01a097ea-941e-75fc-9cc2-5230a858e5fe` contains 56 tool calls, including 42 bash calls with 237125 output characters; 14 results contain 12000 characters each. Replaying its recorded messages into real Pi 0.85.1 components exposed repeated rendering of completed, collapsed shell output on every scroll frame.

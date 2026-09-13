@@ -85,7 +85,7 @@ export class SelectionSerializer {
     let nativeRows = 0;
     for (let row = selection.startRow; row <= selection.endRow; row++) {
       const columns = selection.columnsFor(row);
-      const { pieces, soft, bridge, mapped, native } = this.#rowPieces(frame, row, columns, selection, anchor);
+      const { pieces, soft, bridge, native } = this.#rowPieces(frame, row, columns, selection, anchor);
       const text = pieces.join("");
       if (text.length > 0) {
         // Soft join decided by THIS row's product; the bridge is the
@@ -128,12 +128,11 @@ export class SelectionSerializer {
     columns: { start: number; end: number },
     selection: SelectionSpec,
     anchor: { x: number; y: number },
-  ): { pieces: string[]; soft: boolean; bridge: string; mapped: boolean; native: boolean } {
+  ): { pieces: string[]; soft: boolean; bridge: string; native: boolean } {
     const pieces: string[] = [];
     let soft = true;
     let bridge = "";
     const owners = this.#ownershipFor(frame, row, anchor, selection.scrollView !== undefined, columns.end);
-    let mapped = false;
     let native = false;
     let runStart = columns.start;
     let runHit = owners[columns.start];
@@ -144,7 +143,6 @@ export class SelectionSerializer {
         this.#pushRun(runHit, runStart, col, row, selection, anchor.x, pieces, (update) => {
           if (update.soft === false) soft = false;
           if (update.bridge && !bridge) bridge = update.bridge;
-          if (update.mapped) mapped = true;
           if (update.native) native = true;
         });
         runStart = col;
@@ -152,7 +150,7 @@ export class SelectionSerializer {
         if (atEnd) break;
       }
     }
-    return { pieces, soft, bridge, mapped, native };
+    return { pieces, soft, bridge, native };
   }
 
   #pushRun(
@@ -163,7 +161,7 @@ export class SelectionSerializer {
     selection: SelectionSpec,
     anchorX: number,
     pieces: string[],
-    onUpdate: (update: { soft?: boolean; bridge?: string; mapped?: boolean; native?: boolean }) => void,
+    onUpdate: (update: { soft?: boolean; bridge?: string; native?: boolean }) => void,
   ): void {
     if (end <= start) return;
     if (!hit) {
@@ -183,7 +181,6 @@ export class SelectionSerializer {
       onUpdate({ soft: false, native: true });
       return;
     }
-    onUpdate({ mapped: true });
     if (resolved.row.breakBefore !== "soft") onUpdate({ soft: false });
     if (resolved.row.bridge) onUpdate({ bridge: resolved.row.bridge });
     // Box rects are screen-space; the content origin's x comes back out.

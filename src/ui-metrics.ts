@@ -86,7 +86,6 @@ export class UiMetrics {
   #interactionStart: number | undefined;
   #interactionStartWall: number | undefined;
   #phase: ActivityPhase = "idle";
-  #phaseSince = 0;
   #thinking: ThinkingInterval[] = [];
   #usage: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   #usageRequests = new Set<string>();
@@ -169,7 +168,6 @@ export class UiMetrics {
   setPhase(phase: ActivityPhase): void {
     if (phase === this.#phase) return;
     this.#phase = phase;
-    this.#phaseSince = this.#opts.now();
     this.#emit();
   }
 

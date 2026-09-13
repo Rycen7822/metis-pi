@@ -9,7 +9,7 @@ import { makeSurfaceOps } from "./src/surface.ts";
 import { renderWritePreview } from "./src/write-preview.ts";
 import { loadConfig } from "./src/config.ts";
 import { thoughtSummaryText } from "./src/thinking-summary.ts";
-import { registerProduct, productFor } from "./src/selection-copy/model.ts";
+import { registerProduct, productFor, publishRows, releaseCopyCache } from "./src/selection-copy/model.ts";
 import type { CopyRow } from "./src/selection-copy/model.ts";
 import type { WritePreviewInput } from "./src/renderers.ts";
 import type { ToolName } from "./src/tool-names.ts";
@@ -21,32 +21,27 @@ function layoutOps(): LayoutOps {
   };
 }
 
-/** Result region of an edit/write diff: rows -> width-aware Codex renderer. */
-class CodexDiffComponent implements Tui.Component {
-  readonly #input: DiffComponentInput;
-  #lastWidth = -1;
-  #cache: string[] | undefined;
+/** Host updates create new tool regions. One cache owns both displayed rows
+ * and copy provenance; invalidation releases them together. */
+function cachedRowsComponent(componentId: string, renderRows: (width: number, copyOut: CopyRow[]) => string[]): Tui.Component {
+  let cache: { width: number; rows: string[] } | undefined;
+  return {
+    render(width) {
+      if (!cache || cache.width !== width) {
+        const copyOut: CopyRow[] = [];
+        const rows = renderRows(width, copyOut);
+        if (copyOut.length === rows.length) registerProduct(rows, { componentId, width, rows: copyOut });
+        cache = { width, rows };
+      }
+      publishRows(this, cache.rows);
+      return cache.rows;
+    },
+    invalidate() { cache = undefined; releaseCopyCache(this); },
+  };
+}
 
-  constructor(input: DiffComponentInput) {
-    this.#input = input;
-  }
-
-  render(width: number): string[] {
-    if (this.#cache && this.#lastWidth === width) return this.#cache;
-    const copyOut: CopyRow[] = [];
-    const rows = renderCodexDiffComponent(this.#input, width, layoutOps(), copyOut);
-    if (copyOut.length === rows.length) {
-      registerProduct(rows, { componentId: "diff", width, rows: copyOut });
-    }
-    this.#cache = rows;
-    this.#lastWidth = width;
-    return this.#cache;
-  }
-
-  invalidate(): void {
-    this.#cache = undefined;
-    this.#lastWidth = -1;
-  }
+function createDiffComponent(input: DiffComponentInput): Tui.Component {
+  return cachedRowsComponent("diff", (width, copyOut) => renderCodexDiffComponent(input, width, layoutOps(), copyOut));
 }
 
 /** Call region: bullet + bold title + highlighted command with "  │ "
@@ -56,47 +51,25 @@ interface ShellCallInput {
   options: { expanded?: boolean; isPartial?: boolean };
   colorLevel: import("./src/palette.ts").ColorLevel;
 }
-class CodexShellCallComponent implements Tui.Component {
-  // Host updates (args/result/expanded/theme) create a new shell component.
-  // Scroll-only frames can reuse both the rows and their copy-product identity.
-  readonly #input: ShellCallInput;
-  #cache: { width: number; rows: string[] } | undefined;
-
-  constructor(input: ShellCallInput) {
-    this.#input = input;
-  }
-
-  render(width: number): string[] {
-    if (this.#cache?.width === width) return this.#cache.rows;
-    const copyOut: CopyRow[] = [];
-    const rows = renderShellCall({
-      row: {
-        title: this.#input.title,
-        isError: false,
-        isPartial: this.#input.options.isPartial === true,
-        command: String(this.#input.args.command ?? ""),
-        language: this.#input.name === "powershell" ? "powershell" : "bash",
-        output: "",
-        expanded: this.#input.options.expanded === true,
-        expandHint: "",
-      },
-      width,
-      layout: layoutOps(),
-      colorLevel: this.#input.colorLevel,
-      bullet: this.#input.bullet,
-      titlePainter: (title) => title,
-      copyOut,
-    });
-    if (copyOut.length === rows.length) {
-      registerProduct(rows, { componentId: "shell-call", width, rows: copyOut });
-    }
-    this.#cache = { width, rows };
-    return rows;
-  }
-
-  invalidate(): void {
-    this.#cache = undefined;
-  }
+function createShellCallComponent(input: ShellCallInput): Tui.Component {
+  return cachedRowsComponent("shell-call", (width, copyOut) => renderShellCall({
+    row: {
+      title: input.title,
+      isError: false,
+      isPartial: input.options.isPartial === true,
+      command: String(input.args.command ?? ""),
+      language: input.name === "powershell" ? "powershell" : "bash",
+      output: "",
+      expanded: input.options.expanded === true,
+      expandHint: "",
+    },
+    width,
+    layout: layoutOps(),
+    colorLevel: input.colorLevel,
+    bullet: input.bullet,
+    titlePainter: (title) => title,
+    copyOut,
+  }));
 }
 
 /**
@@ -104,56 +77,38 @@ class CodexShellCallComponent implements Tui.Component {
  * budget. Never renders a command head.
  */
 interface ShellResultInput {
-  name: ToolName; args: Record<string, unknown>; result: unknown;
+  name: ToolName; result: unknown;
   options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
   bullet: string;
   expandHint: string;
   colorLevel: import("./src/palette.ts").ColorLevel;
 }
 
-class CodexShellResultComponent implements Tui.Component {
-  readonly #input: ShellResultInput;
-  #cache: { width: number; rows: string[] } | undefined;
-
-  constructor(input: ShellResultInput) {
-    this.#input = input;
-  }
-
-  render(width: number): string[] {
-    if (this.#cache?.width === width) return this.#cache.rows;
-    const result = this.#input.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
+function createShellResultComponent(input: ShellResultInput): Tui.Component {
+  return cachedRowsComponent("shell-result", (width, copyOut) => {
+    const result = input.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
     const output = Array.isArray(result?.content)
       ? result.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
       : "";
-    const copyOut: CopyRow[] = [];
-    const rows = renderShellResult({
+    return renderShellResult({
       row: {
         title: "",
-        isError: this.#input.isError,
-        isPartial: this.#input.options.isPartial === true,
+        isError: input.isError,
+        isPartial: input.options.isPartial === true,
         command: "",
-        language: this.#input.name === "powershell" ? "powershell" : "bash",
+        language: input.name === "powershell" ? "powershell" : "bash",
         output,
-        expanded: this.#input.options.expanded === true,
-        expandHint: this.#input.expandHint,
+        expanded: input.options.expanded === true,
+        expandHint: input.expandHint,
       },
       width,
       layout: layoutOps(),
-      colorLevel: this.#input.colorLevel,
-      bullet: this.#input.bullet,
+      colorLevel: input.colorLevel,
+      bullet: input.bullet,
       titlePainter: (title) => title,
       copyOut,
     });
-    if (copyOut.length === rows.length) {
-      registerProduct(rows, { componentId: "shell-result", width, rows: copyOut });
-    }
-    this.#cache = { width, rows };
-    return rows;
-  }
-
-  invalidate(): void {
-    this.#cache = undefined;
-  }
+  });
 }
 
 /** Separator before assistant text that follows tool activity: a light
@@ -382,18 +337,18 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   activate(pi, {
     prototype,
     makeText: (text) => new Tui.Text(text, 0, 0),
-    makeDiff: (input) => new CodexDiffComponent({
+    makeDiff: (input) => createDiffComponent({
       rows: input.rows, filePath: input.filePath, paint: highlight,
       colorLevel, expanded: input.options.expanded === true,
       expandHint: input.expandHint ?? "",
     }),
     makeShell: {
-      makeShellCall: (input) => new CodexShellCallComponent({
+      makeShellCall: (input) => createShellCallComponent({
         name: input.name, bullet: input.bullet, title: input.title, args: input.args,
         options: input.options, colorLevel: input.colorLevel,
       }),
-      makeShellResult: (input) => new CodexShellResultComponent({
-        name: input.name, args: input.args, result: input.result,
+      makeShellResult: (input) => createShellResultComponent({
+        name: input.name, result: input.result,
         options: input.options, isError: input.context.isError === true,
         bullet: input.theme.fg(input.context.isError ? "error" : input.options.isPartial ? "dim" : "success", "•"),
         expandHint: input.expandHint, colorLevel: input.colorLevel,
@@ -432,6 +387,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       HStack: typeof Tui.HStack === "function" ? Tui.HStack : undefined,
       Spacer: typeof Tui.Spacer === "function" ? Tui.Spacer : undefined,
     },
+    historyWindowHost: { Container: Tui.Container, ScrollView: Tui.ScrollView, matchesKey: Tui.matchesKey },
     selectionCopyHost: {
       prototypes: {
         Text: Tui.Text.prototype,

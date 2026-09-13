@@ -50,7 +50,7 @@ export interface CodexQuotaQueryOptions {
 
 /** One-shot query: start → initialize → initialized → read → dispose. */
 export async function queryCodexQuota(options: CodexQuotaQueryOptions): Promise<CodexQuotaSnapshot> {
-  const client = new CodexAppServerClient(options.timeoutMs, options.spawnFn, options.clientVersion);
+  const client = new CodexAppServerClient(options.timeoutMs, options.spawnFn);
   try {
     await client.start();
     await client.request("initialize", {
@@ -72,7 +72,6 @@ type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => vo
 class CodexAppServerClient {
   readonly #timeoutMs: number;
   readonly #spawnFn: (command: string, args: string[]) => SpawnLike;
-  readonly #clientVersion: string | undefined;
   #child: SpawnLike | undefined;
   #nextId = 1;
   #stderr = "";
@@ -80,11 +79,10 @@ class CodexAppServerClient {
   #startPromise: Promise<void> | undefined;
   #exitError: Error | undefined;
 
-  constructor(timeoutMs: number, spawnFn: CodexQuotaQueryOptions["spawnFn"], clientVersion: string | undefined) {
+  constructor(timeoutMs: number, spawnFn: CodexQuotaQueryOptions["spawnFn"]) {
     this.#timeoutMs = timeoutMs;
     this.#spawnFn = spawnFn ?? ((command, args) =>
       spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] }) as unknown as SpawnLike);
-    this.#clientVersion = clientVersion;
   }
 
   start(): Promise<void> {

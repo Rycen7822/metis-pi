@@ -1,9 +1,9 @@
 // Display-only renderer registration for Pi's native two slots (call region = title/command, result region = output/diff body; never modifies tool data).
 
 import { renderExplorationHeader, renderExplorationMember, renderExplorationImages, renderExplorationLines, explorationVerb, type ExplorationRow } from "./explore.ts";
-import type { ExplorationPlan } from "./transcript-state.ts";
+import type { ExplorationPlan, TranscriptState } from "./transcript-state.ts";
 import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
-import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffRow, type DiffStats } from "./diff.ts";
+import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffStats } from "./diff.ts";
 import type { WriteDiff } from "./write-tracker.ts";
 import { resolveWriteStage, type WriteStage } from "./write-preview.ts";
 
@@ -253,6 +253,13 @@ export interface ShellFactories {
   }) => Component;
 }
 
+/** Only presentation data crosses into the tool renderers. */
+export interface RendererSession {
+  readonly colorLevel: import("./palette.ts").ColorLevel;
+  readonly writeChanges: ReadonlyMap<string, WriteDiff>;
+  readonly transcript?: Pick<TranscriptState, "explorationPlan">;
+}
+
 export function makeRenderers(
   makeText: TextFactory,
   expandHint: () => string,
@@ -260,7 +267,7 @@ export function makeRenderers(
   makeDiff?: DiffFactory,
   makeShell?: ShellFactories,
   makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => Component | undefined,
-  session?: import("./extension.ts").AppearanceSession,
+  session?: RendererSession,
   layoutOps?: DiffLayoutOps,
 ): Record<ToolName, Renderers> {
   const ownComponents = new WeakSet<object>();
@@ -344,7 +351,6 @@ export function makeRenderers(
 
   return Object.fromEntries<Renderers>(TOOL_NAMES.map((name) => [name, {
     renderCall(args: unknown, theme: Palette, ctx: ViewContext) {
-      const state = view(ctx);
       // Pi passes the same args in both slots; merge so title builders can read args from either source.
       const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
       if (SHELL.has(name)) {
@@ -398,23 +404,18 @@ export function makeRenderers(
           ?? session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
         return component(explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)), ctx);
       }
-      const done = merged.isPartial === false;
-      const label = merged.isError ? "Failed" : done ? "Edited" : "Editing";
-      const stats = state?.stats;
-      let suffix = "";
-      if (name === "edit" && stats && merged.isError !== true) {
-        suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
-      }
-      const bullet = theme.fg(merged.isError ? "error" : done ? "success" : "dim", "•");
-      const call = component(`${bullet} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(asRecord(args), merged))))}${suffix}`, ctx);
+      const state = view(ctx);
+      const call = component(formatCall(name, args, theme, merged, state?.stats, paint), ctx);
       if (state) state.call = call;
       return call;
     },
     renderResult(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext) {
-      const state = view(ctx);
-      if (state && name === "edit") {
-        state.stats = diffStats(result);
-        state.call?.setText(formatCall(name, ctx.args, theme, ctx, state.stats, paint));
+      if (name === "edit") {
+        const state = view(ctx);
+        if (state) {
+          state.stats = diffStats(result);
+          state.call?.setText(formatCall(name, ctx.args, theme, ctx, state.stats, paint));
+        }
       }
       if (name === "edit" && ctx.isError !== true) {
         const details = asRecord(asRecord(result).details);
@@ -435,15 +436,11 @@ export function makeRenderers(
         if (options.isPartial) return component("", ctx);
         return writeBody(result, options, theme, ctx);
       }
-      if (SHELL.has(name)) {
-        if (makeShell?.makeShellResult) {
-          return makeShell.makeShellResult({
-            name, args: asRecord(ctx.args), result, options, theme, context: ctx,
-            expandHint: expandHint(), colorLevel: colorFor(ctx),
-          });
-        }
-        // Result region NEVER repeats the command head — the call region owns the title even without a shell component factory.
-        return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
+      if (SHELL.has(name) && makeShell?.makeShellResult) {
+        return makeShell.makeShellResult({
+          name, args: asRecord(ctx.args), result, options, theme, context: ctx,
+          expandHint: expandHint(), colorLevel: colorFor(ctx),
+        });
       }
       return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
     },

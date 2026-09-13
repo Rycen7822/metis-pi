@@ -16,6 +16,7 @@ import {
   decorationRow,
   publishRows,
   registerProduct,
+  registerCacheReleaser,
   type BreakBefore,
   type CopyProduct,
   type CopyRow,
@@ -550,6 +551,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
         return rows;
       }
       const previous = seen.get(this);
+      if (!previous) registerCacheReleaser(this, () => { cache.delete(this); seen.delete(this); });
       const changing = previous !== undefined && previous.width === width && previous.text !== this.text;
       const throttled = changing && now() - previous.attemptAt < MIRROR_REBUILD_INTERVAL_MS;
       seen.set(this, { text: this.text, width, attemptAt: throttled ? previous.attemptAt : now() });

@@ -20,8 +20,6 @@ function bgAnsi(rgb: Rgb, level: ColorLevel): string {
   return ""; // ansi16 cannot represent the surface honestly; none = no SGR
 }
 
-const BG_RESET = "\x1b[49m";
-
 /** Re-emit `bg` after every SGR that cleared the background inside `segment`.
  * Extended-color prefixes (38/48/58) consume their arguments so component
  * values like 0/49/2 can never read as resets. */

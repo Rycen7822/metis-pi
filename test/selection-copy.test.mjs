@@ -12,6 +12,8 @@ import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem, detectExternalSerializerPatch } from "../src/selection-copy/index.ts";
 import { makeCodexEditorFactory } from "../src/chrome/editor.ts";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { fakeTerminal, sgr } from "./helpers.mjs";
+import { SelectionSerializer } from "../src/selection-copy/serialize.ts";
 
 const theme = {
   bold: (t) => `\x1b[1m${t}\x1b[22m`,
@@ -31,7 +33,8 @@ const theme = {
   linkUrl: (t) => t,
 };
 
-const SHARED_SYS = createSelectionCopySystem({
+// Native prototypes are shared by every case in this file. Install once.
+const sys = createSelectionCopySystem({
   prototypes: {
     Text: Tui.Text.prototype,
     Markdown: Tui.Markdown.prototype,
@@ -46,12 +49,8 @@ const SHARED_SYS = createSelectionCopySystem({
     renderLatex: (text, options) => Tui.renderLatex(text, options) ?? null,
   },
 }, undefined);
-SHARED_SYS.wrapPrototypes();
-function makeSystem() {
-  return SHARED_SYS;
-}
-
-function diagnostics(sys) {
+sys.wrapPrototypes();
+function diagnostics() {
   const d = sys.diagnostics();
   return { degraded: d.mirrors.markdownDegraded + d.mirrors.textDegraded, reason: d.mirrors.lastDegradedReason };
 }
@@ -73,36 +72,30 @@ const CORPUS = [
 ];
 
 test("differential: real Markdown mirror builds at every width without degradation", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   for (const [name, text] of CORPUS) {
     for (const width of [60, 80, 120, 160]) {
       const md = new Tui.Markdown(text, 1, 1, theme, undefined, {});
       md.render(width);
     }
   }
-  const d = diagnostics(sys);
+  const d = diagnostics();
   assert.equal(d.degraded, 0, `mirror degraded: ${d.reason}`);
 });
 
 test("differential: real Text mirror builds without degradation", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const text = new Tui.Text("plain text with a reasonably long line to force wrapping at narrow widths", 1, 1);
   for (const width of [40, 60, 100]) text.render(width);
-  const d = diagnostics(sys);
+  const d = diagnostics();
   assert.equal(d.degraded, 0, `mirror degraded: ${d.reason}`);
 });
 
 test("differential: user message path (Box > Markdown) builds and copies", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const text = "帮我看看这个很长的中文问题在窗口变窄的时候软折行复制是否保持为一行不添加多余换行或空格";
   const content = new Tui.Box(1, 1, (line) => line);
   content.addChild(new Tui.Markdown(text, 0, 0, theme, { color: (t) => t }, { preserveOrderedListMarkers: true, preserveBackslashEscapes: true }));
   const width = 60;
   const rows = content.render(width);
-  const d = diagnostics(sys);
+  const d = diagnostics();
   assert.equal(d.degraded, 0, `mirror degraded: ${d.reason}`);
   // Full content selection through the real layout frame.
   const frame = {
@@ -127,18 +120,11 @@ function serializeFrame(frame, rows, startRow, endRow) {
   });
 }
 
-import { SelectionSerializer } from "../src/selection-copy/serialize.ts";
-
 // ---------------------------------------------------------------------------
 // C. Real TuiAltScreen: real SGR mouse sequences → selection → exact copy.
 // ---------------------------------------------------------------------------
 
-function fakeTerminal(columns, rows) {
-  const writes = [];
-  return { columns, rows, write: (s) => writes.push(s), writes };
-}
-
-function buildAltScreen(sys, text, width = 80) {
+function buildAltScreen(text, width = 80) {
   const terminal = fakeTerminal(width, 24);
   const tui = new Tui.TuiAltScreen(terminal);
   tui.beforeTerminalStart();
@@ -151,16 +137,9 @@ function buildAltScreen(sys, text, width = 80) {
   return { tui, md, terminal };
 }
 
-function sgr(button, x, y, release = false) {
-  // 1-based screen coords, SGR encoding.
-  return `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
-}
-
 test("real TUI: mouse drag selects soft-wrapped CJK paragraph; copy is one logical line", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const text = "这是一个很长的中文段落用来测试软折行复制功能当我们把窗口调窄时中文字符会按宽度折行但复制时应该保持为一行逻辑文本。";
-  const { tui } = buildAltScreen(sys, text, 60);
+  const { tui } = buildAltScreen(text, 60);
   tui.setCopyOnSelect(false);
   // Find the content rows on screen (paddingY=1 → row 1 is first content row;
   // the paragraph wraps at contentWidth 58).
@@ -182,10 +161,8 @@ test("real TUI: mouse drag selects soft-wrapped CJK paragraph; copy is one logic
 });
 
 test("real TUI: Ctrl+C with selection consumes the key, copies, keeps the draft", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron";
-  const { tui } = buildAltScreen(sys, text, 60);
+  const { tui } = buildAltScreen(text, 60);
   tui.setCopyOnSelect(false);
   const screen = tui.previousScreen.map((line) => Tui.stripTerminalSequences(line).trimEnd());
   const rowOf = (needle) => screen.findIndex((line) => line.includes(needle));
@@ -232,10 +209,8 @@ test("real TUI: Ctrl+C with selection consumes the key, copies, keeps the draft"
 });
 
 test("real TUI: decoration-only selection returns undefined (stock parity) and never touches the clipboard", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const text = "tiny";
-  const { tui } = buildAltScreen(sys, text, 60);
+  const { tui } = buildAltScreen(text, 60);
   tui.setCopyOnSelect(false);
   // The padding band row is pure decoration: mapped spans, no content. Stock
   // maps empty extraction to undefined — hasActiveSelection stays false and
@@ -249,10 +224,8 @@ test("real TUI: decoration-only selection returns undefined (stock parity) and n
 });
 
 test("external prototype wrapper (pi-copy-soft-wrap pattern) is detected and bypassed", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const text = "一行中文软折行复制测试内容需要足够长才能在窄宽度下折行成多行屏幕显示验证精确复制。";
-  const { tui } = buildAltScreen(sys, text, 60);
+  const { tui } = buildAltScreen(text, 60);
   tui.setCopyOnSelect(false);
   // Simulate the old plugin: wrap the PROTOTYPE method with a heuristic
   // normalizer (adds markers around every newline it sees).
@@ -291,8 +264,6 @@ function seededRandom(seed) {
 }
 
 test("property: mirrored render equals host rows and full selection round-trips (seeded)", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const rand = seededRandom(0x9e3779b9);
   const words = ["alpha", "beta", "gamma", "中文词语", "x".repeat(20), "https://example.com/a/b/c", "hyphen-ated", "3.14", "foo_bar"];
   const joins = [" ", " ", "\n", "\n\n", ""];
@@ -332,7 +303,7 @@ test("property: mirrored render equals host rows and full selection round-trips 
     }
   }
   assert.ok(roundTrips > 20, `expected many round trips, got ${roundTrips}`);
-  const d = diagnostics(sys);
+  const d = diagnostics();
   assert.equal(d.degraded, 0, `mirror degraded during property run: ${d.reason}`);
 });
 
@@ -343,7 +314,6 @@ test("property: mirrored render equals host rows and full selection round-trips 
 // ---------------------------------------------------------------------------
 
 test("user message card: copied logical text identical across widths, background never copied", () => {
-  const sys = makeSystem();
   const text = "帮我看看这个很长的中文问题在窗口变窄的时候软折行复制是否保持为一行不添加多余换行或空格，同时灰色卡片背景绝对不能混进复制结果里。";
   const bgPaint = (line) => `\x1b[48;2;41;41;41m${line}\x1b[49m`;
   const copies = [];
@@ -366,7 +336,6 @@ test("user message card: copied logical text identical across widths, background
 });
 
 test("collapsed thought summary copies its label only — hidden reasoning is not rendered anywhere", () => {
-  makeSystem();
   // The real label as index.ts paints it: italic + thinkingText color.
   const label = new Tui.Text("\x1b[3m\x1b[38;2;163;163;163mThought for 13s\x1b[39m\x1b[23m", 1, 0);
   const rows = label.render(40);
@@ -470,8 +439,6 @@ test("throttle: changing text at one width rebuilds at most once per interval; s
 });
 
 test("container alignment resolves child products WITHOUT re-rendering children", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const inner = new Tui.Container();
   inner.addChild(new Tui.Markdown("steady child content", 0, 0, theme, undefined, {}));
   inner.addChild(new Tui.Text("a label", 1, 0));
@@ -502,8 +469,6 @@ test("container alignment resolves child products WITHOUT re-rendering children"
 });
 
 test("container alignment: child of an unwrapped component type still aligns via fallback render", () => {
-  const sys = makeSystem();
-  sys.wrapPrototypes();
   const plain = { render: (w) => ["foreign".slice(0, Math.min(7, w))] };
   const chat = new Tui.Container();
   chat.addChild(new Tui.Text("wrapped child", 0, 0));

@@ -33,7 +33,7 @@ interface RawSpan { text: string; token: MochaToken | "plain" }
  * Command position = first word of the line or a word right after
  * `;` `&&` `||` `|` `(` `&`. Words there classify as builtin/executable.
  */
-export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan[] {
+export function tokenizeBashLine(line: string, _atScriptStart: boolean): BashSpan[] {
   const raw: RawSpan[] = [];
   const push = (text: string, token: MochaToken | "plain") => {
     if (!text) return;
@@ -49,7 +49,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
   let afterControl = true; // line start is command position
   let wordStarted = false;
   let sawExpansion = false;
-  let sawSlash = false;
 
   const classifyCurrentWord = (word: string): MochaToken | "plain" => {
     if (!word) return "plain";
@@ -76,7 +75,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
       wordBuffer = "";
       wordStarted = false;
       sawExpansion = false;
-      sawSlash = false;
       afterControl = false;
     }
   };
@@ -165,7 +163,6 @@ export function tokenizeBashLine(line: string, atScriptStart: boolean): BashSpan
       continue;
     }
     if (!wordStarted) { wordStarted = true; }
-    if (char === "/") sawSlash = true;
     wordBuffer += char;
     index += 1;
   }

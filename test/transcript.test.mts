@@ -28,11 +28,9 @@ const IMAGE_NAMES = [
 
 function fakeStateSession() {
   return {
-    tracker: { trackStart() {}, trackEnd() {} },
     colorLevel: { kind: "truecolor" },
     writeChanges: new Map(),
     transcript: new TranscriptState(),
-    resultImages: new Map(),
   };
 }
 

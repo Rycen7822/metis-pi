@@ -168,7 +168,8 @@ test("lifecycle uses no tool registration, context middleware, editor, footer or
   const Host = fakeHost();
   const before = Object.getOwnPropertyDescriptors(Host.prototype);
   activate(pi, { ...bindings, prototype: Host.prototype });
-  assert.deepEqual([...handlers.keys()], [
+  // Different event names dispatch independently; only membership matters.
+  assert.deepEqual([...handlers.keys()].sort(), [
     "session_start",
     "agent_start", // interaction clock (0.8.0 working/summary)
     "agent_end",
@@ -186,7 +187,7 @@ test("lifecycle uses no tool registration, context middleware, editor, footer or
     "message_update",
     "message_end",
     "session_shutdown",
-  ]);
+  ].sort());
   const ctx = { hasUI: true, ui: { notify() { throw new Error("unexpected warning"); } } };
   for (let i = 0; i < 5; i++) {
     handlers.get("session_start")({}, ctx);

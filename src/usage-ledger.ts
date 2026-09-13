@@ -34,24 +34,22 @@ function amount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-/** Sanitize a raw usage object; null when nothing valid is present. */
+/** Keep the same token boundary for streaming metrics and confirmed usage. */
+export function sanitizeUsage(raw: RawUsage): Partial<Omit<UsageRecord, "costTotal">> {
+  const usage: Partial<Omit<UsageRecord, "costTotal">> = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const value = amount(raw[key]);
+    if (value !== undefined) usage[key] = value;
+  }
+  return usage;
+}
+
+/** Sanitize a raw usage object; undefined when nothing valid is present. */
 export function toUsageRecord(raw: RawUsage | undefined): UsageRecord | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const input = amount(raw.input);
-  const output = amount(raw.output);
-  const cacheRead = amount(raw.cacheRead);
-  const cacheWrite = amount(raw.cacheWrite);
-  const costTotal = amount(raw.cost?.total);
-  if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
-    return undefined;
-  }
-  return {
-    input: input ?? 0,
-    output: output ?? 0,
-    cacheRead: cacheRead ?? 0,
-    cacheWrite: cacheWrite ?? 0,
-    costTotal,
-  };
+  const tokens = sanitizeUsage(raw);
+  if (Object.keys(tokens).length === 0) return undefined;
+  return { ...ZERO, ...tokens, costTotal: amount(raw.cost?.total) };
 }
 
 function addInto(target: UsageRecord, rec: UsageRecord): void {
@@ -75,82 +73,43 @@ export function cacheHitRate(rec: UsageRecord | undefined): number | null {
 
 export class UsageLedger {
   #confirmed = new Map<string, UsageRecord>();
-  /** Insertion order — the last confirmed key is the "last request". */
-  #order: string[] = [];
-  #previewSeq: number | undefined;
-  #preview: UsageRecord | undefined;
+  /** Corrections preserve insertion order: an older request stays older. */
+  #lastKey: string | undefined;
+  #totals: UsageRecord | undefined;
 
   /** Confirm final usage for a request/entry. Same key replaces (correction),
    * never double-counts. Returns false when the usage carried no valid data. */
   confirm(key: string, raw: RawUsage | undefined): boolean {
     const rec = toUsageRecord(raw);
     if (!rec) return false;
-    if (!this.#confirmed.has(key)) this.#order.push(key);
+    if (!this.#confirmed.has(key)) this.#lastKey = key;
     this.#confirmed.set(key, rec);
+    this.#totals = undefined;
     return true;
   }
 
-  /** Replace the in-flight preview contribution (streaming usage is a
-   * CUMULATIVE snapshot per request — never sum deltas). */
-  preview(seq: number, raw: RawUsage | undefined): void {
-    const rec = toUsageRecord(raw);
-    if (!rec) return;
-    this.#previewSeq = seq;
-    this.#preview = rec;
-  }
-
-  clearPreview(seq: number): void {
-    if (this.#previewSeq === seq) {
-      this.#previewSeq = undefined;
-      this.#preview = undefined;
-    }
-  }
-
-  /** Confirmed totals only (the honest ledger). */
+  /** Recompute only after confirmations change; scrolling only copies the
+   * cached totals, so callers cannot mutate the next frame's data. */
   totals(): UsageRecord {
-    const total: UsageRecord = { ...ZERO, costTotal: undefined };
-    for (const rec of this.#confirmed.values()) addInto(total, rec);
-    return total;
-  }
-
-  /** Current preview contribution, if a request is in flight. */
-  previewRecord(): UsageRecord | undefined {
-    return this.#preview;
-  }
-
-  /** Most recent confirmed request (basis for cache(last)); undefined when
-   * the session has none yet — shown as unknown, not as a stale rate. */
-  lastRequest(): UsageRecord | undefined {
-    for (let i = this.#order.length - 1; i >= 0; i -= 1) {
-      const rec = this.#confirmed.get(this.#order[i]);
-      if (rec) return rec;
+    if (!this.#totals) {
+      this.#totals = { ...ZERO };
+      for (const rec of this.#confirmed.values()) addInto(this.#totals, rec);
     }
-    return undefined;
+    return { ...this.#totals };
   }
 
+  /** Cache rate of the most recent request; unknown for an empty session. */
   cacheRateLast(): number | null {
-    return cacheHitRate(this.lastRequest());
-  }
-
-  cacheRateSession(): number | null {
-    return cacheHitRate(this.totals());
+    return cacheHitRate(this.#lastKey === undefined ? undefined : this.#confirmed.get(this.#lastKey));
   }
 
   /** Rebuild from session entries (init/resume/tree/compact). Idempotent with
    * live confirmations through the shared key space. */
-  rebuild(entries: unknown[], ownCustomType: string): void {
-    this.#confirmed.clear();
-    this.#order = [];
-    this.#previewSeq = undefined;
-    this.#preview = undefined;
+  rebuild(entries: unknown[]): void {
+    this.reset();
     for (const entry of entries) {
       if (!entry || typeof entry !== "object") continue;
       const record = entry as Record<string, unknown>;
-      if (record.type === "custom") {
-        // Never count our own UI summary back into the totals.
-        if (record.customType === ownCustomType) continue;
-        continue;
-      }
       if (record.type === "compaction" || record.type === "branch_summary") {
         this.confirm(`e-${String(record.id)}`, record.usage as RawUsage | undefined);
         continue;
@@ -168,9 +127,8 @@ export class UsageLedger {
 
   reset(): void {
     this.#confirmed.clear();
-    this.#order = [];
-    this.#previewSeq = undefined;
-    this.#preview = undefined;
+    this.#lastKey = undefined;
+    this.#totals = undefined;
   }
 
   /** Diagnostics: how many distinct requests are confirmed. */

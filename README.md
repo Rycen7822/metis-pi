@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.9.8**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.9.9**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -10,6 +10,7 @@
 - **Codex 式 Working 行**（aboveEditor widget）：`• Working (3m 36s · thinking 24s · esc to interrupt) · read`，`Writing…`/`Waiting for input` 相位，思考结束后 `thought for Ns`；克制的渐变彗尾 shimmer（亮头 + 连续渐隐尾：彗头 128ms/格悠闲扫过，32ms 高帧率驱动亚格强度渐变，truecolor only，NO_COLOR/ansi16 静态）；计时与动画分用两个定时器，settle 后归零；动画帧不扫 session、不读盘、不查 quota（实测 0.003ms/帧）。
 - **真实 Codex 额度**（只读）：经本机已登录 Codex CLI 的 `codex app-server`（stdio JSON-RPC：initialize → initialized → account/rateLimits/read），`remaining = 100 − used`（永不混用方向）；超时/退出/异常全部有界并按类别进 `/codex-ui`；不读任何凭据文件、不请求私有 HTTP、不 scrape Codex TUI；quota 失败绝不影响 agent 交互与 outcome 判定。
 
+- **有界历史窗口（fullscreen）**：仅让当前历史窗口进入昂贵的组件绘制路径，硬上限 **5,000 显示行**（含翻页提示）。滚到窗口顶部／底部继续滚动会按需加载上一段／下一段，并释放另一端的派生渲染缓存；session 原始记录保留。原生回到顶部／底部操作可跨页跳转；阅读旧历史时保留当前位置，新输出不会挤掉正在查看的行。恢复和宽度变化从当前窗口边界开始排版，达到行预算即停止；普通滚动复用窗口行。选区存在时固定已提交窗口，避免新输出改变复制内容；提交输入时解除选区冻结。宿主只提供整组件 `render()`，因此边界处的单个超大输出仍可能完整排版一次，再裁切并释放其完整缓存；5,000 行是保留窗口的硬上限，不是单次组件内部计算量的保证。宿主界面搜索作用于当前已加载窗口。
 - **逻辑选区复制（0.9.0，fullscreen）**：鼠标选区后 Ctrl+C 复制**已选显示内容的逻辑文本** —— 视觉软折行合并（中文不补空格、英文按源空格桥接）、真实换行/空行保留、代码源缩进保留（宿主展示缩进与 diff 行号/gutter 不混入）、列表 marker / 引用首行边框 / diff 增删符号 / 代码围栏按所选列决定是否包含（语义前缀，不凭字符猜测）。无选区时 Ctrl+C 保持原生行为（清空草稿、双击退出）；纯装饰选区不写剪贴板、不清草稿；剪贴板失败保留选区与草稿。渲染时逐组件生成带来源映射的 sidecar（WeakMap 以渲染数组身份为键，天然绑定已提交帧），并与宿主真实输出逐行 diff —— 任何漂移只降级为原生提取，绝不猜。表格/未知 token/图片行按 conservative 回退；与 `pi-copy-soft-wrap` 共存时精确路径优先生效（加载顺序无关），`/codex-ui` 报告其存在。选区复制零新按键注入、零 prototype 工具执行改动；`selectionCopy.enabled` / `selectionCopy.ctrlC` 可关闭。
 
 既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（默认 `full/full`，Ctrl+T/点击手动切换）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。

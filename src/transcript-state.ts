@@ -107,14 +107,6 @@ export function assistantHasVisibleThinking(message: TranscriptEvent["message"])
   return message.content.some((block) => block.type === "thinking" && !!block.thinking?.trim());
 }
 
-/** Zero-height assistant messages (tool-call-only, nothing visible). */
-export function isToolCallOnlyAssistant(message: TranscriptEvent["message"]): boolean {
-  if (!message || message.role !== "assistant") return false;
-  const visible = assistantHasVisibleText(message) || assistantHasVisibleThinking(message);
-  const toolCalls = message.content.some((block) => block.type === "toolCall");
-  return toolCalls && !visible;
-}
-
 /** Content-shape runs of one message: contiguous same-kind blocks. */
 export interface ThinkingRunSlot {
   readonly runIndex: number;
@@ -240,7 +232,7 @@ export class TranscriptState {
   }
 
   /** Stable key for a streaming assistant message (object identity first). */
-  messageKeyFor(message: NonNullable<TranscriptEvent["message"]>, sourceObject?: object): MessageViewKey {
+  messageKeyFor(_message: NonNullable<TranscriptEvent["message"]>, sourceObject?: object): MessageViewKey {
     if (sourceObject) {
       const known = this.identityByObject.get(sourceObject);
       if (known) return known;

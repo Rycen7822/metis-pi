@@ -44,11 +44,24 @@ export function decorationRow(cols: number): CopyRow {
 }
 
 const byArray = new WeakMap<object, CopyProduct>();
+const cacheReleasers = new WeakMap<object, () => void>();
 let hits = 0;
 let misses = 0;
 
 export function registerProduct(lines: readonly string[], product: CopyProduct): void {
   byArray.set(lines, product);
+}
+
+/** Eviction drops instance-owned mirrors, not products belonging to an already
+ * committed frame. Those remain collectible with their row-array keys. */
+export function registerCacheReleaser(component: object, release: () => void): void {
+  cacheReleasers.set(component, release);
+}
+
+export function releaseCopyCache(component: object): void {
+  cacheReleasers.get(component)?.();
+  cacheReleasers.delete(component);
+  Reflect.deleteProperty(component, LAST_ROWS);
 }
 
 /**

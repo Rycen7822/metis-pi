@@ -84,7 +84,6 @@ const makeTextComponent = (text) => ({
   setText: (next) => { text = next; },
 });
 const transcript = new TranscriptState();
-const resultImages = new Map();
 const renderers = makeRenderers(
   makeTextComponent,
   () => "ctrl+o to expand",
@@ -139,7 +138,7 @@ const renderers = makeRenderers(
       colorLevel: input.colorLevel, layout, gutter: "  │ ",
     }),
   }),
-  { colorLevel, transcript, resultImages },
+  { colorLevel, transcript, writeChanges: new Map() },
   layout,
 );
 const WIDTH = 112;
@@ -176,7 +175,6 @@ transcript.apply({ type: "message_start", message: { role: "assistant", content:
 transcript.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: `img${gi}` }] } });
 transcript.apply({ type: "tool_execution_start", toolCallId: `img${gi}`, toolName: "read" });
 transcript.apply({ type: "tool_execution_end", toolCallId: `img${gi}`, toolName: "read", isError: false, imageCount: 1 });
-resultImages.set(`img${gi}`, 1);
 }
 
 const groupRows = [];

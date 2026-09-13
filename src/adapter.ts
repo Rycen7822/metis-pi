@@ -1,4 +1,4 @@
-import { asRecord, TOOL_NAMES, type Renderers, type ToolName } from "./renderers.ts";
+import { asRecord, TOOL_NAMES, type Renderers, type ToolName } from "./tool-names.ts";
 import { publishRows } from "./selection-copy/model.ts";
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.

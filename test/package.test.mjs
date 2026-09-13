@@ -39,16 +39,13 @@ test("package defaults to the compact transcript entry, with no added runtime de
 });
 
 test("runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
-  const rootUrl = new URL("../src", import.meta.url);
+  const rootUrl = new URL("../src/", import.meta.url);
   const files = ["index.ts"];
   const walk = (url, prefix) => {
-    for (const name of readdirSync(url)) {
-      if (name.endsWith(".ts") || name.endsWith(".mjs")) files.push(`${prefix}${name}`);
-      else {
-        try {
-          walk(new URL(`${name}/`, url), `${prefix}${name}/`);
-        } catch { /* not a directory */ }
-      }
+    for (const entry of readdirSync(url, { withFileTypes: true })) {
+      const path = `${prefix}${entry.name}`;
+      if (entry.isDirectory()) walk(new URL(`${entry.name}/`, url), `${path}/`);
+      else if (/\.(ts|mjs)$/.test(entry.name)) files.push(path);
     }
   };
   walk(rootUrl, "src/");

@@ -263,9 +263,6 @@ export function buildDiffRows(beforeText: string, afterText: string): { rows: Di
   if (!withinDiffBudget(before, after)) return undefined;
 
   const ops = diffLineOps(before, after);
-  let oldLine = 1;
-  let newLine = 1;
-
   const changeIndexes = ops.map((op, index) => op.sign !== " " ? index : -1).filter((index) => index >= 0);
   const intervals: Array<[number, number]> = [];
   for (const index of changeIndexes) {

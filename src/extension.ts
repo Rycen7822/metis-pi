@@ -1,23 +1,24 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy } from "./transcript-adapter.ts";
 import { TranscriptState, type TranscriptEvent } from "./transcript-state.ts";
-import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories } from "./renderers.ts";
+import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration, formatTokensCompact } from "./ui-metrics.ts";
-import { TurnSummary, SUMMARY_CUSTOM_TYPE, formatSummaryLine } from "./turn-summary.ts";
+import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { probeHost, type HostFacts } from "./host-compat.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
-import { UsageLedger } from "./usage-ledger.ts";
+import { UsageLedger, sanitizeUsage, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
-import { WORKING_WIDGET_KEY, createWorkingComponent, type WorkingShow, type WorkingAnimation, type WorkingComponent } from "./chrome/working.ts";
-import { COMPOSER_META_WIDGET_KEY, createComposerMetaComponent, type ComposerMetaSnapshot } from "./chrome/composer-metadata.ts";
-import { createFooterComponent, type FooterShow, type FooterSnapshot } from "./chrome/footer.ts";
+import { WORKING_WIDGET_KEY, type WorkingShow, type WorkingAnimation, type WorkingComponent } from "./chrome/working.ts";
+import { COMPOSER_META_WIDGET_KEY, type ComposerMetaSnapshot } from "./chrome/composer-metadata.ts";
+import type { FooterShow, FooterSnapshot } from "./chrome/footer.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { QuotaStore } from "./quota/quota-store.ts";
-import { createSelectionCopySystem, detectExternalSerializerPatch, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
+import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
 import { createFullscreenMargin, type FullscreenMarginHost, type FullscreenMarginSystem } from "./chrome/fullscreen-margin.ts";
+import { createHistoryWindowSystem, type HistoryWindowHost } from "./chrome/history-window.ts";
 import type { CodexQuotaSnapshot } from "./quota/types.ts";
 
 export interface AppearanceAPI {
@@ -60,9 +61,7 @@ export interface Bindings {
   /** Detect an external owner that already renders thinking rails. */
   externalRailOwner?: () => boolean;
   /** Build the live write call component (header + stage + preview body). */
-  makeWriteCall?: import("./renderers.ts").WritePreviewInput extends infer T
-    ? (input: T & { headerText: string }) => import("./tool-names.ts").Component | undefined
-    : never;
+  makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
 
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
   editorHost?: { CustomEditor: unknown };
@@ -84,23 +83,11 @@ export interface Bindings {
   selectionCopyHost?: SelectionCopyHost;
   /** Host TUI HStack/Spacer constructors for the fullscreen margin (index.ts). */
   marginHost?: FullscreenMarginHost;
-}
-
-/** Session-scoped presentation state (ephemeral, display-only). */
-export interface AppearanceSession {
-  tracker: WriteDiffTracker;
-  colorLevel: ColorLevel;
-  /** Completed write diffs keyed by toolCallId; entries are pruned on read. */
-  readonly writeChanges: Map<string, WriteDiff>;
-  /** Display-order projection (exploration groups + text boundaries). */
-  readonly transcript: TranscriptState;
-  /** toolCallId → image-block count from the REAL result content. */
-  readonly resultImages: Map<string, number>;
+  historyWindowHost?: HistoryWindowHost;
 }
 
 /** Bounded store for completed write diffs (entry + total budget). */
 const MAX_WRITE_CHANGES = 64;
-const MAX_IMAGE_ENTRIES = 256;
 const SUMMARY_STATUS_KEY = "pi-codex-appearance:summary";
 
 /** Extract image-block count from a tool result WITHOUT copying payloads. */
@@ -133,28 +120,6 @@ function toStateMessage(message: unknown): TranscriptEvent["message"] {
   };
 }
 
-interface UsageFields {
-  input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown;
-  cost?: { total?: unknown };
-}
-
-/** Boundary sanitize: only finite, non-negative numbers cross into the
- * metrics/ledger numeric types (unknown → omitted, never NaN/-1). */
-function sanitizeUsage(usage: UsageFields): { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } {
-  const pick = (v: unknown): number | undefined =>
-    (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
-  const out: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } = {};
-  const input = pick(usage.input);
-  const output = pick(usage.output);
-  const cacheRead = pick(usage.cacheRead);
-  const cacheWrite = pick(usage.cacheWrite);
-  if (input !== undefined) out.input = input;
-  if (output !== undefined) out.output = output;
-  if (cacheRead !== undefined) out.cacheRead = cacheRead;
-  if (cacheWrite !== undefined) out.cacheWrite = cacheWrite;
-  return out;
-}
-
 /** Usage key shared by the interaction metrics and the session ledger:
  * `${provider}:${responseId}` (namespaced — responseIds can collide across
  * providers), `m-${timestamp}` when the host gives no response id. */
@@ -172,12 +137,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   let handle: AdapterHandle | undefined;
   let decorations: DecorationHandle | undefined;
   const transcript = new TranscriptState();
-  const session: AppearanceSession = {
-    tracker: new WriteDiffTracker(),
+  const tracker = new WriteDiffTracker();
+  const session = {
     colorLevel: bindings.colorLevel ?? detectColorLevel(),
     writeChanges: new Map<string, WriteDiff>(),
     transcript,
-    resultImages: new Map<string, number>(),
   };
 
   // Data bridge + ledgers (all display data flows through these).
@@ -227,6 +191,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   const fullscreenMargin: FullscreenMarginSystem | undefined = bindings.marginHost && config.enabled && config.fullscreen.marginX > 0
     ? createFullscreenMargin(bindings.marginHost, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
     : undefined;
+  const historyWindow = bindings.historyWindowHost && config.enabled ? createHistoryWindowSystem(bindings.historyWindowHost) : undefined;
   type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts") & typeof import("./chrome/composer-metadata.ts");
   let chromeMods: Promise<ChromeMods | undefined> | undefined;
   const preloadChrome = (): Promise<ChromeMods | undefined> => {
@@ -262,6 +227,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     serializerHost ??= tui;
     if (selectionCopy) selectionCopy.installOnTui(serializerHost);
     fullscreenMargin?.installOnTui(tui);
+    historyWindow?.installOnTui(tui);
   };
 
   const footerShow = (): FooterShow => ({
@@ -299,14 +265,17 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     contextUsage: hostData.getContextUsage(),
     revision: hostData.revision,
   });
-  const getFooterSnapshot = (): FooterSnapshot => ({
-    cwd: hostData.getCwd(),
-    session: hostData.hasSessionManager ? ledger.totals() : undefined,
-    cacheLastPct: ledger.cacheRateLast(),
-    quota: quotaStore?.state().quota,
-    quotaStale: quotaStore?.state().stale ?? false,
-    revision: hostData.revision,
-  });
+  const getFooterSnapshot = (): FooterSnapshot => {
+    const quota = quotaStore?.state();
+    return {
+      cwd: hostData.getCwd(),
+      session: hostData.hasSessionManager ? ledger.totals() : undefined,
+      cacheLastPct: ledger.cacheRateLast(),
+      quota: quota?.quota,
+      quotaStale: quota?.stale ?? false,
+      revision: hostData.revision,
+    };
+  };
 
   const metrics = new UiMetrics(
     { now: () => performance.now(), wall: () => Date.now() },
@@ -399,8 +368,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const full = ctx as unknown as HostContextLike & { hasUI?: boolean; ui?: Record<string, unknown> };
     chrome.generation += 1;
     hostData.bind(full);
-    ledger.reset();
-    ledger.rebuild(hostData.getSessionEntries(), SUMMARY_CUSTOM_TYPE);
+    ledger.rebuild(hostData.getSessionEntries());
     outcome.reset();
     quotaStore?.reset();
     lastQuotaRefreshAt = 0;
@@ -507,7 +475,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // metadata never floats on a bare background.
     if (typeof ui.setWidget === "function" && config.composer.metadata && config.composer.surface && bindings.surface) {
       try {
-        ui.setWidget(COMPOSER_META_WIDGET_KEY, (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
+        ui.setWidget(COMPOSER_META_WIDGET_KEY, (tui: unknown) => {
           captureTui(tui);
           const surface = bindings.surface!;
           return mods.createComposerMetaComponent({
@@ -657,6 +625,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
           ...selectionCopyLine(),
+          `  history-window: ${JSON.stringify(historyWindow?.status() ?? { installed: false })}`,
         ];
         text = lines.join("\n");
       }
@@ -709,28 +678,17 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
   // Model/effort switches and session-structure events refresh the snapshot
   // revision; the metadata/footer read everything from one revision per render.
-  pi.on("model_select", () => {
+  const refreshHost = () => {
     hostData.bump();
     requestRender();
-  });
-  pi.on("thinking_level_select", () => {
-    hostData.bump();
-    requestRender();
-  });
-  pi.on("session_tree", () => {
-    ledger.rebuild(hostData.getSessionEntries(), SUMMARY_CUSTOM_TYPE);
-    hostData.bump();
-    requestRender();
-  });
-  pi.on("session_compact", () => {
-    ledger.rebuild(hostData.getSessionEntries(), SUMMARY_CUSTOM_TYPE);
-    hostData.bump();
-    requestRender();
-  });
-  pi.on("session_compact_failed", () => {
-    hostData.bump();
-    requestRender();
-  });
+  };
+  for (const event of ["model_select", "thinking_level_select", "session_compact_failed"] as const) pi.on(event, refreshHost);
+  for (const event of ["session_tree", "session_compact"] as const) {
+    pi.on(event, () => {
+      ledger.rebuild(hostData.getSessionEntries());
+      refreshHost();
+    });
+  }
   pi.on("ui_prompt_start", () => {
     if (!chromeEnabled) return;
     metrics.uiPromptStart();
@@ -745,7 +703,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled) return;
     const info = sourceInfoFor(event.toolName);
-    session.tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveWritePath(path, ctx.cwd));
+    tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveWritePath(path, ctx.cwd));
     transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
     if (chromeEnabled) metrics.toolStart(event.toolCallId, event.toolName);
     if (chromeEnabled && event.toolName === "write") metrics.writeStreaming();
@@ -755,7 +713,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // A tool error is a DIAGNOSTIC count only — it never sets the verdict.
     if (event.isError === true && chromeEnabled) outcome.toolError();
     const info = sourceInfoFor(event.toolName);
-    const change = session.tracker.trackEnd(event.toolCallId, event.toolName, info, event.isError);
+    const change = tracker.trackEnd(event.toolCallId, event.toolName, info, event.isError);
     if (change) {
       session.writeChanges.set(event.toolCallId, change);
       if (session.writeChanges.size > MAX_WRITE_CHANGES) {
@@ -765,24 +723,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
     // Image count from the real result content blocks (count only, no copy).
     const images = countImageBlocks(event.result);
-    if (images > 0) {
-      session.resultImages.set(event.toolCallId, images);
-      if (session.resultImages.size > MAX_IMAGE_ENTRIES) {
-        const oldest = session.resultImages.keys().next().value;
-        if (oldest !== undefined) session.resultImages.delete(oldest);
-      }
-    }
     transcript.apply({ type: "tool_execution_end", toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError === true, imageCount: images });
     if (chromeEnabled) metrics.toolEnd(event.toolCallId);
   });
 
-  // Wire the real message handlers (typed loosely above to avoid importing
-  // host event types; only read-only content-shape fields are read). The
-  // event's message OBJECT is passed as the identity anchor so the state
-  // machine can key plans by the host's own object identity.
-  (pi as unknown as {
-    on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
-  }).on("message_start", (event) => {
+  // Keep the original message object as the state machine's identity anchor.
+  pi.on("message_start", (event) => {
     if (!enabled) return;
     const message = event.message as object | undefined;
     transcript.apply({ type: "message_start", message: toStateMessage(message) }, message);
@@ -791,9 +737,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const role = (message as Record<string, unknown> | undefined)?.role;
     if (typeof role === "string") outcome.messageStart(role);
   });
-  (pi as unknown as {
-    on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
-  }).on("message_update", (event) => {
+  pi.on("message_update", (event) => {
     if (!enabled) return;
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);
@@ -822,17 +766,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           metrics.setPhase("working");
           break;
         case "toolcall_start":
-        case "toolcall_delta": {
-          metrics.thinkingEnd();
-          const block = at(streamEvent?.contentIndex);
-          const toolName = typeof block?.name === "string" ? block.name : undefined;
-          if (toolName === "write") metrics.writeStreaming();
-          else metrics.setPhase("working");
-          break;
-        }
+        case "toolcall_delta":
         case "toolcall_end": {
           metrics.thinkingEnd();
-          const toolCall = (streamEvent as { toolCall?: { name?: unknown } }).toolCall;
+          const toolCall = eventType === "toolcall_end" ? (streamEvent as { toolCall?: { name?: unknown } }).toolCall : undefined;
           const block = at(streamEvent?.contentIndex);
           const toolName = typeof toolCall?.name === "string" ? toolCall.name
             : typeof block?.name === "string" ? block.name : undefined;
@@ -846,16 +783,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
     // Streaming usage is a CUMULATIVE snapshot — replace the preview for the
     // current attempt (per-delta summing is forbidden).
-    if (chromeEnabled && stateMessage?.role === "assistant" && outcome.attemptCount > 0) {
-      const usage = (message as Record<string, unknown> | undefined)?.usage as UsageFields | undefined;
+    if (stateMessage?.role === "assistant" && outcome.attemptCount > 0) {
+      const usage = (message as Record<string, unknown> | undefined)?.usage as RawUsage | undefined;
       if (usage && typeof usage === "object") {
         metrics.previewUsage(outcome.attemptCount, sanitizeUsage(usage));
       }
     }
   });
-  (pi as unknown as {
-    on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
-  }).on("message_end", (event) => {
+  pi.on("message_end", (event) => {
     if (!enabled) return;
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);
@@ -867,7 +802,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // session ledger — replays/duplicate completions never double-count.
     if (message && typeof message === "object") {
       const record = message as Record<string, unknown>;
-      const usage = record.usage as UsageFields | undefined;
+      const usage = record.usage as RawUsage | undefined;
       if (usage && typeof usage === "object") {
         const { key, identified } = usageKeyOf(record);
         metrics.recordUsage(key, sanitizeUsage(usage), identified);
@@ -885,6 +820,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     handle = undefined;
     decorations?.dispose();
     decorations = undefined;
+    historyWindow?.dispose();
     fullscreenMargin?.dispose();
     // Chrome restore: only OUR factories are removed (identity comparison);
     // a successor extension's editor/footer/header is left untouched.
@@ -942,7 +878,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     quotaStore?.reset();
     lastQuotaRefreshAt = 0;
     session.writeChanges.clear();
-    session.resultImages.clear();
     transcript.resetSession();
     metrics.reset();
     outcome.reset();

@@ -23,7 +23,7 @@
 // may already own assistant thinking display; when detected the rail stays
 // passive while the separator stays active.
 
-import { asRecord } from "./renderers.ts";
+import { asRecord } from "./tool-names.ts";
 import { TranscriptState, renderedThinkingRuns, type MessageViewKey } from "./transcript-state.ts";
 
 const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
@@ -53,10 +53,6 @@ export interface ThinkingPolicy {
 function methodBody(fn: Function): string {
   const text = Function.prototype.toString.call(fn);
   return text.slice(text.indexOf("{") + 1, text.lastIndexOf("}")).replace(/\s+/g, "");
-}
-
-function failed(features: DecorationFeature[]): DecorationHandle {
-  return { installed: false, features, thinkingAutoApplied: () => 0, dispose() {} };
 }
 
 export interface TranscriptAdapterInput {
@@ -98,9 +94,6 @@ export interface TranscriptAdapterInput {
  * resilient to trailing code changes, strict about its identity). */
 const UPDATE_DISPLAY_HEAD = "letbgFn=this.isPartial?";
 const UPDATE_DISPLAY_HEAD_ALT = "constbgFn=this.isPartial?(";
-/** Structural prefix of the stock updateContent. */
-const UPDATE_CONTENT_HEAD = "this.lastMessage=message;this.isStreaming=isStreaming;this.contentContainer.clear();";
-
 const RAIL_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.thinking-rail");
 const SEP_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.separator");
 
