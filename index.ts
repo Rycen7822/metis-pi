@@ -57,13 +57,17 @@ interface ShellCallInput {
   colorLevel: import("./src/palette.ts").ColorLevel;
 }
 class CodexShellCallComponent implements Tui.Component {
+  // Host updates (args/result/expanded/theme) create a new shell component.
+  // Scroll-only frames can reuse both the rows and their copy-product identity.
   readonly #input: ShellCallInput;
+  #cache: { width: number; rows: string[] } | undefined;
 
   constructor(input: ShellCallInput) {
     this.#input = input;
   }
 
   render(width: number): string[] {
+    if (this.#cache?.width === width) return this.#cache.rows;
     const copyOut: CopyRow[] = [];
     const rows = renderShellCall({
       row: {
@@ -86,40 +90,40 @@ class CodexShellCallComponent implements Tui.Component {
     if (copyOut.length === rows.length) {
       registerProduct(rows, { componentId: "shell-call", width, rows: copyOut });
     }
+    this.#cache = { width, rows };
     return rows;
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.#cache = undefined;
+  }
 }
 
 /**
  * Result region: output block with "  └ "/"    " prefixes and the 5-screen-row
  * budget. Never renders a command head.
  */
-class CodexShellResultComponent implements Tui.Component {
-  readonly #input: {
-    name: ToolName; args: Record<string, unknown>; result: unknown;
-    options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
-    expandHint: string;
-    colorLevel: import("./src/palette.ts").ColorLevel;
-  };
-  #bullet = "";
+interface ShellResultInput {
+  name: ToolName; args: Record<string, unknown>; result: unknown;
+  options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
+  bullet: string;
+  expandHint: string;
+  colorLevel: import("./src/palette.ts").ColorLevel;
+}
 
-  constructor(input: {
-    name: ToolName; args: Record<string, unknown>; result: unknown;
-    options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
-    bullet: string;
-    expandHint: string;
-    colorLevel: import("./src/palette.ts").ColorLevel;
-  }) {
+class CodexShellResultComponent implements Tui.Component {
+  readonly #input: ShellResultInput;
+  #cache: { width: number; rows: string[] } | undefined;
+
+  constructor(input: ShellResultInput) {
     this.#input = input;
-    this.#bullet = input.bullet;
   }
 
   render(width: number): string[] {
+    if (this.#cache?.width === width) return this.#cache.rows;
     const result = this.#input.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
     const output = Array.isArray(result?.content)
-      ? result!.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
+      ? result.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
       : "";
     const copyOut: CopyRow[] = [];
     const rows = renderShellResult({
@@ -136,17 +140,20 @@ class CodexShellResultComponent implements Tui.Component {
       width,
       layout: layoutOps(),
       colorLevel: this.#input.colorLevel,
-      bullet: this.#bullet,
+      bullet: this.#input.bullet,
       titlePainter: (title) => title,
       copyOut,
     });
     if (copyOut.length === rows.length) {
       registerProduct(rows, { componentId: "shell-result", width, rows: copyOut });
     }
+    this.#cache = { width, rows };
     return rows;
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.#cache = undefined;
+  }
 }
 
 /** Separator before assistant text that follows tool activity: a light
@@ -431,6 +438,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
         Markdown: Tui.Markdown.prototype,
         Box: Tui.Box.prototype,
         Container: Tui.Container.prototype,
+        MouseRegion: Tui.MouseRegion?.prototype,
       },
       fns: {
         visibleWidth: Tui.visibleWidth,

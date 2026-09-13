@@ -30,6 +30,25 @@ interface ContainerLike {
 
 type RenderFn<W, R> = (this: W, width: number) => R;
 
+/** MouseRegion forwards its child's exact row array but does not inherit a
+ * wrapped render method. Publish that array without adding another render or
+ * changing the child's product identity. */
+export function wrapMouseRegionPrototype(prototype: object): boolean {
+  const key = Symbol.for("Rycen7822.pi-codex-appearance.copy-mouse-region");
+  if (Object.prototype.hasOwnProperty.call(prototype, key) || !Object.isExtensible(prototype)) return false;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
+  if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) return false;
+  const original = descriptor.value as RenderFn<object, string[]>;
+  const wrapper = function (this: object, width: number): string[] {
+    const rows = original.call(this, width);
+    try { publishRows(this, rows); } catch { /* Copy metadata must not break rendering. */ }
+    return rows;
+  };
+  Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
+  Object.defineProperty(prototype, key, { value: true, configurable: true });
+  return true;
+}
+
 function childRowsOf(component: unknown, width: number): readonly string[] | undefined {
   const rows = (component as { render?: (w: number) => string[] }).render?.(width);
   return Array.isArray(rows) ? rows : undefined;
@@ -54,7 +73,7 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
    * Container: contentWidth = width, padY = 0, colShift = 0. */
   metrics: (self: SELF, width: number) => { contentWidth: number; padY: number; colShift: number },
 ): boolean {
-  if (Object.prototype.hasOwnProperty.call(prototype, key)) return false;
+  if (Object.prototype.hasOwnProperty.call(prototype, key) || !Object.isExtensible(prototype)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
     return false;
@@ -104,6 +123,7 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
     return rows;
   };
   Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
+  Object.defineProperty(prototype, key, { value: true, configurable: true });
   return true;
 }
 
@@ -116,9 +136,8 @@ export function wrapBoxPrototype(prototype: object): boolean {
 }
 
 /** Wrap Container.prototype.render: children stacked at the same width, no
- * gaps. Container.render returns a fresh array every call, so the product is
- * rebuilt per frame — child arrays come from re-rendering children, which
- * hits every leaf's internal cache. */
+ * gaps. Each fresh array gets a product using the rows its children just
+ * published; unknown component types retain the conservative fallback. */
 export function wrapContainerPrototype(prototype: object): boolean {
   return wrapAlignmentPrototype<ContainerLike>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-container"), "container",
     (_self, width) => ({ contentWidth: width, padY: 0, colShift: 0 }));

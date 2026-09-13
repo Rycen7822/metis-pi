@@ -1,3 +1,30 @@
+# Validation record — 0.9.8 (shell scroll performance)
+
+The reported session `01a097ea-941e-75fc-9cc2-5230a858e5fe` contains 56 tool calls, including 42 bash calls with 237125 output characters; 14 results contain 12000 characters each. Replaying its recorded messages into real Pi 0.85.1 components exposed repeated rendering of completed, collapsed shell output on every scroll frame.
+
+`CodexShellCallComponent` and `CodexShellResultComponent` now cache their row arrays by width, keeping the matching CopyProduct on the same array identity. The host creates fresh components on args/result/expanded updates and theme invalidation; explicit component invalidation also clears the cache. Cold renders still wrap the complete output before applying the visual row budget, preserving truncation counts and layout semantics.
+
+The adapter publishes the actual self-shell rows and a MouseRegion wrapper publishes the exact forwarded child array. Container copy alignment now consumes those arrays without rendering these nodes again. Unknown component types retain the existing conservative fallback. Missing ownership markers on the older Markdown/Text/Box/Container wrappers were also restored so repeated setup cannot stack wrappers; non-extensible prototypes are skipped before mutation.
+
+Measured on Node 24.15.0, 120 columns × 40 rows, 30 warmed SGR wheel frames (up/down), truecolor enabled and NO_COLOR unset:
+
+| Condition | Mean ms/frame | p95 ms/frame | Calls per shell leaf per frame |
+|---|---:|---:|---:|
+| Baseline bbeaff8, isolated snapshot | 92.41 | 98.25 | 4 |
+| Fixed workspace | 0.51 | 0.73 | 1 |
+
+Both runs produced identical complete transcript rows, SHA256 `c1a1c6a487d496fb1d5c52ff8414ce1b8da96fb6b18f9bb69649424115c95995`. This is a CPU rendering replay with terminal writes stubbed, not a claim about end-to-end terminal FPS or Codex performance. It does not execute the saved commands or make model requests. Initial no-color measurements independently showed the same mechanism (about 85 ms to 0.31 ms per frame).
+
+Verification:
+
+- `npm test`: 258/258, including 14 chrome tests and four new real-host regressions in `test/shell-scroll.test.mjs` (wheel render counts/cache identity; width/invalidate/args/stream/expansion/theme/old frames; logical CJK copy through MouseRegion; repeated wrapper installation).
+- `npm run check` and `npm run check:core`: pass.
+- `env -u NO_COLOR npm run test:host`: pass. The first host run inherited `NO_COLOR=1` and failed its required truecolor diff-background assertion; running with its intended color environment passed without changing assertions.
+- New shell-scroll tests also pass with `NO_COLOR` unset and `FORCE_COLOR=3`.
+- `npm run test:pty`: real tmux PASS for live Working, thinking timers, mouse expand/collapse, tool result, failure summary, fullscreen gutters and selection copy (`exact=2 mixed=0 native=0`, 161 characters), using an isolated mock-provider installation.
+
+The local replay probe and raw measurements are under `/tmp/pi-scroll-probe.mjs` and `/tmp/pi-scroll-{baseline,fixed}-truecolor.json`; committed regression tests use synthetic data and require no private session file. The 0.9.8 review also consolidated each shell cache into one width/rows state and removed the result component's duplicated input type and separate bullet field. Installation is verified separately after the reviewed commit is pushed.
+
 # Validation record — 0.9.0 (logical selection copy)
 
 ## Scope

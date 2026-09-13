@@ -528,7 +528,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
     fallback: string;
   },
 ): boolean {
-  if (Object.prototype.hasOwnProperty.call(prototype, key)) return false;
+  if (Object.prototype.hasOwnProperty.call(prototype, key) || !Object.isExtensible(prototype)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
     return false;
@@ -572,6 +572,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
     return rows;
   };
   Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
+  Object.defineProperty(prototype, key, { value: true, configurable: true });
   return true;
 }
 

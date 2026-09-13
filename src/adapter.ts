@@ -1,4 +1,5 @@
 import { asRecord, TOOL_NAMES, type Renderers, type ToolName } from "./renderers.ts";
+import { publishRows } from "./selection-copy/model.ts";
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.
 // No tool registration, execution replacement, context middleware or TUI root patch.
@@ -122,7 +123,13 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         }
       }
     }
-    return originalRender.call(this, width);
+    const lines = originalRender.call(this, width);
+    // The host's self-shell path bypasses Container.render. Publish its actual
+    // rows so a parent copy-alignment pass need not render the tool a second time.
+    if (typeof this === "object" && this !== null && Array.isArray(lines)) {
+      try { publishRows(this, lines); } catch { /* Copy metadata must not break rendering. */ }
+    }
+    return lines;
   });
   const owner = {};
   function restoreOwned(): void {

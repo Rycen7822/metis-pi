@@ -2,7 +2,7 @@
 // instance serializer install, editor Ctrl+C hook and diagnostics. Created
 // once per activation; every failure degrades to native extraction.
 
-import { wrapBoxPrototype, wrapContainerPrototype } from "./structure.ts";
+import { wrapBoxPrototype, wrapContainerPrototype, wrapMouseRegionPrototype } from "./structure.ts";
 import { wrapMarkdownPrototype, wrapTextPrototype, setLatexPainter, type MarkdownDiagnostics, type WrapDeps } from "./markdown.ts";
 import { installInstanceSerializer, serializerIsLive, tryConsumeCopyKey, type AltScreenLike, type CopyTelemetry, type CopyControllerDeps } from "./controller.ts";
 import { cacheStats } from "./model.ts";
@@ -16,6 +16,7 @@ export interface SelectionCopyHost {
     Markdown: object;
     Box: object;
     Container: object;
+    MouseRegion?: object;
   };
   fns?: {
     visibleWidth(text: string): number;
@@ -96,6 +97,7 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
         ["box", wrapBoxPrototype(host.prototypes.Box)],
         ["container", wrapContainerPrototype(host.prototypes.Container)],
       ];
+      if (host.prototypes.MouseRegion) wraps.push(["mouse-region", wrapMouseRegionPrototype(host.prototypes.MouseRegion)]);
       return {
         installed: wraps.every(([, ok]) => ok),
         details: wraps.map(([name, ok]) => `${name}=${ok ? "on" : "already-owned"}`).join(" "),
