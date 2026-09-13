@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import * as Tui from "@earendil-works/pi-tui";
 import { createFullscreenMargin, FULLSCREEN_MARGIN_OWNER } from "../src/chrome/fullscreen-margin.ts";
+import { createHistoryWindowSystem } from "../src/chrome/history-window.ts";
 import { createSelectionCopySystem } from "../src/selection-copy/index.ts";
 import { fakeTerminal, sgr } from "./helpers.mjs";
 
@@ -23,6 +24,52 @@ function makeAltScreen(width) {
 function screenLines(tui) {
   return tui.previousScreen.map((line) => Tui.stripTerminalSequences(line).trimEnd());
 }
+
+test("auto scrollbar keeps colored history inside both gutters on wheel input and resize", (t) => {
+  const { tui, terminal } = makeAltScreen(60);
+  tui.requestRender = () => {};
+  const margin = createFullscreenMargin(MARGIN_HOST, { margin: 2, minWidth: 40 });
+  const history = createHistoryWindowSystem(Tui);
+  t.after(() => { history.dispose(); margin.dispose(); });
+  margin.installOnTui(tui);
+  const colors = ["\x1b[48;2;32;55;40m", "\x1b[48;2;70;30;28m"];
+  const source = { render: (width) => Array.from({ length: 6000 }, (_, i) =>
+    `${colors[i % 2]}${`diff ${i}`.padEnd(width)}\x1b[49m`) };
+  const scroll = new Tui.ScrollView(source, { primary: true, follow: "end", scrollbar: "auto" });
+  tui.setLayoutRoot(scroll);
+  history.installOnTui(tui);
+  t.after(() => scroll.hideTransientScrollbar());
+  const checkFrame = () => {
+    tui.doRender();
+    const diffLines = tui.previousScreen.filter((line) => line.includes("diff "));
+    assert.ok(diffLines.length > 1, "colored history remains visible");
+    for (const line of diffLines) {
+      // Inspect printed cells, not stripped text: spaces can carry the leak.
+      const backgrounds = [];
+      let background;
+      for (const part of line.split(/(\x1b\[[0-9;]*m|\x1b\]8;;\x07)/)) {
+        if (part === "\x1b[0m" || part === "\x1b[49m") background = undefined;
+        else if (colors.includes(part)) background = part;
+        else if (!part.startsWith("\x1b")) backgrounds.push(...Array(part.length).fill(background));
+      }
+      assert.equal(backgrounds.length, terminal.columns);
+      assert.deepEqual(backgrounds.slice(0, 2), [undefined, undefined]);
+      assert.ok(colors.includes(backgrounds[3]), "diff background remains painted");
+      assert.deepEqual(backgrounds.slice(-2), [undefined, undefined], "right gutter stays uncolored");
+    }
+  };
+  checkFrame();
+  for (const wheel of [64, 65, 64]) {
+    tui.handleTerminalInput(sgr(wheel, 10, 5));
+    assert.equal(scroll.isScrollbarVisible, true);
+    checkFrame();
+  }
+  terminal.columns = 72;
+  terminal.rows = 30;
+  checkFrame();
+  scroll.hideTransientScrollbar();
+  checkFrame();
+});
 
 test("install wraps setLayoutRoot: content is inset by the margin, gutters blank", (t) => {
   const { tui } = makeAltScreen(60);

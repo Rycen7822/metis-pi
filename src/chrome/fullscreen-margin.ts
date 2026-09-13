@@ -12,6 +12,7 @@ export const FULLSCREEN_MARGIN_OWNER = Symbol.for("Rycen7822.pi-codex-appearance
 
 interface ViewportLike {
   width?: unknown;
+  height?: unknown;
 }
 
 interface TuiLike {
@@ -43,7 +44,7 @@ interface HStackCtor {
   new (children: unknown[], options?: Record<string, unknown>): object;
 }
 interface SpacerCtor {
-  new (lines?: number): object;
+  new (lines?: number): { setLines(lines: number): void };
 }
 
 export function createFullscreenMargin(host: FullscreenMarginHost, options: FullscreenMarginOptions): FullscreenMarginSystem {
@@ -63,16 +64,23 @@ export function createFullscreenMargin(host: FullscreenMarginHost, options: Full
     // Floor: gutters only show when ≥20 content columns remain; the layout
     // engine re-evaluates `visible` every frame.
     const effectiveMinWidth = Math.max(options.minWidth, options.margin * 2 + 20);
-    const visible = (viewport: ViewportLike): boolean =>
-      typeof viewport?.width === "number" ? viewport.width >= effectiveMinWidth : true;
-    const side = () => ({
-      component: new Spacer(1),
-      basis: options.margin,
-      grow: 0,
-      shrink: 0,
-      minSize: 0,
-      visible,
-    });
+    const side = () => {
+      const spacer = new Spacer(1);
+      return {
+        component: spacer,
+        basis: options.margin,
+        grow: 0,
+        shrink: 0,
+        minSize: 0,
+        visible(viewport: ViewportLike): boolean {
+          // Stretch changes the rect, not Spacer's rendered row count. Paint
+          // every gutter row so the host's auto-scrollbar ANSI composition
+          // cannot carry a content background into the right-hand blank cells.
+          spacer.setLines(typeof viewport?.height === "number" ? viewport.height : 1);
+          return typeof viewport?.width === "number" ? viewport.width >= effectiveMinWidth : true;
+        },
+      };
+    };
     const wrapper = new HStack(
       [side(), { component: root, basis: 0, grow: 1, shrink: 1, minSize: 1 }, side()],
       { align: "stretch" },

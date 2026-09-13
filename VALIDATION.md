@@ -1,3 +1,17 @@
+# Validation record — 0.9.10 (fullscreen scrollbar background leak)
+
+Reproduced against Pi 0.85.1: with an automatic scrollbar hidden, both two-column gutters have the default background; a mouse wheel event reveals the scrollbar and colors the right gutter with the diff background. Hiding the scrollbar restores the gutter. The layout width stays correct. The host's `replaceScrollbarCell()` uses `sliceByColumn()` for the trailing segment, which can re-emit pending background ANSI after the reset at that segment's first column.
+
+The margin wrapper previously stretched each `Spacer(1)` rect to the viewport height but only painted its first row. It now updates each Spacer's rendered row count from the current viewport height. Painting the right gutter after the scroll subtree isolates its cells from the leaked style. Copy serialization treats blank unmapped runs like blank unowned runs, so these painted gutters do not interrupt mapped soft line joins; unknown text still falls back to native extraction.
+
+Verification:
+
+- The new regression fails before the fix: the two rightmost cells have the diff's green background. It passes after the fix for both wheel directions, red/green rows, width/height changes, and scrollbar hiding, with the 5,000-row history window installed.
+- `env -u NO_COLOR npm test`: 266/266 pass. The 33 margin, history-window and selection-copy tests also pass as a focused group, including exact CJK logical copy.
+- `npm run check`, `npm run check:core`, and `git diff --check`: pass.
+- `env -u NO_COLOR npm run test:pty`: real Pi tmux pass; selection copy remains exact (161 characters; exact=2, mixed=0, native=0).
+- An independent 60-column, 12-row tmux probe checked captured ANSI cell backgrounds for initial, wheel-up, wheel-down, and hidden-scrollbar frames. Every frame retained 12 colored history rows with default backgrounds in both gutters. Local artifacts: `/tmp/pi-gutter-terminal-{initial,u,d,h}.ansi`.
+
 # Validation record — 0.9.9 (bounded history and code simplification)
 
 The fullscreen transcript retains at most 5,000 display rows, including page notices. Scrolling beyond a window edge loads the adjacent history and releases component render caches and copy mirrors at the opposite edge. Raw session records remain owned by Pi. Native start/end navigation crosses windows; incoming output preserves the old-history reading position, and an active selection pins the committed window until cleared.

@@ -164,21 +164,16 @@ export class SelectionSerializer {
     onUpdate: (update: { soft?: boolean; bridge?: string; native?: boolean }) => void,
   ): void {
     if (end <= start) return;
-    if (!hit) {
-      // Unowned cells with real text (foreign overlays, box gaps) fall back to
-      // native extraction and break softness; BLANK unowned cells (side
-      // gutters, spacing) contribute nothing so mapped runs decide the join.
+    const resolved = hit && this.#resolveProductRow(hit);
+    if (!hit || !resolved) {
+      // Unmapped text falls back to native extraction and breaks softness.
+      // Blank runs contribute nothing, including painted Spacer gutters, so
+      // mapped content decides whether the row continues a logical line.
       const slice = this.#nativeSlice(selection.sourceLines[row], start, end);
       if (slice.length > 0) {
         pieces.push(slice);
         onUpdate({ soft: false, native: true });
       }
-      return;
-    }
-    const resolved = this.#resolveProductRow(hit);
-    if (!resolved) {
-      pieces.push(this.#nativeSlice(selection.sourceLines[row], start, end));
-      onUpdate({ soft: false, native: true });
       return;
     }
     if (resolved.row.breakBefore !== "soft") onUpdate({ soft: false });
