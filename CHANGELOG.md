@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.11
+
+- footer 新增**实测输出速度** `N tok/s`，位置在右块最左、`↑input` 之前（用户指定的那一格）。数值 = 该条 assistant 回复**已确认的** `usage.output` ÷ **真实观测输出窗口**：首个→末个流式 delta 的跨度（不含 TTFT）；无非流式 delta（一次性投递/非流式 provider）时退回 `message_start`→`message_end` 窗口。不按回复字数估算、不取 provider 自报速率。
+- 窗口 <300ms、无已确认 output token、或速率越界（<0.1 或 >5000 tok/s）时**不显示**任何占位（绝不出现 `0.0 tok/s`）；无 usage 的回复（中止/错误）不写入样本，保留上一条已测数值；session 结束清空。
+- provider 中途上报**累计** output token 时（Anthropic 式 `message_delta`）同一公式实时刷新，OpenAI 兼容 provider 只在 `message_end` 出现并保留到下一次回复；实时值在 `message_end` 被确认值替换。新增 `footer.showSpeed`（默认 true）；`/codex-ui` 输出 `output speed: 38.5 tok/s (output=80 tokens, window=2.1s, scope=final)` 便于核对口径、token 数与窗口。
+
 ## 0.9.10
 
 - 修复 fullscreen 模式下鼠标滚动时 diff 背景越过右侧留白：边距 Spacer 按终端高度绘制每一行，隔离宿主自动滚动条合成时泄漏的背景色，调整窗口大小时同步更新。

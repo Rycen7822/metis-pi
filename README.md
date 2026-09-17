@@ -2,11 +2,11 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.9.10**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.9.11**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
-- **紧凑产品 footer**：`目录 (分支)   ↑input ↓output · cache 命中率 · Codex 5h 82% · week 64%`，宽屏追加 `R读 W写 · 花费`；窄屏按 优先级 降级（cost → R/W → 缩短目录 → 两行），P0/P1 永不整块消失；不与 metadata 重复显示 model/context。
+- **紧凑产品 footer**：`目录 (分支)   N tok/s · ↑input ↓output · cache 命中率 · Codex 5h 82% · week 64%`，宽屏追加 `R读 W写 · 花费`；`N tok/s` 是**实测输出速度**，位于右块最左、紧跟其后才是 `↑input`。窄屏按 优先级 降级（cost → R/W → 缩短目录 → 两行），P0/P1 永不整块消失；不与 metadata 重复显示 model/context。
 - **Codex 式 Working 行**（aboveEditor widget）：`• Working (3m 36s · thinking 24s · esc to interrupt) · read`，`Writing…`/`Waiting for input` 相位，思考结束后 `thought for Ns`；克制的渐变彗尾 shimmer（亮头 + 连续渐隐尾：彗头 128ms/格悠闲扫过，32ms 高帧率驱动亚格强度渐变，truecolor only，NO_COLOR/ansi16 静态）；计时与动画分用两个定时器，settle 后归零；动画帧不扫 session、不读盘、不查 quota（实测 0.003ms/帧）。
 - **真实 Codex 额度**（只读）：经本机已登录 Codex CLI 的 `codex app-server`（stdio JSON-RPC：initialize → initialized → account/rateLimits/read），`remaining = 100 − used`（永不混用方向）；超时/退出/异常全部有界并按类别进 `/codex-ui`；不读任何凭据文件、不请求私有 HTTP、不 scrape Codex TUI；quota 失败绝不影响 agent 交互与 outcome 判定。
 
@@ -15,9 +15,9 @@
 
 既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（默认 `full/full`，Ctrl+T/点击手动切换）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
 
-配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showCost` / `footer.showCodexQuota` / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
+配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showCost` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
 
-**统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入，R/W 单独列缓存读写）。未知值显示 `—`，从不伪造为 0。
+**统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入，R/W 单独列缓存读写）；`tok/s` 是**当前或最近一次 assistant 回复**的 `usage.output ÷ 观测输出窗口`（首个→末个流式 delta，排除 TTFT；无非流式 delta 时退回 `message_start`→`message_end`），窗口 <300ms、无已确认 output token 或速率越界时整段不显示（`/codex-ui` 同时给出 token 数与窗口长度，`scope` 区分流式中实时值与 `message_end` 确认值）。未知值显示 `—`，从不伪造为 0。
 
 ![由本项目渲染函数生成的预览，非真实 Pi 会话截图](docs/preview.png)
 

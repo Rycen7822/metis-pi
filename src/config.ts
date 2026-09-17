@@ -10,7 +10,7 @@ export interface AppearanceConfig {
    * duration — thought/tool keep updating. */
   working: { elapsed: boolean; thought: boolean; tool: boolean; tokens: boolean; animation: boolean; animationIntervalMs: number };
   /** Footer detail lines. */
-  footer: { enabled: boolean; details: boolean; showCache: boolean; showCacheReadWrite: boolean; showCost: boolean; showCodexQuota: boolean };
+  footer: { enabled: boolean; details: boolean; showCache: boolean; showCacheReadWrite: boolean; showCost: boolean; showCodexQuota: boolean; showSpeed: boolean };
   /** Codex quota source (read-only app-server). */
   quota: { codex: "auto" | "on" | "off"; refreshSeconds: number; timeoutMs: number };
   summary: { enabled: boolean; persist: boolean };
@@ -29,7 +29,7 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   writePreview: { enabled: true, rows: 8 },
   composer: { surface: true, promptPrefix: true, metadata: true },
   working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 32 },
-  footer: { enabled: true, details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true },
+  footer: { enabled: true, details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true, showSpeed: true },
   quota: { codex: "auto", refreshSeconds: 120, timeoutMs: 8000 },
   summary: { enabled: true, persist: true },
   selectionCopy: { enabled: true, ctrlC: true },
@@ -162,6 +162,7 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
       cfg.footer.showCacheReadWrite = bool(f.showCacheReadWrite, cfg.footer.showCacheReadWrite, problems, "footer.showCacheReadWrite");
       cfg.footer.showCost = bool(f.showCost, cfg.footer.showCost, problems, "footer.showCost");
       cfg.footer.showCodexQuota = bool(f.showCodexQuota, cfg.footer.showCodexQuota, problems, "footer.showCodexQuota");
+      cfg.footer.showSpeed = bool(f.showSpeed, cfg.footer.showSpeed, problems, "footer.showSpeed");
     } else {
       problems.push("footer: expected object — using defaults");
     }

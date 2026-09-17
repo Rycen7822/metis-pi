@@ -1,3 +1,16 @@
+# Validation record — 0.9.11 (footer output speed)
+
+The footer shows one measured rate, at the requested slot in the right block, immediately left of `↑input`: the confirmed `usage.output` of an assistant response divided by the real observed output window (first→last streamed delta, TTFT excluded; `message_start`→`message_end` when no delta span exists). Nothing is estimated from reply length, no provider-reported rate is trusted, and an unmeasurable response adds no segment at all (window < 300 ms, no confirmed output tokens, or a rate outside 0.1..5000 tok/s) — `0.0 tok/s` is unreachable because a value that rounds to zero is dropped. When a provider publishes cumulative output tokens mid-stream (Anthropic-style `message_delta`) the same formula updates live and is then replaced by the confirmed value at `message_end`; OpenAI-compatible providers report usage only in the final chunk, so there the number appears once and persists. A response ending without usage records nothing and leaves the previous measured rate in place; session shutdown clears it.
+
+Verification on Node 24.15.0 and Pi 0.85.1:
+
+- `env -u NO_COLOR npm test`: 279/279 pass, including 11 new output-speed cases (delta span, request-window fallback, sub-minimum burst fallback, no-confirmed-tokens, persistence across a usage-less response, live-then-final replacement and monotonic preview, window/token gates, reset, rails, formatting) and 2 chrome cases (segment position/config gate/no-overflow at 40/60/80/120; the real handler chain `message_start → text_delta → message_end` producing a rate in the rendered footer, plus the live path from cumulative streamed usage).
+- `npm run check` and `npm run check:core`: pass.
+- `env -u NO_COLOR npm run test:host`: pass.
+- `env -u NO_COLOR npm run test:pty`: real Pi tmux pass. The isolated mock provider streams 2 characters per 250 ms and confirms `completion_tokens: 80`, so the PTY assertion covers a real ~500 ms delta window: the footer row carries `N tok/s` left of `↑input`, and `/codex-ui` prints `output speed: N tok/s (output=80 tokens, …)`. The same run still passes every pre-existing stage (Working rhythm, thinking timers, collapse/expand clicks, tool run, provider failure, gutters, history window, exact 161-character copy).
+- Layout check at 120/100/80 columns: `…/tools/pi-codex-appearance (main)   38.5 tok/s · ↑38.5k ↓2.0k · cache 97.3% · R112k W0 · $0.00`; single row at ≥100 columns, and at 80 columns the speed leads the wrapped right-side row rather than being dropped.
+- `node --check scripts/pty-verify.mjs` and `git diff --check`: pass.
+
 # Validation record — 0.9.10 (fullscreen scrollbar background leak)
 
 Reproduced against Pi 0.85.1: with an automatic scrollbar hidden, both two-column gutters have the default background; a mouse wheel event reveals the scrollbar and colors the right gutter with the diff background. Hiding the scrollbar restores the gutter. The layout width stays correct. The host's `replaceScrollbarCell()` uses `sliceByColumn()` for the trailing segment, which can re-emit pending background ANSI after the reset at that segment's first column.

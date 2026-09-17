@@ -212,6 +212,70 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
   assert.deepEqual(layoutFooter(snapshot, show, 2, "main"), []);
 });
 
+test("footer: output speed leads the right block, left of ↑input, and is config-gated", async () => {
+  const { layoutFooter } = await import("../src/chrome/footer.ts");
+  const base = {
+    cwd: "/home/xu/project/tools/pi-codex-appearance",
+    session: { input: 106_000, output: 8_900, cacheRead: 851_000, cacheWrite: 0, costTotal: 0 },
+    cacheLastPct: 99.9,
+    quota: undefined,
+    quotaStale: false,
+    speed: { tokensPerSecond: 38.5, outputTokens: 80, windowMs: 2_078, scope: "final" },
+    revision: 1,
+  };
+  const show = { details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true, showSpeed: true };
+  const flat = (rows) => rows.map((r) => r.map((s) => s.text).join("")).join("\n");
+  const withSpeed = flat(layoutFooter(base, show, 120, "main"));
+  assert.ok(withSpeed.includes("38.5 tok/s"), "measured rate rendered with its unit");
+  assert.ok(withSpeed.indexOf("38.5 tok/s") < withSpeed.indexOf("↑106k"), "rate sits left of ↑input");
+  assert.ok(!flat(layoutFooter(base, { ...show, showSpeed: false }, 120, "main")).includes("tok/s"), "footer.showSpeed=false removes the segment");
+  assert.ok(!flat(layoutFooter({ ...base, speed: undefined }, show, 120, "main")).includes("tok/s"), "unmeasurable → omitted, never 0.0");
+  for (const width of [40, 60, 80, 120]) {
+    for (const row of layoutFooter(base, show, width, "main")) {
+      assert.ok(row.map((s) => s.text).join("").length <= width, `width ${width}: no overflow`);
+    }
+  }
+});
+
+test("output speed reaches the footer from real events (confirmed usage ÷ observed window)", async () => {
+  const { handlers, slots, wrapUi } = activateHarness();
+  const { ctx } = realShapeCtx();
+  handlers.get("session_start")({}, wrapUi(ctx));
+  await tick();
+  const footer = slots.footerFactories[0](
+    { requestRender() {} },
+    { fg: (_k, text) => text },
+    { getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
+  );
+  const msg = (usage) => ({ role: "assistant", content: [], stopReason: "stop", responseId: "req-speed", provider: "test-provider", timestamp: 1, usage });
+  const delta = (usage, deltaText) => ({
+    message: msg(usage),
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: deltaText, partial: { content: [] } },
+  });
+  handlers.get("agent_start")({}, {});
+  handlers.get("message_start")({ message: { role: "assistant", content: [] } });
+  assert.ok(!plain(footer.render(120).join("\n")).includes("tok/s"), "nothing is claimed before a response completes");
+  // One streamed delta, then a real generation window, then the confirmed usage.
+  handlers.get("message_update")(delta({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0 }, "PCX"));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  handlers.get("message_end")({ message: msg({ input: 100, output: 80, cacheRead: 0, cacheWrite: 0 }) });
+  const frame = plain(footer.render(120).join("\n"));
+  const match = frame.match(/([\d.]+) tok\/s/);
+  assert.ok(match, `footer shows a measured rate: ${JSON.stringify(frame)}`);
+  assert.ok(Number(match[1]) > 20 && Number(match[1]) < 2000, `80 tokens over ~0.4s is plausible (got ${match[1]})`);
+  assert.ok(frame.indexOf("tok/s") < frame.indexOf("↑"), "rate renders left of ↑input");
+  // Live path: a provider that streams cumulative usage updates the same formula.
+  handlers.get("message_start")({ message: { role: "assistant", content: [] } });
+  handlers.get("message_update")(delta({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "x"));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  handlers.get("message_update")(delta({ input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "y"));
+  const live = plain(footer.render(120).join("\n")).match(/([\d.]+) tok\/s/);
+  assert.ok(live && Number(live[1]) > 20, `live rate mid-stream from cumulative usage (got ${live?.[1]})`);
+  handlers.get("message_end")({ message: msg({ input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }) });
+  const settled = plain(footer.render(120).join("\n")).match(/([\d.]+) tok\/s/);
+  assert.ok(settled, "the measured rate persists after the response settles");
+});
+
 test("editor factory: surface mode replaces borders; legacy mode keeps accent border", async () => {
   const { makeCodexEditorFactory } = await import("../src/chrome/editor.ts");
   // Minimal real-shape Editor base: the structural contract the factory relies on.

@@ -252,6 +252,13 @@ try {
   // = 200), cacheRead = 1000. Arrows follow Pi's ↑=input ↓=output grammar.
   assert.match(frames.summary, /↑200/, "interaction input from the final usage");
   assert.match(frames.summary, /↓80/, "interaction output from the final usage");
+  // 0.9.11: the footer's measured output speed — the mock streams 2 chars per
+  // 250ms and reports completion_tokens=80, so the value is a real rate over a
+  // real ~500ms delta window (never an estimate from the reply length).
+  const speedRow = frames.summary.split("\n").find((l) => l.includes("tok/s"));
+  assert.ok(speedRow, `footer shows the measured output speed:\n${frames.summary.slice(-800)}`);
+  assert.match(speedRow, /\d+(\.\d+)? tok\/s/, "rate carries its unit");
+  assert.ok(speedRow.indexOf("tok/s") < speedRow.indexOf("↑"), "rate sits left of ↑input in the same row");
 
   // Stage 2b: thinking run — both timers visible at once (elapsed + thinking).
   type("please PCX_THINK now");
@@ -355,10 +362,12 @@ try {
   // exact copy above already prove the shifted frame stays coherent.
   assert.match(beginLine, /^\s{3,}SELECT_BEGIN_MARK/, `transcript content inset by margin + outputPad, got ${JSON.stringify(beginLine)}`);
   assert.ok(flat.includes("fullscreen-margin:applied(margin=2"), "margin diagnostics report applied");
+  assert.match(flat, /outputspeed:[\d.]+tok\/s\(output=80tokens/, "diagnostics expose the measured speed with its scope");
 
   assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
+  console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
   console.log("  auto-collapse: 'Thought for Ns' label; mouse click expands/collapses the reasoning");

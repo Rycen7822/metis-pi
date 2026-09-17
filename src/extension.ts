@@ -5,6 +5,7 @@ import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration, formatTokensCompact } from "./ui-metrics.ts";
+import { OutputSpeedTracker, formatSpeed } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { probeHost, type HostFacts } from "./host-compat.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
@@ -148,6 +149,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   const hostData = new HostData();
   const ledger = new UsageLedger();
   const outcome = new InteractionOutcomeTracker();
+  // Output speed: one measured window per assistant response (see
+  // output-speed.ts for the exact scope of the number).
+  const outputSpeed = new OutputSpeedTracker({ now: () => performance.now() });
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
 
   // Quota store: read-only Codex subscription quota (auxiliary UI data — a
@@ -236,6 +240,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     showCacheReadWrite: config.footer.showCacheReadWrite,
     showCost: config.footer.showCost,
     showCodexQuota: config.footer.showCodexQuota,
+    showSpeed: config.footer.showSpeed,
   });
   const workingShow = (): WorkingShow => ({
     elapsed: config.working.elapsed,
@@ -273,6 +278,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       cacheLastPct: ledger.cacheRateLast(),
       quota: quota?.quota,
       quotaStale: quota?.stale ?? false,
+      speed: outputSpeed.snapshot(),
       revision: hostData.revision,
     };
   };
@@ -599,6 +605,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         const verdict = outcome.frozen ? outcome.freeze() : undefined;
         const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : String(v));
         const quotaState = quotaStore?.state();
+        const speed = outputSpeed.snapshot();
+        const speedText = formatSpeed(speed?.tokensPerSecond);
+        const speedDetail = speedText
+          ? `${speedText} (output=${speed!.outputTokens} tokens, window=${(speed!.windowMs / 1000).toFixed(1)}s, scope=${speed!.scope})`
+          : "— (no measured response yet)";
         const quotaAge = quotaStore?.lastSuccessAgeMs(Date.now());
         const quotaDetail = quotaState?.quota
           ? `primary=${quotaState.quota.primary ? `${Math.round(quotaState.quota.primary.remainingPercent * 10) / 10}%${quotaState.quota.primary.windowMinutes ? `/${quotaState.quota.primary.windowMinutes}min` : ""}` : "—"} secondary=${quotaState.quota.secondary ? `${Math.round(quotaState.quota.secondary.remainingPercent * 10) / 10}%` : "—"}`
@@ -614,6 +625,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
             ? `input=${ledger.totals().input} output=${ledger.totals().output} cacheRead=${ledger.totals().cacheRead} cacheWrite=${ledger.totals().cacheWrite} requests=${ledger.confirmedCount} — scope=this session file`
             : "unavailable (no sessionManager)"}`,
           `  cache(last)=${ledger.cacheRateLast() === null ? "—" : `${Math.round(ledger.cacheRateLast()! * 10) / 10}%`} — scope=latest confirmed request; ↑=uncached input per Pi normalization`,
+          `  output speed: ${speedDetail} — confirmed usage.output ÷ observed output window; live only when the provider streams cumulative usage`,
           `  interaction usage (confirmed): ↑${snap.usage.input} ↓${snap.usage.output} R${snap.usage.cacheRead} W${snap.usage.cacheWrite} — preview replaces, never sums`,
           `  outcome: ${verdict ? `${verdict.outcome} (evidence=${verdict.evidence}, attempt=${verdict.attempt}, toolErrors=${verdict.toolErrorsObserved}) — ${verdict.reason}` : `pending (attempts=${outcome.attemptCount}, toolErrors=${outcome.toolErrorsObserved})`}`,
           `  codex quota: mode=${config.quota.codex} source=codex-app-server available=${quotaState?.quota ? "yes" : quotaState?.lastErrorClass ? "no" : "unknown"} lastSuccess=${quotaAge === undefined ? "never" : `${Math.round(quotaAge / 1000)}s ago`} ${quotaDetail} stale=${quotaState?.stale ? "yes" : "no"} lastError=${quotaState?.lastErrorClass ?? "—"}`,
@@ -622,7 +634,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
           `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
           `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
-          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
+          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
           ...selectionCopyLine(),
           `  history-window: ${JSON.stringify(historyWindow?.status() ?? { installed: false })}`,
@@ -736,6 +748,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (isUserMessage(message)) metrics.uiPromptEnd();
     const role = (message as Record<string, unknown> | undefined)?.role;
     if (typeof role === "string") outcome.messageStart(role);
+    // One speed window per assistant response (request sent → message_end).
+    if (role === "assistant") outputSpeed.requestStart();
   });
   pi.on("message_update", (event) => {
     if (!enabled) return;
@@ -749,6 +763,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const streamEvent = (event as { assistantMessageEvent?: { type?: string; contentIndex?: number; partial?: { content?: Array<Record<string, unknown>> } } }).assistantMessageEvent;
     const eventType = typeof streamEvent?.type === "string" ? streamEvent.type : undefined;
     if (stateMessage && stateMessage.role === "assistant" && eventType) {
+      // Output speed measures real token arrival: only *_delta events open and
+      // extend the window (structural start/end events carry no content).
+      if (eventType.endsWith("_delta")) outputSpeed.delta();
       const content = streamEvent?.partial?.content ?? [];
       const at = (idx: number | undefined) => (typeof idx === "number" ? content[idx] : undefined);
       switch (eventType) {
@@ -786,7 +803,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (stateMessage?.role === "assistant" && outcome.attemptCount > 0) {
       const usage = (message as Record<string, unknown> | undefined)?.usage as RawUsage | undefined;
       if (usage && typeof usage === "object") {
-        metrics.previewUsage(outcome.attemptCount, sanitizeUsage(usage));
+        const tokens = sanitizeUsage(usage);
+        metrics.previewUsage(outcome.attemptCount, tokens);
+        // Live rate only when the provider publishes cumulative output tokens
+        // mid-stream; otherwise the value lands once at message_end.
+        if (outputSpeed.preview(tokens.output ?? 0)) requestRender();
       }
     }
   });
@@ -808,6 +829,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         metrics.recordUsage(key, sanitizeUsage(usage), identified);
         ledger.confirm(key, usage);
         metrics.clearPreviewUsage(outcome.attemptCount);
+      }
+      // Close the speed window on the confirmed output count (a response with
+      // no usage records nothing — the previous sample stays displayed).
+      if (stateMessage?.role === "assistant") {
+        outputSpeed.finish(usage ? (sanitizeUsage(usage).output ?? 0) : 0);
       }
     }
   });
@@ -881,6 +907,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     transcript.resetSession();
     metrics.reset();
     outcome.reset();
+    outputSpeed.reset();
     ledger.reset();
     turnSummary.forgetSession();
     hostData.bind(undefined);

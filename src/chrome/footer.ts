@@ -5,14 +5,18 @@
 // duplicate model/context line.
 //
 // Data contract: a single FooterSnapshot (host-data bridge + usage ledger +
-// quota store). Scopes stay explicit: Σ = session cumulative, cache = latest
-// confirmed request, quota = codex app-server (unknown → omitted, never 0%).
+// quota store + output-speed tracker). Scopes stay explicit: Σ = session
+// cumulative, cache = latest confirmed request, speed = current/last assistant
+// response, quota = codex app-server (unknown → omitted, never 0%).
 //
 // Priority ladder as width shrinks: cost → R/W → shorter dir → wrap to two
-// rows — P0 (cwd/branch, session I/O) and P1 (cache, quota) always survive.
+// rows — P0 (cwd/branch, output speed, session I/O) and P1 (cache, quota)
+// always survive. Speed sits at the HEAD of the right block, in the slot left
+// of ↑input (where a rate is read next to the totals it came from).
 // Layout runs on PLAIN segment text; painters apply afterwards.
 
 import type { UsageRecord } from "../usage-ledger.ts";
+import { formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
 import { formatQuotaLine, type CodexQuotaSnapshot } from "../quota/types.ts";
 import {
   cellWidth,
@@ -35,6 +39,9 @@ export interface FooterSnapshot {
   quota: CodexQuotaSnapshot | undefined;
   /** True when the quota snapshot is known-stale (refresh failed). */
   quotaStale: boolean;
+  /** Observed output rate of the in-flight (live) or last completed assistant
+   * response; undefined = not measurable yet (segment omitted). */
+  speed: OutputSpeedSample | undefined;
   /** Snapshot revision. */
   revision: number;
 }
@@ -50,6 +57,8 @@ export interface FooterShow {
   showCost: boolean;
   /** Codex subscription quota. */
   showCodexQuota: boolean;
+  /** Observed model output speed (tok/s). */
+  showSpeed: boolean;
 }
 
 export interface FooterDeps {
@@ -89,10 +98,18 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
     if (branch) left.push({ text: ` (${branch})`, tone: "normal" });
   }
 
-  // Right groups by priority: P0 session I/O, P1 cache + quota, P2 R/W + cost.
+  // Right groups by priority: P0 output speed + session I/O, P1 cache + quota,
+  // P2 R/W + cost.
   const session = snapshot.session;
   const right: Segment[] = [];
+  // Output speed leads the right block: the rate of the response these totals
+  // just grew by, read immediately left of ↑input.
+  if (show.showSpeed) {
+    const value = formatSpeedValue(snapshot.speed?.tokensPerSecond);
+    if (value) right.push({ text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" });
+  }
   if (show.details && session) {
+    if (right.length > 0) right.push(SEG_SEP);
     right.push({ text: `↑${formatCount(session.input)}`, tone: "normal" });
     if (session.output > 0) right.push({ text: ` ↓${formatCount(session.output)}`, tone: "normal" });
     if (show.showCache) {
