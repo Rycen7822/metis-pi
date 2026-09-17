@@ -215,7 +215,7 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
 test("footer: output speed leads the right block, left of ↑input, and is config-gated", async () => {
   const { layoutFooter } = await import("../src/chrome/footer.ts");
   const base = {
-    cwd: "/home/xu/project/tools/pi-codex-appearance",
+    cwd: "/home/xu/project/tools/pi-codexy",
     session: { input: 106_000, output: 8_900, cacheRead: 851_000, cacheWrite: 0, costTotal: 0 },
     cacheLastPct: 99.9,
     quota: undefined,
