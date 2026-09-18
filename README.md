@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.9.11**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.8.0 起，本插件独立负责主界面外观（0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.10.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.10.0 起本包含**第二个入口** `goal.ts`（长任务 `/goal` 模式，由本项目维护，见 [/goal 长任务模式](#goal-长任务模式0100)）；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -71,6 +71,20 @@ pi install /绝对路径/pi-codex-appearance
 
 若已经安装上游 `pi-codex-style-tools`，先移除上游包，避免它继续注册同名工具及改写搜索结果。移除旧包后重新启动。0.1.0 用户应移除自己额外添加的 `optional/format-tools.ts` 条目；0.2.0/0.3.0 都自动加载 `index.ts`。
 
+## /goal 长任务模式（0.10.0）
+
+本包第二个入口 `goal.ts` 提供长任务目标模式：`/goal <objective>` 设定目标，`/goal pause|resume|edit|clear` 管理状态，`create_goal` / `get_goal` / `update_goal` 工具只在被明确要求时由模型使用；目标状态（active / paused / blocked / complete、token 预算与累计用量）以 `goal` 类型 CustomEntry 追加进会话记录，恢复会话或切换分支时从当前分支重建，不依赖外部数据库。footer 左下的 `Pursuing goal (…s)` / `Goal paused` / `Goal complete` 由该扩展推送。
+
+与上游的唯一差异是**逐秒刷新**：上游只在目标生命周期事件（创建/暂停/恢复/编辑/清空、`session_start`、`session_tree`、`agent_end`）重算并推送 footer 文本，而 Pi 的 `ctx.ui.setStatus` 只存静态字符串——因此在一个单次 agent run 里连续跑几十分钟的目标，会从创建（`0s`）到状态变更前一直不动。本包在目标 active 期间挂 1 秒定时器重新推送同一快照（`syncStatusTimer`；暂停/完成/清空即停，`unref()` 不阻塞退出）。计时口径未变：定时器只读快照，时间仍只在 `agent_end` 记账（`test/goal.test.mts` 有对应用例）。
+
+来源：`goal.ts` 取自 [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) 的 `extensions/goal.ts`（Apache-2.0，@ `122e299`），按 Apache-2.0 §4 随包附带许可证全文（`LICENSE-APACHE-2.0`）并在 [NOTICE](NOTICE) 登记归属与改动，改动点标注在文件头。上游更新时按文件头的同一处说明重新套用即可（文件保持上游制表符缩进，便于对照同步）。
+
+本扩展是本包唯一的非显示层入口：它注册 `/goal` 命令、三个目标工具，并监听 `session_start` / `session_tree` / `before_agent_start` / `agent_start` / `agent_end` / `context`。`index.ts` 与 `src/**` 的“不注册工具、不改写结果与上下文”边界不变（`test/package.test.mjs` 显式限定该范围）。不需要目标模式时，给本包加一条只含显示入口的过滤即可：
+
+```json
+{ "source": "git:git@github.com:Rycen7822/pi-codexy.git", "extensions": ["-goal.ts"] }
+```
+
 ## 与现有插件的边界
 
 ### 与 pi-copy-soft-wrap 共存（0.9.0）
@@ -113,7 +127,7 @@ pi remove pi-copy-soft-wrap   # 或从 ~/.pi/agent/settings.json 的 packages �
 
 ## 实现与退避
 
-扩展没有 `registerTool()`，不重新创建内建工具，不修改工具参数、执行结果、会话记录、模型上下文或系统提示词。上游的 `compactSearchResult` 与全局结果改写已删除。
+扩展的**显示层运行时**（`index.ts` 与 `src/**`）没有 `registerTool()`，不重新创建内建工具，不修改工具参数、执行结果、会话记录、模型上下文或系统提示词；上游的 `compactSearchResult` 与全局结果改写已删除。唯一的非显示入口是 vendored 的 `goal.ts`（注册自己的 `/goal` 命令与目标工具，见上），`test/package.test.mjs` 已把这条边界写成显式范围。
 
 针对已核对的 Pi 0.85.1 UI，扩展装饰 `ToolExecutionComponent` 的三个 renderer/shell selector 以及这个**工具行组件自身**的 `render()`。默认构造的子组件树保持不变；首次实际绘制时切换 self-shell 并填充显示内容。这使卸载后可以还原原有卡片，不需要剪切 children，也不改写鼠标命中或图片协议。
 
@@ -140,4 +154,4 @@ npm run verify
 
 ## 来源与许可
 
-基于用户提供的 `pi-codex-style-master.zip` 修改，保留上游 MIT 许可。来源和归属见 [NOTICE](NOTICE)。本项目与 OpenAI、Pi 上游无官方关联。
+基于用户提供的 `pi-codex-style-master.zip` 修改，保留上游 MIT 许可。来源和归属见 [NOTICE](NOTICE)。`goal.ts` 是 Apache-2.0 上游代码的 vendored 副本，许可证全文见 `LICENSE-APACHE-2.0`，改动说明见文件头与 NOTICE。本项目与 OpenAI、Pi 上游无官方关联。

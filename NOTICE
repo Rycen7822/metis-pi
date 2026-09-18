@@ -28,3 +28,13 @@ Codex diff visual/behavior reference additionally inspected for 0.3.0:
   codex-rs/tui/src/diff_render.rs
 The implementation here is an independent TypeScript renderer. No Codex Rust
 source is embedded or redistributed by this package.
+
+The goal extension (goal.ts) is vendored third-party code:
+Upstream: https://github.com/mitsuhiko/agent-stuff (extensions/goal.ts @ 122e299)
+Upstream copyright: the mitsuhiko/agent-stuff authors. Apache License 2.0
+  (full text in LICENSE-APACHE-2.0).
+
+Modifications: Copyright (c) 2026 Rycen7822. MIT License.
+- Modified goal.ts: added a one-second footer status refresh while a goal is active
+  (syncStatusTimer), so elapsed time ticks during a long single agent run, where
+  upstream fires no goal event in between. The change is marked in the file header.

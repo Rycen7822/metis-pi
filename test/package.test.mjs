@@ -26,9 +26,16 @@ test("user messages regain the Codex gray surface through the native theme slot"
 
 test("package defaults to the compact transcript entry, with no added runtime dependencies", () => {
   const pkg = load("package.json");
-  assert.deepEqual(pkg.pi.extensions, ["./index.ts"]);
+  assert.deepEqual(pkg.pi.extensions, ["./index.ts", "./goal.ts"]);
   assert.equal(existsSync(new URL("../index.ts", import.meta.url)), true);
+  assert.equal(existsSync(new URL("../goal.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions", import.meta.url)), false);
+  // goal.ts is vendored from an Apache-2.0 upstream, so its licence text and
+  // attribution must ship with the package.
+  assert.equal(existsSync(new URL("../LICENSE-APACHE-2.0", import.meta.url)), true);
+  assert.ok(pkg.files.includes("goal.ts"));
+  assert.ok(pkg.files.includes("LICENSE-APACHE-2.0"));
+  assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.deepEqual(pkg.pi.themes, ["./themes/codex-appearance.json"]);
   // The ONE allowed runtime dependency: marked, pinned to the exact version
   // pi-tui itself uses (the copy-provenance lexer must see the host's token
@@ -38,7 +45,7 @@ test("package defaults to the compact transcript entry, with no added runtime de
   assert.equal(pkg.pi.prompts, undefined);
 });
 
-test("runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
+test("display runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
   const rootUrl = new URL("../src/", import.meta.url);
   const files = ["index.ts"];
   const walk = (url, prefix) => {
@@ -49,6 +56,11 @@ test("runtime has no registration, result mutation or tool activation; chrome AP
     }
   };
   walk(rootUrl, "src/");
+  // Scope: the codex-appearance runtime only (index.ts + src/**). goal.ts is the
+  // one deliberate non-display entry point — it registers /goal, the goal tools
+  // and the session/context hooks those features need — and is covered by
+  // goal.test.mts instead. Every other file stays display-only.
+  //
   // appendEntry is allowed ONLY in turn-summary.ts (the audited persistence
   // exception). Everything else stays forbidden everywhere.
   const forbidden = /\b(?:registerTool|setActiveTools|sendMessage|sendUserMessage|setSystemPrompt|registerShortcut|setTheme)\s*\(/;

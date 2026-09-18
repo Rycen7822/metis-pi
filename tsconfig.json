@@ -2,6 +2,7 @@
   "extends": "./tsconfig.core.json",
   "include": [
     "index.ts",
+    "goal.ts",
     "src/**/*.ts"
   ]
 }

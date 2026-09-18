@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- 新增第二个入口 **`goal.ts`**：长任务 `/goal` 模式纳入本包维护（上游 [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) `extensions/goal.ts` @ `122e299`，Apache-2.0）。`/goal <objective>`、`/goal pause|resume|edit|clear`、`create_goal` / `get_goal` / `update_goal` 工具、`goal` 类型 CustomEntry 状态链与 footer 状态行（`Pursuing goal (…s)` / `Goal paused` / `Goal complete`）行为与上游一致。
+- 与上游的唯一差异：目标 active 期间 footer 状态**每秒刷新**（`syncStatusTimer`，暂停/完成/清空即停，`unref()` 不阻塞退出）。上游只在生命周期事件重算，而 Pi 的 `ctx.ui.setStatus` 只存静态字符串，导致在单次 agent run 内跑完的长目标全程停在 `Pursuing goal (0s)`。计时口径未变：定时器只读快照，时间仍只在 `agent_end` 记账，总时长与上游一致。
+- 本包不变式显式收窄：`package.test.mjs` 的“无注册/无工具/无上下文改写”检查限定于显示层运行时（`index.ts` + `src/**`）；`goal.ts` 作为唯一的非显示入口由新增的 `test/goal.test.mts` 覆盖（命令/工具表面、逐秒刷新、暂停/完成/清空停表、不重复计时）。测试 279 → 284。
+- 交付物同步登记：`tsconfig.json` 纳入 `goal.ts`（严格类型检查零改动通过），`package.json` 的 `files` 与 `pi.extensions` 登记该入口；因上游为 Apache-2.0，随包新增 `LICENSE-APACHE-2.0` 全文并在 `NOTICE` 登记归属与改动说明。
+
 ## 0.9.11
 
 - footer 新增**实测输出速度** `N tok/s`，位置在右块最左、`↑input` 之前（用户指定的那一格）。数值 = 该条 assistant 回复**已确认的** `usage.output` ÷ **真实观测输出窗口**：首个→末个流式 delta 的跨度（不含 TTFT）；无非流式 delta（一次性投递/非流式 provider）时退回 `message_start`→`message_end` 窗口。不按回复字数估算、不取 provider 自报速率。
