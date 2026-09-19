@@ -12,9 +12,9 @@
 // - Two sizes: the collapsed budget above, and an expanded view that shows the
 //   whole list. A LEFT CLICK anywhere on the panel toggles between them (the
 //   host dispatches mouse events through the layout tree, so the component just
-//   implements handleMouse); ctrl+shift+t does the same for keyboards. A RIGHT
-//   CLICK hides the panel altogether; opening /todos shows it again. The hide
-//   is persisted (`widgetHidden`) so it survives restarts.
+//   implements handleMouse). A RIGHT CLICK hides the panel altogether; opening
+//   /todos shows it again. The hide is persisted (`widgetHidden`) so it survives
+//   restarts. No keyboard shortcut: interaction is mouse-only by design.
 // - Completed rows collapse on the NEXT turn (completedAtTurn < turn), so the
 //   user sees the ✓ before it folds away.
 // - Zero polling: refresh() runs only from the system's changed hook.

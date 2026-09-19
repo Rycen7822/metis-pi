@@ -1,3 +1,15 @@
+# Validation record — 0.17.3 (keyboard shortcut removed)
+
+User request: drop the `ctrl+shift+t` toggle entirely, code included. The widget is now mouse-only:
+left click expands/collapses, right click hides, `/todos` restores.
+
+Removed: the `pi.registerShortcut` block in `extensions/todo.ts`, the keyboard mention in the widget
+header comment and README. Assertions flipped to prove the absence: host-smoke asserts the extension
+registers zero shortcuts; the pty `/hotkeys` stage positively asserts no codex-todo entry (the vendored
+codex-conversion shortcut assertion stays).
+
+Verified: 372/372, `npm run check` 0 errors, host-smoke PASS, pty rc=0.
+
 # Validation record — 0.17.2 (manually hiding the todo panel)
 
 User request: the panel can be manually hidden. Chosen interaction: RIGHT CLICK anywhere on the panel hides

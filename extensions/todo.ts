@@ -68,15 +68,6 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
   const widget = createTodoWidget({ system, sessionId: () => lastSessionId });
   changedHooks.push(() => widget.refresh());
 
-  try {
-    pi.registerShortcut("ctrl+shift+t", {
-      description: "Expand/collapse the codex-todo widget (same as clicking it)",
-      handler: () => widget.toggleExpanded(),
-    });
-  } catch (err) {
-    notify(`codex-todo: shortcut unavailable — ${err instanceof Error ? err.message : String(err)}`, "warning");
-  }
-
   pi.on("session_start", (_event, ctx) => {
     ui = ctx.ui;
     sessionCwd = ctx.cwd;

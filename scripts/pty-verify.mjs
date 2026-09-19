@@ -712,7 +712,7 @@ try {
   sendKeys(["Enter"]);
   const hotkeys = await waitFor(/Previous Codex background shell/, 20_000, "extensions in /hotkeys");
   assert.match(hotkeys, /Fold or open Codex background shell widget/, "vendored codex-conversion shortcuts registered");
-  assert.match(hotkeys, /Expand\/collapse the codex-todo widget/, "codex-todo shortcut registered in the same session");
+  assert.ok(!/codex-todo widget/.test(hotkeys), "codex-todo keyboard shortcut is gone (mouse-only since 0.17.3)");
 
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
@@ -727,7 +727,7 @@ try {
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right click hides it; /todos restores it above the editor");
-  console.log("  extensions:   /hotkeys lists the vendored codex-conversion + codex-todo shortcuts (live registrations)");
+  console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

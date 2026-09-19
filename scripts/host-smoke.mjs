@@ -334,7 +334,7 @@ const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codex-todo-smoke-"));
 todoExtension(todoPi);
 assert.deepEqual(todoCalls.tools.map((t) => t.name), ["todo"]);
 assert.deepEqual(todoCalls.commands.map((c) => c.name), ["todos", "todos-doctor"]);
-assert.deepEqual(todoCalls.shortcuts.map((s) => s.key), ["ctrl+shift+t"]);
+assert.deepEqual(todoCalls.shortcuts, [], "no shortcuts: the widget is mouse-only since 0.17.3");
 const todoNotices = [];
 const todoWidgets = [];
 todoCalls.handlers.get("session_start")({}, {

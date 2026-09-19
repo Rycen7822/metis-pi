@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.3
+
+**移除 codex-todo 的 `ctrl+shift+t` 快捷键**（用户要求：彻底删除）。面板交互全部走鼠标：
+左键=展开/收起，右键=隐藏，`/todos`=恢复显示。`registerShortcut` 调用、widget 注释、
+README 提法一并清除；host-smoke 断言改为"未注册任何快捷键"，pty 的 `/hotkeys` 阶段改为
+正向断言 codex-todo 条目不存在（vendored codex-conversion 的快捷键断言保留）。
+
+验证：372/372、check 0 error、host-smoke PASS、pty rc=0。
+
 ## 0.17.2
 
 **codex-todo 面板可手动隐藏**：右键单击面板任意一行 → 面板消失；再打开 `/todos` 即恢复显示。

@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.17.2**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.17.3**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -113,8 +113,8 @@ pi install /绝对路径/pi-codex-appearance
 - **鼠标点击展开**：面板默认显示**三行任务**，超出时尾部折叠成 `+N more (a completed, b pending)`
   汇总行（先丢已完成、再截断未完成，保留 pending 优先）。**左键单击面板任意一行**即展开成完整列表
   （汇总行消失、标题变 `▴ · click to collapse`），**再点一次收回三行视图**。展开态写盘，重启保留；
-  `ctrl+shift+t` 是同一动作的键盘等价物。**右键单击面板任意一行则手动隐藏**（隐藏态写盘，
-  重启仍隐藏）；再打开一次 `/todos` 即恢复显示。首帧锁定高度、实时更新不会缩行（防终端跳动），
+  **右键单击面板任意一行则手动隐藏**（隐藏态写盘，重启仍隐藏）；再打开一次 `/todos` 即恢复显示。
+  面板无键盘快捷键——交互全部走鼠标（0.17.3 起移除原 `ctrl+shift+t`）。首帧锁定高度、实时更新不会缩行（防终端跳动），
   显式展开/收起则允许改高；刷新零轮询（store 变更才触发）。
 - **子任务树**：模型提交扁平 `[{title, parentId}]`、扩展端建树（≤4 层、≤15 个）；父任务显示态由
   子树推导不落库；complete 默认**门禁**（未完成子任务 + 非空证据，可要求证据文件真实存在），
