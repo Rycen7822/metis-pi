@@ -277,6 +277,53 @@ const paneSize = () => {
   return { w, h };
 };
 const visibleRows = (frame) => frame.split("\n").slice(-paneSize().h);
+/** Wait until `pattern` is no longer on screen (inverse of waitFor). */
+const waitGone = async (pattern, timeoutMs, label) => {
+  const start = Date.now();
+  for (;;) {
+    if (!pattern.test(visibleText())) return;
+    if (Date.now() - start > timeoutMs) {
+      assert.fail(`timeout waiting for ${label} to disappear:\n${capture().slice(-2000)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+};
+/** Wait until two consecutive captures are identical (streaming output settled). */
+const waitStableFrame = async (timeoutMs = 15_000) => {
+  const start = Date.now();
+  let previous = capture();
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const current = capture();
+    if (current === previous) return;
+    previous = current;
+    if (Date.now() - start > timeoutMs) return;
+  }
+};
+/**
+ * Click the row that matches `rowPattern` until `done()` holds. The transcript
+ * re-flows while output streams, so the row must be re-found per attempt (the
+ * panel stages use the same discipline).
+ */
+const clickRowUntilState = async (rowPattern, hover, done, timeoutMs, label) => {
+  const start = Date.now();
+  for (;;) {
+    if (done()) return;
+    const rows = visibleRows(capture());
+    const index = rows.findIndex((line) => rowPattern.test(line));
+    if (index >= 0) {
+      clickRow(index, cellOf(rows[index], hover));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      if (done()) return;
+    }
+    if (Date.now() - start > timeoutMs) {
+      assert.fail(`timeout: ${label}\n${capture().slice(-1500)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+};
+/** 0-based screen row of the first visible line matching `pattern` (-1 when absent). */
+const rowOf = (pattern) => visibleRows(capture()).findIndex((line) => pattern.test(line));
 const cellOf = (rowText, needle, offset = 0) => {
   // 1-based tmux column: sum display widths up to the needle (CJK = 2 cells).
   let cells = 0;
@@ -785,6 +832,29 @@ try {
   // second block as raw user text.
   await waitFor(/\[skill\] pcx-pty-mux-a/, 15_000, "multi-skill prompt folds into one [skill] entry");
   assert.ok(!/probe body\./.test(visibleText()), "skill bodies stay collapsed inside the folded entry");
+  // skill-fold extension: the host's entry is clickable — one left click on the
+  // `[skill] …` line expands it, the next one collapses it again.
+  // Click ON the label: the transcript has a small left gutter, so the click
+  // column is the label's own cell (counted with CJK widths).
+  await waitStableFrame();
+  assert.ok(rowOf(/\[skill\] pcx-pty-mux-a/) >= 0, "the folded [skill] entry is on screen");
+  await clickRowUntilState(
+    /\[skill\] pcx-pty-mux-a \(ctrl\+o to expand\)/,
+    "[skill]",
+    () => /probe body\./.test(visibleText()),
+    20_000,
+    "a click expands the folded skill entry",
+  );
+  // Expanded, the entry renders a bare `[skill]` label plus the bodies, so the
+  // second click targets a body row — same component, same toggle.
+  await clickRowUntilState(
+    /probe body\./,
+    "probe body.",
+    () => !/probe body\./.test(visibleText()),
+    20_000,
+    "a second click collapses the skill entry again",
+  );
+  await waitFor(/\[skill\] pcx-pty-mux-a/, 15_000, "the entry stays collapsed after collapsing it");
 
   // 0.17.9: ￥ is a registered trigger character — after a complete skill
   // token + space, typing ￥ ALONE must pop the menu (no letter needed).
@@ -812,7 +882,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    multi-skill prompt folds into ONE collapsed [skill] entry (no raw second block); bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    multi-skill prompt folds into ONE collapsed [skill] entry (no raw second block) and click-to-expand/collapse toggles it; bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

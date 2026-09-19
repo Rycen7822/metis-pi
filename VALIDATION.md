@@ -1,3 +1,37 @@
+# Validation record — 0.19.0 (click-to-toggle on the folded skill entry)
+
+Request: a left click on the folded `[skill] …` entry expands it, another click collapses it. The entry is a host
+component (SkillInvocationMessageComponent, a Box with `expanded`/`setExpanded`); no extension API reaches it, so
+the click handler is installed on the class prototype at extension load.
+
+Identity was the first thing verified, not assumed: pi's npm bin runs the BUNDLED CLI while jiti's alias resolves
+extension imports through the loader (`getAliases()` / `virtualModules`). A live probe wrapping the imported
+class's `updateDisplay` fired for every entry the host created (9 calls in one run), proving the imported class IS
+the one the session instantiates. An entry created by the host is therefore patchable directly.
+
+Gesture details that the code depends on, all read from pi-tui's alt-screen dispatcher:
+
+- A `click` is only dispatched to the component that claimed the matching `press`, so a plain left press is
+  claimed and the toggle happens on the click — a swallowed release can never toggle by accident.
+- `press`/`click` default to `render: true`, so `setExpanded()` + `invalidate()` is enough to repaint.
+- Modified clicks (Shift/Ctrl/Alt), right/middle press, wheel and move fall through to Box's own child
+  forwarding, so text selection and every other behavior stay as they were.
+
+In the compact transcript the click is routed by our own `HistoryWindow.handleMouse`, which maps a row back to the
+component that rendered it (the same path the thinking-rail click uses); the plain host path works through the
+same prototype patch.
+
+## Verified
+
+- 391/391; check 0 errors. Unit tests cover: left-press claim, click toggling expand→collapse, `invalidate()`
+  per toggle, modified/right/wheel events reaching the original handler, idempotent install, and the real host
+  class (patch applies, Box forwarding preserved for unclaimed events).
+- pty rc=0 in a real session: after a multi-skill submit the frame shows one collapsed `[skill] …` entry with the
+  bodies hidden; a click on the label expands it (both skill bodies become visible), a click on a body row
+  collapses it again, and the mock still receives both skill blocks plus the trailing marker.
+- Known trade-off (documented): the entry claims plain left presses over its whole area, so starting a text
+  selection drag on that entry does not select; modified clicks still select.
+
 # Validation record — 0.18.3 (multi-skill prompt folds into one collapsible entry)
 
 User evidence (screenshot): with two skills in one input, the first rendered as a collapsed `[skill] …` entry

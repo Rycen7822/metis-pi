@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.19.0
+
+**skill 折叠条目可点击展开/折叠**（用户要求）。
+
+折叠条目是**宿主组件** `SkillInvocationMessageComponent`（Box + `expanded`/`setExpanded`，默认折叠成
+`[skill] name (ctrl+o to expand)` 一行），扩展 API 拿不到它。做法：在本扩展加载时**给该类原型装一个
+`handleMouse`**——宿主扩展加载器的 jiti 别名把 `@earendil-works/pi-coding-agent` 指向宿主自己的模块实例
+（已用探针实证：包住 `updateDisplay` 后宿主每建一个条目都会触发），所以打的正是**运行时那个类**。
+
+手势契约（pi-tui `tui-alt-screen.js`）：
+
+- 普通的左键 **press 认领**（返回 `{ handled: true }`）——pi-tui 只把 `click` 派发给认领过 press 的组件，
+  于是"松手才切换"：某些终端会吞掉 release，光按不松不会误触。
+- `click` 时 `setExpanded(!expanded)` + `invalidate()`（丢掉 Box 的行缓存）→ 派发器对 press/click 默认
+  `render: true`，无需任何 TUI 句柄即可重绘。
+- 带 Shift/Ctrl/Alt 的点击、右键/中键/滚轮一律回落到 Box 原有行为（修饰键点击仍是文本选择）。
+
+在我们的紧凑转写里，点击由自己的 `HistoryWindow.handleMouse` 按行反查来源组件后转发（同一机制也服务于
+thinking rail 的点击），因此普通宿主渲染路径与紧凑路径都生效。
+
+验证：391/391（新增原型补丁单测：左键 press 认领、click 切换、修饰键/右键/滚轮回落到 Box 转发、
+重复安装幂等、宿主真实类可打补丁且保留其自有行为）；check 0；pty rc=0——真实会话里点击 `[skill] …` 行
+展开（断言正文出现），再点正文行折叠（断言正文消失），模型的 mock 仍收到两块 + 尾随。
+
 ## 0.18.3
 
 **第二个 skill 收进折叠块**（用户截图反馈：第一个 skill 折起来了，第二个以展开原文露在外面）。
