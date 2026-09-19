@@ -1,3 +1,16 @@
+# Validation record — 0.15.0 (footer R/W counters removed)
+
+Removed at the user's request: the footer's session-cumulative cache read/write counters (`R112M W0`) and the `footer.showCacheReadWrite` switch that gated them. The measured case for removal, taken from this session's own JSONL: 656 confirmed requests summed to 112,334,848 cache-read tokens (median 159,744 per request — each turn re-reads the whole long context from the provider cache), while the write counter is structurally 0 because the OpenAI/DeepSeek-style endpoint this session runs on reports cache hits only (no Anthropic-style `cache_creation_input_tokens`). Two numbers that occupy the wide-screen right block without informing a decision; `cache NN%` — the hit rate of the latest confirmed request — stays and carries the actionable signal.
+
+Scope removed: the footer segment, `FooterShow.showCacheReadWrite`, the config key (type, default, parser), the footer P2 width-trigger tier (the ladder is now  shorter dir → wrap to two rows), the `rw=` field on the `/codex-ui` config line, and the cacheRead/cacheWrite numbers in the `session Σ` and `interaction usage` diagnostic lines. Deliberately kept: `UsageLedger`/`UiMetrics` still parse and accumulate cache fields (`cache(last)` consumes the ratio; the interaction-summary persistence schema carries the amounts), and every raw usage shape in the test/harness fixtures is unchanged.
+
+Verification (Node 24.15.0, Pi 0.85.1):
+
+- `env -u NO_COLOR npm test`: 323/323. The wide-screen footer case now asserts `assert.doesNotMatch(frame, /R\d|W\d/)` — the old `R10k` assertion is gone and its absence is itself covered; `↑`/`↓`, `cache 20%`, quota and speed assertions are untouched.
+- `npm run check` / `npm run check:core`: clean; no `showCacheReadWrite` reference remains anywhere in `src/`, `test/` or `scripts/`.
+- host-smoke and pty unchanged (neither asserted R/W); `npm run verify` rc=0 at 0.15.0.
+- A user config still carrying `footer.showCacheReadWrite` is ignored silently: the key is simply no longer read, and no other footer key is affected (parser untouched elsewhere).
+
 # Validation record — 0.14.0 (glyph text-presentation)
 
 The transcript could show `grep -n "✖\|# fail"` as `✖|# fail`: the user's screenshot (pixel-measured here) showed the ✖ glyph's ink at 24×24 px against a 15 px cell pitch — emoji-presentation marks are advanced one cell by the terminal (pi-tui's WIDTHS table agrees: U+2714/U+2716 are 1-wide) but drawn from a color-emoji font ~1.6 cells wide, composited over the text layer, so they cover the next character. The session log confirmed the backslash was in the content all along; the grid itself never moved.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.0
+
+- **移除 footer 的 `R`/`W` 缓存读写计数**，连带 `footer.showCacheReadWrite` 配置项。会话累计的 cache-read 会随长上下文缓存迅速膨胀（本机实测：656 个请求合计 112,334,848，中位 15.9 万/请求），而 OpenAI/DeepSeek 风格的提供商没有 cache-write 计数器，`W` 恒为 0 —— 两个数字占着宽屏右端却不解释任何可行动的决策。`cache NN%`（最近一次请求的命中率）保留：它才是"缓存有没有生效"的可读信号。
+- 清理范围：footer 段与 P2 降级档（窄屏阶梯现在是 缩短目录 → 两行）、`FooterShow.showCacheReadWrite`、配置解析、`/codex-ui` 的 `session Σ` / `interaction usage` 行里的 cacheRead/cacheWrite 数字与 `config` 行的 `rw=`。`UsageLedger`/`UiMetrics` 仍照常解析并累计缓存字段 —— 存活的 `cache NN%` 与交互摘要的持久化 schema 依赖它们；配置里若还留着 `footer.showCacheReadWrite` 会被忽略（不报错，其余键照常生效）。
+- 测试：`test/chrome.test.mjs` 宽屏用例从断言 `R10k` 存在改为断言其不再出现（回归守卫），`show` 对象同步收窄。
+
 ## 0.14.0
 
 - **修复 emoji 字形覆盖相邻字符**：`✔`/`✖` 这类可被 emoji 字体接管的符号，终端只前进 1 格，但 emoji 字形宽约 1.6 格且合成在文字层之上 —— 用户截图里 `grep -n "✖\|# fail"` 显示成 `✖|# fail`（反斜杠被盖）、`✖ peek:` 显示成 `✖peek:`。渲染层在 frame 写入终端前给默认字符集 `✔ ✖ ✓ ✗ ⚠` 补 U+FE0E 文字呈现选择子（像素级证据：✖ 墨迹 24px vs 格宽 15px；会话日志确认反斜杠一直在内容里）。

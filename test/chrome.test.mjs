@@ -160,7 +160,7 @@ test("REAL shape → activation → composer metadata + footer, all fields from 
     assert.ok(frame.includes("cache 20%"), "last-request cache rate = 20.0%");
     assert.ok(frame.includes("Codex 5h 82%"), "primary quota (300min → 5h, REMAINING not used)");
     assert.ok(frame.includes("week 64%"), "secondary quota (10080min → week)");
-    assert.ok(frame.includes("R10k"), "cacheRead Σ");
+    assert.doesNotMatch(frame, /R\d|W\d/, "session cache read/write counters are gone");
     assert.doesNotMatch(frame, /test-model|17\.2%/, "model/context belong to the composer surface, not the footer");
   });
 
@@ -187,7 +187,7 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
     quotaStale: false,
     revision: 1,
   };
-  const show = { details: true, showCache: true, showCacheReadWrite: true, showChanges: true, showCodexQuota: true };
+  const show = { details: true, showCache: true, showChanges: true, showCodexQuota: true };
   const widthOf = (text) => {
     let w = 0;
     for (const ch of text.replace(/\x1b\[[0-9;]*m/g, "")) {
@@ -207,8 +207,8 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
     assert.ok(flat.includes("codex_workspace"), `width ${width}: cwd kept`);
     if (width >= 100) {
       assert.ok(flat.includes("Codex 5h 82%") && flat.includes("week 64%"), `width ${width}: P1 quota kept`);
-      assert.ok(flat.includes("R851k"), `width ${width}: P2 R/W kept`);
     }
+    assert.doesNotMatch(flat, /R\d|W\d/, `width ${width}: session cache read/write counters not rendered`);
   }
   assert.deepEqual(layoutFooter(snapshot, show, 0, "main"), [], "0 columns: hidden, no crash");
   assert.deepEqual(layoutFooter(snapshot, show, 1, "main"), []);
@@ -227,7 +227,7 @@ test("footer: session change counts ride with the branch in diff colours, exact"
     changes: { additions: 99, deletions: 20, files: 3 },
     revision: 1,
   };
-  const show = { details: true, showCache: true, showCacheReadWrite: true, showChanges: true, showCodexQuota: true, showSpeed: true };
+  const show = { details: true, showCache: true, showChanges: true, showCodexQuota: true, showSpeed: true };
   const flat = (rows) => rows.map((r) => r.map((s) => s.text).join("")).join("\n");
   const at120 = (snapshot, cfg) => layoutFooter(snapshot, cfg, 120, "main");
 
@@ -263,7 +263,7 @@ test("footer: output speed leads the right block, left of ↑input, and is confi
     speed: { tokensPerSecond: 38.5, outputTokens: 80, windowMs: 2_078, scope: "final" },
     revision: 1,
   };
-  const show = { details: true, showCache: true, showCacheReadWrite: true, showChanges: true, showCodexQuota: true, showSpeed: true };
+  const show = { details: true, showCache: true, showChanges: true, showCodexQuota: true, showSpeed: true };
   const flat = (rows) => rows.map((r) => r.map((s) => s.text).join("")).join("\n");
   const withSpeed = flat(layoutFooter(base, show, 120, "main"));
   assert.ok(withSpeed.includes("38.5 tok/s"), "measured rate rendered with its unit");
@@ -479,7 +479,9 @@ test("usage dedup through real handlers: preview replaces, final confirms once",
   const finalFrame = plain(footer.render(140).join("\n"));
   assert.ok(finalFrame.includes("↑100"), "session Σ input = 100 (once)");
   assert.ok(finalFrame.includes("↓100"), "session Σ output = 100 (once)");
-  assert.ok(finalFrame.includes("R900"), "session Σ cacheRead = 900 (once)");
+  // The session Σ cache counters are no longer rendered (0.15.0); the same
+  // confirmed record still has to dedup, and 90% only holds when the duplicate
+  // message_end REPLACED the streaming previews' 200 instead of appending.
   assert.ok(finalFrame.includes("cache 90%"), "cache(last) = 900/(100+900) per the spec formula");
 });
 
