@@ -1,3 +1,28 @@
+# Validation record — 0.18.1 (the second "/" pops even when the editor state is dead)
+
+0.18.0 kept the menu state alive at the trailing space, but the user found a remaining path: after the state is
+ALREADY dead, the bare "/" still does nothing (first press silent, delete-and-retype pops it). That matches the
+editor code exactly: any accept calls cancelAutocomplete() (hardcoded), and with a dead state the space and the
+"/" keystrokes issue no provider query at all — the editor auto-triggers "/" only at line start and excludes it
+from trigger characters. A provider-side fix cannot help, because the provider is never called.
+
+Fix at the only place that can: the editor. This package's Codex composer is already a CustomEditor subclass
+overriding handleInput, so after super.handleInput(data) it now checks data === "/" and, when the text before
+the cursor is a complete-skill-token prefix (plus whitespace), runs the editor's own autocomplete trigger — the
+same query the editor issues for a letter in a slash context. That makes the menu appear in BOTH states: the
+live hint state from 0.18.0 and the dead state.
+
+## Verified
+
+- 387/387; check 0 errors. New unit test drives a real-shape fake editor through the hook: ordinary text,
+  `src/` paths, mid-sentence slashes, and text before the prefix never trigger; `/skill:a ` + "/", `￥a ` + "/",
+  and every later token do; a live menu is not re-queried; the hook is opt-in (absent without skillTrigger);
+  hosts without the private trigger method stay silent instead of throwing.
+- pty rc=0 with the dead-state path end-to-end: first token → Escape (state dead, menu gone) → " " → bare "/"
+  pops the skill menu with no Tab and no letters → filter → accept → submit → the mock reports both skill
+  blocks + trailing text, no raw token. The live-state path from 0.18.0 (hint row → bare "/") and the ￥
+  boundary trigger both still pass.
+
 # Validation record — 0.18.0 (the second "/" pops the menu by itself)
 
 0.17.9 made Tab an immediate trigger, but the user's real flow (type `/skill:a `, then `/`) still showed no menu.

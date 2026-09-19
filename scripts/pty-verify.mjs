@@ -752,21 +752,28 @@ try {
   sendKeys(["Enter"]);
   await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "second-/ completion expands");
 
-  // Dead-state guard: Escape kills the menu state, so the trailing space and
-  // the bare "/" cannot re-arm it (no provider query happens at all) — Tab
-  // must still force the menu through the gate.
+  // 0.18.1 (THE user repro): the host editor auto-triggers "/" only at line
+  // start, so once its menu state is dead (any accept/escape cancels it; the
+  // built-in also answers nothing for `/skill:a `) the second "/" reaches NO
+  // provider and nothing popped until the user typed a letter, Tab, or deleted
+  // the slash. The composer now forces that one query itself. Here the state
+  // is killed with Escape, then " " + "/" must pop the menu on its own.
   type("/skill:pcx-pty-mux-a");
   await waitFor(/pty probe/, 15_000, "first-token menu before Escape");
   sendKeys(["Escape"]);
   for (let i = 0; i < 40 && /pty probe/.test(visibleText()); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   } // the menu is really gone — no stale frame can satisfy the next wait
-  type(" /");
-  sendKeys(["Tab"]);
-  await waitFor(/pty probe/, 15_000, "Tab forces the skill menu at a bare second / with a dead state");
-  // Clear the composer instead of submitting anything.
-  sendKeys(["C-u"]);
+  type(" ");
+  type("/");
+  await waitFor(/pty probe/, 15_000, "the bare second / pops the menu with a DEAD editor state");
+  type("mux-b");
+  await waitFor(/pty probe/, 15_000, "dead-state menu filters as letters arrive");
+  sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b
   await new Promise((resolve) => setTimeout(resolve, 300));
+  type("MUX_TAIL_MARKER");
+  sendKeys(["Enter"]);
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "dead-state / completion expands");
 
   // 0.17.6 baseline still holds without the menu: full tokens typed out.
   type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
@@ -799,7 +806,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    2nd-token / and ￥ completion menus (Tab-accept) → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    bare 2nd / pops the menu by itself (live hint state AND dead state) and ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

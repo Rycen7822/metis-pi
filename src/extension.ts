@@ -459,6 +459,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           promptPrefix: config.composer.promptPrefix,
           placeholder: "Ask anything...",
           selectionCopy: config.selectionCopy.ctrlC ? selectionCopy?.editorHook() : undefined,
+          // The host auto-triggers "/" only at line start; without this the
+          // second skill trigger (`/skill:a /`) never queries the provider.
+          skillTrigger: true,
         });
         chrome.editorFactory = factory;
         chrome.surfaceApplied = surface !== undefined;

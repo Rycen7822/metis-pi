@@ -13,6 +13,8 @@
 // Intentionally no per-line '›' prefix beyond the first row (deliberate Codex
 // deviation, see VALIDATION.md).
 
+import { isSkillPrefixOnly } from "../skill-tokens.ts";
+
 /** Minimal structural types for the host pieces we touch (no imports). */
 export interface CodexEditorRowHost {
   borderColor: (str: string) => string;
@@ -25,6 +27,14 @@ export interface CodexEditorRowHost {
   getPaddingX(): number;
   setPaddingX(padding: number): void;
   handleInput(data: string): void;
+  /** Base editor surface used by the multi-skill trigger hook (optional so
+   * test fakes without them stay valid — absent means "no hook"). */
+  getLines?: () => string[];
+  getCursor?: () => { line: number; col: number };
+  isShowingAutocomplete?: () => boolean;
+  /** The editor's own auto-trigger, the same one letters in a slash context
+   * use (private in the host class; absent on other host versions). */
+  tryTriggerAutocomplete?: () => void;
 }
 
 export interface CodexEditorHost {
@@ -58,9 +68,38 @@ export interface CodexEditorFactoryInput {
   /** Selection-aware Ctrl+C: consume the key when the fullscreen TUI has a
    * selection (copy if copyable, consume-only when decoration-only). */
   selectionCopy?: { tryConsume: (data: string, editor: unknown) => boolean };
+  /** Multi-skill composer: force the completion query for a trigger char the
+   * host refuses to auto-trigger (see forceSkillCompletion). */
+  skillTrigger?: boolean;
 }
 
 const CURSOR_CELL = "\x1b[7m \x1b[0m";
+
+/**
+ * Force the completion query the host skips for the second skill trigger.
+ *
+ * The host editor auto-triggers `/` only at line start (isAtStartOfMessage),
+ * `/` is excluded from its autocomplete trigger characters, and a query that
+ * returns nothing clears its menu state — so after `/skill:a ` (the built-in
+ * provider answers nothing there) the next `/` keystroke reaches NO provider
+ * at all: no menu, no matter how long the user waits. The editor's own
+ * auto-trigger path is private, so call it directly (optional member: if a
+ * future host renames it, this silently does nothing instead of throwing).
+ * The predicate matches ONLY "complete skill tokens + whitespace" right before
+ * the slash, so ordinary text and first-token slashes are untouched.
+ */
+function forceSkillCompletion(editor: CodexEditorRowHost, data: string): void {
+  if (data !== "/") return;
+  if (typeof editor.tryTriggerAutocomplete !== "function") return;
+  if (editor.isShowingAutocomplete?.() === true) return; // menu already live
+  const cursor = editor.getCursor?.();
+  const line = cursor ? (editor.getLines?.() ?? [])[cursor.line] : undefined;
+  if (cursor === undefined || line === undefined) return;
+  const beforeCursor = line.slice(0, cursor.col);
+  if (!beforeCursor.endsWith("/")) return;
+  if (!isSkillPrefixOnly(beforeCursor.slice(0, -1))) return;
+  editor.tryTriggerAutocomplete();
+}
 
 export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
   const accent = input.accent ?? ((s: string) => `\x1b[38;2;58;150;221m${s}\x1b[39m`);
@@ -84,6 +123,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
       const hook = input.selectionCopy;
       if (hook && hook.tryConsume(data, this)) return;
       super.handleInput(data);
+      if (input.skillTrigger) forceSkillCompletion(this, data);
     }
 
     override renderTopBorder(width: number, hiddenLineCount: number): string {

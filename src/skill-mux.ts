@@ -29,6 +29,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadSkills, stripFrontmatter, type InputEvent, type InputEventResult, type Skill } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
+import { isSkillPrefixOnly, splitLeadingSkillHeads } from "./skill-tokens.ts";
 
 /** Leading skill token: `/skill:name` or `￥name`; the name runs to the
  * next whitespace (or EOL). */
@@ -238,9 +239,6 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
 
 // ---- autocomplete wrapper ---------------------------------------------------
 
-/** A complete head token plus the current partial token of a multi-skill input. */
-const HEAD_TOKEN = /^(?:\/skill:|￥)(\S+)\s+/;
-
 export interface SkillContext {
   /** The exact partial token text before the cursor (this is the replace prefix). */
   partial: string;
@@ -258,13 +256,7 @@ export interface SkillContext {
  * after the first token (and own the ￥ form outright).
  */
 export function matchSkillContext(beforeCursor: string): SkillContext | null {
-  let rest = beforeCursor;
-  let head = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HEAD_TOKEN.exec(rest)) !== null) {
-    head += 1;
-    rest = rest.slice(match[0].length);
-  }
+  const { count: head, rest } = splitLeadingSkillHeads(beforeCursor);
   if (head === 0 && !rest.startsWith("￥")) return null;
   let trigger: "/" | "￥";
   let body: string;
@@ -313,16 +305,9 @@ const BRIDGE_ITEM: AutocompleteItem = {
  * partial token (those positions keep their previous behavior).
  */
 export function matchSkillBridge(beforeCursor: string, skills: SkillSummary[]): boolean {
-  let rest = beforeCursor;
-  const names: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = HEAD_TOKEN.exec(rest)) !== null) {
-    names.push(match[1]);
-    rest = rest.slice(match[0].length);
-  }
-  if (names.length === 0 || !/^\s*$/.test(rest)) return false;
+  if (!isSkillPrefixOnly(beforeCursor)) return false;
   const known = new Set(skills.map((skill) => skill.name));
-  return names.every((name) => known.has(name));
+  return splitLeadingSkillHeads(beforeCursor).names.every((name) => known.has(name));
 }
 
 const buildCompletionItems = (ctx: SkillContext, skills: SkillSummary[]): AutocompleteItem[] => {

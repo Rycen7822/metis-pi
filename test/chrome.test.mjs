@@ -378,6 +378,79 @@ test("editor factory: surface mode replaces borders; legacy mode keeps accent bo
   assert.match(legacy.render(40).join("\n"), /─{10}/, "legacy border mode intact");
 });
 
+test("editor factory: the composer forces the completion query for a second skill trigger", async () => {
+  const { makeCodexEditorFactory } = await import("../src/chrome/editor.ts");
+  const calls = { triggers: 0 };
+  // Real-shape base: the host editor inserts printable keys and exposes the
+  // cursor/lines/isShowingAutocomplete surface the hook reads.
+  class FakeEditorBase {
+    constructor() {
+      this.lines = [""];
+      this.cursor = { line: 0, col: 0 };
+      this.showing = false;
+    }
+    handleInput(data) {
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        const line = this.lines[this.cursor.line];
+        this.lines[this.cursor.line] = line.slice(0, this.cursor.col) + data + line.slice(this.cursor.col);
+        this.cursor.col += data.length;
+      }
+    }
+    tryTriggerAutocomplete() { calls.triggers += 1; }
+    isShowingAutocomplete() { return this.showing; }
+    getLines() { return this.lines; }
+    getCursor() { return { ...this.cursor }; }
+    getText() { return this.lines.join("\n"); }
+    getPaddingX() { return 2; }
+    setPaddingX() {}
+  }
+  const factory = makeCodexEditorFactory({ host: { CustomEditor: FakeEditorBase }, skillTrigger: true });
+  const at = (editor, text) => { editor.lines = [text]; editor.cursor = { line: 0, col: text.length }; };
+  const editor = factory({}, {}, {});
+
+  // The FIRST token is the host's business (it auto-triggers "/" at line start).
+  at(editor, "");
+  editor.handleInput("/");
+  assert.equal(calls.triggers, 0, "first-token slash left to the host");
+  // Ordinary text, paths, and mid-sentence slashes never force a query.
+  at(editor, "hello ");
+  editor.handleInput("/");
+  at(editor, "see src/");
+  editor.handleInput("/");
+  at(editor, "hello /skill:alpha ");
+  editor.handleInput("/");
+  assert.equal(calls.triggers, 0, "no hook outside a leading skill prefix");
+
+  // THE case: a complete skill token + space, then "/" — the host refuses to
+  // auto-trigger here, so the hook must run the query (this is what makes the
+  // menu pop even when the editor's own menu state already died).
+  at(editor, "/skill:alpha ");
+  editor.handleInput("/");
+  assert.equal(calls.triggers, 1, "second-token slash forces the query");
+  at(editor, "￥alpha ");
+  editor.handleInput("/");
+  assert.equal(calls.triggers, 2, "￥ heads count too");
+  at(editor, "/skill:alpha /skill:beta ");
+  editor.handleInput("/");
+  assert.equal(calls.triggers, 3, "fires for every later token");
+
+  // A live menu already queried for this position — don't query twice.
+  at(editor, "/skill:alpha ");
+  editor.showing = true;
+  editor.handleInput("/");
+  assert.equal(calls.triggers, 3, "no duplicate query while the menu is open");
+  editor.showing = false;
+
+  // Non-slash keys, and hosts without the private trigger, stay untouched.
+  at(editor, "/skill:alpha ");
+  editor.handleInput("x");
+  assert.equal(calls.triggers, 3, "only the slash key is hooked");
+  const plain = makeCodexEditorFactory({ host: { CustomEditor: FakeEditorBase } })({}, {}, {});
+  at(plain, "/skill:alpha ");
+  plain.handleInput("/");
+  assert.equal(calls.triggers, 3, "hook is opt-in");
+});
+
 test("Working widget: above-editor placement, Codex format, native loader hidden", async () => {
   const { handlers, slots, wrapUi } = activateHarness();
   const { ctx } = realShapeCtx();
