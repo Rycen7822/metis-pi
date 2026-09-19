@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.17.4
+
+**修复：Warp（及同类终端）下右键无法隐藏 todos 面板**——用户真机报告，三级探针定位：
+
+- 事实链：Warp 设置里 Mouse Reporting 一直开着；探针（备用屏幕 + 与 pi 完全相同的鼠标模式）证实
+  Warp **转发左键 press/release、右键只有 press**（release 被 Warp 的右键菜单吃掉），中键与 Ctrl+左键不转发。
+- 0.17.2 的实现是"右键 press 只认领、等宿主合成 click 再隐藏"——前提是有 release；Warp 永远不来
+  release → click 永不合成 → 隐藏永不执行。tmux 发 release，所以 pty 测试全绿而真机无效。
+- 修复：`handleMouse` 在 right **press** 上直接 `setHidden(true)` 并**刻意不认领**该 press——认领会让宿主
+  记住 press target 并等待 release，release 不来就留下过期 target，把后续所有鼠标事件劫持给已注销的
+  组件。不认领则宿主手势状态干净（右键 press 无人认领、选择逻辑忽略右键，成本为零）。
+- 右键 click 分支随之成为死代码（无认领 press → 宿主永不合成右键 click），移除。
+
+验证：372/372（hide 测试改为断言"press 即隐藏、返回 undefined、后续 click 不再重复隐藏"）；
+pty rc=0 且隐藏阶段改为 Warp 真实路径——**只发 right press** 断言面板消失、补发 release 断言无变化、
+`/todos` 恢复后再用左键展开/收起证明鼠标链路健康（过期 press target 的回归防护）。
+
 ## 0.17.3
 
 **移除 codex-todo 的 `ctrl+shift+t` 快捷键**（用户要求：彻底删除）。面板交互全部走鼠标：

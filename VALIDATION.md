@@ -1,3 +1,33 @@
+# Validation record — 0.17.4 (right-press hide for terminals that eat the right release)
+
+User report: right-clicking the todos panel did not hide it in Warp, even though 0.17.2 shipped a right-press
+claim. Three probe rounds established the facts:
+
+1. Warp has mouse reporting ON, but forwards mouse events only in the ALTERNATE screen (probes on the main
+   screen received nothing; pi runs in the alt screen, which is why left-click expand worked).
+2. In the alt screen with pi's exact mode set (?1000h ?1002h ?1004h ?1006h): LEFT press+release arrive,
+   RIGHT press arrives (4x in the log) but its RELEASE is consumed by Warp's context menu, MIDDLE and
+   CTRL+LEFT never arrive.
+3. pi-tui's real dispatch (bundle chunk read verbatim): a component-claimed press makes the host remember a
+   press target and synthesize a click only when the release lands. With no right release from Warp, the
+   0.17.2 claim-without-hiding never produced a click — panel stayed. tmux sends releases, which is why the
+   pty suite was green.
+
+## Fix
+
+`handleMouse` now hides ON the right press and deliberately returns `undefined` (no claim). An unclaimed
+right press costs nothing: no other component claims right presses, and the selection path ignores
+non-left buttons. A claimed press would leave a stale press target (release never comes) swallowing every
+later mouse event into the unregistered widget — the no-claim choice keeps the host gesture state clean.
+The right-click branch was unreachable after this change (no claim → no synthesized click) and is removed.
+
+## Verified
+
+- 372/372; `npm run check` 0 errors.
+- pty rc=0 with the hide stage rewritten to the Warp-real path: a bare right PRESS (no release) hides the
+  panel; a separately-sent release changes nothing; `/todos` restores it; and left clicks afterwards still
+  expand/collapse the panel — the regression guard against a stale host press target.
+
 # Validation record — 0.17.3 (keyboard shortcut removed)
 
 User request: drop the `ctrl+shift+t` toggle entirely, code included. The widget is now mouse-only:

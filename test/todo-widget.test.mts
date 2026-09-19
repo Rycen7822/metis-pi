@@ -152,14 +152,14 @@ test("a left click on the panel toggles the full list; other events pass through
     const collapsed = component.render(80);
     assert.equal(collapsed.length, 6); // header + 3 body + summary + spacer
 
-    // Non-click events are ignored so the transcript keeps them. (A right
-    // click HIDES the panel — covered by the hide test below. The right PRESS
-    // is claimed so the host synthesizes the click: see the host-contract
-    // comment in widget.ts.)
+    // Non-click events are ignored so the transcript keeps them. A right
+    // PRESS hides the panel and is covered by the hide test below; a bare
+    // right click never occurs in practice (an unclaimed press means the host
+    // never synthesizes one) and is ignored.
     assert.equal(component.handleMouse?.({ type: "wheel", button: "none", wheelDelta: 3 }), undefined);
     assert.equal(component.handleMouse?.({ type: "press", button: "left" }), undefined);
     assert.equal(component.handleMouse?.({ type: "click", button: "middle" }), undefined);
-    assert.deepEqual(component.handleMouse?.({ type: "press", button: "right" }), { handled: true });
+    assert.equal(component.handleMouse?.({ type: "click", button: "right" }), undefined);
 
     const claimed = component.handleMouse?.({ type: "click", button: "left" });
     assert.deepEqual(claimed, { handled: true });
@@ -188,10 +188,14 @@ test("a right click hides the panel; hide persists and /todos-style show restore
     assert.equal(calls[0].content != null, true);
 
     const component = widget.component({ requestRender() {} });
-    const claimed = component.handleMouse?.({ type: "press", button: "right" });
-    assert.deepEqual(claimed, { handled: true });
-    const clicked = component.handleMouse?.({ type: "click", button: "right" });
-    assert.deepEqual(clicked, { handled: true });
+    // The right press hides immediately and is deliberately NOT claimed:
+    // Warp forwards the press but eats the release (its menu takes it), and a
+    // claimed press would leave a stale host-side press target swallowing
+    // later clicks. No release, no click — the press alone must do it.
+    const pressed = component.handleMouse?.({ type: "press", button: "right" });
+    assert.equal(pressed, undefined);
+    assert.equal(widget.isHidden(), true);
+    assert.equal(component.handleMouse?.({ type: "click", button: "right" }), undefined);
     assert.equal(widget.isHidden(), true);
     // Persisted so a restart keeps the panel away.
     assert.equal(store.settings().widgetHidden, true);

@@ -593,9 +593,11 @@ try {
   assert.equal((recollapsedRows.match(/○ pty task/g) ?? []).length, 3, "clicking again returns to three rows");
   assert.ok(!recollapsedRows.includes("pty task 5"), "collapsing hides the tail again");
 
-  // A RIGHT CLICK hides the panel outright; opening /todos brings it back.
-  // Same row-sweep discipline as the left-click toggle: re-check the target
-  // state before each attempt so a sweep can never double-toggle.
+  // A RIGHT PRESS alone hides the panel — no release needed. Warp (the user's
+  // terminal) forwards the right press but eats the release for its context
+  // menu, so the widget hides ON the press and deliberately does not claim
+  // it. The harness therefore sends the release as a SEPARATE step to prove
+  // the press alone is sufficient (and the release harmless).
   const rightClickUntil = async (pattern, present, label) => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const frame = visibleText();
@@ -604,14 +606,17 @@ try {
       assert.ok(header >= 0, `${label}: the panel must be on screen`);
       const target = header + 1 + [2, 1, 3, 4, 5, 0][attempt % 6]; // SGR rows are 1-based
       sendKeys(["-H", ...sgrSeq(2, 12, target)]);
-      sendKeys(["-H", ...sgrSeq(2, 12, target, true)]);
       await new Promise((resolve) => setTimeout(resolve, 450));
     }
     throw new Error(`timeout waiting for ${label}:\n${visibleText()}`);
   };
 
-  await rightClickUntil(/Todos 0\/5 done/, false, "a right click hides the todo panel");
-  assert.ok(!visibleText().includes("Todos 0/5 done"), "panel gone after the right click");
+  await rightClickUntil(/Todos 0\/5 done/, false, "a right press hides the todo panel");
+  assert.ok(!visibleText().includes("Todos 0/5 done"), "panel gone on the press alone");
+  // The release — which Warp eats — must change nothing.
+  sendKeys(["-H", ...sgrSeq(2, 12, 10, true)]);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.ok(!visibleText().includes("Todos 0/5 done"), "release after the hide changes nothing");
 
   // /todos reopens it: the overlay lists the tasks, and closing it leaves the
   // restored panel above the editor.
@@ -629,6 +634,13 @@ try {
   }
   assert.ok(!/── todos \(5 tasks\)/.test(visibleText()), `Esc must close the overlay:\n${visibleText()}`);
   await waitFor(/Todos 0\/5 done ▾/, 30_000, "/todos restores the hidden panel");
+
+  // Mouse health after the UNCLAIMED right press: a stale host press target
+  // would swallow these clicks, so the restored panel must still expand and
+  // collapse on left clicks.
+  const reexpanded = await togglePanelUntil(/click to collapse/, "left clicks still reach the panel after the right press");
+  assert.ok(reexpanded.includes("pty task 5"), "panel expands again");
+  await togglePanelUntil(/\+2 more/, "and collapses again");
 
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");
@@ -726,7 +738,7 @@ try {
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
-  console.log("  todo panel:   a right click hides it; /todos restores it above the editor");
+  console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);

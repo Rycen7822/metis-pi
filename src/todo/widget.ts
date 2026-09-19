@@ -216,23 +216,20 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
       render(width: number): string[] {
         return paint(buildRows(system.store.read(), width, system.turn()), theme);
       },
-      // The host hit-tests the layout and calls handleMouse on the component
-      // under the cursor. Left click toggles the full list; right click hides
-      // the panel (claiming the event keeps both away from transcript
-      // selection).
-      // Host contract (pi-tui handleMouseEvent): a "click" is only synthesized
-      // when the PRESS was claimed by a component — the transcript viewport
-      // claims left presses upstream, but no one claims a right press, so the
-      // widget must claim it or the hide click would never be delivered.
+      // Host contract (pi-tui handleMouseEvent): claiming a press makes the host
+      // remember this component as the press target and expect its release —
+      // but Warp forwards a right press and then EATS the release (its context
+      // menu takes it), which would leave a stale press target swallowing later
+      // clicks. So hide ON the press and deliberately do NOT claim it: the side
+      // effect already happened, and an unclaimed right press costs nothing
+      // (no other component claims right presses; selection ignores them).
       handleMouse(event?: { type?: string; button?: string }): { handled: true } | undefined {
-        if (event?.type === "press" && event.button === "right") return { handled: true };
-        if (event?.type !== "click") return undefined;
-        if (event.button === "left") {
-          toggleExpanded();
-          return { handled: true };
-        }
-        if (event.button === "right") {
+        if (event?.type === "press" && event.button === "right") {
           setHidden(true);
+          return undefined;
+        }
+        if (event?.type === "click" && event.button === "left") {
+          toggleExpanded();
           return { handled: true };
         }
         return undefined;
