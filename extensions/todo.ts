@@ -1,8 +1,6 @@
 // codex-todo — pi extension entry. Wires the disk store, the model-facing
-// todo tool, the user-facing commands, and lifecycle events. UI surfaces
-// (persistent widget, fullscreen overlay) register themselves as changed
-// hooks / overlay openers in their own modules (see src/todo/widget.ts,
-// src/todo/overlay.ts).
+// todo tool, the user-facing commands, and lifecycle events. The persistent
+// widget registers itself as the changed hook (see src/todo/widget.ts).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
@@ -10,7 +8,6 @@ import { openTodoStore, TODO_DIR_NAME, type TodoStore } from "../src/todo/store.
 import { createTodoToolHandlers, TodoToolParams, type TodoToolCall } from "../src/todo/tools.ts";
 import { registerCodexTodoCommands } from "../src/todo/commands.ts";
 import { createTodoWidget } from "../src/todo/widget.ts";
-import { openTodoOverlay } from "../src/todo/overlay.ts";
 
 const TODO_TOOL_NAME = "todo";
 
@@ -121,14 +118,14 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
     notify(`codex-todo: tool "${TODO_TOOL_NAME}" unavailable — ${err instanceof Error ? err.message : String(err)} (disable the other todo extension)`, "warning");
   }
 
-  const openOverlay = (): void => {
-    if (!ui) return;
-    // Opening /todos restores a panel the user right-clicked away.
+  // /todos restores a panel the user right-clicked away; the task list itself
+  // prints as a text notify (the interactive overlay was removed in 0.17.5 —
+  // the persistent panel plus the todo tool covered its use cases).
+  const showPanel = (): void => {
     widget.show();
-    void openTodoOverlay(ui as never, { system, sessionId: () => lastSessionId });
   };
 
-  registerCodexTodoCommands(pi, { system, notify, openOverlay });
+  registerCodexTodoCommands(pi, { system, notify, showPanel });
 
   void changedHooks;
 }

@@ -1,5 +1,6 @@
 // codex-todo — user-facing commands. Kept apart from tools.ts: commands speak
-// to the USER (notify/overlay), tools speak to the MODEL.
+// to the USER (notify), tools speak to the MODEL. The interactive overlay was
+// removed in 0.17.5 — /todos prints the list as text and restores the panel.
 
 import { type TodoState } from "./model.ts";
 import type { TodoStore } from "./store.ts";
@@ -8,8 +9,8 @@ import { renderListText, type CodexTodoSystem } from "./tools.ts";
 export interface CodexTodoCommandsDeps {
   system: CodexTodoSystem;
   notify(text: string, type?: "info" | "warning" | "error"): void;
-  /** Open the fullscreen overlay; undefined when the host has no TUI. */
-  openOverlay?: () => void;
+  /** Restore the persistent panel when the user hid it with a right click. */
+  showPanel?: () => void;
 }
 
 export function registerCodexTodoCommands(pi: unknown, deps: CodexTodoCommandsDeps): void {
@@ -22,19 +23,16 @@ export function registerCodexTodoCommands(pi: unknown, deps: CodexTodoCommandsDe
   if (typeof api.registerCommand !== "function") return;
 
   api.registerCommand("todos", {
-    description: "Show the codex-todo task list (overlay when a TUI is available)",
+    description: "Show the codex-todo task list (and restore the panel)",
     handler: (_args, ctx) => {
-      const { system, openOverlay } = deps;
-      const state = system.store.read();
-      if (openOverlay && state.tasks.length > 0) {
-        openOverlay();
-        return;
-      }
+      const state = deps.system.store.read();
+      deps.showPanel?.();
+      const notify = ctx.ui?.notify ?? deps.notify;
       if (state.tasks.length === 0) {
-        (ctx.ui?.notify ?? deps.notify)("codex-todo: no tasks yet — ask the agent to plan with the todo tool");
+        notify("codex-todo: no tasks yet — ask the agent to plan with the todo tool");
         return;
       }
-      (ctx.ui?.notify ?? deps.notify)(renderListText(state, "user"));
+      notify(renderListText(state, "user"));
     },
   });
 

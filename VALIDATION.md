@@ -1,3 +1,23 @@
+# Validation record — 0.17.5 (todos overlay removed)
+
+The user asked to delete the inline interactive overlay that popped up in the middle of the screen on
+`/todos` (screenshot: `── todos (6 tasks) ─` block with an Esc-to-close help line). Rationale: the
+persistent panel plus the todo tool cover its use cases.
+
+## What changed
+
+- Deleted `src/todo/overlay.ts` and `test/todo-overlay.test.mts` outright.
+- `/todos` now always: (1) restores the panel via `showPanel` when the user hid it with a right click,
+  (2) prints the task list as a text notify via `renderListText` (the previous empty-state branch is
+  unchanged). The commands dep `openOverlay` became `showPanel`.
+- pty stage 3e: after the right-press hide, `/todos` must bring the panel straight back and the frame must
+  NOT contain the `── todos (` overlay title (the old Esc-close loop is gone).
+
+## Verified
+
+369/369 tests (372 minus the 3 overlay tests), `npm run check` and `check:core` 0 errors, host-smoke PASS,
+pty rc=0 with the rewritten stage.
+
 # Validation record — 0.17.4 (right-press hide for terminals that eat the right release)
 
 User report: right-clicking the todos panel did not hide it in Warp, even though 0.17.2 shipped a right-press

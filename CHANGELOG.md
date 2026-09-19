@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.5
+
+**删除 todos overlay 弹窗**（用户反馈：`/todos` 弹出的内联交互窗挡屏幕，还需 Esc 关闭，已无用）：
+
+- 删除 `src/todo/overlay.ts` 与 `test/todo-overlay.test.mts`；`/todos` 新语义 = 恢复被右键隐藏的面板
+  + notify 打印文字任务列表（原"无任务时退化"分支不变）。dependencies 里 `openOverlay` 改为 `showPanel`。
+- pty 阶段 3e 同步改写：`/todos` 后断言面板直接重现、**不存在** `── todos (` overlay 标题
+  （原 Esc 关闭循环删除）；右键隐藏 / 鼠标健康断言保留。
+
+验证：369/369（372 − 3 个 overlay 测试）、check/check:core 0 error、pty rc=0。
+
 ## 0.17.4
 
 **修复：Warp（及同类终端）下右键无法隐藏 todos 面板**——用户真机报告，三级探针定位：

@@ -618,22 +618,12 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 400));
   assert.ok(!visibleText().includes("Todos 0/5 done"), "release after the hide changes nothing");
 
-  // /todos reopens it: the overlay lists the tasks, and closing it leaves the
-  // restored panel above the editor.
+  // /todos restores it: the overlay is gone since 0.17.5, so the panel must
+  // simply reappear (the command also prints the list as a text notify).
   type("/todos");
   sendKeys(["Enter"]);
-  await waitFor(/── todos \(5 tasks\)/, 30_000, "/todos overlay lists the tasks");
-  sendKeys(["Escape"]);
-  // The overlay renders inline above the (always visible) panel, so a plain
-  // panel wait cannot tell whether it closed — assert on the title instead.
-  // Esc can race the overlay's input registration, so resend it if the title
-  // is still there (a stray Esc on the closed editor is a no-op).
-  for (let i = 0; i < 20 && /── todos \(5 tasks\)/.test(visibleText()); i += 1) {
-    if (i > 0) sendKeys(["Escape"]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-  assert.ok(!/── todos \(5 tasks\)/.test(visibleText()), `Esc must close the overlay:\n${visibleText()}`);
   await waitFor(/Todos 0\/5 done ▾/, 30_000, "/todos restores the hidden panel");
+  assert.ok(!/── todos \(5 tasks\)/.test(visibleText()), "no overlay since 0.17.5");
 
   // Mouse health after the UNCLAIMED right press: a stale host press target
   // would swallow these clicks, so the restored panel must still expand and

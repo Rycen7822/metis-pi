@@ -45,7 +45,7 @@ export interface TodoState {
 export const TODO_SCHEMA_VERSION = 1 as const;
 export const MAX_TASKS = 15;
 export const MAX_DEPTH = 4;
-/** Task ids render as `#<id>` everywhere (widget, overlay, tool text). */
+/** Task ids render as `#<id>` everywhere (widget and tool text). */
 export const formatTaskId = (id: number): string => `#${id}`;
 
 // ---------------------------------------------------------------------------
@@ -438,7 +438,7 @@ export function buildTree(state: TodoState): DerivedNode[] {
   return roots;
 }
 
-/** Depth-first flattened view for widget/overlay rendering. */
+/** Depth-first flattened view for the widget rendering. */
 export function flattenTree(roots: DerivedNode[]): DerivedNode[] {
   const out: DerivedNode[] = [];
   const visit = (node: DerivedNode): void => {
