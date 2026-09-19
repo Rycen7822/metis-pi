@@ -1,21 +1,23 @@
 // Compact product status footer (below the composer surface). 0.8.5: the
 // model/effort/provider/context details moved INTO the composer surface
-// (composer-metadata.ts) — the footer carries cwd/branch + session usage +
-// cache + Codex quota (+ optional R/W and cost at wide widths), never a
-// duplicate model/context line.
+// (composer-metadata.ts) — the footer carries cwd/branch (+ working-tree change
+// counts) + session usage + cache + Codex quota (+ optional R/W at wide
+// widths), never a duplicate model/context line.
 //
 // Data contract: a single FooterSnapshot (host-data bridge + usage ledger +
-// quota store + output-speed tracker). Scopes stay explicit: Σ = session
-// cumulative, cache = latest confirmed request, speed = current/last assistant
-// response, quota = codex app-server (unknown → omitted, never 0%).
+// quota store + output-speed tracker + git-changes tracker). Scopes stay
+// explicit: Σ = session cumulative, cache = latest confirmed request,
+// speed = current/last assistant response, quota = codex app-server
+// (unknown → omitted, never 0%), changes = work tree vs HEAD.
 //
-// Priority ladder as width shrinks: cost → R/W → shorter dir → wrap to two
-// rows — P0 (cwd/branch, output speed, session I/O) and P1 (cache, quota)
-// always survive. Speed sits at the HEAD of the right block, in the slot left
-// of ↑input (where a rate is read next to the totals it came from).
+// Priority ladder as width shrinks: R/W → shorter dir → wrap to two rows —
+// P0 (cwd/branch, change counts, output speed, session I/O) and P1 (cache,
+// quota) always survive. Speed sits at the HEAD of the right block, in the
+// slot left of ↑input (where a rate is read next to the totals it came from).
 // Layout runs on PLAIN segment text; painters apply afterwards.
 
 import type { UsageRecord } from "../usage-ledger.ts";
+import type { GitChangeStat } from "../git-changes.ts";
 import { formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
 import { formatQuotaLine, type CodexQuotaSnapshot } from "../quota/types.ts";
 import {
@@ -42,6 +44,8 @@ export interface FooterSnapshot {
   /** Observed output rate of the in-flight (live) or last completed assistant
    * response; undefined = not measurable yet (segment omitted). */
   speed: OutputSpeedSample | undefined;
+  /** Working-tree change counts vs HEAD; undefined = not a repo / unreadable. */
+  changes: GitChangeStat | undefined;
   /** Snapshot revision. */
   revision: number;
 }
@@ -53,8 +57,8 @@ export interface FooterShow {
   showCache: boolean;
   /** cacheRead/cacheWrite amounts. */
   showCacheReadWrite: boolean;
-  /** Known cost. */
-  showCost: boolean;
+  /** Working-tree +A −D counts (diff colours). */
+  showChanges: boolean;
   /** Codex subscription quota. */
   showCodexQuota: boolean;
   /** Observed model output speed (tok/s). */
@@ -96,10 +100,17 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
   if (dir) {
     left.push({ text: dir, tone: "dim" });
     if (branch) left.push({ text: ` (${branch})`, tone: "normal" });
+    // Working-tree change counts ride with the branch, in the diff's own
+    // green/red; a clean tree shows nothing at all.
+    const changes = snapshot.changes;
+    if (show.showChanges && changes && (changes.additions > 0 || changes.deletions > 0)) {
+      left.push({ text: ` +${formatCount(changes.additions)}`, tone: "add" });
+      left.push({ text: ` -${formatCount(changes.deletions)}`, tone: "del" });
+    }
   }
 
   // Right groups by priority: P0 output speed + session I/O, P1 cache + quota,
-  // P2 R/W + cost.
+  // P2 R/W.
   const session = snapshot.session;
   const right: Segment[] = [];
   // Output speed leads the right block: the rate of the response these totals
@@ -123,9 +134,6 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
     if (show.showCacheReadWrite && (session.cacheRead > 0 || session.cacheWrite > 0)) {
       right.push(SEG_SEP, { text: `R${formatCount(session.cacheRead)}`, tone: "normal" });
       right.push({ text: ` W${formatCount(session.cacheWrite)}`, tone: "normal" });
-    }
-    if (show.showCost && session.costTotal !== undefined && Number.isFinite(session.costTotal)) {
-      right.push(SEG_SEP, { text: `$${session.costTotal.toFixed(2)}`, tone: "dim" });
     }
   }
   if (left.length === 0 && right.length === 0) return [];

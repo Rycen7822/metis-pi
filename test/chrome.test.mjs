@@ -6,7 +6,10 @@
 // forbidden here — that pattern let 0.8.3 ship an empty footer.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { activate } from "../src/extension.ts";
 
 /** Real host data shapes (Pi 0.85.1). `ui` deliberately has NO
@@ -184,7 +187,7 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
     quotaStale: false,
     revision: 1,
   };
-  const show = { details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true };
+  const show = { details: true, showCache: true, showCacheReadWrite: true, showChanges: true, showCodexQuota: true };
   const widthOf = (text) => {
     let w = 0;
     for (const ch of text.replace(/\x1b\[[0-9;]*m/g, "")) {
@@ -212,6 +215,37 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
   assert.deepEqual(layoutFooter(snapshot, show, 2, "main"), []);
 });
 
+test("footer: working-tree change counts ride with the branch in diff colours", async () => {
+  const { layoutFooter } = await import("../src/chrome/footer.ts");
+  const base = {
+    cwd: "/home/xu/project/tools/pi-codexy",
+    session: { input: 106_000, output: 8_900, cacheRead: 851_000, cacheWrite: 0, costTotal: 12.34 },
+    cacheLastPct: 99.9,
+    quota: undefined,
+    quotaStale: false,
+    speed: undefined,
+    changes: { additions: 99, deletions: 20, files: 3 },
+    revision: 1,
+  };
+  const show = { details: true, showCache: true, showCacheReadWrite: true, showChanges: true, showCodexQuota: true, showSpeed: true };
+  const flat = (rows) => rows.map((r) => r.map((s) => s.text).join("")).join("\n");
+  const at120 = (snapshot, cfg) => layoutFooter(snapshot, cfg, 120, "main");
+
+  const row = at120(base, show)[0];
+  const line = flat([row]);
+  assert.ok(line.includes("(main) +99 -20"), `counts follow the branch: ${line}`);
+  assert.deepEqual(
+    row.filter((s) => s.tone === "add" || s.tone === "del").map((s) => [s.tone, s.text]),
+    [["add", " +99"], ["del", " -20"]],
+    "counts carry the diff tones",
+  );
+  assert.ok(!line.includes("$") && !line.includes("12.34"), "the cost readout is gone");
+  assert.ok(!flat(at120({ ...base, changes: { additions: 0, deletions: 0, files: 0 } }, show)).includes("+0"), "clean tree shows nothing");
+  assert.ok(!flat(at120({ ...base, changes: undefined }, show)).includes(" -20"), "unknown stat shows nothing");
+  assert.ok(!flat(at120(base, { ...show, showChanges: false })).includes("+99"), "footer.showChanges=false removes the segment");
+  assert.ok(flat(at120({ ...base, changes: { additions: 12_400, deletions: 1_050, files: 3 } }, show)).includes("+12.4k -1.1k"), "compact k form, like the rest of the footer");
+});
+
 test("footer: output speed leads the right block, left of ↑input, and is config-gated", async () => {
   const { layoutFooter } = await import("../src/chrome/footer.ts");
   const base = {
@@ -223,7 +257,7 @@ test("footer: output speed leads the right block, left of ↑input, and is confi
     speed: { tokensPerSecond: 38.5, outputTokens: 80, windowMs: 2_078, scope: "final" },
     revision: 1,
   };
-  const show = { details: true, showCache: true, showCacheReadWrite: true, showCost: true, showCodexQuota: true, showSpeed: true };
+  const show = { details: true, showCache: true, showCacheReadWrite: true, showChanges: true, showCodexQuota: true, showSpeed: true };
   const flat = (rows) => rows.map((r) => r.map((s) => s.text).join("")).join("\n");
   const withSpeed = flat(layoutFooter(base, show, 120, "main"));
   assert.ok(withSpeed.includes("38.5 tok/s"), "measured rate rendered with its unit");
@@ -482,4 +516,47 @@ test("header component: real identity, never impersonates OpenAI", async () => {
   assert.ok(joined.includes("codex-appearance"), "own identity shown");
   assert.ok(joined.includes("test-model"), "real model id shown");
   assert.ok(!/OpenAI/i.test(joined), "never claims OpenAI");
+});
+
+/** Real repo: one tracked edit (−1/+2) plus one untracked file (+2). */
+function makeDirtyRepo(t) {
+  const dir = mkdtempSync(join(tmpdir(), "pi-codexy-chrome-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, {
+    cwd: dir,
+    stdio: "ignore",
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" },
+  });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "tracked.txt"), "one\ntwo\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "init");
+  writeFileSync(join(dir, "tracked.txt"), "one\nthree\nfour\n");
+  writeFileSync(join(dir, "new.txt"), "x\ny\n");
+  return dir;
+}
+
+test("footer: real git changes reach the frame in the diff's green/red", async (t) => {
+  const repo = makeDirtyRepo(t);
+  const { handlers, slots, wrapUi } = activateHarness({ colorLevel: { kind: "truecolor" } });
+  const shutdown = () => handlers.get("session_shutdown")?.({}, wrapUi(realShapeCtx().ctx));
+  t.after(shutdown); // stop the 2s poll this test just armed
+  handlers.get("session_start")({}, wrapUi(realShapeCtx({ cwd: repo }).ctx));
+  await tick(); // the chrome preload resolves the footer factory asynchronously
+  assert.ok(slots.footerFactories.length > 0, "footer installed");
+  const frame = () => slots.footerFactories.at(-1)(
+    { requestRender() {} },
+    { fg: (_k, text) => text },
+    { getGitBranch: () => "main", getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
+  ).render(140).join("\n");
+
+  const deadline = Date.now() + 3_000;
+  let rendered = frame();
+  while (!rendered.includes("\x1b[32m") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    rendered = frame();
+  }
+  assert.match(plain(rendered), /\(main\) \+4 -1/, "tracked −1/+2 plus untracked +2 ride with the branch");
+  assert.ok(rendered.includes("\x1b[32m +4\x1b[39m"), "additions paint the diff green");
+  assert.ok(rendered.includes("\x1b[31m -1\x1b[39m"), "deletions paint the diff red");
 });

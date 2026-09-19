@@ -115,13 +115,24 @@ interface SurfaceStyle {
   readonly contentFg: (text: string) => string;
 }
 
+/** Foreground-only green/red of the diff signs (`\x1b[32m` / `\x1b[31m`, Codex
+ * style); "" when colour is off. The footer's +A/−D tones reuse this, so the two
+ * readouts cannot drift apart. */
+export function diffSignFg(kind: "add" | "remove", level: ColorLevel): string {
+  if (level.kind === "none") return "";
+  return kind === "add" ? "\x1b[32m" : "\x1b[31m";
+}
+
 function surface(kind: "add" | "remove" | "context", level: ColorLevel): SurfaceStyle {
-  if (kind === "context" || level.kind === "none") {
+  if (kind === "context") {
+    return { lineBg: "", signFg: "", contentFg: (text) => text };
+  }
+  const fg = diffSignFg(kind, level);
+  if (!fg) {
     return { lineBg: "", signFg: "", contentFg: (text) => text };
   }
   const rgb = kind === "add" ? DIFF_ADD_BG : DIFF_DEL_BG;
   const bg = backgroundAnsi(rgb, level);
-  const fg = kind === "add" ? "\x1b[32m" : "\x1b[31m";
   if (!bg) {
     // ANSI-16: foreground-only cue (Codex behavior).
     return { lineBg: "", signFg: fg, contentFg: (text) => `${fg}${text}\x1b[39m` };

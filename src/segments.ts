@@ -3,7 +3,7 @@
 // join-or-wrap row realization. Layout always runs on PLAIN text; painters
 // are applied afterwards so final ANSI strings are never sliced.
 
-export type SegmentTone = "normal" | "dim" | "accent" | "warning";
+export type SegmentTone = "normal" | "dim" | "accent" | "warning" | "add" | "del";
 export interface Segment {
   text: string;
   tone: SegmentTone;

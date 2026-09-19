@@ -12,6 +12,9 @@ import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
+import { createGitChangesTracker, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
+import { diffSignFg } from "./diff.ts";
+import type { SegmentTone } from "./segments.ts";
 import { WORKING_WIDGET_KEY, type WorkingShow, type WorkingAnimation, type WorkingComponent } from "./chrome/working.ts";
 import { COMPOSER_META_WIDGET_KEY, type ComposerMetaSnapshot } from "./chrome/composer-metadata.ts";
 import type { FooterShow, FooterSnapshot } from "./chrome/footer.ts";
@@ -218,6 +221,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     } catch { /* render happens on the next host cycle */ }
   };
 
+  // Working-tree change counts for the footer: display-only git reads on a 2s
+  // poll, armed only while a TUI session is live (see git-changes.ts).
+  const gitChanges = createGitChangesTracker({
+    getCwd: () => hostData.getCwd(),
+    onUpdate: requestRender,
+  });
+
   // The factory-time tui is the only reliable requestRender source. Prototype
   // installs retry on every capture and agent activity — the captured
   // renderer may still be the main screen at first (owner-symbol idempotent).
@@ -238,7 +248,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     details: config.footer.details,
     showCache: config.footer.showCache,
     showCacheReadWrite: config.footer.showCacheReadWrite,
-    showCost: config.footer.showCost,
+    showChanges: config.footer.showChanges,
     showCodexQuota: config.footer.showCodexQuota,
     showSpeed: config.footer.showSpeed,
   });
@@ -279,6 +289,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       quota: quota?.quota,
       quotaStale: quota?.stale ?? false,
       speed: outputSpeed.snapshot(),
+      changes: gitChanges.snapshot(),
       revision: hostData.revision,
     };
   };
@@ -387,6 +398,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       void installChrome(facts, chrome.generation);
       startQuotaTimer();
       maybeRefreshQuota(true);
+      gitChanges.start();
     }
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
@@ -425,9 +437,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
   /** Tone painter for footer/metadata text (the theme may be an unbound
    * proxy early on — degrade to plain text instead of crashing). */
-  const makeTonePainter = (theme: { fg?: (key: string, text: string) => string } | undefined) =>
-    (text: string, tone: "normal" | "dim" | "accent" | "warning"): string => {
+  const makeTonePainter = (theme: { fg?: (key: string, text: string) => string } | undefined, colorLevel: ColorLevel) =>
+    (text: string, tone: SegmentTone): string => {
       if (tone === "normal" || !text) return text;
+      if (tone === "add" || tone === "del") {
+        // Same green/red as the diff renderer — Codex has no theme key for them.
+        const fg = diffSignFg(tone === "add" ? "add" : "remove", colorLevel);
+        return fg ? `${fg}${text}\x1b[39m` : text;
+      }
       const key = tone === "warning" ? "warning" : tone;
       try {
         return typeof theme?.fg === "function" ? theme.fg(key as never, text) : text;
@@ -503,7 +520,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           return mods.createFooterComponent(
             { getSnapshot: getFooterSnapshot, requestRender, show: footerShow() },
             footerData as never,
-            makeTonePainter(theme),
+            makeTonePainter(theme, session.colorLevel),
           );
         });
         chrome.footerInstalled = true;
@@ -614,6 +631,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         const quotaDetail = quotaState?.quota
           ? `primary=${quotaState.quota.primary ? `${Math.round(quotaState.quota.primary.remainingPercent * 10) / 10}%${quotaState.quota.primary.windowMinutes ? `/${quotaState.quota.primary.windowMinutes}min` : ""}` : "—"} secondary=${quotaState.quota.secondary ? `${Math.round(quotaState.quota.secondary.remainingPercent * 10) / 10}%` : "—"}`
           : "no snapshot";
+        const changeStat = gitChanges.snapshot();
+        const changesDetail = changeStat
+          ? `+${changeStat.additions} -${changeStat.deletions} (${changeStat.files} files, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll, work tree vs HEAD + untracked)`
+          : "unavailable (no git metadata in cwd)";
         const lines = [
           `pi-codex-appearance ${bindings.appearanceVersion ?? "?"} diagnostics (mode=${hostData.mode}, pi=${bindings.piVersion ?? "?"}, revision=${hostData.revision}):`,
           `  composer: surface=${chrome.surfaceApplied ? "applied" : config.composer.surface ? `fallback (${bindings.surface ? "color level" : "no surface binding"})` : "disabled(config)"} prefix=${chrome.prefixApplied ? "applied" : "off"} metadata=${chrome.metaInstalled ? "applied" : config.composer.metadata ? "fallback" : "disabled(config)"}`,
@@ -634,8 +655,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
           `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
           `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
-          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},cost=${config.footer.showCost},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
-          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
+          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},changes=${config.footer.showChanges},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
+          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
+          `  git-changes: ${changesDetail}`,
           ...selectionCopyLine(),
           `  history-window: ${JSON.stringify(historyWindow?.status() ?? { installed: false })}`,
         ];
@@ -903,6 +925,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     stopQuotaTimer();
     quotaStore?.reset();
     lastQuotaRefreshAt = 0;
+    gitChanges.dispose();
     session.writeChanges.clear();
     transcript.resetSession();
     metrics.reset();

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- footer 分支右侧新增**工作区改动行数** `+A -D`：相对 HEAD 的 tracked 改动（暂存 + 未暂存，`git diff --numstat HEAD`）加上未被 ignore 的未跟踪文件行数（`git ls-files --others --exclude-standard`），颜色与 diff 同行（`diffSignFg` 的 `\x1b[32m`/`\x1b[31m`，`NO_COLOR`/无颜色终端不带 SGR）。计数与分支同行，干净仓库不显示该段，`footer.showChanges: false` 可关闭。
+- 移除 footer 右下角的**花费**显示，`footer.showCost` 配置项一并删除（`$0.00` 类文本不再出现）。用量 ledger 仍保留宿主上报的金额字段，只是不再渲染。
+- 刷新策略：2 秒轮询 + 并发合并 + 仅数字变化时请求重绘；cwd 无 git 元数据时完全不 spawn git；未跟踪按 ≤200 个 / 单个 ≤256 KiB 计数，二进制与超限跳过；任何读取失败都只降级为“不显示”，不影响 agent 结果。`/codex-ui` 新增 `git-timer` 与 `git-changes` 行。
+- 测试 284 → 295：`test/git-changes.test.mts` 9 例（解析、边界、tracker、真实 git 集成），chrome 新增“逐段布局 + 真实 git → 帧内绿/红”两例，`test:pty` 新增真实 TUI 帧断言 `(main) +3 -0`。
+
 ## 0.10.0
 
 - 新增第二个入口 **`goal.ts`**：长任务 `/goal` 模式纳入本包维护（上游 [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) `extensions/goal.ts` @ `122e299`，Apache-2.0）。`/goal <objective>`、`/goal pause|resume|edit|clear`、`create_goal` / `get_goal` / `update_goal` 工具、`goal` 类型 CustomEntry 状态链与 footer 状态行（`Pursuing goal (…s)` / `Goal paused` / `Goal complete`）行为与上游一致。

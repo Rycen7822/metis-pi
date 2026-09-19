@@ -31,6 +31,16 @@ const AGENT_DIR = path.join(HOME_DIR, ".pi", "agent");
 const WORKSPACE = path.join(ROOT, "workspace");
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 fs.mkdirSync(WORKSPACE, { recursive: true });
+// A real git work tree, so the footer's working-tree change counts are asserted
+// from real frames (the 0.11.0 +A −D segment). Skipped with a note without git.
+const hasGit = (() => {
+  try { execFileSync("git", ["--version"], { stdio: "ignore" }); return true; } catch { return false; }
+})();
+if (hasGit) {
+  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: WORKSPACE, stdio: "ignore" });
+  // Untracked, 3 lines → the footer must read "+3 -0".
+  fs.writeFileSync(path.join(WORKSPACE, "changed.txt"), "alpha\nbeta\ngamma\n");
+}
 // HOME isolation: the real ~/.pi/agent user extensions (including the
 // published copy of THIS extension) must not shadow the code under test.
 const ISOLATED_ENV = { ...process.env, HOME: HOME_DIR };
@@ -237,6 +247,12 @@ try {
   const footerLines = frames.idle.split("\n").filter((l) => l.trim() && !l.includes("pcx-mock-model") && !l.includes("Ask anything"));
   assert.ok(footerLines.some((l) => l.includes("pcx-mock-pty") || (l.includes("/") && !l.includes("ctx "))), "footer carries cwd/branch rows");
   assert.ok(!footerLines.some((l) => l.includes("pcx-mock-model ·")), "footer does NOT duplicate the model line");
+  // 0.11.0: working-tree change counts ride with the branch, straight from git.
+  if (hasGit) {
+    assert.match(frames.idle, /\(main\) \+3 -0/, `footer shows +3 -0 for one untracked 3-line file:\n${frames.idle.slice(-600)}`);
+  } else {
+    console.log("  NOTE: git unavailable — working-tree change counts not asserted");
+  }
 
   // Stage 2: a normal run — the Working line is live above the editor with
   // the elapsed timer; ends with a Worked summary (usage-backed tokens).
@@ -367,6 +383,7 @@ try {
   assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
+  console.log(hasGit ? "  git changes:  +3 -0 for one untracked file, read from the real work tree" : "  git changes:  not asserted (git unavailable)");
   console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
