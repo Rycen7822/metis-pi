@@ -67,10 +67,19 @@ function legacyOutcome(outcome: SummaryOutcome): { outcome: InteractionOutcome; 
   return { outcome, legacyUnverified: false };
 }
 
+/** What the summary LINE reads: duration, thinking, uncached I/O. The
+ * persisted entry carries the cache amounts too (schema v2); the renderer
+ * never displays them, so they are not part of its input contract. */
+export interface SummaryLineSnapshot {
+  elapsedMs: number;
+  thinkingMs: number;
+  usage: { input: number; output: number };
+}
+
 /** Build the summary line text (Codex grammar). Unknown pieces are omitted.
  * "Worked for" states the RUN ended normally — never business acceptance. */
 export function formatSummaryLine(
-  snapshot: Pick<InteractionSnapshot, "elapsedMs" | "thinkingMs" | "usage">,
+  snapshot: SummaryLineSnapshot,
   outcome: InteractionOutcome,
   options: { legacyUnverified?: boolean } = {},
 ): string {
@@ -173,15 +182,10 @@ export function makeEntryRenderer(makeText?: SummaryEntryRendererDeps["makeText"
   return (entry: { customType: string; data?: unknown }, _options: unknown, theme?: { fg?: (k: string, t: string) => string }) => {
     const data = entry?.data as InteractionSummaryData | undefined;
     if (!data || (data.schemaVersion !== 1 && data.schemaVersion !== 2)) return undefined;
-    const snapshot: Pick<InteractionSnapshot, "elapsedMs" | "thinkingMs" | "usage"> = {
+    const snapshot: SummaryLineSnapshot = {
       elapsedMs: data.elapsedMs,
       thinkingMs: data.thinkingMs ?? 0,
-      usage: {
-        input: data.usage?.input ?? 0,
-        output: data.usage?.output ?? 0,
-        cacheRead: data.usage?.cacheRead ?? 0,
-        cacheWrite: data.usage?.cacheWrite ?? 0,
-      },
+      usage: { input: data.usage?.input ?? 0, output: data.usage?.output ?? 0 },
     };
     const legacy = data.schemaVersion === 1
       ? legacyOutcome(data.outcome)

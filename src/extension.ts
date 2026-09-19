@@ -5,21 +5,22 @@ import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration } from "./ui-metrics.ts";
-import { OutputSpeedTracker, formatSpeed } from "./output-speed.ts";
+import { OutputSpeedTracker } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { probeHost, type HostFacts } from "./host-compat.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
-import { createGitChangesTracker, GIT_CHANGES_DEBOUNCE_MS, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
+import { createGitChangesTracker } from "./git-changes.ts";
 import { createGlyphPresentation } from "./glyph-presentation.ts";
 import { diffSignFg } from "./diff.ts";
 import type { SegmentTone } from "./segments.ts";
 import type { ThinkingView, ThinkingViewControl } from "./thinking-view.ts";
-import { WORKING_WIDGET_KEY, type WorkingShow, type WorkingAnimation, type WorkingComponent } from "./chrome/working.ts";
-import { COMPOSER_META_WIDGET_KEY, type ComposerMetaSnapshot } from "./chrome/composer-metadata.ts";
-import type { FooterShow, FooterSnapshot } from "./chrome/footer.ts";
+import { WORKING_WIDGET_KEY, type WorkingComponent } from "./chrome/working.ts";
+import { COMPOSER_META_WIDGET_KEY } from "./chrome/composer-metadata.ts";
+import { createSnapshotSource } from "./chrome/snapshots.ts";
+import { registerDiagnosticsCommand } from "./diagnostics.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { QuotaStore } from "./quota/quota-store.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
@@ -251,55 +252,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     historyWindow?.installOnTui(tui);
   };
 
-  const footerShow = (): FooterShow => ({
-    details: config.footer.details,
-    showCache: config.footer.showCache,
-    showChanges: config.footer.showChanges,
-    showCodexQuota: config.footer.showCodexQuota,
-    showSpeed: config.footer.showSpeed,
-  });
-  const workingShow = (): WorkingShow => ({
-    elapsed: config.working.elapsed,
-    thought: config.working.thought,
-    tool: config.working.tool,
-    tokens: config.working.tokens,
-  });
-  const workingAnimation = (): WorkingAnimation => ({
-    enabled: config.working.animation,
-    intervalMs: config.working.animationIntervalMs,
-  });
-  const getWorkingSnapshot = () => {
-    const s = metrics.snapshot();
-    return {
-      active: s.active,
-      phase: s.phase,
-      elapsedMs: s.elapsedMs,
-      thinkingMs: s.thinkingMs,
-      thinkingOpen: s.thinkingOpen,
-      tools: s.tools,
-      usage: { input: s.usage.input, output: s.usage.output },
-    };
-  };
-  const getComposerMetaSnapshot = (): ComposerMetaSnapshot => ({
-    model: hostData.getModel(),
-    thinkingLevel: hostData.getThinkingLevel(),
-    contextUsage: hostData.getContextUsage(),
-    revision: hostData.revision,
-  });
-  const getFooterSnapshot = (): FooterSnapshot => {
-    const quota = quotaStore?.state();
-    return {
-      cwd: hostData.getCwd(),
-      session: hostData.hasSessionManager ? ledger.totals() : undefined,
-      cacheLastPct: ledger.cacheRateLast(),
-      quota: quota?.quota,
-      quotaStale: quota?.stale ?? false,
-      speed: outputSpeed.snapshot(),
-      changes: gitChanges.snapshot(),
-      revision: hostData.revision,
-    };
-  };
-
   const metrics = new UiMetrics(
     { now: () => performance.now(), wall: () => Date.now() },
     {
@@ -346,6 +298,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       },
     },
   );
+  const snapshots = createSnapshotSource({
+    getConfig: () => config,
+    hostData,
+    ledger,
+    metrics,
+    outputSpeed,
+    gitChanges,
+    quotaStore,
+  });
   const turnSummary = new TurnSummary({
     appendEntry: (type, data) => {
       (bindings.api as { appendEntry?: (t: string, d?: unknown) => void } | undefined)?.appendEntry?.(type, data);
@@ -516,7 +477,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           captureTui(tui);
           const surface = bindings.surface!;
           return mods.createComposerMetaComponent({
-            getSnapshot: getComposerMetaSnapshot,
+            getSnapshot: snapshots.getComposerMetaSnapshot,
             surface,
             paint: (text, tone) => (tone === "normal" ? text : surface.paintGlyph(text, tone === "accent" ? "accent" : "dim")),
           });
@@ -532,7 +493,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
           captureTui(tui);
           return mods.createFooterComponent(
-            { getSnapshot: getFooterSnapshot, requestRender, show: footerShow() },
+            { getSnapshot: snapshots.getFooterSnapshot, requestRender, show: snapshots.footerShow() },
             footerData as never,
             makeTonePainter(theme, session.colorLevel),
           );
@@ -574,9 +535,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
             }
           };
           const component = mods.createWorkingComponent({
-            getSnapshot: getWorkingSnapshot,
-            getShow: workingShow,
-            getAnimation: workingAnimation,
+            getSnapshot: snapshots.getWorkingSnapshot,
+            getShow: snapshots.workingShow,
+            getAnimation: snapshots.workingAnimation,
             requestRender,
             colorKind: session.colorLevel.kind,
             paint,
@@ -603,92 +564,28 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   }
 
-  const glyphStatus = (): string => {
-    if (!glyphPresentation) return "disabled(config)";
-    const g = glyphPresentation.status();
-    if (!g.enabled) return "disabled(config)";
-    const marks = g.glyphs.join(" ");
-    return `${g.installed ? `applied (${g.reason})` : g.reason} marks=${g.glyphs.length} [${marks}] frames=${g.frames} changed=${g.changed}${config.glyphs.include.length > 0 ? ` include=${config.glyphs.include.join(" ")}` : ""}`;
-  };
-
-  const selectionCopyLine = (): string[] => {
-    if (!selectionCopy) {
-      return [`  selection-copy: ${config.selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`];
-    }
-    const d = selectionCopy.diagnostics();
-    const t = d.telemetry;
-    const m = d.mirrors;
-    const lines = [
-      `  selection-copy: serializer=${d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${m.markdownDegraded + m.textDegraded} degraded, ${m.markdownThrottled + m.textThrottled} throttled${m.lastDegradedReason ? ` (${m.lastDegradedReason})` : ""} other-wrapper=${d.externalPatch ?? "none"}`,
-      `  copy-stats: calls=${t.calls ?? 0} exact=${t.exact} mixed=${t.mixed} native=${t.nativeFallback} empty=${t.emptyDecoration} failed=${t.failed} last=${t.lastMode} chars=${t.lastCharCount} ms=${t.lastDurationMs} cache=${d.cache.hits}/${d.cache.misses}${t.lastReason ? ` lastError=${t.lastReason}` : ""}`,
-    ];
-    return lines;
-  };
-
-  // /codex-ui — capability + data diagnostics. States are REAL outcomes
-  // (installed/applied/disabled/fallback), never "capability exists".
-  (bindings.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
-    description: "pi-codex-appearance capability diagnostics",
-    handler: (args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
-      let text: string;
-      if (!hostData.bound) {
-        text = "pi-codex-appearance: no active session";
-      } else {
-        if (typeof args === "string" && args.trim().toLowerCase() === "refresh-quota") {
-          maybeRefreshQuota(true);
-        }
-        const model = hostData.getModel();
-        const level = hostData.getThinkingLevel();
-        const usage = hostData.getContextUsage();
-        const snap = metrics.snapshot();
-        const verdict = outcome.frozen ? outcome.freeze() : undefined;
-        const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : String(v));
-        const quotaState = quotaStore?.state();
-        const speed = outputSpeed.snapshot();
-        const speedText = formatSpeed(speed?.tokensPerSecond);
-        const speedDetail = speedText
-          ? `${speedText} (output=${speed!.outputTokens} tokens, window=${(speed!.windowMs / 1000).toFixed(1)}s, scope=${speed!.scope})`
-          : "— (no measured response yet)";
-        const quotaAge = quotaStore?.lastSuccessAgeMs(Date.now());
-        const quotaDetail = quotaState?.quota
-          ? `primary=${quotaState.quota.primary ? `${Math.round(quotaState.quota.primary.remainingPercent * 10) / 10}%${quotaState.quota.primary.windowMinutes ? `/${quotaState.quota.primary.windowMinutes}min` : ""}` : "—"} secondary=${quotaState.quota.secondary ? `${Math.round(quotaState.quota.secondary.remainingPercent * 10) / 10}%` : "—"}`
-          : "no snapshot";
-        const changeStat = gitChanges.snapshot();
-        const changesDetail = changeStat
-          ? `+${changeStat.additions} -${changeStat.deletions} (${changeStat.files} files, session Δ vs ${gitChanges.session().rev ?? "index (unborn HEAD)"}${gitChanges.session().baseline ? " + baseline" : ""}, untracked included, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`
-          : "unavailable (no git metadata in cwd)";
-        const lines = [
-          `pi-codex-appearance ${bindings.appearanceVersion ?? "?"} diagnostics (mode=${hostData.mode}, pi=${bindings.piVersion ?? "?"}, revision=${hostData.revision}):`,
-          `  composer: surface=${chrome.surfaceApplied ? "applied" : config.composer.surface ? `fallback (${bindings.surface ? "color level" : "no surface binding"})` : "disabled(config)"} prefix=${chrome.prefixApplied ? "applied" : "off"} metadata=${chrome.metaInstalled ? "applied" : config.composer.metadata ? "fallback" : "disabled(config)"}`,
-          `  working: ${snap.active ? `active phase=${snap.phase} elapsed=${Math.round(snap.elapsedMs / 1000)}s thinking=${Math.round(snap.thinkingMs / 1000)}s${snap.thinkingOpen ? " (open)" : ""}` : "idle"} animation=${config.working.animation ? `on @${config.working.animationIntervalMs}ms` : "off"} interrupt-hint=esc (default fallback; host remap not exposed)`,
-          `  footer: model source=live ctx (composer surface) context source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd source=ctx.cwd`,
-          `  model: id=${fmt(model?.id)} effort=${fmt(level)} provider=${fmt(model?.provider)} window=${fmt(model?.contextWindow)} (live ctx, rev ${hostData.revision})`,
-          `  context: tokens=${fmt(usage?.tokens)}/${fmt(usage?.contextWindow)} percent=${fmt(usage?.percent)} — scope=live ctx`,
-          `  session Σ: ${hostData.hasSessionManager
-            ? `input=${ledger.totals().input} output=${ledger.totals().output} requests=${ledger.confirmedCount} — scope=this session file`
-            : "unavailable (no sessionManager)"}`,
-          `  cache(last)=${ledger.cacheRateLast() === null ? "—" : `${Math.round(ledger.cacheRateLast()! * 10) / 10}%`} — scope=latest confirmed request; ↑=uncached input per Pi normalization`,
-          `  output speed: ${speedDetail} — confirmed usage.output ÷ observed output window; live only when the provider streams cumulative usage`,
-          `  interaction usage (confirmed): ↑${snap.usage.input} ↓${snap.usage.output} — preview replaces, never sums`,
-          `  outcome: ${verdict ? `${verdict.outcome} (evidence=${verdict.evidence}, attempt=${verdict.attempt}, toolErrors=${verdict.toolErrorsObserved}) — ${verdict.reason}` : `pending (attempts=${outcome.attemptCount}, toolErrors=${outcome.toolErrorsObserved})`}`,
-          `  codex quota: mode=${config.quota.codex} source=codex-app-server available=${quotaState?.quota ? "yes" : quotaState?.lastErrorClass ? "no" : "unknown"} lastSuccess=${quotaAge === undefined ? "never" : `${Math.round(quotaAge / 1000)}s ago`} ${quotaDetail} stale=${quotaState?.stale ? "yes" : "no"} lastError=${quotaState?.lastErrorClass ?? "—"}`,
-          `  chrome: editor=${chrome.editorInstalled ? "applied" : "native"} footer=${chrome.footerInstalled ? "applied" : "native/off"} header=${chrome.headerInstalled ? "applied" : "native"} working=${chrome.widgetInstalled ? "widget" : chrome.fallbackMessage ? "fallback(message)" : "native"}`,
-          `  transcript: ${handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed"}`,
-          `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
-          `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
-          `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
-          `  glyphs: ${glyphStatus()}`, 
-          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},changes=${config.footer.showChanges},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
-          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s + activity` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
-          `  git-changes: ${changesDetail}`,
-          ...selectionCopyLine(),
-          `  history-window: ${JSON.stringify(historyWindow?.status() ?? { installed: false })}`,
-        ];
-        text = lines.join("\n");
-      }
-      // Return values are ignored by the host; surface via the command ctx.
-      commandCtx?.ui?.notify?.(text);
-    },
+  registerDiagnosticsCommand({
+    api: bindings.api,
+    appearanceVersion: bindings.appearanceVersion,
+    piVersion: bindings.piVersion,
+    getConfig: () => config,
+    chrome,
+    hostData,
+    metrics,
+    outcome,
+    ledger,
+    outputSpeed,
+    quotaStore,
+    gitChanges,
+    selectionCopy,
+    fullscreenMargin,
+    historyWindow,
+    glyphPresentation,
+    getHandle: () => handle,
+    getDecorations: () => decorations,
+    refreshQuota: () => maybeRefreshQuota(true),
+    hasSurfaceBinding: bindings.surface !== undefined,
+    quotaTimerRunning: () => quotaTimer !== undefined,
   });
 
   /** Look up a tool entry's sourceInfo (exact builtin ownership checks). */

@@ -33,7 +33,7 @@ interface RawSpan { text: string; token: MochaToken | "plain" }
  * Command position = first word of the line or a word right after
  * `;` `&&` `||` `|` `(` `&`. Words there classify as builtin/executable.
  */
-export function tokenizeBashLine(line: string, _atScriptStart: boolean): BashSpan[] {
+export function tokenizeBashLine(line: string): BashSpan[] {
   const raw: RawSpan[] = [];
   const push = (text: string, token: MochaToken | "plain") => {
     if (!text) return;
@@ -177,9 +177,9 @@ export function tokenizeBashLine(line: string, _atScriptStart: boolean): BashSpa
 
 /** Highlight one line to an ANSI string with the Mocha palette. Plain spans
  * carry the Mocha base foreground so the palette stays consistent. */
-export function highlightBashLine(line: string, atScriptStart: boolean, level: ColorLevel): string {
-  void atScriptStart; // every line start is a command position
-  return tokenizeBashLine(line, true)
+export function highlightBashLine(line: string, level: ColorLevel): string {
+  // Every line start is a command position; there is no script-start state.
+  return tokenizeBashLine(line)
     .map((span) => {
       if (span.token === "plain") {
         return level.kind === "none" ? span.text : `${foregroundAnsi(MOCHA.base, level)}${span.text}\x1b[39m`;
@@ -210,7 +210,7 @@ export function highlightBashScript(lines: readonly string[], level: ColorLevel)
       }
       continue;
     }
-    out.push(highlightBashLine(line, true, level));
+    out.push(highlightBashLine(line, level));
     // Register heredoc start: <<-DELIM, <<DELIM, <<-'DELIM', <<"DELIM".
     // <<< here-strings do not open a heredoc body.
     const hereString = /<<<\s*\S/.test(line);

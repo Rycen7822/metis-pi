@@ -249,7 +249,7 @@ export class TranscriptState {
   }
 
   /** Stable key for a streaming assistant message (object identity first). */
-  messageKeyFor(_message: NonNullable<TranscriptEvent["message"]>, sourceObject?: object): MessageViewKey {
+  messageKeyFor(sourceObject?: object): MessageViewKey {
     if (sourceObject) {
       const known = this.identityByObject.get(sourceObject);
       if (known) return known;
@@ -297,7 +297,7 @@ export class TranscriptState {
       case "message_update": {
         const message = event.message;
         if (!message || message.role !== "assistant") break;
-        const key = this.messageKeyFor(message, sourceObject);
+        const key = this.messageKeyFor(sourceObject);
         if (sourceObject) this.identityByObject.set(sourceObject, key);
         let plan = this.messagePlans.get(key);
         if (!plan) {
@@ -341,7 +341,7 @@ export class TranscriptState {
           break;
         }
         if (message.role === "assistant") {
-          const key = this.messageKeyFor(message, sourceObject);
+          const key = this.messageKeyFor(sourceObject);
           const plan = this.messagePlans.get(key);
           // Seal identity: further updates with the same object map here; the
           // open key becomes an alias of the sealed one (WeakMap is not

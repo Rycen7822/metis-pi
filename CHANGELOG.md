@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.2
+
+第二轮架构精简（行为完全不变，全 gate 复跑通过）：
+
+- **整个删掉的模块**：`src/file-change.ts`（56 行，全部导出零消费者 —— 唯一的外部引用是 renderers.ts 的类型再导出层，一并删除）。
+- **死代码**：surface.ts 的 `surfaceSupported`（零消费者，含内部）；output-speed 的 `SPEED_MIN_TOKENS`/`SPEED_MIN_PLAUSIBLE`（仅内部使用的可调参数，降为模块私有）；bash-lexer 的 `atScriptStart` 占位概念（`tokenizeBashLine`/`highlightBashLine` 两个参数都是 `void` 掉的占位，连内部调用一起清掉）；transcript-state 的 `messageKeyFor` 第一个参数（从未使用）；working.ts 四个 shimmer 常量降私有；turn-summary 渲染器的 `cacheRead/cacheWrite` 死字段（持久化 schema 保留，渲染契约窄化为 `SummaryLineSnapshot`）。
+- **activate() 减负 ~140 行，两处职责归位**：
+  - 六个快照构建器（footer/working/composer 的 show 与 snapshot）提取到 `src/chrome/snapshots.ts`（`createSnapshotSource`）——纯数据装配，activate 只做接线；
+  - `/codex-ui` 诊断命令（glyphStatus/selectionCopyLine/约 30 行状态行）提取到 `src/diagnostics.ts`（`registerDiagnosticsCommand`）——它是所有子系统的纯消费者，独立成模块后 activate 的闭包只剩生命周期与事件编排。
+- 验证：`npm test` 323/323、`check`/`check:core` 干净、host-smoke PASS、真实 TUI pty rc=0（pty 逐行断言 `/codex-ui` 输出，证明提取后字节级一致）、`npm run verify` rc=0。
+
 ## 0.15.1
 
 内部精简（行为完全不变，无用户可见变化）：

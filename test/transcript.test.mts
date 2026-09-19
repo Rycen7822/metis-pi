@@ -570,23 +570,23 @@ test("per-run plans: clock starts once at first text, closes on the text boundar
   state.apply({ type: "message_start", message: { role: "assistant", content: [] } }, messageObj);
   messageObj.content = [{ type: "thinking", thinking: "hmm" }];
   state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
-  let plan = state.thinkingRunPlan(state.messageKeyFor(messageObj, messageObj), 0);
+  let plan = state.thinkingRunPlan(state.messageKeyFor(messageObj), 0);
   assert.ok(plan, "run plan exists while streaming");
   assert.equal(plan!.ended, false);
   assert.equal(plan!.startedAt, 1_000);
   clock += 7_000;
   state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
-  plan = state.thinkingRunPlan(state.messageKeyFor(messageObj, messageObj), 0);
+  plan = state.thinkingRunPlan(state.messageKeyFor(messageObj), 0);
   assert.equal(plan!.startedAt, 1_000, "cumulative updates never reset the start clock");
   messageObj.content = [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Answer." }];
   clock += 2_000;
   state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
-  plan = state.thinkingRunPlan(state.messageKeyFor(messageObj, messageObj), 0);
+  plan = state.thinkingRunPlan(state.messageKeyFor(messageObj), 0);
   assert.equal(plan!.ended, true, "a non-thinking block after the run closes its clock");
   assert.equal(plan!.endedAt, 10_000);
   assert.equal(plan!.thinkingMs, 9_000);
   // textRunPlan is separator-only now (single timing source lives per run).
-  const textPlan = state.textRunPlan(state.messageKeyFor(messageObj, messageObj));
+  const textPlan = state.textRunPlan(state.messageKeyFor(messageObj));
   assert.equal(textPlan?.thinkingMs, undefined);
   assert.equal("thinkingEnded" in (textPlan ?? {}), false);
 });
@@ -606,7 +606,7 @@ test("per-run plans: toolCall splits runs with independent clocks; message_end c
   ];
   clock = 6_000;
   state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
-  const key = state.messageKeyFor(messageObj, messageObj);
+  const key = state.messageKeyFor(messageObj);
   const runs = state.thinkingRunPlans(key);
   assert.equal(runs.length, 2, "toolCall splits the runs");
   assert.equal(runs[0]!.ended, true, "run 0 closed by the toolCall boundary");

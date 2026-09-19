@@ -31,11 +31,11 @@ export interface OutputSpeedSample {
 /** Below this the window says nothing about a rate (one batched delta). */
 export const SPEED_MIN_WINDOW_MS = 300;
 /** A response with no confirmed output tokens has no speed to report. */
-export const SPEED_MIN_TOKENS = 1;
+const SPEED_MIN_TOKENS = 1;
 /** Sanity rails: outside these the sample is a measurement artifact rather
  * than a rate — below the floor a response emits less than one token per 10 s
  * (a stall, not a speed to display), above the ceiling it is a clock bug. */
-export const SPEED_MIN_PLAUSIBLE = 0.1;
+const SPEED_MIN_PLAUSIBLE = 0.1;
 export const SPEED_MAX_PLAUSIBLE = 5000;
 
 export const SPEED_UNIT = "tok/s";

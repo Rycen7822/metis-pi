@@ -82,10 +82,10 @@ export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
 // The head moves CONTINUOUSLY (a fraction of a cell per frame): the wave
 // crosses at a leisurely pace while the 32ms frame rate drives smooth
 // sub-cell intensity flow — high frame rate ≠ fast sweep.
-export const SHIMMER_TRAIL = 5; // comet trail length in cells behind the head
-export const SHIMMER_CELLS_PER_FRAME = 0.25; // sweep speed (4 frames per cell @32ms)
-export const SHIMMER_PAUSE_FRAMES = 16; // rest frames after the wave exits
-export const BULLET_STEP_FRAMES = 2; // bullet brightness holds ~2 frames
+const SHIMMER_TRAIL = 5; // comet trail length in cells behind the head
+const SHIMMER_CELLS_PER_FRAME = 0.25; // sweep speed (4 frames per cell @32ms)
+const SHIMMER_PAUSE_FRAMES = 16; // rest frames after the wave exits
+const BULLET_STEP_FRAMES = 2; // bullet brightness holds ~2 frames
 
 /** Head→trail gradient ramp (truecolor; blue accent, 8 levels). */
 const SHIMMER_RAMP: ReadonlyArray<readonly [number, number, number]> = [

@@ -14,7 +14,6 @@ export type {
 } from "./tool-names.ts";
 export { parseDisplayDiff, renderDiffLines } from "./diff.ts";
 export type { DiffRow, DiffRowKind, DiffStats } from "./diff.ts";
-export type { FileChange, FileChangeKind } from "./file-change.ts";
 
 const PREVIEW_LINES = 5;
 const COMMAND_LINES = 2;

@@ -76,7 +76,7 @@ test("golden: output first row uses '  └ ' and subsequent rows use 4 spaces", 
 });
 
 test("golden: heredoc body renders as string, not as commands", () => {
-  const spans = tokenizeBashLine("python3 - <<'EOF'", true);
+  const spans = tokenizeBashLine("python3 - <<'EOF'");
   const lines = render(GOLDEN_COMMANDS[2], 120, "");
   assert.ok(Array.isArray(spans));
   assert.ok(lines.length >= 3);

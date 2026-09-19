@@ -12,7 +12,7 @@ import { rgbToAnsi256, type ColorLevel, type Rgb } from "./palette.ts";
 import { cellWidth } from "./segments.ts";
 
 /** Dark neutral surface, within the spec's #1f1f1f..#232323 band. */
-export const COMPOSER_BG: Rgb = { r: 31, g: 31, b: 31 }; // #1f1f1f
+const COMPOSER_BG: Rgb = { r: 31, g: 31, b: 31 }; // #1f1f1f
 
 function bgAnsi(rgb: Rgb, level: ColorLevel): string {
   if (level.kind === "truecolor") return `\x1b[48;2;${rgb.r};${rgb.g};${rgb.b}m`;
@@ -99,9 +99,4 @@ export function makeSurfaceOps(
     },
     paintGlyph: (text, tone) => (tone === "accent" ? accent(text) : dim(text)),
   };
-}
-
-/** True when the level can carry the surface at all. */
-export function surfaceSupported(kind: ColorLevel["kind"]): boolean {
-  return kind === "truecolor" || kind === "ansi256";
 }
