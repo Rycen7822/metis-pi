@@ -1,0 +1,11 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type CodexReserveStatus } from "./reserve-policy.ts";
+import { type CodexRateLimitResetConsumeResult, type CodexUsageSnapshot } from "./payload.ts";
+export declare function buildCodexUsageUrl(): string;
+export declare function buildCodexRateLimitResetCreditsUrl(): string;
+export declare function buildCodexRateLimitResetConsumeUrl(): string;
+export declare function fetchCodexUsage(ctx: ExtensionContext): Promise<CodexUsageSnapshot>;
+export declare function fetchCodexReserveStatus(ctx: ExtensionContext): Promise<CodexReserveStatus | undefined>;
+export declare function fetchCodexWeeklyUsageLeft(ctx: ExtensionContext): Promise<number | undefined>;
+export declare function createCodexRateLimitResetRedeemRequestId(): string;
+export declare function consumeCodexRateLimitResetCredit(ctx: ExtensionContext, redeemRequestId?: string): Promise<CodexRateLimitResetConsumeResult>;

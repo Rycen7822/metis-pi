@@ -1,0 +1,44 @@
+diff --git a/src/tools/code-mode/notebook-tool.ts b/src/tools/code-mode/notebook-tool.ts
+index 19a57e1..1e17b2d 100644
+--- a/src/tools/code-mode/notebook-tool.ts
++++ b/src/tools/code-mode/notebook-tool.ts
+@@ -12,27 +12,18 @@ import type {
+ 	ToolExecutionContext,
+ } from "./types.ts";
+ 
+-export const NOTEBOOK_PARAMETERS = Type.Union([
+-	Type.Object({
+-		action: StringEnum(["status", "list"]),
+-		query: Type.Optional(Type.String()),
+-	}, { additionalProperties: false }),
+-	Type.Object({
+-		action: StringEnum(["checkpoint", "restart", "diagnostics", "reset"]),
+-	}, { additionalProperties: false }),
+-	Type.Object({
+-		action: StringEnum(["save", "load"]),
+-		name: Type.String(),
+-	}, { additionalProperties: false }),
+-	Type.Object({
+-		action: StringEnum(["pin", "unpin", "release"]),
+-		names: Type.Array(Type.String(), { minItems: 1 }),
+-	}, { additionalProperties: false }),
+-	Type.Object({
+-		action: Type.Literal("prune"),
+-		query: Type.String(),
+-	}, { additionalProperties: false }),
+-]);
++// Local patch (see ../../PATCHES.md): strict providers (DeepSeek and friends) reject a
++// function whose parameters schema has no top-level `type: "object"`, and a top-level
++// Type.Union serializes without one — the whole request then fails with
++// `400 Invalid schema for function 'notebook': schema must be a JSON Schema of 'type: "object"', got 'type: null'`.
++// One object schema carrying every variant's fields keeps each previously valid input valid
++// (execution normalizes parameters and never validates against this schema).
++export const NOTEBOOK_PARAMETERS = Type.Object({
++	action: StringEnum(["status", "list", "checkpoint", "restart", "diagnostics", "reset", "save", "load", "pin", "unpin", "release", "prune"]),
++	query: Type.Optional(Type.String()),
++	name: Type.Optional(Type.String()),
++	names: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
++}, { additionalProperties: false });
+ 
+ const NOTEBOOK_DESCRIPTION = "Control persistent notebook state: status inspects memory/bindings by query glob; checkpoint; pin/unpin/release names; prune unpinned matches; list/save/load profiles; restart; diagnostics; reset";
+ 

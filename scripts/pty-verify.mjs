@@ -204,6 +204,19 @@ fs.writeFileSync(path.join(AGENT_DIR, "settings.json"), JSON.stringify({
   tuiMode: "fullscreen",
   packages: [],
 }));
+// The vendored codex-conversion defaults its background-shell shortcut to alt+q, which is
+// also a pi built-in (app.message.dequeue); pi then prints an "Extension issues" banner that
+// shifts every row and breaks the coordinate-based mouse stages below. Real installs set this
+// in pi-codex-conversion.json (the dev machine uses alt+u), so seed the isolated HOME the
+// same way instead of diverging from the upstream default.
+fs.writeFileSync(path.join(AGENT_DIR, "pi-codex-conversion.json"), JSON.stringify({
+  ui: { backgroundShellPrevShortcut: "alt+u" },
+}));
+// The vendored codex-conversion renders its CHANGELOG "what's new" block into the transcript
+// on first sight of a version (state file: howaboua-pi-stuff-changelog.json in the agent dir).
+// That block shifts the whole layout and leaves the transcript scrolled past the reasoning
+// window, which breaks the coordinate-based stages below; the harness is not testing that notice.
+fs.writeFileSync(path.join(AGENT_DIR, "howaboua-pi-stuff-changelog.json"), JSON.stringify({ suppress: true }));
 // Install THIS repo (the code under test), not the published one.
 execFileSync(PI_BIN, ["install", path.resolve(new URL("..", import.meta.url).pathname)], {
   env: ISOLATED_ENV,
@@ -277,6 +290,11 @@ try {
   // Stage 1: idle footer with REAL model/effort/provider/capacity visible.
   // Wait for the composer METADATA row (ctx segment lives there in 0.8.5).
   frames.idle = await waitFor(/ctx [0-9—]/, 30_000, "idle composer metadata");
+  // The vendored codex-conversion entry is part of this package's manifest, so a broken
+  // vendored build, a missing asset or a shortcut collision with a pi built-in shows up
+  // here as an "[Extension issues]" block in the transcript.
+  assert.ok(!frames.idle.includes("[Extension issues]"), "extensions load without issues (see the frame above)");
+  assert.ok(!/Could not read the @howaboua\/pi-codex-conversion changelog/.test(frames.idle), "vendored CHANGELOG.md is present");
   // 0.8.5 split: metadata (surface) owns model/effort/provider/context;
   // the footer owns cwd/branch/session — no duplication.
   assert.match(frames.idle, /pcx-mock-model · high · pcx-mock/, "metadata: model/effort/provider");
@@ -575,6 +593,17 @@ try {
   const glyphDiag = flat.match(/glyphs:applied\(terminalprototypewrite\)marks=5\[[^\]]*\]frames=(\d+)changed=(\d+)/);
   assert.ok(glyphDiag, "glyph-presentation diagnostics report applied on the real TUI");
   assert.ok(Number(glyphDiag[1]) > 0 && Number(glyphDiag[2]) > 0, `glyph frames=${glyphDiag[1]} changed=${glyphDiag[2]}`);
+  // Extension registrations in a LIVE session. `/hotkeys` renders an Extensions table from
+  // the host's shortcut registry, so this is positive proof that both our own todo entry and
+  // the vendored codex-conversion entry reached a real pi session (a broken vendored build or
+  // a load failure would leave the rows missing). Runs last: the block is large, so every
+  // coordinate-sensitive stage above is already done.
+  type("/hotkeys");
+  sendKeys(["Enter"]);
+  const hotkeys = await waitFor(/Previous Codex background shell/, 20_000, "extensions in /hotkeys");
+  assert.match(hotkeys, /Fold or open Codex background shell widget/, "vendored codex-conversion shortcuts registered");
+  assert.match(hotkeys, /Collapse\/expand the codex-todo widget/, "codex-todo shortcut registered in the same session");
+
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log(hasGit ? "  git changes:  session Δ +8 -2 absolute, commit clears, post-commit edits re-count" : "  git changes:  not asserted (git unavailable)");
@@ -586,6 +615,7 @@ try {
   console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
+  console.log("  extensions:   /hotkeys lists the vendored codex-conversion + codex-todo shortcuts (live registrations)");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

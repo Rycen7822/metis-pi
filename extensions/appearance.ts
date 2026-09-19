@@ -50,7 +50,7 @@ function createDiffComponent(input: DiffComponentInput): Tui.Component {
 interface ShellCallInput {
   name: ToolName; bullet: string; title: string; args: Record<string, unknown>;
   options: { expanded?: boolean; isPartial?: boolean };
-  colorLevel: import("./src/palette.ts").ColorLevel;
+  colorLevel: import("../src/palette.ts").ColorLevel;
 }
 function createShellCallComponent(input: ShellCallInput): Tui.Component {
   return cachedRowsComponent("shell-call", (width, copyOut) => renderShellCall({
@@ -82,7 +82,7 @@ interface ShellResultInput {
   options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
   bullet: string;
   expandHint: string;
-  colorLevel: import("./src/palette.ts").ColorLevel;
+  colorLevel: import("../src/palette.ts").ColorLevel;
 }
 
 function createShellResultComponent(input: ShellResultInput): Tui.Component {
@@ -130,18 +130,18 @@ class CodexSeparatorComponent implements Tui.Component {
  * `update()` refreshes inputs in place so the host's lastComponent reuse
  * path keeps one stable instance per call. */
 class CodexWriteCallComponent implements Tui.Component {
-  #input: WritePreviewInput & { headerText: string; layout: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number };
+  #input: WritePreviewInput & { headerText: string; layout: import("../src/tool-names.ts").DiffLayoutOps; maxRows?: number };
   #revision = 0;
   #lastWidth = -1;
   #lastRevision = -1;
   #lastExpanded = false;
   #cache: string[] | undefined;
 
-  constructor(input: WritePreviewInput & { headerText: string; layout: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }) {
+  constructor(input: WritePreviewInput & { headerText: string; layout: import("../src/tool-names.ts").DiffLayoutOps; maxRows?: number }) {
     this.#input = input;
   }
 
-  update(next: WritePreviewInput & { headerText?: string; layout?: import("./src/tool-names.ts").DiffLayoutOps; maxRows?: number }): void {
+  update(next: WritePreviewInput & { headerText?: string; layout?: import("../src/tool-names.ts").DiffLayoutOps; maxRows?: number }): void {
     // The renderers' reuse path builds a PARTIAL input (no layout/maxRows -
     // those are component-owned). Merge instead of replacing: a full replace
     // dropped `layout` and crashed render on the next frame.

@@ -1,0 +1,12 @@
+export declare function trimAtConnector(tokens: string[]): string[];
+export declare function skipFlagValues(args: string[], flagsWithValues: string[]): string[];
+export declare function firstNonFlagOperand(args: string[], flagsWithValues: string[]): string | undefined;
+export declare function singleNonFlagOperand(args: string[], flagsWithValues: string[]): string | undefined;
+export declare function awkDataFileOperand(args: string[]): string | undefined;
+export declare function pythonWalksFiles(args: string[]): boolean;
+export declare function isPythonCommand(command: string): boolean;
+export declare function cdTarget(args: string[]): string | undefined;
+export declare function parseFdQueryAndPath(args: string[]): [string | undefined, string | undefined];
+export declare function parseFindQueryAndPath(args: string[]): [string | undefined, string | undefined];
+export declare function readPathFromHeadTail(args: string[], tool: "head" | "tail"): string | undefined;
+export declare function sedReadPath(args: string[]): string | undefined;

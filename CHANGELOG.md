@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.17.0
+
+**`@howaboua/pi-codex-conversion` 纳入本仓库**（vendor 源码 + 仓库内构建），从此由 pi-codexy 维护：
+
+- 布局：`vendor/pi-codex-conversion/`（上游 321 个 `.ts` + 运行时资源 + 提交的 `dist/`）；
+  manifest 新增入口 `./vendor/pi-codex-conversion/dist/index.js`；8 个运行时依赖进入 package.json
+  （pi 为 git 安装的包跑 `npm install`，已验证）。载荷≈11.7MB，仅 linux-x64 原生工具、不含语音二进制。
+- 维护工具：`scripts/vendor-codex-conversion.mjs`（build/check/patch/sync）+ `vendor:build`/
+  `vendor:check`/`vendor:patch`/`vendor:sync`/`vendor:smoke`/`vendor:fresh`；出处与升级流程见
+  `vendor/pi-codex-conversion/UPSTREAM.md`，补丁记账见同目录 `PATCHES.md`。
+- patch #1（源码级）：`notebook` 工具参数 schema 顶层必须是 object（原为顶层 `Type.Union`，
+  DeepSeek 等严格 provider 会 400 拒绝整个请求，subagent 因此 100% 起不来）。构建产物与该修复的
+  npm 线上补丁逐字节一致（仅注释差）。
+- 补齐 `CHANGELOG.md`（运行时/宿主会读 `<packageRoot>/CHANGELOG.md`，缺失会打印警告）。
+
+顺带修掉两个被新门禁暴露的既有缺陷：
+
+- **`npm run check` 其实没检查 `extensions/**`**：0.16.0 迁移后 include 仍写着已删除的
+  `index.ts`/`goal.ts`。修正 include 后立刻抓到 5 处失效的 inline type import
+  （`import("./src/…")` 未随迁移改为 `../src/…`，类型安全已静默失效）与 todo 工具结果缺
+  `details` 字段（宿主 `AgentToolResult` 必填）。
+- `scripts/package.test.mjs` 现在断言 manifest 的 4 个入口、vendored 产物（dist 入口、wasm、
+  linux-x64 工具、patch 文件）与"root 依赖集合 = marked + vendored 依赖集合"。
+
+门禁：`npm run verify` 全绿（368 测试、check/check:core 0 error、vendor:check 0 error、
+vendor:smoke、host-smoke、`npm pack --dry-run` 含 vendor）；pty 新增两条：启动帧不得出现
+`[Extension issues]`/缺失 CHANGELOG 警告，`/hotkeys` 必须在真实会话里列出 vendored
+codex-conversion 与 codex-todo 的快捷键（正向证明两家扩展都真的注册了）。
+
 ## 0.16.0
 
 架构 + 新子插件（docs/0.16.0-todo-plugin-plan.md 为权威计划）：

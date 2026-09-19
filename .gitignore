@@ -10,3 +10,6 @@ references/
 
 # Session-local agent state (todo tool task lists etc.).
 .pi/
+
+# npm lockfile is machine-local (pi installs the git package with npm install).
+package-lock.json

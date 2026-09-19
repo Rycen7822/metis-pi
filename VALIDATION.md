@@ -1,3 +1,57 @@
+# Validation record — 0.17.0 (vendored codex-conversion)
+
+`@howaboua/pi-codex-conversion` 3.0.34 is now part of this repository instead of an installed npm
+package: patchable sources under `vendor/pi-codex-conversion/src`, a committed build at
+`vendor/pi-codex-conversion/dist` that pi loads directly, and vendor tooling
+(`scripts/vendor-codex-conversion.mjs`: build / check / patch / sync). Provenance, payload scope and
+the upgrade procedure: `vendor/pi-codex-conversion/UPSTREAM.md`; the patch list: `PATCHES.md`.
+
+## Facts established before the design was fixed (measured, not assumed)
+
+- Build reproducibility: `tsc -p tsconfig.build.json` with TypeScript 5.9.3 produces 642 files; against
+  the published npm `dist` the only differences are 11 `.d.ts` files whose union members are ordered
+  differently (declaration-emit cosmetics) and the `.js` file we patch.
+- Source-only loading is impossible: `src/**` contains 110 `from "./x.js"` specifiers (NodeNext style)
+  that Node's type stripping does not rewrite — hence a build step, and `dist` is committed so pi needs
+  no build at install time.
+- pi installs npm dependencies for git-sourced extension packages (`installGit` → npm install, plus
+  auto-repair), so the vendored runtime's 8 dependencies are declared in the root `package.json`.
+- Runtime assets resolve relative to the package root (four levels up from
+  `dist/tools/native/binary.js`), so `dist/`, `vendor/`, `code-mode/`, `src/tools/<tool>/bin/<platform>-<arch>/`,
+  `CHANGELOG.md` and `package.json` must keep their positions.
+- Nothing else imports this package's subpath exports — replacing the npm install is self-contained.
+
+## Verified (Node 24.15.0, Pi 0.85.1)
+
+- `npm run vendor:build` → `dist/` regenerated; the emitted `notebook-tool.js` is byte-identical to the
+  npm patch that unblocked subagents (comments aside); the built module's schema serializes to
+  `{"type":"object","required":["action"],...}` with no `anyOf` (checked against the real `typebox`).
+- `npm run vendor:patch` → exactly one patched file; round-trip verified in both directions: reverting
+  the patch reproduces upstream byte-for-byte, re-applying it reproduces the vendored tree byte-for-byte.
+- `npm run vendor:check` → 0 type errors on the vendored sources.
+- `npm run vendor:smoke` → the vendored entry activates against a recording fake pi: 12 tools, 2 commands,
+  8 shortcuts, 27 event subscriptions, and **every** tool's parameters serialize to a JSON Schema object
+  (no second top-level union besides the one we fixed).
+- Manifest integration: `pi install <repo>` into an isolated `$HOME` followed by pi's own package
+  resolver lists four entries ON — `extensions/*.ts` ×3 plus
+  `vendor/pi-codex-conversion/dist/index.js`.
+- `npm test` 368/368; `npm run check` and `check:core` 0 errors; `npm run test:host` PASS;
+  `npm pack --dry-run` ships `vendor/` (13.2 MB unpacked, 4.5 MB tarball).
+- `npm run test:pty` rc=0 with two new assertions: the startup frame must not contain
+  `[Extension issues]` or the missing-CHANGELOG warning (both of which the vendored copy produced before
+  this change was finished), and `/hotkeys` must list the vendored codex-conversion shortcuts and the
+  codex-todo shortcut — positive proof that both extensions' registrations reach a live session.
+
+## Defects the new gates surfaced (fixed here)
+
+- `npm run check` never typechecked `extensions/**`: the include list still named the pre-0.16.0
+  `index.ts`/`goal.ts`. Fixing it immediately caught five stale inline type imports
+  (`import("./src/…")` left behind by the 0.16.0 move; type safety had silently degraded) and the todo
+  tool's result missing the host-required `details` field.
+- The pty harness needed the plugin's shortcut override (`alt+u`, as the dev machine configures) and the
+  changelog `suppress` flag: with upstream defaults the plugin collides with pi's `alt+q` built-in and
+  renders its what's-new block, both of which shift rows and break coordinate-based stages.
+
 # Validation record — 0.16.0 (agent-stuff layout + codex-todo sub-plugin)
 
 Two deliverables, one structural: the package manifest now exports `./extensions/*.ts`

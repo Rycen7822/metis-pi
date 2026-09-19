@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/pi-codex-appearance",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",
@@ -8,15 +8,48 @@
     "type": "git",
     "url": "git+https://github.com/Rycen7822/pi-codex-appearance.git"
   },
-  "keywords": [
-    "pi-package",
-    "pi-extension",
-    "pi-theme",
-    "codex",
-    "appearance"
-  ],
-  "engines": {
-    "node": ">=22.19.0"
+  "pi": {
+    "extensions": [
+      "./extensions/*.ts",
+      "./vendor/pi-codex-conversion/dist/index.js"
+    ],
+    "themes": [
+      "./themes/codex-appearance.json"
+    ]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs test/*.test.mts",
+    "test:host": "node --experimental-strip-types scripts/host-smoke.mjs",
+    "test:chrome": "node --experimental-strip-types --test test/chrome.test.mjs",
+    "check": "tsc -p tsconfig.json",
+    "check:core": "tsc -p tsconfig.core.json",
+    "verify": "npm test && npm run check && npm run vendor:check && npm run vendor:smoke && npm run test:host && npm pack --dry-run --ignore-scripts",
+    "preview": "node --experimental-strip-types scripts/preview.mjs",
+    "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs",
+    "vendor:build": "node scripts/vendor-codex-conversion.mjs build",
+    "vendor:check": "node scripts/vendor-codex-conversion.mjs check",
+    "vendor:patch": "node scripts/vendor-codex-conversion.mjs patch",
+    "vendor:sync": "node scripts/vendor-codex-conversion.mjs sync",
+    "vendor:smoke": "node --experimental-strip-types scripts/vendor-smoke.mjs",
+    "vendor:fresh": "node scripts/vendor-codex-conversion.mjs build && git diff --exit-code --stat -- vendor/pi-codex-conversion/dist vendor/pi-codex-conversion/changelog.js"
+  },
+  "dependencies": {
+    "marked": "18.0.5",
+    "openai": "^7.10.0",
+    "partial-json": "^0.1.7",
+    "proxy-from-env": "^2.1.0",
+    "selfsigned": "^5.5.0",
+    "smol-toml": "^1.8.0",
+    "undici": "^8.10.2",
+    "web-tree-sitter": "^0.27.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/node": "^22.20.2",
+    "@types/ws": "^8.18.1",
+    "typescript": "5.9.3"
   },
   "files": [
     "extensions",
@@ -28,18 +61,19 @@
     "LICENSE",
     "LICENSE-APACHE-2.0",
     "NOTICE",
-    "docs"
+    "docs",
+    "vendor"
   ],
-  "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.mjs test/*.test.mts",
-    "test:host": "node --experimental-strip-types scripts/host-smoke.mjs",
-    "test:chrome": "node --experimental-strip-types --test test/chrome.test.mjs",
-    "check": "tsc -p tsconfig.json",
-    "check:core": "tsc -p tsconfig.core.json",
-    "verify": "npm test && npm run check && npm run test:host && npm pack --dry-run --ignore-scripts",
-    "preview": "node --experimental-strip-types scripts/preview.mjs",
-    "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs"
+  "engines": {
+    "node": ">=22.19.0"
   },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-theme",
+    "codex",
+    "appearance"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
@@ -51,22 +85,5 @@
     "@earendil-works/pi-tui": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "@earendil-works/pi-tui": "0.85.1",
-    "@types/node": "^22.20.2",
-    "typescript": "5.9.3"
-  },
-  "pi": {
-    "extensions": [
-      "./extensions/*.ts"
-    ],
-    "themes": [
-      "./themes/codex-appearance.json"
-    ]
-  },
-  "dependencies": {
-    "marked": "18.0.5"
   }
 }

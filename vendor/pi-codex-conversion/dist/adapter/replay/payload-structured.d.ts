@@ -1,0 +1,11 @@
+import type { ResponsesInputContentItem, ResponsesInputItem, ResponsesInputMessageItem } from "../compaction/serializer.js";
+export declare function isRecord(value: unknown): value is Record<string, unknown>;
+export declare function isResponsesInputContentItem(value: unknown): value is ResponsesInputContentItem;
+export declare function isResponsesInputMessageRole(value: unknown): value is ResponsesInputMessageItem["role"];
+export declare function isPreambleRole(value: ResponsesInputMessageItem["role"]): value is "developer" | "system";
+export declare function isResponsesInputMessageItem(value: unknown): value is ResponsesInputMessageItem;
+export declare function cloneResponsesInputMessageItem(item: ResponsesInputMessageItem): ResponsesInputMessageItem;
+export declare function cloneStructuredValue(value: unknown): unknown;
+export declare function cloneOpaqueCompactedWindow(compactedWindow: readonly unknown[]): unknown[] | undefined;
+export declare function cloneResponsesInputSlice(items: readonly unknown[]): ResponsesInputItem[] | undefined;
+export declare function areEquivalentValues(left: unknown, right: unknown): boolean;

@@ -1,0 +1,10 @@
+- Pi keeps the full JSONL. Hybrid is a compaction toggle on Local, Tree and Remote, not a storage backend; preserve the checkpoint and exact tail instead of slicing at the marker.
+- Window lifecycle stays in `window-manager.ts`; `window-budget.ts` owns reminder deduplication and token budgets, `window-request.ts` owns wire metadata, and `messages.ts` owns persisted message serialization and delivery.
+- Local, Tree and Remote are one context-management contract with 1:1 model-visible behavior. Keep guidance, bootstrap hints, tools, rollover triggers and continuation semantics in parity; only persistence, retrieval, archival and transport may differ. Test shared boundaries across every active mode.
+- Notes-only rollover never invents a summary. Tree filters only owned archive summaries; Hybrid projects the referenced original compaction through `tree-checkpoint.ts`, never copies checkpoints into active storage. Remote storage never falls back.
+- Hybrid uses V2 where supported and Pi compaction elsewhere. Token thresholds request notes after completed tools; only explicit rollover, manual compaction or overflow compacts. Never restrict tools or validate notes to enforce the handoff.
+- Context UUIDs appear in window prompts and turn metadata. Request window IDs use Pi session ID plus zero-based window generation, matching Codex headers.
+- In Code/Notebook, `new_context`, history and notes remain direct; only `get_context_remaining` joins the nested execution surface.
+- Other Responses transports may use native `history.*` and `notes.*` namespaces. Codex transport keeps flat routers for Local and Tree; Remote uses exact native namespaces with encrypted sensitive arguments.
+- Local note writes are model-invisible custom entries. Tree snapshots them across branch cuts. Remote failures remain failures.
+- Encrypted history/notes output must remain a top-level Responses tool result; never unwrap it inside Code or Notebook execution.

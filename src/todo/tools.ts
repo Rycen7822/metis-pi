@@ -77,9 +77,12 @@ export interface TodoToolCall {
 
 export interface TodoToolResult {
   content: { type: "text"; text: string }[];
+  /** Structured payload for logs or UI rendering. This tool returns none — the host's
+   * AgentToolResult requires the field, so it is explicitly undefined. */
+  details: undefined;
 }
 
-const text = (s: string): TodoToolResult => ({ content: [{ type: "text", text: s }] });
+const text = (s: string): TodoToolResult => ({ content: [{ type: "text", text: s }], details: undefined });
 
 const statusGlyph = (t: Task, blocked: boolean): string =>
   blocked ? "⚠︎" : t.status === "complete" ? "✓" : t.status === "skipped" ? "✗" : t.status === "in_progress" ? "◐" : "○";

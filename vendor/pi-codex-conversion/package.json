@@ -1,0 +1,28 @@
+{
+  "name": "@howaboua/pi-codex-conversion",
+  "version": "3.0.34",
+  "private": true,
+  "description": "Vendored runtime of @howaboua/pi-codex-conversion, rebuilt and maintained inside pi-codexy (see UPSTREAM.md / PATCHES.md).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "openai": "^7.10.0",
+    "partial-json": "^0.1.7",
+    "proxy-from-env": "^2.1.0",
+    "selfsigned": "^5.5.0",
+    "smol-toml": "^1.8.0",
+    "undici": "^8.10.2",
+    "web-tree-sitter": "^0.27.0",
+    "ws": "^8.21.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.84.3",
+    "@earendil-works/pi-coding-agent": ">=0.84.4",
+    "@earendil-works/pi-tui": ">=0.84.3",
+    "typebox": "*"
+  }
+}

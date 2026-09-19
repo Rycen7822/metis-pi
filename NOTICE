@@ -38,3 +38,18 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
 - Modified goal.ts: added a one-second footer status refresh while a goal is active
   (syncStatusTimer), so elapsed time ticks during a long single agent run, where
   upstream fires no goal event in between. The change is marked in the file header.
+
+The codex-conversion runtime (vendor/pi-codex-conversion) is vendored third-party code:
+Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-conversion)
+  npm: @howaboua/pi-codex-conversion 3.0.34 (MIT, full text in
+  vendor/pi-codex-conversion/LICENSE). Pristine upstream sources are kept outside the
+  repository; provenance and the upgrade procedure are in
+  vendor/pi-codex-conversion/UPSTREAM.md.
+Upstream copyright: the IgorWarzocha/howaboua-pi-stuff authors.
+
+Modifications: Copyright (c) 2026 Rycen7822. MIT License.
+- The notebook tool's parameter schema is a top-level object instead of a top-level
+  Type.Union, which strict providers (DeepSeek) reject outright. See
+  vendor/pi-codex-conversion/PATCHES.md.
+- Vendored for linux-x64 only: the per-platform voice helper binaries and the
+  darwin/win32/linux-arm64 native tools are not redistributed here.

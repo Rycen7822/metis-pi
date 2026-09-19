@@ -1,0 +1,105 @@
+import { registerCodeModeProxyProvider } from "../providers/code-mode-proxy-provider.js";
+import { registerOpenAICodexCustomProvider } from "../providers/openai-codex-custom-provider.js";
+import { registerApplyPatchDisplayBroker } from "../tools/apply-patch/display-broker.js";
+import { registerCodexCommand } from "../ui/settings/command.js";
+import { registerCodexCodeMode } from "../adapter/code-mode.js";
+import { prepareCodeModeHost, registerCodexEvents } from "./events.js";
+import { createCodexExtensionRuntime } from "./runtime.js";
+import { registerCodexTools } from "./tools.js";
+import { registerCodexUi } from "./ui.js";
+import { registerCodexVoiceRenderer } from "../voice/ui.js";
+import { resolveCodexRuntimePlanForState } from "../adapter/activation/runtime-plan.js";
+import { captureActiveProviderSystemPrompt } from "../adapter/provider-request.js";
+import { hasCodexCacheKeepalivePlanChanged } from "../adapter/activation/cache-keepalive.js";
+export async function registerCodexConversion(pi) {
+    registerCodexVoiceRenderer(pi);
+    registerApplyPatchDisplayBroker(pi);
+    const runtime = createCodexExtensionRuntime(pi);
+    runtime.state.contextTree.register(pi);
+    const codeMode = await registerCodexCodeMode(pi, runtime);
+    let cleanupProxyProvider;
+    try {
+        registerOpenAICodexCustomProvider(pi, {
+            getConfig: () => ({ executionMode: runtime.state.executionMode, openai: runtime.state.config.openai, compaction: runtime.state.config.compaction }),
+            useResponsesLite: (model) => resolveCodexRuntimePlanForState({ model }, runtime.state).transport === "responses-lite",
+            turnState: runtime.state.codexTurnState,
+            getDiagnostics: () => runtime.diagnosticsSink(),
+            onPreparedPayload: (payload) => {
+                if (!runtime.state.pendingActiveProviderPromptCapture)
+                    return;
+                captureActiveProviderSystemPrompt(payload, runtime.state);
+                runtime.state.pendingActiveProviderPromptCapture = false;
+            },
+        });
+        const proxyProvider = registerCodeModeProxyProvider(pi, () => runtime.state.config, () => runtime.state.executionMode, () => runtime.state.availableToolNames);
+        cleanupProxyProvider = proxyProvider;
+        const tools = registerCodexTools(pi, runtime);
+        const ui = registerCodexUi(pi, runtime);
+        registerCodexCommand(pi, runtime.state, runtime.voice, runtime.lanVoice, (config, ctx, previousConfig) => {
+            const executionModeChanged = config.executionMode !== previousConfig.executionMode;
+            const contextManagementChanged = config.compaction.contextManagement !==
+                previousConfig.compaction.contextManagement;
+            if (contextManagementChanged)
+                runtime.state.contextWindows.clearTurnNotes();
+            tools.applyConfig(config);
+            runtime.state.availableToolNames = pi.getAllTools().map((tool) => tool.name);
+            if (previousConfig.compaction.contextManagement === "off" &&
+                config.compaction.contextManagement !== "off" &&
+                resolveCodexRuntimePlanForState(ctx, runtime.state).contextManagement) {
+                runtime.state.contextWindows.restore(ctx.sessionManager.getBranch());
+                void runtime.state.contextWindows.startNewWindow(pi, ctx, {
+                    mode: config.compaction.contextManagement,
+                    trimPreviousWindow: !config.compaction.hybridCompaction && config.compaction.contextManagement !== "tree",
+                }).catch((error) => {
+                    ctx.ui.notify(`Could not start context window: ${error instanceof Error ? error.message : String(error)}`, "warning");
+                });
+            }
+            proxyProvider.applyConfig(config, ctx.modelRegistry);
+            ui.applyConfig(config, ctx, previousConfig);
+            if (config.openai.cacheDiagnostics !== previousConfig.openai.cacheDiagnostics) {
+                void runtime.configureDiagnostics(ctx, previousConfig.openai.cacheDiagnostics !== "status-and-log"
+                    && config.openai.cacheDiagnostics === "status-and-log");
+            }
+            if (hasCodexCacheKeepalivePlanChanged(ctx.model?.id, previousConfig.openai, config.openai)) {
+                runtime.cancelCacheKeepalive();
+            }
+            if (config.voiceFeaturesOnly !== previousConfig.voiceFeaturesOnly
+                || executionModeChanged
+                || config.prompt.heavySystemPromptOverwrite !== previousConfig.prompt.heavySystemPromptOverwrite
+                || config.openai.fast !== previousConfig.openai.fast
+                || config.openai.harnessIdentifierHeader !== previousConfig.openai.harnessIdentifierHeader
+                || contextManagementChanged
+                || config.compaction.hybridCompaction !== previousConfig.compaction.hybridCompaction
+                || config.compaction.responsesCompaction !== previousConfig.compaction.responsesCompaction) {
+                runtime.resetTransport(ctx.sessionManager.getSessionId());
+            }
+            if (config.voiceFeaturesOnly && !previousConfig.voiceFeaturesOnly) {
+                void codeMode.shutdownHost().catch((error) => {
+                    ctx.ui.notify(`Could not stop Code Mode host: ${error instanceof Error ? error.message : String(error)}`, "warning");
+                });
+            }
+            else if (executionModeChanged) {
+                void codeMode.shutdownHost()
+                    .then(() => prepareCodeModeHost(codeMode, ctx))
+                    .catch((error) => {
+                    ctx.ui.notify(`Could not switch execution mode: ${error instanceof Error ? error.message : String(error)}`, "warning");
+                });
+            }
+        });
+        registerCodexEvents(pi, runtime, tools, ui, codeMode, proxyProvider);
+    }
+    catch (registrationError) {
+        try {
+            try {
+                cleanupProxyProvider?.shutdown();
+            }
+            finally {
+                await codeMode.shutdown();
+            }
+        }
+        catch (shutdownError) {
+            throw new AggregateError([registrationError, shutdownError], "Codex conversion registration and Code Mode cleanup failed");
+        }
+        throw registrationError;
+    }
+}

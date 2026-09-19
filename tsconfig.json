@@ -1,8 +1,7 @@
 {
   "extends": "./tsconfig.core.json",
   "include": [
-    "index.ts",
-    "goal.ts",
+    "extensions/**/*.ts",
     "src/**/*.ts"
   ]
 }

@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.16.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口，共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.17.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -132,6 +132,26 @@ pi install /绝对路径/pi-codex-appearance
 `"-extensions/todos.ts"`（`-` 前缀 = 强制排除）。当前的 settings.json 已按此配置。
 存储目录刻意不同名 `.pi/codex-todos`，双装过渡期互不踩数据；如需迁移旧列表，把 `.pi/todos/*.md`
 的内容转成任务用 `todo` 工具 `add` 即可。
+
+## vendored codex-conversion（0.17.0）
+
+`@howaboua/pi-codex-conversion`（Codex 风格的工具层：`exec_command`/`write_stdin`/`apply_patch`/
+`view_image`/`notebook` + code/notebook 运行时）**已整包纳入本仓库**，不再依赖 npm 安装：
+
+- `vendor/pi-codex-conversion/`：上游源码（321 个 `.ts`，**patch 打在这里**）+ 构建产物 `dist/`（提交进
+  git，pi 直接加载，安装期零构建）+ 运行时资源（`vendor/tree-sitter-bash.wasm`、`js-tiktoken`、
+  `code-mode/`、仅 linux-x64 的原生工具）+ `CHANGELOG.md`/`changelog.js`。
+- **升级上游是显式动作**：`npm run vendor:sync`（拷新源码 → 重放 `patches/local.patch` → 重建 dist）。
+- **patch 独立记账**：`vendor/pi-codex-conversion/PATCHES.md` 记每条改动的现象/根因/验证；
+  `patches/local.patch` 是相对上游的合并 diff，`npm run vendor:patch` 重新生成。
+- 出处、载荷裁剪（剔除各平台语音二进制与其它平台原生工具，因此**语音功能不可用**）与
+  精确版本/commit 记在 `UPSTREAM.md`。
+- 门禁：`npm run vendor:check`（类型检查上游源码）、`npm run vendor:smoke`（用假 pi 激活 vendored
+  入口，断言 12 个工具注册且每个工具的 parameters 都是顶层 object）、`npm run vendor:fresh`
+  （重建后 dist 必须无 diff，防"改了源码忘记重建"）。
+
+**部署注意**：本包自带 codex-conversion 后，**必须卸载/禁用 npm 上的同名包**，否则两套工具同名注册
+（工具名冲突是静默后写覆盖，命令会退化成 `xxx:2`）。卸载：`pi remove @howaboua/pi-codex-conversion`。
 
 ## 与现有插件的边界
 

@@ -24,23 +24,36 @@ test("user messages regain the Codex gray surface through the native theme slot"
   assert.notEqual(theme.vars.userMessageSurface.toLowerCase(), "#000000");
 });
 
-test("package defaults to the compact transcript entry, with no added runtime dependencies", () => {
+test("package exposes the display, goal, todo and vendored codex-conversion entries", () => {
   const pkg = load("package.json");
-  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
+  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./vendor/pi-codex-conversion/dist/index.js"]);
   assert.equal(existsSync(new URL("../extensions/appearance.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions/goal.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions/todo.ts", import.meta.url)), true);
+  // The vendored codex-conversion entry is loaded from its build output, which is
+  // committed (see vendor/pi-codex-conversion/UPSTREAM.md); the built entry, its
+  // runtime assets and the pristine-source patch record must all ship.
+  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url)), true);
+  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/vendor/tree-sitter-bash/tree-sitter-bash.wasm", import.meta.url)), true);
+  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/src/tools/exec/bin/linux-x64", import.meta.url)), true);
+  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/patches/local.patch", import.meta.url)), true);
   // goal.ts is vendored from an Apache-2.0 upstream, so its licence text and
   // attribution must ship with the package.
   assert.equal(existsSync(new URL("../LICENSE-APACHE-2.0", import.meta.url)), true);
   assert.ok(pkg.files.includes("extensions"));
+  assert.ok(pkg.files.includes("vendor"), "the vendored runtime must be part of the published files");
   assert.ok(pkg.files.includes("LICENSE-APACHE-2.0"));
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
+  assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
   assert.deepEqual(pkg.pi.themes, ["./themes/codex-appearance.json"]);
-  // The ONE allowed runtime dependency: marked, pinned to the exact version
-  // pi-tui itself uses (the copy-provenance lexer must see the host's token
-  // stream). Any other dependency, or a version drift against pi-tui, fails.
-  assert.deepEqual(pkg.dependencies, { marked: load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked });
+  // Runtime dependencies are exactly: marked (the copy-provenance lexer must see the
+  // host's token stream, pinned to the version pi-tui uses) plus the vendored
+  // codex-conversion's own runtime deps, declared so pi installs them for the git
+  // clone (see vendor/pi-codex-conversion/package.json).
+  assert.equal(pkg.dependencies.marked, load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked);
+  const vendored = load("vendor/pi-codex-conversion/package.json").dependencies;
+  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ["marked", ...Object.keys(vendored)].sort());
+  for (const [name, range] of Object.entries(vendored)) assert.equal(pkg.dependencies[name], range, `${name} must match the vendored manifest`);
   assert.equal(pkg.pi.skills, undefined);
   assert.equal(pkg.pi.prompts, undefined);
 });

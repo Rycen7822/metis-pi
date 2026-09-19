@@ -1,0 +1,11 @@
+- Keep this optional runtime cold: import it only after Notebook Code Mode is selected; download Deno only on first execution/prepare.
+- Keep host persistence/validation separate from injected kernel source; session checkpoint payloads are deltas against project generations
+- `journal.ts` appends cell events and rotates at the heap-derived persistence budget, retaining one previous `.ipynb`; `journal-document.ts` materializes standard notebooks
+- Running sessions are private forks; new `globalThis` properties and explicitly pinned bindings merge into project state, never another live kernel
+- Pin promotion and metadata commit under one project lock; failed commits restore kernel tracking. Release/prune preserve pins, and prune requires a caller-selected glob
+- Startup lists exact-version npm imports previously used by successful project cells; guidance requires user approval before any unlisted package
+- `notebook-diagnostics.ts` maps journals to one-shot Deno diagnostics; `lsp-process.ts` owns bounded JSON-RPC process transport and never stays resident
+- Profiles load by value and never replay cells
+- `directory-lock.ts` owns cross-process leases; release only the observed owner file and never recursively delete a lock path.
+- Existing V8 Code Mode remains under `tools/code-mode/`; share its public tool, rendering, nested-tool, and output contracts without changing the vendored host.
+- Notebook Deno targets Linux, macOS, and Windows on x64/arm64; every archive and extracted executable stays version-, size-, and checksum-pinned.

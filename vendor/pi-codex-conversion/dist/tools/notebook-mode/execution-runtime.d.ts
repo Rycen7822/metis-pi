@@ -1,0 +1,38 @@
+import type { CodeModeNestedRenderStore } from "../code-mode/trace-render-state.ts";
+import type { CodeModeToolDefinition, RuntimeResponse, ToolExecutionContext } from "../code-mode/types.ts";
+import { NotebookBridgeServer } from "./bridge-server.ts";
+import type { NotebookSessionRuntime } from "./session-runtime.ts";
+export declare class NotebookExecutionRuntime {
+    readonly bridge: NotebookBridgeServer;
+    private readonly session;
+    private readonly prepareSession;
+    private readonly delegate;
+    private readonly stopOperations;
+    private activeCell;
+    private nextCellId;
+    constructor(session: () => NotebookSessionRuntime, prepareSession: (context: ToolExecutionContext, signal?: AbortSignal) => Promise<void>, renderStore?: CodeModeNestedRenderStore);
+    activeCellId(): string | undefined;
+    runningCellId(): string | undefined;
+    execute(source: string, context: ToolExecutionContext, signal?: AbortSignal, tools?: CodeModeToolDefinition[]): Promise<RuntimeResponse>;
+    wait(cellId: string, yieldTimeMs: number, context: ToolExecutionContext, signal?: AbortSignal): Promise<RuntimeResponse>;
+    terminate(cellId: string, context: ToolExecutionContext, signal?: AbortSignal): Promise<RuntimeResponse>;
+    stopActive(): Promise<string | undefined>;
+    clear(): void;
+    private runCell;
+    private endCellRuntime;
+    private observe;
+    private finishObservation;
+    private stopCell;
+    private stopCellInner;
+    private stopAndCloseCell;
+    private recoverAfterFatal;
+    private reportJournalFailure;
+    private closeCell;
+    private withCellContext;
+    private callTool;
+    private cancelTools;
+    private notify;
+    private recordMemory;
+    private withMemory;
+    private requireActiveCell;
+}

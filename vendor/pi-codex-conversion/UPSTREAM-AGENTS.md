@@ -1,0 +1,20 @@
+- Port model-native Codex prompt/tool/transport/context behaviour into Pi; add Codex features only for model fit, quota efficiency, or Pi integration.
+- Preserve prompt-cache/continuation across prompt, tool, request, replay, and transport changes.
+- Own GPT harness integration, not universal compatibility, UI, enterprise, or a Pi fork; route uncommon needs to documented overrides, other extensions, or forks.
+- Responses transport recovery follows Codex: initial generation plus five fresh full-request WebSocket retries, then sticky SSE for the session; 426 and WebSocket close 1009 fall back immediately.
+- Pi intentionally retries `server_is_overloaded` and `slow_down` across WebSocket/SSE with a shared three-minute wait budget.
+- Streamed rate-limit delays are exact within a shared three-minute budget; longer delays fail instead of retrying early.
+- Before npm, publish, release, or merge work, compare `src/providers/openai-codex-custom-provider.ts` with Pi's stock `openai-codex-responses` provider: request shape, transport/headers, reasoning/service tier, retry, stream termination, and touched behavior.
+- Structured mode uses flat TypeScript tools except native context namespaces. Code Mode uses `exec`/`wait`; Notebook Mode additionally exposes host-side `notebook` lifecycle control.
+- Keep prompt guidance short and argv-shaped.
+- Core native runners execute bundled helpers directly. Rebuild for the local platform and use the checkout; never patch installed npm files. Web search and image generation belong to their TypeScript extension packages.
+- `src/voice/rust/**` and `scripts/build-voice-helper.mjs` must stay byte-identical with `pi-gippity-control`; change and changeset both packages together.
+- For native GitHub builds, run `gh run watch <id> --exit-status` directly and wait near the expected 10–15 minutes. Never wrap it in polling loops, background shells, or temporary log redirection.
+- `tools.customRustBinariesDir` is the shared filename-based override for core tool and voice helpers; native startup incompatibilities point there without dumping loader noise.
+- Vendored apply-patch engine, path-uri, and absolute-path sources track one Codex commit. Pi-owned changes belong only in `standalone_executable.rs` and the `pi-apply-patch-fs` adapter.
+- Do not accept review-driven drift from stock Pi behavior unless backend-verified or intentional.
+- Provider names and endpoint routing are not backend identity. Models using `openai-codex-responses` retain first-party Codex transport, Fast Mode, and account isolation across renamed providers and proxies.
+- Proxies are deliberate monitoring, routing, and policy seams. Environment HTTP(S)/ALL proxies do not change the canonical ChatGPT contract; explicitly configured `openai-responses` passthrough providers are different and receive only the capabilities their backend supports. Never reject either path from provider name alone or assume “proxy” means non-ChatGPT.
+- Native compaction supports only OpenAI Codex and explicitly configured OpenAI/Codex passthrough proxies; V2 must preserve raw Responses output-item access rather than delegate to arbitrary registered provider streams.
+- Extension developer messages persist as visible Pi custom messages: promote to `developer` at compatible Responses boundaries; otherwise preserve ordinary Pi conversion, including after model switches.
+- After TypeScript topology changes, run root `bun run knip`; it enforces file, dependency, cycle, and export-surface hygiene.

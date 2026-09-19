@@ -1,0 +1,194 @@
+import { uuidv7 } from "@earendil-works/pi-ai";
+import { buildSessionContext, } from "@earendil-works/pi-coding-agent";
+import { createNativeVoiceContextSummary } from "./native-context.js";
+import { projectTreeCheckpointBranch } from "../context-management/tree-checkpoint.js";
+import { REALTIME_DELEGATION_MESSAGE_TYPE } from "./ui.js";
+const VOICE_CONTEXT_SYSTEM_PROMPT = `Summarize the current Pi conversation for a realtime voice assistant joining the same session. Preserve the user's goal, relevant preferences, decisions, current state, unresolved questions, and next step. Treat the conversation as history: do not continue its work or answer it. Return only the self-contained continuity summary.`;
+const VOICE_CONTEXT_REQUEST = "Create the voice continuity summary now.";
+const VOICE_STARTUP_CONTEXT_HEADER = `Startup context from Pi.
+This is background context from the current Pi conversation before realtime voice started. It may be summarized. Use it to answer questions about the earlier conversation, and do not repeat it unless relevant.`;
+const SUMMARIZABLE_CUSTOM_TYPES = new Set([
+    REALTIME_DELEGATION_MESSAGE_TYPE,
+    "codex-realtime-voice-tail",
+]);
+const SUMMARY_CACHE_LIMIT = 32;
+const summaryCache = new Map();
+export async function buildRealtimeInitialItems(args) {
+    const selected = args.config.voice.contextModel;
+    const initialItems = [];
+    if (selected) {
+        const reasoning = args.config.voice.contextReasoning;
+        const cacheKey = voiceContextCacheKey(args.ctx, selected, reasoning, args.sourceLeafId);
+        let text = args.forceSummary ? undefined : summaryCache.get(cacheKey);
+        if (!text) {
+            args.onSummaryStatus?.(true);
+            try {
+                const generated = await createVoiceContextSummary(args.ctx, selected, reasoning, args.signal, args.sourceLeafId);
+                if (generated) {
+                    text = generated;
+                    if (cacheKey === voiceContextCacheKey(args.ctx, selected, reasoning, args.sourceLeafId)) {
+                        summaryCache.set(cacheKey, text);
+                        while (summaryCache.size > SUMMARY_CACHE_LIMIT)
+                            summaryCache.delete(summaryCache.keys().next().value);
+                    }
+                    args.onSummaryGenerated?.(text);
+                }
+            }
+            finally {
+                args.onSummaryStatus?.(false);
+            }
+        }
+        if (text) {
+            initialItems.push({
+                type: "message",
+                role: "developer",
+                content: [{ type: "input_text", text: renderVoiceStartupContext(text) }],
+            });
+        }
+    }
+    return initialItems.length > 0 ? initialItems : undefined;
+}
+export function renderVoiceStartupContext(summary) {
+    return `${VOICE_STARTUP_CONTEXT_HEADER}\n<startup_context>\n${summary}\n</startup_context>`;
+}
+async function createVoiceContextSummary(ctx, selected, reasoning, signal, sourceLeafId) {
+    const entries = projectTreeCheckpointBranch(ctx.sessionManager.getBranch(sourceLeafId), ctx.sessionManager.getEntries());
+    if (latestCompactionIsOpaque(entries))
+        return requireSummary(await createNativeVoiceContextSummary({
+            ctx,
+            entries,
+            model: { ...selected, reasoning },
+            systemPrompt: VOICE_CONTEXT_SYSTEM_PROMPT,
+            request: VOICE_CONTEXT_REQUEST,
+            ...(signal ? { signal } : {}),
+        }));
+    const messages = buildSessionContext([...entries]).messages;
+    const conversation = serializeVoiceConversation(messages);
+    if (!conversation)
+        return undefined;
+    const model = resolveSelectedModel(ctx, selected);
+    return requireSummary(await completeWithSelectedModel(ctx, model, {
+        systemPrompt: VOICE_CONTEXT_SYSTEM_PROMPT,
+        messages: [
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: `## Conversation History\n\n${conversation}\n\n${VOICE_CONTEXT_REQUEST}`,
+                    },
+                ],
+                timestamp: Date.now(),
+            },
+        ],
+    }, reasoning, signal));
+}
+function serializeVoiceConversation(messages) {
+    const turns = [];
+    for (const message of messages) {
+        if (message.role === "user") {
+            appendTurn(turns, "User", textContent(message.content));
+            continue;
+        }
+        if (message.role === "assistant") {
+            if (message.stopReason !== "toolUse")
+                appendTurn(turns, "Assistant", textContent(message.content));
+            continue;
+        }
+        if (message.role === "compactionSummary") {
+            appendTurn(turns, "Conversation summary", message.summary);
+            continue;
+        }
+        if (message.role === "branchSummary") {
+            appendTurn(turns, "Branch summary", message.summary);
+            continue;
+        }
+        if (message.role === "custom" &&
+            SUMMARIZABLE_CUSTOM_TYPES.has(message.customType))
+            appendTurn(turns, "Realtime voice", textContent(message.content));
+    }
+    return turns.join("\n\n");
+}
+function textContent(content) {
+    if (typeof content === "string")
+        return content.trim();
+    if (!Array.isArray(content))
+        return "";
+    return content
+        .filter((part) => !!part &&
+        typeof part === "object" &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string")
+        .map((part) => part.text)
+        .join("\n")
+        .trim();
+}
+function appendTurn(turns, label, text) {
+    if (text)
+        turns.push(`[${label}]: ${text}`);
+}
+function resolveSelectedModel(ctx, selected) {
+    const model = ctx.modelRegistry.find(selected.provider, selected.modelId);
+    if (!model)
+        throw new Error(`Voice context model is unavailable: ${selected.provider}/${selected.modelId}`);
+    return model;
+}
+async function completeWithSelectedModel(ctx, model, context, reasoning, signal) {
+    const provider = ctx.modelRegistry.getProvider(model.provider);
+    if (!provider)
+        throw new Error(`Voice context provider is unavailable: ${model.provider}`);
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok)
+        throw new Error(auth.error);
+    const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
+    let completed;
+    for await (const event of provider.streamSimple(requestModel, context, {
+        ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+        ...(auth.headers ? { headers: auth.headers } : {}),
+        ...(auth.env ? { env: auth.env } : {}),
+        ...(signal ? { signal } : {}),
+        maxTokens: requestModel.maxTokens,
+        cacheRetention: "none",
+        sessionId: uuidv7(),
+        ...(requestModel.reasoning && reasoning !== "off" ? { reasoning } : {}),
+    })) {
+        if (event.type === "done")
+            completed = event.message;
+        if (event.type === "error")
+            throw new Error(event.error.errorMessage || "Voice context model failed");
+    }
+    return (completed?.content
+        .filter((part) => part.type === "text" && typeof part.text === "string")
+        .map((part) => part.text)
+        .join("\n") ?? "");
+}
+function latestCompactionIsOpaque(entries) {
+    const latest = entries
+        .findLast((entry) => entry.type === "compaction");
+    if (!latest || latest.type !== "compaction")
+        return false;
+    const details = latest.details;
+    return (!!details &&
+        typeof details === "object" &&
+        "strategy" in details &&
+        (details.strategy === "openai-responses-compaction-v2" ||
+            details.strategy === "openai-native-compact-v1"));
+}
+function requireSummary(value) {
+    const summary = value.trim();
+    if (!summary)
+        throw new Error("Voice context model returned an empty summary");
+    return summary;
+}
+function voiceContextCacheKey(ctx, model, reasoning, sourceLeafId) {
+    const boundary = ctx.sessionManager
+        .getBranch(sourceLeafId)
+        .findLast((entry) => entry.type === "message" ||
+        entry.type === "compaction" ||
+        entry.type === "branch_summary" ||
+        (entry.type === "custom_message" &&
+            SUMMARIZABLE_CUSTOM_TYPES.has(entry.customType)))?.id;
+    return `${ctx.sessionManager.getSessionId()}:${boundary ?? "empty"}:${model.provider}/${model.modelId}:${reasoning}`;
+}
