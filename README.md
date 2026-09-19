@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.17.9**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.18.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -125,7 +125,7 @@ pi install /绝对路径/pi-codex-appearance
   `.bak-<ts>` 并空载，绝不让会话崩溃；`gcDays` 默认 7 清理已完成）。环境变量
   `PI_CODEX_TODO_PATH` 可整体搬迁。
 - **交互**：`/todos` = 恢复面板（右键隐藏过的话）+ notify 打印文字任务列表
-  （**0.17.5 起移除了原全屏 overlay 弹窗**——面板 + todo 工具已覆盖其用途，不再弹窗挡屏幕）；0.17.6 起新增 **skill-mux**：`/skill:a /skill:b 其他文字` 一条输入展开多个 skill（宿主只认第一个，此处补齐；0.17.7 起 `￥skill名` 是等价快捷触发符，可混用：`￥a /skill:b 文字`；0.17.8 起第二个及以后的 token 也有补全菜单——内置补全器只为首 token 弹菜单，此处补齐，`/` 与 `￥` 均可；0.17.9 起菜单弹出时机：`￥` 按下即弹，`/` 在第二个及以后位置需再敲一个字母或按 Tab 才弹（pi-tui 硬编码裸 `/` 只在行首自动触发，扩展无法绕过））；`/todos-doctor`
+  （**0.17.5 起移除了原全屏 overlay 弹窗**——面板 + todo 工具已覆盖其用途，不再弹窗挡屏幕）；0.17.6 起新增 **skill-mux**：`/skill:a /skill:b 其他文字` 一条输入展开多个 skill（宿主只认第一个，此处补齐；0.17.7 起 `￥skill名` 是等价快捷触发符，可混用：`￥a /skill:b 文字`；0.17.8 起第二个及以后的 token 也有补全菜单——内置补全器只为首 token 弹菜单，此处补齐，`/` 与 `￥` 均可；0.18.0 起菜单弹出时机：`￥` 按下即弹，第二个及以后的 `/` 也**按下即弹**（0.17.9 曾需要再敲一个字母或按 Tab——根因是空格那一下状态被内置补全返回空清掉；0.18.0 在完整 skill token 后的空白处保留一行无副作用提示 `继续添加 skill`，把状态续住））；`/todos-doctor`
   只读诊断（坏档归档、过期锁、GC）。模型侧是单 `todo` 工具 action 分发：校验错误抛出并附
   纠正提示（模型自我修正），无变更返回 `No change:` 结果（防重试循环）。
 

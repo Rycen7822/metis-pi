@@ -733,21 +733,40 @@ try {
   // shows nothing for these tokens, so Enter submits the literal text; the
   // input hook must expand both skills (host-format blocks) and keep the
   // trailing text before the host dispatches to the model.
-  // 0.17.9: the editor's printable path auto-triggers "/" ONLY at line start,
-  // so a bare second "/" never queries (typing a letter re-arms it — the
-  // user's "space+backspace" dance works because backspace re-triggers). We
-  // make TAB the immediate trigger: the wrapper lets forced queries through
-  // its gate and serves skills before files in a multi-skill context.
-  type("/skill:pcx-pty-mux-a /");
-  sendKeys(["Tab"]);
-  await waitFor(/pty probe/, 15_000, "Tab forces the skill menu at a bare second /");
+  // 0.18.0 (the user's repro): the editor auto-triggers "/" only at line
+  // start, and the built-in returns nothing for `/skill:a ` — that null used
+  // to kill the menu state, so the second "/" keystroke reached NO provider
+  // and nothing popped (typing a letter, Tab, or the space+backspace dance
+  // re-armed it). The wrapper now returns a no-op hint row at that trailing
+  // space, which keeps the state alive: the SECOND "/" alone must pop the
+  // real skill menu. Verified here without Tab or extra letters.
+  type("/skill:pcx-pty-mux-a ");
+  await waitFor(/继续添加 skill/, 15_000, "state-keeping hint row after a complete skill token");
+  type("/");
+  await waitFor(/pty probe/, 15_000, "the bare second / pops the skill menu by itself");
   type("mux-b");
-  await waitFor(/pty probe/, 15_000, "the forced menu filters as letters arrive");
+  await waitFor(/pty probe/, 15_000, "the menu filters as letters arrive");
   sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b (proven accept key)
   await new Promise((resolve) => setTimeout(resolve, 300));
   type("MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "Tab-forced completion expands");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "second-/ completion expands");
+
+  // Dead-state guard: Escape kills the menu state, so the trailing space and
+  // the bare "/" cannot re-arm it (no provider query happens at all) — Tab
+  // must still force the menu through the gate.
+  type("/skill:pcx-pty-mux-a");
+  await waitFor(/pty probe/, 15_000, "first-token menu before Escape");
+  sendKeys(["Escape"]);
+  for (let i = 0; i < 40 && /pty probe/.test(visibleText()); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } // the menu is really gone — no stale frame can satisfy the next wait
+  type(" /");
+  sendKeys(["Tab"]);
+  await waitFor(/pty probe/, 15_000, "Tab forces the skill menu at a bare second / with a dead state");
+  // Clear the composer instead of submitting anything.
+  sendKeys(["C-u"]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
 
   // 0.17.6 baseline still holds without the menu: full tokens typed out.
   type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");

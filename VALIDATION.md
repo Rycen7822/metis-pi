@@ -1,3 +1,35 @@
+# Validation record — 0.18.0 (the second "/" pops the menu by itself)
+
+0.17.9 made Tab an immediate trigger, but the user's real flow (type `/skill:a `, then `/`) still showed no menu.
+Root cause, from the editor source: a query that returns nothing calls cancelAutocomplete() and clears the menu
+state; the built-in provider returns nothing for `/skill:a ` (skill commands have no argument completions), so
+the state died at the trailing space. With the state dead, the bare second "/" never reaches ANY provider — the
+editor auto-triggers "/" only at line start (isAtStartOfMessage), "/" is excluded from trigger characters, and
+"/" is outside the letter regex. That is why only a letter, Tab, or the space+backspace dance re-armed it.
+
+Fix: keep the state alive. At a position that is EXACTLY one or more complete, known skill tokens followed by
+whitespace (matchSkillBridge), the wrapper returns a single no-op hint row (`继续添加 skill` / `输入 / 或 ￥`)
+instead of null, so the editor keeps the menu and the very next "/" or ￥ keystroke goes through
+updateAutocomplete() back into this wrapper with a real partial token — the real skill menu pops.
+
+Safety properties verified by unit tests:
+- The hint's value is a sentinel that never renders (SelectList renders label || value; the label is non-empty)
+  and applyCompletion returns the text untouched for it, so Enter cannot mangle the message. The hint's prefix
+  starts with "/", so the editor falls through to the normal submit path: Enter still sends the message
+  (Tab merely closes the hint row).
+- The hint appears only for complete, resolvable skill tokens plus whitespace: unknown names, half-typed
+  tokens, plain text, empty input, and non-skill commands like `/todos ` never bridge.
+- The built-in provider keeps its precedence everywhere it answers (base result wins over the hint).
+- The gate change from 0.17.9 stays: forced (Tab) queries pass through at both the multi-skill context and the
+  bridge position, so an Esc-killed state can still be recovered with Tab.
+
+## Verified
+
+- 386/386 (new bridge + matcher unit tests); check 0 errors.
+- pty rc=0 exercising the user's exact repro end-to-end: `/skill:pcx-pty-mux-a ` → hint row →
+  the BARE "/" pops the skill menu with no Tab and no extra letters → filter → accept → submit → the mock
+  reports both skill blocks + trailing text, no raw tokens; plus an Esc dead-state + Tab fallback regression.
+
 # Validation record — 0.17.9 (immediate menu triggers: Tab for "/", ￥ native)
 
 Follow-up to 0.17.8. User evidence: after the second "/", no menu; typing a space and deleting it makes the
