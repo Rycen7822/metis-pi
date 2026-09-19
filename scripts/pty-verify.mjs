@@ -38,8 +38,11 @@ const hasGit = (() => {
 })();
 if (hasGit) {
   execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: WORKSPACE, stdio: "ignore" });
-  // Untracked, 3 lines → the footer must read "+3 -0".
-  fs.writeFileSync(path.join(WORKSPACE, "changed.txt"), "alpha\nbeta\ngamma\n");
+  fs.writeFileSync(path.join(WORKSPACE, "tracked.txt"), "one\ntwo\nthree\n");
+  execFileSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], { cwd: WORKSPACE, stdio: "ignore" });
+  // Work that PRE-DATES the session: the footer's baseline, never counted.
+  fs.writeFileSync(path.join(WORKSPACE, "preexisting.txt"), "old\nwork\nhere\nfour\n");
 }
 // HOME isolation: the real ~/.pi/agent user extensions (including the
 // published copy of THIS extension) must not shadow the code under test.
@@ -260,13 +263,40 @@ try {
   const footerLines = frames.idle.split("\n").filter((l) => l.trim() && !l.includes("pcx-mock-model") && !l.includes("Ask anything"));
   assert.ok(footerLines.some((l) => l.includes("pcx-mock-pty") || (l.includes("/") && !l.includes("ctx "))), "footer carries cwd/branch rows");
   assert.ok(!footerLines.some((l) => l.includes("pcx-mock-model ·")), "footer does NOT duplicate the model line");
-  // 0.11.0: working-tree change counts ride with the branch, straight from git.
+  // 0.13.0: session change counts ride with the branch, straight from git.
   if (hasGit) {
-    // The counts come from a display-only git poll, so the footer may render
-    // once before the first read lands: wait for them instead of racing.
-    frames.gitChanges = await waitFor(/\(main\) \+3 -0/, 15_000, "footer working-tree change counts (+3 for one untracked 3-line file)");
+    // The counts are the SESSION's delta: work that predates the session (the
+    // pre-existing untracked file above) must not appear at all. The poll (2s)
+    // and the frames are asynchronous, so assert on a settled frame.
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const cleanFrame = capture();
+    assert.ok(!/\+\d+ -\d+/.test(visibleRows(cleanFrame).join("\n")), "pre-existing work is the baseline, not the session's");
+
+    // An edit from outside the agent (a script / another terminal) counts the
+    // same way the agent's own tools do: untracked 3 lines → "+3 -0".
+    fs.writeFileSync(path.join(WORKSPACE, "scripted.txt"), "alpha\nbeta\ngamma\n");
+    frames.gitChanges = await waitFor(/\+3 -0/, 15_000, "footer session change counts (+3 for one script-written 3-line file)");
+    assert.match(frames.gitChanges, /\(main\) \+3 -0/, "counts follow the branch");
+
+    // A tracked rewrite with real deletions (5 added, 2 removed): the footer
+    // must show the absolute pair — never a net "+1 -0" or a line-count delta.
+    fs.writeFileSync(path.join(WORKSPACE, "tracked.txt"), "one\nfour\nfive\nsix\nseven\neight\n");
+    frames.gitChangesEdit = await waitFor(/\+8 -2/, 15_000, "absolute counts: +3 untracked and +5 tracked, 2 deletions");
+    assert.match(frames.gitChangesEdit, /\(main\) \+8 -2/, "additions and deletions are absolute, not a net");
+
+    // A commit mid-session (the agent's /commit, or git from a script) must not
+    // erase the session's progress: the numbers stay.
+    execFileSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "ignore" });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mid-session"], { cwd: WORKSPACE, stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    const committed = visibleRows(capture()).join("\n");
+    assert.match(committed, /\(main\) \+8 -2/, "a mid-session commit keeps the session totals");
+
+    // …and the totals only grow: 3 more lines, exactly "+11 -2".
+    fs.appendFileSync(path.join(WORKSPACE, "scripted.txt"), "delta\nepsilon\nzeta\n");
+    frames.gitChangesAfter = await waitFor(/\+11 -2/, 15_000, "later edits add to the same absolute totals");
   } else {
-    console.log("  NOTE: git unavailable — working-tree change counts not asserted");
+    console.log("  NOTE: git unavailable — session change counts not asserted");
   }
 
   // Stage 2: a normal run — the Working line is live above the editor with
@@ -493,7 +523,7 @@ try {
   assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
-  console.log(hasGit ? "  git changes:  +3 -0 for one untracked file, read from the real work tree" : "  git changes:  not asserted (git unavailable)");
+  console.log(hasGit ? "  git changes:  session Δ +11 -2 (script-written + tracked edits, absolute and commit-proof)" : "  git changes:  not asserted (git unavailable)");
   console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand, wheel scrolls the window");
   console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");

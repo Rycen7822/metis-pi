@@ -12,7 +12,7 @@ import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
-import { createGitChangesTracker, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
+import { createGitChangesTracker, GIT_CHANGES_DEBOUNCE_MS, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
 import { diffSignFg } from "./diff.ts";
 import type { SegmentTone } from "./segments.ts";
 import type { ThinkingView, ThinkingViewControl } from "./thinking-view.ts";
@@ -236,8 +236,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     } catch { /* render happens on the next host cycle */ }
   };
 
-  // Working-tree change counts for the footer: display-only git reads on a 2s
-  // poll, armed only while a TUI session is live (see git-changes.ts).
+  // Session change counts for the footer: display-only git reads on a 2s poll
+  // plus activity-driven refreshes (agent ticks, tool work), armed only while a
+  // TUI session is live (see git-changes.ts).
   const gitChanges = createGitChangesTracker({
     getCwd: () => hostData.getCwd(),
     onUpdate: requestRender,
@@ -314,6 +315,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     {
       onTick: (snapshot) => {
         if (!chromeEnabled) return;
+        // Activity signal for the footer's change counts: refresh while the
+        // agent works, so an edit lands in the footer in ~debounce time
+        // instead of waiting for the next poll.
+        gitChanges.touch();
         if (chrome.widgetInstalled) {
           // The widget component reads the snapshot at render; a 1s tick just
           // asks the host for a frame. No per-token reinstalls.
@@ -328,6 +333,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       },
       onSettled: (snapshot) => {
         if (!chromeEnabled) return;
+        gitChanges.touch();
         // Hide the active widget and stop its animation timer — idle leaves
         // zero timers.
         chrome.workingComponent?.stopAnimation();
@@ -651,7 +657,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           : "no snapshot";
         const changeStat = gitChanges.snapshot();
         const changesDetail = changeStat
-          ? `+${changeStat.additions} -${changeStat.deletions} (${changeStat.files} files, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll, work tree vs HEAD + untracked)`
+          ? `+${changeStat.additions} -${changeStat.deletions} (${changeStat.files} files, session Δ vs ${gitChanges.session().rev ?? "index (unborn HEAD)"}${gitChanges.session().baseline ? " + baseline" : ""}, untracked included, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`
           : "unavailable (no git metadata in cwd)";
         const lines = [
           `pi-codex-appearance ${bindings.appearanceVersion ?? "?"} diagnostics (mode=${hostData.mode}, pi=${bindings.piVersion ?? "?"}, revision=${hostData.revision}):`,
@@ -674,7 +680,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
           `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},changes=${config.footer.showChanges},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
-          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
+          `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s + activity` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
           `  git-changes: ${changesDetail}`,
           ...selectionCopyLine(),
           `  history-window: ${JSON.stringify(historyWindow?.status() ?? { installed: false })}`,

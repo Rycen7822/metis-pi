@@ -121,6 +121,16 @@ export function formatCount(tokens: number): string {
   return String(Math.round(tokens));
 }
 
+/**
+ * Exact integer for the change counts: 1234 → "1234", never "1.2k". Line
+ * counts are the point of the footer's +A −D segment, so they are never
+ * rounded into a magnitude.
+ */
+export function formatExactCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  return String(Math.round(value));
+}
+
 /** 17.2 → "17.2%", 20 → "20%"; null/invalid → undefined (caller omits). */
 export function formatPct(pct: number | null | undefined): string | undefined {
   if (pct === null || pct === undefined || !Number.isFinite(pct)) return undefined;

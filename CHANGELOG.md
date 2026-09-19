@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0
+
+- **修正 footer 的增删统计口径**：`+A -D` 现在是**本 session 的累计绝对增删**，不再是"工作区相对 HEAD"的快照。旧口径下，session 中途的 commit 会把已完成的改动从数字里抹掉，剩下的零头看起来就像"净变化"（文件 A `+11 -9`、B `+6 -5` 显示成 `+3 -0`）；现在两者都是 `+17 -14`。这也解释了"很多改动没被统计进去"。
+- 新口径：session 第一次读取是**基线**（基线之前的未提交改动不算 session 的），之后每次都跟 **session 开始时的那个 revision** 做 `git diff --numstat`（中途 commit 不归零；`git checkout`/stash 撤掉的工作也会如实消失）；未跟踪文件按基线之后**新增的行数**计入；单文件内永远是绝对新增/绝对删除，不做净差。文件从 untracked 变成 tracked（session 里被 commit）时，基线行数依然不算 session 的，只有增量计入。
+- **所有写入者都被统计**：agent 工具、bash/sed/python 脚本、另一个终端都走同一路径（git + 工作区），不依赖任何工具记账，也不需要它们出现在 transcript 里。真实 TUI 断言覆盖了"脚本写的文件"与"中途 commit 后数字不变"。
+- **显示精确整数**：`+1.1k -81` 变成 `+1108 -81`（新增 `formatExactCount`，token 类数字仍用 k/M 紧凑格式）。
+- **延迟改进**：除 2 秒轮询外，新增**活动触发的去抖刷新**（agent tick / settle，250ms，慢仓库按上次读取消耗自适应退避），活动期间实测 ~0.3s；未跟踪文件改为**流式计数 + size/mtime 缓存**（不再每次轮询同步读整份文件）；git 调用加 5 秒超时、`--no-ext-diff --no-textconv`（用户配置的 diff 驱动/字体转换不会再挂住轮询）、失败时保留上一次正确数字而不是清零。
+- 测试 310 → 315（其中 `git-changes` 用例重写为 14 例）：`test/git-changes.test.mts` 重写为 14 例（`-z`/rename 解析、流式计数与缓存失效、基线语义含 untracked→tracked 迁移、失败保留、interval + touch + dispose），新增真实 git 集成用例（脚本改写、中途 commit、ignored/binary 跳过、`+17 -14` 永不坍缩为净值）与 pty 阶段（基线不显示、脚本写入 +3 -0、绝对 +8 -2、commit 后仍 +11 -2）。
+
 ## 0.12.0
 
 - 思考块改为 **Codex 式行窗口**：`thinking.streaming` 新增 `"peek"` 并成为默认值，流式期间只渲染最新的 `thinking.peekLines`（默认 6，1..40）行，上方一行 dim 提示 `… N above of M lines (scroll · double-click for all)`；指针在窗口上滚轮可在窗口内滚动（到两端时事件落回正文滚动），滚回最新行恢复跟随。窗口只切片宿主已渲染的行，不重排 Markdown，rail / 高亮 / 复制归属与展开时一致。

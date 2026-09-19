@@ -23,6 +23,7 @@ import { formatQuotaLine, type CodexQuotaSnapshot } from "../quota/types.ts";
 import {
   cellWidth,
   formatCount,
+  formatExactCount,
   formatPct,
   realizeRow,
   SEG_SEP,
@@ -104,8 +105,9 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
     // green/red; a clean tree shows nothing at all.
     const changes = snapshot.changes;
     if (show.showChanges && changes && (changes.additions > 0 || changes.deletions > 0)) {
-      left.push({ text: ` +${formatCount(changes.additions)}`, tone: "add" });
-      left.push({ text: ` -${formatCount(changes.deletions)}`, tone: "del" });
+      // Exact integers: the segment is a line count, not a magnitude.
+      left.push({ text: ` +${formatExactCount(changes.additions)}`, tone: "add" });
+      left.push({ text: ` -${formatExactCount(changes.deletions)}`, tone: "del" });
     }
   }
 

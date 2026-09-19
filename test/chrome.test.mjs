@@ -215,7 +215,7 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
   assert.deepEqual(layoutFooter(snapshot, show, 2, "main"), []);
 });
 
-test("footer: working-tree change counts ride with the branch in diff colours", async () => {
+test("footer: session change counts ride with the branch in diff colours, exact", async () => {
   const { layoutFooter } = await import("../src/chrome/footer.ts");
   const base = {
     cwd: "/home/xu/project/tools/pi-codexy",
@@ -243,7 +243,13 @@ test("footer: working-tree change counts ride with the branch in diff colours", 
   assert.ok(!flat(at120({ ...base, changes: { additions: 0, deletions: 0, files: 0 } }, show)).includes("+0"), "clean tree shows nothing");
   assert.ok(!flat(at120({ ...base, changes: undefined }, show)).includes(" -20"), "unknown stat shows nothing");
   assert.ok(!flat(at120(base, { ...show, showChanges: false })).includes("+99"), "footer.showChanges=false removes the segment");
-  assert.ok(flat(at120({ ...base, changes: { additions: 12_400, deletions: 1_050, files: 3 } }, show)).includes("+12.4k -1.1k"), "compact k form, like the rest of the footer");
+  // Exact integers, never a magnitude: "+1.1k" would hide the real count and
+  // "+3 -0" is impossible once a per-file net cannot be formed.
+  const wide = flat(at120({ ...base, changes: { additions: 12_400, deletions: 1_050, files: 3 } }, show));
+  assert.ok(wide.includes("+12400 -1050"), `exact counts: ${wide}`);
+  assert.ok(!wide.includes("12.4k") && !wide.includes("1.1k"), "no k/M compaction for change counts");
+  const narrow = flat(at120({ ...base, changes: { additions: 17, deletions: 14, files: 2 } }, show));
+  assert.ok(narrow.includes("+17 -14"), "the reported pair survives verbatim");
 });
 
 test("footer: output speed leads the right block, left of ↑input, and is config-gated", async () => {
@@ -519,7 +525,7 @@ test("header component: real identity, never impersonates OpenAI", async () => {
 });
 
 /** Real repo: one tracked edit (−1/+2) plus one untracked file (+2). */
-function makeDirtyRepo(t) {
+function makeRepo(t) {
   const dir = mkdtempSync(join(tmpdir(), "pi-codexy-chrome-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", args, {
@@ -531,13 +537,18 @@ function makeDirtyRepo(t) {
   writeFileSync(join(dir, "tracked.txt"), "one\ntwo\n");
   git("add", "-A");
   git("commit", "-q", "-m", "init");
-  writeFileSync(join(dir, "tracked.txt"), "one\nthree\nfour\n");
-  writeFileSync(join(dir, "new.txt"), "x\ny\n");
   return dir;
 }
 
+/** Work done by the SESSION (after session_start), which is what the footer
+ * reports: +2 −1 in a tracked file plus a 2-line untracked file. */
+function dirtyRepo(dir) {
+  writeFileSync(join(dir, "tracked.txt"), "one\nthree\nfour\n");
+  writeFileSync(join(dir, "new.txt"), "x\ny\n");
+}
+
 test("footer: real git changes reach the frame in the diff's green/red", async (t) => {
-  const repo = makeDirtyRepo(t);
+  const repo = makeRepo(t);
   const { handlers, slots, wrapUi } = activateHarness({ colorLevel: { kind: "truecolor" } });
   const shutdown = () => handlers.get("session_shutdown")?.({}, wrapUi(realShapeCtx().ctx));
   t.after(shutdown); // stop the 2s poll this test just armed
@@ -550,6 +561,8 @@ test("footer: real git changes reach the frame in the diff's green/red", async (
     { getGitBranch: () => "main", getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
   ).render(140).join("\n");
 
+  assert.ok(!plain(frame()).includes(" +"), "a clean session start shows no change segment");
+  dirtyRepo(repo);
   const deadline = Date.now() + 3_000;
   let rendered = frame();
   while (!rendered.includes("\x1b[32m") && Date.now() < deadline) {

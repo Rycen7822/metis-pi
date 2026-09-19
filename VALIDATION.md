@@ -1,3 +1,28 @@
+# Validation record — 0.13.0 (session change counts)
+
+The footer's `+A −D` segment used to be "work tree vs HEAD". That made a session's own commits erase its progress, left only the residual diff on screen, and made that residual look like a net change (A `+11 −9` and B `+6 −5` reading as `+3 −0`). It also capped "latency" at "until something else moves", because the number was describing a moving baseline. The segment now reports the SESSION's work:
+
+- the session's first read is the baseline, per path, so uncommitted work that predates the session is not credited to it (a fresh session in a dirty tree starts at `+0 −0`);
+- later reads diff against the revision the session STARTED from (HEAD resolved once at the first read; the index when HEAD is unborn), so a mid-session commit changes nothing: git keeps reporting the same rows because the comparison point is pinned;
+- untracked files contribute the lines they gained after the baseline, counted by streaming (no whole-file read), cached by size+mtime; a file the session commits keeps its baseline lines subtracted, so only its growth counts;
+- per dimension, per path: `max(0, current − baseline)`, so the pair is always ABSOLUTE additions and deletions — never a net line delta, never negative;
+- every writer counts: the numbers come from git and the work tree, never from a tool ledger, so `sed`/`python`/another terminal are indistinguishable from the agent's own tools.
+
+Also fixed here: the display used the footer's compact token formatter, so a large session read `+1.1k −81`; change counts now format exactly (`+1108 −81`, `formatExactCount`), and the segment keeps its diff green/red.
+
+Latency, measured on this machine (Node 24.15.0, Pi 0.85.1, real tmux TUI, isolated HOME, mock provider, 4-line worktree):
+
+- idle, untracked file created from outside the agent: **1.8 s** after the write (the 2 s poll, plus one frame);
+- idle, tracked file rewritten: **2.0 s**;
+- during a live run: **303 ms** (the activity-driven debounce; the tracker log shows reads of 5–18 ms, scheduled 250 ms after each tick with no queueing);
+- after a mid-session `git commit`: the footer still reads `+7 −2` while `git diff --numstat HEAD` is empty — the case the user reported as `+3 −0`.
+
+Hardening that came out of the same review: untracked counting streams in 64 KiB chunks instead of `readFileSync` (a 200×250 KiB untracked set used to be read synchronously on every poll); every git call now has a 5 s timeout with SIGKILL, plus `--no-ext-diff --no-textconv` (a user's GUI diff driver or textconv filter could previously hang the poll) and keeps `--no-optional-locks`; and a failed or timed-out read keeps the previous numbers instead of flashing 0. `npm run check`/`check:core` pass.
+
+Tests: `npm test` 315/315 — `test/git-changes.test.mts` rewritten to 14 cases pinning `git diff --numstat -z` parsing (binary rows, rename rows keyed by the new path, tab-bearing paths), streaming line counts (multi-chunk, no trailing newline, binary, over-cap, missing), the size+mtime cache, the pure baseline math including the untracked→tracked transition, the tracker (baseline publish, interval, activity debounce, coalescing, dispose, keep-last-good on error), and real-git integration (script-made edits, mid-session commit, ignored/binary exclusion, `+17 −14` never collapsing to `+3 −0`). `test/chrome.test.mjs` asserts the exact integers and that no `k` compaction can appear; `scripts/pty-verify.mjs` asserts the whole story in a real TUI: pre-existing work shows nothing, a script-written file reads `+3 −0`, a tracked rewrite with deletions reads `+8 −2` (absolute, not net), a mid-session commit keeps `+8 −2`, and later edits read `+11 −2`.
+
+Not verified: a repo large enough for git's own diff to become the bottleneck (this machine reads a 20k-file repo in ~40 ms either way), and window-filesystem behaviour (`/mnt/c`) where stat/read costs dominate — the design bounds them (one process per read, hard timeout, cached streaming counts) but no measurement was taken there.
+
 # Validation record — 0.12.0 (thinking peek window)
 
 The thinking block no longer streams wide open. `thinking.streaming` gained `"peek"` (now the default): while a run is active it renders as a window of the newest `thinking.peekLines` (default 6) rendered rows with one dim hint row (`… N above of M lines (scroll · double-click for all)`); the wheel scrolls inside that window and the event falls through to the transcript at either end, so the page still scrolls when there is nothing left to reveal. On completion the run folds once per the `completed` policy (default collapsed, unchanged from 0.11.0).
