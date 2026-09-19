@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.17.2
+
+**codex-todo 面板可手动隐藏**：右键单击面板任意一行 → 面板消失；再打开 `/todos` 即恢复显示。
+隐藏态持久化（`widgetHidden`），重启后仍保持隐藏。
+
+- 宿主契约（读 pi-tui 实现确认，不是猜）：`click` 事件只在 **press 被某个组件认领**后才合成——
+  左键 press 被聊天视口认领（选择锚点），所以左键 click 能按坐标转发回面板；**右键 press 没有
+  任何组件认领**（选择逻辑只处理左键，右键粘贴仅 Windows），永远不合成 click。修法：组件对
+  right press 返回 `{handled:true}` 认领，release 后合成的 click 直接派发回本组件。
+- `handleMouse`：right press 认领；left click 展开/收起；right click 隐藏；其余事件放行。
+- `/todos` 打开 overlay 前调用 `widget.show()`（commands 通过 openOverlay 包装注入）。
+- pty 新增真实鼠标阶段：右键 → 面板消失 → `/todos` → overlay 列出 5 个任务 → Esc 关闭 →
+  面板恢复。两处 harness 加固：overlay 是内联渲染（面板在其下方始终可见），关闭断言改盯
+  overlay 标题而非面板；Esc 与 overlay 输入注册有竞争，关闭等待循环内允许补发 Esc
+  （已关闭时多余的 Esc 落在编辑器上空操作）。
+
+验证：372/372（widget 测试 9 → 11：右键隐藏/持久化/恢复、跨重启隐藏、right press 认领）、
+check + check:core 0 error、pty rc=0。
+
 ## 0.17.1
 
 **codex-todo 面板改成鼠标点击展开**（用户反馈：`ctrl+shift+t` 在这些终端里被吃掉）：

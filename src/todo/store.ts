@@ -34,7 +34,11 @@ export const DEFAULT_GC_DAYS = 7;
 export interface TodoSettings {
   gcDays: number;
   /** Persistent widget view state: true = full list. */
+  /** Persisted widget view state. `widgetHidden` is a user-level override:
+   *  while set, the panel stays gone regardless of tasks; opening /todos
+   *  clears it. `widgetExpanded` picks the two-level list size. */
   widgetExpanded: boolean;
+  widgetHidden: boolean;
 }
 
 interface LockInfo {
@@ -120,7 +124,8 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     const raw = readJson(settingsPath) as Record<string, unknown> | undefined;
     const gcDays = typeof raw?.gcDays === "number" && raw.gcDays >= 0 ? raw.gcDays : DEFAULT_GC_DAYS;
     const widgetExpanded = raw?.widgetExpanded === true;
-    return { gcDays, widgetExpanded };
+    const widgetHidden = raw?.widgetHidden === true;
+    return { gcDays, widgetExpanded, widgetHidden };
   };
 
   const readState = (): TodoState => {

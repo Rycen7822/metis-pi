@@ -1,3 +1,31 @@
+# Validation record — 0.17.2 (manually hiding the todo panel)
+
+User request: the panel can be manually hidden. Chosen interaction: RIGHT CLICK anywhere on the panel hides
+it; opening /todos restores it. The hide persists (`widgetHidden` setting).
+
+## Host contract discovered by reading pi-tui (not assumed)
+
+In `handleMouseEvent` (pi-tui `tui-alt-screen.js`), a `click` event is ONLY synthesized when the original
+`press` was claimed by a component (`mousePressTarget` branch). Left presses are claimed upstream by the
+chat viewport (selection anchor), so a left click is forwarded back down to the widget by coordinates. A
+RIGHT press is claimed by nobody — selection handling only accepts button 0, right-click-paste is
+Windows-only — so no click is ever synthesized and a right-click-only handler would be dead code. Fix: the
+component claims the right press (`{handled: true}`); the release then synthesizes a click that
+`dispatchMouseToTarget` sends straight back to this component.
+
+## Verified
+
+- `test/todo-widget.test.mts` (11 tests, +2): a right click hides (press claimed + click handled), the hide
+  persists to settings, refresh() unregisters instead of rendering, store changes while hidden cause no
+  re-registration, `show()` restores and persists, and a fresh widget over the same store stays hidden
+  (restart semantics).
+- 372/372 project tests, `npm run check` + `check:core` 0 errors.
+- `npm run test:pty` rc=0 with a new stage: real SGR right clicks make the panel disappear, `/todos` opens
+  the overlay (lists all five tasks), Esc closes it, and the panel is back above the editor.
+- Harness hardening: the overlay renders inline (the panel below stays visible either way), so closure is
+  asserted on the overlay title, not the panel; Esc can race the overlay's input registration, so the
+  closure loop may resend Esc (on the closed editor it is a no-op).
+
 # Validation record — 0.17.1 (clickable codex-todo panel)
 
 Interaction change requested from a screenshot: the persistent todo list grows by one row (three task rows

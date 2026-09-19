@@ -132,6 +132,8 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
 
   const openOverlay = (): void => {
     if (!ui) return;
+    // Opening /todos restores a panel the user right-clicked away.
+    widget.show();
     void openTodoOverlay(ui as never, { system, sessionId: () => lastSessionId });
   };
 

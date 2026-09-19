@@ -12,7 +12,9 @@
 // - Two sizes: the collapsed budget above, and an expanded view that shows the
 //   whole list. A LEFT CLICK anywhere on the panel toggles between them (the
 //   host dispatches mouse events through the layout tree, so the component just
-//   implements handleMouse); ctrl+shift+t does the same for keyboards.
+//   implements handleMouse); ctrl+shift+t does the same for keyboards. A RIGHT
+//   CLICK hides the panel altogether; opening /todos shows it again. The hide
+//   is persisted (`widgetHidden`) so it survives restarts.
 // - Completed rows collapse on the NEXT turn (completedAtTurn < turn), so the
 //   user sees the ✓ before it folds away.
 // - Zero polling: refresh() runs only from the system's changed hook.
@@ -75,6 +77,15 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   let expanded = (() => {
     try {
       return system.store.settings().widgetExpanded;
+    } catch {
+      return false;
+    }
+  })();
+  // User-level hide: while set the panel stays gone regardless of tasks.
+  // Lazily read like `expanded` — the store opens at session_start.
+  let hidden = (() => {
+    try {
+      return system.store.settings().widgetHidden;
     } catch {
       return false;
     }
@@ -188,6 +199,17 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     setExpanded(!expanded);
   }
 
+  function setHidden(next: boolean): void {
+    hidden = next;
+    latchedHeight = null;
+    try {
+      system.store.saveSettings({ widgetHidden: hidden });
+    } catch {
+      // persistence is best-effort; the toggle still works in-memory
+    }
+    refresh();
+  }
+
   const factory = (tui: unknown, theme: TodoWidgetTheme | undefined) => {
     tuiRef = tui as { requestRender?: () => void } | undefined;
     return {
@@ -195,12 +217,25 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
         return paint(buildRows(system.store.read(), width, system.turn()), theme);
       },
       // The host hit-tests the layout and calls handleMouse on the component
-      // under the cursor, so a left click anywhere on the panel toggles the
-      // full list. Claiming the event keeps it away from transcript selection.
+      // under the cursor. Left click toggles the full list; right click hides
+      // the panel (claiming the event keeps both away from transcript
+      // selection).
+      // Host contract (pi-tui handleMouseEvent): a "click" is only synthesized
+      // when the PRESS was claimed by a component — the transcript viewport
+      // claims left presses upstream, but no one claims a right press, so the
+      // widget must claim it or the hide click would never be delivered.
       handleMouse(event?: { type?: string; button?: string }): { handled: true } | undefined {
-        if (event?.type !== "click" || event?.button !== "left") return undefined;
-        toggleExpanded();
-        return { handled: true };
+        if (event?.type === "press" && event.button === "right") return { handled: true };
+        if (event?.type !== "click") return undefined;
+        if (event.button === "left") {
+          toggleExpanded();
+          return { handled: true };
+        }
+        if (event.button === "right") {
+          setHidden(true);
+          return { handled: true };
+        }
+        return undefined;
       },
     };
   };
@@ -221,6 +256,10 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     try {
       state = system.store.read();
     } catch {
+      return;
+    }
+    if (hidden) {
+      unregister();
       return;
     }
     if (!visibleRows(state, system.turn())) {
@@ -255,6 +294,10 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     },
     toggleExpanded,
     isExpanded: () => expanded,
+    setHidden,
+    hide: () => setHidden(true),
+    show: () => setHidden(false),
+    isHidden: () => hidden,
     /** Test seam: the widget component the host sees (render + handleMouse). */
     component: (tui: unknown, theme?: TodoWidgetTheme) => factory(tui, theme) as {
       render(width: number): string[];

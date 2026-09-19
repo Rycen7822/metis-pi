@@ -593,6 +593,43 @@ try {
   assert.equal((recollapsedRows.match(/○ pty task/g) ?? []).length, 3, "clicking again returns to three rows");
   assert.ok(!recollapsedRows.includes("pty task 5"), "collapsing hides the tail again");
 
+  // A RIGHT CLICK hides the panel outright; opening /todos brings it back.
+  // Same row-sweep discipline as the left-click toggle: re-check the target
+  // state before each attempt so a sweep can never double-toggle.
+  const rightClickUntil = async (pattern, present, label) => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const frame = visibleText();
+      if (present ? pattern.test(frame) : !pattern.test(frame)) return frame;
+      const header = visibleRows(capture()).findIndex((l) => l.includes("Todos 0/5 done"));
+      assert.ok(header >= 0, `${label}: the panel must be on screen`);
+      const target = header + 1 + [2, 1, 3, 4, 5, 0][attempt % 6]; // SGR rows are 1-based
+      sendKeys(["-H", ...sgrSeq(2, 12, target)]);
+      sendKeys(["-H", ...sgrSeq(2, 12, target, true)]);
+      await new Promise((resolve) => setTimeout(resolve, 450));
+    }
+    throw new Error(`timeout waiting for ${label}:\n${visibleText()}`);
+  };
+
+  await rightClickUntil(/Todos 0\/5 done/, false, "a right click hides the todo panel");
+  assert.ok(!visibleText().includes("Todos 0/5 done"), "panel gone after the right click");
+
+  // /todos reopens it: the overlay lists the tasks, and closing it leaves the
+  // restored panel above the editor.
+  type("/todos");
+  sendKeys(["Enter"]);
+  await waitFor(/── todos \(5 tasks\)/, 30_000, "/todos overlay lists the tasks");
+  sendKeys(["Escape"]);
+  // The overlay renders inline above the (always visible) panel, so a plain
+  // panel wait cannot tell whether it closed — assert on the title instead.
+  // Esc can race the overlay's input registration, so resend it if the title
+  // is still there (a stray Esc on the closed editor is a no-op).
+  for (let i = 0; i < 20 && /── todos \(5 tasks\)/.test(visibleText()); i += 1) {
+    if (i > 0) sendKeys(["Escape"]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  assert.ok(!/── todos \(5 tasks\)/.test(visibleText()), `Esc must close the overlay:\n${visibleText()}`);
+  await waitFor(/Todos 0\/5 done ▾/, 30_000, "/todos restores the hidden panel");
+
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");
   sendKeys(["Enter"]);
@@ -689,6 +726,7 @@ try {
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
+  console.log("  todo panel:   a right click hides it; /todos restores it above the editor");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion + codex-todo shortcuts (live registrations)");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);

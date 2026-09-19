@@ -152,10 +152,14 @@ test("a left click on the panel toggles the full list; other events pass through
     const collapsed = component.render(80);
     assert.equal(collapsed.length, 6); // header + 3 body + summary + spacer
 
-    // Non-left/ non-click events are ignored so the transcript keeps them.
+    // Non-click events are ignored so the transcript keeps them. (A right
+    // click HIDES the panel — covered by the hide test below. The right PRESS
+    // is claimed so the host synthesizes the click: see the host-contract
+    // comment in widget.ts.)
     assert.equal(component.handleMouse?.({ type: "wheel", button: "none", wheelDelta: 3 }), undefined);
-    assert.equal(component.handleMouse?.({ type: "click", button: "right" }), undefined);
     assert.equal(component.handleMouse?.({ type: "press", button: "left" }), undefined);
+    assert.equal(component.handleMouse?.({ type: "click", button: "middle" }), undefined);
+    assert.deepEqual(component.handleMouse?.({ type: "press", button: "right" }), { handled: true });
 
     const claimed = component.handleMouse?.({ type: "click", button: "left" });
     assert.deepEqual(claimed, { handled: true });
@@ -170,6 +174,70 @@ test("a left click on the panel toggles the full list; other events pass through
     const again = component.render(80);
     assert.equal(again.length, 6);
     assert.match(again[0], /click to expand/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a right click hides the panel; hide persists and /todos-style show restores it", async () => {
+  const { dir, store, widget, calls } = setup();
+  try {
+    await stateWith(store, [{ title: "a" }, { title: "b" }]);
+    widget.refresh();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].content != null, true);
+
+    const component = widget.component({ requestRender() {} });
+    const claimed = component.handleMouse?.({ type: "press", button: "right" });
+    assert.deepEqual(claimed, { handled: true });
+    const clicked = component.handleMouse?.({ type: "click", button: "right" });
+    assert.deepEqual(clicked, { handled: true });
+    assert.equal(widget.isHidden(), true);
+    // Persisted so a restart keeps the panel away.
+    assert.equal(store.settings().widgetHidden, true);
+    // refresh() unregisters instead of re-rendering.
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].key, TODO_WIDGET_KEY);
+    assert.equal(calls[1].content, undefined);
+
+    // Store changes while hidden: still gone, no new registration.
+    await stateWith(store, [{ title: "c" }]);
+    widget.refresh();
+    assert.equal(calls.length, 2);
+
+    // Opening /todos calls show(): the panel comes back and stays back.
+    widget.show();
+    assert.equal(widget.isHidden(), false);
+    assert.equal(store.settings().widgetHidden, false);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].content != null, true);
+    await stateWith(store, [{ title: "d" }]);
+    widget.refresh();
+    assert.equal(calls.length, 3); // already registered, just a render
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hide state survives a fresh widget over the same store", async () => {
+  const { dir, store, widget, calls } = setup();
+  try {
+    await stateWith(store, [{ title: "a" }]);
+    widget.hide();
+    assert.equal(store.settings().widgetHidden, true);
+
+    // A new widget (restart) reads the persisted hide and refuses to show.
+    const system2: CodexTodoSystem = { store, turn: () => 5, changed: () => {} };
+    const widget2 = createTodoWidget({ system: system2, sessionId: () => "sess-A" });
+    widget2.attach({ setWidget: (key: string, content: unknown) => calls.push({ key, content }) });
+    assert.equal(widget2.isHidden(), true);
+    widget2.refresh();
+    assert.equal(calls.length, 0); // hidden → never registers
+
+    widget2.show();
+    widget2.refresh();
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].content != null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
