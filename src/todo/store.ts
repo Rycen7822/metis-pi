@@ -33,6 +33,8 @@ export const DEFAULT_GC_DAYS = 7;
 
 export interface TodoSettings {
   gcDays: number;
+  /** Persistent widget fold state (rpiv loses this on /reload; we have disk). */
+  widgetFolded: boolean;
 }
 
 interface LockInfo {
@@ -61,6 +63,8 @@ export interface TodoStore {
   mutate<T>(fn: (state: TodoState) => ModelResult<T>): Promise<{ ok: true; value: T; state: TodoState } | { ok: false; error: string }>;
   /** GC eligible closed tasks; returns how many were removed. */
   collect(now?: number): number;
+  /** Merge settings into settings.json (e.g. the widget's fold state). */
+  saveSettings(patch: Partial<TodoSettings>): TodoSettings;
   status(): StoreStatus;
   dispose(): void;
 }
@@ -115,7 +119,8 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
   const loadSettings = (): TodoSettings => {
     const raw = readJson(settingsPath) as Record<string, unknown> | undefined;
     const gcDays = typeof raw?.gcDays === "number" && raw.gcDays >= 0 ? raw.gcDays : DEFAULT_GC_DAYS;
-    return { gcDays };
+    const widgetFolded = raw?.widgetFolded === true;
+    return { gcDays, widgetFolded };
   };
 
   const readState = (): TodoState => {
@@ -235,6 +240,13 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
       const after = gcOnce(before);
       if (after !== before) writeState(after);
       return before.tasks.length - after.tasks.length;
+    },
+    saveSettings: (patch) => {
+      const next = { ...loadSettings(), ...patch };
+      const tmp = `${settingsPath}.tmp-${process.pid}-${now()}`;
+      fs.writeFileSync(tmp, JSON.stringify(next, null, 2), "utf8");
+      fs.renameSync(tmp, settingsPath);
+      return next;
     },
     status: () => {
       const state = readState();

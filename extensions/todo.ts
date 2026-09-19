@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { openTodoStore, TODO_DIR_NAME, type TodoStore } from "../src/todo/store.ts";
 import { createTodoToolHandlers, TodoToolParams, type TodoToolCall } from "../src/todo/tools.ts";
 import { registerCodexTodoCommands } from "../src/todo/commands.ts";
+import { createTodoWidget } from "../src/todo/widget.ts";
 
 const TODO_TOOL_NAME = "todo";
 
@@ -19,6 +20,7 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
   let ui: { notify?: (text: string, type?: "info" | "warning" | "error") => void } | undefined;
   let turn = 0;
   const changedHooks: (() => void)[] = [];
+  let lastSessionId = "main";
 
   const notify = (text: string, type?: "info" | "warning" | "error"): void => {
     try {
@@ -62,12 +64,27 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
     },
   };
 
+  const widget = createTodoWidget({ system, sessionId: () => lastSessionId });
+  changedHooks.push(() => widget.refresh());
+
+  try {
+    pi.registerShortcut("ctrl+shift+t", {
+      description: "Collapse/expand the codex-todo widget",
+      handler: () => widget.toggleFold(),
+    });
+  } catch (err) {
+    notify(`codex-todo: shortcut unavailable — ${err instanceof Error ? err.message : String(err)}`, "warning");
+  }
+
   pi.on("session_start", (_event, ctx) => {
     ui = ctx.ui;
     sessionCwd = ctx.cwd;
+    lastSessionId = ctx.sessionManager.getSessionId();
     turn = 0;
     try {
-      ensureStore(ctx.cwd, ctx.sessionManager.getSessionId());
+      ensureStore(ctx.cwd, lastSessionId);
+      widget.attach(ctx.ui as never);
+      widget.refresh();
     } catch (err) {
       notify(`codex-todo: failed to open store — ${err instanceof Error ? err.message : String(err)}`, "error");
     }
@@ -114,6 +131,6 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
 
   registerCodexTodoCommands(pi, { system, notify });
 
-  // M3 (widget) and M4 (overlay) attach here; until then changed() is a no-op.
+  // M4 (overlay) attaches its opener here.
   void changedHooks;
 }
