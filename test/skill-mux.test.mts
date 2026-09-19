@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createSkillMux, type SkillMux } from "../src/skill-mux.ts";
+import { createSkillMux, matchSkillContext, createSkillAutocompleteWrapper, type SkillMux } from "../src/skill-mux.ts";
 
 const makeDir = () => mkdtempSync(join(tmpdir(), "pcx-skillmux-"));
 
@@ -221,4 +221,86 @@ test("￥ trigger: unresolvable tokens keep their ORIGINAL form", () => {
   } finally {
     rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+// ---- autocomplete wrapper ---------------------------------------------------
+
+test("matchSkillContext: only multi-skill positions qualify", () => {
+  // First-token "/" is the host's job — never ours.
+  assert.equal(matchSkillContext("/skill:co"), null);
+  assert.equal(matchSkillContext("/anything"), null);
+  assert.equal(matchSkillContext(""), null);
+  // ￥ first token IS ours.
+  assert.deepEqual(matchSkillContext("￥"), { partial: "￥", trigger: "￥", needle: "" });
+  assert.deepEqual(matchSkillContext("￥co"), { partial: "￥co", trigger: "￥", needle: "co" });
+  // After a complete skill token, "/" and "￥" partials are ours.
+  assert.deepEqual(matchSkillContext("/skill:alpha /"), { partial: "/", trigger: "/", needle: "" });
+  assert.deepEqual(matchSkillContext("/skill:alpha /b"), { partial: "/b", trigger: "/", needle: "b" });
+  assert.deepEqual(matchSkillContext("/skill:alpha /skill:co"), { partial: "/skill:co", trigger: "/", needle: "co" });
+  assert.deepEqual(matchSkillContext("￥alpha ￥"), { partial: "￥", trigger: "￥", needle: "" });
+  assert.deepEqual(matchSkillContext("/skill:alpha ￥ga"), { partial: "￥ga", trigger: "￥", needle: "ga" });
+  assert.deepEqual(matchSkillContext("/skill:alpha ￥beta /ga"), { partial: "/ga", trigger: "/", needle: "ga" });
+  // Non-skill heads and mid-word slashes do not qualify.
+  assert.equal(matchSkillContext("/todos /"), null);
+  assert.equal(matchSkillContext("/skill:alpha mid/"), null);
+  assert.equal(matchSkillContext("plain /"), null);
+  assert.equal(matchSkillContext("/skill:alpha "), null, "no trigger typed after the space yet");
+});
+
+test("autocomplete wrapper: built-in wins; ours fills the multi-skill gap", async () => {
+  const skills = [
+    { name: "alpha", description: "the alpha skill" },
+    { name: "beta", description: "the beta skill" },
+    { name: "alphabet", description: "longer" },
+  ];
+  const baseResult = { items: [{ value: "builtin", label: "builtin" }], prefix: "/skill:a" };
+  const current = {
+    async getSuggestions() {
+      return null;
+    },
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      const line = lines[cursorLine] ?? "";
+      const start = cursorCol - prefix.length;
+      const next = [...lines];
+      next[cursorLine] = line.slice(0, start) + item.value + line.slice(cursorCol);
+      return { lines: next, cursorLine, cursorCol: start + item.value.length };
+    },
+  };
+  const wrapped = createSkillAutocompleteWrapper(() => skills)(current);
+
+  // ￥ first token: items carry the ￥ trigger, label mirrors the host form.
+  const yen = await wrapped.getSuggestions(["￥al"], 0, 3, {});
+  assert.ok(yen && "items" in yen);
+  if (yen && "items" in yen) {
+    assert.equal(yen.prefix, "￥al");
+    assert.deepEqual(yen.items.map((i) => i.value), ["￥alpha ", "￥alphabet "]);
+    assert.equal(yen.items[0].label, "skill:alpha");
+    assert.equal(yen.items[0].description, "the alpha skill");
+  }
+
+  // Second token after "/skill:alpha ": "/" trigger normalizes to /skill:.
+  const second = await wrapped.getSuggestions(["/skill:alpha /ta"], 0, 16, {});
+  assert.ok(second && "items" in second);
+  if (second && "items" in second) {
+    assert.deepEqual(second.items.map((i) => i.value), ["/skill:beta "]);
+    assert.equal(second.prefix, "/ta");
+  }
+
+  // No match → null (editor shows no menu, nothing breaks).
+  assert.equal(await wrapped.getSuggestions(["/skill:alpha /zzz"], 0, 17, {}), null);
+  // No context → null.
+  assert.equal(await wrapped.getSuggestions(["hello /"], 0, 7, {}), null);
+
+  // applyCompletion replaces exactly the partial token, preserving the rest.
+  const applied = wrapped.applyCompletion(["/skill:alpha /b tail"], 0, 15, { value: "/skill:beta " }, "/b");
+  assert.equal(applied.lines[0], "/skill:alpha /skill:beta  tail");
+  assert.equal(applied.cursorCol, 25);
+
+  // The built-in provider's answer always wins.
+  const withBase = createSkillAutocompleteWrapper(() => skills)({
+    async getSuggestions() {
+      return baseResult;
+    },
+  });
+  assert.equal(await withBase.getSuggestions(["/skill:a"], 0, 8, {}), baseResult);
 });

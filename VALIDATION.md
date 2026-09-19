@@ -1,3 +1,35 @@
+# Validation record — 0.17.8 (completion menu for 2nd+ skill tokens)
+
+User screenshots showed: first `/skill:` gets a completion menu; after the second `/` the menu never
+appears, and `￥` gives nothing. Root cause (pi-tui CombinedAutocompleteProvider.getSuggestions read
+verbatim): once the first SPACE exists, the provider only consults the found command's
+`getArgumentCompletions` — skill pseudo-commands register none → null → menu gone. `￥` is outside
+host semantics entirely.
+
+## Fix
+
+`ctx.ui.addAutocompleteProvider` (official API; same pattern as the host example
+examples/extensions/github-issue-autocomplete.ts) wraps the built-in provider from `session_start`:
+
+- Built-in answers always win (zero regression on first-token slash menus, file paths, args).
+- When the built-in returns null and the cursor sits in a multi-skill context (≥1 complete
+  `/skill:` or `￥` token, then a fresh `/…` or `￥…` partial), offer the same skill items the first
+  token gets: label `skill:<name>`, value normalized to the trigger form (`/skill:<name> ` or
+  `￥<name> `, trailing space included). A `/`-triggered FIRST token is never intercepted.
+- applyCompletion delegates to the built-in's generic prefix replacement.
+
+Debug note: a file-logging probe proved the wrapper WAS called and correctly returned null for the
+first pty attempt — the fixture skill names (pcx-pty-mux-*) simply do not contain the test needle
+"ta". Test input bug, not a wrapper bug.
+
+## Verified
+
+- 383/383 (matchSkillContext table cases + wrapper delegation/precedence/apply tests).
+- check 0 errors; pty rc=0 with the E2E now driving the REAL menu: type partial `/mux-b` → wait for
+  the menu (asserted via the item description "pty probe", which cannot appear in the typed text) →
+  Tab accepts → submit → mock model reports both blocks, tail, no raw token. Both `/` and `￥`
+  triggers exercised.
+
 # Validation record — 0.17.7 (￥ quick skill trigger)
 
 Extends skill-mux (0.17.6) with a `￥name` trigger alongside `/skill:name`. Verified against host

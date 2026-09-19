@@ -28,6 +28,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadSkills, stripFrontmatter, type InputEvent, type InputEventResult, type Skill } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
 
 /** Leading skill token: `/skill:name` or `￥name`; the name runs to the
  * next whitespace (or EOL). */
@@ -53,11 +54,18 @@ export interface SkillMuxStats {
   misses: number;
 }
 
+export interface SkillSummary {
+  name: string;
+  description: string;
+}
+
 export interface SkillMux {
   /** pi.on("input") handler: transform multi-skill input, continue otherwise. */
   onInput(event: InputEvent): InputEventResult;
   /** Expand a text for tests; null means "no transform" (host handles it). */
   expand(text: string): string | null;
+  /** All known skills (name + description), sorted, for the completion menu. */
+  listSkills(): SkillSummary[];
   stats(): SkillMuxStats;
 }
 
@@ -213,6 +221,12 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
   return {
     expand,
     stats: () => ({ builds, misses: misses.size }),
+    listSkills: () => {
+      if (!index) buildIndex(false);
+      return [...index!.values()]
+        .map((skill) => ({ name: skill.name, description: skill.description }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
     onInput(event) {
       const text = expand(event.text);
       if (text === null) return { action: "continue" };
@@ -220,4 +234,96 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
       return images && images.length > 0 ? { action: "transform", text, images } : { action: "transform", text };
     },
   };
+}
+
+// ---- autocomplete wrapper ---------------------------------------------------
+
+/** A complete head token plus the current partial token of a multi-skill input. */
+const HEAD_TOKEN = /^(?:\/skill:|￥)\S+\s+/;
+
+export interface SkillContext {
+  /** The exact partial token text before the cursor (this is the replace prefix). */
+  partial: string;
+  /** Which trigger form the replacement should use. */
+  trigger: "/" | "￥";
+  /** Lowercase-free name needle for filtering (trigger and `skill:` stripped). */
+  needle: string;
+}
+
+/**
+ * Detect the multi-skill completion context in the text before the cursor:
+ * one or more COMPLETE skill tokens, then a partial token that opens a new
+ * skill trigger. A `/`-triggered FIRST token is deliberately NOT ours — the
+ * host's built-in provider owns first-token `/` menus; we only fill the gap
+ * after the first token (and own the ￥ form outright).
+ */
+export function matchSkillContext(beforeCursor: string): SkillContext | null {
+  let rest = beforeCursor;
+  let head = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HEAD_TOKEN.exec(rest)) !== null) {
+    head += 1;
+    rest = rest.slice(match[0].length);
+  }
+  if (head === 0 && !rest.startsWith("￥")) return null;
+  let trigger: "/" | "￥";
+  let body: string;
+  if (rest.startsWith("/")) {
+    trigger = "/";
+    body = rest.slice(1);
+    if (body.includes("/")) return null; // not a fresh trigger token
+  } else if (rest.startsWith("￥")) {
+    trigger = "￥";
+    body = rest.slice(1);
+  } else {
+    return null; // cursor sits after a space with no new trigger typed yet
+  }
+  return { partial: rest, trigger, needle: body.startsWith("skill:") ? body.slice(6) : body };
+}
+
+const MAX_COMPLETION_ITEMS = 20;
+
+const buildCompletionItems = (ctx: SkillContext, skills: SkillSummary[]): AutocompleteItem[] => {
+  const needle = ctx.needle.toLowerCase();
+  const prefix = ctx.trigger === "/" ? "/skill:" : "￥";
+  return skills
+    .filter((skill) => needle.length === 0 || skill.name.toLowerCase().includes(needle))
+    .slice(0, MAX_COMPLETION_ITEMS)
+    .map((skill) => ({
+      value: `${prefix}${skill.name} `,
+      label: `skill:${skill.name}`,
+      ...(skill.description ? { description: skill.description } : {}),
+    }));
+};
+
+export type SkillListFn = () => SkillSummary[];
+
+/**
+ * Wrap the host's autocomplete provider (ui.addAutocompleteProvider): keep
+ * every built-in behavior (first-token slash menus, file paths, arguments),
+ * and add skill-name completions for the second-and-later skill tokens —
+ * `/skill:a /…` and `￥…` — which the built-in provider abandons (it only
+ * completes command names at position 0 and has no skill argument support).
+ */
+export function createSkillAutocompleteWrapper(listSkills: SkillListFn): (current: AutocompleteProvider) => AutocompleteProvider {
+  return (current) => ({
+    triggerCharacters: ["￥"],
+    async getSuggestions(lines, cursorLine, cursorCol, options) {
+      const base = await current.getSuggestions(lines, cursorLine, cursorCol, options);
+      if (base) return base; // built-in wins everywhere it already answers
+      const line = lines[cursorLine] ?? "";
+      const ctx = matchSkillContext(line.slice(0, cursorCol));
+      if (!ctx) return null;
+      const items = buildCompletionItems(ctx, listSkills());
+      return items.length > 0 ? { items, prefix: ctx.partial } : null;
+    },
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      // Same generic prefix replacement the built-in provider uses for
+      // non-slash items (our prefix never matches its slash-command branch).
+      return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+    },
+    ...(current.shouldTriggerFileCompletion
+      ? { shouldTriggerFileCompletion: current.shouldTriggerFileCompletion.bind(current) }
+      : {}),
+  });
 }

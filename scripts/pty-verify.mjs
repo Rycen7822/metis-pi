@@ -733,14 +733,34 @@ try {
   // shows nothing for these tokens, so Enter submits the literal text; the
   // input hook must expand both skills (host-format blocks) and keep the
   // trailing text before the host dispatches to the model.
+  // 0.17.8: completion for the SECOND token. The host only completes the
+  // first `/skill:` token; after it, `/…` (and `￥…`) must offer the same
+  // skill menu. Type the partial "/mux-b" (needle filters to pcx-pty-mux-b),
+  // wait for the menu (its item description "pty probe" never appears in the
+  // typed text), accept with Tab, then finish and submit — the accepted token
+  // must expand.
+  type("/skill:pcx-pty-mux-a /mux-b");
+  await waitFor(/pty probe/, 15_000, "second-token completion menu appears");
+  sendKeys(["Tab"]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  type("MUX_TAIL_MARKER");
+  sendKeys(["Enter"]);
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "accepted second token expands");
+
+  // 0.17.6 baseline still holds without the menu: full tokens typed out.
   type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
   await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "both skills expanded from one input");
   // Same expansion via the ￥ quick trigger (the host has no native ￥ syntax;
-  // a lone ￥ token must also expand — this input exercises exactly that).
-  type("￥pcx-pty-mux-a ￥pcx-pty-mux-b MUX_TAIL_MARKER");
+  // a lone ￥ token must also expand — this input exercises exactly that),
+  // plus the ￥ completion menu for the first token.
+  type("￥pcx-pty-mux-a /mux-b");
+  await waitFor(/pty probe/, 15_000, "￥ first-token completion menu appears");
+  sendKeys(["Tab"]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  type("MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "￥ trigger expands both skills too");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "￥ + accepted / token both expand");
 
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
@@ -756,7 +776,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    /skill:a /skill:b tail AND ￥a ￥b tail in one input → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    2nd-token / and ￥ completion menus (Tab-accept) → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

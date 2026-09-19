@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.17.8
+
+**修复：多 skill 输入的补全菜单**——用户截图实证：第一个 `/skill:` 有补全菜单，第二个 `/` 之后菜单消失、`￥` 无任何反应。
+
+- 根因：宿主补全器（pi-tui `CombinedAutocompleteProvider`）只在行首无空格时按命令名补全；第一个
+  空格之后只看该命令的 `getArgumentCompletions`——skill 命令没注册参数补全 → 返回 null → 菜单消失。
+  `￥` 则完全不在宿主语义内。
+- 修复：经官方扩展 API `ctx.ui.addAutocompleteProvider`（与宿主示例 github-issue-autocomplete.ts
+  同模式，在 `session_start` 注册）包装内置补全器：内置有结果时一律让路（零回归），内置返回 null
+  且光标处于多 skill 上下文（≥1 个完整 skill token + 新的 `/`/`￥` 部分 token）时，提供与首 token
+  同形的 skill 菜单（label `skill:名`，值按触发符归一化为 `/skill:名 ` 或 `￥名 `，含尾随空格）。
+  `applyCompletion` 委托内置的通用 prefix 替换。首个 `/` token 仍是宿主的，不抢。
+- 排障实录：探针证实包装器被调用且对 `/ta` 返回 null——是 pty 夹具 skill 名（pcx-pty-mux-*）不含
+  "ta"，测试输入针误配；wrapper 本身行为正确。
+
+验证：383/383（新增 matchSkillContext 上下文表测试 + wrapper 委托/让路/应用替换测试）；
+check 0；pty rc=0 且 E2E 升级为真实菜单交互——输入部分名 `/mux-b` → 菜单出现（以描述文本 "pty probe"
+断言，避免与已输入文字混淆）→ Tab 接受 → 提交 → mock 模型回报双块到达、无残留 token；`/` 与 `￥`
+两种触发各跑一遍。
+
 ## 0.17.7
 
 **skill-mux 新增 `￥` 快捷触发符**——`￥skill-1 ￥skill2 其他文字` 与 `/skill:` 完全等价，可混用。
