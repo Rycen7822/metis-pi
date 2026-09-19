@@ -1,10 +1,10 @@
 // codex-todo widget tests — pure rows, register-once contract, fold persistence.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openTodoStore } from "../src/todo/store.ts";
+import { openTodoStore, TODO_STATE_FILE } from "../src/todo/store.ts";
 import { addTasks, claimTask, completeTask, skipTask, type TodoState } from "../src/todo/model.ts";
 import { createTodoWidget, TODO_WIDGET_KEY, TODO_WIDGET_PLACEMENT } from "../src/todo/widget.ts";
 import type { CodexTodoSystem } from "../src/todo/tools.ts";
@@ -55,6 +55,35 @@ test("hidden when empty, register-once on first task, unregister when all done f
     widget.refresh();
     assert.equal(calls.length, 2);
     assert.equal(calls[1].content, undefined); // setWidget(key, undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a list finished in an earlier session never pops the panel up (restart)", async () => {
+  const { dir, store, widget, calls } = setup();
+  try {
+    // What a restart finds: finished work with old timestamps and old ordinals,
+    // while this session's turn counter starts over at 0.
+    const when = Date.now() - 3_600_000;
+    writeFileSync(join(dir, TODO_STATE_FILE), JSON.stringify({
+      version: 1,
+      nextId: 3,
+      tasks: [
+        { id: 1, title: "shipped", parentId: null, status: "complete", blockedBy: [], claim: null, evidence: "e", skipReason: null, createdAt: when, updatedAt: when, completedAt: when, completedAtTurn: 3 },
+        { id: 2, title: "also shipped", parentId: null, status: "complete", blockedBy: [], claim: null, evidence: "e", skipReason: null, createdAt: when, updatedAt: when, completedAt: when, completedAtTurn: 4 },
+      ],
+    }), "utf8");
+
+    widget.refresh();
+    assert.equal(calls.length, 0, "no panel for work that was already done when the session started");
+    assert.equal(widget.visibleRows(store.read(), 0), false, "visibleRows agrees at turn 0");
+
+    // New work registers the panel again: the session gate must not disable it.
+    await stateWith(store, [{ title: "fresh task" }]);
+    widget.refresh();
+    assert.equal(calls.length, 1, "a new task brings the panel back");
+    assert.equal(widget.visibleRows(store.read(), 0), true, "an unfinished task always shows");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

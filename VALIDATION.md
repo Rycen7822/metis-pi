@@ -1,3 +1,27 @@
+# Validation record — 0.19.1 (no todo panel for work finished in an earlier session)
+
+Report: after restarting pi the panel came back showing `Todos 6/6 done`, i.e. fully finished work popped up again.
+
+Cause: the delayed completed-fold compared `completedAtTurn >= turn`, but `turn` is per SESSION (reset to 0 at
+session_start, +1 per prompt) while the task store is per WORKSPACE. After a restart every completion from the
+previous session (ordinals 3, 4, 5 …) satisfied `>= 0`, so the panel registered again.
+
+Fix: the completion timestamp is the missing fact. `visibleRows` now requires `completedAtTurn >= turn` AND
+`completedAt >= attachedAt`, where `attachedAt` is stamped at attach() (session_start). Callers that use the pure
+seam before attach keep `attachedAt = 0`, i.e. the previous semantics. Verified discriminating: the new unit test
+fails on the pre-fix code (temporarily reverted) and passes with it.
+
+## Verified
+
+- 392/392, check 0 errors. New unit test writes a "previous session" state file (old `completedAt`, old ordinals)
+  straight to disk: `refresh()` registers nothing, `visibleRows(state, 0)` is false, and adding a new task brings
+  the panel back — so the gate removes stale work without disabling the panel.
+- pty rc=0. New final stage restarts the real TUI with a store whose tasks were all finished in the previous
+  session: no `Todos N/N done` line on screen, no "task(s) pending from the previous session" notice, and
+  `/todos` still prints `Todos: 5/5 done` without resurrecting the panel (positive control: the data is intact,
+  only the panel stays folded). Run against the pre-fix build the same stage fails, so the regression is really
+  covered.
+
 # Validation record — 0.19.0 (click-to-toggle on the folded skill entry)
 
 Request: a left click on the folded `[skill] …` entry expands it, another click collapses it. The entry is a host

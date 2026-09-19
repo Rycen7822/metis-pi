@@ -351,9 +351,17 @@ const doubleClickRow = async (rowIndex0, col) => {
   clickRow(rowIndex0, col);
 };
 
-execFileSync("tmux", ["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
-sendKeys(["-l", `env HOME=${HOME_DIR} ${PI_BIN}`]);
-sendKeys(["Enter"]);
+/** (Re)start the TUI in the same tmux session — the restart stage uses this. */
+const bootPi = () => {
+  try { execFileSync("tmux", ["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* not running */ }
+  execFileSync("tmux", ["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
+  // PI_SKIP_VERSION_CHECK: the "Update Available" banner lands in the transcript
+  // asynchronously and shifts rows under the mouse stages (flaky), and it has
+  // nothing to do with what we verify here.
+  sendKeys(["-l", `env HOME=${HOME_DIR} PI_SKIP_VERSION_CHECK=1 ${PI_BIN}`]);
+  sendKeys(["Enter"]);
+};
+bootPi();
 
 const frames = {};
 try {
@@ -868,6 +876,36 @@ try {
   sendKeys(["Enter"]);
   await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "￥ + accepted / token both expand");
 
+  // Restart with a finished list (0.19.1). The store is per workspace and
+  // outlives the session, while the widget's turn counter restarts at 0 — the
+  // panel must not pop back up for work that was already done.
+  const storePath = path.join(WORKSPACE, ".pi", "codex-todos", "tasks.json");
+  const stored = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  const finishedAt = Date.now() - 3_600_000;
+  assert.ok(stored.tasks.length > 0, "the todo stage left tasks to finish");
+  fs.writeFileSync(storePath, JSON.stringify({
+    ...stored,
+    tasks: stored.tasks.map((t) => ({ ...t, status: "complete", evidence: "pty restart probe", completedAt: finishedAt, completedAtTurn: 3 })),
+  }, null, 2));
+  const finishedCount = stored.tasks.length;
+
+  bootPi();
+  await waitFor(/Ask anything\.\.\.|ctx [0-9—]/, 30_000, "composer after the restart");
+  await waitStableFrame();
+  const restartFrame = visibleText();
+  assert.ok(/Ask anything\.\.\./.test(restartFrame), "the restarted TUI is up (composer placeholder visible)");
+  assert.ok(
+    !/Todos \d+\/\d+ done/.test(restartFrame),
+    `no todo panel on restart for ${finishedCount} tasks finished in an earlier session:\n${restartFrame.slice(-800)}`,
+  );
+  assert.ok(!/task\(s\) pending from the previous session/.test(restartFrame), "no pending-tasks reminder for finished work");
+  // Positive control: the list is still on disk, the panel simply folded —
+  // /todos lists the tasks as text without resurrecting the panel.
+  type("/todos");
+  sendKeys(["Enter"]);
+  await waitFor(new RegExp(`Todos: ${finishedCount}/${finishedCount} done`), 30_000, "/todos lists the finished tasks after the restart");
+  assert.ok(!/Todos \d+\/\d+ done/.test(visibleText()), "/todos does not resurrect the folded panel");
+
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log(hasGit ? "  git changes:  session Δ +8 -2 absolute, commit clears, post-commit edits re-count" : "  git changes:  not asserted (git unavailable)");
@@ -881,6 +919,7 @@ try {
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
+  console.log("  todo restart: a store finished in an earlier session shows no panel on the next boot; /todos still lists it");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
   console.log("  skill-mux:    multi-skill prompt folds into ONE collapsed [skill] entry (no raw second block) and click-to-expand/collapse toggles it; bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");

@@ -90,6 +90,10 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
       return false;
     }
   })();
+  // Session boundary for the completed-fold: ms epoch stamped when the panel
+  // attaches (session_start). 0 before that, so a pure visibleRows() call keeps
+  // the turn-only rule. See visibleRows() for why the boundary exists.
+  let attachedAt = 0;
   let latchedHeight: number | null = null;
 
   /** Visible rows for the current snapshot (pure; also what tests assert). */
@@ -159,8 +163,15 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     if (state.tasks.length === 0) return false;
     const unfinished = state.tasks.some((t) => t.status === "pending" || t.status === "in_progress");
     if (unfinished) return true;
-    // Everything finished: linger until this turn's completions fold away.
-    return state.tasks.some((t) => t.completedAtTurn != null && t.completedAtTurn >= turn);
+    // Everything finished: linger until this turn's completions fold away — but
+    // only for completions THIS session watched happen. The store is per
+    // workspace and survives restarts while `turn` restarts at 0, so without the
+    // timestamp gate every old completion looks like it happened "this turn" and
+    // an all-done panel pops up again on startup (0.19.1).
+    return state.tasks.some(
+      (t) =>
+        t.completedAtTurn != null && t.completedAtTurn >= turn && t.completedAt != null && t.completedAt >= attachedAt,
+    );
   }
 
   const paint = (rows: Row[], theme: TodoWidgetTheme | undefined): string[] => {
@@ -281,6 +292,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
 
   return {
     attach(widgetUi: TodoWidgetUi): void {
+      attachedAt = Date.now();
       ui = widgetUi;
     },
     detach(): void {

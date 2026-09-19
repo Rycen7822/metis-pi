@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.19.1
+
+**重启后不再弹出已经全部完成的 todos 面板**（用户报告：重新打开 pi，6/6 已完成的面板又冒出来）。
+
+根因：面板的"完成后延迟收起"用的是 `completedAtTurn >= turn`。`turn` 是**会话内**计数（`session_start` 归零、
+每次 `ui_prompt_start` +1），而任务列表是**按 workspace 持久化**的——重启后旧完成记录的序号（3、4、5…）全部
+"大于等于"新的 turn(0)，于是每个旧完成都像"刚刚完成"，面板照常注册。
+
+修法：完成时刻也是事实，用它划会话边界。`visibleRows` 现在要求"刚完成"同时满足
+`completedAtTurn >= turn` **且** `completedAt >= attachedAt`（`attachedAt` = 面板 attach 的毫秒时间戳，
+即 session_start）。纯函数调用路径（attach 之前 `attachedAt = 0`）保持原语义不变。
+
+行为：重启后已完成的列表不再弹面板，且不会误报 "N task(s) pending from the previous session"；
+`/todos` 仍然打印完整文字列表（数据在，只是面板不弹出）；未完成任务一律照常显示。
+
+验证：392/392（新增单测：把"上一会话完成的 state 文件"直接写盘 → 面板不注册、`visibleRows` 为 false，
+再加新任务则恢复显示；临时回退修复该测试即变红）；check 0；pty rc=0——新增**真实重启**阶段：把 store 全部
+标成完成（旧的 `completedAt`）→ 重启 TUI → 断言无面板、无 pending 提醒，`/todos` 仍列出 `Todos: 5/5 done`
+且不复活面板。（该阶段在回退修复的构建上确实失败，证明它能抓到回归。）
+
 ## 0.19.0
 
 **skill 折叠条目可点击展开/折叠**（用户要求）。
