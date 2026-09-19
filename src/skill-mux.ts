@@ -309,10 +309,17 @@ export function createSkillAutocompleteWrapper(listSkills: SkillListFn): (curren
   return (current) => ({
     triggerCharacters: ["￥"],
     async getSuggestions(lines, cursorLine, cursorCol, options) {
-      const base = await current.getSuggestions(lines, cursorLine, cursorCol, options);
-      if (base) return base; // built-in wins everywhere it already answers
       const line = lines[cursorLine] ?? "";
       const ctx = matchSkillContext(line.slice(0, cursorCol));
+      // Force queries (Tab): in a multi-skill context the user asked for THIS
+      // menu, so answer before the built-in (which would serve file paths for
+      // a "/…" partial). Regular queries stay built-in-first, zero regression.
+      if (ctx && options.force) {
+        const items = buildCompletionItems(ctx, listSkills());
+        if (items.length > 0) return { items, prefix: ctx.partial };
+      }
+      const base = await current.getSuggestions(lines, cursorLine, cursorCol, options);
+      if (base) return base; // built-in wins everywhere it already answers
       if (!ctx) return null;
       const items = buildCompletionItems(ctx, listSkills());
       return items.length > 0 ? { items, prefix: ctx.partial } : null;
@@ -322,8 +329,17 @@ export function createSkillAutocompleteWrapper(listSkills: SkillListFn): (curren
       // non-slash items (our prefix never matches its slash-command branch).
       return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
     },
-    ...(current.shouldTriggerFileCompletion
-      ? { shouldTriggerFileCompletion: current.shouldTriggerFileCompletion.bind(current) }
-      : {}),
+    shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+      // The editor gates ALL forced queries (Tab) behind this hook. In a
+      // multi-skill context a forced query means "show me the skill menu"
+      // (e.g. Tab right after the second "/", which the editor's printable
+      // path refuses to auto-trigger) — let it through even though nothing
+      // file-like is under the cursor. Everywhere else: built-in semantics.
+      const line = lines[cursorLine] ?? "";
+      if (matchSkillContext(line.slice(0, cursorCol))) return true;
+      return current.shouldTriggerFileCompletion
+        ? current.shouldTriggerFileCompletion(lines, cursorLine, cursorCol)
+        : true;
+    },
   });
 }

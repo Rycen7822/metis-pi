@@ -304,3 +304,53 @@ test("autocomplete wrapper: built-in wins; ours fills the multi-skill gap", asyn
   });
   assert.equal(await withBase.getSuggestions(["/skill:a"], 0, 8, {}), baseResult);
 });
+
+test("autocomplete wrapper: Tab-force reaches the skill menu at a bare second '/'; ￥ triggers immediately", async () => {
+  const skills = [
+    { name: "alpha", description: "the alpha skill" },
+    { name: "beta", description: "the beta skill" },
+  ];
+  const fileResult = { items: [{ value: "./file.txt", label: "./file.txt" }], prefix: "/" };
+  const baseResult = { items: [{ value: "builtin", label: "builtin" }], prefix: "/skill:a" };
+  const current = {
+    async getSuggestions(_lines, _line, _col, options) {
+      return options?.force ? fileResult : null; // built-in serves files on force
+    },
+    applyCompletion() {
+      throw new Error("not reached in this test");
+    },
+    shouldTriggerFileCompletion() {
+      return false; // built-in gate: plain text is not a file context
+    },
+  };
+  const wrapped = createSkillAutocompleteWrapper(() => skills)(current);
+
+  // The editor gates forced (Tab) queries behind shouldTriggerFileCompletion:
+  // a multi-skill context must let them through even though nothing is file-like.
+  assert.equal(wrapped.shouldTriggerFileCompletion?.(["/skill:alpha /"], 0, 14), true);
+  assert.equal(wrapped.shouldTriggerFileCompletion?.(["/skill:alpha ￥"], 0, 15), true);
+  assert.equal(wrapped.shouldTriggerFileCompletion?.(["￥alpha /"], 0, 9), true);
+  // Outside our context the built-in gate decides unchanged.
+  assert.equal(wrapped.shouldTriggerFileCompletion?.(["plain text"], 0, 10), false);
+
+  // Force + multi-skill context: OUR items win over the built-in's file items
+  // (a Tab at a bare second "/" means "show skills", not "show files").
+  const forced = await wrapped.getSuggestions(["/skill:alpha /"], 0, 14, { force: true });
+  assert.ok(forced && "items" in forced);
+  if (forced && "items" in forced) {
+    assert.deepEqual(forced.items.map((i) => i.value), ["/skill:alpha ", "/skill:beta "]);
+    assert.equal(forced.prefix, "/");
+  }
+  // Force with a needle that matches no skill falls back to the built-in files.
+  assert.equal(await wrapped.getSuggestions(["/skill:alpha /zzz"], 0, 17, { force: true }), fileResult);
+  // Force outside our context: built-in unchanged.
+  assert.equal(await wrapped.getSuggestions(["/etc/"], 0, 5, { force: true }), fileResult);
+  // Regular (non-force) queries keep built-in precedence even in our context.
+  const current2 = {
+    async getSuggestions() {
+      return baseResult;
+    },
+  };
+  const wrapped2 = createSkillAutocompleteWrapper(() => skills)(current2);
+  assert.equal(await wrapped2.getSuggestions(["/skill:alpha /a"], 0, 15, {}), baseResult);
+});

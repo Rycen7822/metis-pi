@@ -733,29 +733,33 @@ try {
   // shows nothing for these tokens, so Enter submits the literal text; the
   // input hook must expand both skills (host-format blocks) and keep the
   // trailing text before the host dispatches to the model.
-  // 0.17.8: completion for the SECOND token. The host only completes the
-  // first `/skill:` token; after it, `/…` (and `￥…`) must offer the same
-  // skill menu. Type the partial "/mux-b" (needle filters to pcx-pty-mux-b),
-  // wait for the menu (its item description "pty probe" never appears in the
-  // typed text), accept with Tab, then finish and submit — the accepted token
-  // must expand.
-  type("/skill:pcx-pty-mux-a /mux-b");
-  await waitFor(/pty probe/, 15_000, "second-token completion menu appears");
+  // 0.17.9: the editor's printable path auto-triggers "/" ONLY at line start,
+  // so a bare second "/" never queries (typing a letter re-arms it — the
+  // user's "space+backspace" dance works because backspace re-triggers). We
+  // make TAB the immediate trigger: the wrapper lets forced queries through
+  // its gate and serves skills before files in a multi-skill context.
+  type("/skill:pcx-pty-mux-a /");
   sendKeys(["Tab"]);
+  await waitFor(/pty probe/, 15_000, "Tab forces the skill menu at a bare second /");
+  type("mux-b");
+  await waitFor(/pty probe/, 15_000, "the forced menu filters as letters arrive");
+  sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b (proven accept key)
   await new Promise((resolve) => setTimeout(resolve, 300));
   type("MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "accepted second token expands");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "Tab-forced completion expands");
 
   // 0.17.6 baseline still holds without the menu: full tokens typed out.
   type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
   await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "both skills expanded from one input");
-  // Same expansion via the ￥ quick trigger (the host has no native ￥ syntax;
-  // a lone ￥ token must also expand — this input exercises exactly that),
-  // plus the ￥ completion menu for the first token.
-  type("￥pcx-pty-mux-a /mux-b");
-  await waitFor(/pty probe/, 15_000, "￥ first-token completion menu appears");
+
+  // 0.17.9: ￥ is a registered trigger character — after a complete skill
+  // token + space, typing ￥ ALONE must pop the menu (no letter needed).
+  type("￥");
+  await waitFor(/pty probe/, 15_000, "￥ alone pops the menu at a token boundary");
+  type("pcx-pty-mux-a /mux-b");
+  await waitFor(/pty probe/, 15_000, "￥ flow filters down to mux-b");
   sendKeys(["Tab"]);
   await new Promise((resolve) => setTimeout(resolve, 300));
   type("MUX_TAIL_MARKER");

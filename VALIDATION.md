@@ -1,3 +1,31 @@
+# Validation record — 0.17.9 (immediate menu triggers: Tab for "/", ￥ native)
+
+Follow-up to 0.17.8. User evidence: after the second "/", no menu; typing a space and deleting it makes the
+menu appear. Editor source (pi-tui editor.js) explains every step:
+
+- Space cancels: while the menu state is set, a space goes to updateAutocomplete; the built-in returns null
+  for `/skill:a␣` (no argument completions) → cancelAutocomplete clears the state.
+- "/" never re-queries: the printable path auto-triggers "/" ONLY when isAtStartOfMessage(); trigger-char
+  registration explicitly excludes "/"; "/" is outside the letter regex. A bare second "/" produces zero
+  provider queries (verified: space+backspace works because the backspace handler re-triggers via
+  isInSlashCommandContext).
+- Extensions cannot intercept keystrokes (no editor hook), so the fix works the two levers that exist:
+  1. shouldTriggerFileCompletion: the editor gates ALL forced (Tab) queries behind this hook. Our wrapper
+     returns true in a multi-skill context (Tab after a bare "/" now reaches the provider); everywhere else
+     delegates to the built-in unchanged.
+  2. Force-mode precedence: in a multi-skill context, forced queries serve skill items BEFORE the built-in
+     (which would file-complete a "/…" partial); a needle matching no skill falls back to the built-in.
+
+Result: `￥` pops the menu on keydown (registered trigger char, charBefore=space qualifies); `/` pops on the
+next letter (editor's slash-context letter branch) or immediately on Tab. A bare "/" keydown away from line
+start never auto-pops — hardcoded pi-tui behavior, documented in README.
+
+## Verified
+
+- 384/384 (new gate/precedence/delegation unit tests); check 0 errors.
+- pty rc=0 with E2E on both new paths: bare second "/" + Tab → menu → letters filter → Tab accept → submit
+  → mock reports both blocks + tail, no raw token; and ￥ alone pops the menu at a token boundary.
+
 # Validation record — 0.17.8 (completion menu for 2nd+ skill tokens)
 
 User screenshots showed: first `/skill:` gets a completion menu; after the second `/` the menu never

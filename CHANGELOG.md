@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.17.9
+
+**修复：第二个 `/` 敲下去不弹菜单（要打空格再删掉才弹）**——用户实证。根因链（pi-tui 编辑器源码逐行确认）：
+
+- 空格清菜单：菜单一开状态即 `autocompleteState`，输空格走 `else → updateAutocomplete()` → 内置对
+  `/skill:a␣` 返回 null → 编辑器 `cancelAutocomplete()` 清状态。
+- `/` 不重查：可打印字符路径里，`char === "/"` 只在 `isAtStartOfMessage()`（行首）时触发查询；
+  触发字符注册显式排除 `/`（`character === "/"` 被跳过）；`/` 又不在字母正则内 → 裸 `/` 按键零查询。
+- 空格+删除反而弹：退格处理器在状态为空时走 `isInSlashCommandContext → tryTriggerAutocomplete` 重查。
+- 扩展无法在按键层拦截（编辑器无此钩子），但有两处可做的：
+  1. **`shouldTriggerFileCompletion` 门控**：编辑器对所有强制查询（Tab）先过这个钩子。包装器在多
+     skill 上下文返回 true，让 Tab 直达查询；其余位置原样委托内置。
+  2. **force 模式优先级对调**：Tab 触发的强制查询在多 skill 上下文先出 skill 菜单（内置会把 `/…`
+     当文件路径补全）；针不匹配任何 skill 时回退内置（`/tmp` 之类仍出文件）。
+
+**最终交互**：`/skill:a /` 后按 **Tab** 立即弹菜单；或继续敲一个字母自动弹；`￥` 本身是注册触发符，
+按下即弹。宿主限制：裸 `/` 按键（不按键不动 Tab）在行首之外永不自动弹——这是 pi-tui 硬编码，
+扩展无法绕过，已写入 README。
+
+验证：384/384（新增 Tab-force 门控 + force 优先级 + 委托语义单测）；check 0；pty rc=0 且 E2E 覆盖
+两条新路径——裸 `/` + Tab 强制出菜单 → 输字母过滤 → Tab 接受 → 展开；以及 ￥ 单独按键即弹菜单。
+
 ## 0.17.8
 
 **修复：多 skill 输入的补全菜单**——用户截图实证：第一个 `/skill:` 有补全菜单，第二个 `/` 之后菜单消失、`￥` 无任何反应。
