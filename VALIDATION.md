@@ -1,3 +1,24 @@
+# Validation record — 0.17.7 (￥ quick skill trigger)
+
+Extends skill-mux (0.17.6) with a `￥name` trigger alongside `/skill:name`. Verified against host
+sources that `￥` is inert in the host (prompt templates are `/`-prefixed; extension commands are
+`/`-prefixed; nothing consumes a leading ￥), so the syntax is entirely ours:
+
+- One `￥` token expands HERE (the host would send it as literal text) — unlike one `/skill:` token,
+  which still falls through to the host's native expansion.
+- ≥2 tokens expand regardless of trigger mix; zero parses or all-unresolved input passes through
+  untouched (we never re-shape literal user text with injected blank lines).
+- Unresolved tokens keep their ORIGINAL form (￥nope stays ￥nope, never rewritten to /skill:nope).
+- Fast path: first-char check (0x2F+startsWith or 0xFFE5), no regex on non-trigger input.
+
+## Verified
+
+- 381/381 (3 new ￥ tests: lone-token expansion, multi/mixed triggers, original-form preservation;
+  plus `$`-is-not-a-trigger and glued-￥ pass-through cases).
+- check 0 errors; pty rc=0 with the E2E now covering BOTH syntaxes
+  (`/skill:a /skill:b tail` and `￥a ￥b tail` → mock reports both blocks, tail, no raw token;
+  the RAW check matches both `/skill:` and `￥` leftover forms).
+
 # Validation record — 0.17.6 (multi-skill input: /skill:a /skill:b rest)
 
 Feature: expand MULTIPLE leading `/skill:name` tokens in one user input. The host's native

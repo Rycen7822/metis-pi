@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.7
+
+**skill-mux 新增 `￥` 快捷触发符**——`￥skill-1 ￥skill2 其他文字` 与 `/skill:` 完全等价，可混用。
+
+- 宿主对 `￥` 无任何语义（prompt template 是 `/` 开头，已读源码确认零冲突），整个语法由本插件实现。
+- 交接规则：仅一个 `/skill:` token 仍交宿主原生展开；**一个 `￥` token 也由本插件展开**（宿主只会
+  把它当普通文字发出）；≥2 个 token 无论哪种触发符都展开；零解析或全部未命中则原样直通
+  （绝不重排用户的字面文字）。
+- 未命中保持**原始字面**（`￥nope` 不会被改写成 `/skill:nope`）。
+- 快速路径仍是首字符判断（`/`+startsWith 或 0xFFE5），非触发输入零开销。
+
+验证：381/381（新增 3 个 ￥ 单测：单 token 展开、多 token/混用、未命中原始保留；外加 `$` 非触发符、
+`￥` 粘连 token 直通）；check 0；pty rc=0 且 `￥a ￥b tail` 的 E2E 断言通过
+（mock 回报 `A=true B=true TAIL=true RAW=false`，RAW 检查覆盖 `/skill:` 与 `￥` 两种残留形式）。
+
 ## 0.17.6
 
 **新功能：一条输入调用多个 skill**——`/skill:skill-1 /skill:skill2 其他输入` 一次展开全部 skill。

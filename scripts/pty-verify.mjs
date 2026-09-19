@@ -165,7 +165,7 @@ const server = http.createServer((req, res) => {
           // 0.17.6 skill-mux E2E: the model must receive BOTH skill blocks
           // (JSON-escaped quote form — raw `/skill:` tokens never produce it)
           // and the trailing text, with no leftover raw `/skill:` token.
-          ? `MUX_REPLY A=${text.includes('<skill name=\\"pcx-pty-mux-a')} B=${text.includes('<skill name=\\"pcx-pty-mux-b')} TAIL=${text.includes("MUX_TAIL_MARKER")} RAW=${text.includes("/skill:pcx-pty-mux")}`
+          ? `MUX_REPLY A=${text.includes('<skill name=\\"pcx-pty-mux-a')} B=${text.includes('<skill name=\\"pcx-pty-mux-b')} TAIL=${text.includes("MUX_TAIL_MARKER")} RAW=${text.includes("/skill:pcx-pty-mux") || text.includes("￥pcx-pty-mux")}`
           : "PCX_OK";
       send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
       let i = 0;
@@ -736,6 +736,11 @@ try {
   type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
   await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "both skills expanded from one input");
+  // Same expansion via the ￥ quick trigger (the host has no native ￥ syntax;
+  // a lone ￥ token must also expand — this input exercises exactly that).
+  type("￥pcx-pty-mux-a ￥pcx-pty-mux-b MUX_TAIL_MARKER");
+  sendKeys(["Enter"]);
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "￥ trigger expands both skills too");
 
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
@@ -751,7 +756,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    /skill:a /skill:b tail in one input → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    /skill:a /skill:b tail AND ￥a ￥b tail in one input → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

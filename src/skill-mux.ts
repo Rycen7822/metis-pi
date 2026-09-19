@@ -1,15 +1,20 @@
-// skill-mux — expand MULTIPLE leading `/skill:name` tokens in one user input.
+// skill-mux — expand MULTIPLE leading skill tokens in one user input.
 //
-// The host natively expands a single `/skill:name args` (agent-session
-// `_expandSkillCommand`), but only the first token — a second `/skill:` is
-// silently swallowed as "args". This module restores the intuitive syntax
+// Triggers: `/skill:name` (the host's native syntax) and `￥name`; they may
+// mix: `/skill:a ￥b rest`. The host natively expands a single leading
+// `/skill:name args` (agent-session `_expandSkillCommand`) but only the
+// first token — a second `/skill:` is silently swallowed as "args", and `￥`
+// is not skill syntax in the host at all. This module restores the syntax
 //
 //     /skill:one /skill:two the rest of the message
+//     ￥one ￥two the rest of the message
 //
 // by registering on pi's official `input` event (fired BEFORE the host's
 // skill/template expansion; a transform result replaces the text that is
-// then sent). Exactly ONE skill keeps flowing to the host unchanged; zero
-// skills is ignored in O(1). Expansion output is byte-identical to the host
+// then sent). Hand-off rules: zero tokens or an all-literal result passes
+// through untouched; exactly one `/skill:` token is left for the host's
+// native expansion; anything else (two or more tokens, or a lone `￥` token)
+// is transformed here. Expansion output is byte-identical to the host
 // format so the model cannot tell the difference.
 //
 // Performance notes (the input hook runs on every submitted message):
@@ -24,8 +29,15 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadSkills, stripFrontmatter, type InputEvent, type InputEventResult, type Skill } from "@earendil-works/pi-coding-agent";
 
-/** Leading `/skill:name` token: name runs to the next whitespace (or EOL). */
-const SKILL_TOKEN = /^\/skill:([^\s]+)(\s+|$)/;
+/** Leading skill token: `/skill:name` or `￥name`; the name runs to the
+ * next whitespace (or EOL). */
+const SKILL_TOKEN = /^(?:\/skill:|￥)([^\s]+)(\s+|$)/;
+
+/** Does the text open with a skill trigger? Single char check, no regex. */
+const opensWithSkill = (text: string): boolean => {
+  const first = text.charCodeAt(0);
+  return (first === 0x2f && text.startsWith("/skill:")) || first === 0xffe5;
+};
 
 export interface SkillMuxOptions {
   /** Agent config dir (default ~/.pi/agent). */
@@ -168,22 +180,31 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
   };
 
   const expand = (text: string): string | null => {
-    if (!text.startsWith("/skill:")) return null; // O(1) fast path
-    const names: string[] = [];
+    if (!opensWithSkill(text)) return null; // O(1) fast path
+    const tokens: { name: string; raw: string; native: boolean }[] = [];
     let rest = text;
     let match: RegExpExecArray | null;
     while ((match = SKILL_TOKEN.exec(rest)) !== null) {
-      names.push(match[1]);
+      tokens.push({ name: match[1], raw: match[0].trimEnd(), native: match[0].startsWith("/skill:") });
       rest = rest.slice(match[0].length);
     }
-    if (names.length < 2) return null; // 0 impossible; 1 = the host's native job
+    if (tokens.length === 0) return null;
+    // A lone `/skill:x …` keeps its native host expansion; anything else is
+    // ours (the host would swallow a second token or send `￥x` literally).
+    if (tokens.length === 1 && tokens[0].native) return null;
     const parts: string[] = [];
-    for (const name of names) {
-      const skill = lookup(name);
+    let expanded = 0;
+    for (const token of tokens) {
+      const skill = lookup(token.name);
       const block = skill ? expandSkillBlock(skill) : null;
-      // Unknown/unreadable skill stays a literal token (host semantics).
-      parts.push(block ?? `/skill:${name}`);
+      // Unknown/unreadable skill stays as its ORIGINAL literal token (host
+      // semantics for /skill:; plain preservation for ￥).
+      parts.push(block ?? token.raw);
+      if (block) expanded += 1;
     }
+    // Nothing resolved: pass the text through untouched so the host applies
+    // its own native semantics (and we never re-shape literal user text).
+    if (expanded === 0) return null;
     const tail = rest.trim();
     if (tail) parts.push(tail);
     return parts.join("\n\n");

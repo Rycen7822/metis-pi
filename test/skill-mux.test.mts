@@ -67,6 +67,8 @@ test("non-skill input and single-skill input are left for the host", () => {
     assert.equal(f.mux.expand("hello world"), null);
     assert.equal(f.mux.expand("/skill:alpha hello"), null, "one skill + args is the host's native job");
     assert.equal(f.mux.expand(" /skill:alpha /skill:beta"), null, "leading space: not the host syntax");
+    assert.equal(f.mux.expand("$alpha rest"), null, "$ is NOT a skill trigger");
+    assert.equal(f.mux.expand("plain"), null);
     assert.equal(f.mux.onInput({ text: "plain" }).action, "continue");
   } finally {
     rmSync(f.root, { recursive: true, force: true });
@@ -174,9 +176,48 @@ test("adjacent tokens without whitespace parse as one (host-consistent)", () => 
   const f = makeFixture();
   try {
     assert.equal(f.mux.expand("/skill:alpha/skill:beta"), null, "single unknown-ish token → host");
+    assert.equal(f.mux.expand("￥alpha￥beta rest"), null, "glued ￥ token: unresolvable, pass through untouched");
     const out = f.mux.expand("/skill:alpha /skill:beta/skill:gamma tail");
     assert.ok(out!.includes("/skill:beta/skill:gamma"), "glued second token stays literal");
     assert.ok(out!.startsWith(`<skill name="alpha" location="${f.files.alpha}">`));
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("￥ trigger: a lone ￥ token expands here (the host would send it literally)", () => {
+  const f = makeFixture();
+  try {
+    const out = f.mux.expand("￥alpha just do it");
+    const a = block("alpha", f.files.alpha, "Alpha body line one.\nAlpha body line two.");
+    assert.equal(out, `${a}\n\njust do it`);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("￥ trigger: multiple ￥ tokens and mixing with /skill: both work", () => {
+  const f = makeFixture();
+  try {
+    const yen = f.mux.expand("￥alpha ￥beta tail");
+    const a = block("alpha", f.files.alpha, "Alpha body line one.\nAlpha body line two.");
+    const b = block("beta", f.files.beta, "Beta body.");
+    assert.equal(yen, `${a}\n\n${b}\n\ntail`);
+    const mixed = f.mux.expand("/skill:alpha ￥beta ￥gamma");
+    assert.ok(mixed!.includes(`<skill name="alpha" location="${f.files.alpha}">`));
+    assert.ok(mixed!.includes(`<skill name="beta" location="${f.files.beta}">`));
+    assert.ok(mixed!.includes(`<skill name="gamma" location="${f.files.gamma}">`));
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("￥ trigger: unresolvable tokens keep their ORIGINAL form", () => {
+  const f = makeFixture();
+  try {
+    assert.equal(f.mux.expand("￥nope stuff"), null, "lone unresolvable ￥ token: text passes through untouched");
+    const out = f.mux.expand("￥nope /skill:beta");
+    assert.ok(out!.startsWith("￥nope\n\n<skill name=\"beta\""), "￥ token stays ￥, not rewritten to /skill:");
   } finally {
     rmSync(f.root, { recursive: true, force: true });
   }
