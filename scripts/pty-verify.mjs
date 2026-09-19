@@ -98,6 +98,16 @@ const server = http.createServer((req, res) => {
         }, 400);
         return;
       }
+      if (/PCX_TODO_MANY/.test(text)) {
+        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx4", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty task 2" }, { title: "pty task 3" }, { title: "pty task 4" }, { title: "pty task 5" }] }) } }] }, finish_reason: null }] });
+        setTimeout(() => {
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ ...base, choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }, 400);
+        return;
+      }
       if (/PCX_TODO/.test(text)) {
         send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx3", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty task" }] }) } }] }, finish_reason: null }] });
         setTimeout(() => {
@@ -535,6 +545,54 @@ try {
   assert.ok(todoFrame.includes("○ pty task"), "widget shows the task row");
   assert.ok(fs.existsSync(path.join(WORKSPACE, ".pi", "codex-todos", "tasks.json")), "store persisted in the workspace");
 
+  // Stage 3d: the panel is clickable. Five tasks, so the collapsed view shows
+  // three rows plus a "+N more" summary; a left click expands it to the whole
+  // list and a second click collapses it back.
+  type("please PCX_TODO_MANY");
+  sendKeys(["Enter"]);
+  const truncated = await waitFor(/\+2 more \(0 completed, 2 pending\)/, 60_000, "collapsed panel truncates the list");
+  assert.match(truncated, /Todos 0\/5 done ▾ · click to expand/);
+  // Scope every panel assertion to the widget's own rows: the transcript above
+  // also mentions these titles (the todo tool reports what it added).
+  const panelRowsOf = (frame, count) => {
+    const rows = visibleRows(frame);
+    const header = rows.findIndex((l) => l.includes("Todos 0/5 done"));
+    return header < 0 ? [] : rows.slice(header, header + count);
+  };
+  const collapsedPanel = panelRowsOf(truncated, 6).join("\n");
+  assert.equal((collapsedPanel.match(/○ pty task/g) ?? []).length, 3, "exactly three task rows while collapsed");
+  assert.ok(!collapsedPanel.includes("pty task 5"), "the tail is hidden while collapsed");
+
+  // The pane's hit rows drift a row or two from the captured rows (the same
+  // caveat as the reasoning stages), so sweep down from the header: every row
+  // of the panel toggles the same thing, and each attempt re-checks the target
+  // state before clicking again, so a sweep can never double-toggle.
+  const togglePanelUntil = async (pattern, label) => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const before = visibleText();
+      if (pattern.test(before)) return before;
+      const header = visibleRows(capture()).findIndex((l) => l.includes("Todos 0/5 done"));
+      assert.ok(header >= 0, `${label}: the panel must be on screen`);
+      await clickAt(header + [2, 1, 3, 4, 5, 0][attempt % 6], 12);
+      const after = visibleText();
+      if (pattern.test(after)) return after;
+    }
+    throw new Error(`timeout waiting for ${label}:\n${visibleText()}`);
+  };
+
+  const expandedPanel = await togglePanelUntil(/click to collapse/, "a left click expands the todo panel");
+  assert.match(expandedPanel, /Todos 0\/5 done ▴ · click to collapse/);
+  const expandedRows = panelRowsOf(expandedPanel, 7).join("\n");
+  assert.equal((expandedRows.match(/○ pty task/g) ?? []).length, 5, "all five task rows while expanded");
+  assert.ok(!expandedRows.includes("+2 more"), "no summary row while expanded");
+  assert.ok(expandedRows.includes("pty task 5"), "the whole list is visible when expanded");
+
+  const recollapsed = await togglePanelUntil(/\+2 more/, "a second click collapses the todo panel");
+  assert.match(recollapsed, /Todos 0\/5 done ▾ · click to expand/);
+  const recollapsedRows = panelRowsOf(recollapsed, 6).join("\n");
+  assert.equal((recollapsedRows.match(/○ pty task/g) ?? []).length, 3, "clicking again returns to three rows");
+  assert.ok(!recollapsedRows.includes("pty task 5"), "collapsing hides the tail again");
+
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");
   sendKeys(["Enter"]);
@@ -587,7 +645,22 @@ try {
   // exact copy above already prove the shifted frame stays coherent.
   assert.match(beginLine, /^\s{3,}SELECT_BEGIN_MARK/, `transcript content inset by margin + outputPad, got ${JSON.stringify(beginLine)}`);
   assert.ok(flat.includes("fullscreen-margin:applied(margin=2"), "margin diagnostics report applied");
-  assert.match(flat, /outputspeed:[\d.]+tok\/s\(output=80tokens/, "diagnostics expose the measured speed with its scope");
+  // The diagnostics block is taller than the pane once the todo panel sits above
+  // the editor, so its first segments (composer/model/context/cache/speed) scroll
+  // out of view. Wheel the transcript up until the header segment is on screen
+  // and assert the speed scope there; everything below reads from the bottom-
+  // anchored frame above.
+  let flatTop = flat;
+  for (let attempt = 0; attempt < 10 && !/outputspeed:/.test(flatTop); attempt += 1) {
+    for (let i = 0; i < 3; i += 1) wheelRow(4, 30, true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    flatTop = visibleText().replace(/\s+/g, "");
+  }
+  assert.match(flatTop, /outputspeed:[\d.]+tok\/s\(output=80tokens/, "diagnostics expose the measured speed with its scope");
+  // Back to the live tail: the TUI keeps the scroll position after a manual
+  // scroll, so later stages would otherwise assert against an old viewport.
+  for (let i = 0; i < 40; i += 1) wheelRow(4, 30, false);
+  await new Promise((resolve) => setTimeout(resolve, 400));
 
   assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
   const glyphDiag = flat.match(/glyphs:applied\(terminalprototypewrite\)marks=5\[[^\]]*\]frames=(\d+)changed=(\d+)/);
@@ -602,7 +675,7 @@ try {
   sendKeys(["Enter"]);
   const hotkeys = await waitFor(/Previous Codex background shell/, 20_000, "extensions in /hotkeys");
   assert.match(hotkeys, /Fold or open Codex background shell widget/, "vendored codex-conversion shortcuts registered");
-  assert.match(hotkeys, /Collapse\/expand the codex-todo widget/, "codex-todo shortcut registered in the same session");
+  assert.match(hotkeys, /Expand\/collapse the codex-todo widget/, "codex-todo shortcut registered in the same session");
 
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
@@ -615,6 +688,7 @@ try {
   console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
+  console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion + codex-todo shortcuts (live registrations)");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);

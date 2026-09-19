@@ -1,3 +1,38 @@
+# Validation record — 0.17.1 (clickable codex-todo panel)
+
+Interaction change requested from a screenshot: the persistent todo list grows by one row (three task rows
+instead of two) and the keyboard fold is replaced by the mouse — a left click on the panel expands the full
+list, a second click returns to the three-row view. `ctrl+shift+t` stays registered but is no longer
+advertised in the header.
+
+## How the mouse path works (checked against the host, not assumed)
+
+- pi-tui's fullscreen TUI hit-tests its layout per event (`dispatchMouseToLayout` → `getLayoutBoxesAt`) and
+  calls `handleMouse` on the component under the cursor; `Container`/`Box` forward to children by row.
+- `setExtensionWidget` with a factory stores the component instance it returns and re-adds it to the widget
+  container each render, so a component-level `handleMouse` keeps working across frames.
+- The widget therefore gains `handleMouse` with no pi-tui import: left `click` toggles, anything else
+  (wheel, right click, press) returns `undefined` so the transcript keeps it.
+
+## Verified
+
+- `test/todo-widget.test.mts` (9 tests, +2): three task rows then the summary at index 4 when truncated;
+  expanded shows all six tasks with no summary and persists `widgetExpanded`; a click component toggles
+  collapsed (6 lines) → expanded (7 lines) → collapsed, claiming `{handled: true}` while ignoring
+  wheel/right-click/press; the height latch pads instead of shrinking under live updates (still exactly
+  `first.length` lines after completions) but follows an explicit expand/collapse.
+- 370/370 project tests, `npm run check` 0 errors.
+- `npm run test:pty` rc=0 with a new stage: the mock adds four more tasks, the frame shows
+  `Todos 0/5 done ▾ · click to expand` with exactly three `○ pty task` rows plus
+  `+2 more (0 completed, 2 pending)`; **real SGR left clicks** at the panel then produce
+  `Todos 0/5 done ▴ · click to collapse` with all five rows and no summary row; a second click restores
+  the three-row view. Panel assertions read the widget's own row range, because the transcript above also
+  prints the task titles.
+- Two harness assertions that the taller panel exposed were fixed rather than loosened: the diagnostics
+  block is now read from both ends (wheel up for the header segments such as the speed scope, then wheel
+  back to the live tail, since the TUI keeps a manual scroll position), and the `/hotkeys` assertion follows
+  the new shortcut description.
+
 # Validation record — 0.17.0 (vendored codex-conversion)
 
 `@howaboua/pi-codex-conversion` 3.0.34 is now part of this repository instead of an installed npm

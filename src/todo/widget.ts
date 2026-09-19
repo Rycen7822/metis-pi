@@ -9,6 +9,10 @@
 //   frames pad with blanks and never shrink, so the terminal never jumps.
 // - Line budget is a pure function: maxLines − 1 header; overflow costs one
 //   more row for a "+N more" summary; completed rows are dropped first.
+// - Two sizes: the collapsed budget above, and an expanded view that shows the
+//   whole list. A LEFT CLICK anywhere on the panel toggles between them (the
+//   host dispatches mouse events through the layout tree, so the component just
+//   implements handleMouse); ctrl+shift+t does the same for keyboards.
 // - Completed rows collapse on the NEXT turn (completedAtTurn < turn), so the
 //   user sees the ✓ before it folds away.
 // - Zero polling: refresh() runs only from the system's changed hook.
@@ -21,7 +25,8 @@ import type { CodexTodoSystem } from "./tools.ts";
 
 export const TODO_WIDGET_KEY = "codex-todo";
 export const TODO_WIDGET_PLACEMENT = "aboveEditor";
-export const TODO_DEFAULT_MAX_LINES = 4;
+/** Collapsed height: header + up to 4 body rows (a "+N more" row counts). */
+export const TODO_DEFAULT_MAX_LINES = 5;
 
 export interface TodoWidgetTheme {
   fg?: (kind: string, text: string) => string;
@@ -65,11 +70,11 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   let ui: TodoWidgetUi | undefined;
   let tuiRef: { requestRender?: () => void } | undefined;
   let widgetRegistered = false;
-  // The store opens at session_start, not at extension load — read the fold
-  // state lazily and default to unfolded until then.
-  let folded = (() => {
+  // The store opens at session_start, not at extension load — read the view
+  // state lazily and default to the collapsed list until then.
+  let expanded = (() => {
     try {
-      return system.store.settings().widgetFolded;
+      return system.store.settings().widgetExpanded;
     } catch {
       return false;
     }
@@ -80,11 +85,6 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   function buildRows(state: TodoState, width: number, turn: number): Row[] {
     const count = (s: Task["status"]) => state.tasks.filter((t) => t.status === s).length;
     const done = count("complete") + count("skipped");
-    const header: Row = {
-      text: truncate(`Todos ${done}/${state.tasks.length} done${folded ? " ▸" : " ▾"} · ctrl+shift+t`, width),
-      tone: "accent",
-    };
-    if (folded) return [header];
 
     // Delayed completed-fold: completions stay visible until the next turn.
     const visible = flattenTree(buildTree(state)).filter((n) => {
@@ -93,13 +93,9 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
       return true;
     });
 
-    const rows: Row[] = [header];
     const anyBlockedBy = state.tasks.some((t) => t.blockedBy.length > 0);
     const session = deps.sessionId();
     const body: Row[] = [];
-    let overflowDone = 0;
-    let overflowPending = 0;
-    const budget = maxLines - 1; // header always shows
     for (const node of visible) {
       const t = node.task;
       const blocked = isBlocked(state, t.id);
@@ -109,28 +105,36 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
       const idPrefix = anyBlockedBy ? `${formatTaskId(t.id)} ` : "";
       body.push({ text: truncate(`${indent}${glyph} ${idPrefix}${t.title}${claim}`, width), tone: toneFor(t, blocked) });
     }
-    // Overflow policy: completed first, then the pending tail; one summary row.
-    let room = budget;
-    let summaryNeeded = false;
+    // Overflow policy: completed first, then the pending tail; one summary row
+    // that shares the budget with the rows it summarizes. Expanded shows
+    // everything, so nothing is dropped there.
+    const room = expanded ? body.length : maxLines - 1; // header always shows
+    let overflowDone = 0;
+    let overflowPending = 0;
+    let shown = body;
     if (body.length > room) {
-      const kept: typeof body = [];
-      const doneRows = body.filter((r) => r.tone === "success" || r.tone === "dim");
-      const liveRows = body.filter((r) => r.tone !== "success" && r.tone !== "dim");
-      const dropDone = Math.max(0, body.length - room);
-      const keptDone = doneRows.slice(Math.max(0, dropDone));
-      overflowDone = doneRows.length - keptDone.length;
-      const keptLive = liveRows.slice(0, Math.max(0, room - keptDone.length));
-      overflowPending = liveRows.length - keptLive.length;
-      kept.push(...keptDone, ...keptLive);
-      summaryNeeded = overflowDone + overflowPending > 0;
-      body.length = 0;
-      body.push(...kept);
-      if (summaryNeeded && body.length >= room) body.pop();
+      const capacity = Math.max(0, room - 1); // one slot belongs to the summary
+      const doneIdx: number[] = [];
+      const liveIdx: number[] = [];
+      body.forEach((r, i) => (r.tone === "success" || r.tone === "dim" ? doneIdx : liveIdx).push(i));
+      // Keep every pending row that fits, then the newest completed ones; the
+      // surviving rows keep their tree order.
+      const keepLive = new Set(liveIdx.slice(0, capacity));
+      const keepDone = new Set(doneIdx.slice(Math.max(0, doneIdx.length - Math.max(0, capacity - keepLive.size))));
+      const keep = new Set([...keepLive, ...keepDone]);
+      overflowDone = doneIdx.filter((i) => !keep.has(i)).length;
+      overflowPending = liveIdx.filter((i) => !keep.has(i)).length;
+      shown = body.filter((_, i) => keep.has(i));
     }
-    rows.push(...body);
-    if (summaryNeeded) {
+    const overflow = overflowDone + overflowPending;
+    const hint = expanded ? " ▴ · click to collapse" : overflow > 0 ? " ▾ · click to expand" : "";
+    const rows: Row[] = [
+      { text: truncate(`Todos ${done}/${state.tasks.length} done${hint}`, width), tone: "accent" },
+      ...shown,
+    ];
+    if (overflow > 0) {
       rows.push({
-        text: truncate(`+${overflowDone + overflowPending} more (${overflowDone} completed, ${overflowPending} pending)`, width),
+        text: truncate(`+${overflow} more (${overflowDone} completed, ${overflowPending} pending)`, width),
         tone: "dim",
       });
     }
@@ -150,9 +154,11 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
 
   const paint = (rows: Row[], theme: TodoWidgetTheme | undefined): string[] => {
     let lines = rows.map((r) => r.text);
-    // Stable-height latch: fix the count at first sight, pad later, never shrink.
+    // Stable-height latch: fix the count at first sight and pad later, so live
+    // updates never shrink the panel under the user. Growth is allowed (new
+    // tasks, an explicit expand) because buildRows already bounds the height.
     if (latchedHeight == null) latchedHeight = lines.length;
-    else if (lines.length > latchedHeight) latchedHeight = Math.min(lines.length, maxLines + 1);
+    else if (lines.length > latchedHeight) latchedHeight = lines.length;
     while (lines.length < latchedHeight) lines.push("");
     if (lines.length > latchedHeight) lines = lines.slice(0, latchedHeight);
     return lines.map((line, i) => {
@@ -166,11 +172,35 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     });
   };
 
+  function setExpanded(next: boolean): void {
+    expanded = next;
+    // Re-latch: the panel is allowed to change size when the user asks for it.
+    latchedHeight = null;
+    try {
+      system.store.saveSettings({ widgetExpanded: expanded });
+    } catch {
+      // persistence is best-effort; the toggle still works in-memory
+    }
+    refresh();
+  }
+
+  function toggleExpanded(): void {
+    setExpanded(!expanded);
+  }
+
   const factory = (tui: unknown, theme: TodoWidgetTheme | undefined) => {
     tuiRef = tui as { requestRender?: () => void } | undefined;
     return {
       render(width: number): string[] {
         return paint(buildRows(system.store.read(), width, system.turn()), theme);
+      },
+      // The host hit-tests the layout and calls handleMouse on the component
+      // under the cursor, so a left click anywhere on the panel toggles the
+      // full list. Claiming the event keeps it away from transcript selection.
+      handleMouse(event?: { type?: string; button?: string }): { handled: true } | undefined {
+        if (event?.type !== "click" || event?.button !== "left") return undefined;
+        toggleExpanded();
+        return { handled: true };
       },
     };
   };
@@ -223,16 +253,13 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
       tuiRef = undefined;
       latchedHeight = null;
     },
-    toggleFold(): void {
-      folded = !folded;
-      try {
-        system.store.saveSettings({ widgetFolded: folded });
-      } catch {
-        // persistence is best-effort; the toggle still works in-memory
-      }
-      refresh();
+    toggleExpanded,
+    isExpanded: () => expanded,
+    /** Test seam: the widget component the host sees (render + handleMouse). */
+    component: (tui: unknown, theme?: TodoWidgetTheme) => factory(tui, theme) as {
+      render(width: number): string[];
+      handleMouse?(event: { type?: string; button?: string }): unknown;
     },
-    isFolded: () => folded,
     /** changed-hook entry point — re-evaluate visibility, render if shown. */
     refresh,
     /** Test seam: raw rows without colors or latching. */

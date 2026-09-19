@@ -33,8 +33,8 @@ export const DEFAULT_GC_DAYS = 7;
 
 export interface TodoSettings {
   gcDays: number;
-  /** Persistent widget fold state (rpiv loses this on /reload; we have disk). */
-  widgetFolded: boolean;
+  /** Persistent widget view state: true = full list. */
+  widgetExpanded: boolean;
 }
 
 interface LockInfo {
@@ -119,8 +119,8 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
   const loadSettings = (): TodoSettings => {
     const raw = readJson(settingsPath) as Record<string, unknown> | undefined;
     const gcDays = typeof raw?.gcDays === "number" && raw.gcDays >= 0 ? raw.gcDays : DEFAULT_GC_DAYS;
-    const widgetFolded = raw?.widgetFolded === true;
-    return { gcDays, widgetFolded };
+    const widgetExpanded = raw?.widgetExpanded === true;
+    return { gcDays, widgetExpanded };
   };
 
   const readState = (): TodoState => {

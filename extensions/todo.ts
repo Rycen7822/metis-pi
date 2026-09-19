@@ -70,8 +70,8 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
 
   try {
     pi.registerShortcut("ctrl+shift+t", {
-      description: "Collapse/expand the codex-todo widget",
-      handler: () => widget.toggleFold(),
+      description: "Expand/collapse the codex-todo widget (same as clicking it)",
+      handler: () => widget.toggleExpanded(),
     });
   } catch (err) {
     notify(`codex-todo: shortcut unavailable — ${err instanceof Error ? err.message : String(err)}`, "warning");

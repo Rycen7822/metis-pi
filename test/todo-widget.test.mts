@@ -93,41 +93,112 @@ test("overflow: completed dropped first, +N more summary row, budget honored", a
     ]);
     // Complete live4+live5 at turn 5 (current) so they are visible-but-completed.
     for (const id of [4, 5]) await store.mutate((s) => completeTask(s, id, "ev", Date.now(), turns.get()));
-    // maxLines default 4 → header + 3 body rows + summary, spacer squeezed out.
+    // maxLines default 5 → header + 3 body rows + summary = 5 lines (one row is
+    // given up to the summary), plus the trailing spacer.
     const rows = widget.buildRows(store.read(), 80, 5).map((r) => r.text);
     assert.match(rows[0], /Todos 2\/5 done/);
     const summaryIdx = rows.findIndex((r) => r.startsWith("+"));
     assert.ok(summaryIdx > 0, "expected a +N more row");
     assert.match(rows[summaryIdx], /\+\d+ more \(\d+ completed, \d+ pending\)/);
-    // live tasks survive, completed rows are the ones dropped.
+    assert.equal(summaryIdx, 4, "three task rows then the summary");
+    // The pending rows survive; both completed rows are dropped first so the
+    // whole three-row list stays actionable.
     const body = rows.slice(1, summaryIdx);
-    assert.ok(body.some((r) => r.includes("live1")));
-    assert.ok(!body.some((r) => r.includes("✓")));
-    assert.ok(rows.length <= 5); // header + budget body + summary (+ maybe spacer)
+    assert.deepEqual(body.map((r) => r.slice(2, 7)), ["live1", "live2", "live3"]);
+    assert.match(rows[summaryIdx], /\+2 more \(2 completed, 0 pending\)/);
+    assert.ok(rows.length <= 6); // header + budget body + summary + spacer
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("fold: header only, persists to settings, restores on next open", async () => {
+test("expanded shows the whole list with no summary, and persists to settings", async () => {
   const { dir, store, widget } = setup();
   try {
-    await stateWith(store, [{ title: "a" }]);
-    assert.equal(widget.isFolded(), false);
-    widget.toggleFold();
-    assert.equal(widget.isFolded(), true);
-    const rows = widget.buildRows(store.read(), 80, 5).map((r) => r.text);
-    assert.equal(rows.length, 1);
-    assert.match(rows[0], /Todos 0\/1 done ▸/);
-    assert.equal(store.settings().widgetFolded, true);
+    await stateWith(store, [
+      { title: "one" }, { title: "two" }, { title: "three" }, { title: "four" }, { title: "five" }, { title: "six" },
+    ]);
+    const collapsed = widget.buildRows(store.read(), 80, 5).map((r) => r.text);
+    assert.match(collapsed[0], /Todos 0\/6 done ▾ · click to expand/);
+    assert.ok(collapsed.some((r) => r.startsWith("+")), "collapsed hides the tail");
 
-    // Simulate /reload: a fresh widget over the same store starts folded.
-    const system2: CodexTodoSystem = { store, turn: () => 5, changed: () => {} };
-    const widget2 = createTodoWidget({ system: system2, sessionId: () => "s" });
-    assert.equal(widget2.isFolded(), true);
-    widget2.toggleFold();
-    assert.equal(widget2.isFolded(), false);
-    assert.equal(store.settings().widgetFolded, false);
+    assert.equal(widget.isExpanded(), false);
+    widget.toggleExpanded();
+    assert.equal(widget.isExpanded(), true);
+    assert.equal(store.settings().widgetExpanded, true);
+    const expanded = widget.buildRows(store.read(), 80, 5).map((r) => r.text);
+    assert.match(expanded[0], /Todos 0\/6 done ▴ · click to collapse/);
+    assert.ok(!expanded.some((r) => r.startsWith("+")), "expanded drops the summary");
+    for (const t of ["one", "two", "three", "four", "five", "six"]) {
+      assert.ok(expanded.some((r) => r.includes(t)), `${t} must be visible when expanded`);
+    }
+
+    // A fresh widget over the same store starts expanded (the view survives /reload).
+    const widget2 = createTodoWidget({ system: { store, turn: () => 5, changed: () => {} }, sessionId: () => "s" });
+    assert.equal(widget2.isExpanded(), true);
+    widget2.toggleExpanded();
+    assert.equal(store.settings().widgetExpanded, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a left click on the panel toggles the full list; other events pass through", async () => {
+  const { dir, store, widget } = setup();
+  try {
+    await stateWith(store, [{ title: "a" }, { title: "b" }, { title: "c" }, { title: "d" }, { title: "e" }]);
+    const component = widget.component({ requestRender() {} });
+    assert.equal(typeof component.handleMouse, "function");
+    const collapsed = component.render(80);
+    assert.equal(collapsed.length, 6); // header + 3 body + summary + spacer
+
+    // Non-left/ non-click events are ignored so the transcript keeps them.
+    assert.equal(component.handleMouse?.({ type: "wheel", button: "none", wheelDelta: 3 }), undefined);
+    assert.equal(component.handleMouse?.({ type: "click", button: "right" }), undefined);
+    assert.equal(component.handleMouse?.({ type: "press", button: "left" }), undefined);
+
+    const claimed = component.handleMouse?.({ type: "click", button: "left" });
+    assert.deepEqual(claimed, { handled: true });
+    assert.equal(widget.isExpanded(), true);
+    const expanded = component.render(80);
+    assert.equal(expanded.length, 7); // header + 5 tasks + spacer, no summary row
+    assert.ok(expanded.some((l) => l.includes("click to collapse")));
+
+    // Clicking again collapses back to the three-row list.
+    component.handleMouse?.({ type: "click", button: "left" });
+    assert.equal(widget.isExpanded(), false);
+    const again = component.render(80);
+    assert.equal(again.length, 6);
+    assert.match(again[0], /click to expand/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the live latch keeps the panel from shrinking under live updates", async () => {
+  const { dir, store, widget, calls } = setup();
+  try {
+    await stateWith(store, [{ title: "a" }, { title: "b" }, { title: "c" }, { title: "d" }, { title: "e" }]);
+    widget.refresh();
+    const content = calls[0].content as (tui: unknown, theme: unknown) => { render(width: number): string[] };
+    const first = content({ requestRender() {} }, undefined).render(80);
+    assert.equal(first.length, 6);
+
+    // Two tasks complete and fold away next turn: the panel must not shrink.
+    await store.mutate((s) => completeTask(s, 1, "ev", Date.now(), 5));
+    await store.mutate((s) => completeTask(s, 2, "ev", Date.now(), 5));
+    const padded = content({ requestRender() {} }, undefined).render(80);
+    assert.equal(padded.length, first.length);
+    assert.match(padded[0], /^Todos /, "the header stays on the first row");
+
+    // An explicit expand is allowed to grow past the latch.
+    widget.toggleExpanded();
+    const grown = content({ requestRender() {} }, undefined).render(80);
+    assert.ok(grown.length > first.length, "expanding grows the panel");
+    // ...and collapsing goes back to the collapsed height, not the latched one.
+    widget.toggleExpanded();
+    const back = content({ requestRender() {} }, undefined).render(80);
+    assert.equal(back.length, first.length);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
