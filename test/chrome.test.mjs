@@ -564,6 +564,11 @@ test("footer: real git changes reach the frame in the diff's green/red", async (
   ).render(140).join("\n");
 
   assert.ok(!plain(frame()).includes(" +"), "a clean session start shows no change segment");
+  // The baseline read is async (rev-parse + diff); dirtying the repo before
+  // it lands would fold the edits INTO the baseline and the segment would
+  // never appear. Settle past the read, then dirty.
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.ok(!plain(frame()).includes(" +"), "still clean after the baseline read");
   dirtyRepo(repo);
   const deadline = Date.now() + 3_000;
   let rendered = frame();

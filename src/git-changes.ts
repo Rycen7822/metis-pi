@@ -2,14 +2,18 @@
 // the work tree, never writes to the index or the tree, never throws, and
 // reports nothing (rather than a wrong 0) when the data cannot be read.
 //
-// 0.13.0 semantics — the footer answers "what did THIS session change?":
+// 0.15.4 semantics — the footer answers "what uncommitted change is THIS
+// session responsible for?":
 //
 //   * the session's FIRST read is the baseline, per path, so work-tree changes
 //     that predate the session are not credited to it;
-//   * every later read diffs against the revision the session STARTED from, so
-//     commits made during the session do not erase progress — the numbers are
-//     the session's cumulative ABSOLUTE additions and deletions, never a net
-//     line-count delta ("file grew by 3" is not "file changed by +3 −0");
+//   * every read diffs the work tree against HEAD **as of that read** — HEAD
+//     is re-resolved each cycle, and when HEAD moved (a commit / amend /
+//     rebase / pull landed) the committed delta is folded OUT of the baseline:
+//     a commit CLEARS the footer (the tree is clean again, the numbers go),
+//     while work that is still uncommitted keeps counting from its baseline;
+//   * the numbers are ABSOLUTE additions and deletions, never a net line-count
+//     delta ("file grew by 3" is not "file changed by +3 −0");
 //   * untracked, non-ignored files contribute the lines they gained since the
 //     baseline;
 //   * every writer counts the same way — the agent's tools, a bash/sed/python
@@ -226,8 +230,9 @@ export type ChangeReadResult =
   /** Git answered with an error or timed out: keep the previous numbers. */
   | { readonly kind: "error" };
 
-/** The revision the session diffs against: HEAD at session start. undefined =
- * unborn HEAD (no commits yet), where the read compares index ↔ work tree. */
+/** The revision the work tree currently diffs against: HEAD right now.
+ * undefined = unborn HEAD (no commits yet), where the read compares index ↔
+ * work tree. HEAD is re-resolved every read so a commit is seen next poll. */
 export async function resolveSessionRev(cwd: string, deps: { exec?: GitExec } = {}): Promise<string | undefined> {
   const exec = deps.exec ?? defaultExec;
   const result = await exec(["rev-parse", "--verify", "--quiet", "HEAD"], cwd);
@@ -266,10 +271,11 @@ export async function readChangeSample(cwd: string, deps: ChangeReadDeps = {}): 
 }
 
 /**
- * The session's cumulative change stat: every path's absolute counts beyond
- * what the baseline already had. Clamped per path and dimension, so a session
- * that reverts someone else's pending edit reports nothing rather than a
- * negative.
+ * The session's uncommitted change stat: every path's absolute counts beyond
+ * what the baseline already had (the baseline itself moves when a commit
+ * folds the committed work out of it). Clamped per path and dimension, so a
+ * session that reverts someone else's pending edit reports nothing rather
+ * than a negative.
  */
 export function sessionChangeStat(sample: ChangeSample, baseline: ChangeSample | undefined): GitChangeStat {
   let additions = 0;
@@ -299,6 +305,42 @@ export function sessionChangeStat(sample: ChangeSample, baseline: ChangeSample |
     }
   }
   return { additions, deletions, files };
+}
+
+/**
+ * Per-path counts a commit swept past the baseline (oldRev → newRev). With an
+ * unborn oldRev the whole tree of newRev counts (diff-tree --root). Undefined
+ * = the read failed; callers fall back to re-baselining against the work tree.
+ */
+async function committedDelta(exec: GitExec, cwd: string, oldRev: string | undefined, newRev: string): Promise<Map<string, ChangeCounts> | undefined> {
+  const args = oldRev
+    ? ["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", oldRev, newRev]
+    : ["diff-tree", "--numstat", "-z", "--root", "-r", "--no-ext-diff", "--no-textconv", newRev];
+  const res = await exec(args, cwd);
+  if (!res.ok) return undefined;
+  return parseNumstatZ(res.stdout);
+}
+
+/**
+ * Remove what a commit took away from the baseline: committed paths drop their
+ * committed counts (a fully committed path leaves the baseline), and a
+ * committed untracked-baseline entry disappears — a later edit to that file
+ * starts a fresh count instead of inheriting stale untracked lines.
+ */
+function foldCommittedDelta(baseline: ChangeSample, committed: Map<string, ChangeCounts>): ChangeSample {
+  const tracked = new Map(baseline.tracked);
+  const untracked = new Map(baseline.untracked);
+  for (const [path, counts] of committed) {
+    const base = tracked.get(path);
+    if (base) {
+      const additions = Math.max(0, base.additions - counts.additions);
+      const deletions = Math.max(0, base.deletions - counts.deletions);
+      if (additions === 0 && deletions === 0) tracked.delete(path);
+      else tracked.set(path, { additions, deletions });
+    }
+    untracked.delete(path);
+  }
+  return { tracked, untracked };
 }
 
 export interface GitChangesSession {
@@ -349,12 +391,15 @@ export function createGitChangesTracker(deps: {
   let inFlight: Promise<void> | undefined;
   let current: GitChangeStat | undefined;
   let baseline: ChangeSample | undefined;
+  /** HEAD the baseline was captured against (undefined = unborn). */
+  let baselineRev: string | undefined;
+  /** HEAD from the latest read (diagnostics only). */
   let rev: string | undefined;
   let revCwd: string | undefined;
-  let revReady = false;
   let lastReadAt = 0;
   let lastReadMs = 0;
   let generation = 0;
+  const exec = deps.exec ?? defaultExec;
 
   const run = async (gen: number): Promise<void> => {
     const cwd = deps.getCwd();
@@ -362,19 +407,17 @@ export function createGitChangesTracker(deps: {
       // A new work tree (session /cd): new baseline, new revision.
       revCwd = cwd;
       baseline = undefined;
+      baselineRev = undefined;
       current = undefined;
       rev = undefined;
-      revReady = false;
       lineCounts.clear();
     }
-    if (!revReady) {
-      rev = await resolveSessionRev(cwd, deps);
-      if (gen !== generation) return;
-      revReady = true;
-    }
+
+    const nextRev = await resolveSessionRev(cwd, deps);
+    if (gen !== generation) return;
 
     const started = now();
-    const result = await readChangeSample(cwd, { exec: deps.exec, lineCounts, rev });
+    const result = await readChangeSample(cwd, { exec: deps.exec, lineCounts, rev: nextRev });
     if (gen !== generation) return; // disposed (or re-armed) mid-read
     lastReadMs = now() - started;
     lastReadAt = now();
@@ -384,13 +427,27 @@ export function createGitChangesTracker(deps: {
       const changed = current !== undefined;
       current = undefined;
       baseline = undefined;
+      baselineRev = undefined;
       rev = undefined;
-      revReady = false;
       if (changed) deps.onUpdate?.();
       return;
     }
 
+    // HEAD moved since the baseline (a commit / amend / rebase / pull landed):
+    // fold the committed delta out of the baseline so the stat keeps counting
+    // only uncommitted work — a commit clears the footer instead of freezing
+    // it at the pre-commit numbers. A failed fold falls back to re-baselining
+    // against the current work tree (transient under-report, never stale).
+    if (baseline && nextRev !== baselineRev) {
+      // nextRev undefined (HEAD went unborn): the diff base changed wholesale,
+      // so re-baseline against the index-comparing sample instead of folding.
+      const committed = nextRev === undefined ? undefined : await committedDelta(exec, cwd, baselineRev, nextRev);
+      if (gen !== generation) return;
+      baseline = committed ? foldCommittedDelta(baseline, committed) : result.sample;
+    }
     baseline ??= result.sample;
+    baselineRev = nextRev;
+    rev = nextRev;
     const next = sessionChangeStat(result.sample, baseline);
     const changed = !sameStat(current, next);
     current = next;
@@ -440,8 +497,8 @@ export function createGitChangesTracker(deps: {
       }
       current = undefined;
       baseline = undefined;
+      baselineRev = undefined;
       rev = undefined;
-      revReady = false;
       revCwd = undefined;
       lineCounts.clear();
     },

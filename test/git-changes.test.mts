@@ -1,9 +1,10 @@
 // git-changes.test.mts — the footer's session change counts (+A −D).
 // Three layers: the pure parsers/stat math, the reader (pinned git contract),
-// and the tracker. The last cases run real git in a temp repo — including a
-// mid-session commit and a script-style edit — because the whole point of
-// 0.13.0 is that the counts are the SESSION's absolute additions/deletions,
-// never a worktree-vs-HEAD snapshot or a net line delta.
+// and the tracker. The last cases run real git in a temp repo — including
+// mid-session commits and a script-style edit — because the point since
+// 0.15.4 is that the counts are the session's UNCOMMITTED absolute
+// additions/deletions: a commit clears them, and only work made after the
+// commit counts against the new revision.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -242,12 +243,17 @@ test("readChangeSample reports no-repo and error distinctly, and rev resolution 
 
 test("tracker: the first read is the baseline, later reads are session deltas", async (t) => {
   const dir = fakeRepo(t);
+  let rev = "rev1\n";
   let tracked = "11\t9\ta.ts\0";       // work in progress when the session starts
   let untracked = "notes.md\0";
+  // What a commit swept past the baseline (oldRev → newRev), keyed by request.
+  let committed = "22\t18\ta.ts\0" + "6\t5\tb.ts\0" + "5\t0\tnotes.md\0";
   let updates = 0;
   const exec: GitExec = async (args) => {
     const key = args.join(" ");
-    if (key.startsWith("rev-parse")) return { ok: true, stdout: "rev1\n" };
+    if (key.startsWith("rev-parse")) return { ok: true, stdout: rev };
+    // The two-revision form only comes from the commit fold.
+    if (key === "diff --numstat -z --no-ext-diff --no-textconv rev1 rev2") return { ok: true, stdout: committed };
     if (key.startsWith("diff --numstat -z")) return { ok: true, stdout: tracked };
     if (key === "ls-files --others --exclude-standard -z") return { ok: true, stdout: untracked };
     return { ok: false, stdout: "" };
@@ -264,25 +270,30 @@ test("tracker: the first read is the baseline, later reads are session deltas", 
   assert.deepEqual(tracker.snapshot(), { additions: 17, deletions: 14, files: 2 });
   assert.equal(updates, 2);
 
-  // A commit mid-session does not move the numbers: the read diffs against the
-  // revision the SESSION started from, so git keeps reporting the same rows.
+  // A commit lands: HEAD moves, the work tree is clean against the new rev,
+  // and the committed delta folds out of the baseline — the footer CLEARS.
+  rev = "rev2\n";
+  tracked = "";
+  untracked = "";
   await tracker.refresh();
-  assert.deepEqual(tracker.snapshot(), { additions: 17, deletions: 14, files: 2 }, "a commit never erases session progress");
-  assert.equal(updates, 2, "unchanged numbers do not repaint");
+  assert.deepEqual(tracker.session(), { rev: "rev2", baseline: true }, "the session rev follows HEAD");
+  assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "a commit clears the stat");
+  assert.equal(updates, 3);
+
+  // Work made AFTER the commit counts fresh against the new revision; a file
+  // the session creates counts its whole content.
+  tracked = "3\t0\ta.ts\0";
+  untracked = "fresh.md\0";
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 8, deletions: 0, files: 2 }, "+3 committed-after, +5 for the new file");
+  assert.equal(updates, 4);
 
   // Undoing the work (git checkout / stash / the agent reverting itself) does
-  // report nothing: the numbers are the session's diff against its own start.
+  // report nothing: the numbers are the session's diff against its baseline.
   tracked = "";
   untracked = "";
   await tracker.refresh();
   assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 });
-
-  // New work after that counts against the same baseline again, and a file the
-  // session creates counts its whole content.
-  tracked = "22\t18\ta.ts\0";
-  untracked = ["notes.md", "fresh.md"].join("\0") + "\0";
-  await tracker.refresh();
-  assert.deepEqual(tracker.snapshot(), { additions: 16, deletions: 9, files: 2 }, "+11 −9 tracked, +5 for the new file");
 
   tracker.dispose();
   assert.equal(tracker.running, false);
@@ -409,7 +420,7 @@ test("tracker coalesces concurrent refreshes and drops a read that lands after d
   assert.equal(updates, 0);
 });
 
-test("real git: session deltas survive a commit and count script-made edits", async (t) => {
+test("real git: a commit clears the stat and later edits count against the new HEAD", async (t) => {
   const dir = realRepo(t);
   // Work in progress when the session starts: NOT the session's work.
   writeFileSync(join(dir, "a.txt"), "one\ntwo\nthree\nfour\nfive\n");
@@ -428,17 +439,19 @@ test("real git: session deltas survive a commit and count script-made edits", as
   // scripted.txt: created by the script, untracked, 5 lines → +5.
   assert.deepEqual(tracker.snapshot(), { additions: 7, deletions: 1, files: 2 });
 
-  // A mid-session commit moves the changes into HEAD: the session totals stay.
+  // Committing that work moves HEAD: the tree is clean again, so the footer
+  // clears — and the session revision follows the new HEAD.
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "mid-session");
   await tracker.refresh();
-  assert.deepEqual(tracker.snapshot(), { additions: 7, deletions: 1, files: 2 });
+  assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "a commit clears the stat");
+  assert.notEqual(tracker.session().rev, rev, "the session rev follows HEAD");
 
-  // …and later edits keep adding to the same absolute totals.
+  // …and work made after the commit counts fresh, from the new HEAD.
   appendFileSync(join(dir, "a.txt"), "eight\nnine\n");
   writeFileSync(join(dir, "new.ts"), "export const x = 1;\n");
   await tracker.refresh();
-  assert.deepEqual(tracker.snapshot(), { additions: 10, deletions: 1, files: 3 });
+  assert.deepEqual(tracker.snapshot(), { additions: 3, deletions: 0, files: 2 }, "+2 appended, +1 new file");
   tracker.dispose();
 });
 

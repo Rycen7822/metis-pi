@@ -295,17 +295,19 @@ try {
     frames.gitChangesEdit = await waitFor(/\+8 -2/, 15_000, "absolute counts: +3 untracked and +5 tracked, 2 deletions");
     assert.match(frames.gitChangesEdit, /\(main\) \+8 -2/, "additions and deletions are absolute, not a net");
 
-    // A commit mid-session (the agent's /commit, or git from a script) must not
-    // erase the session's progress: the numbers stay.
+    // A commit mid-session (the agent's /commit, or git from a script) clears
+    // the stat: the tree is clean against the new HEAD, so no counts by the
+    // branch. (0.15.4 — the committed delta folds out of the baseline.)
     execFileSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "ignore" });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mid-session"], { cwd: WORKSPACE, stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 4000));
     const committed = visibleRows(capture()).join("\n");
-    assert.match(committed, /\(main\) \+8 -2/, "a mid-session commit keeps the session totals");
+    assert.ok(!/\+\d+ -\d+/.test(committed), "a mid-session commit clears the counts");
 
-    // …and the totals only grow: 3 more lines, exactly "+11 -2".
+    // …and work made after the commit counts fresh against the new HEAD:
+    // 3 appended lines → "+3 -0".
     fs.appendFileSync(path.join(WORKSPACE, "scripted.txt"), "delta\nepsilon\nzeta\n");
-    frames.gitChangesAfter = await waitFor(/\+11 -2/, 15_000, "later edits add to the same absolute totals");
+    frames.gitChangesAfter = await waitFor(/\(main\) \+3 -0/, 15_000, "post-commit edits count against the new HEAD");
   } else {
     console.log("  NOTE: git unavailable — session change counts not asserted");
   }
@@ -553,7 +555,7 @@ try {
   assert.ok(Number(glyphDiag[1]) > 0 && Number(glyphDiag[2]) > 0, `glyph frames=${glyphDiag[1]} changed=${glyphDiag[2]}`);
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
-  console.log(hasGit ? "  git changes:  session Δ +11 -2 (script-written + tracked edits, absolute and commit-proof)" : "  git changes:  not asserted (git unavailable)");
+  console.log(hasGit ? "  git changes:  session Δ +8 -2 absolute, commit clears, post-commit edits re-count" : "  git changes:  not asserted (git unavailable)");
   console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand, wheel scrolls the window");
   console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");

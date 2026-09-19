@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.4
+
+**行为变更：footer 增删统计在 commit 后清零**（用户明确要求："commit 之后工作树应该是干净了，要清空数据"）。
+
+- 旧口径（0.13.0 起）：diff 基准钉死在 **session 开始时的那个 commit**，中途 commit 不会抹掉累计 —— 但代价是 commit 后数字永远冻住（工作区 vs 老 rev 仍包含已提交内容）。真实复现：改文件 `+4` → commit → 数字冻结在 `+4` 不再更新。
+- 新口径：每次读取重新解析 HEAD；HEAD 一挪（commit / amend / rebase / pull），用 `git diff oldRev newRev --numstat` 把**已提交的部分从基线里折掉**（`foldCommittedDelta`：已提交路径扣除其提交量、完全提交的路径离开基线、被提交的 untracked 条目清除）。footer 只保留**仍未提交**的 session 改动 —— commit 即清零；commit 后的新编辑照常被计入（不会吸进基线、也不会对着老 rev 冻结）。unborn HEAD 的首次提交同样触发清零（`diff-tree --root` 全树折除）。
+- 折除读取失败时退回以当前工作区重建基线（宁可瞬时不报，不留陈旧数字）。
+- 测试：fake-exec tracker 用例与真 git 用例双双改写 —— commit → `0/0`、commit 后编辑 → 只计新改动（真 git 复现脚本 `/tmp/gc-repro.mjs` 四步全过：基线 0 → 脏 +4 → commit 清零 → 新编辑 +3）。
+- 语义文档同步：模块头注释、`sessionChangeStat` 注释、README 两处口径描述；0.13.0 的 CHANGELOG 条目保留为历史。
+
 ## 0.15.3
 
 第三轮：diagnostics.ts 结构重组（`/codex-ui` 报告本身一字未改）：
