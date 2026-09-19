@@ -10,6 +10,7 @@ import { openTodoStore, TODO_DIR_NAME, type TodoStore } from "../src/todo/store.
 import { createTodoToolHandlers, TodoToolParams, type TodoToolCall } from "../src/todo/tools.ts";
 import { registerCodexTodoCommands } from "../src/todo/commands.ts";
 import { createTodoWidget } from "../src/todo/widget.ts";
+import { openTodoOverlay } from "../src/todo/overlay.ts";
 
 const TODO_TOOL_NAME = "todo";
 
@@ -129,8 +130,12 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
     notify(`codex-todo: tool "${TODO_TOOL_NAME}" unavailable — ${err instanceof Error ? err.message : String(err)} (disable the other todo extension)`, "warning");
   }
 
-  registerCodexTodoCommands(pi, { system, notify });
+  const openOverlay = (): void => {
+    if (!ui) return;
+    void openTodoOverlay(ui as never, { system, sessionId: () => lastSessionId });
+  };
 
-  // M4 (overlay) attaches its opener here.
+  registerCodexTodoCommands(pi, { system, notify, openOverlay });
+
   void changedHooks;
 }
