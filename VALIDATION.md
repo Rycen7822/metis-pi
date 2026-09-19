@@ -1,3 +1,36 @@
+# Validation record — 0.17.6 (multi-skill input: /skill:a /skill:b rest)
+
+Feature: expand MULTIPLE leading `/skill:name` tokens in one user input. The host's native
+`_expandSkillCommand` only expands the first token; a second `/skill:` is swallowed as args.
+
+## Mechanism (verified against pi 0.85.1 sources)
+
+- `AgentSession.prompt()` emits the `input` extension event BEFORE command/skill/template
+  routing; handlers may return `{action:"transform", text}` and the transformed text then
+  flows through the normal pipeline. `pi.on("input", …)` is a typed overload
+  (dist/core/extensions/types.d.ts). Transforms chain; "handled" short-circuits.
+- Unknown `/skill:x` as a first token falls through `_tryExecuteExtensionCommand`
+  (returns false when no command matches) — so multi-skill input reaches the hook intact.
+- Expansion output is byte-identical to the host: `<skill name location>\nReferences are
+  relative to ${baseDir}.\n\n${body}\n</skill>` with `stripFrontmatter` — the same
+  `loadSkills`/`stripFrontmatter` functions the host uses are imported from
+  "@earendil-works/pi-coding-agent" (the loader aliases that specifier to the host's own
+  dist, so semantics cannot drift).
+- Steer/followUp paths call `_expandSkillCommand` directly and do NOT emit the input
+  event — mid-stream multi-skill only expands the first token (documented limitation).
+
+## Verified
+
+- 378/378 (9 new hermetic skill-mux tests: tmpdir fixtures for settings-declared,
+  default-dir, project-dir, and manifest-declared skills; pass-through cases; negative
+  cache and single-build reuse stats; unknown-name literal fallback; glued-token
+  host-consistency).
+- check/check:core 0 errors; host-smoke PASS.
+- pty rc=0 with a new E2E stage: two fixture skills under the harness's fake-HOME
+  agentDir, real composer input `/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER`,
+  mock model reports `MUX_REPLY A=true B=true TAIL=true RAW=false` — both blocks arrived,
+  trailing text intact, no leftover raw `/skill:` token.
+
 # Validation record — 0.17.5 (todos overlay removed)
 
 The user asked to delete the inline interactive overlay that popped up in the middle of the screen on

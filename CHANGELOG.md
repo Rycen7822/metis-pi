@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.17.6
+
+**新功能：一条输入调用多个 skill**——`/skill:skill-1 /skill:skill2 其他输入` 一次展开全部 skill。
+
+- 宿主原生 `_expandSkillCommand` 只展开行首第一个 `/skill:` token，第二个会被当成参数静默吞掉。
+  本版本通过 pi 官方 input 拦截钩子（`pi.on("input")`，宿主在 skill/template 展开前调用）实现：
+  连续消费行首的多个 `/skill:name` token，逐个展开为**与宿主逐字节一致**的 `<skill name=…>…</skill>`
+  块，剩余文字作为尾随文本，随后交回宿主正常发送。单个 `/skill:` 与非 skill 输入零开销直通
+  （一次 startsWith 判断，无 I/O）。
+- skill 名→文件索引用**宿主自己的 `loadSkills`**（jiti 别名解析到宿主 dist，语义天然一致），
+  索引会话内惰性构建一次并复用；来源 = settings 的 `skills` 列表 + 默认目录
+  （`<agentDir>/skills`、`<cwd>/.pi/skills`）；miss 时再做一次带扩展 manifest 扫描
+  （`package.json pi.skills`）的重建，且未知名进负缓存，绝不重复扫描。
+- 未知 skill 名保持字面量（与宿主行为一致）；文件读取失败也保持字面量。
+- 已知边界（宿主行为，扩展改不了）：补全菜单不会在第二个 `/skill:` 弹出（手动输全即可）；
+  流式 steer/followUp 路径不经过 input 钩子（agent 运行中插话只展开第一个，空闲时正常）。
+- 新入口 `extensions/skill-mux.ts`（manifest 通配自动挂载），核心在 `src/skill-mux.ts`。
+
+验证：378/378（新增 9 个 skill-mux 单测，全 tmpdir 夹具）；check/check:core 0；
+pty rc=0 且新增 E2E 阶段——真实 TUI 输入 `/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER`，
+mock 模型回报 `MUX_REPLY A=true B=true TAIL=true RAW=false`（两个块都到达模型、尾随文本完整、无残留原始 token）。
+
 ## 0.17.5
 
 **删除 todos overlay 弹窗**（用户反馈：`/todos` 弹出的内联交互窗挡屏幕，还需 Esc 关闭，已无用）：

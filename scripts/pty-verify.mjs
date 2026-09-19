@@ -34,6 +34,14 @@ fs.mkdirSync(WORKSPACE, { recursive: true });
 // Stale codex-todo state from a previous harness run would break the
 // "Todos 0/1 done" stage assertion — start each run with a clean store.
 try { fs.rmSync(path.join(WORKSPACE, ".pi", "codex-todos"), { recursive: true, force: true }); } catch { /* best effort */ }
+// skill-mux fixtures: two skills in the default agent skills dir. The 0.17.6
+// stage types `/skill:a /skill:b tail` into the real composer; the mock model
+// reports which blocks it received.
+for (const probe of ["pcx-pty-mux-a", "pcx-pty-mux-b"]) {
+  const dir = path.join(AGENT_DIR, "skills", probe);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${probe}\ndescription: pty probe\n---\n${probe} probe body.\n`);
+}
 // A real git work tree, so the footer's working-tree change counts are asserted
 // from real frames (the 0.11.0 +A −D segment). Skipped with a note without git.
 const hasGit = (() => {
@@ -153,7 +161,12 @@ const server = http.createServer((req, res) => {
       }
       const reply = /PCX_SELECT/.test(text)
         ? "SELECT_BEGIN_MARK\n这一段很长的中文回答会在终端宽度下软折行显示成多个屏幕行，复制时应当保持为一行逻辑文本，不添加多余的换行或空格。\nselect alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\nSELECT_END_MARK"
-        : "PCX_OK";
+        : /MUX_TAIL_MARKER/.test(text)
+          // 0.17.6 skill-mux E2E: the model must receive BOTH skill blocks
+          // (JSON-escaped quote form — raw `/skill:` tokens never produce it)
+          // and the trailing text, with no leftover raw `/skill:` token.
+          ? `MUX_REPLY A=${text.includes('<skill name=\\"pcx-pty-mux-a')} B=${text.includes('<skill name=\\"pcx-pty-mux-b')} TAIL=${text.includes("MUX_TAIL_MARKER")} RAW=${text.includes("/skill:pcx-pty-mux")}`
+          : "PCX_OK";
       send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
       let i = 0;
       const timer = setInterval(() => {
@@ -716,6 +729,14 @@ try {
   assert.match(hotkeys, /Fold or open Codex background shell widget/, "vendored codex-conversion shortcuts registered");
   assert.ok(!/codex-todo widget/.test(hotkeys), "codex-todo keyboard shortcut is gone (mouse-only since 0.17.3)");
 
+  // 0.17.6: skill-mux — TWO skills in ONE input. The composer slash menu
+  // shows nothing for these tokens, so Enter submits the literal text; the
+  // input hook must expand both skills (host-format blocks) and keep the
+  // trailing text before the host dispatches to the model.
+  type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
+  sendKeys(["Enter"]);
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "both skills expanded from one input");
+
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log(hasGit ? "  git changes:  session Δ +8 -2 absolute, commit clears, post-commit edits re-count" : "  git changes:  not asserted (git unavailable)");
@@ -730,6 +751,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
+  console.log("  skill-mux:    /skill:a /skill:b tail in one input → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");
