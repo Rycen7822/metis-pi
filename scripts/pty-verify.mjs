@@ -733,17 +733,17 @@ try {
   // shows nothing for these tokens, so Enter submits the literal text; the
   // input hook must expand both skills (host-format blocks) and keep the
   // trailing text before the host dispatches to the model.
-  // 0.18.0 (the user's repro): the editor auto-triggers "/" only at line
-  // start, and the built-in returns nothing for `/skill:a ` — that null used
-  // to kill the menu state, so the second "/" keystroke reached NO provider
-  // and nothing popped (typing a letter, Tab, or the space+backspace dance
-  // re-armed it). The wrapper now returns a no-op hint row at that trailing
-  // space, which keeps the state alive: the SECOND "/" alone must pop the
-  // real skill menu. Verified here without Tab or extra letters.
+  // 0.18.0/0.18.1 (the user's repro): the editor auto-triggers "/" only at
+  // line start and the built-in returns nothing for `/skill:a ` — that null
+  // kills the menu state, after which the second "/" keystroke reached NO
+  // provider and nothing popped (typing a letter, Tab, or the space+backspace
+  // dance re-armed it). The composer now forces that one query itself, and no
+  // extra row is shown at the trailing space: the SECOND "/" alone must pop
+  // the skill menu, with the state alive (this stage) or dead (next stage).
   type("/skill:pcx-pty-mux-a ");
-  await waitFor(/继续添加 skill/, 15_000, "state-keeping hint row after a complete skill token");
   type("/");
   await waitFor(/pty probe/, 15_000, "the bare second / pops the skill menu by itself");
+  assert.ok(!/继续添加 skill/.test(visibleText()), "no state-keeping row is shown");
   type("mux-b");
   await waitFor(/pty probe/, 15_000, "the menu filters as letters arrive");
   sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b (proven accept key)
@@ -806,7 +806,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    bare 2nd / pops the menu by itself (live hint state AND dead state) and ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

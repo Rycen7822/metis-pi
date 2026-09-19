@@ -1,3 +1,21 @@
+# Validation record — 0.18.2 (no extra row at the trailing space)
+
+0.18.0 kept the editor's menu state alive by answering the trailing-space query with a one-row hint; 0.18.1 then
+made the composer force that query itself, which left the row with no job. It is removed here at the user's
+request: BRIDGE_ITEM, its sentinel accept branch in applyCompletion, and matchSkillBridge are gone, and the
+wrapper answers nothing at the trailing space again (the editor cancels its menu there, as it always did).
+
+The pop behavior is unchanged because the trigger no longer depends on that state: the composer's hook fires on
+the bare "/" in both situations — state alive or state already dead. src/skill-tokens.ts stays: it is now the
+shared token definition used by the composer hook and by the completion wrapper's context matcher.
+
+## Verified
+
+- 387/387; check 0 errors (the bridge tests were replaced by "no row at the trailing space" plus direct
+  splitLeadingSkillHeads / isSkillPrefixOnly contract tests, and the gate test no longer expects the bridge).
+- pty rc=0: the bare second "/" pops the menu and the frame is asserted to NOT contain `继续添加 skill`; the
+  dead-state path (Escape first, then " " + "/") still pops; ￥ boundary trigger and full-token expansion unchanged.
+
 # Validation record — 0.18.1 (the second "/" pops even when the editor state is dead)
 
 0.18.0 kept the menu state alive at the trailing space, but the user found a remaining path: after the state is

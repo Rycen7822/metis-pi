@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createSkillMux, matchSkillContext, matchSkillBridge, createSkillAutocompleteWrapper, type SkillMux } from "../src/skill-mux.ts";
+import { createSkillMux, matchSkillContext, createSkillAutocompleteWrapper, type SkillMux } from "../src/skill-mux.ts";
 
 const makeDir = () => mkdtempSync(join(tmpdir(), "pcx-skillmux-"));
 
@@ -305,45 +305,33 @@ test("autocomplete wrapper: built-in wins; ours fills the multi-skill gap", asyn
   assert.equal(await withBase.getSuggestions(["/skill:a"], 0, 8, {}), baseResult);
 });
 
-test("autocomplete wrapper: the trailing space keeps the menu alive so the next '/' pops it", async () => {
+test("autocomplete wrapper: no extra row at the trailing space — the composer hook owns that trigger", async () => {
   const skills = [
     { name: "alpha", description: "the alpha skill" },
     { name: "beta", description: "the beta skill" },
   ];
+  const fileResult = { items: [{ value: "./f", label: "./f" }], prefix: "" };
   const current = {
     async getSuggestions() {
-      return null; // the built-in has nothing for `/skill:alpha ` (no arg completions)
+      return null; // the built-in answers nothing for `/skill:alpha ` (no arg completions)
     },
     applyCompletion(lines: string[], cursorLine: number, cursorCol: number) {
       return { lines, cursorLine, cursorCol };
     },
   };
   const wrapped = createSkillAutocompleteWrapper(() => skills)(current);
-
-  // Nothing replaces the state-killing null of the built-in at the space.
-  const bridged = await wrapped.getSuggestions(["/skill:alpha "], 0, 14, {});
-  assert.ok(bridged && "items" in bridged);
-  if (!bridged || !("items" in bridged)) throw new Error("unreachable");
-  assert.equal(bridged.items.length, 1);
-  assert.equal(bridged.prefix, "/"); // slash layout + Enter falls through to submit
-  const hint = bridged.items[0];
-  assert.ok(hint.label && hint.label.length > 0, "SelectList renders label || value");
-  // Accepting the hint must not touch the text (Enter still sends the message).
-  const applied = wrapped.applyCompletion(["/skill:alpha "], 0, 14, hint, bridged.prefix);
-  assert.deepEqual(applied, { lines: ["/skill:alpha "], cursorLine: 0, cursorCol: 14 });
-  // The next keystroke is that second "/": now the real menu must answer.
+  // The trailing space returns nothing: src/chrome/editor.ts forces the query
+  // for the following "/" itself, so no state-keeping row is needed there.
+  assert.equal(await wrapped.getSuggestions(["/skill:alpha "], 0, 14, {}), null);
+  // The second token itself still completes normally, for "/" and for ￥.
   const popped = await wrapped.getSuggestions(["/skill:alpha /"], 0, 15, {});
   assert.ok(popped && "items" in popped);
   if (popped && "items" in popped) {
     assert.deepEqual(popped.items.map((i) => i.value), ["/skill:alpha ", "/skill:beta "]);
     assert.equal(popped.prefix, "/");
   }
-  // Same via ￥ (the bridge is trigger-agnostic).
-  const popped2 = await wrapped.getSuggestions(["/skill:alpha ￥"], 0, 15, {});
-  assert.ok(popped2 && "items" in popped2);
-
-  // Built-in still wins where it answers; the hint is only a fallback.
-  const fileResult = { items: [{ value: "./f", label: "./f" }], prefix: "" };
+  assert.ok(await wrapped.getSuggestions(["/skill:alpha ￥"], 0, 15, {}));
+  // Built-in precedence is untouched.
   const withBase = createSkillAutocompleteWrapper(() => skills)({
     async getSuggestions() {
       return fileResult;
@@ -353,22 +341,19 @@ test("autocomplete wrapper: the trailing space keeps the menu alive so the next 
   assert.equal(await withBase.getSuggestions(["/skill:alpha "], 0, 14, {}), fileResult);
 });
 
-test("matchSkillBridge: only complete, known skill tokens plus whitespace qualify", () => {
-  const skills = [{ name: "alpha" }, { name: "beta" }];
-  assert.equal(matchSkillBridge("/skill:alpha ", skills), true);
-  assert.equal(matchSkillBridge("/skill:alpha  ", skills), true);
-  assert.equal(matchSkillBridge("/skill:alpha /skill:beta ", skills), true);
-  assert.equal(matchSkillBridge("￥alpha ￥beta ", skills), true);
-  assert.equal(matchSkillBridge("/skill:alpha /skill:beta ", skills), true);
-  // Unknown names, partial tokens, plain text, and empty input never bridge.
-  assert.equal(matchSkillBridge("/skill:nope ", skills), false);
-  assert.equal(matchSkillBridge("/skill:alpha /skill:nope ", skills), false);
-  assert.equal(matchSkillBridge("/skill:alpha", skills), false);
-  assert.equal(matchSkillBridge("/skill:alpha /", skills), false);
-  assert.equal(matchSkillBridge("/skill:alpha hello", skills), false);
-  assert.equal(matchSkillBridge("/skill:alpha ", []), false);
-  assert.equal(matchSkillBridge("", skills), false);
-  assert.equal(matchSkillBridge("/todos ", skills), false);
+test("splitLeadingSkillHeads / isSkillPrefixOnly: shared token contract of the composer hook", async () => {
+  const { splitLeadingSkillHeads, isSkillPrefixOnly } = await import("../src/skill-tokens.ts");
+  assert.deepEqual(splitLeadingSkillHeads("/skill:a ￥b  rest"), { count: 2, names: ["a", "b"], rest: "rest" });
+  assert.deepEqual(splitLeadingSkillHeads("/skill:a"), { count: 0, names: [], rest: "/skill:a" });
+  assert.deepEqual(splitLeadingSkillHeads("plain /skill:a "), { count: 0, names: [], rest: "plain /skill:a " });
+  assert.deepEqual(splitLeadingSkillHeads("/todos a "), { count: 0, names: [], rest: "/todos a " });
+  assert.equal(isSkillPrefixOnly("/skill:a "), true);
+  assert.equal(isSkillPrefixOnly("/skill:a ￥b  "), true);
+  assert.equal(isSkillPrefixOnly("/skill:a"), false);
+  assert.equal(isSkillPrefixOnly("/skill:a /"), false);
+  assert.equal(isSkillPrefixOnly("/skill:a text"), false);
+  assert.equal(isSkillPrefixOnly("/todos "), false);
+  assert.equal(isSkillPrefixOnly(""), false);
 });
 
 test("autocomplete wrapper: Tab-force reaches the skill menu at a bare second '/'; ￥ triggers immediately", async () => {
@@ -398,8 +383,6 @@ test("autocomplete wrapper: Tab-force reaches the skill menu at a bare second '/
   assert.equal(wrapped.shouldTriggerFileCompletion?.(["￥alpha /"], 0, 9), true);
   // Outside our context the built-in gate decides unchanged.
   assert.equal(wrapped.shouldTriggerFileCompletion?.(["plain text"], 0, 10), false);
-  // …and the bridge position counts as our context too (it can re-arm the state).
-  assert.equal(wrapped.shouldTriggerFileCompletion?.(["/skill:alpha "], 0, 14), true);
 
   // Force + multi-skill context: OUR items win over the built-in's file items
   // (a Tab at a bare second "/" means "show skills", not "show files").

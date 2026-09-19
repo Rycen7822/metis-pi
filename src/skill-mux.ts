@@ -29,7 +29,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadSkills, stripFrontmatter, type InputEvent, type InputEventResult, type Skill } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
-import { isSkillPrefixOnly, splitLeadingSkillHeads } from "./skill-tokens.ts";
+import { splitLeadingSkillHeads } from "./skill-tokens.ts";
 
 /** Leading skill token: `/skill:name` or `￥name`; the name runs to the
  * next whitespace (or EOL). */
@@ -275,41 +275,6 @@ export function matchSkillContext(beforeCursor: string): SkillContext | null {
 
 const MAX_COMPLETION_ITEMS = 20;
 
-/**
- * A one-row hint that exists to keep the editor's autocomplete STATE alive at
- * the trailing space after a complete skill token.
- *
- * Why: the editor cancels its menu whenever a query returns nothing, and the
- * built-in provider returns nothing for `/skill:a ` (it has no argument
- * completions for skill commands). With the state dead, typing the second `/`
- * never reaches any provider — the editor auto-triggers `/` only at line start
- * — so no menu could ever appear until the user typed a letter or Tab. Keeping
- * the state alive makes that `/` keystroke go through `updateAutocomplete()`,
- * which lands on this wrapper again with a real partial token.
- *
- * Accepting the hint is a NO-OP (see applyCompletion) and its prefix starts
- * with `/`, so the editor falls through to the normal submit path: Enter still
- * sends the message instead of silently swallowing the row.
- */
-const BRIDGE_ITEM_VALUE = "/\u0000skill-bridge";
-const BRIDGE_ITEM: AutocompleteItem = {
-  value: BRIDGE_ITEM_VALUE,
-  label: "继续添加 skill",
-  description: "输入 / 或 ￥",
-};
-
-/**
- * The bridge position: one or more COMPLETE skill tokens (each resolving to a
- * real skill) followed only by whitespace. Nothing else in the line may be
- * present — the hint must never appear for plain text, unknown names, or a
- * partial token (those positions keep their previous behavior).
- */
-export function matchSkillBridge(beforeCursor: string, skills: SkillSummary[]): boolean {
-  if (!isSkillPrefixOnly(beforeCursor)) return false;
-  const known = new Set(skills.map((skill) => skill.name));
-  return splitLeadingSkillHeads(beforeCursor).names.every((name) => known.has(name));
-}
-
 const buildCompletionItems = (ctx: SkillContext, skills: SkillSummary[]): AutocompleteItem[] => {
   const needle = ctx.needle.toLowerCase();
   const prefix = ctx.trigger === "/" ? "/skill:" : "￥";
@@ -348,20 +313,11 @@ export function createSkillAutocompleteWrapper(listSkills: SkillListFn): (curren
       }
       const base = await current.getSuggestions(lines, cursorLine, cursorCol, options);
       if (base) return base; // built-in wins everywhere it already answers
-      if (ctx) {
-        const items = buildCompletionItems(ctx, listSkills());
-        return items.length > 0 ? { items, prefix: ctx.partial } : null;
-      }
-      // Trailing space after complete skill tokens: keep the menu state alive
-      // so the next `/` or ￥ keystroke re-enters this wrapper (see BRIDGE_ITEM).
-      if (matchSkillBridge(beforeCursor, listSkills())) return { items: [BRIDGE_ITEM], prefix: "/" };
-      return null;
+      if (!ctx) return null;
+      const items = buildCompletionItems(ctx, listSkills());
+      return items.length > 0 ? { items, prefix: ctx.partial } : null;
     },
     applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
-      // The bridge hint is not a completion: apply nothing, leave the text
-      // exactly as typed. The editor then falls through to submit because the
-      // prefix starts with "/" (Enter sends the message, Tab only closes it).
-      if (item.value === BRIDGE_ITEM_VALUE) return { lines, cursorLine, cursorCol };
       // Same generic prefix replacement the built-in provider uses for
       // non-slash items (our prefix never matches its slash-command branch).
       return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
@@ -373,8 +329,7 @@ export function createSkillAutocompleteWrapper(listSkills: SkillListFn): (curren
       // path refuses to auto-trigger) — let it through even though nothing
       // file-like is under the cursor. Everywhere else: built-in semantics.
       const line = lines[cursorLine] ?? "";
-      const beforeCursor = line.slice(0, cursorCol);
-      if (matchSkillContext(beforeCursor) || matchSkillBridge(beforeCursor, listSkills())) return true;
+      if (matchSkillContext(line.slice(0, cursorCol))) return true;
       return current.shouldTriggerFileCompletion
         ? current.shouldTriggerFileCompletion(lines, cursorLine, cursorCol)
         : true;
