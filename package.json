@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/pi-codex-appearance",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",

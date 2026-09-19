@@ -3,6 +3,11 @@
 // apart from activate() because it is a pure consumer of every subsystem:
 // it reads state and formats lines, and is the one surface that must keep
 // working (and keep being honest) when every other feature failed.
+//
+// Structure: one small builder per report section. Each takes the deps (and
+// the few precomputed snapshots the handler already gathered) and returns
+// its line(s); the handler only assembles. The report text is asserted
+// line-by-line by the pty harness, so builders must stay byte-stable.
 
 import type { AdapterHandle } from "./adapter.ts";
 import type { AppearanceConfig } from "./config.ts";
@@ -52,93 +57,250 @@ export interface DiagnosticsDeps {
   quotaTimerRunning: () => boolean;
 }
 
-const glyphStatus = (deps: DiagnosticsDeps): string => {
-  const g = deps.glyphPresentation;
-  if (!g) return "disabled(config)";
-  const status = g.status();
-  if (!status.enabled) return "disabled(config)";
-  const marks = status.glyphs.join(" ");
-  const include = deps.getConfig().glyphs.include;
-  return `${status.installed ? `applied (${status.reason})` : status.reason} marks=${status.glyphs.length} [${marks}] frames=${status.frames} changed=${status.changed}${include.length > 0 ? ` include=${include.join(" ")}` : ""}`;
+// ---------------------------------------------------------------------------
+// Small formatting primitives
+
+const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : String(v));
+const pct = (x: number): number => Math.round(x * 10) / 10;
+const seconds = (ms: number): number => Math.round(ms / 1000);
+
+// ---------------------------------------------------------------------------
+// Section builders (each returns one line unless named ...Lines)
+
+const composerLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
+  const surface = deps.chrome.surfaceApplied
+    ? "applied"
+    : config.composer.surface
+      ? `fallback (${deps.hasSurfaceBinding ? "color level" : "no surface binding"})`
+      : "disabled(config)";
+  const prefix = deps.chrome.prefixApplied ? "applied" : "off";
+  const metadata = deps.chrome.metaInstalled
+    ? "applied"
+    : config.composer.metadata ? "fallback" : "disabled(config)";
+  return `  composer: surface=${surface} prefix=${prefix} metadata=${metadata}`;
 };
 
-const selectionCopyLine = (deps: DiagnosticsDeps): string[] => {
+const workingLine = (config: AppearanceConfig, snap: ReturnType<UiMetrics["snapshot"]>): string => {
+  const state = snap.active
+    ? `active phase=${snap.phase} elapsed=${seconds(snap.elapsedMs)}s thinking=${seconds(snap.thinkingMs)}s${snap.thinkingOpen ? " (open)" : ""}`
+    : "idle";
+  const animation = config.working.animation ? `on @${config.working.animationIntervalMs}ms` : "off";
+  return `  working: ${state} animation=${animation} interrupt-hint=esc (default fallback; host remap not exposed)`;
+};
+
+const modelLine = (deps: DiagnosticsDeps): string => {
+  const model = deps.hostData.getModel();
+  return `  model: id=${fmt(model?.id)} effort=${fmt(deps.hostData.getThinkingLevel())} provider=${fmt(model?.provider)} window=${fmt(model?.contextWindow)} (live ctx, rev ${deps.hostData.revision})`;
+};
+
+const contextLine = (deps: DiagnosticsDeps): string => {
+  const usage = deps.hostData.getContextUsage();
+  return `  context: tokens=${fmt(usage?.tokens)}/${fmt(usage?.contextWindow)} percent=${fmt(usage?.percent)} — scope=live ctx`;
+};
+
+const sessionLine = (deps: DiagnosticsDeps): string => {
+  if (!deps.hostData.hasSessionManager) return "  session Σ: unavailable (no sessionManager)";
+  const t = deps.ledger.totals();
+  return `  session Σ: input=${t.input} output=${t.output} requests=${deps.ledger.confirmedCount} — scope=this session file`;
+};
+
+const cacheLine = (deps: DiagnosticsDeps): string => {
+  const rate = deps.ledger.cacheRateLast();
+  return `  cache(last)=${rate === null ? "—" : `${pct(rate)}%`} — scope=latest confirmed request; ↑=uncached input per Pi normalization`;
+};
+
+const speedLine = (deps: DiagnosticsDeps): string => {
+  const speed = deps.outputSpeed.snapshot();
+  const speedText = formatSpeed(speed?.tokensPerSecond);
+  const detail = speedText
+    ? `${speedText} (output=${speed!.outputTokens} tokens, window=${(speed!.windowMs / 1000).toFixed(1)}s, scope=${speed!.scope})`
+    : "— (no measured response yet)";
+  return `  output speed: ${detail} — confirmed usage.output ÷ observed output window; live only when the provider streams cumulative usage`;
+};
+
+const interactionLine = (snap: ReturnType<UiMetrics["snapshot"]>): string =>
+  `  interaction usage (confirmed): ↑${snap.usage.input} ↓${snap.usage.output} — preview replaces, never sums`;
+
+const outcomeLine = (deps: DiagnosticsDeps): string => {
+  const verdict = deps.outcome.frozen ? deps.outcome.freeze() : undefined;
+  const detail = verdict
+    ? `${verdict.outcome} (evidence=${verdict.evidence}, attempt=${verdict.attempt}, toolErrors=${verdict.toolErrorsObserved}) — ${verdict.reason}`
+    : `pending (attempts=${deps.outcome.attemptCount}, toolErrors=${deps.outcome.toolErrorsObserved})`;
+  return `  outcome: ${detail}`;
+};
+
+const quotaLine = (deps: DiagnosticsDeps, config: AppearanceConfig, now: number): string => {
+  const state = deps.quotaStore?.state();
+  const age = deps.quotaStore?.lastSuccessAgeMs(now);
+  const primary = state?.quota?.primary
+    ? `${pct(state.quota.primary.remainingPercent)}%${state.quota.primary.windowMinutes ? `/${state.quota.primary.windowMinutes}min` : ""}`
+    : "—";
+  const secondary = state?.quota?.secondary ? `${pct(state.quota.secondary.remainingPercent)}%` : "—";
+  const available = state?.quota ? "yes" : state?.lastErrorClass ? "no" : "unknown";
+  const lastSuccess = age === undefined ? "never" : `${seconds(age)}s ago`;
+  return `  codex quota: mode=${config.quota.codex} source=codex-app-server available=${available} lastSuccess=${lastSuccess} primary=${primary} secondary=${secondary} stale=${state?.stale ? "yes" : "no"} lastError=${state?.lastErrorClass ?? "—"}`;
+};
+
+const chromeLine = (deps: DiagnosticsDeps): string => {
+  const c = deps.chrome;
+  const editor = c.editorInstalled ? "applied" : "native";
+  const footer = c.footerInstalled ? "applied" : "native/off";
+  const header = c.headerInstalled ? "applied" : "native";
+  const working = c.widgetInstalled ? "widget" : c.fallbackMessage ? "fallback(message)" : "native";
+  return `  chrome: editor=${editor} footer=${footer} header=${header} working=${working}`;
+};
+
+const transcriptLine = (deps: DiagnosticsDeps): string => {
+  const handle = deps.getHandle();
+  const state = handle ? (handle.installed ? "applied" : `failed: ${handle.reason}`) : "not installed";
+  return `  transcript: ${state}`;
+};
+
+const decorationsLine = (deps: DiagnosticsDeps): string => {
+  const decorations = deps.getDecorations();
+  const detail = decorations
+    ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
+    : "unavailable (no assistant prototype binding)";
+  return `  decorations: ${detail}`;
+};
+
+const thinkingLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
+  const auto = deps.getDecorations()?.thinkingAutoApplied?.() ?? "n/a";
+  return `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${auto} (host override-map transitions applied once)`;
+};
+
+const fullscreenMarginLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
+  if (!deps.fullscreenMargin) {
+    return `  fullscreen-margin: ${config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`;
+  }
+  const status = deps.fullscreenMargin.status();
+  return `  fullscreen-margin: ${status.installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : status.reason}`;
+};
+
+const glyphsLine = (deps: DiagnosticsDeps): string => {
+  const g = deps.glyphPresentation;
+  if (!g) return "  glyphs: disabled(config)";
+  const status = g.status();
+  if (!status.enabled) return "  glyphs: disabled(config)";
+  const applied = status.installed ? `applied (${status.reason})` : status.reason;
+  const include = deps.getConfig().glyphs.include;
+  const includeSuffix = include.length > 0 ? ` include=${include.join(" ")}` : "";
+  return `  glyphs: ${applied} marks=${status.glyphs.length} [${status.glyphs.join(" ")}] frames=${status.frames} changed=${status.changed}${includeSuffix}`;
+};
+
+const configLine = (config: AppearanceConfig): string => {
+  const composer = config.composer.surface
+    ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}`
+    : "off";
+  const workingParts = [
+    `elapsed=${config.working.elapsed}`,
+    `thought=${config.working.thought}`,
+    `tool=${config.working.tool}`,
+    `tokens=${config.working.tokens}`,
+    `anim=${config.working.animation}@${config.working.animationIntervalMs}ms`,
+  ];
+  const footerParts = [
+    `details=${config.footer.details}`,
+    `cache=${config.footer.showCache}`,
+    `changes=${config.footer.showChanges}`,
+    `quota=${config.footer.showCodexQuota}`,
+    `speed=${config.footer.showSpeed}`,
+  ];
+  const writePreview = config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off";
+  const summary = config.summary.enabled ? `persist=${config.summary.persist}` : "off";
+  return `  config: enabled=${config.enabled}`
+    + ` composer=${composer}`
+    + ` working=${workingParts.join(",")}`
+    + ` footer=${config.footer.enabled ? footerParts.join(",") : "off"}`
+    + ` quota=${config.quota.codex}/${config.quota.refreshSeconds}s`
+    + ` thinking=${config.thinking.streaming}/${config.thinking.completed}`
+    + ` writePreview=${writePreview}`
+    + ` summary=${summary}`;
+};
+
+const resourcesLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
+  const ticker = deps.metrics.tickerAlive ? "alive" : "stopped";
+  const quotaTimer = deps.quotaTimerRunning() ? `every ${config.quota.refreshSeconds}s` : "stopped";
+  const gitTimer = deps.gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s + activity` : "stopped";
+  const widget = deps.chrome.widgetInstalled ? "installed" : "none";
+  return `  resources: ticker=${ticker} working-timer=active-only quota-timer=${quotaTimer} git-timer=${gitTimer} widget=${widget}`;
+};
+
+const gitChangesLine = (deps: DiagnosticsDeps): string => {
+  const stat = deps.gitChanges.snapshot();
+  if (!stat) return "  git-changes: unavailable (no git metadata in cwd)";
+  const session = deps.gitChanges.session();
+  return `  git-changes: +${stat.additions} -${stat.deletions} (${stat.files} files, session Δ vs ${session.rev ?? "index (unborn HEAD)"}${session.baseline ? " + baseline" : ""}, untracked included, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`;
+};
+
+const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {
   if (!deps.selectionCopy) {
     return [`  selection-copy: ${deps.getConfig().selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`];
   }
   const d = deps.selectionCopy.diagnostics();
   const t = d.telemetry;
   const m = d.mirrors;
+  const serializer = d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`;
+  const degraded = m.markdownDegraded + m.textDegraded;
+  const throttled = m.markdownThrottled + m.textThrottled;
+  const lastReason = m.lastDegradedReason ? ` (${m.lastDegradedReason})` : "";
   return [
-    `  selection-copy: serializer=${d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${m.markdownDegraded + m.textDegraded} degraded, ${m.markdownThrottled + m.textThrottled} throttled${m.lastDegradedReason ? ` (${m.lastDegradedReason})` : ""} other-wrapper=${d.externalPatch ?? "none"}`,
+    `  selection-copy: serializer=${serializer} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${degraded} degraded, ${throttled} throttled${lastReason} other-wrapper=${d.externalPatch ?? "none"}`,
     `  copy-stats: calls=${t.calls ?? 0} exact=${t.exact} mixed=${t.mixed} native=${t.nativeFallback} empty=${t.emptyDecoration} failed=${t.failed} last=${t.lastMode} chars=${t.lastCharCount} ms=${t.lastDurationMs} cache=${d.cache.hits}/${d.cache.misses}${t.lastReason ? ` lastError=${t.lastReason}` : ""}`,
   ];
 };
+
+const historyLine = (deps: DiagnosticsDeps): string =>
+  `  history-window: ${JSON.stringify(deps.historyWindow?.status() ?? { installed: false })}`;
+
+const FOOTER_SOURCES_LINE =
+  "  footer: model source=live ctx (composer surface) context source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd source=ctx.cwd";
+
+// ---------------------------------------------------------------------------
 
 /** Register the `/codex-ui` command (best-effort: absent host API → no-op). */
 export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
   (deps.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
     description: "pi-codex-appearance capability diagnostics",
     handler: (args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
-      let text: string;
       if (!deps.hostData.bound) {
-        text = "pi-codex-appearance: no active session";
-      } else {
-        if (typeof args === "string" && args.trim().toLowerCase() === "refresh-quota") {
-          deps.refreshQuota();
-        }
-        const config = deps.getConfig();
-        const model = deps.hostData.getModel();
-        const level = deps.hostData.getThinkingLevel();
-        const usage = deps.hostData.getContextUsage();
-        const snap = deps.metrics.snapshot();
-        const verdict = deps.outcome.frozen ? deps.outcome.freeze() : undefined;
-        const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : String(v));
-        const quotaState = deps.quotaStore?.state();
-        const speed = deps.outputSpeed.snapshot();
-        const speedText = formatSpeed(speed?.tokensPerSecond);
-        const speedDetail = speedText
-          ? `${speedText} (output=${speed!.outputTokens} tokens, window=${(speed!.windowMs / 1000).toFixed(1)}s, scope=${speed!.scope})`
-          : "— (no measured response yet)";
-        const quotaAge = deps.quotaStore?.lastSuccessAgeMs(Date.now());
-        const quotaDetail = quotaState?.quota
-          ? `primary=${quotaState.quota.primary ? `${Math.round(quotaState.quota.primary.remainingPercent * 10) / 10}%${quotaState.quota.primary.windowMinutes ? `/${quotaState.quota.primary.windowMinutes}min` : ""}` : "—"} secondary=${quotaState.quota.secondary ? `${Math.round(quotaState.quota.secondary.remainingPercent * 10) / 10}%` : "—"}`
-          : "no snapshot";
-        const changeStat = deps.gitChanges.snapshot();
-        const changesDetail = changeStat
-          ? `+${changeStat.additions} -${changeStat.deletions} (${changeStat.files} files, session Δ vs ${deps.gitChanges.session().rev ?? "index (unborn HEAD)"}${deps.gitChanges.session().baseline ? " + baseline" : ""}, untracked included, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`
-          : "unavailable (no git metadata in cwd)";
-        const lines = [
-          `pi-codex-appearance ${deps.appearanceVersion ?? "?"} diagnostics (mode=${deps.hostData.mode}, pi=${deps.piVersion ?? "?"}, revision=${deps.hostData.revision}):`,
-          `  composer: surface=${deps.chrome.surfaceApplied ? "applied" : config.composer.surface ? `fallback (${deps.hasSurfaceBinding ? "color level" : "no surface binding"})` : "disabled(config)"} prefix=${deps.chrome.prefixApplied ? "applied" : "off"} metadata=${deps.chrome.metaInstalled ? "applied" : config.composer.metadata ? "fallback" : "disabled(config)"}`,
-          `  working: ${snap.active ? `active phase=${snap.phase} elapsed=${Math.round(snap.elapsedMs / 1000)}s thinking=${Math.round(snap.thinkingMs / 1000)}s${snap.thinkingOpen ? " (open)" : ""}` : "idle"} animation=${config.working.animation ? `on @${config.working.animationIntervalMs}ms` : "off"} interrupt-hint=esc (default fallback; host remap not exposed)`,
-          `  footer: model source=live ctx (composer surface) context source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd source=ctx.cwd`,
-          `  model: id=${fmt(model?.id)} effort=${fmt(level)} provider=${fmt(model?.provider)} window=${fmt(model?.contextWindow)} (live ctx, rev ${deps.hostData.revision})`,
-          `  context: tokens=${fmt(usage?.tokens)}/${fmt(usage?.contextWindow)} percent=${fmt(usage?.percent)} — scope=live ctx`,
-          `  session Σ: ${deps.hostData.hasSessionManager
-            ? `input=${deps.ledger.totals().input} output=${deps.ledger.totals().output} requests=${deps.ledger.confirmedCount} — scope=this session file`
-            : "unavailable (no sessionManager)"}`,
-          `  cache(last)=${deps.ledger.cacheRateLast() === null ? "—" : `${Math.round(deps.ledger.cacheRateLast()! * 10) / 10}%`} — scope=latest confirmed request; ↑=uncached input per Pi normalization`,
-          `  output speed: ${speedDetail} — confirmed usage.output ÷ observed output window; live only when the provider streams cumulative usage`,
-          `  interaction usage (confirmed): ↑${snap.usage.input} ↓${snap.usage.output} — preview replaces, never sums`,
-          `  outcome: ${verdict ? `${verdict.outcome} (evidence=${verdict.evidence}, attempt=${verdict.attempt}, toolErrors=${verdict.toolErrorsObserved}) — ${verdict.reason}` : `pending (attempts=${deps.outcome.attemptCount}, toolErrors=${deps.outcome.toolErrorsObserved})`}`,
-          `  codex quota: mode=${config.quota.codex} source=codex-app-server available=${quotaState?.quota ? "yes" : quotaState?.lastErrorClass ? "no" : "unknown"} lastSuccess=${quotaAge === undefined ? "never" : `${Math.round(quotaAge / 1000)}s ago`} ${quotaDetail} stale=${quotaState?.stale ? "yes" : "no"} lastError=${quotaState?.lastErrorClass ?? "—"}`,
-          `  chrome: editor=${deps.chrome.editorInstalled ? "applied" : "native"} footer=${deps.chrome.footerInstalled ? "applied" : "native/off"} header=${deps.chrome.headerInstalled ? "applied" : "native"} working=${deps.chrome.widgetInstalled ? "widget" : deps.chrome.fallbackMessage ? "fallback(message)" : "native"}`,
-          `  transcript: ${deps.getHandle()?.installed ? "applied" : deps.getHandle() ? `failed: ${deps.getHandle()!.reason}` : "not installed"}`,
-          `  decorations: ${deps.getDecorations() ? deps.getDecorations()!.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
-          `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${deps.getDecorations()?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
-          `  fullscreen-margin: ${deps.fullscreenMargin ? (deps.fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : deps.fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
-          `  glyphs: ${glyphStatus(deps)}`,
-          `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},changes=${config.footer.showChanges},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
-          `  resources: ticker=${deps.metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${deps.quotaTimerRunning() ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${deps.gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s + activity` : "stopped"} widget=${deps.chrome.widgetInstalled ? "installed" : "none"}`,
-          `  git-changes: ${changesDetail}`,
-          ...selectionCopyLine(deps),
-          `  history-window: ${JSON.stringify(deps.historyWindow?.status() ?? { installed: false })}`,
-        ];
-        text = lines.join("\n");
+        commandCtx?.ui?.notify?.("pi-codex-appearance: no active session");
+        return;
       }
+      if (typeof args === "string" && args.trim().toLowerCase() === "refresh-quota") {
+        deps.refreshQuota();
+      }
+      const config = deps.getConfig();
+      const snap = deps.metrics.snapshot();
+      const appearanceVersion = deps.appearanceVersion ?? "?";
+      const piVersion = deps.piVersion ?? "?";
+      const lines = [
+        `pi-codex-appearance ${appearanceVersion} diagnostics (mode=${deps.hostData.mode}, pi=${piVersion}, revision=${deps.hostData.revision}):`,
+        composerLine(deps, config),
+        workingLine(config, snap),
+        FOOTER_SOURCES_LINE,
+        modelLine(deps),
+        contextLine(deps),
+        sessionLine(deps),
+        cacheLine(deps),
+        speedLine(deps),
+        interactionLine(snap),
+        outcomeLine(deps),
+        quotaLine(deps, config, Date.now()),
+        chromeLine(deps),
+        transcriptLine(deps),
+        decorationsLine(deps),
+        thinkingLine(deps, config),
+        fullscreenMarginLine(deps, config),
+        glyphsLine(deps),
+        configLine(config),
+        resourcesLine(deps, config),
+        gitChangesLine(deps),
+        ...selectionCopyLines(deps),
+        historyLine(deps),
+      ];
       // Return values are ignored by the host; surface via the command ctx.
-      commandCtx?.ui?.notify?.(text);
+      commandCtx?.ui?.notify?.(lines.join("\n"));
     },
   });
 }

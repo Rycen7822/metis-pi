@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.3
+
+第三轮：diagnostics.ts 结构重组（`/codex-ui` 报告本身一字未改）：
+
+- 原来 handler 内联 ~30 个巨型模板行（最长 400 字符、嵌套三元），现按报告段落拆成单段构建器（composer/working/model/context/session/cache/speed/interaction/outcome/quota/chrome/transcript/decorations/thinking/margin/glyphs/config/resources/git-changes/selection-copy/history），handler 只剩组装；共享小格式化原语（fmt/pct/seconds）提到模块级。
+- 可读性修复：modelLine 三次 `getModel()` 调用合一；configLine 的 working/footer 段改为部件数组 join；报告头版本兜底提前为命名常量。
+- **字节级等价是硬验证**：独立 harness 在重构前后各跑一次完整报告（含 refresh-quota 参数分支与无会话分支）并 diff 为空；pty 逐行断言 `/codex-ui` 输出也再次通过。>160 字符行 19 → 6（剩余 6 行均为报告字符串本身，无法再拆）。
+- 全 gate 复跑：323/323、check/check:core 0 error、host-smoke PASS、真实 TUI pty rc=0、verify rc=0。
+- 其余长行巡检结论：renderers/extension/selection-copy 等处剩余长行均为 import 列表、类型联合或单表达式，按"风格churn 不拆"原则保留。
+
 ## 0.15.2
 
 第二轮架构精简（行为完全不变，全 gate 复跑通过）：
