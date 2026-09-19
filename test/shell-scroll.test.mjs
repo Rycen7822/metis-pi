@@ -151,8 +151,10 @@ test("repeated selection-copy setup does not stack render wrappers", () => {
     stripTerminalSequences: Tui.stripTerminalSequences, wrapTextWithAnsi: Tui.wrapTextWithAnsi,
   } });
   system.wrapPrototypes();
-  system.wrapPrototypes();
+  const second = system.wrapPrototypes();
   assert.deepEqual(Object.values(prototypes).map((p) => p.render), before);
+  assert.equal(second.installed, true, "a sibling activation's own marks count as active, not blocked");
+  assert.match(second.details, /markdown=self/, "self-owned entries are labelled, not 'already-owned'");
   const nonExtensible = Object.fromEntries(Object.keys(prototypes).map((key) => [key, Object.preventExtensions({ render() { return []; } })]));
   const original = Object.values(nonExtensible).map((p) => p.render);
   const blocked = createSelectionCopySystem({ prototypes: nonExtensible, fns: {

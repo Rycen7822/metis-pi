@@ -30,12 +30,15 @@ interface ContainerLike {
 
 type RenderFn<W, R> = (this: W, width: number) => R;
 
+export const MOUSE_REGION_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-mouse-region");
+export const BOX_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-box");
+export const CONTAINER_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-container");
+
 /** MouseRegion forwards its child's exact row array but does not inherit a
  * wrapped render method. Publish that array without adding another render or
  * changing the child's product identity. */
 export function wrapMouseRegionPrototype(prototype: object): boolean {
-  const key = Symbol.for("Rycen7822.pi-codex-appearance.copy-mouse-region");
-  if (Object.prototype.hasOwnProperty.call(prototype, key) || !Object.isExtensible(prototype)) return false;
+  if (Object.prototype.hasOwnProperty.call(prototype, MOUSE_REGION_COPY_OWNER) || !Object.isExtensible(prototype)) return false;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "render");
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) return false;
   const original = descriptor.value as RenderFn<object, string[]>;
@@ -45,7 +48,7 @@ export function wrapMouseRegionPrototype(prototype: object): boolean {
     return rows;
   };
   Object.defineProperty(prototype, "render", { ...descriptor, value: wrapper });
-  Object.defineProperty(prototype, key, { value: true, configurable: true });
+  Object.defineProperty(prototype, MOUSE_REGION_COPY_OWNER, { value: true, configurable: true });
   return true;
 }
 
@@ -131,7 +134,7 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
  * stacked vertically between paddingY bg rows; each child line is prefixed
  * with paddingX cells. */
 export function wrapBoxPrototype(prototype: object): boolean {
-  return wrapAlignmentPrototype<BoxLike>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-box"), "box",
+  return wrapAlignmentPrototype<BoxLike>(prototype, BOX_COPY_OWNER, "box",
     (self, width) => ({ contentWidth: Math.max(1, width - self.paddingX * 2), padY: self.paddingY, colShift: self.paddingX }));
 }
 
@@ -139,6 +142,6 @@ export function wrapBoxPrototype(prototype: object): boolean {
  * gaps. Each fresh array gets a product using the rows its children just
  * published; unknown component types retain the conservative fallback. */
 export function wrapContainerPrototype(prototype: object): boolean {
-  return wrapAlignmentPrototype<ContainerLike>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-container"), "container",
+  return wrapAlignmentPrototype<ContainerLike>(prototype, CONTAINER_COPY_OWNER, "container",
     (_self, width) => ({ contentWidth: width, padY: 0, colShift: 0 }));
 }

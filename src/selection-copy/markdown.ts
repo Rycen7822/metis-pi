@@ -578,8 +578,11 @@ function wrapRenderPrototype<INST extends { text: string }>(
   return true;
 }
 
+export const MARKDOWN_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-markdown");
+export const TEXT_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-text");
+
 export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolean {
-  return wrapRenderPrototype<MarkdownInstance>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-markdown"), deps,
+  return wrapRenderPrototype<MarkdownInstance>(prototype, MARKDOWN_COPY_OWNER, deps,
     buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" });
 }
 
@@ -676,7 +679,7 @@ function marginRow(row: CopyRow, padX: number, width: number, contentWidth: numb
 }
 
 export function wrapTextPrototype(prototype: object, deps: WrapDeps): boolean {
-  return wrapRenderPrototype<TextInstance>(prototype, Symbol.for("Rycen7822.pi-codex-appearance.copy-text"), deps,
+  return wrapRenderPrototype<TextInstance>(prototype, TEXT_COPY_OWNER, deps,
     buildTextProduct, { built: "textBuilt", degraded: "textDegraded", throttled: "textThrottled", fallback: "text mirror failed" });
 }
 

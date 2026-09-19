@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.5
+
+**静默修复：subagent 启动时输入框被 selection-copy 的 "already-owned" 警告刷屏**（用户报告：每次 pi 启动 subagent，输入框就被两行 `pi-codex-appearance: selection-copy prototypes unavailable (markdown=already-owned …)` 占满）。
+
+- 根因：selection-copy 包的是 pi-tui 的**类原型**（进程级单例），owner 标记用 `Symbol.for`（同为进程级）。父 session 激活时已完成 wrap；subagent session 在同进程内**第二次激活**本扩展时，wrapPrototypes 看到自家标记 → 全部 "already-owned" → `installed: false` → extension.ts 向 stderr 写警告。功能本身无损伤（复制能力来自父 session 的 wrap，全局生效），纯噪音。
+- 修法：`wrapPrototypes` 现在区分三种状态并在 details 里标注 —— `on`（本次包上）/ `self`（自家兄弟激活已包好，视为成功）/ `blocked`（密封原型或外来 render 替换，才算失败）。`installed` = 全部 on-or-self；只有 blocked 才写 stderr。owner 符号提升为五个具名导出（MARKDOWN/TEXT/BOX/CONTAINER/MOUSE_REGION_COPY_OWNER）。
+- 顺带根治 chrome footer 用例的残余 flaky：不再用固定 settle 赌异步基线读的完成时序，改为**两波编辑**——无论第一波被折进基线与否，第二波都同时带 +/- 两种符号，6 秒预算内帧上必现染色段落（精确计数由 git-changes 单测层钉死，此用例只证管线）。
+- Gate：323/323 ×4 连跑、check/check:core 0 error、host-smoke PASS、pty rc=0、verify rc=0。
+
 ## 0.15.4
 
 **行为变更：footer 增删统计在 commit 后清零**（用户明确要求："commit 之后工作树应该是干净了，要清空数据"）。

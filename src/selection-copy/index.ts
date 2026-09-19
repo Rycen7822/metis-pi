@@ -2,8 +2,14 @@
 // instance serializer install, editor Ctrl+C hook and diagnostics. Created
 // once per activation; every failure degrades to native extraction.
 
-import { wrapBoxPrototype, wrapContainerPrototype, wrapMouseRegionPrototype } from "./structure.ts";
-import { wrapMarkdownPrototype, wrapTextPrototype, setLatexPainter, type MarkdownDiagnostics, type WrapDeps } from "./markdown.ts";
+import {
+  BOX_COPY_OWNER, CONTAINER_COPY_OWNER, MOUSE_REGION_COPY_OWNER,
+  wrapBoxPrototype, wrapContainerPrototype, wrapMouseRegionPrototype,
+} from "./structure.ts";
+import {
+  MARKDOWN_COPY_OWNER, TEXT_COPY_OWNER,
+  wrapMarkdownPrototype, wrapTextPrototype, setLatexPainter, type MarkdownDiagnostics, type WrapDeps,
+} from "./markdown.ts";
 import { installInstanceSerializer, serializerIsLive, tryConsumeCopyKey, type AltScreenLike, type CopyTelemetry, type CopyControllerDeps } from "./controller.ts";
 import { cacheStats } from "./model.ts";
 import type { AdapterHostFns } from "./shared.ts";
@@ -91,16 +97,27 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
         return { installed: false, details: "host bindings unavailable" };
       }
       setLatexPainter(fns!.renderLatex);
-      const wraps: [string, boolean][] = [
-        ["markdown", wrapMarkdownPrototype(host.prototypes.Markdown, deps)],
-        ["text", wrapTextPrototype(host.prototypes.Text, deps)],
-        ["box", wrapBoxPrototype(host.prototypes.Box)],
-        ["container", wrapContainerPrototype(host.prototypes.Container)],
+      // The owners are Symbol.for keys, so a SECOND activation of this
+      // extension in the same process (a subagent's session) sees the parent
+      // session's marks: "self" entries are already producing copy metadata
+      // and must stay silent. Only genuinely blocked entries (sealed, or a
+      // foreign render replacement) fail the install.
+      const entries: [name: string, prototype: object, owner: symbol, wrapped: boolean][] = [
+        ["markdown", host.prototypes.Markdown, MARKDOWN_COPY_OWNER, wrapMarkdownPrototype(host.prototypes.Markdown, deps)],
+        ["text", host.prototypes.Text, TEXT_COPY_OWNER, wrapTextPrototype(host.prototypes.Text, deps)],
+        ["box", host.prototypes.Box, BOX_COPY_OWNER, wrapBoxPrototype(host.prototypes.Box)],
+        ["container", host.prototypes.Container, CONTAINER_COPY_OWNER, wrapContainerPrototype(host.prototypes.Container)],
       ];
-      if (host.prototypes.MouseRegion) wraps.push(["mouse-region", wrapMouseRegionPrototype(host.prototypes.MouseRegion)]);
+      if (host.prototypes.MouseRegion) {
+        entries.push(["mouse-region", host.prototypes.MouseRegion, MOUSE_REGION_COPY_OWNER, wrapMouseRegionPrototype(host.prototypes.MouseRegion)]);
+      }
+      const selfOwned = (prototype: object, owner: symbol): boolean =>
+        Object.prototype.hasOwnProperty.call(prototype, owner);
       return {
-        installed: wraps.every(([, ok]) => ok),
-        details: wraps.map(([name, ok]) => `${name}=${ok ? "on" : "already-owned"}`).join(" "),
+        installed: entries.every(([, prototype, owner, wrapped]) => wrapped || selfOwned(prototype, owner)),
+        details: entries
+          .map(([name, prototype, owner, wrapped]) => `${name}=${wrapped ? "on" : selfOwned(prototype, owner) ? "self" : "blocked"}`)
+          .join(" "),
       };
     },
 
