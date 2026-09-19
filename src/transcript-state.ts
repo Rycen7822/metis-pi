@@ -95,6 +95,20 @@ export interface TranscriptEvent {
   generation?: number;
 }
 
+export type MessageBlock = { type: string; text?: string; thinking?: string };
+
+/** Canonical read-only content-block mapping, shared by the event boundary
+ * (extension.ts toStateMessage) and the render adapter (transcript-adapter.ts):
+ * one policy so a new block field cannot be added at one site only. Tolerates
+ * null/undefined entries and a non-array payload (→ []). */
+export function normalizeMessageBlocks(blocks: unknown): MessageBlock[] {
+  if (!Array.isArray(blocks)) return [];
+  return blocks.map((block) => {
+    const b = (block ?? {}) as Record<string, unknown>;
+    return { type: String(b.type ?? ""), text: typeof b.text === "string" ? b.text : undefined, thinking: typeof b.thinking === "string" ? b.thinking : undefined };
+  });
+}
+
 /**
  * True when a message contains NON-EMPTY visible TEXT (thinking does not
  * count: thinking must not steal the separator's text qualification).
@@ -232,14 +246,6 @@ export class TranscriptState {
     this.nextMessageSeq = 1;
     this.sealedFingerprints.clear();
     this.dirtyViews.clear();
-  }
-
-  get currentGeneration(): number {
-    return this.generation;
-  }
-
-  get currentSessionKey(): string {
-    return this.sessionKey;
   }
 
   /** Stable key for a streaming assistant message (object identity first). */
@@ -566,11 +572,6 @@ export class TranscriptState {
     return key;
   }
 
-  /** Whether a message has a plan at all (history replay completeness). */
-  hasMessagePlan(messageKey: MessageViewKey): boolean {
-    return this.messagePlans.has(messageKey);
-  }
-
   /** Keys whose plans changed since the last call (grouped refresh hints). */
   takeDirtyViews(): string[] {
     const keys = [...this.dirtyViews];
@@ -616,5 +617,4 @@ export class TranscriptState {
     return groupId !== undefined && this.groups.get(groupId)?.open === true;
   }
 
-  static readonly EXPLORATION_TOOLS = EXPLORATION_TOOLS;
 }

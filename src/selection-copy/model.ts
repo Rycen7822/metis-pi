@@ -6,7 +6,7 @@
 
 import type { SpanKind } from "./wrap.ts";
 
-export type BreakBefore = "hard" | "soft" | "paragraph" | "gap" | "unknown";
+export type BreakBefore = "hard" | "soft" | "gap" | "unknown";
 
 export interface CopySpan {
   colStart: number;

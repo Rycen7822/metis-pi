@@ -71,14 +71,8 @@ export interface RowPlan {
   right: Segment[] | undefined;
 }
 
-export function planWidths(plan: RowPlan): { left: number; right: number } {
+function planWidths(plan: RowPlan): { left: number; right: number } {
   return { left: rowWidth(plan.left), right: plan.right ? rowWidth(plan.right) : 0 };
-}
-
-export function planFits(plan: RowPlan, width: number): boolean {
-  const { left, right } = planWidths(plan);
-  if (!plan.right) return left <= width;
-  return left + right + 2 <= width || (left + 2 <= width && right + 2 <= width);
 }
 
 /** Realize a plan at `width`: join with a gap when it fits, otherwise wrap
@@ -97,10 +91,6 @@ export function realizeRow(plan: RowPlan, width: number): Segment[][] {
     return [truncateSegments(plan.left, width), truncateSegments(plan.right, width)];
   }
   return [truncateSegments(plan.left, width)];
-}
-
-export function segmentsToText(row: Segment[]): string {
-  return row.map((seg) => seg.text).join("");
 }
 
 /** k/M compact: 172000 → "172k", 1_000_000 → "1.0M" (never 1600k). */

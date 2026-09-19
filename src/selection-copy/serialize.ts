@@ -30,6 +30,18 @@ export interface LayoutFrameLike {
   root: LayoutBoxLike;
 }
 
+/** Depth-first search for the layout box bound to `scrollView` (identity
+ * match against the host's scrollView object). Shared by the serializer
+ * (anchorFor → the content child) and the controller (scroll content lines). */
+export function findScrollViewBox(box: LayoutBoxLike, scrollView: unknown): LayoutBoxLike | undefined {
+  if (box.scrollView === scrollView) return box;
+  for (const child of box.children) {
+    const found = findScrollViewBox(child, scrollView);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 export interface SerializeHostFns {
   visibleWidth(text: string): number;
   sliceByColumn(line: string, start: number, width: number, preserveAnsi: boolean): string;
@@ -109,17 +121,9 @@ export class SelectionSerializer {
    * gutters). */
   #anchorFor(frame: LayoutFrameLike, scrollView: unknown): { x: number; y: number } | undefined {
     if (scrollView === undefined) return { x: 0, y: 0 };
-    const content = this.#findScrollViewContent(frame.root, scrollView);
+    const box = findScrollViewBox(frame.root, scrollView);
+    const content = box?.children[0];
     return content ? { x: content.rect.x, y: content.rect.y } : undefined;
-  }
-
-  #findScrollViewContent(box: LayoutBoxLike, scrollView: unknown): LayoutBoxLike | undefined {
-    if (box.scrollView === scrollView) return box.children[0];
-    for (const child of box.children) {
-      const found = this.#findScrollViewContent(child, scrollView);
-      if (found) return found;
-    }
-    return undefined;
   }
 
   #rowPieces(

@@ -1,16 +1,16 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy } from "./transcript-adapter.ts";
-import { TranscriptState, type TranscriptEvent } from "./transcript-state.ts";
+import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
-import { UiMetrics, formatDuration, formatTokensCompact } from "./ui-metrics.ts";
+import { UiMetrics, formatDuration } from "./ui-metrics.ts";
 import { OutputSpeedTracker, formatSpeed } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { probeHost, type HostFacts } from "./host-compat.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
-import { UsageLedger, sanitizeUsage, type RawUsage } from "./usage-ledger.ts";
+import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker, GIT_CHANGES_DEBOUNCE_MS, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
 import { createGlyphPresentation } from "./glyph-presentation.ts";
@@ -127,28 +127,12 @@ function toStateMessage(message: unknown): TranscriptEvent["message"] {
   const record = message as Record<string, unknown>;
   const role = typeof record.role === "string" ? record.role : undefined;
   if (!role) return undefined;
-  const content = Array.isArray(record.content)
-    ? (record.content as unknown[]).map((block) => {
-        const b = (block ?? {}) as Record<string, unknown>;
-        return { type: String(b.type ?? ""), text: typeof b.text === "string" ? b.text : undefined, thinking: typeof b.thinking === "string" ? b.thinking : undefined };
-      })
-    : [];
+  const content = normalizeMessageBlocks(record.content);
   return {
     role,
     content,
     stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
   };
-}
-
-/** Usage key shared by the interaction metrics and the session ledger:
- * `${provider}:${responseId}` (namespaced — responseIds can collide across
- * providers), `m-${timestamp}` when the host gives no response id. */
-function usageKeyOf(record: Record<string, unknown>): { key: string; identified: boolean } {
-  const responseId = typeof record.responseId === "string" && record.responseId ? record.responseId : undefined;
-  if (responseId) return { key: `${String(record.provider)}:${responseId}`, identified: true };
-  const timestamp = record.timestamp;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) return { key: `m-${timestamp}`, identified: true };
-  return { key: `u-${Math.random().toString(36).slice(2)}`, identified: false };
 }
 
 export function activate(pi: AppearanceAPI, bindings: Bindings): void {
@@ -886,8 +870,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       const record = message as Record<string, unknown>;
       const usage = record.usage as RawUsage | undefined;
       if (usage && typeof usage === "object") {
-        const { key, identified } = usageKeyOf(record);
-        metrics.recordUsage(key, sanitizeUsage(usage), identified);
+        const identified = usageKeyOf(record);
+        const key = identified?.key ?? `u-${Math.random().toString(36).slice(2)}`;
+        metrics.recordUsage(key, sanitizeUsage(usage), identified ? identified.identified : false);
         ledger.confirm(key, usage);
         metrics.clearPreviewUsage(outcome.attemptCount);
       }
@@ -979,6 +964,3 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 function isUserMessage(message: unknown): boolean {
   return (message as Record<string, unknown> | undefined)?.role === "user";
 }
-
-// Re-exported for tests that verify display rules without the host.
-export { formatTokensCompact };

@@ -10,6 +10,21 @@
 // double-counts; a later confirmation with the same key REPLACES (final usage
 // may correct an earlier partial). Our own summary CustomEntry is excluded.
 
+/** Usage-dedup key grammar shared by live confirmations (extension.ts) and
+ * session-file rebuilds (UsageLedger.rebuild) — both MUST produce the same
+ * key for the same response or a replay double-counts. Covers only the two
+ * IDENTIFIED forms; unidentified fallbacks stay local by design (live:
+ * random `u-` key that never dedups; rebuild: stable entry-id key).
+ * `${provider}:${responseId}` (namespaced — responseIds can collide across
+ * providers), else `m-${timestamp}` when the host gives no response id. */
+export function usageKeyOf(record: Record<string, unknown>): { key: string; identified: boolean } | undefined {
+  const responseId = typeof record.responseId === "string" && record.responseId ? record.responseId : undefined;
+  if (responseId) return { key: `${String(record.provider)}:${responseId}`, identified: true };
+  const timestamp = record.timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) return { key: `m-${timestamp}`, identified: true };
+  return undefined;
+}
+
 /** Narrow structural usage shape (matches the host Usage fields we sum). */
 export interface RawUsage {
   input?: unknown;
@@ -117,10 +132,8 @@ export class UsageLedger {
       if (record.type !== "message") continue;
       const message = record.message as Record<string, unknown> | undefined;
       if (!message || message.role !== "assistant") continue;
-      const responseId = typeof message.responseId === "string" && message.responseId
-        ? `${String(message.provider)}:${message.responseId}`
-        : undefined;
-      const key = responseId ?? `m-${String(message.timestamp ?? record.id)}`;
+      const identified = usageKeyOf(message);
+      const key = identified ? identified.key : `m-${String(message.timestamp ?? record.id)}`;
       this.confirm(key, message.usage as RawUsage | undefined);
     }
   }

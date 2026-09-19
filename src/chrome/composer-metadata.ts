@@ -23,7 +23,6 @@ export interface ComposerMetaDeps {
   getSnapshot: () => ComposerMetaSnapshot;
   surface: {
     paintRow: (row: string, width: number) => string;
-    paintGlyph: (text: string, tone: "accent" | "dim") => string;
   };
   /** Painter for plain-text tones (normal/dim/warning) AFTER layout. */
   paint: (text: string, tone: Segment["tone"]) => string;

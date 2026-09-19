@@ -24,7 +24,7 @@
 // passive while the separator stays active.
 
 import { asRecord } from "./tool-names.ts";
-import { TranscriptState, renderedThinkingRuns, type MessageViewKey } from "./transcript-state.ts";
+import { TranscriptState, normalizeMessageBlocks, renderedThinkingRuns, type MessageViewKey } from "./transcript-state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "./thinking-view.ts";
 
 const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
@@ -364,7 +364,7 @@ function applyThinkingPolicy(
     return false;
   };
   let changed = false;
-  for (const run of renderedThinkingRuns(normalizeBlocks(content))) {
+  for (const run of renderedThinkingRuns(normalizeMessageBlocks(content))) {
     const plan = key !== undefined ? input.state.thinkingRunPlan(key, run.runIndex) : undefined;
     const ended = plan ? plan.ended : run.endedInContent;
     // Per-run display state (click choice + peek scroll), stored with the run
@@ -400,14 +400,6 @@ function applyThinkingPolicy(
     }
   }
   return changed;
-}
-
-function normalizeBlocks(content: Array<Record<string, unknown>>): Array<{ type: string; text?: string; thinking?: string }> {
-  return content.map((block) => ({
-    type: String(block.type ?? ""),
-    text: typeof block.text === "string" ? block.text : undefined,
-    thinking: typeof block.thinking === "string" ? block.thinking : undefined,
-  }));
 }
 
 /** True when a non-thinking block exists after the run's first block — the
@@ -628,7 +620,7 @@ function resolveMessagePlan(
   // whose message object was never anchored (history replay, cold start):
   // the state may already hold the OPEN plan for this message; reuse it
   // instead of sealing a second plan whose followsTools flag would be wrong.
-  const contentBlocks = normalizeBlocks(content);
+  const contentBlocks = normalizeMessageBlocks(content);
   const hasText = contentBlocks.some((block) => block.type === "text" && block.text?.trim() !== "");
   const hasThinking = contentBlocks.some((block) => block.type === "thinking" && block.thinking?.trim() !== "");
   if (!hasText && !hasThinking) return undefined;

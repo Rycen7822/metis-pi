@@ -8,9 +8,6 @@ import {
   type ColorLevel,
 } from "./palette.ts";
 
-export { DIM_ON, INTENSITY_RESET, BG_RESET };
-export const CODEX_DIFF_DARK_ADD_BG = [DIFF_ADD_BG.r, DIFF_ADD_BG.g, DIFF_ADD_BG.b] as const;
-export const CODEX_DIFF_DARK_DEL_BG = [DIFF_DEL_BG.r, DIFF_DEL_BG.g, DIFF_DEL_BG.b] as const;
 import type { LayoutOps } from "./shell.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
 
@@ -332,11 +329,6 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
     }
   }
   return out.length ? out : [""];
-}
-
-/** Summarize rows for the header: "(+A -D)". */
-export function renderCountSummary(stats: DiffStats): (painter: (text: string, color: "add" | "remove" | "plain") => string) => string {
-  return (painter) => `(${painter(`+${stats.added}`, "add")} ${painter(`-${stats.removed}`, "remove")})`;
 }
 
 export { MOCHA };

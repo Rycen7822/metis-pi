@@ -336,11 +336,3 @@ export function formatTokensCompact(tokens: number): string {
   }
   return String(Math.round(tokens));
 }
-
-export const WORKING_PHASE_LABEL: Record<ActivityPhase, string> = {
-  idle: "Working",
-  working: "Working",
-  thinking: "Thinking",
-  writing: "Writing",
-  "waiting-for-input": "Waiting for input",
-};

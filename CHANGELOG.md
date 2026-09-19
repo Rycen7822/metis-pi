@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.1
+
+内部精简（行为完全不变，无用户可见变化）：
+
+- **去死代码**：adapter.ts 里两条返回相同的 `renderShell === "self"` 分支（含一段重复注释）；diff.ts 的 `DIM_ON/INTENSITY_RESET/BG_RESET` 再导出、`CODEX_DIFF_DARK_*_BG`、`renderCountSummary`；write-tracker 的 `DiffBudget`；write-preview 的 `WRITE_PREVIEW_BODY_ROWS`；ui-metrics 的 `WORKING_PHASE_LABEL`；config.ts 的 `SUMMARY_ENTRY_TYPE`（与 turn-summary 的 `SUMMARY_CUSTOM_TYPE` 同值双名的那份）；extension.ts 的 `formatTokensCompact` 再导出；transcript-state 的 `currentGeneration`/`currentSessionKey`/`hasMessagePlan`/`EXPLORATION_TOOLS` 静态成员；segments.ts 的 `planFits`/`segmentsToText`（`planWidths` 降为内部）；composer-metadata 表面接口里从未使用的 `paintGlyph`；selection-copy 模型里从未被构造的 `"paragraph"` 断行类型；controller 里从未被读取的 `primaryScrollView` 类型字段。
+- **收敛重复实现**：usage 去重键语法（`provider:responseId` / `m-${timestamp}`）由 usage-ledger 导出的 `usageKeyOf` 单点拥有（extension 实时确认与 ledger 回放共用，回退策略仍各自本地）；消息 content-block 归一化由 transcript-state 导出的 `normalizeMessageBlocks` 单点拥有（extension 事件边界与 transcript-adapter 渲染适配共用）；scroll-view 布局树查找由 serialize 导出的 `findScrollViewBox` 单点拥有（serializer 锚点与 controller 共用）；header 与 turn-summary 的 lazy theme-probe 画笔下的 `palette.resolveThemePainter` 单点拥有；`LayoutOps` 成为 `DiffLayoutOps` 的类型别名（同构双接口合一）。
+- 验证：`npm test` 323/323、`check`/`check:core` 干净、host-smoke 与真实 TUI pty 全过、`npm run verify` rc=0。
+
 ## 0.15.0
 
 - **移除 footer 的 `R`/`W` 缓存读写计数**，连带 `footer.showCacheReadWrite` 配置项。会话累计的 cache-read 会随长上下文缓存迅速膨胀（本机实测：656 个请求合计 112,334,848，中位 15.9 万/请求），而 OpenAI/DeepSeek 风格的提供商没有 cache-write 计数器，`W` 恒为 0 —— 两个数字占着宽屏右端却不解释任何可行动的决策。`cache NN%`（最近一次请求的命中率）保留：它才是"缓存有没有生效"的可读信号。

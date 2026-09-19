@@ -11,10 +11,9 @@ export const OUTPUT_SUBSEQUENT_PREFIX = "    ";
 export const COMMAND_CONTINUATION_MAX_ROWS = 2;
 export const OUTPUT_MAX_ROWS = 5;
 
-export interface LayoutOps {
-  wrap(text: string, width: number): string[];
-  visibleWidth(text: string): number;
-}
+import type { DiffLayoutOps } from "./tool-names.ts";
+
+export type LayoutOps = DiffLayoutOps;
 
 export interface ExecRowModel {
   /** "Running" while streaming, "Ran" once done. Empty = no title. */

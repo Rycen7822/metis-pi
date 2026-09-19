@@ -41,8 +41,6 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   glyphs: { textPresentation: true, include: [] },
 };
 
-const SUMMARY_ENTRY_TYPE = "pi-codex-appearance:interaction-summary:v1";
-
 export interface ConfigLoadResult {
   config: AppearanceConfig;
   /** Human-readable problems with the user's file (empty when pristine/default). */
@@ -286,5 +284,3 @@ export function loadConfig(
   }
   return { config: validateConfig(raw, problems), problems, present: true };
 }
-
-export { SUMMARY_ENTRY_TYPE };

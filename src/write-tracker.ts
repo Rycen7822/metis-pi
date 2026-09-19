@@ -106,8 +106,6 @@ function normalizeLf(text: string): string {
   return text.includes("\r\n") ? text.replace(/\r\n/g, "\n") : text.replace(/\r(?!\n)/g, "\n");
 }
 
-export interface DiffBudget { ok: boolean }
-
 function withinDiffBudget(before: readonly string[], after: readonly string[]): boolean {
   const totalLines = before.length + after.length;
   if (totalLines > MAX_DIFF_LINES) return false;

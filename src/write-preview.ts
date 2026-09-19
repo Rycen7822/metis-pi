@@ -31,7 +31,6 @@ export function resolveWriteStage(context: WriteStageContext): WriteStage {
   return "receiving-arguments";
 }
 
-export const WRITE_PREVIEW_BODY_ROWS = 8;
 export const WRITE_PREVIEW_MAX_ROWS = 12;
 
 /** Stage label + colors: neutral for in-flight stages (never success green). */

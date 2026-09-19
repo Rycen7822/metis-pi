@@ -15,7 +15,7 @@
 // - Unmapped regions → native per-row extraction mixed with exact spans,
 //   separated by hard boundaries.
 
-import { SelectionSerializer, type LayoutBoxLike, type LayoutFrameLike } from "./serialize.ts";
+import { SelectionSerializer, findScrollViewBox, type LayoutFrameLike } from "./serialize.ts";
 import type { SerializeHostFns } from "./serialize.ts";
 
 export interface CopyTelemetry {
@@ -37,7 +37,7 @@ export interface AltScreenLike {
   getSelectionColumns?: (line: string, row: number, selection: unknown, minColumn?: number, maxColumn?: number) => { start: number; end: number };
   getActiveSelectionText?: () => string | undefined;
   copyTextToClipboard?: (text: string) => Promise<boolean>;
-  currentLayout?: LayoutFrameLike & { primaryScrollView?: { scrollTop: number } } | undefined;
+  currentLayout?: LayoutFrameLike | undefined;
   previousScreen?: readonly string[];
   [key: string]: unknown;
 }
@@ -151,15 +151,6 @@ function scrollContentLinesOf(tui: AltScreenLike, scrollView: unknown): readonly
   if (!layout) return undefined;
   const box = findScrollViewBox(layout.root, scrollView);
   return box?.scrollContentLines;
-}
-
-function findScrollViewBox(box: LayoutBoxLike, scrollView: unknown): LayoutBoxLike | undefined {
-  if (box.scrollView === scrollView) return box;
-  for (const child of box.children) {
-    const found = findScrollViewBox(child, scrollView);
-    if (found) return found;
-  }
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------

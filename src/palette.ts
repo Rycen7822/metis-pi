@@ -31,6 +31,37 @@ export interface ColorLevel {
   readonly kind: ColorLevelKind;
 }
 
+/** Resolve a `(key, text) => text` theme painter with the lazy-probe contract
+ * shared by the header and the interaction-summary entry renderer: the host
+ * may hand over an unbound theme proxy (early construction), so the painter
+ * is chosen at use time — bound theme first (`fg("dim", …)` must return a
+ * DIFFERENT string), then the host's globalThis theme symbol, else identity.
+ * One implementation so the two surfaces cannot drift. */
+export function resolveThemePainter(theme: unknown): (key: string, text: string) => string {
+  const probe = (fg: (k: string, t: string) => string): boolean => {
+    try {
+      const probeText = "\u0000probe";
+      return typeof fg("dim", probeText) === "string" && fg("dim", probeText) !== probeText;
+    } catch {
+      return false;
+    }
+  };
+  const bound = theme as { fg?: (k: string, t: string) => string } | undefined;
+  if (bound && typeof bound.fg === "function") {
+    const fg = bound.fg;
+    if (probe(fg)) return (k, t) => fg(k, t);
+  }
+  const globalTheme = (globalThis as Record<symbol, unknown>)[
+    Symbol.for("@earendil-works/pi-coding-agent:theme")
+  ] as { fg?: (k: string, t: string) => string } | undefined;
+  if (globalTheme && typeof globalTheme.fg === "function") {
+    const fg = globalTheme.fg;
+    if (probe(fg)) return (k, t) => fg(k, t);
+  }
+  return (_k: string, t: string) => t;
+}
+
+
 /**
  * Pipeline-wide color context. One resolver, one source of truth: the live
  * host passes pi-tui's real `getCapabilities()`; env vars only degrade.

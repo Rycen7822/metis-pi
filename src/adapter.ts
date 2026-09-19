@@ -72,12 +72,8 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const source = asRecord(info.sourceInfo);
     if (source.source !== "builtin" || source.path !== `<builtin:${name}>`) return;
-    // 0.8.1: an EXACT builtin self-shell (edit renders its own rows) may be
-    // taken over — we show the same structured diff surface as every other
-    // text tool. Any third-party self-shell still backs off above.
     // An EXACT builtin self-shell (edit renders its own rows) takes the same
     // renderer as every other text tool; third-party self-shells back off above.
-    if (definition.renderShell === "self") return options.renderers[name as ToolName];
     return options.renderers[name as ToolName];
   }
   function select(row: unknown): Renderers | undefined {
