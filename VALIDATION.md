@@ -38,7 +38,7 @@ Verified (Node 24.15.0, Pi 0.85.1):
   widget rows/register-once/fold persistence/overflow/latch, overlay interactions).
 - `npm run check` / `npm run check:core`: 0 errors.
 - `scripts/host-smoke.mjs`: new block activates `extensions/todo.ts` against a
-  recording fake pi — asserts tool `todo`, commands `codex-todo`/`codex-todo-doctor`,
+  recording fake pi — asserts tool `todo`, commands `todos`/`todos-doctor`,
   shortcut `ctrl+shift+t`, session_start store creation, an end-to-end tool
   add/list round trip, and the aboveEditor widget registration.
 - `scripts/pty-verify.mjs`: new stage 3c — the mock provider calls the `todo` tool

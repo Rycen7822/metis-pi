@@ -21,7 +21,7 @@
   纯函数（先丢已完成再截断 + "+N more"）；已完成下 turn 延迟收起；折叠态写盘；
   ctrl+shift+t 折叠；零轮询。
 - 全屏 overlay：命名键位导航；space/s/r/x 动作；错误闪现不崩；与 widget 共享 store。
-- 命令：`/codex-todo`（列表/开 overlay）、`/codex-todo-doctor`（只读诊断 + gc）。
+- 命令：`/todos`（列表/开 overlay，0.16.0 定名；初稿曾用 `/codex-todo`）、`/todos-doctor`（只读诊断 + gc）。
 - 部署注意：与 pi-agent-extensions 的 todos 扩展工具同名，需禁用对方 todos；
   存储目录刻意不同名（`.pi/codex-todos` vs `.pi/todos`）。
 

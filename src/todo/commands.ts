@@ -21,8 +21,8 @@ export function registerCodexTodoCommands(pi: unknown, deps: CodexTodoCommandsDe
   };
   if (typeof api.registerCommand !== "function") return;
 
-  api.registerCommand("codex-todo", {
-    description: "codex-todo: show the task list (overlay when a TUI is available)",
+  api.registerCommand("todos", {
+    description: "Show the codex-todo task list (overlay when a TUI is available)",
     handler: (_args, ctx) => {
       const { system, openOverlay } = deps;
       const state = system.store.read();
@@ -38,7 +38,7 @@ export function registerCodexTodoCommands(pi: unknown, deps: CodexTodoCommandsDe
     },
   });
 
-  api.registerCommand("codex-todo-doctor", {
+  api.registerCommand("todos-doctor", {
     description: "codex-todo: read-only diagnostics (corrupt archives, stale locks, GC)",
     handler: (args, ctx) => {
       const notify = ctx.ui?.notify ?? deps.notify;

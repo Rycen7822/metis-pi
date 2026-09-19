@@ -147,7 +147,7 @@ test("blockedBy actions and blocked marker", async () => {
   }
 });
 
-test("commands: /codex-todo notifies the list; doctor reports status and gc", async () => {
+test("commands: /todos notifies the list; /todos-doctor reports status and gc", async () => {
   const dir = mkdtempSync(join(tmpdir(), "codex-todo-tools-"));
   try {
     const { system } = makeSystem(dir);
@@ -162,7 +162,7 @@ test("commands: /codex-todo notifies the list; doctor reports status and gc", as
     assert.equal(fakePi.handlers.length, 2);
 
     const ctx = { ui: { notify: (t: string) => notices.push(t) } };
-    fakePi.handlers[0]("", ctx); // codex-todo with no tasks
+    fakePi.handlers[0]("", ctx); // /todos with no tasks
     assert.match(notices[0], /no tasks yet/);
 
     const exec = createTodoToolHandlers(system, () => dir);

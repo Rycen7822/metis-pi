@@ -38,12 +38,12 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
       storeDir = dir;
       const status = store.status();
       if (status.recoveredFrom) {
-        notify(`codex-todo: recovered from a corrupt state file (archived as ${status.recoveredFrom}) — run /codex-todo-doctor`, "warning");
+        notify(`codex-todo: recovered from a corrupt state file (archived as ${status.recoveredFrom}) — run /todos-doctor`, "warning");
       }
       // Restart recovery reminder (pi-goal-x lesson: the model must KNOW the
       // list exists, with concrete numbers, or it ignores it).
       const open = store.read().tasks.filter((t) => t.status === "pending" || t.status === "in_progress").length;
-      if (open > 0) notify(`codex-todo: ${open} task(s) pending from the previous session — see /codex-todo`);
+      if (open > 0) notify(`codex-todo: ${open} task(s) pending from the previous session — see /todos`);
     }
     return store;
   };

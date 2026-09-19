@@ -29,7 +29,7 @@ test("rows: header, ids always visible, tree indent, help footer, empty hint", a
     assert.match(empty[1].text, /no tasks/);
     await store.mutate((s) => addTasks(s, [{ title: "root" }, { title: "child", parentId: 1 }], 1));
     const rows = buildOverlayRows(store.read(), "s", 0, 60); // cursor on first task row
-    assert.match(rows[0].text, /codex-todo \(2 tasks\)/);
+    assert.match(rows[0].text, /todos \(2 tasks\)/);
     assert.match(rows[1].text, /❯ ○ #1 root/); // cursor row
     assert.match(rows[2].text, /○ #2 child/); // no cursor mark
     assert.ok(rows[2].text.startsWith("    ○")); // mark+space+depth indent

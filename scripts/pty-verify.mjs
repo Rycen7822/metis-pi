@@ -585,6 +585,7 @@ try {
   console.log("  auto-collapse: 'Thought for Ns' label; 1 click = 6-row peek window, 2 clicks = full body");
   console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place");
   console.log("  tool run:     real bash output, summary still Worked");
+  console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

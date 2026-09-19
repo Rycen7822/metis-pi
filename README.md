@@ -120,15 +120,18 @@ pi install /绝对路径/pi-codex-appearance
 - **存储**：`<cwd>/.pi/codex-todos/tasks.json`（version 字段、原子写、损坏自动归档成
   `.bak-<ts>` 并空载，绝不让会话崩溃；`gcDays` 默认 7 清理已完成）。环境变量
   `PI_CODEX_TODO_PATH` 可整体搬迁。
-- **交互**：`/codex-todo` 打开全屏 overlay（↑↓ 导航走宿主命名键位；space 推进、s skip、
-  r reopen、x claim/release；错误闪现不崩），无任务时退化为 notify 列表；`/codex-todo-doctor`
+- **交互**：`/todos` 打开全屏 overlay（↑↓ 导航走宿主命名键位；space 推进、s skip、
+  r reopen、x claim/release；错误闪现不崩），无任务时退化为 notify 列表；`/todos-doctor`
   只读诊断（坏档归档、过期锁、GC）。模型侧是单 `todo` 工具 action 分发：校验错误抛出并附
   纠正提示（模型自我修正），无变更返回 `No change:` 结果（防重试循环）。
 
-**部署注意**：与 pi-agent-extensions 的 todos 扩展**工具同名（`todo`），不能共存**——请禁用
-对方的 todos 扩展（本插件撞名时只提示一次、不刷屏）。存储目录刻意不同名
-`.pi/codex-todos`，双装过渡期互不踩数据；如需迁移旧列表，把 `.pi/todos/*.md` 的内容
-转成任务用 `todo` 工具 `add` 即可。
+**部署注意**：另有两个同名扩展会抢占工具名 `todo` 与命令 `/todos`——mitsuhiko/agent-stuff 的
+`extensions/todos.ts`（文件式 `.pi/todos/*.md`）与 pi-agent-extensions 的 `extensions/todos/index.ts`。
+两者**必须禁用其一**（本插件撞名时只提示一次、不刷屏；工具名冲突是静默后写覆盖，命令冲突会退化成
+`/todos:2`，所以不要靠运气）。禁用方式：settings.json 对应包的 `extensions` 数组里写
+`"-extensions/todos.ts"`（`-` 前缀 = 强制排除）。当前的 settings.json 已按此配置。
+存储目录刻意不同名 `.pi/codex-todos`，双装过渡期互不踩数据；如需迁移旧列表，把 `.pi/todos/*.md`
+的内容转成任务用 `todo` 工具 `add` 即可。
 
 ## 与现有插件的边界
 

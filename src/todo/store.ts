@@ -9,7 +9,7 @@
 //   timestamped backup and we start empty, never crash the session.
 // - Cross-process mutation lock (separate pi sessions in two terminals can
 //   share a repo): atomic `wx` create, 30-minute TTL, expired locks are
-//   archived (not silently deleted) for /codex-todo-doctor to report. The lock
+//   archived (not silently deleted) for /todos-doctor to report. The lock
 //   guards the read-modify-write instant only — task claims live in the task
 //   records themselves (pi-agent-extensions: claim ≠ lock).
 // - Tests must use a tmpdir; nothing here ever touches a real HOME.
@@ -127,7 +127,7 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     const raw = readJson(statePath);
     if (raw === undefined) {
       if (fs.existsSync(statePath)) {
-        // Corrupt state: archive for /codex-todo-doctor, start empty. A bad
+        // Corrupt state: archive for /todos-doctor, start empty. A bad
         // todo file must never take the session down with it.
         const backup = `${TODO_STATE_FILE}.bak-${now()}`;
         try {

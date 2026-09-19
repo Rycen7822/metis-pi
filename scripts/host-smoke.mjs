@@ -333,7 +333,7 @@ const todoPi = {
 const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codex-todo-smoke-"));
 todoExtension(todoPi);
 assert.deepEqual(todoCalls.tools.map((t) => t.name), ["todo"]);
-assert.deepEqual(todoCalls.commands.map((c) => c.name), ["codex-todo", "codex-todo-doctor"]);
+assert.deepEqual(todoCalls.commands.map((c) => c.name), ["todos", "todos-doctor"]);
 assert.deepEqual(todoCalls.shortcuts.map((s) => s.key), ["ctrl+shift+t"]);
 const todoNotices = [];
 const todoWidgets = [];

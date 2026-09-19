@@ -40,7 +40,7 @@ export function buildOverlayRows(state: TodoState, sessionId: string, cursor: nu
   const flat = flattenTree(buildTree(state));
   const rows: OverlayRow[] = [{
     id: -1, depth: 0,
-    text: `── codex-todo (${state.tasks.length} tasks) ${"─".repeat(Math.max(0, width - 24))}`.slice(0, width),
+    text: `── todos (${state.tasks.length} tasks) ${"─".repeat(Math.max(0, width - 24))}`.slice(0, width),
     tone: "accent",
   }];
   if (flat.length === 0) {
@@ -130,7 +130,7 @@ export function openTodoOverlay(ui: TodoOverlayUi, deps: TodoOverlayDeps): Promi
             } else if (t.status === "in_progress") {
               // User-driven completion from the overlay: the gate still runs
               // (unfinished subtasks block), evidence marks WHO completed it.
-              const r = await system.store.mutate((s) => completeTask(s, id, "completed via /codex-todo overlay", now(), system.turn()));
+              const r = await system.store.mutate((s) => completeTask(s, id, "completed via /todos overlay", now(), system.turn()));
               if (!r.ok) throw new Error(r.error);
             }
             break;
