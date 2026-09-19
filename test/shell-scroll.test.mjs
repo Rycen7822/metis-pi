@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
-import extension from "../index.ts";
+import extension from "../extensions/appearance.ts";
 import { productFor, publishedRowsOf } from "../src/selection-copy/model.ts";
 import { SelectionSerializer } from "../src/selection-copy/serialize.ts";
 import { createSelectionCopySystem } from "../src/selection-copy/index.ts";

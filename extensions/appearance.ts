@@ -1,19 +1,19 @@
 import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
-import { activate, type AppearanceAPI } from "./src/extension.ts";
-import { renderCodexDiffComponent, type DiffComponentInput } from "./src/diff-component.ts";
-import { renderShellCall, renderShellResult, type LayoutOps } from "./src/shell.ts";
-import { resolveColorContext } from "./src/palette.ts";
-import { makeSurfaceOps } from "./src/surface.ts";
-import { renderWritePreview } from "./src/write-preview.ts";
-import { loadConfig } from "./src/config.ts";
-import { thoughtSummaryText } from "./src/thinking-summary.ts";
-import { peekHintText, type PeekWindow, type ThinkingView, type ThinkingViewControl } from "./src/thinking-view.ts";
-import { registerProduct, productFor, publishRows, releaseCopyCache } from "./src/selection-copy/model.ts";
-import type { CopyRow } from "./src/selection-copy/model.ts";
-import type { WritePreviewInput } from "./src/renderers.ts";
-import type { ToolName } from "./src/tool-names.ts";
+import { activate, type AppearanceAPI } from "../src/extension.ts";
+import { renderCodexDiffComponent, type DiffComponentInput } from "../src/diff-component.ts";
+import { renderShellCall, renderShellResult, type LayoutOps } from "../src/shell.ts";
+import { resolveColorContext } from "../src/palette.ts";
+import { makeSurfaceOps } from "../src/surface.ts";
+import { renderWritePreview } from "../src/write-preview.ts";
+import { loadConfig } from "../src/config.ts";
+import { thoughtSummaryText } from "../src/thinking-summary.ts";
+import { peekHintText, type PeekWindow, type ThinkingView, type ThinkingViewControl } from "../src/thinking-view.ts";
+import { registerProduct, productFor, publishRows, releaseCopyCache } from "../src/selection-copy/model.ts";
+import type { CopyRow } from "../src/selection-copy/model.ts";
+import type { WritePreviewInput } from "../src/renderers.ts";
+import type { ToolName } from "../src/tool-names.ts";
 
 function layoutOps(): LayoutOps {
   return {
@@ -426,11 +426,11 @@ class CodexThinkingClickableComponent implements Tui.Component {
   }
 }
 
-/** Real package version, read once from package.json next to this entry —
+/** Real package version, read once from the repo-root package.json —
  * never hardcoded (diagnostics and the header show this value). */
 function appearanceVersion(): string {
   try {
-    const raw = readFileSync(new URL("./package.json", import.meta.url), "utf8");
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
     const version = (JSON.parse(raw) as { version?: unknown }).version;
     return typeof version === "string" && version ? version : "unknown";
   } catch {

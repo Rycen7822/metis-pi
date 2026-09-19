@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as Core from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import extension from "/home/xu/project/tools/pi-codexy/index.ts";
+import extension from "../extensions/appearance.ts";
 
 const handlers = new Map();
 const pi = new Proxy({

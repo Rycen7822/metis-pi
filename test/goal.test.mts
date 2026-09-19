@@ -7,7 +7,7 @@
 // never double-counts elapsed time.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import goalExtension from "../goal.ts";
+import goalExtension from "../extensions/goal.ts";
 
 const NOW = 1_700_000_000_000;
 

@@ -19,8 +19,7 @@
     "node": ">=22.19.0"
   },
   "files": [
-    "index.ts",
-    "goal.ts",
+    "extensions",
     "src",
     "themes",
     "README.md",
@@ -61,8 +60,7 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts",
-      "./goal.ts"
+      "./extensions/*.ts"
     ],
     "themes": [
       "./themes/codex-appearance.json"

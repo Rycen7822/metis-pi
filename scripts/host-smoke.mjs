@@ -12,7 +12,7 @@ import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
 import { Text, MouseRegion, hyperlink, visibleWidth } from "@earendil-works/pi-tui";
-import extension from "../index.ts";
+import extension from "../extensions/appearance.ts";
 
 const handlers = new Map();
 const registeredCommands = [];
