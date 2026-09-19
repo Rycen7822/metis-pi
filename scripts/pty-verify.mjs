@@ -31,6 +31,9 @@ const AGENT_DIR = path.join(HOME_DIR, ".pi", "agent");
 const WORKSPACE = path.join(ROOT, "workspace");
 fs.mkdirSync(AGENT_DIR, { recursive: true });
 fs.mkdirSync(WORKSPACE, { recursive: true });
+// Stale codex-todo state from a previous harness run would break the
+// "Todos 0/1 done" stage assertion — start each run with a clean store.
+try { fs.rmSync(path.join(WORKSPACE, ".pi", "codex-todos"), { recursive: true, force: true }); } catch { /* best effort */ }
 // A real git work tree, so the footer's working-tree change counts are asserted
 // from real frames (the 0.11.0 +A −D segment). Skipped with a note without git.
 const hasGit = (() => {
@@ -87,6 +90,16 @@ const server = http.createServer((req, res) => {
       if (/PCX_GLYPH/.test(text)) {
         const cmd = "printf '\u2714 done\\n\u2716 fail\\n'";
         send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx2", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: cmd }) } }] }, finish_reason: null }] });
+        setTimeout(() => {
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ ...base, choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }, 400);
+        return;
+      }
+      if (/PCX_TODO/.test(text)) {
+        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx3", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty task" }] }) } }] }, finish_reason: null }] });
         setTimeout(() => {
           send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
           send({ ...base, choices: [], usage });
@@ -494,6 +507,15 @@ try {
   assert.ok((glyphFrame.match(/\u2714\uFE0E/g) ?? []).length >= 2, "command row + output row both normalized");
   assert.ok((glyphFrame.match(/\u2716\uFE0E/g) ?? []).length >= 2, "command row + output row both normalized");
   assert.doesNotMatch(glyphFrame, /[\u2714\u2716](?![\uFE0E\uFE0F])/, "no bare \u2714/\u2716 reaches the screen");
+
+  // Stage 3c: codex-todo — the mock model calls the todo tool; the persistent
+  // widget appears above the editor and the store lands on disk in the
+  // workspace (.pi/codex-todos/tasks.json).
+  type("please PCX_TODO now");
+  sendKeys(["Enter"]);
+  const todoFrame = await waitFor(/Todos 0\/1 done/, 60_000, "codex-todo widget above the editor");
+  assert.ok(todoFrame.includes("○ pty task"), "widget shows the task row");
+  assert.ok(fs.existsSync(path.join(WORKSPACE, ".pi", "codex-todos", "tasks.json")), "store persisted in the workspace");
 
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");

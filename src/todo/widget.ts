@@ -65,7 +65,15 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   let ui: TodoWidgetUi | undefined;
   let tuiRef: { requestRender?: () => void } | undefined;
   let widgetRegistered = false;
-  let folded = system.store.settings().widgetFolded;
+  // The store opens at session_start, not at extension load — read the fold
+  // state lazily and default to unfolded until then.
+  let folded = (() => {
+    try {
+      return system.store.settings().widgetFolded;
+    } catch {
+      return false;
+    }
+  })();
   let latchedHeight: number | null = null;
 
   /** Visible rows for the current snapshot (pure; also what tests assert). */

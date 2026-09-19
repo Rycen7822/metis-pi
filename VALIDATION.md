@@ -1,3 +1,50 @@
+# Validation record — 0.16.0 (agent-stuff layout + codex-todo sub-plugin)
+
+Two deliverables, one structural: the package manifest now exports `./extensions/*.ts`
+(glob, mitsupi-style). `index.ts` → `extensions/appearance.ts` and `goal.ts` →
+`extensions/goal.ts`; `src/` paths untouched (the 323-test display suite needed no
+changes) and the pty harness needed none (it installs the repo dir; pi resolves the
+manifest). On top of that layout ships the third entry, `extensions/todo.ts` —
+codex-todo, distilled from three upstreams (full analysis in
+`docs/0.16.0-todo-plugin-plan.md`):
+
+- rpiv-todo: register-once setWidget with a getter-closure factory; stable-height
+  latch; pure line budget (completed dropped first, then pending tail, one row for
+  `+N more`); delayed completed-fold (completedAtTurn < turn); zero polling; the
+  no-change result convention (`No change: ...` instead of an error, so the model
+  does not retry identical calls); blockedBy with incremental add/remove; VALID_TRANSITIONS
+  with named-state errors; text sanitizing before the TUI.
+- pi-goal-x: completion blocked by default (unfinished subtasks listed; evidence
+  required, recorded as an UNTRUSTED claim; optional evidenceFiles must exist on
+  disk); skip cascade with per-task reasons; derived parent display status (never
+  stored); restart recovery reminder with concrete open-task numbers; doctor command
+  stays read-only unless the user asks for gc.
+- pi-agent-extensions todos: per-mutation cross-process lock (wx, 30min TTL, expired
+  locks archived as `stale-lock-*` for the doctor); claim/release as long-lived task
+  records distinct from locks, with `force`; gcDays GC that reparents survivors;
+  host named keybindings in the overlay.
+
+Deliberate deviations from the plan, recorded: (1) merge-by-id was dropped — the
+action-based tool API never has the model resend whole documents, so the failure
+mode it solves cannot occur; (2) 4-state machine instead of pi-goal-x's
+3-state+currentTaskId, because parallel subagents mean several tasks are live at
+once and one focus pointer cannot express that; (3) a child blockedBy its parent is
+legal (waiting-on-parent is signal, not deadlock) — only waits-for edges cycle-check.
+
+Verified (Node 24.15.0, Pi 0.85.1):
+
+- `env -u NO_COLOR npm test`: 368/368 — 45 new todo tests (model purity, store
+  persistence/locking/GC, tool policy incl. throw-vs-no-change and evidence files,
+  widget rows/register-once/fold persistence/overflow/latch, overlay interactions).
+- `npm run check` / `npm run check:core`: 0 errors.
+- `scripts/host-smoke.mjs`: new block activates `extensions/todo.ts` against a
+  recording fake pi — asserts tool `todo`, commands `codex-todo`/`codex-todo-doctor`,
+  shortcut `ctrl+shift+t`, session_start store creation, an end-to-end tool
+  add/list round trip, and the aboveEditor widget registration.
+- `scripts/pty-verify.mjs`: new stage 3c — the mock provider calls the `todo` tool
+  (`add "pty task"`); the real TUI frame shows the `Todos 0/1 done` panel with the
+  task row, and `workspace/.pi/codex-todos/tasks.json` exists on disk.
+
 # Validation record — 0.15.4 (footer change counts clear on commit)
 
 Reverses the 0.13.0 pinned-revision decision at the user's explicit request ("commit 之后工作树应该是干净了，要清空数据"). Reproduced first against the real tracker: edit `+4` → `git commit` → the stat froze at `+4` (the diff was pinned to the session-start commit, so the committed work stayed inside the comparison forever; no `onUpdate` ever fired again).

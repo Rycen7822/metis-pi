@@ -318,4 +318,40 @@ assert.ok(
 }
 
 fs.rmSync(dir, { recursive: true, force: true });
+
+// ---- codex-todo entry: registrations + session wiring ----------------------
+// Separate fake pi: the appearance Proxy above throws on unknown APIs, while
+// the todo entry legitimately registers a tool, two commands and a shortcut.
+const todoExtension = (await import("../extensions/todo.ts")).default;
+const todoCalls = { tools: [], commands: [], shortcuts: [], handlers: new Map() };
+const todoPi = {
+  on: (event, handler) => todoCalls.handlers.set(event, handler),
+  registerTool: (opts) => todoCalls.tools.push(opts),
+  registerCommand: (name, options) => todoCalls.commands.push({ name, ...options }),
+  registerShortcut: (key, options) => todoCalls.shortcuts.push({ key, ...options }),
+};
+const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), "codex-todo-smoke-"));
+todoExtension(todoPi);
+assert.deepEqual(todoCalls.tools.map((t) => t.name), ["todo"]);
+assert.deepEqual(todoCalls.commands.map((c) => c.name), ["codex-todo", "codex-todo-doctor"]);
+assert.deepEqual(todoCalls.shortcuts.map((s) => s.key), ["ctrl+shift+t"]);
+const todoNotices = [];
+const todoWidgets = [];
+todoCalls.handlers.get("session_start")({}, {
+  cwd: tmpCwd,
+  sessionManager: { getSessionId: () => "smoke" },
+  ui: { notify: (t) => todoNotices.push(t), setWidget: (key, content, options) => todoWidgets.push({ key, content, options }) },
+});
+assert.ok(fs.existsSync(path.join(tmpCwd, ".pi", "codex-todos")), "session_start opens the store in cwd");
+const todoTool = todoCalls.tools[0];
+const todoResult = await todoTool.execute("call1", { action: "add", tasks: [{ title: "smoke task" }] }, undefined, () => {}, {
+  sessionManager: { getSessionId: () => "smoke" },
+});
+assert.match(todoResult.content[0].text, /added 1 task\(s\): #1 smoke task/);
+// The changed hook registered the persistent widget with the host.
+assert.ok(todoWidgets.some((w) => w.key === "codex-todo" && typeof w.content === "function" && w.options?.placement === "aboveEditor"), "widget registered aboveEditor with a factory");
+const todoList = await todoTool.execute("call2", { action: "list" }, undefined, () => {}, { sessionManager: { getSessionId: () => "smoke" } });
+assert.match(todoList.content[0].text, /Todos: 0\/1 done/);
+fs.rmSync(tmpCwd, { recursive: true, force: true });
+
 console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");

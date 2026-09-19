@@ -6,3 +6,4 @@ coverage/
 
 # Local agent state index (per-machine working notes, not part of the repo).
 CODEX_STATE.md
+references/

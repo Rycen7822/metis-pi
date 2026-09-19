@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.16.0
+
+架构 + 新子插件（docs/0.16.0-todo-plugin-plan.md 为权威计划）：
+
+**agent-stuff 布局**：包 manifest 改为 `pi.extensions: ["./extensions/*.ts"]`（glob，
+同 mitsupi）——`index.ts` → `extensions/appearance.ts`，vendored goal 入口移到
+`extensions/goal.ts`；src/ 路径不动，323 个展示测试零改动；pty harness 零改动
+（`pi install <repo>` 由 pi 解析 manifest）。后续子插件 = extensions/ 下一个新文件。
+
+**codex-todo 子插件**（融合 rpiv-todo / pi-goal-x / pi-agent-extensions 三方分析）：
+- 数据：4 态状态机 + 显式转移表 + no-change 结果（防模型重试循环）；扁平输入建树；
+  父状态渲染期推导不落库；complete 默认门禁（未完成子任务 + 证据，可选证据文件存在性）；
+  blockedBy 增量 API + waits-for 环检测（子等父合法）；claim/release + force；
+  skip 级联留痕；磁盘单事实源 `.pi/codex-todos/tasks.json`（version 字段、原子写、
+  损坏自动归档、跨进程锁 30min TTL、gcDays GC 重挂幸存者）。
+- LLM 接口：单工具 action 分发（冻结 ABI），校验错误抛出并附纠正提示，schema
+  description 兼任 guidance。
+- 常驻面板：setWidget register-once + getter 闭包工厂；稳定高度 latch；行预算
+  纯函数（先丢已完成再截断 + "+N more"）；已完成下 turn 延迟收起；折叠态写盘；
+  ctrl+shift+t 折叠；零轮询。
+- 全屏 overlay：命名键位导航；space/s/r/x 动作；错误闪现不崩；与 widget 共享 store。
+- 命令：`/codex-todo`（列表/开 overlay）、`/codex-todo-doctor`（只读诊断 + gc）。
+- 部署注意：与 pi-agent-extensions 的 todos 扩展工具同名，需禁用对方 todos；
+  存储目录刻意不同名（`.pi/codex-todos` vs `.pi/todos`）。
+
+验证：368/368（新增 45 个 todo 测试）、check 0 error、host-smoke 含 todo 入口冒烟、
+pty 新增 stage 3c（mock 模型调 todo 工具 → 屏幕出现 "Todos 0/1 done" 面板 + store 落盘）。
+
 ## 0.15.5
 
 **静默修复：subagent 启动时输入框被 selection-copy 的 "already-owned" 警告刷屏**（用户报告：每次 pi 启动 subagent，输入框就被两行 `pi-codex-appearance: selection-copy prototypes unavailable (markdown=already-owned …)` 占满）。

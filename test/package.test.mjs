@@ -29,6 +29,7 @@ test("package defaults to the compact transcript entry, with no added runtime de
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
   assert.equal(existsSync(new URL("../extensions/appearance.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions/goal.ts", import.meta.url)), true);
+  assert.equal(existsSync(new URL("../extensions/todo.ts", import.meta.url)), true);
   // goal.ts is vendored from an Apache-2.0 upstream, so its licence text and
   // attribution must ship with the package.
   assert.equal(existsSync(new URL("../LICENSE-APACHE-2.0", import.meta.url)), true);

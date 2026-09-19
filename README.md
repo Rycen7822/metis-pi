@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.14.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.10.0 起本包含**第二个入口** `goal.ts`（长任务 `/goal` 模式，由本项目维护，见 [/goal 长任务模式](#goal-长任务模式0100)）；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.16.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口，共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -102,6 +102,33 @@ pi install /绝对路径/pi-codex-appearance
 - **转义序列逐字保留**：SGR/OSC 8 超链接（URL 里有 ✔ 也不会被改写）/OSC 52 剪贴板载荷都原样通过；内容里显式写了 U+FE0F（要求 emoji 形态）的不动。
 - 默认字符集 `✔ ✖ ✓ ✗ ⚠`（等宽字体都带文字形态）；`glyphs.include` 可以追加，例如 `["⏺"]`。
 - 不做的事：`✅`/`❌`/`🔴` 这类没有文字形态的符号不处理（强转会变成豆腐块）。
+
+## codex-todo 任务子插件（0.16.0）
+
+第三个扩展入口 `extensions/todo.ts`：带**常驻输入框上方面板**与子任务树的磁盘持久化任务列表。
+设计融合 rpiv-todo（面板工程）、pi-goal-x（长任务推进）、pi-agent-extensions todos（持久化与认领）：
+
+- **常驻面板**：`Todos 2/5 done` 标题 + 树形行（`○ ◐ ✓ ✗ ⚠︎` 状态符，有 blockedBy 时才显示 `#id`），
+  完成后保留到下一 turn 再收起；全部完成即消失。`ctrl+shift+t` 折叠/展开（折叠态写盘，重启保留）。
+  行数有预算：超出先丢已完成行、再截断未完成，并给 `+N more (a completed, b pending)` 汇总行；
+  首帧锁定高度，终端不跳动；刷新零轮询（store 变更才触发）。
+- **子任务树**：模型提交扁平 `[{title, parentId}]`、扩展端建树（≤4 层、≤15 个）；父任务显示态由
+  子树推导不落库；complete 默认**门禁**（未完成子任务 + 非空证据，可要求证据文件真实存在），
+  证据记为 UNTRUSTED claim；blockedBy 增量增删、waits-for 环检测；skip 级联留痕。
+- **subagent 认领**：claim/release（含 force 夺取），认领即 in_progress，跨进程文件锁保护写操作
+  （30min TTL，过期锁自动归档）。
+- **存储**：`<cwd>/.pi/codex-todos/tasks.json`（version 字段、原子写、损坏自动归档成
+  `.bak-<ts>` 并空载，绝不让会话崩溃；`gcDays` 默认 7 清理已完成）。环境变量
+  `PI_CODEX_TODO_PATH` 可整体搬迁。
+- **交互**：`/codex-todo` 打开全屏 overlay（↑↓ 导航走宿主命名键位；space 推进、s skip、
+  r reopen、x claim/release；错误闪现不崩），无任务时退化为 notify 列表；`/codex-todo-doctor`
+  只读诊断（坏档归档、过期锁、GC）。模型侧是单 `todo` 工具 action 分发：校验错误抛出并附
+  纠正提示（模型自我修正），无变更返回 `No change:` 结果（防重试循环）。
+
+**部署注意**：与 pi-agent-extensions 的 todos 扩展**工具同名（`todo`），不能共存**——请禁用
+对方的 todos 扩展（本插件撞名时只提示一次、不刷屏）。存储目录刻意不同名
+`.pi/codex-todos`，双装过渡期互不踩数据；如需迁移旧列表，把 `.pi/todos/*.md` 的内容
+转成任务用 `todo` 工具 `add` 即可。
 
 ## 与现有插件的边界
 
