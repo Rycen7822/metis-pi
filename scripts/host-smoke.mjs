@@ -354,4 +354,26 @@ const todoList = await todoTool.execute("call2", { action: "list" }, undefined, 
 assert.match(todoList.content[0].text, /Todos: 0\/1 done/);
 fs.rmSync(tmpCwd, { recursive: true, force: true });
 
-console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");
+// Skill-mux expansion shape against the REAL user-message parser. The host
+// folds exactly ONE leading skill block per user message (parseSkillBlock);
+// sibling blocks put every later skill into the raw user-message component,
+// which is what showed up expanded in the transcript. Ours must stay inside
+// that single block while keeping every skill body and the trailing text.
+const muxRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-skillmux-smoke-"));
+for (const name of ["alpha", "beta"]) {
+  const dir = path.join(muxRoot, "skills", name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} skill\n---\n${name} body.\n`);
+}
+const { createSkillMux } = await import("../src/skill-mux.ts");
+const mux = createSkillMux({ agentDir: muxRoot, cwd: muxRoot });
+const expanded = mux.expand("/skill:alpha /skill:beta tail text");
+assert.ok(expanded, "multi-skill input expands");
+const parsed = Core.parseSkillBlock(expanded);
+assert.ok(parsed, "the expansion parses as a skill block (single folded entry)");
+assert.equal(parsed.name, "alpha", "the parsed block keeps the first skill's name");
+assert.ok(parsed.content.includes('<skill name="beta"'), "the second skill body sits inside the parsed block");
+assert.equal(parsed.userMessage, "tail text", "only the real user text stays outside the folded block");
+fs.rmSync(muxRoot, { recursive: true, force: true });
+
+console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; multi-skill expansion folds into one parsed skill block; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");

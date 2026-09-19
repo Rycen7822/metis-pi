@@ -1,3 +1,27 @@
+# Validation record — 0.18.3 (multi-skill prompt folds into one collapsible entry)
+
+User evidence (screenshot): with two skills in one input, the first rendered as a collapsed `[skill] …` entry
+while the second stayed expanded as raw text. Cause is the host's user-message parser: parseSkillBlock matches a
+single leading block with an anchored regex and hands everything after the first `</skill>` to a plain-text user
+message component. Sibling blocks therefore land in that raw remainder.
+
+Fix: nest every later expanded block inside the previous one's content (chain nesting, balanced tags). The model
+input keeps every skill as a host-format `<skill name="…">` block with its body verbatim and in order, the host
+parses exactly one block (so the transcript shows a single collapsed entry with the bodies hidden), and genuine
+trailing user text still sits outside the block after a blank line, rendering as a normal user message. The
+nesting also holds for three or more skills: with each block inside the previous one, the first `\n</skill>` a
+non-greedy body could stop at is the outermost close.
+
+## Verified
+
+- 387/387; check 0 errors. Unit tests assert the nested shape (no `</skill>\n\n<skill` sibling boundary, both
+  bodies present, trailing text after the outer close).
+- test:host asserts the contract against the REAL host parser: our two-skill expansion parses as one block whose
+  name is the first skill, whose content contains the second skill's tag, and whose userMessage is exactly the
+  trailing text.
+- pty rc=0: the transcript shows `[skill] pcx-pty-mux-a` and the skill bodies are NOT visible (folded), while the
+  mock still receives both skill blocks plus the trailing marker with no raw tokens.
+
 # Validation record — 0.18.2 (no extra row at the trailing space)
 
 0.18.0 kept the editor's menu state alive by answering the trailing-space query with a one-row hint; 0.18.1 then

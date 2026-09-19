@@ -81,7 +81,14 @@ test("two skills expand to host-format blocks with the trailing text", () => {
     const out = f.mux.expand("/skill:alpha /skill:beta do the thing");
     const a = block("alpha", f.files.alpha, "Alpha body line one.\nAlpha body line two.");
     const b = block("beta", f.files.beta, "Beta body.");
-    assert.equal(out, `${a}\n\n${b}\n\ndo the thing`);
+    // NESTED, not sibling: the host parses only ONE leading skill block per
+    // user message (parseSkillBlock stops at the first `</skill>`) and renders
+    // everything after it as raw text, so sibling blocks showed every skill
+    // after the first expanded. Nesting keeps a single collapsible
+    // `[skill] …` entry while the model still receives both tagged bodies.
+    assert.equal(out, `${a.slice(0, -"</skill>".length)}\n\n${b}\n</skill>\n\ndo the thing`);
+    assert.ok(!out!.includes("</skill>\n\n<skill"), "no sibling blocks");
+    assert.equal((out!.match(/<skill name=/g) ?? []).length, 2, "both bodies are present");
     assert.ok(!out!.includes("description:"), "frontmatter is stripped");
     assert.ok(!out!.includes("---"), "frontmatter markers are stripped");
   } finally {
@@ -202,7 +209,8 @@ test("￥ trigger: multiple ￥ tokens and mixing with /skill: both work", () =>
     const yen = f.mux.expand("￥alpha ￥beta tail");
     const a = block("alpha", f.files.alpha, "Alpha body line one.\nAlpha body line two.");
     const b = block("beta", f.files.beta, "Beta body.");
-    assert.equal(yen, `${a}\n\n${b}\n\ntail`);
+    // Nested for the host's single-block parser, exactly like the /skill: path.
+    assert.equal(yen, `${a.slice(0, -"</skill>".length)}\n\n${b}\n</skill>\n\ntail`);
     const mixed = f.mux.expand("/skill:alpha ￥beta ￥gamma");
     assert.ok(mixed!.includes(`<skill name="alpha" location="${f.files.alpha}">`));
     assert.ok(mixed!.includes(`<skill name="beta" location="${f.files.beta}">`));

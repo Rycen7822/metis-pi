@@ -779,6 +779,12 @@ try {
   type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
   sendKeys(["Enter"]);
   await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "both skills expanded from one input");
+  // Transcript folding: the host parses exactly ONE leading skill block, so the
+  // expansion nests every later skill inside the first — the entry stays a
+  // single collapsed `[skill] …` line (bodies hidden) instead of dumping the
+  // second block as raw user text.
+  await waitFor(/\[skill\] pcx-pty-mux-a/, 15_000, "multi-skill prompt folds into one [skill] entry");
+  assert.ok(!/probe body\./.test(visibleText()), "skill bodies stay collapsed inside the folded entry");
 
   // 0.17.9: ￥ is a registered trigger character — after a complete skill
   // token + space, typing ￥ ALONE must pop the menu (no letter needed).
@@ -806,7 +812,7 @@ try {
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    multi-skill prompt folds into ONE collapsed [skill] entry (no raw second block); bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

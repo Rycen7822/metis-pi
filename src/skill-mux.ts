@@ -188,6 +188,32 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
     }
   };
 
+  const BLOCK_CLOSE = "</skill>";
+
+  /**
+   * Fold several expanded blocks into ONE host-parsable block.
+   *
+   * The host parses exactly one leading skill block per user message
+   * (parseSkillBlock: anchored, non-greedy up to the first `</skill>`) and hands
+   * everything after that closing tag to a plain-text user-message component.
+   * Sibling blocks therefore printed every skill after the first as expanded
+   * raw text in the transcript (the first one folded, the rest not). Nesting
+   * each later block inside the previous one's content keeps the whole
+   * expansion within that single parsed block — the transcript shows one
+   * collapsible `[skill] …` entry — while the model still receives every
+   * `<skill name="…">` body verbatim, in order, with balanced tags.
+   */
+  const nestBlocks = (parts: string[]): string => {
+    let nested = parts[parts.length - 1]!;
+    for (let index = parts.length - 2; index >= 0; index -= 1) {
+      const part = parts[index]!;
+      nested = part.endsWith(BLOCK_CLOSE)
+        ? `${part.slice(0, -BLOCK_CLOSE.length)}\n\n${nested}\n${BLOCK_CLOSE}`
+        : `${part}\n\n${nested}`;
+    }
+    return nested;
+  };
+
   const expand = (text: string): string | null => {
     if (!opensWithSkill(text)) return null; // O(1) fast path
     const tokens: { name: string; raw: string; native: boolean }[] = [];
@@ -215,8 +241,8 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
     // its own native semantics (and we never re-shape literal user text).
     if (expanded === 0) return null;
     const tail = rest.trim();
-    if (tail) parts.push(tail);
-    return parts.join("\n\n");
+    const body = parts.length > 1 ? nestBlocks(parts) : parts[0]!;
+    return tail ? `${body}\n\n${tail}` : body;
   };
 
   return {
