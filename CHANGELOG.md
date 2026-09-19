@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.19.2
+
+**多 skill 的折叠条目列出全部名字**（用户反馈：调用了两个 skill，折叠行只显示了一个名字）。
+
+原因：宿主 `parseSkillBlock` 只解析**行首第一个** skill 块，`SkillInvocationMessageComponent` 折叠行渲染的是
+`skillBlock.name`；0.18.3 的 `nestBlocks` 把后续 skill 逐字嵌套进第一块的 `content`（模型照旧收到全部正文），
+于是第二个及以后的名字只存在于组件数据里，进不了标签。
+
+做法（纯插件，不动宿主）：`src/skill-label.ts` 给同一个宿主类原型包一层 `updateDisplay`——先让宿主按原样渲染
+（主题、快捷键提示、markdown 正文全部保留），再把渲染出来的文本里**第一个**块名换成 join 后的名字列表
+（折叠行 `[skill] a + b (hint)`；展开时 `**a + b**` 头部同样处理）。名字从 `content` 里的
+`<skill name="…">` 标签抽取（那是我们逐字写进去的，抽取精确），按调用顺序去重。
+
+保守边界：只在 `[skill]` token **之后**找块名（名叫 `skill` 的 skill 不会打到 token 上）；找不到 token/名字、
+子节点没有可读可写文本、或者只有一个 skill 时**一律不改**，直接沿用宿主渲染。类不可用（宿主重构）→ 返回
+`missing`，静默退回"只显示第一个名字"，不抛错。
+
+验证：397/397（新增 5 个单测：嵌套名字抽取与去重、只替换 token 后的首个名字并保住 ANSI/提示、展开头同样 join、
+单 skill 不动、幂等与保守退化、真实宿主类可补丁）；check 0；test:host PASS；pty rc=0——真实帧里折叠行断言为
+`[skill] pcx-pty-mux-a + pcx-pty-mux-b (ctrl+o to expand)`，点击展开/折叠阶段同步改用该行。
+
 ## 0.19.1
 
 **重启后不再弹出已经全部完成的 todos 面板**（用户报告：重新打开 pi，6/6 已完成的面板又冒出来）。

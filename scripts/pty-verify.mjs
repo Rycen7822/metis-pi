@@ -840,6 +840,13 @@ try {
   // second block as raw user text.
   await waitFor(/\[skill\] pcx-pty-mux-a/, 15_000, "multi-skill prompt folds into one [skill] entry");
   assert.ok(!/probe body\./.test(visibleText()), "skill bodies stay collapsed inside the folded entry");
+  // skill-label extension: the folded line names every invoked skill, not just
+  // the first one (the host's own render lists `skillBlock.name` only).
+  await waitFor(
+    /\[skill\] pcx-pty-mux-a \+ pcx-pty-mux-b \(ctrl\+o to expand\)/,
+    15_000,
+    "the folded entry lists both skill names",
+  );
   // skill-fold extension: the host's entry is clickable — one left click on the
   // `[skill] …` line expands it, the next one collapses it again.
   // Click ON the label: the transcript has a small left gutter, so the click
@@ -847,13 +854,14 @@ try {
   await waitStableFrame();
   assert.ok(rowOf(/\[skill\] pcx-pty-mux-a/) >= 0, "the folded [skill] entry is on screen");
   await clickRowUntilState(
-    /\[skill\] pcx-pty-mux-a \(ctrl\+o to expand\)/,
+    /\[skill\] pcx-pty-mux-a \+ pcx-pty-mux-b \(ctrl\+o to expand\)/,
     "[skill]",
     () => /probe body\./.test(visibleText()),
     20_000,
     "a click expands the folded skill entry",
   );
-  // Expanded, the entry renders a bare `[skill]` label plus the bodies, so the
+  // Expanded, the entry renders a bare `[skill]` label plus the bodies (the
+  // markdown header is joined by the same extension), so the
   // second click targets a body row — same component, same toggle.
   await clickRowUntilState(
     /probe body\./,
@@ -921,7 +929,7 @@ try {
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  todo restart: a store finished in an earlier session shows no panel on the next boot; /todos still lists it");
   console.log("  extensions:   /hotkeys lists the vendored codex-conversion shortcuts; codex-todo registers none (mouse-only)");
-  console.log("  skill-mux:    multi-skill prompt folds into ONE collapsed [skill] entry (no raw second block) and click-to-expand/collapse toggles it; bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
+  console.log("  skill-mux:    multi-skill prompt folds into ONE collapsed [skill] entry naming BOTH skills (no raw second block) and click-to-expand/collapse toggles it; bare 2nd / pops the menu by itself (live and dead editor state) with no extra row, ￥ triggers at the token boundary; accepted tokens expand → both blocks + tail reach the model, no raw tokens");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");

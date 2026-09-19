@@ -1,3 +1,32 @@
+# Validation record — 0.19.2 (folded skill entry lists every skill name)
+
+Report: invoking two skills folded into one entry showing only the first name (`[skill] software-quality-workflows …`).
+
+Cause: the host parses one skill block per user message (`parseSkillBlock`, anchored regex) and renders
+`skillBlock.name`; skill-mux keeps the later blocks nested inside the first block's content (0.18.3), so the other
+names are in the component's data but never in the label.
+
+Fix (plugin only): wrap the host class's `updateDisplay` (same prototype seam skill-fold uses) and rewrite the text
+the host just rendered — the first occurrence of the block name after the `[skill]` token becomes the joined list.
+Everything the host owns stays the host's: theme colors, the keybinding hint, the markdown body. Names are read
+from the nested `<skill name="…">` tags in `content`, which our own expansion wrote verbatim (order preserved,
+repeats dropped). Guards: a name is only replaced when it appears after the token (a skill named "skill" cannot hit
+the token), children without readable/writable text are skipped, a single-skill block is left untouched, and a
+missing class/`updateDisplay` degrades to `missing` instead of throwing.
+
+## Verified
+
+- 397/397, check 0 errors, `npm run test:host` PASS. New unit tests cover: nested-name extraction (chains, repeats,
+  trimming, non-strings), the surgery (ANSI + hint preserved, token trap, no-token markdown header), the collapsed
+  and expanded renders, single-skill no-op, idempotence, and conservative degradation (`{}`, no `updateDisplay`,
+  odd children). Real host class: prototype gets wrapped exactly once.
+- pty rc=0 in a real frame: the folded entry asserts `[skill] pcx-pty-mux-a + pcx-pty-mux-b (ctrl+o to expand)`;
+  the click-to-expand/collapse stage uses that joined line and still finds the bodies.
+- Scope note (documented): the interactive TUI is patched at the class prototype; the HTML export renders skills
+  through its own template copy and still shows the first name only.
+- Internal-API note: the patch depends on the host's `updateDisplay` rendering the name into a Text/Markdown child
+  with a readable/writable `text`. It is fail-soft — if that shape changes, the label silently shows one name again.
+
 # Validation record — 0.19.1 (no todo panel for work finished in an earlier session)
 
 Report: after restarting pi the panel came back showing `Todos 6/6 done`, i.e. fully finished work popped up again.
