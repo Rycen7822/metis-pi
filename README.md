@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.11.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.10.0 起本包含**第二个入口** `goal.ts`（长任务 `/goal` 模式，由本项目维护，见 [/goal 长任务模式](#goal-长任务模式0100)）；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.12.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.10.0 起本包含**第二个入口** `goal.ts`（长任务 `/goal` 模式，由本项目维护，见 [/goal 长任务模式](#goal-长任务模式0100)）；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -13,9 +13,9 @@
 - **有界历史窗口（fullscreen）**：仅让当前历史窗口进入昂贵的组件绘制路径，硬上限 **5,000 显示行**（含翻页提示）。滚到窗口顶部／底部继续滚动会按需加载上一段／下一段，并释放另一端的派生渲染缓存；session 原始记录保留。原生回到顶部／底部操作可跨页跳转；阅读旧历史时保留当前位置，新输出不会挤掉正在查看的行。恢复和宽度变化从当前窗口边界开始排版，达到行预算即停止；普通滚动复用窗口行。选区存在时固定已提交窗口，避免新输出改变复制内容；提交输入时解除选区冻结。宿主只提供整组件 `render()`，因此边界处的单个超大输出仍可能完整排版一次，再裁切并释放其完整缓存；5,000 行是保留窗口的硬上限，不是单次组件内部计算量的保证。宿主界面搜索作用于当前已加载窗口。
 - **逻辑选区复制（0.9.0，fullscreen）**：鼠标选区后 Ctrl+C 复制**已选显示内容的逻辑文本** —— 视觉软折行合并（中文不补空格、英文按源空格桥接）、真实换行/空行保留、代码源缩进保留（宿主展示缩进与 diff 行号/gutter 不混入）、列表 marker / 引用首行边框 / diff 增删符号 / 代码围栏按所选列决定是否包含（语义前缀，不凭字符猜测）。无选区时 Ctrl+C 保持原生行为（清空草稿、双击退出）；纯装饰选区不写剪贴板、不清草稿；剪贴板失败保留选区与草稿。渲染时逐组件生成带来源映射的 sidecar（WeakMap 以渲染数组身份为键，天然绑定已提交帧），并与宿主真实输出逐行 diff —— 任何漂移只降级为原生提取，绝不猜。表格/未知 token/图片行按 conservative 回退；与 `pi-copy-soft-wrap` 共存时精确路径优先生效（加载顺序无关），`/codex-ui` 报告其存在。选区复制零新按键注入、零 prototype 工具执行改动；`selectionCopy.enabled` / `selectionCopy.ctrlC` 可关闭。
 
-既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（默认 `full/full`，Ctrl+T/点击手动切换）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
+既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（**0.12.0 起默认 `peek/collapsed`**：流式期间只显示最新的 6 行思路窗口，滚轮在窗口内滚动，结束后自动折叠；单击在折叠 ↔ 6 行窗口之间切换，双击在 6 行窗口 ↔ 全展开之间切换，Ctrl+T 仍是全局显示/隐藏）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
 
-配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showChanges` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
+配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `thinking.streaming`（`peek`/`full`/`collapsed`，默认 `peek`）/ `thinking.completed`（`collapsed`/`full`，默认 `collapsed`）/ `thinking.peekLines`（1..40，默认 6）/ `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showChanges` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
 
 **统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入，R/W 单独列缓存读写）；`tok/s` 是**当前或最近一次 assistant 回复**的 `usage.output ÷ 观测输出窗口`（首个→末个流式 delta，排除 TTFT；无非流式 delta 时退回 `message_start`→`message_end`），窗口 <300ms、无已确认 output token 或速率越界时整段不显示（`/codex-ui` 同时给出 token 数与窗口长度，`scope` 区分流式中实时值与 `message_end` 确认值）；`+A -D` 是**工作区相对 HEAD 的行数变化**（tracked 暂存 + 未暂存，外加未被 ignore 的未跟踪文件；未跟踪按 ≤200 个、单个 ≤256 KiB 计数，二进制与超限文件跳过），2 秒轮询、只在数字变化时重绘、取不到 git 元数据时整段不显示（`/codex-ui` 的 `git-changes`/`git-timer` 行给出同一口径、文件数与轮询状态）。未知值显示 `—`，从不伪造为 0。
 
@@ -84,6 +84,14 @@ pi install /绝对路径/pi-codex-appearance
 ```json
 { "source": "git:git@github.com:Rycen7822/pi-codexy.git", "extensions": ["-goal.ts"] }
 ```
+
+## 思考块交互（0.12.0）
+
+流式思考默认渲染成 **6 行窗口**（`thinking.peekLines`，1..40）：显示最新的几行，上方一行 dim 提示 `… N above of M lines (scroll · double-click for all)` 说出被裁掉多少行；把指针放在窗口上滚轮即可在窗口内滚动（滚到两端时事件落回正文滚动），滚回最新行后恢复自动跟随。窗口只对宿主已经渲染好的行做切片，不重排 Markdown，也不重新着色，所以 rail、语法高亮和复制归属都与展开时完全一致。
+
+鼠标手势对**进行中与已结束**的思考块是同一套规则：单击在"折叠 ↔ 6 行窗口"之间切换，双击在"6 行窗口 ↔ 全展开"之间切换（从折叠状态双击直接全展开）。单击会等一个 300ms 的双击窗口再落地——宿主按组件身份识别双击，而每次重建都会换掉组件实例，只有延迟落地才能同时保住单击语义和双击语义（`src/thinking-view.ts` 有对应用例）。思考结束时按 `thinking.completed` 自动折叠一次（默认折叠，与旧版一致）；折叠之后的手势选择不会被后续重建覆盖。
+
+`thinking.streaming: "full"` 可以退回旧的"流式全展开"，`"collapsed"` 则连流式期间也折叠。窗口高度、提示行和手势都不影响计时口径：思路用时仍只在 `agent_end` 记账。
 
 ## 与现有插件的边界
 

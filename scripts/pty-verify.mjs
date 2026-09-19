@@ -82,13 +82,16 @@ const server = http.createServer((req, res) => {
         return;
       }
       if (/PCX_THINK/.test(text)) {
-        // Reasoning phase first (deepseek-style reasoning_content), slow
-        // enough for the tick loop to show the growing thinking timer.
+        // Reasoning phase first (deepseek-style reasoning_content), slow enough
+        // for the tick loop to show the growing thinking timer and LONG enough
+        // to overflow the 6-row peek window. The head/tail markers let the test
+        // tell the clipped window from the fully expanded body.
+        const reasoning = `PCX_THINK_HEAD ${"the transcript window keeps the newest rows ".repeat(20)}PCX_THINK_TAIL`;
         let r = 0;
         const rtimer = setInterval(() => {
-          send({ ...base, choices: [{ index: 0, delta: { reasoning_content: "pondering ".slice(r, r + 2) }, finish_reason: null }] });
-          r += 2;
-          if (r >= 10) {
+          send({ ...base, choices: [{ index: 0, delta: { reasoning_content: reasoning.slice(r, r + 80) }, finish_reason: null }] });
+          r += 80;
+          if (r >= reasoning.length) {
             clearInterval(rtimer);
             setTimeout(() => finishText("PCX_THINK_DONE"), 300);
           }
@@ -227,6 +230,16 @@ const clickRow = (rowIndex0, col) => {
   sendKeys(["-H", ...sgrSeq(0, col, rowIndex0 + 1)]);
   sendKeys(["-H", ...sgrSeq(0, col, rowIndex0 + 1, true)]);
 };
+/** Wheel over a viewport row (64 = up / older, 65 = down / newer). */
+const wheelRow = (rowIndex0, col, up = true) => {
+  sendKeys(["-H", ...sgrSeq(up ? 64 : 65, col, rowIndex0 + 1)]);
+};
+/** Two left clicks inside the double-click window: ONE gesture for the plugin. */
+const doubleClickRow = async (rowIndex0, col) => {
+  clickRow(rowIndex0, col);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  clickRow(rowIndex0, col);
+};
 
 execFileSync("tmux", ["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
 sendKeys(["-l", `env HOME=${HOME_DIR} ${PI_BIN}`]);
@@ -249,7 +262,9 @@ try {
   assert.ok(!footerLines.some((l) => l.includes("pcx-mock-model ·")), "footer does NOT duplicate the model line");
   // 0.11.0: working-tree change counts ride with the branch, straight from git.
   if (hasGit) {
-    assert.match(frames.idle, /\(main\) \+3 -0/, `footer shows +3 -0 for one untracked 3-line file:\n${frames.idle.slice(-600)}`);
+    // The counts come from a display-only git poll, so the footer may render
+    // once before the first read lands: wait for them instead of racing.
+    frames.gitChanges = await waitFor(/\(main\) \+3 -0/, 15_000, "footer working-tree change counts (+3 for one untracked 3-line file)");
   } else {
     console.log("  NOTE: git unavailable — working-tree change counts not asserted");
   }
@@ -281,41 +296,136 @@ try {
   sendKeys(["Enter"]);
   frames.thinking = await waitFor(/thinking \d+s/, 30_000, "live thinking timer");
   assert.match(frames.thinking, /• Working \(\d+s · thinking \d+s · esc to interrupt\)/, "dual timers in the Codex paren group");
+  // 0.12.0: the LIVE reasoning renders as a peek window — newest rows plus one
+  // dim hint row — instead of the whole (now long) body: the head of the stream
+  // is clipped, and the wheel scrolls inside the window.
+  // The transcript keeps 200 rows of scrollback in the capture, so the thinking
+  // stages match only rows that are ON SCREEN: a hint left in history must not
+  // pass for an open window.
+  const visibleText = () => visibleRows(capture()).join("\n");
+  const waitForVisible = async (pattern, timeoutMs, label) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (pattern.test(visibleText())) return capture();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    assert.fail(`timeout waiting for ${label} (visible rows only):\n${capture().slice(-2200)}`);
+  };
+  frames.livePeek = await waitForVisible(/scroll · double-click for all/, 30_000, "live thinking peek window");
+  assert.match(frames.livePeek, /… \d+ above of \d+ lines/, "hint counts the clipped rows");
+  assert.ok(!visibleRows(frames.livePeek).some((l) => l.includes("PCX_THINK_HEAD")), "peek follows the newest rows (head clipped away)");
+  // (The wheel is asserted below, on the settled block: while the stream is
+  // running the block shifts a row or two between reading a row and sending the
+  // event, so a wheel aimed at a captured row can land beside the window.)
   await waitFor(/PCX_THINK_DONE/, 30_000, "post-thinking reply");
   frames.thinkSummary = await waitFor(/thought for \d+s/, 30_000, "closed thinking in summary");
   assert.match(frames.thinkSummary, /thought for \d+s/, "summary carries the accumulated thinking time");
 
-  // 0.9.2: the completed thinking run auto-collapses in the transcript with
-  // its own duration; clicking the summary re-expands the original reasoning
-  // through the native MouseRegion; clicking again re-collapses. The chat
-  // shifts as the Working widget retires at settle AND the TUI's region hit
-  // rows sit ±1 against the capture rows, so every attempt re-locates the row
-  // from a FRESH capture and sweeps small row offsets until the expected
-  // frame appears (each miss is a no-op, so sweeping never double-toggles).
+  // 0.12.0: the completed run auto-collapses (label with its duration), a
+  // SINGLE click opens the 6-row peek window (not the whole body), a DOUBLE
+  // click toggles between the peek window and the fully expanded body, and a
+  // single click folds it again. The chat shifts as the Working widget retires
+  // at settle AND the TUI's region hit rows sit ±1 against the capture rows, so
+  // every attempt re-locates the row from a FRESH capture and sweeps small row
+  // offsets until the expected frame appears (each miss is a no-op, so sweeping
+  // never double-toggles).
   frames.collapsed = await waitFor(/Thought for \d+s/, 30_000, "auto-collapsed thinking label");
-  assert.ok(!visibleRows(frames.collapsed).some((l) => l.includes("pondering")), "reasoning body hidden while collapsed");
-  const clickUntil = async (needle, pattern, timeoutMs, label) => {
+  assert.ok(!visibleRows(frames.collapsed).some((l) => l.includes("PCX_THINK_TAIL")), "reasoning body hidden while collapsed");
+
+  // Everything below clicks the MIDDLE of the block, never its first row: the
+  // TUI's region hit rows sit a row or two off the captured rows in this pane,
+  // so a 7-row block is only reliably hit near its centre. Every helper re-reads
+  // the screen and sweeps small offsets; a missed row is a no-op.
+  const clickAt = async (rowIndex0, col) => {
+    clickRow(rowIndex0, col);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  };
+  const doubleClickAt = async (rowIndex0, col) => {
+    await doubleClickRow(rowIndex0, col);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  };
+  /** What the reasoning block currently shows: the host label, the 6-row peek
+   * window, or the fully expanded body. */
+  const screenState = () => {
+    const text = visibleText();
+    if (/scroll · double-click for all/.test(text)) return "peek";
+    if (/PCX_THINK_HEAD/.test(text)) return "full";
+    if (/Thought for \d+s/.test(text)) return "collapsed";
+    return "unknown";
+  };
+  /** Drive the block to `target` with real gestures: a single click moves
+   * collapsed ↔ peek, a double click moves peek ↔ full. Each step is verified
+   * from a fresh screen, so a gesture the host reads differently is corrected on
+   * the next pass instead of failing the stage. */
+  const gotoState = async (target, timeoutMs) => {
+    const start = Date.now();
+    let attempt = 0;
+    while (Date.now() - start < timeoutMs) {
+      const state = screenState();
+      if (state === target) return capture();
+      const rows = visibleRows(capture());
+      const offset = [0, 1, -1][attempt % 3];
+      if (state === "collapsed") {
+        const index = rows.findIndex((l) => l.includes("Thought for"));
+        if (index >= 0) await clickAt(index + offset, 8);
+      } else if (state === "peek" || state === "full") {
+        const index = rows.findIndex((l) => l.includes("transcript window"));
+        if (index >= 0) await doubleClickAt(index + offset, 8);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      attempt += 1;
+    }
+    assert.fail(`timeout reaching thinking state "${target}" (still "${screenState()}"):\n${capture().slice(-2200)}`);
+  };
+
+  frames.peeked = await gotoState("peek", 25_000);
+  assert.ok(!visibleRows(frames.peeked).some((l) => l.includes("PCX_THINK_HEAD")), "peek window clips the head of the reasoning");
+  assert.ok(visibleRows(frames.peeked).some((l) => l.includes("PCX_THINK_TAIL")), "peek window shows the newest rows");
+
+  // The wheel scrolls INSIDE the window instead of the transcript — the block is
+  // settled here, so the row read is the row hit.
+  const wheelUntil = async (pattern, timeoutMs, label) => {
     const start = Date.now();
     let attempt = 0;
     while (Date.now() - start < timeoutMs) {
       const rows = visibleRows(capture());
-      const idx = rows.findIndex((l) => l.includes(needle));
-      const dRow = [0, 1, -1][attempt % 3];
-      const row = idx + dRow;
-      if (idx >= 0 && row >= 0 && row < rows.length) {
-        clickRow(row, cellOf(rows[idx], needle) + 1);
-        await new Promise((resolve) => setTimeout(resolve, 700));
-        if (pattern.test(capture())) return capture();
+      const index = rows.findIndex((l) => l.includes("above of") || l.includes("below of"));
+      if (index >= 0) {
+        wheelRow(index + [0, 1, -1][attempt % 3], 40, true);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (pattern.test(visibleText())) return capture();
       }
       attempt += 1;
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    assert.fail(`timeout waiting for ${label}:\n${capture().slice(-2200)}`);
+    assert.fail(`timeout waiting for ${label} (visible rows only):\n${capture().slice(-2200)}`);
   };
-  frames.expanded = await clickUntil("Thought for", /pondering/, 15_000, "click re-expands the reasoning");
-  assert.ok(visibleRows(frames.expanded).some((l) => l.includes("pondering")), "reasoning visible after expansion");
-  frames.recollapsed = await clickUntil("pondering", /Thought for \d+s/, 15_000, "second click re-collapses");
-  assert.ok(!visibleRows(frames.recollapsed).some((l) => l.includes("pondering")), "reasoning hidden again");
+  frames.scrolled = await wheelUntil(/below of \d+ lines/, 20_000, "wheel scrolls the reasoning window");
+  assert.ok(!visibleRows(frames.scrolled).some((l) => l.includes("PCX_THINK_HEAD")), "one wheel line up still clips the very beginning");
+
+  const refollow = async (timeoutMs) => {
+    const start = Date.now();
+    let attempt = 0;
+    while (Date.now() - start < timeoutMs) {
+      if (/… \d+ above of \d+ lines/.test(visibleText())) return capture();
+      const rows = visibleRows(capture());
+      const index = rows.findIndex((l) => l.includes("above of") || l.includes("below of"));
+      if (index >= 0) wheelRow(index + [0, 1, -1, 2][attempt % 4], 40, false);
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    assert.fail(`timeout waiting for the peek window to follow its tail again:\n${capture().slice(-2200)}`);
+  };
+  frames.refollowed = await refollow(20_000);
+  assert.ok(visibleRows(frames.refollowed).some((l) => l.includes("PCX_THINK_TAIL")), "newest rows back in view");
+
+  frames.fullBody = await gotoState("full", 30_000);
+  assert.ok(!/scroll · double-click for all/.test(visibleText()), "fully expanded body carries no peek hint");
+  frames.peekAgain = await gotoState("peek", 30_000);
+  assert.ok(!visibleRows(frames.peekAgain).some((l) => l.includes("PCX_THINK_HEAD")), "reasoning clipped again");
+  frames.recollapsed = await gotoState("collapsed", 20_000);
+  assert.ok(!visibleRows(frames.recollapsed).some((l) => l.includes("PCX_THINK_TAIL")), "reasoning hidden again");
 
   // Stage 3: tool run — real bash execution through the mock's tool call,
   // still Worked (proves the tool path doesn't brand Failed).
@@ -384,10 +494,12 @@ try {
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log(hasGit ? "  git changes:  +3 -0 for one untracked file, read from the real work tree" : "  git changes:  not asserted (git unavailable)");
+  console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand, wheel scrolls the window");
   console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
-  console.log("  auto-collapse: 'Thought for Ns' label; mouse click expands/collapses the reasoning");
+  console.log("  auto-collapse: 'Thought for Ns' label; 1 click = 6-row peek window, 2 clicks = full body");
+  console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);

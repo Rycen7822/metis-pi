@@ -9,6 +9,7 @@ import { makeSurfaceOps } from "./src/surface.ts";
 import { renderWritePreview } from "./src/write-preview.ts";
 import { loadConfig } from "./src/config.ts";
 import { thoughtSummaryText } from "./src/thinking-summary.ts";
+import { peekHintText, type PeekWindow, type ThinkingView, type ThinkingViewControl } from "./src/thinking-view.ts";
 import { registerProduct, productFor, publishRows, releaseCopyCache } from "./src/selection-copy/model.ts";
 import type { CopyRow } from "./src/selection-copy/model.ts";
 import type { WritePreviewInput } from "./src/renderers.ts";
@@ -219,6 +220,7 @@ class CodexWriteCallComponent implements Tui.Component {
 class CodexThinkingRailComponent implements Tui.Component {
   readonly #child: Tui.Component;
   #lastWidth = -1;
+  #lastChildLines: string[] | undefined;
   #cache: string[] | undefined;
 
   constructor(child: Tui.Component) {
@@ -226,12 +228,16 @@ class CodexThinkingRailComponent implements Tui.Component {
   }
 
   render(width: number): string[] {
-    if (this.#cache && this.#lastWidth === width) return this.#cache;
-    const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
-    const rail = level.kind === "none" ? "| " : `\x1b[38;2;58;150;221m▏\x1b[39m `;
     const railCells = 2;
     const inner = Math.max(1, Math.floor(width) - railCells);
     const childLines = this.#child.render(inner);
+    // Cached by BOTH width and the child's row array: a peek window that
+    // scrolled in place returns a new array, so the rail must re-prefix it.
+    // The child render itself is cached downstream (peek/markdown per width),
+    // which is what makes this identity check cheap.
+    if (this.#cache && this.#lastWidth === width && this.#lastChildLines === childLines) return this.#cache;
+    const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+    const rail = level.kind === "none" ? "| " : `\x1b[38;2;58;150;221m▏\x1b[39m `;
     // Per-row shift: rows already carrying a rail pass through WITHOUT the
     // prefix, so their provenance shift is 0, not railCells.
     const shifts = childLines.map((line) => {
@@ -256,6 +262,7 @@ class CodexThinkingRailComponent implements Tui.Component {
       });
     }
     this.#lastWidth = width;
+    this.#lastChildLines = childLines;
     return this.#cache;
   }
 
@@ -272,6 +279,149 @@ class CodexThinkingRailComponent implements Tui.Component {
   invalidate(): void {
     this.#cache = undefined;
     this.#lastWidth = -1;
+    this.#lastChildLines = undefined;
+    this.#child.invalidate?.();
+  }
+}
+
+/** Forward a mouse event to a wrapped component (undefined when it cannot
+ * receive one). Used by every wrapper whose own interest is clicks or wheels. */
+function childHandleMouse(child: unknown, event: Tui.TuiMouseEvent): Tui.TuiMouseEventResult | undefined {
+  const target = child as { handleMouse?: (event: Tui.TuiMouseEvent) => Tui.TuiMouseEventResult | undefined };
+  return typeof target?.handleMouse === "function" ? target.handleMouse(event) : undefined;
+}
+
+/**
+ * Peek window over a thinking body: the newest `windowLines` rendered rows,
+ * wheel-scrollable, plus ONE dim hint row when rows are clipped. The child's
+ * own rows are sliced — never re-rendered — so markdown styling, the rail and
+ * copy provenance stay exactly what the host produced; the window's rows map
+ * back to the child's rows one-to-one (the hint row stays unmapped, so a copy
+ * of it falls back to native extraction of the visible text).
+ */
+class CodexThinkingPeekComponent implements Tui.Component {
+  readonly #child: Tui.Component;
+  readonly #control: ThinkingViewControl;
+  readonly #windowLines: number;
+  readonly #paintHint: (text: string) => string;
+  readonly #onScroll: () => void;
+  #lastWidth = -1;
+  #childLines: string[] | undefined;
+  #window: PeekWindow | undefined;
+  #rows: string[] | undefined;
+
+  constructor(
+    child: Tui.Component,
+    control: ThinkingViewControl,
+    windowLines: number,
+    paintHint: (text: string) => string,
+    onScroll: () => void,
+  ) {
+    this.#child = child;
+    this.#control = control;
+    this.#windowLines = windowLines;
+    this.#paintHint = paintHint;
+    this.#onScroll = onScroll;
+  }
+
+  render(width: number): string[] {
+    // Child rows are cached per width; the WINDOW is rebuilt whenever it moved
+    // (a wheel scroll changes it without any content change, and a stale cache
+    // would freeze the visible rows).
+    if (!this.#childLines || this.#lastWidth !== width) {
+      this.#childLines = this.#child.render(width);
+      this.#lastWidth = width;
+      this.#window = undefined;
+    }
+    const lines = this.#childLines;
+    const window = this.#control.scroll.resolve(lines.length, this.#windowLines);
+    const cached = this.#window;
+    if (this.#rows && cached && cached.top === window.top && cached.above === window.above && cached.below === window.below) {
+      return this.#rows;
+    }
+    const body = lines.slice(window.top, window.top + this.#windowLines);
+    const clipped = window.above > 0 || window.below > 0;
+    const rows = clipped
+      ? [this.#paintHint(peekHintText(window.above, window.below, lines.length)), ...body]
+      : body;
+    const childProduct = productFor(lines);
+    if (childProduct) {
+      registerProduct(rows, {
+        componentId: "thinking-peek",
+        width,
+        rows: [],
+        children: rows.map((_, index) => {
+          if (clipped && index === 0) return undefined; // hint row = decoration, copied natively
+          const source = window.top + index - (clipped ? 1 : 0);
+          return childProduct.children
+            ? childProduct.children[source]
+            : { product: childProduct, rowIndex: source, colShift: 0 };
+        }),
+      });
+    }
+    this.#window = window;
+    this.#rows = rows;
+    return rows;
+  }
+
+  handleMouse(event: Tui.TuiMouseEvent): Tui.TuiMouseEventResult | undefined {
+    if (event.type === "wheel") {
+      // Scrolling inside the window wins; at either end the event falls through
+      // so the transcript scrolls instead of swallowing the gesture.
+      if (!this.#control.scroll.scrollBy(event.wheelDelta ?? 0)) return undefined;
+      // The window moved: ask for the same host rebuild a click asks for, which
+      // is the path that actually repaints this subtree.
+      this.#onScroll();
+      return { handled: true, render: true };
+    }
+    return childHandleMouse(this.#child, event);
+  }
+
+  invalidate(): void {
+    this.#childLines = undefined;
+    this.#rows = undefined;
+    this.#window = undefined;
+    this.#lastWidth = -1;
+    this.#child.invalidate?.();
+  }
+}
+
+/**
+ * Click layer around a thinking block (rail and peek inside it). A click never
+ * rewrites itself into a toggle here: the run control owns the gesture, so a
+ * single click (delayed by the double-click window) folds or opens the peek
+ * window while a double click switches between peek and full — the same rule
+ * while streaming and after completion. Renders nothing of its own.
+ */
+class CodexThinkingClickableComponent implements Tui.Component {
+  readonly #child: Tui.Component;
+  readonly #control: ThinkingViewControl;
+  readonly #fallback: ThinkingView;
+  readonly #apply: (next: ThinkingView) => void;
+
+  constructor(child: Tui.Component, control: ThinkingViewControl, fallback: ThinkingView, apply: (next: ThinkingView) => void) {
+    this.#child = child;
+    this.#control = control;
+    this.#fallback = fallback;
+    this.#apply = apply;
+  }
+
+  render(width: number): string[] {
+    return this.#child.render(width);
+  }
+
+  handleMouse(event: Tui.TuiMouseEvent): Tui.TuiMouseEventResult | undefined {
+    if (event.type === "click" && event.button === "left") {
+      this.#control.handleClick(
+        { at: Date.now(), x: event.screenX, y: event.screenY },
+        { fallback: this.#fallback, apply: this.#apply },
+      );
+      return { handled: true };
+    }
+    return childHandleMouse(this.#child, event);
+  }
+
+  invalidate(): void {
     this.#child.invalidate?.();
   }
 }
@@ -362,6 +512,19 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     makeSeparator: () => new CodexSeparatorComponent(),
     makeSpacer: () => new Tui.Spacer(1),
     makeRail: (child) => new CodexThinkingRailComponent(child as Tui.Component),
+    makePeek: (input) => new CodexThinkingPeekComponent(
+      input.inner as Tui.Component,
+      input.control,
+      input.windowLines,
+      (text) => surface.paintGlyph(text, "dim"),
+      input.onScroll,
+    ),
+    makeClickable: (input) => new CodexThinkingClickableComponent(
+      input.inner as Tui.Component,
+      input.control,
+      input.fallback,
+      input.apply,
+    ),
     // Collapsed thinking run: a real Tui.Text so selection-copy mirrors it
     // like any other host label (the hidden reasoning body is not rendered
     // anywhere and can never be copied). Painter memoized — label building

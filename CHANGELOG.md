@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0
+
+- 思考块改为 **Codex 式行窗口**：`thinking.streaming` 新增 `"peek"` 并成为默认值，流式期间只渲染最新的 `thinking.peekLines`（默认 6，1..40）行，上方一行 dim 提示 `… N above of M lines (scroll · double-click for all)`；指针在窗口上滚轮可在窗口内滚动（到两端时事件落回正文滚动），滚回最新行恢复跟随。窗口只切片宿主已渲染的行，不重排 Markdown，rail / 高亮 / 复制归属与展开时一致。
+- 鼠标手势对进行中与已结束的思考块统一：单击 = 折叠 ↔ 6 行窗口，双击 = 6 行窗口 ↔ 全展开（折叠态双击直接全展开）。单击延迟 300ms 落地以兼容宿主的"按组件身份识别双击"（重建会换实例），因此单击反馈有约 0.3s 延迟；这是同时支持两种手势的唯一可靠方式，`src/thinking-view.ts` 有对应用例。
+- 自动折叠语义保持：思考结束时按 `thinking.completed`（默认 `collapsed`）折叠一次，此后用户的手势选择不会被后续重建覆盖（`foldOnEnd` 每轮只清一次）。
+- 视图状态改为**每帧推导**而非存储：点击是唯一被记住的选择，其余由 `ended` + 配置决定，避免宿主重建/re-show 时留下过期的"已折叠"记录把窗口撑成全展开（调试过程中在真实 TUI 里复现并修复）。
+- `/codex-ui` 的 `thinking:` 行增加 `peekLines`；`thinking.streaming: "full"` 可退回旧的流式全展开，`"collapsed"` 连流式期间也折叠。
+- 测试 295 → 310：`src/thinking-view.ts` 的窗口/滚动/手势状态机 13 例，transcript 适配层的 peek 组合与 fold-once 2 例；`test:pty` 新增真实 TUI 断言（流式 6 行 + 提示行、滚轮在窗口内滚动并在滚回后跟随、单击折叠 ↔ 6 行、双击 6 行 ↔ 全展开）。
+
 ## 0.11.0
 
 - footer 分支右侧新增**工作区改动行数** `+A -D`：相对 HEAD 的 tracked 改动（暂存 + 未暂存，`git diff --numstat HEAD`）加上未被 ignore 的未跟踪文件行数（`git ls-files --others --exclude-standard`），颜色与 diff 同行（`diffSignFg` 的 `\x1b[32m`/`\x1b[31m`，`NO_COLOR`/无颜色终端不带 SGR）。计数与分支同行，干净仓库不显示该段，`footer.showChanges: false` 可关闭。

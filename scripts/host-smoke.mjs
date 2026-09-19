@@ -160,8 +160,8 @@ const notified = [];
 codexUi.handler("", { ui: { notify: (t) => notified.push(t) } });
 const diagnostics = notified.join("\n");
 assert.match(diagnostics, /pi-codex-appearance [\w.-]+ diagnostics \(mode=\w+, pi=[\w.-]+/);
-assert.match(diagnostics, /thinking=full\/collapsed/, "effective thinking policy surfaced (full/collapsed default)");
-assert.match(diagnostics, /thinking: policy=full\/collapsed autoVisibility=\d+/, "0.9.2 thinking policy + applied-transition count");
+assert.match(diagnostics, /thinking=peek\/collapsed/, "effective thinking policy surfaced (peek/collapsed default)");
+assert.match(diagnostics, /thinking: policy=peek\/collapsed peekLines=6 autoVisibility=\d+/, "0.9.2 thinking policy + 0.12.0 peek height + applied-transition count");
 assert.match(diagnostics, /composer: surface=\S+.*prefix=\S+ metadata=\S+/);
 assert.match(diagnostics, /working: (idle|active) /);
 assert.match(diagnostics, /codex quota: mode=auto source=codex-app-server /);
@@ -271,8 +271,17 @@ handlers.get("message_update")({ type: "message_update", message: thinkMessage }
 thinkComp.updateContent(thinkMessage, true);
 assert.match(thinkFrame(thinkComp), /Thought for \d+s/, "collapsed with a duration after the text boundary");
 assert.doesNotMatch(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "body hidden once collapsed");
+// 0.12.0: a left click is owned by our click layer and DELAYED by the
+// double-click window, then the run renders as its peek window (the whole body
+// here, since it fits). The gesture layer is the region's child, outside the
+// host's own node.
+const THINKING_CLICK = Symbol.for("Rycen7822.pi-codex-appearance.thinking-click.v1");
 regionOf(thinkComp).handleMouse({ type: "click", button: "left", x: 5, y: 0 });
-assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "native click expands the original body");
+assert.doesNotMatch(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "the click waits for a possible second one");
+await new Promise((resolve) => setTimeout(resolve, 500));
+assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "single click opens the reasoning window");
+assert.equal(regionOf(thinkComp).child[THINKING_CLICK], true, "click layer sits outside the host body");
+assert.equal(thinkComp.thinkingVisibilityOverrides.get(0), false, "the click wrote the host override (shown)");
 thinkComp.setHideThinkingBlock(false);
 assert.match(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "Ctrl+T show not fought by the policy");
 thinkComp.updateContent(thinkMessage);

@@ -9,6 +9,9 @@
 
 export type PresentationKind = "exploration" | "other-tool" | "assistant-text" | "transparent" | "barrier";
 
+/** Cycle-free: thinking-view.ts has no imports at all. */
+type ViewControl = import("./thinking-view.ts").ThinkingViewControl;
+
 export interface ExplorationMember {
   readonly toolCallId: string;
   readonly toolName: string;
@@ -147,6 +150,10 @@ interface ThinkingRunState {
   firstContentIndex: number;
   startedAt?: number;
   endedAt?: number;
+  /** Every non-empty thinking run gets its own view control: which shape it renders in,
+   * its peek scroll position, and a pending single click. Lives with the plan so a
+   * host rebuild (streaming, resize, branch re-render) keeps the user's choice. */
+  viewControl?: ViewControl;
 }
 
 interface MessagePlan {
@@ -211,6 +218,10 @@ export class TranscriptState {
   }
 
   resetSession(sessionKey = "default"): void {
+    // Pending single clicks die with their transcript (no timers outlive a session).
+    for (const plan of this.messagePlans.values()) {
+      for (const run of plan.thinkingRuns) run.viewControl?.cancel();
+    }
     this.generation += 1;
     this.sessionKey = sessionKey;
     this.groups.clear();
@@ -496,6 +507,19 @@ export class TranscriptState {
     return [...plan.thinkingRuns]
       .sort((a, b) => a.runIndex - b.runIndex)
       .map((run) => this.thinkingRunPlan(messageKey, run.runIndex)!);
+  }
+
+  /**
+   * The per-run view control (shape + peek scroll + click gesture). Stored with
+   * the run's clock so it survives every rebuild; for a message whose plan was
+   * never registered (unknown transcript shape) a transient control is handed
+   * back — the run then behaves correctly, it just cannot persist. Idempotent:
+   * the factory runs at most once per run.
+   */
+  thinkingViewControl(messageKey: MessageViewKey, runIndex: number, create: () => ViewControl): ViewControl {
+    const run = this.messagePlans.get(messageKey)?.thinkingRuns.find((entry) => entry.runIndex === runIndex);
+    if (!run) return create();
+    return (run.viewControl ??= create());
   }
 
   /**

@@ -15,6 +15,7 @@ import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
 import { diffSignFg } from "./diff.ts";
 import type { SegmentTone } from "./segments.ts";
+import type { ThinkingView, ThinkingViewControl } from "./thinking-view.ts";
 import { WORKING_WIDGET_KEY, type WorkingShow, type WorkingAnimation, type WorkingComponent } from "./chrome/working.ts";
 import { COMPOSER_META_WIDGET_KEY, type ComposerMetaSnapshot } from "./chrome/composer-metadata.ts";
 import type { FooterShow, FooterSnapshot } from "./chrome/footer.ts";
@@ -62,6 +63,20 @@ export interface Bindings {
   makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number }) => unknown;
   /** Structural guard for the host's collapsed-label Text (real class check). */
   isCollapsedLabel?: (node: unknown) => boolean;
+  /** Wrap a thinking body in the peek window (newest N rows, wheel-scrollable). */
+  makePeek?: (input: {
+    inner: unknown;
+    control: ThinkingViewControl;
+    windowLines: number;
+    onScroll: () => void;
+  }) => unknown;
+  /** Wrap a thinking body/label so left clicks drive the run's view state. */
+  makeClickable?: (input: {
+    inner: unknown;
+    control: ThinkingViewControl;
+    fallback: ThinkingView;
+    apply: (next: ThinkingView) => void;
+  }) => unknown;
   /** Detect an external owner that already renders thinking rails. */
   externalRailOwner?: () => boolean;
   /** Build the live write call component (header + stage + preview body). */
@@ -413,6 +428,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       const thinkingPolicy = (): ThinkingPolicy => ({
         streaming: config.thinking.streaming,
         completed: config.thinking.completed,
+        peekLines: config.thinking.peekLines,
       });
       decorations = installTranscriptDecorations({
         state: transcript,
@@ -421,6 +437,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         makeSeparator: bindings.makeSeparator,
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
         makeRail: bindings.makeRail,
+        makePeek: bindings.makePeek,
+        makeClickable: bindings.makeClickable,
         externalRailOwner: bindings.externalRailOwner,
         thinkingPolicy,
         makeThoughtSummary: bindings.makeThoughtSummary,
@@ -653,7 +671,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  chrome: editor=${chrome.editorInstalled ? "applied" : "native"} footer=${chrome.footerInstalled ? "applied" : "native/off"} header=${chrome.headerInstalled ? "applied" : "native"} working=${chrome.widgetInstalled ? "widget" : chrome.fallbackMessage ? "fallback(message)" : "native"}`,
           `  transcript: ${handle?.installed ? "applied" : handle ? `failed: ${handle.reason}` : "not installed"}`,
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
-          `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
+          `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
           `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},changes=${config.footer.showChanges},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,

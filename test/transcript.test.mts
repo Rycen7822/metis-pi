@@ -972,3 +972,153 @@ test("policy: collapsed/full opens the run once at completion via its own overri
   assert.ok(innerOf(regionsOf(component)[0]!) instanceof FakeMarkdown, "expanded after completion (full policy)");
   assert.equal(summaryLabels(component, summaries).length, 0, "no duration label on an expanded run");
 });
+
+// --- 0.12.0: the peek window -------------------------------------------------
+
+interface TestPeek {
+  readonly kind: "peek";
+  readonly wrapped: unknown;
+  readonly control: ThinkingViewControl;
+  readonly windowLines: number;
+  readonly onScroll: () => void;
+}
+interface TestClickable {
+  readonly kind: "clickable";
+  readonly wrapped: unknown;
+  readonly control: ThinkingViewControl;
+  readonly fallback: ThinkingView;
+  readonly apply: (next: ThinkingView) => void;
+}
+
+/** Installs the display policy WITH the peek/click wrappers, recording them. */
+function setupWithPeek(state: TranscriptState, policy: { streaming: "peek" | "full" | "collapsed"; completed: "collapsed" | "full"; peekLines: number }) {
+  activePolicyHandle?.dispose();
+  const rails: unknown[] = [];
+  const peeks: TestPeek[] = [];
+  const clickables: TestClickable[] = [];
+  const summaries: FakeText[] = [];
+  const handle = installTranscriptDecorations({
+    state,
+    toolPrototype: undefined,
+    assistantPrototype: FakeAssistantComponent.prototype as unknown as object,
+    makeSeparator: () => new FakeMarkdown("─".repeat(80)),
+    makeSpacer: () => new FakeSpacer(),
+    makeRail: (child) => {
+      const rail = createTestRail(child);
+      rails.push(rail);
+      return rail;
+    },
+    makePeek: (input) => {
+      const peek: TestPeek = {
+        kind: "peek",
+        wrapped: input.inner,
+        control: input.control,
+        windowLines: input.windowLines,
+        onScroll: input.onScroll,
+      };
+      peeks.push(peek);
+      return peek;
+    },
+    makeClickable: (input) => {
+      const clickable: TestClickable = {
+        kind: "clickable",
+        wrapped: input.inner,
+        control: input.control,
+        fallback: input.fallback,
+        apply: input.apply,
+      };
+      clickables.push(clickable);
+      return clickable;
+    },
+    thinkingPolicy: () => policy,
+    makeThoughtSummary: (input) => {
+      const label = new FakeText(thoughtSummaryText(input.durationMs));
+      summaries.push(label);
+      return label;
+    },
+    isCollapsedLabel: (node) => node instanceof FakeText,
+    enabled: () => true,
+  });
+  activePolicyHandle = handle;
+  return { handle, peeks, clickables, rails, summaries };
+}
+
+/** Walk every wrapper layer (click layer, rail, peek window) to the host body. */
+function unwrapAll(node: unknown): unknown {
+  let current = node;
+  for (let i = 0; i < 5; i += 1) {
+    const wrapped = (current as { wrapped?: unknown } | undefined)?.wrapped;
+    if (wrapped === undefined) break;
+    current = wrapped;
+  }
+  return current;
+}
+
+/** Unwrap the click layer (always outermost in 0.12.0) and return it. */
+function clickableOf(component: FakeAssistantComponent, index = 0): TestClickable {
+  const child = regionsOf(component)[index]!.child as TestClickable;
+  assert.equal(child.kind, "clickable", "the click layer wraps the whole block");
+  return child;
+}
+
+test("peek: an active run renders as a wheel window sized by the policy, with a click layer outside", () => {
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
+  const { peeks, clickables } = setupWithPeek(state, { streaming: "peek", completed: "collapsed", peekLines: 5 });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "long reasoning body" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+
+  const clickable = clickableOf(component);
+  const rail = clickable.wrapped as { wrapped?: unknown };
+  const peek = rail.wrapped as TestPeek;
+  assert.equal(peek.kind, "peek", "rail wraps the peek window");
+  assert.equal(peek.windowLines, 5, "window height comes from the policy");
+  assert.ok(peek.wrapped instanceof FakeMarkdown, "the peek slices the host's own body");
+  assert.equal(clickables.length, 1, "one click layer per run");
+  assert.equal(peeks.length, 1, "one peek window per run");
+  // A wheel that moved asks for the host rebuild (the only path that repaints).
+  const before = component.updateCalls;
+  peek.onScroll();
+  assert.equal(component.updateCalls - before, 1, "scrolling repaints through updateContent");
+});
+
+test("peek: the completion fold happens once, so a later choice survives rebuilds", () => {
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
+  const { clickables } = setupWithPeek(state, { streaming: "peek", completed: "collapsed", peekLines: 6 });
+  const messageObj = { role: "assistant", content: [{ type: "thinking", thinking: "run body" }] } as { role: string; content: Array<Record<string, unknown>> };
+  state.apply({ type: "message_start", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  const component = new FakeAssistantComponent(undefined);
+  component.updateContent(messageObj, true);
+
+  // The user double clicks the streaming window: peek → full.
+  const streaming = clickableOf(component);
+  streaming.control.handleClick({ at: 1_000, x: 4, y: 4 }, { fallback: streaming.fallback, apply: streaming.apply });
+  streaming.control.handleClick({ at: 1_080, x: 4, y: 4 }, { fallback: streaming.fallback, apply: streaming.apply });
+  assert.equal(streaming.control.userView(), "full", "double click opened the full body");
+  assert.notEqual(component.thinkingVisibilityOverrides.get(0), true, "a shown run needs no override entry");
+  component.updateContent(messageObj, true);
+  assert.ok(unwrapAll(regionsOf(component)[0]!.child) instanceof FakeMarkdown, "full body, no window");
+
+  // The run ends: the completion policy folds it once (the user's shape is dropped).
+  messageObj.content = [{ type: "thinking", thinking: "run body" }, { type: "text", text: "out" }];
+  clock = 4_000;
+  state.apply({ type: "message_update", message: { role: "assistant", content: messageObj.content } }, messageObj);
+  component.updateContent(messageObj, true);
+  assert.equal(component.thinkingVisibilityOverrides.get(0), true, "auto-folded at completion");
+  const collapsedChild = clickableOf(component).wrapped;
+  assert.ok(collapsedChild instanceof FakeText, "collapsed label shown");
+
+  // The user opens it again AFTER the run ended: no later rebuild may re-fold it.
+  const ended = clickableOf(component);
+  ended.control.handleClick({ at: 5_000, x: 4, y: 4 }, { fallback: ended.fallback, apply: ended.apply });
+  ended.control.handleClick({ at: 5_080, x: 4, y: 4 }, { fallback: ended.fallback, apply: ended.apply });
+  assert.equal(ended.control.userView(), "full", "post-completion choice recorded");
+  for (let i = 0; i < 3; i += 1) component.updateContent(messageObj, true);
+  assert.equal(component.thinkingVisibilityOverrides.get(0), false, "rebuilds keep the run open");
+  assert.ok(unwrapAll(regionsOf(component)[0]!.child) instanceof FakeMarkdown, "and keep the full body");
+});

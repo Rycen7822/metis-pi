@@ -25,10 +25,12 @@
 
 import { asRecord } from "./tool-names.ts";
 import { TranscriptState, renderedThinkingRuns, type MessageViewKey } from "./transcript-state.ts";
+import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "./thinking-view.ts";
 
 const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
 const ASSISTANT_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.assistant-deco.v2");
 const THOUGHT_LABEL = Symbol.for("Rycen7822.pi-codex-appearance.thought-label.v1");
+const CLICK_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.thinking-click.v1");
 
 /** Per-feature install diagnostics (never aggregate with .some()). */
 export interface DecorationFeature {
@@ -46,8 +48,10 @@ export interface DecorationHandle {
 }
 
 export interface ThinkingPolicy {
-  streaming: "full" | "collapsed";
+  streaming: "peek" | "full" | "collapsed";
   completed: "full" | "collapsed";
+  /** Rows visible in the peek window (config already clamped it). */
+  peekLines: number;
 }
 
 function methodBody(fn: Function): string {
@@ -70,6 +74,30 @@ export interface TranscriptAdapterInput {
   makeRail: ((child: unknown) => unknown) | undefined;
   /** True when an external owner already renders thinking rails. */
   externalRailOwner?(): boolean;
+  /**
+   * Wrap a thinking body so left clicks drive the run's view state: a single
+   * click folds/peeks, a double click toggles peek ↔ full (the control owns the
+   * gesture and its pending click). Applied OUTSIDE the rail.
+   */
+  makeClickable?: (input: {
+    inner: unknown;
+    control: ThinkingViewControl;
+    fallback: ThinkingView;
+    apply: (next: ThinkingView) => void;
+  }) => unknown;
+  /**
+   * Wrap a thinking body in the peek window (newest `windowLines` rows, wheel
+   * scrollable). Applied INSIDE the rail, so clipped rows keep the rail and the
+   * hint row reads as part of the same block.
+   */
+  makePeek?: (input: {
+    inner: unknown;
+    control: ThinkingViewControl;
+    windowLines: number;
+    /** Ask the host for the rebuild that repaints a scrolled window — the host
+     * repaints through its own update path, not through a bare requestRender. */
+    onScroll: () => void;
+  }) => unknown;
   /**
    * Thinking display policy (config). When absent, NO automatic visibility
    * transition is ever applied — the host's own defaults stay in charge.
@@ -222,6 +250,17 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   // wrapper installed before us is captured as the descriptor we decorate.
   let active = true;
 
+  // A view change needs the host to rebuild this component's subtree. The
+  // host's own MouseRegion handler does exactly this (updateContent(lastMessage)),
+  // so a click behaves like the native toggle it replaces.
+  const rebuild = (target: object): void => {
+    try {
+      if (!active) return;
+      const record = target as { updateContent?: (message: unknown) => void; lastMessage?: unknown };
+      if (record.lastMessage !== undefined) record.updateContent?.(record.lastMessage);
+    } catch { /* a presentation failure must not break the message */ }
+  };
+
   // Auto policy state: applied transitions are remembered PER COMPONENT and
   // PER RUN so the policy fires once per lifecycle transition — never on every
   // repaint. This is what keeps manual toggles and Ctrl+T sticky.
@@ -255,7 +294,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       // A policy failure must not break the original message display.
     }
     try {
-      coordinateSubtree(input, this as object, getSpacerProto());
+      coordinateSubtree(input, this as object, getSpacerProto(), rebuild);
     } catch {
       // A presentation failure must not break the original message display.
     }
@@ -328,6 +367,11 @@ function applyThinkingPolicy(
   for (const run of renderedThinkingRuns(normalizeBlocks(content))) {
     const plan = key !== undefined ? input.state.thinkingRunPlan(key, run.runIndex) : undefined;
     const ended = plan ? plan.ended : run.endedInContent;
+    // Per-run display state (click choice + peek scroll), stored with the run
+    // clock so every later rebuild reuses the same one.
+    const control = key !== undefined
+      ? input.state.thinkingViewControl(key, run.runIndex, createThinkingViewControl)
+      : createThinkingViewControl();
     // Streaming policy: fires when the run first renders WHILE ACTIVE — an
     // already-ended run (restored history) goes straight to the completion
     // policy instead.
@@ -337,15 +381,21 @@ function applyThinkingPolicy(
       streaming.add(run.runIndex);
       if (!ended && apply(run.runIndex, policy.streaming === "collapsed")) changed = true;
     }
-    // Completion policy: fires once on the active→ended transition. A forced
-    // open (completed=full) only happens when an override entry already exists.
+    // Completion policy: fires once on the active→ended transition and owns the
+    // auto-fold — it forgets a shape the user opened while the run was still
+    // streaming ("clicked it open, it folds when the thought ends") and hides
+    // the run. A forced open (completed=full) only happens when an override
+    // entry already exists; a run hidden only by the host's global
+    // hideThinkingBlock is left alone.
     if (ended) {
       let completion = completionApplied.get(component);
       if (!completion) completionApplied.set(component, (completion = new Set()));
       if (!completion.has(run.runIndex)) {
         completion.add(run.runIndex);
         const desired = policy.completed === "collapsed";
-        if ((desired || map.has(run.runIndex)) && apply(run.runIndex, desired)) changed = true;
+        const forceOpen = !desired && map.has(run.runIndex);
+        control.foldOnEnd();
+        if ((desired || forceOpen) && apply(run.runIndex, desired)) changed = true;
       }
     }
   }
@@ -373,7 +423,7 @@ function contentEndedAfter(content: Array<Record<string, unknown>>, firstContent
  * and swap the host's collapsed labels for duration summaries.
  * Runs on every rebuild; each pass leaves exactly one matching decoration.
  */
-function coordinateSubtree(input: TranscriptAdapterInput, component: object, spacerProto: object | undefined): void {
+function coordinateSubtree(input: TranscriptAdapterInput, component: object, spacerProto: object | undefined, rebuild: (target: object) => void): void {
   const record = component as Record<string, unknown>;
   const message = asRecord(record.lastMessage);
   if (!message || message.role !== "assistant") return;
@@ -395,7 +445,7 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
   for (let i = children.length - 1; i >= 0; i--) {
     const child = children[i] as Record<string, unknown> | null;
     if (!child || typeof child !== "object") continue;
-    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL]) {
+    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL] || (child as Record<symbol, unknown>)[CLICK_SYMBOL]) {
       children.splice(i, 1);
       continue;
     }
@@ -404,7 +454,7 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
     // (or a successor install) must re-decide from the NATIVE node, never
     // inherit a stale summary.
     const innerWrapper = (child as Record<string, unknown>).child as (Record<symbol | string, unknown> & { original?: unknown }) | undefined;
-    if (innerWrapper && typeof innerWrapper === "object" && (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL])) {
+    if (innerWrapper && typeof innerWrapper === "object" && (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL])) {
       const original = innerWrapper["original"];
       if (original !== undefined) {
         (child as { child: unknown }).child = original;
@@ -447,56 +497,120 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
   //    click handler stays; the next host rebuild restores the native label
   //    and this pass re-coordinates). An ACTIVE hidden run keeps the host's
   //    own "Thinking..." label — durations exist only for ended runs.
-  if ((input.makeRail && !railBlocked) || (input.makeThoughtSummary && input.isCollapsedLabel)) {
+  const policy = input.thinkingPolicy?.();
+  const viewFeature = policy !== undefined && (input.makePeek !== undefined || input.makeClickable !== undefined);
+  if ((input.makeRail && !railBlocked) || (input.makeThoughtSummary && input.isCollapsedLabel) || (viewFeature && input.makeClickable)) {
     for (const slot of slots) {
       if (slot.run.kind !== "thinking" || !slot.run.nonEmpty) continue;
       const child = slot.child as Record<string, unknown>;
       // Host shape (pi-tui MouseRegion): `child` field holds the wrapped
       // component. Swap the region's inner child in place: the region keeps
-      // its own click semantics and geometry.
+      // its own geometry.
       const inner = child && typeof child === "object" && "child" in child
         ? (child as { child: unknown }).child
         : child;
       const innerRecord = inner !== null && typeof inner === "object" ? (inner as Record<string, unknown>) : undefined;
-      if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL] || ((inner as Record<symbol, unknown>))[THOUGHT_LABEL]) continue;
+      if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]
+        || ((inner as Record<symbol, unknown>))[THOUGHT_LABEL]
+        || ((inner as Record<symbol, unknown>))[CLICK_SYMBOL]) continue;
 
+      const ordinal = slot.run.thinkingRunIndex;
       const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
+      const plan = ordinal !== undefined && planKey !== undefined ? input.state.thinkingRunPlan(planKey, ordinal) : undefined;
+      const ended = plan ? plan.ended : contentEndedAfter(content, slot.run.firstContentIndex);
+      const control = viewFeature && ordinal !== undefined
+        ? (planKey !== undefined
+          ? input.state.thinkingViewControl(planKey, ordinal, createThinkingViewControl)
+          : createThinkingViewControl())
+        : undefined;
+      // Shape of this render: a click wins; otherwise the configured policy for
+      // the run's CURRENT phase decides (a running thought peeks, a finished one
+      // is folded unless completed=full). Deriving it per render is what keeps a
+      // long stream honest across rebuilds — nothing stale to go wrong.
+      //
+      // A SHOWN run with no per-run override means the host's global default
+      // shows thinking (Ctrl+T) — show everything, so that toggle keeps
+      // meaning "all of it".
+      const overrideShown = (record.thinkingVisibilityOverrides as Map<number, boolean> | undefined)?.get(ordinal ?? -1) === true;
+      const policyDefault: ThinkingView = ended
+        ? (policy?.completed === "collapsed" ? "collapsed" : "full")
+        : (policy?.streaming === "peek" ? "peek" : policy?.streaming === "full" ? "full" : "collapsed");
+      const derived: ThinkingView = control?.userView() ?? policyDefault;
+      const view: ThinkingView = isExpandedMarkdown
+        ? (derived === "collapsed" ? (overrideShown ? "peek" : "full") : derived)
+        : "collapsed";
+
+      let node: unknown = inner;
+      let decorated = false;
       if (isExpandedMarkdown) {
-        if (!input.makeRail || railBlocked) continue;
-        const wrapped = input.makeRail(inner);
-        if (!wrapped) continue;
-        ((wrapped as Record<symbol, unknown>))[RAIL_SYMBOL] = true;
-        // Remember the original child so the unwrap pass (step 1) can restore it.
-        (wrapped as Record<symbol | string, unknown>)["original"] = inner;
-        if (inner !== child) {
-          (child as { child: unknown }).child = wrapped;
-        } else {
-          const index = children.indexOf(child);
-          if (index >= 0) children[index] = wrapped;
+        if (view === "peek" && control && input.makePeek && policy) {
+          const peeked = input.makePeek({
+            inner: node,
+            control,
+            windowLines: policy.peekLines,
+            onScroll: () => rebuild(component),
+          });
+          if (peeked && typeof peeked === "object") node = peeked;
         }
-        continue;
+        if (input.makeRail && !railBlocked) {
+          const railed = input.makeRail(node);
+          if (railed && typeof railed === "object") {
+            ((railed as Record<symbol, unknown>))[RAIL_SYMBOL] = true;
+            node = railed;
+            decorated = true;
+          }
+        }
+      } else {
+        if (!input.makeThoughtSummary || !input.isCollapsedLabel?.(inner) || !ended) continue;
+        const paddingX = typeof record.outputPad === "number" ? record.outputPad : 1;
+        const summary = input.makeThoughtSummary({ durationMs: plan?.thinkingMs, runIndex: ordinal ?? 0, ended: true, paddingX });
+        if (!summary || typeof summary !== "object") continue;
+        ((summary as Record<symbol, unknown>))[THOUGHT_LABEL] = true;
+        node = summary;
+        decorated = true;
       }
 
-      if (!input.makeThoughtSummary || !input.isCollapsedLabel?.(inner)) continue;
-      const ordinal = slot.run.thinkingRunIndex;
-      if (ordinal === undefined) continue;
-      const plan = planKey !== undefined ? input.state.thinkingRunPlan(planKey, ordinal) : undefined;
-      const ended = plan ? plan.ended : contentEndedAfter(content, slot.run.firstContentIndex);
-      if (!ended) continue;
-      const paddingX = typeof record.outputPad === "number" ? record.outputPad : 1;
-      const summary = input.makeThoughtSummary({ durationMs: plan?.thinkingMs, runIndex: ordinal, ended: true, paddingX });
-      if (!summary || typeof summary !== "object") continue;
-      ((summary as Record<symbol, unknown>))[THOUGHT_LABEL] = true;
-      // Remember the original child so the unwrap pass (step 1) can restore it.
-      (summary as Record<symbol | string, unknown>)["original"] = inner;
+      // The click layer sits OUTSIDE the rail/peek/label: a click anywhere on
+      // the block (rail column included) is ours, and the gesture state lives in
+      // the run control — never in the instances this rebuild just replaced.
+      if (control && input.makeClickable) {
+        const clickable = input.makeClickable({
+          inner: node,
+          control,
+          fallback: view,
+          apply: (next) => applyThinkingView(component, ordinal ?? 0, next, rebuild),
+        });
+        if (clickable && typeof clickable === "object") {
+          ((clickable as Record<symbol, unknown>))[CLICK_SYMBOL] = true;
+          node = clickable;
+          decorated = true;
+        }
+      }
+      if (!decorated) continue;
+      // Remember the native node so the unwrap pass (step 1) restores it.
+      (node as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
-        (child as { child: unknown }).child = summary;
+        (child as { child: unknown }).child = node;
       } else {
         const index = children.indexOf(child);
-        if (index >= 0) children[index] = summary;
+        if (index >= 0) children[index] = node;
       }
     }
   }
+}
+
+/** Apply a user-chosen view: write the host's per-run override (the field the
+ * native MouseRegion toggle writes) and ask for the ONE rebuild that renders it.
+ * The view itself is already recorded in the run control. */
+function applyThinkingView(component: object, runIndex: number, view: ThinkingView, rebuild: (target: object) => void): void {
+  const record = component as Record<string, unknown>;
+  const map = record.thinkingVisibilityOverrides as Map<number, boolean> | undefined;
+  const hideAll = record.hideThinkingBlock === true;
+  if (map && typeof map.get === "function" && typeof map.set === "function") {
+    const hidden = view === "collapsed";
+    if ((map.get(runIndex) ?? hideAll) !== hidden) map.set(runIndex, hidden);
+  }
+  rebuild(component);
 }
 
 /** Resolve the stable message key for the component's current message. */

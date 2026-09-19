@@ -2,7 +2,7 @@
 
 export interface AppearanceConfig {
   enabled: boolean;
-  thinking: { streaming: "full" | "collapsed"; completed: "collapsed" | "full"; rail: boolean };
+  thinking: { streaming: "peek" | "full" | "collapsed"; completed: "collapsed" | "full"; rail: boolean; peekLines: number };
   writePreview: { enabled: boolean; rows: number };
   /** Composer surface (gray background, `> ` prefix, metadata row). */
   composer: { surface: boolean; promptPrefix: boolean; metadata: boolean };
@@ -25,7 +25,7 @@ export const CONFIG_FILE = "codex-appearance.json";
 
 export const DEFAULT_CONFIG: AppearanceConfig = {
   enabled: true,
-  thinking: { streaming: "full", completed: "collapsed", rail: true },
+  thinking: { streaming: "peek", completed: "collapsed", rail: true, peekLines: 6 },
   writePreview: { enabled: true, rows: 8 },
   composer: { surface: true, promptPrefix: true, metadata: true },
   working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 32 },
@@ -67,11 +67,18 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
   if (thinking !== undefined && thinking !== null) {
     if (typeof thinking === "object") {
       const t = thinking as Record<string, unknown>;
-      if (t.streaming === "full" || t.streaming === "collapsed") cfg.thinking.streaming = t.streaming;
-      else if (t.streaming !== undefined) problems.push(`thinking.streaming: unknown value ${JSON.stringify(t.streaming)} — using "full"`);
+      if (t.streaming === "peek" || t.streaming === "full" || t.streaming === "collapsed") cfg.thinking.streaming = t.streaming;
+      else if (t.streaming !== undefined) problems.push(`thinking.streaming: unknown value ${JSON.stringify(t.streaming)} — using "peek"`);
       if (t.completed === "collapsed" || t.completed === "full") cfg.thinking.completed = t.completed;
       else if (t.completed !== undefined) problems.push(`thinking.completed: unknown value — using "full"`);
       cfg.thinking.rail = bool(t.rail, cfg.thinking.rail, problems, "thinking.rail");
+      if (t.peekLines === undefined || t.peekLines === null) {
+        // default
+      } else if (typeof t.peekLines === "number" && Number.isFinite(t.peekLines)) {
+        cfg.thinking.peekLines = Math.max(1, Math.min(40, Math.floor(t.peekLines)));
+      } else {
+        problems.push("thinking.peekLines: expected number 1..40 — using 6");
+      }
     } else {
       problems.push("thinking: expected object — using defaults");
     }
