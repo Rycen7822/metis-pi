@@ -19,6 +19,10 @@ export interface AppearanceConfig {
   selectionCopy: { enabled: boolean; ctrlC: boolean };
   /** Fullscreen side gutters; marginX 0 disables, gutters vanish below minWidth. */
   fullscreen: { marginX: number; minWidth: number };
+  /** Glyph presentation: append U+FE0E (text presentation) to emoji-presentation
+   * marks in rendered frames, so a terminal's emoji font cannot draw them ~2
+   * cells wide over the next character. Display-only; `include` adds marks. */
+  glyphs: { textPresentation: boolean; include: string[] };
 }
 
 export const CONFIG_FILE = "codex-appearance.json";
@@ -34,6 +38,7 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   summary: { enabled: true, persist: true },
   selectionCopy: { enabled: true, ctrlC: true },
   fullscreen: { marginX: 2, minWidth: 72 },
+  glyphs: { textPresentation: true, include: [] },
 };
 
 const SUMMARY_ENTRY_TYPE = "pi-codex-appearance:interaction-summary:v1";
@@ -98,6 +103,42 @@ export function validateConfig(raw: unknown, problems: string[]): AppearanceConf
       }
     } else {
       problems.push("writePreview: expected object — using defaults");
+    }
+  }
+
+  const glyphs = root.glyphs;
+  if (glyphs !== undefined && glyphs !== null) {
+    if (typeof glyphs === "object") {
+      const g = glyphs as Record<string, unknown>;
+      cfg.glyphs.textPresentation = bool(g.textPresentation, cfg.glyphs.textPresentation, problems, "glyphs.textPresentation");
+      const include = g.include;
+      if (include === undefined || include === null) {
+        // default: none
+      } else if (Array.isArray(include)) {
+        const cleaned: string[] = [];
+        for (const entry of include) {
+          if (typeof entry !== "string") {
+            problems.push("glyphs.include: entries must be single-character strings — skipped");
+            continue;
+          }
+          const cp = entry.codePointAt(0);
+          const size = cp !== undefined && cp > 0xffff ? 2 : 1;
+          if (cp === undefined || cp < 0x80 || entry.length !== size) {
+            problems.push(`glyphs.include: ${JSON.stringify(entry)} is not a single non-ASCII character — skipped`);
+            continue;
+          }
+          if (cleaned.length >= 32) {
+            problems.push("glyphs.include: at most 32 entries — extra entries ignored");
+            break;
+          }
+          if (!cleaned.includes(entry)) cleaned.push(entry);
+        }
+        cfg.glyphs.include = cleaned;
+      } else {
+        problems.push("glyphs.include: expected an array of characters — using none");
+      }
+    } else {
+      problems.push("glyphs: expected object — using defaults");
     }
   }
 

@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.13.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.10.0 起本包含**第二个入口** `goal.ts`（长任务 `/goal` 模式，由本项目维护，见 [/goal 长任务模式](#goal-长任务模式0100)）；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.14.0**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.10.0 起本包含**第二个入口** `goal.ts`（长任务 `/goal` 模式，由本项目维护，见 [/goal 长任务模式](#goal-长任务模式0100)）；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -15,7 +15,7 @@
 
 既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（**0.12.0 起默认 `peek/collapsed`**：流式期间只显示最新的 6 行思路窗口，滚轮在窗口内滚动，结束后自动折叠；单击在折叠 ↔ 6 行窗口之间切换，双击在 6 行窗口 ↔ 全展开之间切换，Ctrl+T 仍是全局显示/隐藏）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
 
-配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `thinking.streaming`（`peek`/`full`/`collapsed`，默认 `peek`）/ `thinking.completed`（`collapsed`/`full`，默认 `collapsed`）/ `thinking.peekLines`（1..40，默认 6）/ `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showChanges` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` 可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
+配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `thinking.streaming`（`peek`/`full`/`collapsed`，默认 `peek`）/ `thinking.completed`（`collapsed`/`full`，默认 `collapsed`）/ `thinking.peekLines`（1..40，默认 6）/ `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showCacheReadWrite` / `footer.showChanges` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` / `glyphs.textPresentation`（默认 true）/ `glyphs.include`（追加字符）可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
 
 **统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入，R/W 单独列缓存读写）；`tok/s` 是**当前或最近一次 assistant 回复**的 `usage.output ÷ 观测输出窗口`（首个→末个流式 delta，排除 TTFT；无非流式 delta 时退回 `message_start`→`message_end`），窗口 <300ms、无已确认 output token 或速率越界时整段不显示（`/codex-ui` 同时给出 token 数与窗口长度，`scope` 区分流式中实时值与 `message_end` 确认值）；`+A -D` 是**本 session 的累计增删行数**：session 第一次读取时的状态是基线（之前的未提交改动不算你的），之后每次都跟**session 开始时的那个 commit** 比（所以中途 commit 不会让数字归零），并且只统计**绝对**新增与绝对删除 —— 文件 A `+11 -9`、文件 B `+6 -5` 就是 `+17 -14`，永远不会被压成净变化 `+3 -0`；数字不做 k/M 缩写。所有写入者一视同仁：agent 的工具、bash/sed/python 脚本、另一个终端，都从 git 与工作区读取（不经任何工具记账）。未跟踪文件按 ≤200 个、单个 ≤256 KiB 流式计数（二进制与超限文件跳过，按 size+mtime 缓存，未变不重读）；git 调用有 5 秒超时与 `--no-ext-diff --no-textconv --no-optional-locks`（不会被用户的 diff 驱动或索引锁拖住），读取失败保留上一次正确数字而不是清零。节奏：2 秒轮询 + agent 活动触发的 250ms 去抖刷新（活动期间实测 ~0.3s，空闲 ≤2s）；取不到 git 元数据时整段不显示（`/codex-ui` 的 `git-changes`/`git-timer` 行给出同一口径、基线 revision 与轮询状态）。未知值显示 `—`，从不伪造为 0。
 
@@ -92,6 +92,16 @@ pi install /绝对路径/pi-codex-appearance
 鼠标手势对**进行中与已结束**的思考块是同一套规则：单击在"折叠 ↔ 6 行窗口"之间切换，双击在"6 行窗口 ↔ 全展开"之间切换（从折叠状态双击直接全展开）。单击会等一个 300ms 的双击窗口再落地——宿主按组件身份识别双击，而每次重建都会换掉组件实例，只有延迟落地才能同时保住单击语义和双击语义（`src/thinking-view.ts` 有对应用例）。思考结束时按 `thinking.completed` 自动折叠一次（默认折叠，与旧版一致）；折叠之后的手势选择不会被后续重建覆盖。
 
 `thinking.streaming: "full"` 可以退回旧的"流式全展开"，`"collapsed"` 则连流式期间也折叠。窗口高度、提示行和手势都不影响计时口径：思路用时仍只在 `agent_end` 记账。
+
+## 字形呈现（0.14.0）
+
+`✔`/`✖`（U+2714/U+2716）这类"可被画成 emoji"的符号，终端只给它们前进 1 格（pi-tui 的宽度表同样按 1 格算），但 emoji 字体会把字形画到 ~1.6 格宽并合成在文字层之上 —— 于是 `grep -n "✖\|# fail"` 在屏幕上变成 `✖|# fail`（反斜杠被 ✖ 的笔画盖住），`✖ peek:` 变成 `✖peek:`。渲染层（frame 写入终端前的最后一跳）会给这类符号补一个 U+FE0E 文字呈现选择子，终端于是改用等宽字体画它们：1 格宽、单色、不再压住右边的字符。
+
+- **只动显示**：写入终端的字节流里多了一个零宽选择子；组件渲染、会话记录、选区复制全部保持原样（`glyphs.textPresentation:false` 可整体关闭，复制逐字精确的 pty 用例会回归验证）。
+- **宽度中立**：选择子在 pi-tui 的宽度表里是 0 宽（`[65024,65039,0]`），且插在布局完成之后，rail/背景/选区的列映射不会移动（host-smoke 用真实 `visibleWidth` 断言）。
+- **转义序列逐字保留**：SGR/OSC 8 超链接（URL 里有 ✔ 也不会被改写）/OSC 52 剪贴板载荷都原样通过；内容里显式写了 U+FE0F（要求 emoji 形态）的不动。
+- 默认字符集 `✔ ✖ ✓ ✗ ⚠`（等宽字体都带文字形态）；`glyphs.include` 可以追加，例如 `["⏺"]`。
+- 不做的事：`✅`/`❌`/`🔴` 这类没有文字形态的符号不处理（强转会变成豆腐块）。
 
 ## 与现有插件的边界
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.0
+
+- **修复 emoji 字形覆盖相邻字符**：`✔`/`✖` 这类可被 emoji 字体接管的符号，终端只前进 1 格，但 emoji 字形宽约 1.6 格且合成在文字层之上 —— 用户截图里 `grep -n "✖\|# fail"` 显示成 `✖|# fail`（反斜杠被盖）、`✖ peek:` 显示成 `✖peek:`。渲染层在 frame 写入终端前给默认字符集 `✔ ✖ ✓ ✗ ⚠` 补 U+FE0E 文字呈现选择子（像素级证据：✖ 墨迹 24px vs 格宽 15px；会话日志确认反斜杠一直在内容里）。
+- 实现为 **frame 级最后一跳**：只改写入终端的字节流，组件渲染/会话记录/选区复制全部原样（复制逐字精确的 161 字符 pty 用例回归通过）；SGR/OSC 8/OSC 52 转义序列逐字保留（URL 里的 ✔ 不会被改写）；显式 U+FE0F 的 emoji 请求被尊重；宽度中立（pi-tui 宽度表中 VS15 为 0 宽，host-smoke 用真实 `visibleWidth` 断言）。补丁挂在 TUI 的 terminal 原型上，owner-symbol 幂等，`captureTui` 的重试路径会覆盖新实例。
+- 配置：`glyphs.textPresentation`（默认 true）+ `glyphs.include`（追加单字符，最多 32 个）；`/codex-ui` 新增 `glyphs:` 行（applied/原因、字符集、frames/changed 计数）。
+- 测试 315 → 323：`src/glyph-presentation.ts` 8 例（CSI/OSC/BEL/ST 边界、选择器不重复、显式呈现尊重、escape 逐字、原型级幂等安装、实例级 write、非字符串写入透传），host-smoke 增补真实 pi-tui 帧的宽度中立与转义完整性断言，pty 新增阶段：工具命令与输出里的 ✔/✖ 在真实 TUI 中均带选择子、屏幕无任何裸符号、诊断报告 frames>0/changed>0。
+
 ## 0.13.0
 
 - **修正 footer 的增删统计口径**：`+A -D` 现在是**本 session 的累计绝对增删**，不再是"工作区相对 HEAD"的快照。旧口径下，session 中途的 commit 会把已完成的改动从数字里抹掉，剩下的零头看起来就像"净变化"（文件 A `+11 -9`、B `+6 -5` 显示成 `+3 -0`）；现在两者都是 `+17 -14`。这也解释了"很多改动没被统计进去"。

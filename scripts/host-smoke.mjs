@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
-import { Text, MouseRegion } from "@earendil-works/pi-tui";
+import { Text, MouseRegion, hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import extension from "../index.ts";
 
 const handlers = new Map();
@@ -294,6 +294,28 @@ assert.ok(
   userSurface.render(80).some((row) => /\x1b\[48;[0-9;]*m/.test(row)),
   "user message rows carry the theme surface",
 );
+
+// 0.14.0: glyph presentation. The selector is inserted at the LAST mile
+// (terminal writes only), so pi-tui's own layout math must be unchanged: U+FE0E
+// is zero-width and must not widen the ✔/✖ cluster. Then the write hook must
+// rewrite a REAL pi-tui frame string (SGR styling + OSC 8 hyperlink) without
+// touching the escape sequences themselves.
+{
+  const { createGlyphPresentation } = await import("../src/glyph-presentation.ts");
+  assert.equal(visibleWidth("\u2716\uFE0E"), visibleWidth("\u2716"), "VS15 is zero-width: layout does not move");
+  assert.equal(visibleWidth("\u2714\uFE0E done"), visibleWidth("\u2714 done"));
+  const written = [];
+  const glyphSystem = createGlyphPresentation({ enabled: true });
+  assert.equal(glyphSystem.installOnTui({ terminal: { write: (data) => written.push(data) } }), true);
+  const styled = `\x1b[1m${hyperlink("\u2714 link", "https://x.test/\u2716")}\x1b[0m plain \u2716 tail`;
+  written.push(glyphSystem.present(styled)); // same transform the write hook applies
+  const out = written[0];
+  assert.ok(out.includes("\u2714\uFE0E link"), "styled mark gained the text-presentation selector");
+  assert.ok(out.includes("https://x.test/\u2716"), "OSC 8 URL stayed byte-identical");
+  assert.ok(out.endsWith("plain \u2716\uFE0E tail"), "plain marks normalized too, SGR tail intact");
+  const disabled = createGlyphPresentation({ enabled: false });
+  assert.equal(disabled.installOnTui({ terminal: { write: () => {} } }), false, "disabled config installs nothing");
+}
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");

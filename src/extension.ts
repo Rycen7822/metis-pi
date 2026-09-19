@@ -13,6 +13,7 @@ import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker, GIT_CHANGES_DEBOUNCE_MS, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
+import { createGlyphPresentation } from "./glyph-presentation.ts";
 import { diffSignFg } from "./diff.ts";
 import type { SegmentTone } from "./segments.ts";
 import type { ThinkingView, ThinkingViewControl } from "./thinking-view.ts";
@@ -214,6 +215,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     ? createFullscreenMargin(bindings.marginHost, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
     : undefined;
   const historyWindow = bindings.historyWindowHost && config.enabled ? createHistoryWindowSystem(bindings.historyWindowHost) : undefined;
+  // Glyph presentation: the last mile of the frame (terminal writes only), so
+  // emoji-presentation marks like ✔/✖ are drawn by the monospace font instead
+  // of an emoji font that paints over the next character (see
+  // glyph-presentation.ts). Installed from captureTui with the same retry logic.
+  const glyphPresentation = config.enabled ? createGlyphPresentation({ enabled: config.glyphs.textPresentation, include: config.glyphs.include }) : undefined;
   type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts") & typeof import("./chrome/composer-metadata.ts");
   let chromeMods: Promise<ChromeMods | undefined> | undefined;
   const preloadChrome = (): Promise<ChromeMods | undefined> => {
@@ -257,6 +263,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     serializerHost ??= tui;
     if (selectionCopy) selectionCopy.installOnTui(serializerHost);
     fullscreenMargin?.installOnTui(tui);
+    glyphPresentation?.installOnTui(tui);
     historyWindow?.installOnTui(tui);
   };
 
@@ -613,6 +620,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   }
 
+  const glyphStatus = (): string => {
+    if (!glyphPresentation) return "disabled(config)";
+    const g = glyphPresentation.status();
+    if (!g.enabled) return "disabled(config)";
+    const marks = g.glyphs.join(" ");
+    return `${g.installed ? `applied (${g.reason})` : g.reason} marks=${g.glyphs.length} [${marks}] frames=${g.frames} changed=${g.changed}${config.glyphs.include.length > 0 ? ` include=${config.glyphs.include.join(" ")}` : ""}`;
+  };
+
   const selectionCopyLine = (): string[] => {
     if (!selectionCopy) {
       return [`  selection-copy: ${config.selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`];
@@ -679,6 +694,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
           `  decorations: ${decorations ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ") : "unavailable (no assistant prototype binding)"}`,
           `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${decorations?.thinkingAutoApplied?.() ?? "n/a"} (host override-map transitions applied once)`,
           `  fullscreen-margin: ${fullscreenMargin ? (fullscreenMargin.status().installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : fullscreenMargin.status().reason) : config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`,
+          `  glyphs: ${glyphStatus()}`, 
           `  config: enabled=${config.enabled} composer=${config.composer.surface ? `surface,prefix=${config.composer.promptPrefix},meta=${config.composer.metadata}` : "off"} working=${`elapsed=${config.working.elapsed},thought=${config.working.thought},tool=${config.working.tool},tokens=${config.working.tokens},anim=${config.working.animation}@${config.working.animationIntervalMs}ms`} footer=${config.footer.enabled ? `details=${config.footer.details},cache=${config.footer.showCache},rw=${config.footer.showCacheReadWrite},changes=${config.footer.showChanges},quota=${config.footer.showCodexQuota},speed=${config.footer.showSpeed}` : "off"} quota=${config.quota.codex}/${config.quota.refreshSeconds}s thinking=${config.thinking.streaming}/${config.thinking.completed} writePreview=${config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off"} summary=${config.summary.enabled ? `persist=${config.summary.persist}` : "off"}`,
           `  resources: ticker=${metrics.tickerAlive ? "alive" : "stopped"} working-timer=active-only quota-timer=${quotaTimer ? `every ${config.quota.refreshSeconds}s` : "stopped"} git-timer=${gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s + activity` : "stopped"} widget=${chrome.widgetInstalled ? "installed" : "none"}`,
           `  git-changes: ${changesDetail}`,

@@ -1,3 +1,23 @@
+# Validation record — 0.14.0 (glyph text-presentation)
+
+The transcript could show `grep -n "✖\|# fail"` as `✖|# fail`: the user's screenshot (pixel-measured here) showed the ✖ glyph's ink at 24×24 px against a 15 px cell pitch — emoji-presentation marks are advanced one cell by the terminal (pi-tui's WIDTHS table agrees: U+2714/U+2716 are 1-wide) but drawn from a color-emoji font ~1.6 cells wide, composited over the text layer, so they cover the next character. The session log confirmed the backslash was in the content all along; the grid itself never moved.
+
+The fix is a last-mile, display-only rewrite: the frame string a TUI hands its terminal is scanned, and every occurrence of a curated mark (✔ ✖ ✓ ✗ ⚠ by default, extensible via `glyphs.include`) gains a U+FE0E text-presentation selector unless the content already carries an explicit selector. Properties that make it safe:
+
+- **Content untouched**: component renders, the session record and the selection-copy serializers never see the selector; only the terminal's byte stream changes. The pre-existing 161-char exact-copy pty case still passes byte-for-byte.
+- **Width-neutral**: pi-tui's width table has [65024,65039,0] (VS15 = zero width) and the insertion happens after layout, so rails, backgrounds, mouse geometry and column mapping do not move — asserted against the host's real `visibleWidth` in host-smoke.
+- **Escape-aware**: SGR and OSC sequences are copied verbatim (an OSC 8 hyperlink whose URL contains ✔ keeps it byte-identical; an OSC 52 clipboard payload is ASCII-safe), an explicit U+FE0F emoji request is respected, and a truncated final escape terminates at end-of-frame without crashing.
+- **Install**: the write method of the captured TUI's terminal is patched (prototype when the class owns it, the instance when a host shadows it), idempotent via an owner symbol, retried by the existing captureTui path for new terminal instances.
+
+Verification on Node 24.15.0, Pi 0.85.1:
+
+- `env -u NO_COLOR npm test`: 323/323, including 8 new cases for `src/glyph-presentation.ts` (CSI/OSC-BEL/OSC-ST/DCS boundaries, selector never doubled, explicit presentation respected, escape sequences verbatim, prototype-level idempotent install shared across terminal instances, instance-level writer, non-string writes passed through and not counted).
+- `npm run check`, `npm run check:core`: pass; host-smoke additionally asserts `visibleWidth("✖\uFE0E") === visibleWidth("✖")` and that a real pi-tui frame (SGR + `hyperlink()` OSC 8 + plain marks) gains selectors only in its visible text.
+- `env -u NO_COLOR npm run test:pty`: real TUI pass. A mock tool runs `printf '✔ done\n✖ fail\n'`; the captured screen shows `✔\uFE0E done` / `✖\uFE0E fail` in every place pi renders them (command rows and output rows — tmux preserves zero-width selectors in capture-pane, verified in isolation), zero bare marks remain, and `/codex-ui` reports `glyphs: applied(terminal prototype write) marks=5 [✔ ✖ ✓ ✗ ⚠] frames=N changed=M` with N,M > 0.
+- Every earlier stage still passes in the same run (peek window, footer session counts, Working rhythm, tool run, provider error, exact selection copy, fullscreen margins).
+
+Not verified: the selector's effect inside the user's actual Windows Terminal font stack (it is honored there in general, and harmless where ignored); glyphs with no text form (✅ ❌ 🔴) are deliberately out of scope.
+
 # Validation record — 0.13.0 (session change counts)
 
 The footer's `+A −D` segment used to be "work tree vs HEAD". That made a session's own commits erase its progress, left only the residual diff on screen, and made that residual look like a net change (A `+11 −9` and B `+6 −5` reading as `+3 −0`). It also capped "latency" at "until something else moves", because the number was describing a moving baseline. The segment now reports the SESSION's work:

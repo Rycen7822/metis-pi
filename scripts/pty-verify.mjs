@@ -84,6 +84,17 @@ const server = http.createServer((req, res) => {
         }, 400);
         return;
       }
+      if (/PCX_GLYPH/.test(text)) {
+        const cmd = "printf '\u2714 done\\n\u2716 fail\\n'";
+        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx2", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: cmd }) } }] }, finish_reason: null }] });
+        setTimeout(() => {
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ ...base, choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }, 400);
+        return;
+      }
       if (/PCX_THINK/.test(text)) {
         // Reasoning phase first (deepseek-style reasoning_content), slow enough
         // for the tick loop to show the growing thinking timer and LONG enough
@@ -466,6 +477,22 @@ try {
   frames.toolSummary = await waitFor(/Worked for/, 60_000, "post-tool Worked summary");
   assert.match(frames.toolSummary, /Worked for/);
 
+  // Stage 3b: glyph presentation — a tool whose COMMAND and OUTPUT carry ✔/✖
+  // must reach the screen with the U+FE0E text-presentation selector (the
+  // user's screenshot: an emoji font painted ~2 cells of ink over the next
+  // character, hiding the backslash after ✖). Selector is zero-width, so the
+  // frame must carry it but no bare mark may remain.
+  type("please PCX_GLYPH now");
+  sendKeys(["Enter"]);
+  frames.glyph = await waitFor(/\u2716.? fail/, 60_000, "glyph tool output on screen");
+  await new Promise((resolve) => setTimeout(resolve, 800)); // settle the frames
+  const glyphFrame = visibleRows(capture()).join("\n");
+  assert.ok(glyphFrame.includes("\u2714\uFE0E done"), "\u2714 carried the text-presentation selector on screen");
+  assert.ok(glyphFrame.includes("\u2716\uFE0E fail"), "\u2716 carried the selector");
+  assert.ok((glyphFrame.match(/\u2714\uFE0E/g) ?? []).length >= 2, "command row + output row both normalized");
+  assert.ok((glyphFrame.match(/\u2716\uFE0E/g) ?? []).length >= 2, "command row + output row both normalized");
+  assert.doesNotMatch(glyphFrame, /[\u2714\u2716](?![\uFE0E\uFE0F])/, "no bare \u2714/\u2716 reaches the screen");
+
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");
   sendKeys(["Enter"]);
@@ -521,6 +548,9 @@ try {
   assert.match(flat, /outputspeed:[\d.]+tok\/s\(output=80tokens/, "diagnostics expose the measured speed with its scope");
 
   assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
+  const glyphDiag = flat.match(/glyphs:applied\(terminalprototypewrite\)marks=5\[[^\]]*\]frames=(\d+)changed=(\d+)/);
+  assert.ok(glyphDiag, "glyph-presentation diagnostics report applied on the real TUI");
+  assert.ok(Number(glyphDiag[1]) > 0 && Number(glyphDiag[2]) > 0, `glyph frames=${glyphDiag[1]} changed=${glyphDiag[2]}`);
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log(hasGit ? "  git changes:  session Δ +11 -2 (script-written + tracked edits, absolute and commit-proof)" : "  git changes:  not asserted (git unavailable)");
