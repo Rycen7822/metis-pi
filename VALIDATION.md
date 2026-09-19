@@ -696,7 +696,7 @@ Measured on Node 24.15.0, 120 columns × 40 rows, 30 warmed SGR wheel frames (up
 
 | Condition | Mean ms/frame | p95 ms/frame | Calls per shell leaf per frame |
 |---|---:|---:|---:|
-| Baseline bbeaff8, isolated snapshot | 92.41 | 98.25 | 4 |
+| Baseline ac5e66c, isolated snapshot | 92.41 | 98.25 | 4 |
 | Fixed workspace | 0.51 | 0.73 | 1 |
 
 Both runs produced identical complete transcript rows, SHA256 `c1a1c6a487d496fb1d5c52ff8414ce1b8da96fb6b18f9bb69649424115c95995`. This is a CPU rendering replay with terminal writes stubbed, not a claim about end-to-end terminal FPS or Codex performance. It does not execute the saved commands or make model requests. Initial no-color measurements independently showed the same mechanism (about 85 ms to 0.31 ms per frame).
@@ -716,7 +716,7 @@ The local replay probe and raw measurements are under `/tmp/pi-scroll-probe.mjs`
 ## Scope
 
 Fullscreen TUI 选区复制：Ctrl+C 复制已选显示内容的逻辑文本；软折行合并、真实换行保留、
-decoration 排除、semantic 前缀按列包含；无选区原生行为不变。基线：插件 0.8.8 @ 4185395，
+decoration 排除、semantic 前缀按列包含；无选区原生行为不变。基线：插件 0.8.8 @ 4ba21c5，
 Pi 0.85.1（dev-dep 与运行宿主一致），pi-copy-soft-wrap 0.1.2 仍在用户环境加载。
 
 ## Root causes confirmed against host dist (0.85.1)
@@ -974,7 +974,7 @@ mutation; the UI-only CustomEntry summary exception stays as granted).
 Executed in `/home/xu/project/tools/pi-codex-appearance`, Node v24.15.0,
 Pi core/TUI 0.85.1.
 
-Baseline: remote main `c3486a0815f0af6b4df2872ca5bb7fd5a555fab7` (0.8.0),
+Baseline: remote main `0e114cb7cc217d4c775c4c2b7b1bc8a1bd6146dd` (0.8.0),
 verified equal to local HEAD and to the live clone
 `~/.pi/agent/git/github.com/Rycen7822/pi-codex-appearance` before any change.
 No uncommitted user changes existed; nothing was reset or overwritten.
@@ -1045,7 +1045,7 @@ frame cadence.
 - `npm run test:host` runs against the REAL installed
   `@earendil-works/pi-coding-agent` (0.85.1 dist) and real pi-tui through
   `index.ts`'s default export — component-level behavior above is not faked.
-- PTY-driven real `pi` TUI (user's own extension stack), HEAD `ae09669`:
+- PTY-driven real `pi` TUI (user's own extension stack), HEAD `428525b`:
   fresh start frame shows the `Pi 0.85.1 · codex-appearance 0.8.1` header and
   native footer; `/codex-ui` reports `0.8.1 diagnostics:`, chrome applied,
   transcript applied, `decorations: group-spacing=applied, separator=applied,
