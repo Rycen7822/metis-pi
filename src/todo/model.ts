@@ -545,28 +545,6 @@ export function flattenTree(roots: DerivedNode[]): DerivedNode[] {
   return out;
 }
 
-export interface Progress {
-  total: number;
-  complete: number;
-  skipped: number;
-  inProgress: number;
-  pending: number;
-}
-
-/** Progress over leaf tasks only — parents are summaries, not work units. */
-export function progressOf(state: TodoState): Progress {
-  const parents = new Set(state.tasks.filter((t) => t.parentId != null).map((t) => t.parentId));
-  const leaves = state.tasks.filter((t) => !parents.has(t.id));
-  const p: Progress = { total: leaves.length, complete: 0, skipped: 0, inProgress: 0, pending: 0 };
-  for (const leaf of leaves) {
-    if (leaf.status === "complete") p.complete += 1;
-    else if (leaf.status === "skipped") p.skipped += 1;
-    else if (leaf.status === "in_progress") p.inProgress += 1;
-    else p.pending += 1;
-  }
-  return p;
-}
-
 /** First unclaimed, unblocked, pending leaf — the "next" suggestion. */
 export function nextTaskId(state: TodoState): number | null {
   const flat = flattenTree(buildTree(state));
@@ -574,19 +552,4 @@ export function nextTaskId(state: TodoState): number | null {
     ? n.task.status === "pending" && !n.task.claim && !isBlocked(state, n.task.id)
     : false);
   return node ? node.task.id : null;
-}
-
-// ---------------------------------------------------------------------------
-// No-change detection (rpiv-todo): field-level diff for tool results.
-
-const TASK_FIELDS = ["title", "parentId", "status", "evidence", "skipReason", "completedAt", "completedAtTurn"] as const;
-
-export function diffTask(before: Task, after: Task): string[] {
-  const changes: string[] = [];
-  for (const field of TASK_FIELDS) {
-    if (before[field] !== after[field]) changes.push(field);
-  }
-  if (before.claim?.session !== after.claim?.session) changes.push("claim");
-  if (before.blockedBy.join(",") !== after.blockedBy.join(",")) changes.push("blockedBy");
-  return changes;
 }

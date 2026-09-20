@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   addTasks, addBlockedBy, buildTree, canTransition, claimTask, completeTask,
-  completionBlock, createState, diffTask, flattenTree, formatTaskId, pathOf, resolveTaskRef, taskPaths,
-  isBlocked, isListFinished, MAX_DEPTH, MAX_TASKS, moveTask, nextTaskId, progressOf,
+  completionBlock, createState, flattenTree, formatTaskId, pathOf, resolveTaskRef, taskPaths,
+  isBlocked, isListFinished, MAX_DEPTH, MAX_TASKS, moveTask, nextTaskId,
   releaseTask, removeBlockedBy, sanitizeText, skipTask, startNewList, transitionTask,
   updateTitle, VALID_TRANSITIONS, type ModelResult, type Task, type TodoState,
 } from "../src/todo/model.ts";
@@ -154,7 +154,6 @@ test("derived parent status and leaf-only progress", () => {
   assert.equal(flat.length, 4);
   assert.equal(flat.find((n) => n.task.id === 1)!.depth, 1);
   assert.equal(flat.find((n) => n.task.id === 3)!.depth, 2);
-  assert.equal(progressOf(state).total, 3); // leaves: 3,4,2 — parents not work units
   const child = transitionTask(state, 3, "in_progress", T0);
   assert.ok(child.ok);
   const roots = buildTree(child.state);
@@ -188,14 +187,6 @@ test("updateTitle validates duplicates and sanitizes", () => {
   assert.ok(!dupe.ok && /duplicate title/.test(dupe.error));
   const ok = updateTitle(state, 1, "  root A² \n", T0);
   assert.ok(ok.ok && ok.value.title === "root A²");
-});
-
-test("diffTask powers the no-change tool responses", () => {
-  const { state } = seed();
-  const r = transitionTask(state, 2, "in_progress", T0);
-  assert.ok(r.ok);
-  assert.deepEqual(diffTask(state.tasks.find((t) => t.id === 2)!, r.value), ["status"]);
-  assert.deepEqual(diffTask(r.value, r.value), []);
 });
 
 test("formatTaskId is the INTERNAL identity and never reaches the screen", () => {
