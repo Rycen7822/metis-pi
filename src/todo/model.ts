@@ -341,7 +341,6 @@ export function transitionTask(state: TodoState, id: number, to: TaskStatus, now
       t.skipReason = null;
     }
   });
-  if (!result.ok) return result;
   return result;
 }
 
@@ -416,7 +415,6 @@ export function claimTask(state: TodoState, id: number, session: string, now: nu
     t.claim = { session, at: now };
     if (t.status === "pending") t.status = "in_progress";
   });
-  if (!result.ok) return result;
   return result;
 }
 
@@ -431,7 +429,6 @@ export function releaseTask(state: TodoState, id: number, session: string, now: 
     t.claim = null;
     if (t.status === "in_progress") t.status = "pending";
   });
-  if (!result.ok) return result;
   return result;
 }
 
