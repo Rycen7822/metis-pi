@@ -14,3 +14,4 @@ references/
 
 # npm lockfile is machine-local (pi installs the git package with npm install).
 package-lock.json
+.worktree/
