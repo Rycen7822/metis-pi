@@ -73,7 +73,7 @@ test("a user prompt folds completed rows and hides the finished panel", async ()
     // pty harness produces — is a user message too, so it folds as well.
     const steered = await call({ action: "add", tasks: [{ title: "steered task" }] });
     assert.match(steered.content[0].text, /new list: 1 finished task\(s\) cleared/, "the first ✓ list was already history");
-    await call({ action: "complete", id: 2, evidence: "done too" });
+    await call({ action: "complete", id: 1, evidence: "done too" });
     assert.ok(typeof lastWidget(host) === "function", "the new list shows its ✓ row");
     host.handlers.get("input")!({ type: "input", text: "steer", source: "interactive", streamingBehavior: "steer" }, ctx);
     assert.equal(lastWidget(host), undefined, "a steer folds too (it is user input)");
@@ -81,7 +81,7 @@ test("a user prompt folds completed rows and hides the finished panel", async ()
     // A finished list is history: new work starts a NEW list rather than
     // appending to it (0.19.4).
     const added = await call({ action: "add", tasks: [{ title: "fresh work" }] });
-    assert.match(added.content[0].text, /#3 fresh work \(new list: 1 finished task\(s\) cleared\)/);
+    assert.match(added.content[0].text, /#1 fresh work \(new list: 1 finished task\(s\) cleared; ids restart at #1/);
     const listed = await call({ action: "list" });
     assert.match(listed.content[0].text, /Todos: 0\/1 done/);
     assert.doesNotMatch(listed.content[0].text, /wired task|steered task/, "no history is carried over");

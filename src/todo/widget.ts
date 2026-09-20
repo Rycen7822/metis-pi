@@ -22,7 +22,7 @@
 // The widget takes no pi-tui dependency: the host hands (tui, theme) to the
 // factory, and the component contract is just { render(width): string[] }.
 
-import { buildTree, flattenTree, formatTaskId, isBlocked, type Task, type TodoState } from "./model.ts";
+import { buildTree, flattenTree, isBlocked, taskPaths, type Task, type TodoState } from "./model.ts";
 import type { CodexTodoSystem } from "./tools.ts";
 
 export const TODO_WIDGET_KEY = "codex-todo";
@@ -109,6 +109,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     });
 
     const anyBlockedBy = state.tasks.some((t) => t.blockedBy.length > 0);
+    const paths = anyBlockedBy ? taskPaths(state) : null;
     const session = deps.sessionId();
     const body: Row[] = [];
     for (const node of visible) {
@@ -117,7 +118,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
       const glyph = blocked ? GLYPHS.blocked : t.status === "complete" ? GLYPHS.complete : t.status === "skipped" ? GLYPHS.skipped : t.status === "in_progress" ? GLYPHS.inProgress : GLYPHS.pending;
       const indent = "  ".repeat(node.depth - 1);
       const claim = t.claim ? (t.claim.session === session ? " · mine" : ` · ${t.claim.session}`) : "";
-      const idPrefix = anyBlockedBy ? `${formatTaskId(t.id)} ` : "";
+      const idPrefix = paths ? `${paths.get(t.id)} ` : "";
       body.push({ text: truncate(`${indent}${glyph} ${idPrefix}${t.title}${claim}`, width), tone: toneFor(t, blocked) });
     }
     // Overflow policy: completed first, then the pending tail; one summary row

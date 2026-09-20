@@ -1,3 +1,51 @@
+# Validation record — 0.19.5 (todo references are hierarchical paths)
+
+Report: the panel showed `#12 demo…`, `#13 …`, `#14 …` after a new list had started, and the user asked why the
+numbering continues after the 11 tasks that had already been cleared.
+
+## Findings
+
+0.19.4 kept one monotonic `nextId` on purpose (a stale `complete #3` after a rotation must fail loudly instead of
+silently closing a different task) and then used that same number as the user-visible reference. That made every
+list read as a continuation of a ledger whose earlier entries no longer exist. The requirement is a numbering that
+describes the CURRENT plan — `#1`, `#1.1`, `#2.1` — without giving up the loud-failure property.
+
+## Fix
+
+- **Display/interface references are paths, storage ids are not.** `taskPaths(state)` walks the tree in list order
+  and labels each task by its position: roots `#1`, `#2`…, each child appending its sibling index (`#1.1`, `#1.2`,
+  `#1.1.1`, max 4 levels). `pathOf(state, id)` is the only way a task is named on screen (widget rows, `list` text,
+  tool results); the numeric id stays inside the store. `formatTaskId` survives for model-layer error strings only,
+  and `translateIds` rewrites any `#<digits>` in those strings into paths at the tool boundary.
+- **Inputs accept the same paths.** `resolveTaskRef` parses `"1"`, `"1.2"`, `"#1.2"`, and bare numbers for
+  top-level tasks, then maps to the internal id. Every miss lists the paths that do exist
+  (`task #2 not found — current paths: #1, #1.1`), so a stale reference self-corrects instead of aliasing.
+- **A new list restarts at `#1`** (replaces 0.19.4's continued serial), and same-batch nesting still works: parent
+  references inside one `add` resolve against a projection that already holds the earlier items of that batch, so
+  `[{title:"parent"}, {parentId:"1"}]` needs one call. The projection is discarded; the real append re-validates.
+- **The one moment references are reused is announced.** `add` on a finished list returns
+  `(new list: M finished task(s) cleared; ids restart at #1 — earlier #id references are void)`, and the tool
+  description tells the model never to reuse an id it read before such a restart. Rows cannot collide visually:
+  the widget renders from the store, and rotation deletes the old tasks, so the finished rows are gone immediately.
+
+## Reproduction and verification
+
+| Probe | Result |
+|---|---|
+| `taskPaths` on root + child + grandchild + second root + its child | `#1`, `#1.1`, `#1.1.1`, `#2`, `#2.1` |
+| `add [{title:"plan schema"}, {title:"write store", parentId:1}]` | `added 2 task(s): #1 plan schema, #1.1 write store` |
+| `complete id:"1.1"` on the child, then the parent | both close; the parent gate still blocks while the child is open |
+| `complete id:"2"` after the list rotated to a single `#1` | throws `task #2 not found — current paths: #1` |
+| widget rows on a claimed child with a blockedBy edge present | `◐ #1.1 child · mine`, `⚠︎ #2 solo` (paths, not running numbers) |
+| `moveTask` promoting a subtask to top level | the task becomes the last root (`#3`); existing roots keep `#1`/`#2` |
+
+- `test/todo-model.test.mts` gained the three numbering tests (hierarchy, resolution + error text, positional
+  renumbering after a promote); `todo-tools`/`todo-widget`/`todo-extension` assertions moved to path form.
+- `npm test` 406/406, `npm run check` 0, `npm run test:host` PASS, `npm run test:pty` rc=0 (real pi over a pty).
+- Not covered here: nothing in the pty harness exercises a *dotted* reference end to end (its lists are flat, where
+  paths and numbers coincide). The ordering guarantee that makes paths stable (append-only order, positions never
+  reused within a list) is pinned by unit tests instead.
+
 # Validation record — 0.19.4 (todo lists do not accumulate history)
 
 Report: the panel kept showing historical todos — a screenshot listed 11 rows, six of them long-finished tasks from an

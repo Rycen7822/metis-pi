@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   addTasks, addBlockedBy, buildTree, canTransition, claimTask, completeTask,
-  completionBlock, createState, diffTask, flattenTree, formatTaskId,
+  completionBlock, createState, diffTask, flattenTree, formatTaskId, pathOf, resolveTaskRef, taskPaths,
   isBlocked, isListFinished, MAX_DEPTH, MAX_TASKS, moveTask, nextTaskId, progressOf,
   releaseTask, removeBlockedBy, sanitizeText, skipTask, startNewList, transitionTask,
   updateTitle, VALID_TRANSITIONS, type ModelResult, type Task, type TodoState,
@@ -198,8 +198,59 @@ test("diffTask powers the no-change tool responses", () => {
   assert.deepEqual(diffTask(r.value, r.value), []);
 });
 
-test("formatTaskId renders #N", () => {
+test("formatTaskId is the INTERNAL identity and never reaches the screen", () => {
+  // Still used by model-level error strings, which the tool layer rewrites to
+  // paths before they leave (see translateIds in tools.ts).
   assert.equal(formatTaskId(12), "#12");
+});
+
+test("taskPaths numbers subtasks hierarchically (1, 1.1, 1.1.1, 2, 2.1)", () => {
+  const r1 = addTasks(createState(T0), [{ title: "root" }], T0);
+  assert.ok(r1.ok);
+  const r2 = addTasks(r1.state, [{ title: "child a", parentId: 1 }, { title: "second root" }], T0);
+  assert.ok(r2.ok);
+  const r3 = addTasks(r2.state, [{ title: "grandchild", parentId: 2 }, { title: "second child", parentId: 3 }], T0);
+  assert.ok(r3.ok);
+  const state = r3.state;
+  assert.deepEqual([...taskPaths(state).values()], ["#1", "#1.1", "#1.1.1", "#2", "#2.1"]);
+  // pathOf takes the internal id — the language the model layer speaks.
+  assert.equal(pathOf(state, 1), "#1");
+  assert.equal(pathOf(state, 2), "#1.1");
+  assert.equal(pathOf(state, 3), "#2");
+  assert.equal(pathOf(state, 4), "#1.1.1");
+  assert.equal(pathOf(state, 5), "#2.1");
+});
+
+test("resolveTaskRef accepts paths (and bare numbers for roots) and teaches on miss", () => {
+  const r1 = addTasks(createState(T0), [{ title: "root" }], T0);
+  assert.ok(r1.ok);
+  const r2 = addTasks(r1.state, [{ title: "child", parentId: 1 }], T0);
+  assert.ok(r2.ok);
+  const state = r2.state;
+  assert.deepEqual(resolveTaskRef(state, "1"), { ok: true, id: 1 });
+  assert.deepEqual(resolveTaskRef(state, "#1.1"), { ok: true, id: 2 });
+  assert.deepEqual(resolveTaskRef(state, 1), { ok: true, id: 1 }, "numbers stay valid for top-level tasks");
+  const missing = resolveTaskRef(state, "2");
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.match(missing.error, /task #2 not found — current paths: #1, #1\.1/);
+  const tooDeep = resolveTaskRef(state, "1.1.1");
+  assert.equal(tooDeep.ok, false, "one level past the tree is a miss");
+  const bad = resolveTaskRef(state, "one.two");
+  assert.equal(bad.ok, false);
+  if (!bad.ok) assert.match(bad.error, /bad task reference/);
+});
+
+test("paths are positional: promoting a subtask moves it to the end of the roots", () => {
+  const r1 = addTasks(createState(T0), [{ title: "root" }, { title: "solo" }], T0);
+  assert.ok(r1.ok);
+  const r2 = addTasks(r1.state, [{ title: "child", parentId: 1 }], T0);
+  assert.ok(r2.ok);
+  assert.equal(pathOf(r2.state, 3), "#1.1");
+  const moved = moveTask(r2.state, 3, null, T0);
+  assert.ok(moved.ok);
+  const state = { ...r2.state, tasks: r2.state.tasks.map((t) => (t.id === 3 ? moved.value : t)) };
+  assert.equal(pathOf(state, 3), "#3", "a promoted child is the last root, not a renumbered middle one");
+  assert.equal(pathOf(state, 2), "#2", "existing roots keep their numbers");
 });
 
 test("a finished list is history: isListFinished and startNewList", () => {
@@ -230,14 +281,16 @@ test("a finished list is history: isListFinished and startNewList", () => {
   s = skip(s, 2);
   assert.equal(isListFinished(s), true, "every task complete or skipped");
 
-  // A new list drops the tasks and keeps the id sequence monotonic, so a stale
-  // "complete #2" from the model fails loudly instead of hitting a new task.
+  // A new list drops the tasks and restarts the ids at #1, so the panel reads
+  // like a fresh plan. Ids are therefore unique only WITHIN a list: `add`
+  // reports the restart loudly because of exactly that.
   const fresh = startNewList(s);
   assert.deepEqual(fresh.tasks, []);
   assert.equal(fresh.version, s.version);
+  assert.equal(fresh.nextId, 1, "a new list starts numbering at #1");
   const added = addTasks(fresh, [{ title: "next batch" }], T0);
   assert.ok(added.ok);
-  assert.equal(added.value[0].id, s.nextId, "ids continue where the old list stopped");
-  assert.equal(added.state.nextId, s.nextId + 1);
+  assert.equal(added.value[0].id, 1, "the first task of a new list is #1");
+  assert.equal(added.state.nextId, 2);
   assert.equal(s.tasks.length, 4, "the previous list is not mutated");
 });

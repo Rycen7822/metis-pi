@@ -27,7 +27,7 @@ test("add returns created ids and fires changed", async () => {
     const { system, changed } = makeSystem(dir);
     const exec = createTodoToolHandlers(system, () => dir);
     const r = await exec({ action: "add", tasks: [{ title: "plan schema" }, { title: "write store", parentId: 1 }] }, "sess-A");
-    assert.match(r.content[0].text, /added 2 task\(s\): #1 plan schema, #2 write store/);
+    assert.match(r.content[0].text, /added 2 task\(s\): #1 plan schema, #1\.1 write store/, "a subtask is numbered #1.1, not #2");
     assert.equal(changed(), 1);
     const list = await exec({ action: "list" }, "sess-A");
     assert.match(list.content[0].text, /Todos: 0\/2 done/);
@@ -48,8 +48,8 @@ test("validation errors throw with self-correcting messages", async () => {
     await assert.rejects(() => exec({ action: "claim", id: 99 }, "s"), /not found/);
     // The completion gate blocks BOTH unfinished subtasks and missing evidence.
     await assert.rejects(() => exec({ action: "complete", id: 1, evidence: "done" }, "s"), /unfinished subtasks/);
-    await assert.rejects(() => exec({ action: "complete", id: 2 }, "s"), /evidence required/);
-    await exec({ action: "complete", id: 2, evidence: "child done" }, "s");
+    await assert.rejects(() => exec({ action: "complete", id: "1.1" }, "s"), /evidence required/);
+    await exec({ action: "complete", id: "1.1", evidence: "child done" }, "s");
     const ok = await exec({ action: "complete", id: 1, evidence: "all done" }, "s");
     assert.match(ok.content[0].text, /completed #1/);
   } finally {
@@ -200,11 +200,19 @@ test("adding to a finished list starts a new list instead of appending", async (
     await exec({ action: "complete", id: 2, evidence: "shipped" }, "s");
     await exec({ action: "complete", id: 3, evidence: "shipped" }, "s");
     const fresh = await exec({ action: "add", tasks: [{ title: "new work" }] }, "s");
-    assert.match(fresh.content[0].text, /added 1 task\(s\): #4 new work \(new list: 3 finished task\(s\) cleared\)/);
+    assert.match(fresh.content[0].text, /added 1 task\(s\): #1 new work \(new list: 3 finished task\(s\) cleared; ids restart at #1/);
     const list = await exec({ action: "list" }, "s");
     assert.match(list.content[0].text, /Todos: 0\/1 done/);
     assert.match(list.content[0].text, /new work/);
     assert.doesNotMatch(list.content[0].text, /old a|old b|follow-up/, "the finished list is gone, not shown as history");
+
+    // Paths are unique only within a list, and the restart note above is the
+    // guard: a path the new list does not have still fails loudly, and the error
+    // teaches the paths that do exist.
+    await assert.rejects(
+      () => exec({ action: "complete", id: "2", evidence: "shipped" }, "s"),
+      /task #2 not found — current paths: #1/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -45,8 +45,79 @@ export interface TodoState {
 export const TODO_SCHEMA_VERSION = 1 as const;
 export const MAX_TASKS = 15;
 export const MAX_DEPTH = 4;
-/** Task ids render as `#<id>` everywhere (widget and tool text). */
+/** Internal identity of a task. NEVER shown to the user or the model — use
+ * `taskPaths`/`pathOf` for anything that leaves the store. */
 export const formatTaskId = (id: number): string => `#${id}`;
+
+// ---------------------------------------------------------------------------
+// Task references — what the user and the model see.
+//
+// A task is identified by its HIERARCHICAL PATH: roots count from 1 in list
+// order, and each level appends its position among its siblings, so a subtask is
+// `#1.2` and its child `#1.2.1`. Numbering restarts with every new list, which
+// keeps the panel readable (a list is a plan, not a session-long ledger) at the
+// cost of ids being unique only WITHIN one list: `add` reports the restart
+// loudly, and a reference that no longer resolves names the paths that do.
+
+export interface TaskRef {
+  ok: true;
+  id: number;
+}
+export interface TaskRefError {
+  ok: false;
+  error: string;
+}
+
+/** Map of internal id → display path (`#1`, `#1.2`, …) for the current list. */
+export function taskPaths(state: TodoState): Map<number, string> {
+  const children = new Map<number | null, Task[]>();
+  for (const task of state.tasks) {
+    const key = task.parentId ?? null;
+    const siblings = children.get(key);
+    if (siblings) siblings.push(task);
+    else children.set(key, [task]);
+  }
+  const paths = new Map<number, string>();
+  const walk = (parent: number | null, prefix: string): void => {
+    const siblings = children.get(parent) ?? [];
+    siblings.forEach((task, index) => {
+      const path = prefix === "" ? String(index + 1) : `${prefix}.${index + 1}`;
+      paths.set(task.id, `#${path}`);
+      walk(task.id, path);
+    });
+  };
+  walk(null, "");
+  // Defensive: a task whose parent is missing (corrupt store) still gets a
+  // label — never the internal id, which must not reach the screen.
+  let orphan = 0;
+  for (const task of state.tasks) {
+    if (!paths.has(task.id)) paths.set(task.id, `#?${++orphan}`);
+  }
+  return paths;
+}
+
+/** Display path of one task in this state. */
+export function pathOf(state: TodoState, id: number): string {
+  return taskPaths(state).get(id) ?? formatTaskId(id);
+}
+
+/**
+ * Resolve a user/model-supplied reference (`"1"`, `"#1.2"`, or a legacy number)
+ * to an internal id. Errors name every path that DOES exist, so a stale or
+ * shifted reference self-corrects instead of silently hitting another task.
+ */
+export function resolveTaskRef(state: TodoState, ref: string | number): TaskRef | TaskRefError {
+  const raw = String(ref).trim().replace(/^#/, "");
+  if (!/^\d+(\.\d+)*$/.test(raw)) {
+    return { ok: false, error: `bad task reference "${String(ref)}" — use a path like #1 or #1.2` };
+  }
+  const wanted = `#${raw}`;
+  for (const [id, path] of taskPaths(state)) {
+    if (path === wanted) return { ok: true, id };
+  }
+  const known = [...taskPaths(state).values()].join(", ") || "none";
+  return { ok: false, error: `task ${wanted} not found — current paths: ${known}` };
+}
 
 // ---------------------------------------------------------------------------
 // Text hygiene — model-generated text crosses the TUI boundary; keep control
@@ -104,14 +175,20 @@ export function isListFinished(state: TodoState): boolean {
 }
 
 /**
- * Start a new list: drop every task, keep the id sequence monotonic. The ids
- * are deliberately NOT reset — a stale `complete #3` from the model then fails
- * loudly ("not found") instead of silently closing a different task of the new
- * list. The previous list is history, not an archive: the store only ever holds
- * the list that is being worked on, and a finished list is garbage (gcDays).
+ * Start a new list: drop every task and restart the id sequence at #1, so the
+ * panel reads like a fresh plan instead of continuing a number that only ever
+ * counted tasks the user no longer sees.
+ *
+ * The cost is that ids are only unique WITHIN a list: an id the model read
+ * before the rotation can name a different task afterwards. That is why the
+ * rotation is always reported loudly by `add` ("ids restart at #1 — ignore
+ * earlier #id references") and why rotating is the only place where ids are
+ * reused — never while a list still has live work. The previous list is
+ * history, not an archive: the store only ever holds the list that is being
+ * worked on, and a finished list is garbage (gcDays).
  */
-export function startNewList(state: TodoState): TodoState {
-  return { version: TODO_SCHEMA_VERSION, nextId: state.nextId, tasks: [] };
+export function startNewList(_state: TodoState): TodoState {
+  return { version: TODO_SCHEMA_VERSION, nextId: 1, tasks: [] };
 }
 
 const byId = (state: TodoState, id: number): Task | undefined =>

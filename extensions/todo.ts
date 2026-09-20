@@ -110,7 +110,8 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
       label: "Todo",
       description: [
         "Task list with subtask nesting, blockedBy dependencies and session claims, persisted to disk.",
-        "Adding to a FINISHED list (every task complete/skipped) starts a new list — the finished tasks are cleared and ids keep counting, so pass only the new work.",
+        "Task references are hierarchical paths: \"1\" is the first top-level task, \"1.2\" its second subtask.",
+        "Adding to a FINISHED list (every task complete/skipped) starts a new list — the finished tasks are cleared and ids restart at #1, so pass only the new work and never reuse an id you read before that restart.",
         "Guidance: claim before starting work; complete requires evidence and unfinished subtasks block completion;",
         "completed is one-way (reopen to reset); use addBlockedBy/removeBlockedBy incrementally, never resend whole lists;",
         "duplicate titles and illegal transitions are rejected with the reason — read the error and adjust instead of retrying.",

@@ -108,7 +108,8 @@ test("rows: header, tree indent, claims, blocked glyph, id prefix only with edge
       return { ok: true as const, state: { ...s, tasks: s.tasks.map((x) => (x.id === 3 ? { ...t, blockedBy: [1] } : x)) }, value: t };
     });
     const rows2 = widget.buildRows(store.read(), 80, 5).map((r) => r.text);
-    assert.match(rows2[3], /⚠︎ #3 solo/); // edge exists → ids appear
+    assert.match(rows2[2], /◐ #1\.1 child · mine/); // subtask path, not a running number
+    assert.match(rows2[3], /⚠︎ #2 solo/); // edge exists → paths appear
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
