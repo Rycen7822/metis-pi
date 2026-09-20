@@ -15,6 +15,7 @@
 // and dispose stop it (idle must leave zero timers).
 
 import { formatDuration, formatTokensCompact, type ActivityPhase } from "../ui-metrics.ts";
+import { stripAnsi } from "../selection-copy/wrap.ts";
 
 export interface WorkingSnapshot {
   active: boolean;
@@ -213,7 +214,7 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
       if (f.tool) line += `${sep}${input.paint(f.tool, "dim")}`;
 
       // Cell-width guard: hide decorations, never overflow the widget row.
-      const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
+      const plain = stripAnsi(line);
       if (plain.length > width) {
         const budget = width - 3; // bullet + space + ellipsis
         return budget >= 1 ? [`${bullet} ${plain.slice(0, budget)}…`] : [bullet.slice(0, Math.max(1, width))];

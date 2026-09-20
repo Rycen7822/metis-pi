@@ -4,6 +4,7 @@ import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./p
 import { styleToolOutputLine } from "./output-style.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
+import { stripAnsi } from "./selection-copy/wrap.ts";
 
 export const COMMAND_CONTINUATION_PREFIX = "  │ ";
 export const OUTPUT_INITIAL_PREFIX = "  └ ";
@@ -64,10 +65,6 @@ function shorten(line: string): string {
     index += 1;
   }
   return `${out.replace(/[\ud800-\udbff]$/, "")} …`;
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 /**

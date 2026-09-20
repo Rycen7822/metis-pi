@@ -10,6 +10,7 @@ import {
 
 import type { LayoutOps } from "./shell.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
+import { stripAnsi } from "./selection-copy/wrap.ts";
 
 export const DIFF_LEFT_INSET = 2;
 
@@ -225,9 +226,6 @@ export function wrapStyledContent(text: string, width: number): string[] {
 }
 
 /** Render diff rows Codex-style from structured rows. Never returns empty. */
-function stripAnsiDiff(text: string): string {
-  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
 
 export function renderDiffLines(input: DiffRenderInput): string[] {
   const { rows, layout, colorLevel } = input;
@@ -312,7 +310,7 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
           spans: [
             { colStart: 0, colEnd: signCell, kind: "decoration" },
             { colStart: signCell, colEnd: signCell + 1, kind: "semantic", text: sign === " " ? undefined : sign },
-            { colStart: prefixCols, colEnd: prefixCols + layout.visibleWidth(body), kind: "content", text: stripAnsiDiff(body) },
+            { colStart: prefixCols, colEnd: prefixCols + layout.visibleWidth(body), kind: "content", text: stripAnsi(body) },
           ],
           breakBefore: "hard",
         });
@@ -320,7 +318,7 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
         input.copyOut?.push({
           spans: [
             { colStart: 0, colEnd: prefixCols, kind: "decoration" },
-            { colStart: prefixCols, colEnd: prefixCols + layout.visibleWidth(body), kind: "content", text: stripAnsiDiff(body) },
+            { colStart: prefixCols, colEnd: prefixCols + layout.visibleWidth(body), kind: "content", text: stripAnsi(body) },
           ],
           breakBefore: "soft",
         });
