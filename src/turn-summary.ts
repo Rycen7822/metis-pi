@@ -13,6 +13,7 @@
 import { formatDuration, formatTokensCompact, type InteractionSnapshot } from "./ui-metrics.ts";
 import type { InteractionOutcome, TerminalEvidence } from "./interaction-outcome.ts";
 import { resolveThemePainter } from "./palette.ts";
+import { clipLine } from "./segments.ts";
 
 export const SUMMARY_CUSTOM_TYPE = "pi-codex-appearance:interaction-summary:v1";
 
@@ -197,7 +198,7 @@ export function makeEntryRenderer(makeText?: SummaryEntryRendererDeps["makeText"
     const painter = resolveThemePainter(theme);
     if (makeText) return makeText(painter("dim", line));
     return {
-      render: (width: number) => [painter("dim", line.slice(0, Math.max(0, width)))],
+      render: (width: number) => [painter("dim", clipLine(line, width))],
     };
   };
 }

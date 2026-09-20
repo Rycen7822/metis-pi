@@ -3,6 +3,7 @@
 // render no line.
 
 import { resolveThemePainter } from "../palette.ts";
+import { clipLine } from "../segments.ts";
 
 export interface HeaderDeps {
   appearanceVersion: string;
@@ -30,7 +31,7 @@ export function createHeaderComponent(deps: HeaderDeps, theme: { fg?: (key: stri
   return {
     render(width: number): string[] {
       const painter = paint();
-      return headerLines(deps).map((line) => painter("dim", line.slice(0, Math.max(0, width))));
+      return headerLines(deps).map((line) => painter("dim", clipLine(line, width)));
     },
     invalidate(): void {
       // static

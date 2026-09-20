@@ -37,6 +37,25 @@ export function rowWidth(row: Segment[]): number {
   return w;
 }
 
+/**
+ * Hard clip a PLAIN text line to `width` terminal cells: wider-than-ASCII
+ * glyphs are counted properly and a surrogate pair is never split. The array
+ * `slice(0, width)` it replaces counted UTF-16 units, so a CJK path could run
+ * twice as wide as the line budget. ANSI is painted after clipping.
+ */
+export function clipLine(line: string, width: number): string {
+  if (cellWidth(line) <= width) return line;
+  let out = "";
+  let used = 0;
+  for (const ch of line) {
+    const cw = cellWidth(ch);
+    if (used + cw > width) break;
+    out += ch;
+    used += cw;
+  }
+  return out;
+}
+
 /** Cell-level truncation on plain text (paint afterwards). */
 export function truncateSegments(row: Segment[], width: number): Segment[] {
   if (rowWidth(row) <= width) return row;
