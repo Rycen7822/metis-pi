@@ -74,6 +74,17 @@ function createShellCallComponent(input: ShellCallInput): Tui.Component {
 }
 
 /**
+ * The terminal's color capability cannot change mid-session, so resolve it once
+ * per process: every render path (separator, thinking rail, thought summary
+ * painter, composer surface) then shares one context instead of re-probing the
+ * host on each frame.
+ */
+let cachedColorLevel: ReturnType<typeof resolveColorContext> | undefined;
+function colorLevelOnce(): ReturnType<typeof resolveColorContext> {
+  return (cachedColorLevel ??= resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true }));
+}
+
+/**
  * Result region: output block with "  └ "/"    " prefixes and the 5-screen-row
  * budget. Never renders a command head.
  */
@@ -117,7 +128,7 @@ function createShellResultComponent(input: ShellResultInput): Tui.Component {
 class CodexSeparatorComponent implements Tui.Component {
   render(width: number): string[] {
     const usable = Math.max(1, Math.floor(width));
-    const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+    const level = colorLevelOnce();
     const line = "─".repeat(usable);
     return [level.kind === "none" ? "-".repeat(usable) : `\x1b[2m${line}\x1b[22m`];
   }
@@ -236,7 +247,7 @@ class CodexThinkingRailComponent implements Tui.Component {
     // The child render itself is cached downstream (peek/markdown per width),
     // which is what makes this identity check cheap.
     if (this.#cache && this.#lastWidth === width && this.#lastChildLines === childLines) return this.#cache;
-    const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+    const level = colorLevelOnce();
     const rail = level.kind === "none" ? "| " : `\x1b[38;2;${CODEX_CYAN_RGB}m▏\x1b[39m `;
     // Per-row shift: rows already carrying a rail pass through WITHOUT the
     // prefix, so their provenance shift is 0, not railCells.
@@ -446,7 +457,7 @@ function appearanceVersion(): string {
  * terminals get plain text.
  */
 function thoughtPainter(): (text: string) => string {
-  const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+  const level = colorLevelOnce();
   if (level.kind === "none") return (text) => text;
   let hex = "#a3a3a3"; // this theme's thinkingText (muted) — the fallback
   try {
@@ -472,7 +483,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     });
     return;
   }
-  const colorLevel = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
+  const colorLevel = colorLevelOnce();
   const highlight = (text: string, language: string): string => {
     const lines = Pi.highlightCode(text, language);
     return Array.isArray(lines) ? lines.join("\n") : String(lines);
