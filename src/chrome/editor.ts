@@ -13,6 +13,7 @@
 // Intentionally no per-line '›' prefix beyond the first row (deliberate Codex
 // deviation, see VALIDATION.md).
 
+import { CODEX_CYAN_RGB } from "../palette.ts";
 import { isSkillPrefixOnly } from "../skill-tokens.ts";
 
 /** Minimal structural types for the host pieces we touch (no imports). */
@@ -102,7 +103,7 @@ function forceSkillCompletion(editor: CodexEditorRowHost, data: string): void {
 }
 
 export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
-  const accent = input.accent ?? ((s: string) => `\x1b[38;2;58;150;221m${s}\x1b[39m`);
+  const accent = input.accent ?? ((s: string) => `\x1b[38;2;${CODEX_CYAN_RGB}m${s}\x1b[39m`);
   const surface = input.surface;
   const paddingX = input.paddingX ?? 2;
   const placeholder = input.placeholder ?? "Ask anything...";

@@ -4,7 +4,7 @@ import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "../src/extension.ts";
 import { renderCodexDiffComponent, type DiffComponentInput } from "../src/diff-component.ts";
 import { renderShellCall, renderShellResult, type LayoutOps } from "../src/shell.ts";
-import { resolveColorContext } from "../src/palette.ts";
+import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
 import { makeSurfaceOps } from "../src/surface.ts";
 import { renderWritePreview } from "../src/write-preview.ts";
 import { loadConfig } from "../src/config.ts";
@@ -237,7 +237,7 @@ class CodexThinkingRailComponent implements Tui.Component {
     // which is what makes this identity check cheap.
     if (this.#cache && this.#lastWidth === width && this.#lastChildLines === childLines) return this.#cache;
     const level = resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true });
-    const rail = level.kind === "none" ? "| " : `\x1b[38;2;58;150;221m▏\x1b[39m `;
+    const rail = level.kind === "none" ? "| " : `\x1b[38;2;${CODEX_CYAN_RGB}m▏\x1b[39m `;
     // Per-row shift: rows already carrying a rail pass through WITHOUT the
     // prefix, so their provenance shift is 0, not railCells.
     const shifts = childLines.map((line) => {
@@ -481,7 +481,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   // keeps its no-host-import rule.
   const surface = makeSurfaceOps(
     colorLevel,
-    (text) => `\x1b[38;2;58;150;221m${text}\x1b[39m`,
+    (text) => `\x1b[38;2;${CODEX_CYAN_RGB}m${text}\x1b[39m`,
     (text) => `\x1b[2m${text}\x1b[22m`,
   );
   activate(pi, {

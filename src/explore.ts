@@ -2,9 +2,9 @@
 // A group header is owned by the FIRST member's component; later members render
 // with a four-space gutter. Display-only.
 
-import { foregroundAnsi, type ColorLevel } from "./palette.ts";
+import { CODEX_CYAN, foregroundAnsi, type ColorLevel } from "./palette.ts";
 
-const EXPLORATION_CYAN = "#3a96dd"; // Codex paints member verbs with ANSI cyan ("Read".cyan())
+const EXPLORATION_CYAN = CODEX_CYAN; // Codex paints member verbs with ANSI cyan ("Read".cyan())
 const DIM_GRAY = "#6c7086"; // Mocha overlay0 for the " in " hint
 
 export type ExplorationVerb = "Read" | "Search" | "Find" | "List" | "Run";

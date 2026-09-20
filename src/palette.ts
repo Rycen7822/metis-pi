@@ -18,6 +18,12 @@ export const MOCHA = {
 
 export type MochaToken = keyof typeof MOCHA;
 
+/** Codex accent cyan ("Read".cyan()) — the one definition for the composer
+ * prefix, the thinking rail, the editor caret painter, and exploration verbs. */
+export const CODEX_CYAN = "#3a96dd";
+/** CODEX_CYAN pre-expanded, for raw SGR strings that bypass foregroundAnsi. */
+export const CODEX_CYAN_RGB = "58;150;221";
+
 /** Codex diff dark surfaces (exec_cell/diff_render.rs). */
 export const DIFF_ADD_BG: Rgb = { r: 33, g: 58, b: 43 };   // #213A2B
 export const DIFF_DEL_BG: Rgb = { r: 74, g: 34, b: 29 };   // #4A221D
