@@ -25,7 +25,7 @@ export interface AppearanceConfig {
   glyphs: { textPresentation: boolean; include: string[] };
 }
 
-export const CONFIG_FILE = "codex-appearance.json";
+const CONFIG_FILE = "codex-appearance.json";
 
 export const DEFAULT_CONFIG: AppearanceConfig = {
   enabled: true,
@@ -56,7 +56,7 @@ function bool(value: unknown, fallback: boolean, problems: string[], where: stri
   return fallback;
 }
 
-export function validateConfig(raw: unknown, problems: string[]): AppearanceConfig {
+function validateConfig(raw: unknown, problems: string[]): AppearanceConfig {
   if (raw === undefined || raw === null) return structuredClone(DEFAULT_CONFIG);
   if (typeof raw !== "object") {
     problems.push("root: expected object — using defaults");
