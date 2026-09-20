@@ -601,7 +601,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
   // Write tracking observes lifecycle events only (never tool_call/tool_result
   // content); all state is ephemeral presentation data dropped at shutdown.
-  (pi as unknown as AppearanceAPI).on("agent_start", () => {
+  pi.on("agent_start", () => {
     if (!chromeEnabled) return;
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
     if (fullscreenMargin && serializerHost) fullscreenMargin.installOnTui(serializerHost);
@@ -617,11 +617,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     metrics.agentStart();
     setWidgetVisible(true);
   });
-  (pi as unknown as AppearanceAPI).on("agent_end", () => {
+  pi.on("agent_end", () => {
     if (!chromeEnabled) return;
     metrics.agentEnd();
   });
-  (pi as unknown as AppearanceAPI).on("agent_settled", () => {
+  pi.on("agent_settled", () => {
     if (!chromeEnabled) return;
     metrics.agentSettled();
     outcome.reset();
