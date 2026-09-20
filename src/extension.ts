@@ -8,17 +8,14 @@ import { UiMetrics, formatDuration } from "./ui-metrics.ts";
 import { OutputSpeedTracker } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
-import { HostData, type HostContextLike, type UiAvailable } from "./host-data.ts";
+import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker } from "./git-changes.ts";
 import { createGlyphPresentation } from "./glyph-presentation.ts";
-import { diffSignFg } from "./diff.ts";
-import type { SegmentTone } from "./segments.ts";
 import type { ThinkingView, ThinkingViewControl } from "./thinking-view.ts";
-import { WORKING_WIDGET_KEY, type WorkingComponent } from "./chrome/working.ts";
-import { COMPOSER_META_WIDGET_KEY } from "./chrome/composer-metadata.ts";
 import { createSnapshotSource } from "./chrome/snapshots.ts";
+import { createChromeLifecycle, SUMMARY_STATUS_KEY } from "./chrome/install.ts";
 import { registerDiagnosticsCommand } from "./diagnostics.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { QuotaStore } from "./quota/quota-store.ts";
@@ -106,7 +103,6 @@ export interface Bindings {
 
 /** Bounded store for completed write diffs (entry + total budget). */
 const MAX_WRITE_CHANGES = 64;
-const SUMMARY_STATUS_KEY = "pi-codex-appearance:summary";
 
 /** Extract image-block count from a tool result WITHOUT copying payloads. */
 function countImageBlocks(result: unknown): number {
@@ -163,24 +159,25 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   let quotaTimer: ReturnType<typeof setInterval> | undefined;
   let lastQuotaRefreshAt = 0;
 
-  // Chrome install state. `generation` invalidates late async installs:
-  // a preload resolving after shutdown/new-session must not touch the new UI.
-  const chrome = {
-    generation: 0,
-    editorFactory: undefined as object | undefined,
-    editorInstalled: false,
-    surfaceApplied: false,
-    prefixApplied: false,
-    footerInstalled: false,
-    headerInstalled: false,
-    metaInstalled: false,
-    widgetInstalled: false,
-    widgetFactory: undefined as unknown,
-    workingComponent: undefined as WorkingComponent | undefined,
-    nativeLoaderHidden: false,
-    fallbackMessage: false,
-    tui: undefined as { requestRender?: () => void } | undefined,
-  };
+  // Chrome install state + lifecycle (src/chrome/install.ts). `chrome.state`
+  // is read by diagnostics and events; every chrome mutation goes through it.
+  const chrome = createChromeLifecycle({
+    config,
+    hostData,
+    colorLevel: session.colorLevel,
+    editorHost: bindings.editorHost,
+    surface: bindings.surface,
+    appearanceVersion: bindings.appearanceVersion,
+    piVersion: bindings.piVersion,
+    // snapshots is built after metrics (which needs chrome.state), so the
+    // lifecycle reads it lazily — it only installs after session_start.
+    getSnapshots: () => snapshots,
+    requestRender,
+    captureTui,
+    selectionCopyHook: () => (config.selectionCopy.ctrlC ? selectionCopy?.editorHook() : undefined),
+    isInteractionActive: () => metrics.active,
+  });
+
   const selectionCopy: SelectionCopySystem | undefined = bindings.selectionCopyHost && config.enabled && config.selectionCopy.enabled
     ? createSelectionCopySystem(bindings.selectionCopyHost, undefined)
     : undefined;
@@ -202,27 +199,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // of an emoji font that paints over the next character (see
   // glyph-presentation.ts). Installed from captureTui with the same retry logic.
   const glyphPresentation = config.enabled ? createGlyphPresentation({ enabled: config.glyphs.textPresentation, include: config.glyphs.include }) : undefined;
-  type ChromeMods = typeof import("./chrome/editor.ts") & typeof import("./chrome/footer.ts") & typeof import("./chrome/header.ts") & typeof import("./chrome/working.ts") & typeof import("./chrome/composer-metadata.ts");
-  let chromeMods: Promise<ChromeMods | undefined> | undefined;
-  const preloadChrome = (): Promise<ChromeMods | undefined> => {
-    chromeMods ??= Promise.all([
-      import("./chrome/editor.ts"),
-      import("./chrome/footer.ts"),
-      import("./chrome/header.ts"),
-      import("./chrome/working.ts"),
-      import("./chrome/composer-metadata.ts"),
-    ]).then(([editor, footer, header, working, meta]) => ({ ...editor, ...footer, ...header, ...working, ...meta }))
-      .catch(() => undefined);
-    return chromeMods;
-  };
-  // Start the preload immediately so session_start rarely waits.
-  void preloadChrome();
-
-  const requestRender = (): void => {
+  function requestRender(): void {
     try {
-      chrome.tui?.requestRender?.();
+      chrome.state.tui?.requestRender?.();
     } catch { /* render happens on the next host cycle */ }
-  };
+  }
 
   // Session change counts for the footer: display-only git reads on a 2s poll
   // plus activity-driven refreshes (agent ticks, tool work), armed only while a
@@ -236,18 +217,18 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // installs retry on every capture and agent activity — the captured
   // renderer may still be the main screen at first (owner-symbol idempotent).
   let serializerHost: unknown = undefined;
-  const captureTui = (tui: unknown): void => {
+  function captureTui(tui: unknown): void {
     if (!tui || typeof tui !== "object") return;
-    if (!chrome.tui) {
+    if (!chrome.state.tui) {
       const rr = (tui as { requestRender?: unknown }).requestRender;
-      if (typeof rr === "function") chrome.tui = tui as { requestRender?: () => void };
+      if (typeof rr === "function") chrome.state.tui = tui as { requestRender?: () => void };
     }
     serializerHost ??= tui;
     if (selectionCopy) selectionCopy.installOnTui(serializerHost);
     fullscreenMargin?.installOnTui(tui);
     glyphPresentation?.installOnTui(tui);
     historyWindow?.installOnTui(tui);
-  };
+  }
 
   const metrics = new UiMetrics(
     { now: () => performance.now(), wall: () => Date.now() },
@@ -258,13 +239,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         // agent works, so an edit lands in the footer in ~debounce time
         // instead of waiting for the next poll.
         gitChanges.touch();
-        if (chrome.widgetInstalled) {
+        if (chrome.state.widgetInstalled) {
           // The widget component reads the snapshot at render; a 1s tick just
           // asks the host for a frame. No per-token reinstalls.
           requestRender();
           return;
         }
-        if (chrome.fallbackMessage && config.working.elapsed) {
+        if (chrome.state.fallbackMessage && config.working.elapsed) {
           const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
           const label = snapshot.phase === "writing" ? "Writing" : snapshot.phase === "waiting-for-input" ? "Waiting for input" : "Working";
           ui.setWorkingMessage?.(`${label} (${formatDuration(snapshot.elapsedMs)})`);
@@ -275,8 +256,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         gitChanges.touch();
         // Hide the active widget and stop its animation timer — idle leaves
         // zero timers.
-        chrome.workingComponent?.stopAnimation();
-        setWidgetVisible(false);
+        chrome.state.workingComponent?.stopAnimation();
+        chrome.setWidgetVisible(false);
         const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
         ui.setWorkingMessage?.();
         if (!config.summary.enabled) return;
@@ -337,36 +318,23 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   };
 
-  /** Show/hide the above-editor Working widget (undefined = hide). */
-  function setWidgetVisible(visible: boolean): void {
-    const ui = hostData.ui as { setWidget?: (key: string, content: unknown, options?: unknown) => void };
-    if (typeof ui.setWidget !== "function") return;
-    try {
-      if (visible && chrome.widgetInstalled && chrome.widgetFactory) {
-        ui.setWidget(WORKING_WIDGET_KEY, chrome.widgetFactory, { placement: "aboveEditor" });
-      } else if (!visible) {
-        ui.setWidget(WORKING_WIDGET_KEY, undefined);
-      }
-    } catch { /* widget slot is best-effort */ }
-  }
-
   pi.on("session_start", (_event, ctx) => {
     const full = ctx as unknown as HostContextLike & { hasUI?: boolean; ui?: Record<string, unknown> };
-    chrome.generation += 1;
+    chrome.invalidate();
     hostData.bind(full);
     ledger.rebuild(hostData.getSessionEntries());
     outcome.reset();
     quotaStore?.reset();
     lastQuotaRefreshAt = 0;
     // One capability snapshot per session, from the same live ctx.ui that
-    // installChrome captures below.
+    // chrome.install captures below.
     const available = hostData.available;
     enabled = hostData.isTui || hostData.hasUI;
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && config.enabled !== false;
     if (chromeEnabled) {
-      void installChrome(available, chrome.generation);
+      void chrome.install(available, chrome.state.generation);
       startQuotaTimer();
       maybeRefreshQuota(true);
       gitChanges.start();
@@ -408,169 +376,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   });
 
-  /** Tone painter for footer/metadata text (the theme may be an unbound
-   * proxy early on — degrade to plain text instead of crashing). */
-  const makeTonePainter = (theme: { fg?: (key: string, text: string) => string } | undefined, colorLevel: ColorLevel) =>
-    (text: string, tone: SegmentTone): string => {
-      if (tone === "normal" || !text) return text;
-      if (tone === "add" || tone === "del") {
-        // Same green/red as the diff renderer — Codex has no theme key for them.
-        const fg = diffSignFg(tone === "add" ? "add" : "remove", colorLevel);
-        return fg ? `${fg}${text}\x1b[39m` : text;
-      }
-      const key = tone === "warning" ? "warning" : tone;
-      try {
-        return typeof theme?.fg === "function" ? theme.fg(key as never, text) : text;
-      } catch {
-        return text;
-      }
-    };
-
-  /** Install the Codex-style chrome through PUBLIC host APIs only. Preloaded
-   * modules install synchronously when ready; a preload resolving after the
-   * generation changed (shutdown/new session) is dropped. */
-  async function installChrome(available: UiAvailable, generation: number): Promise<void> {
-    const ui = hostData.ui as Partial<{
-      setEditorComponent: (factory: unknown) => void;
-      getEditorComponent: () => unknown;
-      setFooter: (factory: unknown) => void;
-      setHeader: (factory: unknown) => void;
-      setWidget: (key: string, content: unknown, options?: unknown) => void;
-      setWorkingVisible: (visible: boolean) => void;
-      setWorkingIndicator: (options?: unknown) => void;
-    }>;
-    const mods = await preloadChrome();
-    if (!mods || generation !== chrome.generation) return;
-
-    // Editor factory: Codex surface composer. The gray surface (when the
-    // terminal can carry it and surface ops were injected) replaces the
-    // accent borders; embedWorkingStatus is OFF — the Working line lives in
-    // the above-editor widget.
-    if (available.setEditorComponent && !ui.getEditorComponent?.() && bindings.editorHost?.CustomEditor) {
-      try {
-        const surface = config.composer.surface ? bindings.surface : undefined;
-        const factory = mods.makeCodexEditorFactory({
-          host: bindings.editorHost as never,
-          paddingX: 2,
-          embedWorkingStatus: false,
-          surface,
-          promptPrefix: config.composer.promptPrefix,
-          placeholder: "Ask anything...",
-          selectionCopy: config.selectionCopy.ctrlC ? selectionCopy?.editorHook() : undefined,
-          // The host auto-triggers "/" only at line start; without this the
-          // second skill trigger (`/skill:a /`) never queries the provider.
-          skillTrigger: true,
-        });
-        chrome.editorFactory = factory;
-        chrome.surfaceApplied = surface !== undefined;
-        chrome.prefixApplied = surface !== undefined && config.composer.promptPrefix;
-        ui.setEditorComponent?.(factory as never);
-        chrome.editorInstalled = true;
-      } catch { /* editor stays native */ }
-    }
-
-    // Composer metadata: same-surface belowEditor widget (model/effort/
-    // provider + context). Only when the editor surface is active, so the
-    // metadata never floats on a bare background.
-    if (available.setWidget && config.composer.metadata && config.composer.surface && bindings.surface) {
-      try {
-        ui.setWidget?.(COMPOSER_META_WIDGET_KEY, (tui: unknown) => {
-          captureTui(tui);
-          const surface = bindings.surface!;
-          return mods.createComposerMetaComponent({
-            getSnapshot: snapshots.getComposerMetaSnapshot,
-            surface,
-            paint: (text, tone) => (tone === "normal" ? text : surface.paintGlyph(text, tone === "accent" ? "accent" : "dim")),
-          });
-        }, { placement: "belowEditor" });
-        chrome.metaInstalled = true;
-      } catch { /* metadata stays off; the footer still renders */ }
-    }
-
-    // Footer: compact product status (cwd/branch · session I/O · cache ·
-    // quota · optional R/W + cost).
-    if (available.setFooter && config.footer.enabled) {
-      try {
-        ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
-          captureTui(tui);
-          return mods.createFooterComponent(
-            { getSnapshot: snapshots.getFooterSnapshot, requestRender, show: snapshots.footerShow() },
-            footerData as never,
-            makeTonePainter(theme, session.colorLevel),
-          );
-        });
-        chrome.footerInstalled = true;
-      } catch { /* footer stays native */ }
-    }
-
-    // Header: real identity line with real versions.
-    if (available.setHeader) {
-      try {
-        ui.setHeader?.((_tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) =>
-          mods.createHeaderComponent(
-            {
-              appearanceVersion: bindings.appearanceVersion ?? "unknown",
-              piVersion: bindings.piVersion ?? "unknown",
-              getModel: () => hostData.getModel(),
-              getCwd: () => hostData.getCwd(),
-            },
-            theme,
-          ));
-        chrome.headerInstalled = true;
-      } catch { /* header stays native */ }
-    }
-
-    // Working: the standalone above-editor widget with the Codex rhythm.
-    // The native loader row is hidden ONLY after the widget installed; without
-    // setWidget the old message-based fallback stays (never two Working rows).
-    if (available.setWidget) {
-      try {
-        const factory = (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
-          captureTui(tui);
-          const paint = (text: string, tone: "accent" | "dim" | "normal"): string => {
-            if (!text || tone === "normal") return text;
-            try {
-              return typeof theme?.fg === "function" ? theme.fg(tone as never, text) : text;
-            } catch {
-              return text;
-            }
-          };
-          const component = mods.createWorkingComponent({
-            getSnapshot: snapshots.getWorkingSnapshot,
-            getShow: snapshots.workingShow,
-            getAnimation: snapshots.workingAnimation,
-            requestRender,
-            colorKind: session.colorLevel.kind,
-            paint,
-          });
-          chrome.workingComponent = component;
-          return component;
-        };
-        chrome.widgetFactory = factory;
-        chrome.widgetInstalled = true;
-        // agent_start may have fired while the preload resolved — if an
-        // interaction is already active, show the widget immediately.
-        setWidgetVisible(metrics.active);
-        ui.setWorkingVisible?.(false);
-        chrome.nativeLoaderHidden = true;
-      } catch {
-        chrome.widgetInstalled = false;
-      }
-    }
-    if (!chrome.widgetInstalled && available.setWorkingIndicator) {
-      try {
-        ui.setWorkingIndicator?.({ frames: ["●"], intervalMs: 1000 });
-        chrome.fallbackMessage = true;
-      } catch { /* native spinner keeps its default */ }
-    }
-  }
-
   registerDiagnosticsCommand({
     api: bindings.api,
     appearanceVersion: bindings.appearanceVersion,
     piVersion: bindings.piVersion,
     getConfig: () => config,
-    chrome,
+    chrome: chrome.state,
     hostData,
     metrics,
     outcome,
@@ -616,7 +427,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       } catch { /* status slot is best-effort */ }
     }
     metrics.agentStart();
-    setWidgetVisible(true);
+    chrome.setWidgetVisible(true);
   });
   pi.on("agent_end", () => {
     if (!chromeEnabled) return;
@@ -785,7 +596,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   pi.on("session_shutdown", () => {
     enabled = false;
     chromeEnabled = false;
-    chrome.generation += 1;
+    chrome.invalidate();
     handle?.dispose();
     handle = undefined;
     decorations?.dispose();
@@ -794,56 +605,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     fullscreenMargin?.dispose();
     // Chrome restore: only OUR factories are removed (identity comparison);
     // a successor extension's editor/footer/header is left untouched.
-    const ui = hostData.ui as Partial<{
-      setEditorComponent: (factory: unknown) => void;
-      getEditorComponent: () => unknown;
-      setFooter: (factory: unknown) => void;
-      setHeader: (factory: unknown) => void;
-      setWidget: (key: string, content: unknown, options?: unknown) => void;
-      setWorkingVisible: (visible: boolean) => void;
-      setWorkingMessage: (message?: string) => void;
-      setStatus: (key: string, text: string | undefined) => void;
-    }>;
-    try {
-      if (chrome.editorFactory && ui.getEditorComponent?.() === chrome.editorFactory) {
-        ui.setEditorComponent?.(undefined);
-      }
-    } catch { /* keep current editor */ }
-    chrome.editorFactory = undefined;
-    chrome.editorInstalled = false;
-    chrome.surfaceApplied = false;
-    chrome.prefixApplied = false;
-    try {
-      if (chrome.footerInstalled) ui.setFooter?.(undefined);
-    } catch { /* keep current footer */ }
-    chrome.footerInstalled = false;
-    try {
-      if (chrome.headerInstalled) ui.setHeader?.(undefined);
-    } catch { /* keep current header */ }
-    chrome.headerInstalled = false;
-    try {
-      if (chrome.metaInstalled) ui.setWidget?.(COMPOSER_META_WIDGET_KEY, undefined);
-    } catch { /* keep widget slot */ }
-    chrome.metaInstalled = false;
-    try {
-      if (chrome.widgetInstalled) ui.setWidget?.(WORKING_WIDGET_KEY, undefined);
-    } catch { /* keep widget slot */ }
-    chrome.widgetInstalled = false;
-    chrome.widgetFactory = undefined;
-    chrome.workingComponent?.stopAnimation();
-    chrome.workingComponent = undefined;
-    if (chrome.nativeLoaderHidden) {
-      try {
-        ui.setWorkingVisible?.(true);
-      } catch { /* native loader state is the host's */ }
-      chrome.nativeLoaderHidden = false;
-    }
-    chrome.fallbackMessage = false;
-    try {
-      ui.setWorkingMessage?.();
-      ui.setStatus?.(SUMMARY_STATUS_KEY, undefined);
-    } catch { /* status slot is best-effort */ }
-    chrome.tui = undefined;
+    chrome.restore();
     stopQuotaTimer();
     quotaStore?.reset();
     lastQuotaRefreshAt = 0;
