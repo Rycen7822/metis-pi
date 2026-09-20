@@ -137,6 +137,4 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
   };
 
   registerCodexTodoCommands(pi, { system, notify, showPanel });
-
-  void changedHooks;
 }
