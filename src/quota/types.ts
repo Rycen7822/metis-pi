@@ -30,12 +30,10 @@ export interface CodexQuotaSnapshot {
 /** Bounded error classes — diagnostics show the CLASS, never the raw body. */
 export type QuotaErrorClass =
   | "codex-missing"
-  | "spawn-failed"
   | "startup-timeout"
   | "rpc-timeout"
   | "rpc-error"
   | "early-exit"
-  | "malformed"
   | "no-data";
 
 export interface QuotaState {
