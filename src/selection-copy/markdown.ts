@@ -22,7 +22,7 @@ import {
   type CopyRow,
 } from "./model.ts";
 import { stripAnsi, wrapWithProvenance } from "./wrap.ts";
-import type { AdapterHostFns } from "./shared.ts";
+import type { AdapterHostFns } from "./serialize.ts";
 import type { CopyLexer, MarkdownToken } from "./parser.ts";
 
 export interface MarkdownInstance {

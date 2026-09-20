@@ -48,6 +48,11 @@ export interface SerializeHostFns {
   stripTerminalSequences(line: string): string;
 }
 
+/** Host-primitive contract for the selection-copy adapters that also strip ANSI. */
+export interface AdapterHostFns extends SerializeHostFns {
+  stripAnsi(line: string): string;
+}
+
 export interface SelectionSpec {
   scrollView: unknown;
   startRow: number;

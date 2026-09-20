@@ -12,7 +12,7 @@ import {
 } from "./markdown.ts";
 import { installInstanceSerializer, serializerIsLive, tryConsumeCopyKey, type AltScreenLike, type CopyTelemetry, type CopyControllerDeps } from "./controller.ts";
 import { cacheStats } from "./model.ts";
-import type { AdapterHostFns } from "./shared.ts";
+import type { AdapterHostFns } from "./serialize.ts";
 import { stripAnsi } from "./wrap.ts";
 import { createCopyLexer } from "./parser.ts";
 
