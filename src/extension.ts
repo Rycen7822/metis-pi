@@ -7,9 +7,8 @@ import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration } from "./ui-metrics.ts";
 import { OutputSpeedTracker } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
-import { probeHost, type HostFacts } from "./host-compat.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
-import { HostData, type HostContextLike } from "./host-data.ts";
+import { HostData, type HostContextLike, type UiAvailable } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker } from "./git-changes.ts";
@@ -359,13 +358,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     outcome.reset();
     quotaStore?.reset();
     lastQuotaRefreshAt = 0;
-    const facts: HostFacts = probeHost({ ui: hostData.ui as never, mode: hostData.mode, hasUI: hostData.hasUI });
-    enabled = facts.isTui || full.hasUI === true;
+    // One capability snapshot per session, from the same live ctx.ui that
+    // installChrome captures below.
+    const available = hostData.available;
+    enabled = hostData.isTui || hostData.hasUI;
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
-    chromeEnabled = facts.isTui && config.enabled !== false;
+    chromeEnabled = hostData.isTui && config.enabled !== false;
     if (chromeEnabled) {
-      void installChrome(facts, chrome.generation);
+      void installChrome(available, chrome.generation);
       startQuotaTimer();
       maybeRefreshQuota(true);
       gitChanges.start();
@@ -428,7 +429,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   /** Install the Codex-style chrome through PUBLIC host APIs only. Preloaded
    * modules install synchronously when ready; a preload resolving after the
    * generation changed (shutdown/new session) is dropped. */
-  async function installChrome(facts: HostFacts, generation: number): Promise<void> {
+  async function installChrome(available: UiAvailable, generation: number): Promise<void> {
     const ui = hostData.ui as Partial<{
       setEditorComponent: (factory: unknown) => void;
       getEditorComponent: () => unknown;
@@ -445,7 +446,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // terminal can carry it and surface ops were injected) replaces the
     // accent borders; embedWorkingStatus is OFF — the Working line lives in
     // the above-editor widget.
-    if (facts.available.setEditorComponent && !ui.getEditorComponent?.() && bindings.editorHost?.CustomEditor) {
+    if (available.setEditorComponent && !ui.getEditorComponent?.() && bindings.editorHost?.CustomEditor) {
       try {
         const surface = config.composer.surface ? bindings.surface : undefined;
         const factory = mods.makeCodexEditorFactory({
@@ -471,7 +472,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // Composer metadata: same-surface belowEditor widget (model/effort/
     // provider + context). Only when the editor surface is active, so the
     // metadata never floats on a bare background.
-    if (facts.available.setWidget && config.composer.metadata && config.composer.surface && bindings.surface) {
+    if (available.setWidget && config.composer.metadata && config.composer.surface && bindings.surface) {
       try {
         ui.setWidget?.(COMPOSER_META_WIDGET_KEY, (tui: unknown) => {
           captureTui(tui);
@@ -488,7 +489,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
     // Footer: compact product status (cwd/branch · session I/O · cache ·
     // quota · optional R/W + cost).
-    if (facts.available.setFooter && config.footer.enabled) {
+    if (available.setFooter && config.footer.enabled) {
       try {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
           captureTui(tui);
@@ -503,7 +504,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
 
     // Header: real identity line with real versions.
-    if (facts.available.setHeader) {
+    if (available.setHeader) {
       try {
         ui.setHeader?.((_tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) =>
           mods.createHeaderComponent(
@@ -522,7 +523,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // Working: the standalone above-editor widget with the Codex rhythm.
     // The native loader row is hidden ONLY after the widget installed; without
     // setWidget the old message-based fallback stays (never two Working rows).
-    if (facts.available.setWidget) {
+    if (available.setWidget) {
       try {
         const factory = (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
           captureTui(tui);
@@ -556,7 +557,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         chrome.widgetInstalled = false;
       }
     }
-    if (!chrome.widgetInstalled && facts.available.setWorkingIndicator) {
+    if (!chrome.widgetInstalled && available.setWorkingIndicator) {
       try {
         ui.setWorkingIndicator?.({ frames: ["●"], intervalMs: 1000 });
         chrome.fallbackMessage = true;

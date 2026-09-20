@@ -39,6 +39,27 @@ export interface HostContextLike {
   ui?: Record<string, unknown>;
 }
 
+/** The public UI surface we rely on (verified against Pi v0.85.1 types). */
+export interface UiSurface {
+  setEditorComponent: (factory: unknown) => void;
+  getEditorComponent: () => unknown;
+  setFooter: (factory: unknown) => void;
+  setHeader: (factory: unknown) => void;
+  setWidget: (key: string, content: unknown, options?: unknown) => void;
+  setWorkingMessage: (message?: string) => void;
+  setWorkingVisible: (visible: boolean) => void;
+  setWorkingIndicator: (options?: unknown) => void;
+  setStatus: (key: string, text: string | undefined) => void;
+}
+
+/** Which members of UiSurface the LIVE ctx.ui actually provides. */
+export type UiAvailable = Partial<Record<keyof UiSurface, boolean>>;
+
+const UI_SURFACE_METHODS: ReadonlyArray<keyof UiSurface> = [
+  "setEditorComponent", "getEditorComponent", "setFooter", "setHeader",
+  "setWidget", "setWorkingMessage", "setWorkingVisible", "setWorkingIndicator", "setStatus",
+];
+
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -110,6 +131,24 @@ export class HostData {
 
   get hasUI(): boolean {
     return this.#ctx?.hasUI === true;
+  }
+
+  /** True only for the real TUI process; print/json/rpc never get chrome. */
+  get isTui(): boolean {
+    return this.mode === "tui";
+  }
+
+  /**
+   * Probe the LIVE ctx.ui once per call and report which methods exist. The
+   * caller snapshots this at session_start and passes it down, so a mid-install
+   * re-bind cannot make the availability answer disagree with the ui handle
+   * that was captured next to it. Reading a method off ctx.ui cannot throw.
+   */
+  get available(): UiAvailable {
+    const ui = this.ui as Partial<UiSurface>;
+    const available: UiAvailable = {};
+    for (const method of UI_SURFACE_METHODS) available[method] = typeof ui[method] === "function";
+    return available;
   }
 
   /** Read the model through the LIVE context (never a session_start copy). */
