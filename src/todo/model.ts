@@ -159,6 +159,18 @@ export const canTransition = (from: TaskStatus, to: TaskStatus): boolean =>
 export const transitionError = (id: number, from: TaskStatus, to: TaskStatus): string =>
   `illegal transition ${formatTaskId(id)}: ${from} → ${to} (allowed: ${VALID_TRANSITIONS[from].join(", ") || "none — use reopen to reset"})`;
 
+/** Status glyphs shared by the panel (TUI columns) and `todos` (plain text). */
+export const TASK_GLYPHS = { pending: "○", inProgress: "◐", complete: "✓", skipped: "✗", blocked: "⚠︎" } as const;
+
+/** The one glyph rule: a blocked task outranks its stored status. */
+export function taskGlyph(task: Task, blocked: boolean): string {
+  if (blocked) return TASK_GLYPHS.blocked;
+  if (task.status === "complete") return TASK_GLYPHS.complete;
+  if (task.status === "skipped") return TASK_GLYPHS.skipped;
+  if (task.status === "in_progress") return TASK_GLYPHS.inProgress;
+  return TASK_GLYPHS.pending;
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 

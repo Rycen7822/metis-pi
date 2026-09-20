@@ -22,7 +22,7 @@
 // The widget takes no pi-tui dependency: the host hands (tui, theme) to the
 // factory, and the component contract is just { render(width): string[] }.
 
-import { buildTree, flattenTree, isBlocked, taskPaths, type Task, type TodoState } from "./model.ts";
+import { buildTree, flattenTree, isBlocked, taskGlyph, taskPaths, type Task, type TodoState } from "./model.ts";
 import type { CodexTodoSystem } from "./tools.ts";
 
 export const TODO_WIDGET_KEY = "codex-todo";
@@ -48,8 +48,6 @@ interface Row {
   text: string;
   tone: "accent" | "success" | "warning" | "dim" | "normal";
 }
-
-const GLYPHS = { pending: "○", inProgress: "◐", complete: "✓", skipped: "✗", blocked: "⚠︎" } as const;
 
 const truncate = (text: string, width: number): string => {
   if (width <= 0) return "";
@@ -115,7 +113,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     for (const node of visible) {
       const t = node.task;
       const blocked = isBlocked(state, t.id);
-      const glyph = blocked ? GLYPHS.blocked : t.status === "complete" ? GLYPHS.complete : t.status === "skipped" ? GLYPHS.skipped : t.status === "in_progress" ? GLYPHS.inProgress : GLYPHS.pending;
+      const glyph = taskGlyph(t, blocked);
       const indent = "  ".repeat(node.depth - 1);
       const claim = t.claim ? (t.claim.session === session ? " · mine" : ` · ${t.claim.session}`) : "";
       const idPrefix = paths ? `${paths.get(t.id)} ` : "";

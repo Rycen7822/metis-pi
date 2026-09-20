@@ -19,7 +19,7 @@ import { existsSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import {
   addBlockedBy, addTasks, buildTree, claimTask, completeTask, flattenTree,
-  isBlocked, isListFinished, moveTask, nextTaskId, pathOf, releaseTask, resolveTaskRef, taskPaths, type AddItem,
+  isBlocked, isListFinished, moveTask, nextTaskId, pathOf, releaseTask, resolveTaskRef, taskGlyph, taskPaths, type AddItem,
   removeBlockedBy, skipTask, startNewList, transitionTask, updateTitle,
   type ModelResult, type Task, type TodoState,
 } from "./model.ts";
@@ -92,9 +92,6 @@ export interface TodoToolResult {
 
 const text = (s: string): TodoToolResult => ({ content: [{ type: "text", text: s }], details: undefined });
 
-const statusGlyph = (t: Task, blocked: boolean): string =>
-  blocked ? "⚠︎" : t.status === "complete" ? "✓" : t.status === "skipped" ? "✗" : t.status === "in_progress" ? "◐" : "○";
-
 export function renderListText(state: TodoState, sessionId: string): string {
   const lines: string[] = [];
   const flat = flattenTree(buildTree(state));
@@ -106,7 +103,7 @@ export function renderListText(state: TodoState, sessionId: string): string {
     const indent = "  ".repeat(node.depth - 1);
     const claim = t.claim ? (t.claim.session === sessionId ? " [mine]" : ` [${t.claim.session}]`) : "";
     const idPrefix = anyBlockedBy ? `${paths.get(t.id)} ` : "";
-    lines.push(`${indent}${statusGlyph(t, blocked)} ${idPrefix}${t.title}${claim}${t.status === "skipped" && t.skipReason ? ` — ${t.skipReason}` : ""}`);
+    lines.push(`${indent}${taskGlyph(t, blocked)} ${idPrefix}${t.title}${claim}${t.status === "skipped" && t.skipReason ? ` — ${t.skipReason}` : ""}`);
   }
   // Header counts EVERY task (rpiv-todo's Todos (done/total)); parents are
   // visible rows too, even though their work is delegated to children.
