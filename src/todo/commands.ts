@@ -2,7 +2,6 @@
 // to the USER (notify), tools speak to the MODEL. The interactive overlay was
 // removed in 0.17.5 — /todos prints the list as text and restores the panel.
 
-import { type TodoState } from "./model.ts";
 import type { TodoStore } from "./store.ts";
 import { renderListText, type CodexTodoSystem } from "./tools.ts";
 
@@ -60,5 +59,3 @@ export function registerCodexTodoCommands(pi: unknown, deps: CodexTodoCommandsDe
     },
   });
 }
-
-export type { TodoState };
