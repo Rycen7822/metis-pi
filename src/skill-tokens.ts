@@ -1,4 +1,5 @@
-// Shared skill-token parsing for the multi-skill composer.
+// Shared skill-token parsing for the multi-skill composer, plus the shared
+// host-prototype patch guard the two skill entry points rely on.
 //
 // Dependency-free on purpose: src/chrome/editor.ts (the Codex composer, which
 // must never import the host package) needs the exact same token definition as
@@ -53,4 +54,44 @@ export function splitLeadingSkillHeads(text: string): LeadingSkillHeads {
 export function isSkillPrefixOnly(text: string): boolean {
   const { count, rest } = splitLeadingSkillHeads(text);
   return count > 0 && /^\s*$/.test(rest);
+}
+
+/** What happened when a host prototype patch was installed. */
+export type SkillPatchResult = "patched" | "already" | "missing";
+
+/** Any host method we wrap: called with the host component as `this`. */
+type HostMethod = (...args: never[]) => unknown;
+
+/** Prototypes this process patched, and which of their methods. */
+const patchedHosts = new WeakMap<object, Set<string>>();
+
+/**
+ * Patch one method on a host component class (a constructor, not an instance),
+ * exactly once. Returns `missing` for anything without a prototype so a host
+ * refactor degrades instead of throwing, and `already` for a method this
+ * process patched before.
+ *
+ * `wrap` receives the method as it exists now (possibly undefined) and returns
+ * its replacement; returning undefined declines the patch and leaves the host
+ * method untouched.
+ *
+ * The METHOD is part of the guard key, not just the prototype: skill-fold and
+ * skill-label patch two different methods of the SAME host class, so a
+ * prototype-wide guard would silently drop the second patch.
+ */
+export function patchHostPrototype(
+  component: unknown,
+  method: string,
+  wrap: (original: unknown) => HostMethod | undefined,
+): SkillPatchResult {
+  const prototype = (component as { prototype?: Record<string, unknown> } | undefined)?.prototype;
+  if (!prototype || typeof prototype !== "object") return "missing";
+  const done = patchedHosts.get(prototype);
+  if (done?.has(method)) return "already";
+  const replacement = wrap(prototype[method]);
+  if (replacement === undefined) return "missing";
+  prototype[method] = replacement;
+  if (done) done.add(method);
+  else patchedHosts.set(prototype, new Set([method]));
+  return "patched";
 }

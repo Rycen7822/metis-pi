@@ -26,6 +26,8 @@
 // in the dispatcher, so toggling needs no TUI handle: `invalidate()` drops the
 // Box's cached lines and the host repaints.
 
+import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
+
 /** The slice of the host component this patch relies on. */
 export interface SkillFoldComponent {
   expanded: boolean;
@@ -46,12 +48,6 @@ export type SkillFoldMouseResult = { handled: true } | undefined;
 
 type MouseHandler = (this: SkillFoldComponent, event?: SkillFoldMouseEvent) => SkillFoldMouseResult;
 
-/** What happened when the click handler was installed. */
-export type SkillFoldInstall = "patched" | "already" | "missing";
-
-/** Prototypes already carrying the handler (re-install must be a no-op). */
-const patched = new WeakSet<object>();
-
 /** True when the event should toggle rather than select text. */
 const isToggleGesture = (event?: SkillFoldMouseEvent): boolean =>
   event?.button === "left" && event.shift !== true && event.ctrl !== true && event.alt !== true;
@@ -62,32 +58,27 @@ const isToggleGesture = (event?: SkillFoldMouseEvent): boolean =>
  * for anything without a prototype so a host refactor degrades to "no click
  * toggle" instead of throwing.
  */
-export function installSkillFoldClick(component: unknown): SkillFoldInstall {
-  const prototype = (component as { prototype?: Record<string, unknown> } | undefined)?.prototype;
-  if (!prototype || typeof prototype !== "object") return "missing";
-  if (patched.has(prototype)) return "already";
-
-  const original = prototype.handleMouse as MouseHandler | undefined;
-  prototype.handleMouse = function handleMouse(
-    this: SkillFoldComponent,
-    event?: SkillFoldMouseEvent,
-  ): SkillFoldMouseResult {
-    if (event?.type === "press" && isToggleGesture(event)) {
-      // Claim the press so pi-tui remembers this component as the gesture
-      // target and synthesizes `click` on release.
-      return { handled: true };
-    }
-    if (event?.type === "click" && isToggleGesture(event)) {
-      this.setExpanded(!this.expanded);
-      // setExpanded swaps the children; invalidate drops the cached render.
-      this.invalidate?.();
-      return { handled: true };
-    }
-    // Everything else (right/middle press, wheel, move, modified clicks) keeps
-    // Box's own child forwarding — the behavior this class had before.
-    return original ? original.call(this, event) : undefined;
-  };
-
-  patched.add(prototype);
-  return "patched";
+export function installSkillFoldClick(component: unknown): SkillPatchResult {
+  return patchHostPrototype(component, "handleMouse", (original) => {
+    const fallback = original as MouseHandler | undefined;
+    return function handleMouse(
+      this: SkillFoldComponent,
+      event?: SkillFoldMouseEvent,
+    ): SkillFoldMouseResult {
+      if (event?.type === "press" && isToggleGesture(event)) {
+        // Claim the press so pi-tui remembers this component as the gesture
+        // target and synthesizes `click` on release.
+        return { handled: true };
+      }
+      if (event?.type === "click" && isToggleGesture(event)) {
+        this.setExpanded(!this.expanded);
+        // setExpanded swaps the children; invalidate drops the cached render.
+        this.invalidate?.();
+        return { handled: true };
+      }
+      // Everything else (right/middle press, wheel, move, modified clicks) keeps
+      // Box's own child forwarding — the behavior this class had before.
+      return fallback ? fallback.call(this, event) : undefined;
+    };
+  });
 }

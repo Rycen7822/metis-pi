@@ -20,6 +20,8 @@
 // — no token in the label, name not found, a child without a readable and
 // writable text — leaves the host's rendering untouched.
 
+import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
+
 const NESTED_SKILL = /<skill\s+name="([^"]+)"/g;
 const LABEL_TOKEN = "[skill]";
 
@@ -34,12 +36,6 @@ interface LabelChild {
   text?: unknown;
   setText?: (text: string) => void;
 }
-
-/** What happened when the label patch was installed. */
-export type SkillLabelInstall = "patched" | "already" | "missing";
-
-/** Prototypes already carrying the wrapper (re-install must be a no-op). */
-const patched = new WeakSet<object>();
 
 /** The block's own name plus every nested skill name, in invocation order. */
 export function skillNames(block: SkillLabelComponent["skillBlock"]): string[] {
@@ -75,29 +71,23 @@ export function joinSkillLabel(text: string, name: string, names: readonly strin
  * `updateDisplay`), so a host refactor degrades to "one name" instead of
  * throwing.
  */
-export function installSkillLabelNames(component: unknown): SkillLabelInstall {
-  const prototype = (component as { prototype?: Record<string, unknown> } | undefined)?.prototype;
-  if (!prototype || typeof prototype !== "object") return "missing";
-  if (patched.has(prototype)) return "already";
-
-  const original = prototype.updateDisplay as ((this: SkillLabelComponent) => void) | undefined;
-  if (typeof original !== "function") return "missing";
-
-  prototype.updateDisplay = function updateDisplay(this: SkillLabelComponent): void {
-    original.call(this);
-    const name = typeof this.skillBlock?.name === "string" ? this.skillBlock.name : "";
-    const names = skillNames(this.skillBlock);
-    if (names.length < 2) return;
-    // Rewrite what the host just built: the collapsed line, and (when expanded)
-    // the `**name**` header of the markdown body. Both expose text/setText.
-    for (const child of Array.isArray(this.children) ? this.children : []) {
-      const label = child as LabelChild;
-      if (typeof label?.text !== "string" || typeof label.setText !== "function") continue;
-      const rewritten = joinSkillLabel(label.text, name, names);
-      if (rewritten !== label.text) label.setText(rewritten);
-    }
-  };
-
-  patched.add(prototype);
-  return "patched";
+export function installSkillLabelNames(component: unknown): SkillPatchResult {
+  return patchHostPrototype(component, "updateDisplay", (original) => {
+    if (typeof original !== "function") return undefined;
+    const previous = original as (this: SkillLabelComponent) => void;
+    return function updateDisplay(this: SkillLabelComponent): void {
+      previous.call(this);
+      const name = typeof this.skillBlock?.name === "string" ? this.skillBlock.name : "";
+      const names = skillNames(this.skillBlock);
+      if (names.length < 2) return;
+      // Rewrite what the host just built: the collapsed line, and (when expanded)
+      // the `**name**` header of the markdown body. Both expose text/setText.
+      for (const child of Array.isArray(this.children) ? this.children : []) {
+        const label = child as LabelChild;
+        if (typeof label?.text !== "string" || typeof label.setText !== "function") continue;
+        const rewritten = joinSkillLabel(label.text, name, names);
+        if (rewritten !== label.text) label.setText(rewritten);
+      }
+    };
+  });
 }
