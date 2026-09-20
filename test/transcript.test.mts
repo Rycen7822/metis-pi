@@ -13,7 +13,7 @@ import { TranscriptState, assistantHasVisibleText, assistantHasVisibleThinking, 
 import { installTranscriptDecorations } from "../src/transcript-adapter.ts";
 import { thoughtSummaryText } from "../src/thinking-summary.ts";
 import { makeRenderers } from "../src/renderers.ts";
-import { resolveWriteStage, previewLines, renderWritePreview } from "../src/write-preview.ts";
+import { resolveWriteStage, renderWritePreview } from "../src/write-preview.ts";
 import { renderDiffLines } from "../src/diff.ts";
 import { styleToolOutputLine, reapplyDimAfterResets } from "../src/output-style.ts";
 import { theme, FakeText, bindings } from "./helpers.mjs";
@@ -451,25 +451,6 @@ test("write stage resolution across the host lifecycle", () => {
   assert.equal(resolveWriteStage({ hasResult: true, isError: false }), "succeeded");
   assert.equal(resolveWriteStage({ hasResult: true, isError: true }), "failed-or-aborted");
   assert.equal(resolveWriteStage({ hasResult: true, aborted: true }), "failed-or-aborted");
-});
-
-test("preview lines: rolling tail, incomplete last line, no JSON parsing", () => {
-  const content = "第一行\n第二行\n第三行\n第四行\n第五行\n第六行\n第七行\n第八行\n第九行未完成";
-  const { lines, totalLogicalLines, truncated } = previewLines(content, 8);
-  assert.equal(totalLogicalLines, 9);
-  assert.equal(truncated, true);
-  assert.equal(lines.length, 8);
-  assert.equal(lines[0]!.number, 2, "rolling tail starts at 2");
-  assert.equal(lines.at(-1)!.text, "第九行未完成");
-  // CRLF normalized for display only.
-  const crlf = previewLines("a\r\nb", 8);
-  assert.equal(crlf.lines[0]!.text, "a");
-});
-
-test("lone trailing surrogate is dropped, content unchanged otherwise", () => {
-  assert.equal(previewLines("ok", 8).lines[0]!.text, "ok");
-  const raw = "emoji \u{1F600}";
-  assert.equal(previewLines(raw, 8).lines[0]!.text, raw);
 });
 
 test("renderWritePreview: bounded rows, dim stage label, no success green", () => {

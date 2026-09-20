@@ -57,29 +57,6 @@ export function safePrefix(text: string): string {
   return text;
 }
 
-export interface WritePreviewLine {
-  readonly number: number;
-  readonly text: string;
-  readonly complete: boolean; // false = last line still open (no trailing \n)
-}
-
-/** Build display lines from the raw content prefix (no JSON parsing, no escaping). A final line without a trailing newline is marked incomplete. */
-export function previewLines(contentPrefix: string, maxLines: number): { lines: WritePreviewLine[]; totalLogicalLines: number; truncated: boolean } {
-  const raw = safePrefix(contentPrefix);
-  if (!raw) return { lines: [], totalLogicalLines: 0, truncated: false };
-  const normalized = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
-  const all = normalized.split("\n").map((line) => line.replace(/\r$/, ""));
-  const totalLogicalLines = all.length;
-  const truncated = all.length > maxLines;
-  const shown = truncated ? all.slice(-maxLines) : all;
-  const firstNumber = truncated ? totalLogicalLines - shown.length + 1 : 1;
-  return {
-    lines: shown.map((text, i) => ({ number: firstNumber + i, text, complete: !(truncated && i === shown.length - 1) || raw.endsWith("\n") })),
-    totalLogicalLines,
-    truncated,
-  };
-}
-
 /**
  * Live preview: stage line + PHYSICAL-ROW tail budget (terminal screen rows,
  * not logical lines). Lines wrap FIRST (gutter + line-number column deducted
