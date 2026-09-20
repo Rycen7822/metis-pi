@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import {
   addTasks, addBlockedBy, buildTree, canTransition, claimTask, completeTask,
   completionBlock, createState, diffTask, flattenTree, formatTaskId,
-  isBlocked, MAX_DEPTH, MAX_TASKS, moveTask, nextTaskId, progressOf,
-  releaseTask, removeBlockedBy, sanitizeText, skipTask, transitionTask,
-  updateTitle, VALID_TRANSITIONS, type TodoState,
+  isBlocked, isListFinished, MAX_DEPTH, MAX_TASKS, moveTask, nextTaskId, progressOf,
+  releaseTask, removeBlockedBy, sanitizeText, skipTask, startNewList, transitionTask,
+  updateTitle, VALID_TRANSITIONS, type ModelResult, type Task, type TodoState,
 } from "../src/todo/model.ts";
 
 const T0 = 1_000;
@@ -200,4 +200,44 @@ test("diffTask powers the no-change tool responses", () => {
 
 test("formatTaskId renders #N", () => {
   assert.equal(formatTaskId(12), "#12");
+});
+
+test("a finished list is history: isListFinished and startNewList", () => {
+  // transitionTask/skipTask return the patched task (and skipTask also returns a
+  // cascaded state); the store is what folds them back into a TodoState.
+  const close = (state: TodoState, id: number): TodoState => {
+    const started = transitionTask(state, id, "in_progress", T0);
+    assert.ok(started.ok);
+    const mid = { ...state, tasks: state.tasks.map((t) => (t.id === id ? started.value : t)) };
+    const done = transitionTask(mid, id, "complete", T0);
+    assert.ok(done.ok);
+    return { ...mid, tasks: mid.tasks.map((t) => (t.id === id ? done.value : t)) };
+  };
+  const skip = (state: TodoState, id: number): TodoState => {
+    const r = skipTask(state, id, "not needed", T0);
+    assert.ok(r.ok);
+    return r.state;
+  };
+
+  assert.equal(isListFinished(createState()), false, "an empty list is not a finished one");
+  const { state } = seed();
+  assert.equal(isListFinished(state), false, "open tasks keep the list live");
+
+  // Close the tree child-first (A.1, A.2, A) and leave B open.
+  let s = state;
+  for (const id of [3, 4, 1]) s = close(s, id);
+  assert.equal(isListFinished(s), false, "one live task still holds the list open");
+  s = skip(s, 2);
+  assert.equal(isListFinished(s), true, "every task complete or skipped");
+
+  // A new list drops the tasks and keeps the id sequence monotonic, so a stale
+  // "complete #2" from the model fails loudly instead of hitting a new task.
+  const fresh = startNewList(s);
+  assert.deepEqual(fresh.tasks, []);
+  assert.equal(fresh.version, s.version);
+  const added = addTasks(fresh, [{ title: "next batch" }], T0);
+  assert.ok(added.ok);
+  assert.equal(added.value[0].id, s.nextId, "ids continue where the old list stopped");
+  assert.equal(added.state.nextId, s.nextId + 1);
+  assert.equal(s.tasks.length, 4, "the previous list is not mutated");
 });

@@ -2,7 +2,7 @@
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
-版本：**0.19.2**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
+版本：**0.19.4**。面向用户当前使用的 classic Pi **0.85.1** 接口。0.16.0 起改为 **agent-stuff 式多扩展布局**：manifest 导出 `./extensions/*.ts`，`appearance.ts`（本主题，即原 index.ts）、`goal.ts`（长任务 `/goal` 模式，见 [/goal 长任务模式](#goal-长任务模式0100)）、`todo.ts`（**codex-todo 任务子插件**，见下方专节）是三个独立入口；0.17.0 起 manifest 再加一项 `./vendor/pi-codex-conversion/dist/index.js`——**Codex 转换层**（见 [vendored codex-conversion](#vendored-codex-conversion0170)）由本仓库自带并维护。四者共享一个 repo 但加载互不影响；其余部分仍是独立负责主界面外观的 Codex 风格转录界面（0.8.0 起，0.7.x 的 Zentui 协同方案已随 0.7.0 发布并废弃）。0.8.5 起输入区收敛为三块：
 
 - **灰色 composer surface**（仍继承宿主 `CustomEditor`，编辑状态机零改动）：去掉整条 accent 边框，改为低对比 `#1f1f1f` 背景面（truecolor；ansi256 用最近灰阶；ansi16/NO_COLOR 无背景、保留布局）；首行两个 padding 格借用为 `> ` 提示符（格数不变，光标/鼠标/补全几何零偏移，`getText()` 不含该字符），空输入显示暗色 `Ask anything...` 占位；`↑ N more`/`↓ N more` 滚动指示保留。
 - **Surface 内 metadata 行**（公开 belowEditor widget，与编辑区同一底色）：`模型 · 推理等级 · provider    ctx 已用/容量 · 占用%`，全部来自 Pi 真实公开接口（`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`），切换模型/等级即时更新。
@@ -109,9 +109,18 @@ pi install /绝对路径/pi-codex-appearance
 设计融合 rpiv-todo（面板工程）、pi-goal-x（长任务推进）、pi-agent-extensions todos（持久化与认领）：
 
 - **常驻面板**：`Todos 2/5 done` 标题 + 树形行（`○ ◐ ✓ ✗ ⚠︎` 状态符，有 blockedBy 时才显示 `#id`），
-  完成后保留到下一 turn 再收起；全部完成即消失。**"刚完成"只对本会话亲眼看到完成的那些任务成立**（0.19.1）：
+  完成后保留到**下一个用户 prompt**再收起；全部完成即消失。**"刚完成"只对本会话亲眼看到完成的那些任务成立**（0.19.1）：
   store 按 workspace 落盘、重启后 turn 计数从 0 重来，若不看完成时刻，上次会话已做完的列表每次启动都会重新弹出
   （0.19.1 修掉的就是这个：重启后已完成的面板不再出现，`/todos` 仍能打印文字列表）。
+  **0.19.4 起收起的触发信号是真正的用户 prompt**（宿主 `input` 事件）：此前挂的是 `ui_prompt_start`——那是宿主的
+  **阻塞式对话框**事件（`ctx.ui.select/confirm/input`），聊天输入根本不触发，于是 turn 序数永远是 0，✓ 行永不收起、
+  旧列表一直挂在面板上（用户报告"todos 会显示历史 todos"）；现在**任何**用户输入（新 prompt、agent 干活途中打字的
+  steer、排队的 follow-up —— pi 的 `input` 事件）一到就折叠并立刻刷新可见性，全部完成的面板随之消失。
+  宿主 `turn_start` 的粒度是模型往返，会在同一次请求内就折叠，所以不能用它当"用户已经看过"的边界。
+- **列表生命周期（0.19.4）**：**默认新建**——对一个已完成（全部 complete/skipped）的列表再 `add`，会**开一张新列表**
+  （旧任务清空、`#id` 继续递增，绝不把历史任务追加到新工作后面）；只有列表**还有未完成任务**时才追加，
+  也就是"非必要不追加"。id 故意不重置：模型若用陈旧引用 `complete #3`，会得到明确的"not found"，
+  而不是静默改掉新列表里的另一个任务。已完成列表本身就是历史（`gcDays` 会回收），store 只保存**正在做的那张列表**。
 - **鼠标点击展开**：面板默认显示**三行任务**，超出时尾部折叠成 `+N more (a completed, b pending)`
   汇总行（先丢已完成、再截断未完成，保留 pending 优先）。**左键单击面板任意一行**即展开成完整列表
   （汇总行消失、标题变 `▴ · click to collapse`），**再点一次收回三行视图**。展开态写盘，重启保留；

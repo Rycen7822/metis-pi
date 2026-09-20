@@ -87,11 +87,20 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
       // keep the previous store rather than spamming errors
     }
   });
-  // Turn ordinal drives the widget's delayed completed-fold. A new user
-  // prompt advances the world even when no tool ran (pi-goal-x's lesson:
-  // decide advancement by explicit signals, not by reading the transcript).
-  pi.on("ui_prompt_start", () => {
+  // Turn ordinal drives the widget's delayed completed-fold (and the panel's
+  // disappearance once a list is fully done). pi's `input` event is the only
+  // correct signal for "the user sent something", and EVERY submission counts —
+  // a prompt, a steer typed while the agent still works, a queued follow-up:
+  //   - `turn_start` fires per model round-trip, so rows would fold inside the
+  //     request that completed them;
+  //   - `ui_prompt_start` is pi's blocking-DIALOG event (ctx.ui.select/confirm/
+  //     input), which chat input never fires — 0.19.4 fixes that wrong hook,
+  //     which left the ordinal at 0 and kept old ✓ rows on screen forever.
+  // The refresh re-evaluates visibility immediately, so rows fold on the next
+  // message rather than on the next tool call.
+  pi.on("input", () => {
     turn += 1;
+    widget.refresh();
   });
 
   const handlers = createTodoToolHandlers(system, () => sessionCwd);
@@ -101,6 +110,7 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
       label: "Todo",
       description: [
         "Task list with subtask nesting, blockedBy dependencies and session claims, persisted to disk.",
+        "Adding to a FINISHED list (every task complete/skipped) starts a new list — the finished tasks are cleared and ids keep counting, so pass only the new work.",
         "Guidance: claim before starting work; complete requires evidence and unfinished subtasks block completion;",
         "completed is one-way (reopen to reset); use addBlockedBy/removeBlockedBy incrementally, never resend whole lists;",
         "duplicate titles and illegal transitions are rejected with the reason — read the error and adjust instead of retrying.",

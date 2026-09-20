@@ -1,3 +1,60 @@
+# Validation record — 0.19.4 (todo lists do not accumulate history)
+
+Report: the panel kept showing historical todos — a screenshot listed 11 rows, six of them long-finished tasks from an
+earlier batch of work — and the new work had been appended to that old list.
+
+## Findings
+
+`<cwd>/.pi/codex-todos/tasks.json` in the reporting workspace held 11 tasks, all `complete`, and every one had
+`completedAtTurn: 0` — the second clue. Two independent defects:
+
+1. **The turn ordinal never advanced.** The widget folds completed rows on the turn AFTER the one that completed
+   them (`completedAtTurn < turn`), and it was fed by `pi.on("ui_prompt_start")`. That is the host's
+   blocking-DIALOG event (fired for `ctx.ui.select/confirm/input` from extensions), not a chat-input signal, so the
+   ordinal stayed 0 for the whole session and the `✓` rows could never fold. Verified against the installed host
+   bundle: `ui_prompt_start` carries `kind: "select" | "confirm" | "input" | "editor" | "custom"`, while user input
+   is published as the `input` event (`source`, `text`, `images`, `streamingBehavior`). The host's per-model-round
+   `turn_start`/`turnIndex` is the wrong granularity (it advances inside one request, so rows would fold instantly).
+2. **`add` always appended.** New work was merged into the finished list, so the panel grew without bound
+   (11 rows) and the six old `✓` rows stayed on screen. There was no notion of "this list is history".
+
+## Fix
+
+- `extensions/todo.ts` now advances on the host's `input` event — EVERY submission, including a steer typed while the
+  agent still streams and a queued follow-up — then calls `widget.refresh()` so visibility is re-evaluated
+  immediately. The pty run forced that decision: the harness types its next message while the previous run is still
+  streaming, so pi delivered it as a `steer`, and a "prompt-while-idle only" rule made the fold depend on typing
+  speed (a real user does the same thing). The host's `turn_start` is the wrong signal in the other direction — it
+  fires per model round-trip, so rows would fold inside the request that completed them.
+- `src/todo/model.ts` gains `isListFinished(state)` (has tasks, all complete/skipped) and `startNewList(state)`
+  (drop the tasks, KEEP `nextId`). `todo add` on a finished list starts a new one and reports
+  `(new list: N finished task(s) cleared)`; a list with live work is still appended to. Keeping the id sequence
+  monotonic means a stale `complete #3` from the model fails with "not found" instead of closing a different task.
+- The tool description tells the model the rule ("adding to a FINISHED list starts a new list … pass only the new
+  work"), so it does not try to resend the old list.
+
+## Verified
+
+- `test/todo-model.test.mts`: `isListFinished` is false for an empty list and for a list with any live task, true
+  when everything is complete/skipped (skipped counts as closed); `startNewList` clears the tasks, keeps the version
+  and the id sequence (`addTasks` on the fresh list continues at the old `nextId`), and does not mutate the old state.
+- `test/todo-tools.test.mts`: adding while one task is live appends (`#3 follow-up`, no "new list" note); after every
+  task is closed, the next add reports `#4 new work (new list: 3 finished task(s) cleared)`, the list shows
+  `Todos: 0/1 done`, and the finished titles are gone from `list` and from the panel.
+- `scripts/pty-verify.mjs` stage 3e (real pi over a pty, mock provider): five `todo complete` calls through the
+  model produce `Todos 5/5 done` with the rows still visible on that turn; the NEXT message (delivered as a steer by
+  the harness) folds the panel away entirely (`waitGone`); a following `todo add` re-registers the panel as
+  `Todos 0/1 done` with only `pty fresh task`, never the old titles.
+- `test/todo-extension.test.mts` drives the real extension with a fake pi host: the panel registers only once there
+  is work, survives the turn that completed it, unregisters on the next `input` (including a steer), and the tool
+  reports `(new list: N finished task(s) cleared)` while `list` shows only the new work. This is the unit-level pin
+  for the `ui_prompt_start` → `input` fix.
+- The harness itself needed a fix found while debugging: a FAILED run left its tmux session (and server) alive, and a
+  reused tmux server does not pass arbitrary environment variables to new sessions, which silently hid the debug
+  probe. `waitGone` was also broken (it referenced a helper that only exists inside `main()`); it now builds the
+  pane view from the capture itself.
+- `npm test` (all suites), `npm run check` 0 errors, `npm run test:host` PASS, `npm run test:pty` rc=0.
+
 # Validation record — 0.19.3 (footer change counts are observed churn)
 
 Report: the footer's `-D` was far below reality (a screenshot showed a 14-line deletion against `-6`), and the

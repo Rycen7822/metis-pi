@@ -179,3 +179,33 @@ test("commands: /todos notifies the list; /todos-doctor reports status and gc", 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("adding to a finished list starts a new list instead of appending", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "codex-todo-tools-"));
+  try {
+    const { system } = makeSystem(dir);
+    const exec = createTodoToolHandlers(system, () => dir);
+    await exec({ action: "add", tasks: [{ title: "old a" }, { title: "old b" }] }, "s");
+    await exec({ action: "complete", id: 1, evidence: "shipped" }, "s");
+    await exec({ action: "complete", id: 2, evidence: "shipped" }, "s");
+
+    // While a task is still live, add keeps extending the same list.
+    const reopened = await exec({ action: "reopen", id: 2 }, "s");
+    assert.match(reopened.content[0].text, /reopened/);
+    const appended = await exec({ action: "add", tasks: [{ title: "follow-up" }] }, "s");
+    assert.match(appended.content[0].text, /added 1 task\(s\): #3 follow-up/);
+    assert.doesNotMatch(appended.content[0].text, /new list/);
+
+    // Once every task is closed, the list is history: the next add starts over.
+    await exec({ action: "complete", id: 2, evidence: "shipped" }, "s");
+    await exec({ action: "complete", id: 3, evidence: "shipped" }, "s");
+    const fresh = await exec({ action: "add", tasks: [{ title: "new work" }] }, "s");
+    assert.match(fresh.content[0].text, /added 1 task\(s\): #4 new work \(new list: 3 finished task\(s\) cleared\)/);
+    const list = await exec({ action: "list" }, "s");
+    assert.match(list.content[0].text, /Todos: 0\/1 done/);
+    assert.match(list.content[0].text, /new work/);
+    assert.doesNotMatch(list.content[0].text, /old a|old b|follow-up/, "the finished list is gone, not shown as history");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

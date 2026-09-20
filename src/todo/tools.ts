@@ -19,8 +19,8 @@ import { existsSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import {
   addBlockedBy, addTasks, buildTree, claimTask, completeTask, flattenTree,
-  formatTaskId, isBlocked, moveTask, nextTaskId, releaseTask,
-  removeBlockedBy, skipTask, transitionTask, updateTitle,
+  formatTaskId, isBlocked, isListFinished, moveTask, nextTaskId, releaseTask,
+  removeBlockedBy, skipTask, startNewList, transitionTask, updateTitle,
   type ModelResult, type Task, type TodoState,
 } from "./model.ts";
 import type { TodoStore } from "./store.ts";
@@ -141,10 +141,22 @@ export function createTodoToolHandlers(system: CodexTodoSystem, cwd: () => strin
 
       case "add": {
         if (!params.tasks || params.tasks.length === 0) throw new Error("todo add: tasks array required");
-        const outcome = await run((s) => addTasks(s, params.tasks!, now()));
+        // A finished list is history: new work starts a NEW list instead of
+        // appending to it (0.19.4). Appending is only for a list that still has
+        // live work — otherwise the panel accumulates one growing list forever.
+        let cleared = 0;
+        const outcome = await run((s) => {
+          let base = s;
+          if (isListFinished(s)) {
+            cleared = s.tasks.length;
+            base = startNewList(s);
+          }
+          return addTasks(base, params.tasks!, now());
+        });
         if (outcome.kind === "noop") return text(outcome.message);
         const names = outcome.value.map((t) => `${formatTaskId(t.id)} ${t.title}`).join(", ");
-        return text(`added ${outcome.value.length} task(s): ${names}`);
+        const note = cleared > 0 ? ` (new list: ${cleared} finished task(s) cleared)` : "";
+        return text(`added ${outcome.value.length} task(s): ${names}${note}`);
       }
 
       case "update": {

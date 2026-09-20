@@ -85,6 +85,24 @@ const server = http.createServer((req, res) => {
         prompt_tokens_details: { cached_tokens: 1000 },
       };
       const base = { id: "chatcmpl-pcx", object: "chat.completion.chunk", created: 1, model: "pcx-mock-model" };
+      // Streaming text reply. Declared before the marker branches: a branch that
+      // calls it synchronously would otherwise hit the temporal dead zone.
+      const finishText = (reply) => {
+        let i = 0;
+        const timer = setInterval(() => {
+          send({ ...base, choices: [{ index: 0, delta: { content: reply.slice(i, i + 2) }, finish_reason: null }] });
+          i += 2;
+          if (i >= reply.length) {
+            clearInterval(timer);
+            setTimeout(() => {
+              send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+              send({ ...base, choices: [], usage });
+              res.write("data: [DONE]\n\n");
+              res.end();
+            }, 200);
+          }
+        }, 250);
+      };
       if (/PCX_TOOL/.test(text)) {
         send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx1", type: "function", function: { name: "bash", arguments: "{\"command\":\"echo PCX_TOOL_MARK\"}" } }] }, finish_reason: null }] });
         setTimeout(() => {
@@ -98,6 +116,49 @@ const server = http.createServer((req, res) => {
       if (/PCX_GLYPH/.test(text)) {
         const cmd = "printf '\u2714 done\\n\u2716 fail\\n'";
         send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx2", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: cmd }) } }] }, finish_reason: null }] });
+        setTimeout(() => {
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ ...base, choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }, 400);
+        return;
+      }
+      if (/PCX_TODO_DONE/.test(text)) {
+        // One assistant message carrying five `todo complete` calls. After the
+        // tool results, pi asks the model again with the same user text, so the
+        // guard answers with plain text instead of re-issuing the calls. It keys
+        // on THIS call id: earlier stages already put tool results in the
+        // transcript, so a plain `role === "tool"` test would match immediately.
+        const issued = (parsed.messages ?? []).some((m) =>
+          m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.some((c) => c.id === "call_pcxd1"),
+        );
+        if (issued) {
+          finishText("PCX_TODO_DONE_ACK");
+          return;
+        }
+        const calls = [1, 2, 3, 4, 5].map((id, i) => ({
+          index: i, id: `call_pcxd${id}`, type: "function",
+          function: { name: "todo", arguments: JSON.stringify({ action: "complete", id, evidence: `pty completion ${id}` }) },
+        }));
+        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls }, finish_reason: null }] });
+        setTimeout(() => {
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+          send({ ...base, choices: [], usage });
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }, 400);
+        return;
+      }
+      if (/PCX_TODO_AGAIN/.test(text)) {
+        const issuedAgain = (parsed.messages ?? []).some((m) =>
+          m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.some((c) => c.id === "call_pcx5"),
+        );
+        if (issuedAgain) {
+          finishText("PCX_TODO_AGAIN_ACK");
+          return;
+        }
+        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx5", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty fresh task" }] }) } }] }, finish_reason: null }] });
         setTimeout(() => {
           send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
           send({ ...base, choices: [], usage });
@@ -141,22 +202,6 @@ const server = http.createServer((req, res) => {
             setTimeout(() => finishText("PCX_THINK_DONE"), 300);
           }
         }, 300);
-        const finishText = (reply) => {
-          let i = 0;
-          const timer = setInterval(() => {
-            send({ ...base, choices: [{ index: 0, delta: { content: reply.slice(i, i + 2) }, finish_reason: null }] });
-            i += 2;
-            if (i >= reply.length) {
-              clearInterval(timer);
-              setTimeout(() => {
-                send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
-                send({ ...base, choices: [], usage });
-                res.write("data: [DONE]\n\n");
-                res.end();
-              }, 200);
-            }
-          }, 250);
-        };
         return;
       }
       const reply = /PCX_SELECT/.test(text)
@@ -281,7 +326,9 @@ const visibleRows = (frame) => frame.split("\n").slice(-paneSize().h);
 const waitGone = async (pattern, timeoutMs, label) => {
   const start = Date.now();
   for (;;) {
-    if (!pattern.test(visibleText())) return;
+    // Pane-scoped view: `visibleText` only exists inside main(), the helpers at
+    // module scope have to build it from the capture themselves.
+    if (!pattern.test(visibleRows(capture()).join("\n"))) return;
     if (Date.now() - start > timeoutMs) {
       assert.fail(`timeout waiting for ${label} to disappear:\n${capture().slice(-2000)}`);
     }
@@ -709,6 +756,34 @@ try {
   assert.ok(reexpanded.includes("pty task 5"), "panel expands again");
   await togglePanelUntil(/\+2 more/, "and collapses again");
 
+  // Stage 3e (0.19.4): the completed-fold needs a real INPUT signal. pi's
+  // `ui_prompt_start` is its blocking-dialog event, so the widget's turn ordinal
+  // stayed 0 and ✓ rows never folded away. Note this harness types the next
+  // message while the previous run is still streaming, so pi delivers it as a
+  // `steer` — user input all the same, and the fold must react to it. The panel
+  // must fold on the next message, disappear when the list is fully done, and
+  // the next batch of work must start a NEW list instead of appending to the
+  // finished one.
+  type("please PCX_TODO_DONE now");
+  sendKeys(["Enter"]);
+  const allDone = await waitFor(/Todos 5\/5 done/, 60_000, "the panel reports every task complete");
+  assert.ok(allDone.includes("pty task 5"), "the ✓ rows are still listed on the turn that completed them");
+
+  type("PCX_FOLD_NOW");
+  sendKeys(["Enter"]);
+  await waitGone(/Todos \d+\/\d+ done/, 30_000, "the finished panel folds away on the next prompt");
+  assert.ok(!visibleText().includes("Todos 5/5 done"), "no history is left on screen");
+
+  type("please PCX_TODO_AGAIN now");
+  sendKeys(["Enter"]);
+  const freshList = await waitFor(/Todos 0\/1 done/, 60_000, "new work re-registers the panel");
+  const freshRows = visibleRows(freshList);
+  const freshHeader = freshRows.findIndex((line) => line.includes("Todos 0/1 done"));
+  const freshPanel = freshRows.slice(freshHeader, freshHeader + 3).join("\n");
+  assert.ok(freshPanel.includes("pty fresh task"), "the new task is listed");
+  assert.ok(!/pty task 2|pty task 3|pty task 4|pty task 5/.test(freshPanel), "the finished list is not carried over as history");
+  assert.ok(!/\+4 more|\(4 completed/.test(freshPanel), "the panel counts only the new list");
+
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");
   sendKeys(["Enter"]);
@@ -938,6 +1013,7 @@ try {
   console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
+  console.log("  codex-todo:   ✓ rows fold on the next prompt, a finished panel disappears, new work starts a fresh list");
   console.log("  todo panel:   a left click expands it to all 5 tasks, a second click collapses it back to 3 rows");
   console.log("  todo panel:   a right press alone hides it (no release needed); /todos restores it; left clicks stay healthy");
   console.log("  todo restart: a store finished in an earlier session shows no panel on the next boot; /todos still lists it");

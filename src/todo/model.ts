@@ -95,6 +95,25 @@ export function createState(): TodoState {
   return { version: TODO_SCHEMA_VERSION, nextId: 1, tasks: [] };
 }
 
+/**
+ * True when the list holds no live work: it has tasks and every one is closed
+ * (complete or skipped). Such a list is history — `add` starts a new one.
+ */
+export function isListFinished(state: TodoState): boolean {
+  return state.tasks.length > 0 && state.tasks.every((t) => t.status === "complete" || t.status === "skipped");
+}
+
+/**
+ * Start a new list: drop every task, keep the id sequence monotonic. The ids
+ * are deliberately NOT reset — a stale `complete #3` from the model then fails
+ * loudly ("not found") instead of silently closing a different task of the new
+ * list. The previous list is history, not an archive: the store only ever holds
+ * the list that is being worked on, and a finished list is garbage (gcDays).
+ */
+export function startNewList(state: TodoState): TodoState {
+  return { version: TODO_SCHEMA_VERSION, nextId: state.nextId, tasks: [] };
+}
+
 const byId = (state: TodoState, id: number): Task | undefined =>
   state.tasks.find((t) => t.id === id);
 

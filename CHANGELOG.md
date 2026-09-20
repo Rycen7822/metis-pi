@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.19.4
+
+**todos 不再显示历史任务：换掉失效的 turn 信号，并让"已完成列表"之后的 add 默认新建列表。**
+
+用户反馈：面板上出现历史 todos（截图里 11 行、其中 6 行是很久以前 0.17.0 的已完成任务），
+并且新工作被追加到那张旧列表后面。两个独立根因：
+
+1. **turn 信号挂错事件**：widget 的"完成后保留到下一 turn 再收起"依赖 `turn` 序数，而 0.16.0 起挂的是
+   `pi.on("ui_prompt_start")` —— 那是宿主**阻塞式对话框**事件（`ctx.ui.select/confirm/input`），
+   聊天输入永远不会触发它。于是 `turn` 恒为 0，判据 `completedAtTurn < turn` 永不成立，✓ 行永不折叠、
+   列表一直挂在面板上（实测 store 里 11 个任务的 `completedAtTurn` 全是 0，正是此故）。
+   现在改用宿主的 **`input` 事件**：**任何**用户输入（新 prompt、agent 干活途中打字的 steer、排队的 follow-up）
+   一到就 `turn += 1` 并立即 `widget.refresh()`，✓ 行折叠、全部完成的面板随即注销消失。
+   （pty 复现时发现：测试脚本在上一次 run 还在流式输出时输入，pi 会把它当 steer 投递 —— 真实用户也常这么干，
+   所以判定必须覆盖 steer，否则折叠就取决于手速。宿主 `turn_start` 更不能用作信号：它按模型往返计次，
+   会在完成的那次请求内就把行折掉。）
+2. **add 无脑追加**：`add` 以前一律追加到现有列表。现在**已完成（全部 complete/skipped）的列表视为历史**：
+   再 `add` 会开一张**新列表**（旧任务清空），工具结果明确回报
+   `added N task(s): … (new list: M finished task(s) cleared)`；列表里**还有未完成任务**时仍然追加。
+   `#id` 刻意继续递增——模型若用过期的 `complete #3`，会得到明确的 "not found"，而不是静默改掉新列表里的
+   另一个任务。store 只保存正在做的那张列表（已完成的本来就归 `gcDays` 回收），所以面板与 `/todos` 文字列表
+   再也不会累积历史。
+
+验证：全套单测通过（新增 model 的 `isListFinished`/`startNewList` 用例与 tool 的"完成后再 add 开新列表"用例）；
+`npm run check` 0；`test:host` PASS；pty rc=0 新增端到端断言：5 个任务全部完成后 ✓ 行在完成当轮仍可见，
+下一个 prompt 一到面板整体消失，再次 `add` 后面板只显示 `Todos 0/1 done` 的新任务（旧任务不再出现）。
+
 ## 0.19.3
 
 **`+A -D` 改为累计改动量（churn）口径，修掉两处"删减统计偏少"的缺陷。**
