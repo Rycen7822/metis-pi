@@ -128,29 +128,29 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     return { gcDays, widgetExpanded, widgetHidden };
   };
 
+  /** Move a state file that cannot be used aside for /todos-doctor. Polluting
+   * the session with a corrupt file is never an option, and a failed archive
+   * must still leave the session usable: the caller starts empty regardless. */
+  const archiveCorruptState = (): void => {
+    const backup = `${TODO_STATE_FILE}.bak-${now()}`;
+    try {
+      fs.renameSync(statePath, join(dir, backup));
+      recoveredBackup = backup;
+    } catch {
+      // If archiving itself fails, still start empty.
+    }
+  };
+
   const readState = (): TodoState => {
     const raw = readJson(statePath);
     if (raw === undefined) {
-      if (fs.existsSync(statePath)) {
-        // Corrupt state: archive for /todos-doctor, start empty. A bad
-        // todo file must never take the session down with it.
-        const backup = `${TODO_STATE_FILE}.bak-${now()}`;
-        try {
-          fs.renameSync(statePath, join(dir, backup));
-          recoveredBackup = backup;
-        } catch {
-          // If archiving itself fails, still start empty.
-        }
-      }
+      // A file that exists but does not parse is corrupt; a missing one is not.
+      if (fs.existsSync(statePath)) archiveCorruptState();
       return createState();
     }
     const state = normalizeState(raw);
     if (!state) {
-      const backup = `${TODO_STATE_FILE}.bak-${now()}`;
-      try {
-        fs.renameSync(statePath, join(dir, backup));
-        recoveredBackup = backup;
-      } catch { /* start empty regardless */ }
+      archiveCorruptState();
       return createState();
     }
     return state;
