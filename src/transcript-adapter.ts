@@ -73,7 +73,6 @@ export interface TranscriptAdapterInput {
    */
   makeRail: ((child: unknown) => unknown) | undefined;
   /** True when an external owner already renders thinking rails. */
-  externalRailOwner?(): boolean;
   /**
    * Wrap a thinking body so left clicks drive the run's view state: a single
    * click folds/peeks, a double click toggles peek ↔ full (the control owns the
@@ -310,9 +309,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     installed: true,
     reason: "assistant decoration layer enabled",
     railInstalled: input.makeRail !== undefined,
-    railReason: input.makeRail !== undefined
-      ? (input.externalRailOwner?.() ? "external rail owner detected; our rail stays passive" : "thinking rail enabled")
-      : "no rail factory provided",
+    railReason: input.makeRail !== undefined ? "thinking rail enabled" : "no rail factory provided",
     dispose() {
       active = false;
       try {
@@ -426,7 +423,6 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
   const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : [];
   const planKey = resolveMessagePlan(input, component, message, content);
   const textRunPlan = planKey !== undefined ? input.state.textRunPlan(planKey) : undefined;
-  const railBlocked = input.externalRailOwner?.() === true;
 
   // 1) Remove OUR stale decorations from the current subtree (they get
   //    re-added below at the right slots). Components removed by clear() lose
@@ -491,7 +487,7 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
   //    own "Thinking..." label — durations exist only for ended runs.
   const policy = input.thinkingPolicy?.();
   const viewFeature = policy !== undefined && (input.makePeek !== undefined || input.makeClickable !== undefined);
-  if ((input.makeRail && !railBlocked) || (input.makeThoughtSummary && input.isCollapsedLabel) || (viewFeature && input.makeClickable)) {
+  if (input.makeRail || (input.makeThoughtSummary && input.isCollapsedLabel) || (viewFeature && input.makeClickable)) {
     for (const slot of slots) {
       if (slot.run.kind !== "thinking" || !slot.run.nonEmpty) continue;
       const child = slot.child as Record<string, unknown>;
@@ -544,7 +540,7 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
           });
           if (peeked && typeof peeked === "object") node = peeked;
         }
-        if (input.makeRail && !railBlocked) {
+        if (input.makeRail) {
           const railed = input.makeRail(node);
           if (railed && typeof railed === "object") {
             ((railed as Record<symbol, unknown>))[RAIL_SYMBOL] = true;

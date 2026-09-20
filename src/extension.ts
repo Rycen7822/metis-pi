@@ -79,8 +79,6 @@ export interface Bindings {
     fallback: ThinkingView;
     apply: (next: ThinkingView) => void;
   }) => unknown;
-  /** Detect an external owner that already renders thinking rails. */
-  externalRailOwner?: () => boolean;
   /** Build the live write call component (header + stage + preview body). */
   makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
 
@@ -396,7 +394,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         makeRail: bindings.makeRail,
         makePeek: bindings.makePeek,
         makeClickable: bindings.makeClickable,
-        externalRailOwner: bindings.externalRailOwner,
         thinkingPolicy,
         makeThoughtSummary: bindings.makeThoughtSummary,
         isCollapsedLabel: bindings.isCollapsedLabel,
