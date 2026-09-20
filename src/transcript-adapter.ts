@@ -24,7 +24,7 @@
 // passive while the separator stays active.
 
 import { asRecord } from "./tool-names.ts";
-import { TranscriptState, normalizeMessageBlocks, renderedThinkingRuns, type MessageViewKey } from "./transcript-state.ts";
+import { TranscriptState, normalizeMessageBlocks, renderedThinkingRuns, semanticRuns, type SemanticRun, type MessageViewKey } from "./transcript-state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "./thinking-view.ts";
 
 const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
@@ -399,12 +399,6 @@ function applyThinkingPolicy(
   return changed;
 }
 
-/** True when a non-thinking block exists after the run's first block — the
- * host's rebuild loop breaks there, so the run cannot grow anymore. */
-function contentEndedAfter(content: Array<Record<string, unknown>>, firstContentIndex: number): boolean {
-  return content.slice(firstContentIndex + 1).some((block) => String(block.type ?? "") !== "thinking");
-}
-
 /**
  * Re-coordinate the freshly rebuilt contentContainer: map semantic slots,
  * attach ONE separator before the first text run (when the plan says so),
@@ -456,12 +450,6 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
   //    (thinking) with optional Spacers between. We match by ORDER of
   //    visible children against content runs — never by string content.
   const runs = semanticRuns(content);
-  // Host parity: the host's thinkingRunIndex counts only RENDERED (non-empty)
-  // thinking runs, in content order.
-  let thinkingOrdinal = 0;
-  for (const run of runs) {
-    if (run.kind === "thinking" && run.nonEmpty) run.thinkingRunIndex = thinkingOrdinal++;
-  }
   const slots = mapChildrenToRuns(children, runs, spacerProto);
 
   // 3) Attach the separator before the FIRST text-run slot (not message top).
@@ -505,7 +493,7 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
       const ordinal = slot.run.thinkingRunIndex;
       const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
       const plan = ordinal !== undefined && planKey !== undefined ? input.state.thinkingRunPlan(planKey, ordinal) : undefined;
-      const ended = plan ? plan.ended : contentEndedAfter(content, slot.run.firstContentIndex);
+      const ended = plan ? plan.ended : slot.run.ended === true;
       const control = viewFeature && ordinal !== undefined
         ? (planKey !== undefined
           ? input.state.thinkingViewControl(planKey, ordinal, createThinkingViewControl)
@@ -630,52 +618,6 @@ function resolveMessagePlan(
     followsTools,
     component,
   );
-}
-
-interface SemanticRun {
-  kind: "text" | "thinking";
-  firstContentIndex: number;
-  nonEmpty: boolean;
-  /** A toolCall/unknown block — produces no child but BREAKS runs. */
-  barrier?: boolean;
-  /** Host thinkingRunIndex (ordinal of rendered thinking runs); thinking runs only. */
-  thinkingRunIndex?: number;
-}
-
-/** Contiguous same-kind visible runs of the message content. */
-function semanticRuns(content: Array<Record<string, unknown>>): SemanticRun[] {
-  // Host parity: each NON-EMPTY text block is its own child; consecutive
-  // thinking blocks merge into ONE run ONLY when truly adjacent. ANY other
-  // block breaks the run — including an EMPTY text block: the host's rebuild
-  // loop breaks on the first non-thinking block regardless of emptiness.
-  const runs: SemanticRun[] = [];
-  for (let i = 0; i < content.length; i++) {
-    const block = content[i]!;
-    const kind = block.type === "text" ? "text" : block.type === "thinking" ? "thinking" : null;
-    if (!kind) {
-      // toolCall/unknown: no visible run of its own, but BREAKS any adjacent
-      // thinking run (host rebuild has one MouseRegion per contiguous
-      // thinking run between other blocks).
-      runs.push({ kind: "text", firstContentIndex: i, nonEmpty: false, barrier: true });
-      continue;
-    }
-    const nonEmpty = kind === "text"
-      ? (typeof block.text === "string" ? !!block.text.trim() : false)
-      : (typeof block.thinking === "string" ? !!block.thinking.trim() : false);
-    if (kind === "text") {
-      // Every text block (even empty) breaks a thinking run; only non-empty
-      // ones create a run of their own.
-      runs.push({ kind, firstContentIndex: i, nonEmpty });
-      continue;
-    }
-    const last = runs.at(-1);
-    if (last && last.kind === "thinking") {
-      last.nonEmpty = last.nonEmpty || nonEmpty;
-      continue;
-    }
-    runs.push({ kind, firstContentIndex: i, nonEmpty });
-  }
-  return runs;
 }
 
 /**

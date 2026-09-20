@@ -133,28 +133,95 @@ export interface ThinkingRunSlot {
   readonly endedInContent: boolean;
 }
 
+/** The content-block fields the run merge reads (structural: the adapter's
+ * raw message blocks and the transcript's normalized blocks both fit). */
+export interface ContentBlockLike {
+  type?: unknown;
+  text?: unknown;
+  thinking?: unknown;
+}
+
+export interface SemanticRun {
+  kind: "text" | "thinking";
+  /** Index of the run's first content block. */
+  firstContentIndex: number;
+  /** The run has visible content: a non-empty text block (text run) or at
+   * least one non-empty thinking block (thinking run). */
+  nonEmpty: boolean;
+  /** A toolCall/unknown block: it renders nothing of its own but BREAKS any
+   * adjacent thinking run (the host's rebuild has one MouseRegion per
+   * contiguous thinking run between other blocks). */
+  barrier?: boolean;
+  /** Thinking runs only: a block follows the run, so the host's rebuild loop
+   * cannot extend it any further and its clock is closed. */
+  ended?: boolean;
+  /** Host thinkingRunIndex (ordinal of RENDERED thinking runs, in content
+   * order); thinking runs only. An all-empty run renders nothing and takes no
+   * ordinal, exactly like the host. */
+  thinkingRunIndex?: number;
+}
+
+/**
+ * Contiguous same-kind visible runs of one message's content — THE run merge,
+ * shared by the host-parity thinking clocks (renderedThinkingRuns) and the
+ * transcript rebuild coordinator so the two can never drift apart.
+ *
+ * Host parity: each NON-EMPTY text block is its own child; consecutive
+ * thinking blocks merge into ONE run ONLY when truly adjacent. ANY other
+ * block breaks the run — including an EMPTY text block: the host's rebuild
+ * loop breaks on the first non-thinking block regardless of emptiness.
+ */
+export function semanticRuns(content: ReadonlyArray<ContentBlockLike>): SemanticRun[] {
+  const runs: SemanticRun[] = [];
+  for (let i = 0; i < content.length; i++) {
+    const block = content[i]!;
+    const kind = block.type === "text" ? "text" : block.type === "thinking" ? "thinking" : null;
+    if (!kind) {
+      runs.push({ kind: "text", firstContentIndex: i, nonEmpty: false, barrier: true });
+      continue;
+    }
+    const nonEmpty = kind === "text"
+      ? (typeof block.text === "string" ? !!block.text.trim() : false)
+      : (typeof block.thinking === "string" ? !!block.thinking.trim() : false);
+    if (kind === "text") {
+      // Every text block (even empty) breaks a thinking run; only non-empty
+      // ones create a run of their own.
+      runs.push({ kind, firstContentIndex: i, nonEmpty });
+      continue;
+    }
+    const last = runs.at(-1);
+    if (last && last.kind === "thinking") {
+      last.nonEmpty = last.nonEmpty || nonEmpty;
+      continue;
+    }
+    runs.push({ kind, firstContentIndex: i, nonEmpty, ended: true });
+  }
+  // A thinking run that reaches the end of the content cannot grow either:
+  // the host's rebuild loop simply runs out of blocks.
+  const last = runs.at(-1);
+  if (last?.kind === "thinking" && content.at(-1)?.type === "thinking") last.ended = false;
+  // Host parity: the host's thinkingRunIndex counts only RENDERED (non-empty)
+  // thinking runs, in content order.
+  let thinkingOrdinal = 0;
+  for (const run of runs) {
+    if (run.kind === "thinking" && run.nonEmpty) run.thinkingRunIndex = thinkingOrdinal++;
+  }
+  return runs;
+}
+
 /**
  * Thinking runs of one message content, matching the host rebuild exactly:
  * consecutive thinking blocks merge into ONE run; a run whose blocks are ALL
- * empty produces no child and consumes no runIndex; ANY non-thinking block
- * (text, even empty, toolCall, …) breaks the run.
+ * empty produces no child and consumes no runIndex. Derived from the shared
+ * semanticRuns traversal.
  */
 export function renderedThinkingRuns(
   content: Array<{ type: string; thinking?: string }>,
 ): ThinkingRunSlot[] {
   const slots: ThinkingRunSlot[] = [];
-  let runIndex = 0;
-  for (let i = 0; i < content.length; ) {
-    if (content[i]!.type !== "thinking") {
-      i += 1;
-      continue;
-    }
-    const firstContentIndex = i;
-    let nonEmpty = false;
-    for (; i < content.length && content[i]!.type === "thinking"; i += 1) {
-      if (content[i]!.thinking?.trim()) nonEmpty = true;
-    }
-    if (nonEmpty) slots.push({ runIndex: runIndex++, firstContentIndex, endedInContent: i < content.length });
+  for (const run of semanticRuns(content)) {
+    if (run.kind !== "thinking" || !run.nonEmpty) continue;
+    slots.push({ runIndex: run.thinkingRunIndex!, firstContentIndex: run.firstContentIndex, endedInContent: run.ended === true });
   }
   return slots;
 }
