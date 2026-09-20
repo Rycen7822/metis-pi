@@ -1,5 +1,6 @@
 // Display-only renderer registration for Pi's native two slots (call region = title/command, result region = output/diff body; never modifies tool data).
 
+import { renderCodexDiffComponent } from "./diff-component.ts";
 import { renderExplorationHeader, renderExplorationMember, renderExplorationImages, renderExplorationLines, explorationVerb, type ExplorationRow } from "./explore.ts";
 import type { ExplorationPlan, TranscriptState } from "./transcript-state.ts";
 import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
@@ -428,11 +429,10 @@ export function makeRenderers(
           if (makeDiff) {
             return makeDiff({ rows, filePath, theme, context: ctx, options, expandHint: expandHint() });
           }
-          return component(renderDiffLines({
-            rows, width: 100, layout, colorLevel: colorFor(ctx),
-            language: languageForPath(filePath), paint,
+          return component(renderCodexDiffComponent({
+            rows, filePath, paint, colorLevel: colorFor(ctx),
             expanded: options.expanded === true, expandHint: expandHint(),
-          }).join("\n"), ctx);
+          }, 100, layout).join("\n"), ctx);
         }
       }
       if (name === "write") {
