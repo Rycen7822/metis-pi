@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   countsGrowth,
-  countLines,
   createGitChangesTracker,
   createLineCountCache,
   findGitDir,
@@ -100,14 +99,6 @@ test("untracked paths split on NUL, ignoring the trailing empty entry", () => {
   assert.deepEqual(parseUntracked(""), []);
   assert.deepEqual(parseUntracked("a.txt\0"), ["a.txt"]);
   assert.deepEqual(parseUntracked("a.txt\0dir with space/b.txt\0"), ["a.txt", "dir with space/b.txt"]);
-});
-
-test("line counting matches git: trailing newline, no trailing newline, empty", () => {
-  assert.equal(countLines(""), 0);
-  assert.equal(countLines("a\n"), 1);
-  assert.equal(countLines("a\nb\n"), 2);
-  assert.equal(countLines("a\nb"), 2);
-  assert.equal(countLines("\n"), 1);
 });
 
 test("readLineCount streams: text, no trailing newline, binary, oversized, missing", async (t) => {

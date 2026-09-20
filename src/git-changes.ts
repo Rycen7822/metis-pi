@@ -127,13 +127,6 @@ export function parseUntracked(stdout: string): string[] {
   return stdout.split("\0").filter((path) => path.length > 0);
 }
 
-/** Lines in a text blob: "a\nb\n" and "a\nb" both count 2, "" counts 0. */
-export function countLines(text: string): number {
-  if (text.length === 0) return 0;
-  const breaks = text.split("\n").length - 1;
-  return text.endsWith("\n") ? breaks : breaks + 1;
-}
-
 export interface LineCount {
   /** Counted lines; the trailing line counts even without a final newline. */
   readonly lines: number;
