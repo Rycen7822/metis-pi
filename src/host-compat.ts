@@ -14,7 +14,7 @@ export interface UiSurface {
   setStatus: (key: string, text: string | undefined) => void;
 }
 
-export type UiMode = string;
+type UiMode = string;
 
 export interface HostFacts {
   mode: UiMode;
@@ -25,7 +25,7 @@ export interface HostFacts {
   agentDir: string | undefined;
 }
 
-export interface UiSurfaceInput {
+interface UiSurfaceInput {
   ui: Partial<UiSurface>;
   mode: UiMode;
   hasUI: boolean;
