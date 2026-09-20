@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activate } from "../src/extension.ts";
@@ -120,10 +120,13 @@ const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
 
 test("chrome modules have no direct host imports (src/ rule)", () => {
-  for (const name of ["chrome/editor.ts", "chrome/footer.ts", "chrome/header.ts", "chrome/working.ts", "chrome/composer-metadata.ts"]) {
-    const text = readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
-    assert.ok(!text.includes("from \"@earendil-works"), `${name} must not import host packages directly`);
-    assert.ok(!text.includes("from '@earendil-works"), `${name} must not import host packages directly`);
+  // Read the directory instead of a hardcoded list: every chrome module is covered,
+  // including new ones (the factory in editor.ts explains the rule's reason).
+  for (const entry of readdirSync(new URL("../src/chrome/", import.meta.url))) {
+    if (!entry.endsWith(".ts")) continue;
+    const text = readFileSync(new URL(`../src/chrome/${entry}`, import.meta.url), "utf8");
+    assert.ok(!text.includes("from \"@earendil-works"), `src/chrome/${entry} must not import host packages directly`);
+    assert.ok(!text.includes("from '@earendil-works"), `src/chrome/${entry} must not import host packages directly`);
   }
 });
 
