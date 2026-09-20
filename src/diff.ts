@@ -3,7 +3,7 @@
 // write-tracker or parseDisplayDiff. Display-only.
 
 import {
-  DIFF_ADD_BG, DIFF_DEL_BG, MOCHA,
+  DIFF_ADD_BG, DIFF_DEL_BG,
   backgroundAnsi, DIM_ON, INTENSITY_RESET, BG_RESET,
   type ColorLevel,
 } from "./palette.ts";
@@ -11,8 +11,7 @@ import {
 import type { LayoutOps } from "./shell.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
 
-const DIFF_LEFT_INSET = 2;
-export { DIFF_LEFT_INSET };
+export const DIFF_LEFT_INSET = 2;
 
 export type DiffRowKind = "add" | "remove" | "context" | "separator" | "metadata";
 
@@ -330,5 +329,3 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
   }
   return out.length ? out : [""];
 }
-
-export { MOCHA };
