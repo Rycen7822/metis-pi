@@ -1,21 +1,25 @@
 // git-changes.test.mts — the footer's session change counts (+A −D).
 // Three layers: the pure parsers/stat math, the reader (pinned git contract),
-// and the tracker. The last cases run real git in a temp repo — including
-// mid-session commits and a script-style edit — because the point since
-// 0.15.4 is that the counts are the session's UNCOMMITTED absolute
-// additions/deletions: a commit clears them, and only work made after the
-// commit counts against the new revision.
+// and the tracker. Since 0.19.3 the counts are the session's observed CHURN:
+// every read diffs each changed path's content against the content the session
+// last saw, and adds the difference — so an edit that adds 14 lines and a later
+// edit that removes them count +14 AND −14. The session's first read is the
+// content reference (work that predates the session never counts), a commit
+// folds the committed delta out, a clean work tree resets the totals. The last
+// cases run real git in a temp repo, including mid-session commits.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  countsGrowth,
   countLines,
   createGitChangesTracker,
   createLineCountCache,
   findGitDir,
+  foldCommitted,
   GIT_CHANGES_DEBOUNCE_MS,
   MAX_UNTRACKED_BYTES,
   parseNumstatZ,
@@ -23,9 +27,10 @@ import {
   readChangeSample,
   readLineCount,
   resolveSessionRev,
-  sessionChangeStat,
+  samePathState,
   type ChangeSample,
   type GitExec,
+  type PathSnapshot,
 } from "../src/git-changes.ts";
 
 function tempDir(t: TestContext, prefix: string): string {
@@ -158,42 +163,22 @@ test("line-count cache re-reads only when size or mtime moved", async (t) => {
   assert.equal(reads, 4, "clear() drops the cache");
 });
 
-test("sessionChangeStat subtracts the baseline per path and never goes negative", () => {
-  // Pre-existing work at session start (baseline) is not the session's work.
-  const baseline = sample([["a.ts", 11, 9], ["pre.ts", 50, 0]], [["notes.md", 20]]);
-  assert.deepEqual(sessionChangeStat(baseline, baseline), { additions: 0, deletions: 0, files: 0 });
-
-  // The user's case: A +11 −9 and B +6 −5 must read +17 −14, not +3 −0.
-  const edited = sample([["a.ts", 22, 18], ["b.ts", 6, 5]], [["notes.md", 20]]);
-  assert.deepEqual(sessionChangeStat(edited, baseline), { additions: 17, deletions: 14, files: 2 });
-
-  // A file the session never touched contributes nothing, even after commits
-  // (its counts move to HEAD and drop out of the diff).
-  assert.deepEqual(sessionChangeStat(sample([["pre.ts", 0, 0]]), baseline), { additions: 0, deletions: 0, files: 0 });
-  // Reverting someone else's pending edit: clamped, not negative.
-  assert.deepEqual(sessionChangeStat(sample([["pre.ts", 0, 0]]), sample([["pre.ts", 50, 0]])), { additions: 0, deletions: 0, files: 0 });
-  // Files the session created count fully; baselined untracked files count only
-  // what they gained.
-  assert.deepEqual(
-    sessionChangeStat(sample([], [["notes.md", 26], ["new.md", 7]]), baseline),
-    { additions: 13, deletions: 0, files: 2 },
-  );
-  // An untracked file that the session COMMITS: its baseline lines are still
-  // not the session's, only the growth beyond them is.
-  assert.deepEqual(
-    sessionChangeStat(sample([["notes.md", 24, 0]], []), baseline),
-    { additions: 4, deletions: 0, files: 1 },
-  );
-  // A file that was tracked at the baseline and is untracked now (git rm
-  // --cached) predates the session: credited with nothing.
-  assert.deepEqual(
-    sessionChangeStat(sample([], [["pre.ts", 50]]), baseline),
-    { additions: 0, deletions: 0, files: 0 },
-  );
-  // A plain read with no baseline yet: everything is the session's (the
-  // tracker's very first read is the baseline itself, so this is only the
-  // degenerate call).
-  assert.deepEqual(sessionChangeStat(sample([["x.ts", 2, 1]]), undefined), { additions: 2, deletions: 1, files: 1 });
+test("churn math: a commit folds out, an unreadable path grows, a stat decides", () => {
+  // A commit takes its committed delta out of the session totals (clamped).
+  assert.deepEqual(foldCommitted({ additions: 17, deletions: 14 }, { additions: 6, deletions: 5 }), { additions: 11, deletions: 9 });
+  assert.deepEqual(foldCommitted({ additions: 2, deletions: 1 }, { additions: 9, deletions: 9 }), { additions: 0, deletions: 0 }, "never negative");
+  // The fallback for paths whose content cannot be referenced: growth only.
+  assert.deepEqual(countsGrowth({ additions: 11, deletions: 9 }, { additions: 22, deletions: 18 }), { additions: 11, deletions: 9 });
+  assert.deepEqual(countsGrowth({ additions: 22, deletions: 18 }, { additions: 11, deletions: 9 }), { additions: 0, deletions: 0 }, "a revert is not negative churn");
+  // A snapshot describes one work-tree state, missing paths included.
+  const seen: PathSnapshot = { blob: "b", missing: false, size: 3, mtimeMs: 7, counts: { additions: 1, deletions: 0 } };
+  assert.equal(samePathState(seen, { size: 3, mtimeMs: 7 }), true);
+  assert.equal(samePathState(seen, { size: 4, mtimeMs: 7 }), false, "size moved");
+  assert.equal(samePathState(seen, { size: 3, mtimeMs: 8 }), false, "mtime moved");
+  assert.equal(samePathState(seen, undefined), false, "the file is gone");
+  const gone: PathSnapshot = { ...seen, missing: true, size: 0, mtimeMs: 0 };
+  assert.equal(samePathState(gone, undefined), true);
+  assert.equal(samePathState(gone, { size: 1, mtimeMs: 1 }), false, "recreated");
 });
 
 test("readChangeSample pins the git contract and counts untracked lines", async (t) => {
@@ -262,7 +247,9 @@ test("tracker: the first read is the baseline, later reads are session deltas", 
   const tracker = createGitChangesTracker({ getCwd: () => dir, exec, lineCounts, onUpdate: () => { updates += 1; } });
   await tracker.refresh();
   assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "pre-existing work is the baseline");
-  assert.deepEqual(tracker.session(), { rev: "rev1", baseline: true });
+  // The state is the work tree vs HEAD right now: a.ts (+11 −9) and the five
+  // untracked lines of notes.md.
+  assert.deepEqual(tracker.session(), { rev: "rev1", tracking: true, observations: 1, state: { additions: 16, deletions: 9 } });
   assert.equal(updates, 1, "the baseline publishes once (0/0 hides the segment)");
 
   tracked = ["22\t18\ta.ts", "6\t5\tb.ts"].join("\0") + "\0";   // +11 −9 in A, +6 −5 in B
@@ -276,7 +263,7 @@ test("tracker: the first read is the baseline, later reads are session deltas", 
   tracked = "";
   untracked = "";
   await tracker.refresh();
-  assert.deepEqual(tracker.session(), { rev: "rev2", baseline: true }, "the session rev follows HEAD");
+  assert.equal(tracker.session().rev, "rev2", "the session rev follows HEAD");
   assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "a commit clears the stat");
   assert.equal(updates, 3);
 
@@ -288,8 +275,8 @@ test("tracker: the first read is the baseline, later reads are session deltas", 
   assert.deepEqual(tracker.snapshot(), { additions: 8, deletions: 0, files: 2 }, "+3 committed-after, +5 for the new file");
   assert.equal(updates, 4);
 
-  // Undoing the work (git checkout / stash / the agent reverting itself) does
-  // report nothing: the numbers are the session's diff against its baseline.
+  // Undoing everything returns the tree to its reference state, which resets the
+  // totals (0.15.4): a clean work tree shows nothing.
   tracked = "";
   untracked = "";
   await tracker.refresh();
@@ -362,7 +349,7 @@ test("tracker: interval, activity refresh and dispose", async (t) => {
   assert.equal(reads, 0, "touch before start is a no-op");
   tracker.start();
   assert.equal(tracker.running, true);
-  await flush();
+  await tracker.refresh();
   assert.equal(reads, 1, "start reads once for the baseline");
 
   // Activity-driven refresh: debounced, then a real read.
@@ -373,7 +360,7 @@ test("tracker: interval, activity refresh and dispose", async (t) => {
   await flush();
   assert.equal(reads, 1, "still inside the debounce window");
   t.mock.timers.tick(20);
-  await flush();
+  await tracker.refresh();
   assert.equal(reads, 2, "activity triggers a read");
   assert.deepEqual(tracker.snapshot(), { additions: 3, deletions: 0, files: 1 });
   assert.equal(updates, 2);
@@ -381,14 +368,14 @@ test("tracker: interval, activity refresh and dispose", async (t) => {
   // The interval keeps polling independently of activity.
   additions = 9;
   t.mock.timers.tick(1000);
-  await flush();
+  await tracker.refresh();
   assert.equal(reads, 3);
   assert.deepEqual(tracker.snapshot(), { additions: 7, deletions: 0, files: 1 });
 
   tracker.dispose();
   assert.equal(tracker.running, false);
   assert.equal(tracker.snapshot(), undefined);
-  assert.deepEqual(tracker.session(), { rev: undefined, baseline: false });
+  assert.deepEqual(tracker.session(), { rev: undefined, tracking: false, observations: 0, state: { additions: 0, deletions: 0 } });
   tracker.touch();
   t.mock.timers.tick(5000);
   await flush();
@@ -470,4 +457,75 @@ test("real git: ignored files never count, binary untracked files are skipped", 
   assert.deepEqual(await readChangeSample(dir, { rev: await resolveSessionRev(dir) }).then((r) => (r.kind === "sample" ? [...r.sample.untracked] : [])), [["notes.md", 2]]);
   await tracker.refresh();
   assert.deepEqual(tracker.snapshot(), { additions: 2, deletions: 0, files: 1 });
+});
+
+test("real git: churn counts work the session adds and then removes again", async (t) => {
+  const dir = realRepo(t);
+  const tracker = createGitChangesTracker({ getCwd: () => dir, intervalMs: 60_000 });
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "a clean start has no churn");
+
+  // The session writes a 14-line probe (the shape of the reported bug: this
+  // probe never reaches git history, so no state comparison can see it).
+  const head = readFileSync(join(dir, "a.txt"), "utf8");
+  const probe = Array.from({ length: 14 }, (_, i) => `probe ${i}`).join("\n") + "\n";
+  writeFileSync(join(dir, "a.txt"), head + probe);
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 14, deletions: 0, files: 1 });
+
+  // …then deletes it again, replacing it with 5 comment lines. A state
+  // comparison reads +5 −0 here; the churn is +19 −14.
+  writeFileSync(join(dir, "a.txt"), head + "// c1\n// c2\n// c3\n// c4\n// c5\n");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 19, deletions: 14, files: 1 }, "the 14 deletions survive their own removal");
+  assert.deepEqual(tracker.session().state, { additions: 5, deletions: 0 }, "…while the work-tree state is still reported for reconciliation");
+
+  // Deleting two of the session's own lines raises the deletion total: churn
+  // never shrinks while the work tree is dirty.
+  writeFileSync(join(dir, "a.txt"), head + "// c1\n// c2\n// c3\n");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 19, deletions: 16, files: 1 });
+
+  // Committing the rest clears the totals (the tree is clean against HEAD).
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "comment");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "a commit clears the churn it captured");
+  tracker.dispose();
+});
+
+test("real git: edits inside work that predates the session count exactly", async (t) => {
+  const dir = realRepo(t);
+  // Work in progress before the session: a.txt already differs from HEAD.
+  writeFileSync(join(dir, "a.txt"), "one\ntwo\nTHREE\nFOUR\nfive\nsix\n");
+  const tracker = createGitChangesTracker({ getCwd: () => dir, intervalMs: 60_000 });
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 0, deletions: 0, files: 0 }, "pre-session work is the reference, not churn");
+  assert.deepEqual(tracker.session().state, { additions: 4, deletions: 1 }, "…but it is still visible as the work-tree state");
+
+  // Rewriting two of those pre-session lines and appending one: the old
+  // HEAD-anchored subtraction reported +0 −0 for exactly this edit.
+  writeFileSync(join(dir, "a.txt"), "one\ntwo\nTHREE\nFOUR2\nFIVE2\nfive\nsix\nseven\n");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 3, deletions: 1, files: 1 });
+
+  // Deleting a pre-session line counts as a deletion too.
+  writeFileSync(join(dir, "a.txt"), "one\ntwo\nTHREE\nFOUR2\nFIVE2\nsix\nseven\n");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 3, deletions: 2, files: 1 });
+  tracker.dispose();
+});
+
+test("real git: an untracked file counts its growth and its later shrink", async (t) => {
+  const dir = realRepo(t);
+  const tracker = createGitChangesTracker({ getCwd: () => dir, intervalMs: 60_000 });
+  await tracker.refresh();
+  writeFileSync(join(dir, "notes.md"), "a\nb\nc\n");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 3, deletions: 0, files: 1 }, "a new file counts its lines");
+  // The same file loses a line: that is churn too, not a silent no-op.
+  writeFileSync(join(dir, "notes.md"), "a\nc\n");
+  await tracker.refresh();
+  assert.deepEqual(tracker.snapshot(), { additions: 3, deletions: 1, files: 1 });
+  tracker.dispose();
 });

@@ -1,3 +1,57 @@
+# Validation record — 0.19.3 (footer change counts are observed churn)
+
+Report: the footer's `-D` was far below reality (a screenshot showed a 14-line deletion against `-6`), and the
+number never caught up however long the user waited.
+
+## Reproduction (real git driving the real tracker)
+
+A script (`/tmp/footer-repro.mjs`) drove `createGitChangesTracker` against temp repos and compared the footer with
+the truth:
+
+| scenario | old footer | truth |
+| --- | --- | --- |
+| delete 5 committed lines, add 2 (clean tree) | `+2 -5` | `+2 -5` |
+| add a 14-line probe, then remove it and write 5 comment lines | `+5 -0` | churn `+19 -14` |
+| pre-session WIP present; rewrite 3 lines inside it | `+0 -0` | `+3 -3` |
+| …then append 4 lines | `+4 -0` | `+7 -3` |
+| pre-session WIP present; delete 5 committed lines | `+0 -5` | `+0 -5` |
+
+Two distinct defects: (1) the totals subtracted two HEAD-anchored `--numstat` samples per path, which is not valid
+when the edit overlaps work that was already uncommitted at session start — the clamp then swallows the whole
+change (the `+3 -3 → +0 -0` row); (2) no state comparison can see work the session added and then removed — the
+probe lines in the report never entered git history (`git log -S 'skill-mux-probe.log'` over all refs is empty), so
+those 14 deletions were invisible by construction.
+
+## Fix
+
+`src/git-changes.ts` counts observed churn: each read diffs every changed path's CONTENT against the content the
+session last saw and adds the difference, so additions and deletions accumulate independently and never cancel.
+The session's first read is a content reference (pre-session work still counts as nothing). A commit folds the
+committed delta out of the totals (0.15.4) and a work tree with no diffs and no untracked files resets them.
+
+Content is compared with git's own machinery without writing to the user's repository: changed paths are hashed
+with `git hash-object -w --no-filters` into a session-private `GIT_OBJECT_DIRECTORY` under the OS temp dir, and
+`git diff --numstat <oldBlob> <newBlob>` yields the exact churn (verified: blob↔blob diffs need no working tree,
+and the temp store leaves `.git/objects` untouched). Paths whose content cannot be referenced degrade to counting
+the growth of their state counts, so a failure can neither double count nor clear the totals; change detection
+combines the work-tree stat with the diff counts, so an edit that keeps size and mtime still registers.
+`/codex-ui` now prints the churn, the read count and the raw work-tree-vs-HEAD numbers side by side, so the churn
+can be reconciled with `git diff --numstat` by hand.
+
+## Verified
+
+- Repro after the fix: `+0 -0` / `+3 -3` / `+7 -3` for the pre-session-WIP case, `+19 -14` for the probe case, and
+  `+2 -5` / `+0 -5` unchanged where the old numbers were already right.
+- `npm test` 400/400 — `test/git-changes.test.mts` (17 cases) adds real-git regressions for churn across
+  add-then-remove, edits inside pre-session work, and an untracked file that grows and then shrinks, plus the
+  pure math (`foldCommitted`, `countsGrowth`, `samePathState`).
+- `npm run check` 0 errors; `npm run test:host` PASS; pty rc=0 with a new end-to-end assertion: after rewriting the
+  three lines the session itself appended, the footer reads `+5 -3` while the work tree vs HEAD is only `+2 -0`.
+- Known limits (documented): churn is sampled at the poll/debounce resolution, so an add+remove that happens
+  entirely between two reads is invisible (no tool ledger is consulted, by design); binary files and files git
+  reports without line counts contribute no line counts; a path whose content can never be hashed falls back to
+  count growth.
+
 # Validation record — 0.19.2 (folded skill entry lists every skill name)
 
 Report: invoking two skills folded into one entry showing only the first name (`[skill] software-quality-workflows …`).

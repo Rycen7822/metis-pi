@@ -417,6 +417,15 @@ try {
     // 3 appended lines → "+3 -0".
     fs.appendFileSync(path.join(WORKSPACE, "scripted.txt"), "delta\nepsilon\nzeta\n");
     frames.gitChangesAfter = await waitFor(/\(main\) \+3 -0/, 15_000, "post-commit edits count against the new HEAD");
+
+    // 0.19.3: the counts are observed CHURN, not a snapshot of the current diff.
+    // Rewriting the three lines the session itself just added has to raise the
+    // deletion total too (+3 −0, then +2 −3 → +5 −3). The old per-path numstat
+    // subtraction reported "+2 -0" here, which is the bug that was reported: the
+    // deletions of work the session added and then replaced never showed up.
+    fs.writeFileSync(path.join(WORKSPACE, "scripted.txt"), "alpha\nbeta\ngamma\nTHE1\nTHE2\n");
+    frames.gitChangesChurn = await waitFor(/\(main\) \+5 -3/, 20_000, "churn keeps the deletions of lines this session added itself");
+    assert.match(frames.gitChangesChurn, /\(main\) \+5 -3/, "absolute churn, not the +2 -0 work-tree state");
   } else {
     console.log("  NOTE: git unavailable — session change counts not asserted");
   }
@@ -916,7 +925,11 @@ try {
 
   console.log("PASS: real TUI frames verified —");
   console.log("  idle footer:  model/effort/provider/capacity visible");
-  console.log(hasGit ? "  git changes:  session Δ +8 -2 absolute, commit clears, post-commit edits re-count" : "  git changes:  not asserted (git unavailable)");
+  console.log(
+    hasGit
+      ? "  git changes:  session churn +8 -2 absolute, commit clears, post-commit edits re-count, rewriting self-added lines keeps their deletions (+5 -3)"
+      : "  git changes:  not asserted (git unavailable)",
+  );
   console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand, wheel scrolls the window");
   console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
