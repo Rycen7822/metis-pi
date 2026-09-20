@@ -5,6 +5,8 @@
 // opens on the FIRST agent_start of a chain and never resets mid-chain. Date
 // is used only for wall-clock stamps persisted in the summary entry.
 
+import { formatCount } from "./segments.ts";
+
 export type ActivityPhase =
   | "idle"
   | "working"
@@ -325,14 +327,9 @@ export function formatDuration(ms: number): string {
 }
 
 /** Codex compact tokens: 143000 → "143k", 9200 → "9.2k", 5000 → "5.0k"
- * (one decimal kept below 10k for stable column alignment). */
+ * (one decimal kept below 10k for stable column alignment). Delegates to the
+ * shared k/M formatter so a token count can never disagree with the counts
+ * rendered next to it. */
 export function formatTokensCompact(tokens: number): string {
-  if (!Number.isFinite(tokens) || tokens <= 0) return "0";
-  if (tokens >= 1000) {
-    const k = tokens / 1000;
-    if (k >= 100) return `${Math.round(k)}k`;
-    if (k >= 10) return `${Math.round(k * 10) / 10}k`;
-    return `${k.toFixed(1)}k`;
-  }
-  return String(Math.round(tokens));
+  return formatCount(tokens);
 }
