@@ -5,9 +5,17 @@
 // src/skill-mux.ts (the completion/expansion side). Both go through this
 // module so the syntax cannot drift apart.
 
+/** The trigger prefix of a leading skill token: `/skill:name` or `￥name`. Both
+ * token regexes below are built from it so the syntax cannot drift apart. */
+const SKILL_TRIGGER = "(?:\\/skill:|￥)";
+
 /** One COMPLETE leading skill token (`/skill:name` or `￥name`) plus the
  * whitespace that ends it. The name runs to the next whitespace. */
-export const SKILL_HEAD_TOKEN = /^(?:\/skill:|￥)(\S+)\s+/;
+export const SKILL_HEAD_TOKEN = new RegExp(`^${SKILL_TRIGGER}(\\S+)\\s+`);
+
+/** The same token terminated by whitespace OR end of input — the mux expansion
+ * must also accept a trailing name with no whitespace after it yet. */
+export const SKILL_TOKEN_EOL = new RegExp(`^${SKILL_TRIGGER}(\\S+)(\\s+|$)`);
 
 export interface LeadingSkillHeads {
   /** How many complete skill tokens the text opens with. */

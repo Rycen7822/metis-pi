@@ -29,11 +29,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadSkills, stripFrontmatter, type InputEvent, type InputEventResult, type Skill } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
-import { splitLeadingSkillHeads } from "./skill-tokens.ts";
-
-/** Leading skill token: `/skill:name` or `￥name`; the name runs to the
- * next whitespace (or EOL). */
-const SKILL_TOKEN = /^(?:\/skill:|￥)([^\s]+)(\s+|$)/;
+import { SKILL_TOKEN_EOL, splitLeadingSkillHeads } from "./skill-tokens.ts";
 
 /** Does the text open with a skill trigger? Single char check, no regex. */
 const opensWithSkill = (text: string): boolean => {
@@ -219,7 +215,7 @@ export function createSkillMux(options?: SkillMuxOptions): SkillMux {
     const tokens: { name: string; raw: string; native: boolean }[] = [];
     let rest = text;
     let match: RegExpExecArray | null;
-    while ((match = SKILL_TOKEN.exec(rest)) !== null) {
+    while ((match = SKILL_TOKEN_EOL.exec(rest)) !== null) {
       tokens.push({ name: match[1], raw: match[0].trimEnd(), native: match[0].startsWith("/skill:") });
       rest = rest.slice(match[0].length);
     }
