@@ -36,6 +36,10 @@ function shortened(line: string): string {
   return line.length > MAX_PREVIEW_LINE_CHARS
     ? `${line.slice(0, MAX_PREVIEW_LINE_CHARS).replace(/[\ud800-\udbff]$/, "")} … [line shortened in preview]` : line;
 }
+/** Right-aligned four-cell line numbers, the one numbering used by every preview. */
+function numberedLines(lines: readonly string[]): string[] {
+  return lines.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
+}
 function preview(lines: string[], limit: number, expanded: boolean, hint: string, mode: "head" | "tail" | "both" = "head"): string[] {
   if (expanded) return lines;
   let selected = lines;
@@ -194,7 +198,7 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   if (name === "write" && !error && !options.isPartial && typeof asRecord(ctx.args).content === "string") {
     const written = cleanLines(asRecord(ctx.args).content as string);
     sections.push(gutter([`Written content (${written.length} lines)`], theme, "muted"));
-    const code = written.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
+    const code = numberedLines(written);
     sections.push(gutter(preview(code, 12, expanded, hint), theme));
   }
   const foldedExploration = EXPLORATION.has(name) && !expanded && !error && !options.isPartial;
@@ -317,7 +321,7 @@ export function makeRenderers(
       const body = lines.length ? gutter(preview(lines, PREVIEW_LINES, expanded, hint), theme, "error") : "";
       const attempted = contentArg
         ? gutter(expanded
-            ? ["attempted content (not written):", ...cleanLines(contentArg).map((line, i) => `${String(i + 1).padStart(4)} ${line}`)]
+            ? ["attempted content (not written):", ...numberedLines(cleanLines(contentArg))]
             : ["attempted content (not written) — expand to view"], theme, "muted")
         : "";
       return component([head, body, attempted].filter(Boolean).join("\n"), ctx);
@@ -339,7 +343,7 @@ export function makeRenderers(
     // unchanged/unavailable/no tracker: preview from the call's own args — never a fabricated +N/-0.
     if (contentArg === undefined) return component("", ctx);
     const lines = cleanLines(contentArg);
-    const numbered = lines.map((line, i) => `${String(i + 1).padStart(4)} ${line}`);
+    const numbered = numberedLines(lines);
     const label = change?.kind === "unchanged"
       ? "written content (unchanged)"
       : `written content (${lines.length} lines)`;
