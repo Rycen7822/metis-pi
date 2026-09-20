@@ -471,9 +471,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // Composer metadata: same-surface belowEditor widget (model/effort/
     // provider + context). Only when the editor surface is active, so the
     // metadata never floats on a bare background.
-    if (typeof ui.setWidget === "function" && config.composer.metadata && config.composer.surface && bindings.surface) {
+    if (facts.available.setWidget && config.composer.metadata && config.composer.surface && bindings.surface) {
       try {
-        ui.setWidget(COMPOSER_META_WIDGET_KEY, (tui: unknown) => {
+        ui.setWidget?.(COMPOSER_META_WIDGET_KEY, (tui: unknown) => {
           captureTui(tui);
           const surface = bindings.surface!;
           return mods.createComposerMetaComponent({
@@ -522,7 +522,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // Working: the standalone above-editor widget with the Codex rhythm.
     // The native loader row is hidden ONLY after the widget installed; without
     // setWidget the old message-based fallback stays (never two Working rows).
-    if (typeof ui.setWidget === "function") {
+    if (facts.available.setWidget) {
       try {
         const factory = (tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) => {
           captureTui(tui);
