@@ -57,7 +57,7 @@ export const TodoToolParams = Type.Object({
     Type.Literal("addBlockedBy"),
     Type.Literal("removeBlockedBy"),
   ]),
-  tasks: Type.Optional(Type.Array(TaskAddItem, { description: "add: flat list of new tasks (the extension builds the tree; do not nest JSON yourself)." })),
+  tasks: Type.Optional(Type.Array(TaskAddItem, { description: "add: flat array of new tasks (no nested JSON); nest by setting parentId to an earlier task of this same batch — e.g. [{title:\"A\"}, {title:\"A.1\", parentId:\"1\"}]." })),
   id: Type.Optional(TaskRefSchema),
   title: Type.Optional(Type.String({ description: "update: new title." })),
   parentId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()], { description: "update: new parent path, or null to move to top level. Moves that would create a cycle are rejected." })),
