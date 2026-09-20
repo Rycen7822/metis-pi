@@ -495,7 +495,28 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     (text) => `\x1b[38;2;${CODEX_CYAN_RGB}m${text}\x1b[39m`,
     (text) => `\x1b[2m${text}\x1b[22m`,
   );
+  // Config access shared by activate() and the write-preview budget below.
+  // PI_AGENT_DIR override is respected by Pi itself; we only need the PATH,
+  // never auth contents.
+  const getAgentDir = (): string => {
+    const fromEnv = process.env.PI_AGENT_DIR;
+    if (fromEnv) return fromEnv;
+    const fromOs = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
+    return fromOs ?? `${process.env.HOME ?? ""}/.pi/agent`;
+  };
+  const readFile = (path: string): string | undefined => {
+    try {
+      return readFileSync(path, "utf8");
+    } catch {
+      return undefined;
+    }
+  };
+  // One boot-time read from the same path activate() resolves.
+  const bootWritePreview = loadConfig(getAgentDir(), readFile).config.writePreview;
+
   activate(pi, {
+    getAgentDir,
+    readFile,
     prototype,
     makeText: (text) => new Tui.Text(text, 0, 0),
     makeDiff: (input) => createDiffComponent({
@@ -546,14 +567,11 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     },
     isCollapsedLabel: (node) => node instanceof Tui.Text,
     makeWriteCall: (input) => {
-      let maxRows: number | undefined;
-      try {
-        const dir = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
-        if (dir) {
-          const { config } = loadConfig(dir, (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } });
-          maxRows = config.writePreview.enabled ? config.writePreview.rows : 0;
-        }
-      } catch { maxRows = undefined; }
+      // Read ONCE at boot from the same path activate() uses: a per-write-call
+      // reload could disagree with the startup config (and made the host's
+      // getAgentDir the only resolution path, dropping the PI_AGENT_DIR
+      // override the startup read honors).
+      const maxRows = bootWritePreview.enabled ? bootWritePreview.rows : 0;
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
@@ -584,19 +602,5 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     piVersion: typeof (Pi as unknown as { VERSION?: unknown }).VERSION === "string"
       ? (Pi as unknown as { VERSION: string }).VERSION
       : "unknown",
-    getAgentDir: () => {
-      // PI_AGENT_DIR override is respected by Pi itself; we only need the PATH, never auth contents.
-      const fromEnv = process.env.PI_AGENT_DIR;
-      if (fromEnv) return fromEnv;
-      const fromOs = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
-      return fromOs ?? `${process.env.HOME ?? ""}/.pi/agent`;
-    },
-    readFile: (path) => {
-      try {
-        return readFileSync(path, "utf8");
-      } catch {
-        return undefined;
-      }
-    },
   });
 }
