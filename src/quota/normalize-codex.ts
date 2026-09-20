@@ -6,19 +6,6 @@
 
 import { remainingPercent, type CodexQuotaSnapshot, type CodexQuotaWindow } from "./types.ts";
 
-export interface RawQuotaWindow {
-  usedPercent?: unknown;
-  windowDurationMins?: unknown;
-  resetsAt?: unknown;
-}
-
-export interface RawQuotaSnapshot {
-  planType?: unknown;
-  primary?: unknown;
-  secondary?: unknown;
-  credits?: unknown;
-}
-
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
