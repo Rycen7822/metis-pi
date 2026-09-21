@@ -1,5 +1,6 @@
 import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic, createAssistantMessageEventStream, } from "@earendil-works/pi-ai";
 import { createGrammarToolInputProperties } from "../constrained-sampling.js";
+import { declaredToolsOf } from "../transcript.js";
 import { DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_SSE_HEADER_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_RETRIES, INITIAL_STREAM_RETRY_DELAY_MS, MAX_SSE_REQUEST_RETRIES, MAX_STREAM_MAX_RETRIES } from "./constants.js";
 import { createErrorMessage, isRetryableRequestStatus, isRetryableStreamStatus, NonRetryableProviderError, parseErrorResponse } from "./errors.js";
 import { buildSSEHeaders, buildWebSocketHeaders, createCodexRequestId, extractAccountId, headersToRecord, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexUrl, resolveCodexWebSocketUrl } from "./headers.js";
@@ -119,7 +120,7 @@ export function createCodexTransportStream(model, context, options, deps) {
     const responsesLite = deps.useResponsesLite?.(model)
         ?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
             && supportsResponsesLiteModel(model.id));
-    const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, responsesLite);
+    const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
     const preferredTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai);
     const effectiveTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai, options?.sessionId);
     const effectiveOptions = options
@@ -246,7 +247,7 @@ export function createCodexTransportStream(model, context, options, deps) {
                         const fallbackArmed = immediateFallback || (retryableWebSocketError && (attempt >= streamMaxRetries || overloadBudgetExhausted));
                         appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic(retryableWebSocketError ? "provider_transport_failure" : "provider_stream_failure", error, {
                             configuredTransport: preferredTransport,
-                            fallbackTransport: fallbackArmed ? "sse" : undefined,
+                            ...(fallbackArmed ? { fallbackTransport: "sse" } : {}),
                             eventsEmitted: websocketStarted,
                             phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
                             requestBytes: new TextEncoder().encode(bodyJson).byteLength,

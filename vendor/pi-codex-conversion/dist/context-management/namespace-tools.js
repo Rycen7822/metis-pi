@@ -1,5 +1,6 @@
 import { createAssistantMessageEventStream, } from "@earendil-works/pi-ai";
 import { HISTORY_ACTIONS, HISTORY_DESCRIPTION, NOTES_ACTIONS, NOTES_DESCRIPTION, } from "./tool-contract.js";
+import { currentToolNamesOf } from "../providers/transcript.js";
 const ACTIONS = {
     history: new Set(HISTORY_ACTIONS),
     notes: new Set(NOTES_ACTIONS),
@@ -198,7 +199,7 @@ export function rewriteContextNamespaceTools(payload, options = {}) {
     return changed ? { ...payload, tools, input } : payload;
 }
 export function hasContextNamespaceRouters(context) {
-    const names = new Set(context.tools?.map((tool) => tool.name));
+    const names = currentToolNamesOf(context);
     return names.has("history") && names.has("notes");
 }
 function routedAction(call) {

@@ -4,16 +4,100 @@ import { normalizeResponsesToolHistory } from "./tool-history.js";
 import { normalizeResponsesMessageHistory } from "./message-history.js";
 import { encryptedToolOutputFromDetails, imageDetailForResponses, isImageGenerationCallBlock, isWebSearchCallBlock, sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem } from "./native-items.js";
 import { unrouteContextNamespaceToolCall } from "../../context-management/namespace-tools.js";
+import { getAnchoredToolAdditions, getInitialSystemMessage, getSystemMessageText, legacyAddedToolNames, normalizeProviderContext, renderSystemMessageUpdate, resolveTranscript, resolveTranscriptTools, } from "../transcript.js";
 export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
-export function splitDeferredTools(context, enabled) {
-    const uniqueTools = new Map();
-    for (const tool of context.tools ?? [])
-        uniqueTools.set(tool.name, tool);
-    if (!enabled)
-        return { immediate: [...uniqueTools.values()], deferred: new Map() };
-    const deferredNames = new Set();
+/**
+ * Read the transcript semantics a model declares. Every provider-facing path (normal request,
+ * compaction serializer, native replay) resolves them here, so the same transcript is replayed
+ * the same way and no caller re-invents a second, independent decision.
+ */
+export function resolveResponsesTranscriptSemantics(model) {
+    const compat = model.compat;
+    return {
+        supportsStrictMode: compat?.supportsStrictMode ?? true,
+        supportsMidConvoSystemMessages: compat?.supportsMidConvoSystemMessages === true,
+        deferredToolsMode: compat?.supportsAdditionalTools === true
+            ? "additional-tools"
+            : compat?.supportsToolSearch === true
+                ? "tool-search"
+                : undefined,
+    };
+}
+/**
+ * Whether the resolved transcript starts at its head: collapsing synthesizes a leading system
+ * message, so a collapsed continuation does start at a head even when the caller passed a slice.
+ */
+function transcriptHeadIncluded(semantics, startsAtTranscriptHead) {
+    return !(semantics.supportsMidConvoSystemMessages && startsAtTranscriptHead === false);
+}
+/**
+ * The single tool placement decision for `messages`: which tools the request declares at the top
+ * level and which ones its later system messages announce in place. Callers that serialize slices
+ * of an already decided transcript pass the result on instead of asking again. Agent-level entries
+ * are accepted: the decision only reads system messages and tool declarations.
+ */
+export function resolveToolPlacement(model, messages, startsAtTranscriptHead = true) {
+    const semantics = resolveResponsesTranscriptSemantics(model);
+    return splitDeferredTools(resolveTranscript(normalizeProviderContext({ messages }), semantics.supportsMidConvoSystemMessages), semantics.deferredToolsMode !== undefined, transcriptHeadIncluded(semantics, startsAtTranscriptHead));
+}
+/**
+ * Replay one transcript into provider input plus the placement decision that owns every tool
+ * declaration. Callers pass `toolPlacement` when they serialize slices of a transcript whose
+ * decision was already made (native replay), so no slice decides on its own.
+ */
+export function prepareResponsesTranscript(args) {
+    const semantics = resolveResponsesTranscriptSemantics(args.model);
+    const toolOptions = {
+        strict: false,
+        supportsStrictMode: semantics.supportsStrictMode,
+        supportsOpenAIGrammarTools: (args.grammarToolInputProperties?.size ?? 0) > 0,
+    };
+    const resolved = resolveTranscript(normalizeProviderContext({ messages: args.messages }), semantics.supportsMidConvoSystemMessages);
+    const startsAtTranscriptHead = transcriptHeadIncluded(semantics, args.startsAtTranscriptHead);
+    const toolPlacement = args.toolPlacement
+        ?? splitDeferredTools(resolved, semantics.deferredToolsMode !== undefined, startsAtTranscriptHead);
+    const input = convertResponsesMessages(args.model, resolved, args.allowedToolCallProviders ?? CODEX_TOOL_CALL_PROVIDERS, {
+        includeSystemPrompt: args.includeSystemPrompt ?? false,
+        ...(args.grammarToolInputProperties ? { grammarToolInputProperties: args.grammarToolInputProperties } : {}),
+        deferredTools: toolPlacement.deferred,
+        deferredToolsMode: semantics.deferredToolsMode,
+        anchorsToolAdditions: toolPlacement.anchorsAdditions,
+        supportsMidConvoSystemMessages: semantics.supportsMidConvoSystemMessages,
+        startsAtTranscriptHead,
+        toolOptions,
+    });
+    const initialSystemMessage = getInitialSystemMessage(resolved.messages, startsAtTranscriptHead);
+    return {
+        input,
+        instructions: initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "",
+        toolPlacement,
+        toolOptions,
+    };
+}
+/**
+ * Decide where every current tool is declared: the top-level request field or a later in-place
+ * addition. This is the single placement decision for the request — the caller hands it to
+ * `convertResponsesMessages`, so the top-level declarations and the in-message additions cannot
+ * disagree.
+ *
+ * Pi 0.86 anchors dynamic tools on system messages (`toolsAdded`); the bundled 3.0.34 transport
+ * predates that and used `ToolResultMessage.addedToolNames`. Both shapes are read here so code-mode
+ * tool deferral keeps its cache-friendly shape on either host.
+ *
+ * Removals and same-name redeclarations are not expressible as additions: the request then carries
+ * the complete current tool set, and nothing is declared in place (which would duplicate a tool or
+ * resurrect a removed one).
+ */
+export function splitDeferredTools(context, enabled, startsAtTranscriptHead = true) {
+    const messages = normalizeProviderContext(context).messages;
+    const { requestTools, anchorsAdditions } = resolveTranscriptTools(messages, enabled, startsAtTranscriptHead);
+    if (!anchorsAdditions)
+        return { immediate: requestTools, deferred: new Map(), anchorsAdditions: false };
+    const anchoredAdditions = getAnchoredToolAdditions(messages, startsAtTranscriptHead);
+    const deferredNames = new Set(anchoredAdditions.map((tool) => tool.name));
+    // Pre-0.86 transcripts recorded each dynamic tool on the tool result that introduced it.
     const usedNames = new Set();
-    for (const message of context.messages) {
+    for (const message of messages) {
         if (message.role === "assistant") {
             for (const block of message.content) {
                 if (block.type === "toolCall")
@@ -21,7 +105,7 @@ export function splitDeferredTools(context, enabled) {
             }
         }
         else if (message.role === "toolResult") {
-            for (const name of message.addedToolNames ?? []) {
+            for (const name of legacyAddedToolNames(message)) {
                 if (!usedNames.has(name))
                     deferredNames.add(name);
             }
@@ -29,13 +113,18 @@ export function splitDeferredTools(context, enabled) {
     }
     const immediate = [];
     const deferred = new Map();
-    for (const [name, tool] of uniqueTools) {
-        if (deferredNames.has(name))
-            deferred.set(name, tool);
+    for (const tool of requestTools) {
+        if (deferredNames.has(tool.name))
+            deferred.set(tool.name, tool);
         else
             immediate.push(tool);
     }
-    return { immediate, deferred };
+    // Tools anchored on a later system message are absent from the top-level declaration.
+    for (const tool of anchoredAdditions) {
+        if (!deferred.has(tool.name))
+            deferred.set(tool.name, tool);
+    }
+    return { immediate, deferred, anchorsAdditions: true };
 }
 function sanitizeSurrogates(text) {
     return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
@@ -73,14 +162,69 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
             normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
         return `${normalizedCallId}|${normalizedItemId}`;
     };
-    const transformedMessages = normalizeResponsesMessageHistory(context.messages, model, normalizeToolCallId);
+    const normalizedContext = resolveTranscript(normalizeProviderContext(context), options?.supportsMidConvoSystemMessages);
+    const startsAtTranscriptHead = options?.startsAtTranscriptHead !== false;
+    const transformedMessages = normalizeResponsesMessageHistory(normalizedContext.messages, model, normalizeToolCallId);
     const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-    if (includeSystemPrompt && context.systemPrompt) {
-        messages.push({ role: model.reasoning ? "developer" : "system", content: sanitizeSurrogates(context.systemPrompt) });
-    }
+    const supportsMidConvoSystemMessages = options?.supportsMidConvoSystemMessages === true;
+    const anchorsToolAdditions = options?.anchorsToolAdditions === true;
+    const appendSystemToolAdditions = (message) => {
+        const tools = anchorsToolAdditions ? (message.toolsAdded ?? []) : [];
+        if (tools.length === 0)
+            return;
+        if (options?.deferredToolsMode === "additional-tools") {
+            messages.push({
+                type: "additional_tools",
+                role: "developer",
+                tools: convertResponsesTools(tools, options.toolOptions),
+            });
+            return;
+        }
+        if (options?.deferredToolsMode !== "tool-search")
+            return;
+        const names = tools.map((tool) => tool.name);
+        // Derive the id from the anchor itself (not its index) so a replayed slice of the same
+        // transcript produces the same tool_search pair as the full request.
+        const seed = `${message.timestamp ?? 0}:${renderSystemMessageUpdate(message)}`;
+        const searchCallId = `pi_tool_load_${shortHash(`${seed}:${names.join(",")}`)}`;
+        messages.push({
+            type: "tool_search_call",
+            call_id: searchCallId,
+            execution: "client",
+            status: "completed",
+            arguments: { query: names.join(" "), limit: names.length },
+        });
+        messages.push({
+            type: "tool_search_output",
+            call_id: searchCallId,
+            execution: "client",
+            status: "completed",
+            tools: convertResponsesTools(tools, { ...options.toolOptions, deferLoading: true }),
+        });
+    };
+    const compat = model.compat;
+    const instructionRole = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
     let msgIndex = 0;
+    let sourceIndex = 0;
     for (const msg of transformedMessages) {
-        if (msg.role === "user") {
+        const isLeadingSystemMessage = startsAtTranscriptHead && sourceIndex++ === 0 && msg.role === "system";
+        if (msg.role === "system") {
+            if (!isLeadingSystemMessage)
+                appendSystemToolAdditions(msg);
+            if (isLeadingSystemMessage) {
+                if (includeSystemPrompt) {
+                    const text = getSystemMessageText(msg);
+                    if (text.length > 0)
+                        messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
+                }
+            }
+            else if (supportsMidConvoSystemMessages) {
+                const text = renderSystemMessageUpdate(msg);
+                if (text.length > 0)
+                    messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
+            }
+        }
+        else if (msg.role === "user") {
             if (typeof msg.content === "string") {
                 messages.push({ role: "user", content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }] });
             }
@@ -203,21 +347,21 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
                 output: output,
             });
             const newlyLoadedTools = [];
-            for (const name of msg.addedToolNames ?? []) {
+            for (const name of legacyAddedToolNames(msg)) {
                 const tool = options?.deferredTools?.get(name);
                 if (!tool || loadedTools.has(name))
                     continue;
                 loadedTools.set(name, tool);
                 newlyLoadedTools.push(tool);
             }
-            if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "additional-tools") {
+            if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "additional-tools") {
                 messages.push({
                     type: "additional_tools",
                     role: "developer",
                     tools: convertResponsesTools([...loadedTools.values()], options.toolOptions),
                 });
             }
-            else if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "tool-search") {
+            else if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "tool-search") {
                 const names = newlyLoadedTools.map((tool) => tool.name);
                 const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
                 messages.push({

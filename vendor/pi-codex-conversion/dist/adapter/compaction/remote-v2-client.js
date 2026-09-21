@@ -4,9 +4,23 @@ import { canonicalCompactionOutput, normalizeRemoteCompactionV2PromptInput } fro
 import { withRemoteCompactionV2Feature } from "../../providers/openai-responses/compaction-v2-feature.js";
 import { sleep } from "../../providers/openai-codex/sse.js";
 import { isWebSocketSseFallbackActive } from "../../providers/openai-codex/websocket.js";
-import { canonicalCompactionPromptInput, canonicalCompactionRequestBody } from "../../providers/openai-codex/session-continuity.js";
+import { canonicalCompactionRequestBody } from "../../providers/openai-codex/session-continuity.js";
 import { extractAccountId, resolveCodexWebSocketUrl } from "../../providers/openai-codex/headers.js";
+import { toProviderTranscript } from "../../providers/transcript.js";
 const MAX_STREAM_RETRIES = 2;
+/**
+ * Provider context for the compaction request. Only the prompt and the replayed history's own
+ * top-level tools travel here: the history is the source of truth for both halves of the request.
+ */
+function nativeCompactionContext(options) {
+    return {
+        // Match the active provider lane so cached WebSocket compaction can send
+        // only previous_response_id plus the trigger instead of the full history.
+        systemPrompt: options.systemPrompt,
+        messages: [],
+        ...(options.history.tools.length > 0 ? { tools: [...options.history.tools] } : {}),
+    };
+}
 function resolveStream(options) {
     if (options.runtime.codexTransport) {
         // The Codex API implementation is registered once under the stock
@@ -46,7 +60,7 @@ function diagnosticTransport(transport) {
     return transport === "websocket" || transport === "websocket-cached" ? "websocket" : "sse";
 }
 function canonicalSessionIdentity(options) {
-    if (options.promptInputSource === "reconstructed" || !options.runtime.codexTransport || !options.runtime.apiKey)
+    if (options.canonicalInput === undefined || !options.runtime.codexTransport || !options.runtime.apiKey)
         return undefined;
     return {
         url: resolveCodexWebSocketUrl(options.runtime.baseUrl),
@@ -67,7 +81,7 @@ async function runAttempt(options, streamSimple) {
     const outputItems = [];
     let responseStatus;
     const compactionDiagnostic = options.compactionDiagnostic ?? {
-        inputSource: options.promptInputSource ?? "reconstructed",
+        inputSource: options.canonicalInput !== undefined ? "canonical" : "reconstructed",
         canonicalReplay: "not_applicable",
         checkpointReused: false,
     };
@@ -75,12 +89,8 @@ async function runAttempt(options, streamSimple) {
         compactionDiagnostic.transport = diagnosticTransport(options.transport);
     }
     const canonicalIdentity = canonicalSessionIdentity(options);
-    const canonicalInput = options.promptInputSource === "canonical"
-        ? options.promptInput
-        : options.promptInputSource === undefined && canonicalIdentity
-            ? canonicalCompactionPromptInput(options.sessionId, options.runtime.model, canonicalIdentity)
-            : undefined;
-    const canonicalBody = options.promptInputSource !== "reconstructed" && canonicalIdentity
+    const canonicalInput = options.canonicalInput;
+    const canonicalBody = canonicalInput !== undefined && canonicalIdentity
         ? canonicalCompactionRequestBody(options.sessionId, options.runtime.model, canonicalIdentity)
         : undefined;
     const streamOptions = {
@@ -101,7 +111,7 @@ async function runAttempt(options, streamSimple) {
             const requestBody = canonicalBody
                 ? withCurrentCompactionControls(canonicalBody, body)
                 : body;
-            const promptInput = normalizeRemoteCompactionV2PromptInput(canonicalInput ?? options.promptInput);
+            const promptInput = normalizeRemoteCompactionV2PromptInput(canonicalInput ?? options.history.input);
             const request = await shrinkNativeCompactionRequestForEndpoint({
                 model: requestBody.model,
                 input: promptInput,
@@ -122,7 +132,7 @@ async function runAttempt(options, streamSimple) {
     };
     let completed;
     let completedNormally = false;
-    for await (const rawEvent of streamSimple(options.runtime.currentModel, options.context, streamOptions)) {
+    for await (const rawEvent of streamSimple(options.runtime.currentModel, toProviderTranscript(nativeCompactionContext(options)), streamOptions)) {
         const event = rawEvent;
         if (event.type === "done") {
             completed = event.message;

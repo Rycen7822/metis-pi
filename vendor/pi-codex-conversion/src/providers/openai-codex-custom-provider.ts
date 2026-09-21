@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
 import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+import { declaredToolsOf } from "./transcript.ts";
 import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexWebSocketUrl } from "./openai-codex/headers.ts";
 import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";
 import { buildRequestBody } from "./openai-codex/request-body.ts";
@@ -81,7 +82,7 @@ export async function prewarmOpenAICodexWebSocket<TApi extends Api>(
 	const responsesLite = deps.useResponsesLite?.(model)
 		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
 			&& supportsResponsesLiteModel(model.id));
-	const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, responsesLite);
+	const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
 	const effectiveOptions = runtimeConfig?.compaction?.responsesCompaction
 		? { ...options, grammarToolInputProperties, headers: withRemoteCompactionV2Feature(options.headers) }
 		: { ...options, grammarToolInputProperties };

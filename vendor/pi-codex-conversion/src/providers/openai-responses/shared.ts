@@ -1,4 +1,4 @@
-import type { Api, Context, Model, Tool, Usage } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, SystemMessage, Tool, Usage } from "@earendil-works/pi-ai";
 import type {
 	ResponseCreateParamsStreaming,
 	ResponseInput,
@@ -17,6 +17,17 @@ import { normalizeResponsesToolHistory } from "./tool-history.ts";
 import { normalizeResponsesMessageHistory } from "./message-history.ts";
 import { encryptedToolOutputFromDetails, imageDetailForResponses, isImageGenerationCallBlock, isWebSearchCallBlock, sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageDetail, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
 import { unrouteContextNamespaceToolCall } from "../../context-management/namespace-tools.ts";
+import {
+	getAnchoredToolAdditions,
+	getInitialSystemMessage,
+	getSystemMessageText,
+	legacyAddedToolNames,
+	normalizeProviderContext,
+	renderSystemMessageUpdate,
+	resolveTranscript,
+	resolveTranscriptTools,
+	type TranscriptMessages,
+} from "../transcript.ts";
 
 type Message = Context["messages"][number];
 
@@ -39,6 +50,16 @@ interface ConvertResponsesMessagesOptions {
 	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
 	deferredTools?: ReadonlyMap<string, Tool> | undefined;
 	deferredToolsMode?: "additional-tools" | "tool-search" | undefined;
+	/** Placement from `splitDeferredTools`: later system messages declare their additions in place. */
+	anchorsToolAdditions?: boolean | undefined;
+	/** Model accepts system/developer messages in the middle of the transcript. */
+	supportsMidConvoSystemMessages?: boolean | undefined;
+	/**
+	 * Whether `context.messages` starts at the transcript head. Slices that continue a longer
+	 * transcript pass false so a leading update is replayed in place instead of being dropped
+	 * as the global prompt.
+	 */
+	startsAtTranscriptHead?: boolean | undefined;
 	toolOptions?: ConvertResponsesToolsOptions | undefined;
 }
 
@@ -51,20 +72,167 @@ interface ConvertResponsesToolsOptions {
 
 export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
-export function splitDeferredTools(context: Context, enabled: boolean): { immediate: Tool[]; deferred: Map<string, Tool> } {
-	const uniqueTools = new Map<string, Tool>();
-	for (const tool of context.tools ?? []) uniqueTools.set(tool.name, tool);
-	if (!enabled) return { immediate: [...uniqueTools.values()], deferred: new Map() };
+export type ResponsesToolDeclarationMode = "additional-tools" | "tool-search";
 
-	const deferredNames = new Set<string>();
+/** Model capabilities that decide how a transcript is replayed on the wire. */
+export interface ResponsesTranscriptSemantics {
+	/** The model accepts system/developer messages between turns. */
+	supportsMidConvoSystemMessages: boolean;
+	/** How tools declared after the first turn travel; `undefined` when the model has no in-place additions. */
+	deferredToolsMode: ResponsesToolDeclarationMode | undefined;
+	supportsStrictMode: boolean;
+}
+
+/**
+ * Read the transcript semantics a model declares. Every provider-facing path (normal request,
+ * compaction serializer, native replay) resolves them here, so the same transcript is replayed
+ * the same way and no caller re-invents a second, independent decision.
+ */
+export function resolveResponsesTranscriptSemantics(model: Model<Api>): ResponsesTranscriptSemantics {
+	const compat = model.compat as {
+		supportsStrictMode?: boolean | undefined;
+		supportsAdditionalTools?: boolean | undefined;
+		supportsToolSearch?: boolean | undefined;
+		supportsMidConvoSystemMessages?: boolean | undefined;
+	} | undefined;
+	return {
+		supportsStrictMode: compat?.supportsStrictMode ?? true,
+		supportsMidConvoSystemMessages: compat?.supportsMidConvoSystemMessages === true,
+		deferredToolsMode: compat?.supportsAdditionalTools === true
+			? "additional-tools"
+			: compat?.supportsToolSearch === true
+				? "tool-search"
+				: undefined,
+	};
+}
+
+/**
+ * Whether the resolved transcript starts at its head: collapsing synthesizes a leading system
+ * message, so a collapsed continuation does start at a head even when the caller passed a slice.
+ */
+function transcriptHeadIncluded(semantics: ResponsesTranscriptSemantics, startsAtTranscriptHead: boolean | undefined): boolean {
+	return !(semantics.supportsMidConvoSystemMessages && startsAtTranscriptHead === false);
+}
+
+/**
+ * The single tool placement decision for `messages`: which tools the request declares at the top
+ * level and which ones its later system messages announce in place. Callers that serialize slices
+ * of an already decided transcript pass the result on instead of asking again. Agent-level entries
+ * are accepted: the decision only reads system messages and tool declarations.
+ */
+export function resolveToolPlacement<TApi extends Api>(
+	model: Model<TApi>,
+	messages: TranscriptMessages,
+	startsAtTranscriptHead = true,
+): DeferredToolPlacement {
+	const semantics = resolveResponsesTranscriptSemantics(model);
+	return splitDeferredTools(
+		resolveTranscript(
+			normalizeProviderContext({ messages } as unknown as Context),
+			semantics.supportsMidConvoSystemMessages,
+		),
+		semantics.deferredToolsMode !== undefined,
+		transcriptHeadIncluded(semantics, startsAtTranscriptHead),
+	);
+}
+
+/** Everything a provider-facing path needs to replay one transcript. */
+export interface PreparedResponsesTranscript {
+	/** Provider input items for the transcript; the leading prompt is not part of it. */
+	input: ResponseInput;
+	/** Complete text of the leading system message, or `""` when the transcript has none. */
+	instructions: string;
+	/** Where every current tool is declared; the same decision owns the in-message additions. */
+	toolPlacement: DeferredToolPlacement;
+	/** Tool conversion options matching the placement. */
+	toolOptions: ConvertResponsesToolsOptions;
+}
+
+/**
+ * Replay one transcript into provider input plus the placement decision that owns every tool
+ * declaration. Callers pass `toolPlacement` when they serialize slices of a transcript whose
+ * decision was already made (native replay), so no slice decides on its own.
+ */
+export function prepareResponsesTranscript<TApi extends Api>(args: {
+	model: Model<TApi>;
+	messages: Message[];
+	startsAtTranscriptHead?: boolean | undefined;
+	toolPlacement?: DeferredToolPlacement | undefined;
+	includeSystemPrompt?: boolean | undefined;
+	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
+	allowedToolCallProviders?: ReadonlySet<string> | undefined;
+}): PreparedResponsesTranscript {
+	const semantics = resolveResponsesTranscriptSemantics(args.model);
+	const toolOptions: ConvertResponsesToolsOptions = {
+		strict: false,
+		supportsStrictMode: semantics.supportsStrictMode,
+		supportsOpenAIGrammarTools: (args.grammarToolInputProperties?.size ?? 0) > 0,
+	};
+	const resolved = resolveTranscript(
+		normalizeProviderContext({ messages: args.messages } as Context),
+		semantics.supportsMidConvoSystemMessages,
+	);
+	const startsAtTranscriptHead = transcriptHeadIncluded(semantics, args.startsAtTranscriptHead);
+	const toolPlacement = args.toolPlacement
+		?? splitDeferredTools(resolved, semantics.deferredToolsMode !== undefined, startsAtTranscriptHead);
+	const input = convertResponsesMessages(args.model, resolved, args.allowedToolCallProviders ?? CODEX_TOOL_CALL_PROVIDERS, {
+		includeSystemPrompt: args.includeSystemPrompt ?? false,
+		...(args.grammarToolInputProperties ? { grammarToolInputProperties: args.grammarToolInputProperties } : {}),
+		deferredTools: toolPlacement.deferred,
+		deferredToolsMode: semantics.deferredToolsMode,
+		anchorsToolAdditions: toolPlacement.anchorsAdditions,
+		supportsMidConvoSystemMessages: semantics.supportsMidConvoSystemMessages,
+		startsAtTranscriptHead,
+		toolOptions,
+	});
+	const initialSystemMessage = getInitialSystemMessage(resolved.messages, startsAtTranscriptHead);
+	return {
+		input,
+		instructions: initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "",
+		toolPlacement,
+		toolOptions,
+	};
+}
+
+export interface DeferredToolPlacement {
+	/** Tools declared in the top-level request field. */
+	immediate: Tool[];
+	/** Tools declared in place from a later system message or a pre-0.86 `addedToolNames` result. */
+	deferred: Map<string, Tool>;
+	/** Whether later system messages declare their own additions in place. */
+	anchorsAdditions: boolean;
+}
+
+/**
+ * Decide where every current tool is declared: the top-level request field or a later in-place
+ * addition. This is the single placement decision for the request — the caller hands it to
+ * `convertResponsesMessages`, so the top-level declarations and the in-message additions cannot
+ * disagree.
+ *
+ * Pi 0.86 anchors dynamic tools on system messages (`toolsAdded`); the bundled 3.0.34 transport
+ * predates that and used `ToolResultMessage.addedToolNames`. Both shapes are read here so code-mode
+ * tool deferral keeps its cache-friendly shape on either host.
+ *
+ * Removals and same-name redeclarations are not expressible as additions: the request then carries
+ * the complete current tool set, and nothing is declared in place (which would duplicate a tool or
+ * resurrect a removed one).
+ */
+export function splitDeferredTools(context: Pick<Context, "messages">, enabled: boolean, startsAtTranscriptHead = true): DeferredToolPlacement {
+	const messages = normalizeProviderContext(context as Context).messages;
+	const { requestTools, anchorsAdditions } = resolveTranscriptTools(messages, enabled, startsAtTranscriptHead);
+	if (!anchorsAdditions) return { immediate: requestTools, deferred: new Map(), anchorsAdditions: false };
+
+	const anchoredAdditions = getAnchoredToolAdditions(messages, startsAtTranscriptHead);
+	const deferredNames = new Set(anchoredAdditions.map((tool) => tool.name));
+	// Pre-0.86 transcripts recorded each dynamic tool on the tool result that introduced it.
 	const usedNames = new Set<string>();
-	for (const message of context.messages) {
+	for (const message of messages) {
 		if (message.role === "assistant") {
 			for (const block of message.content) {
 				if (block.type === "toolCall") usedNames.add(block.name);
 			}
 		} else if (message.role === "toolResult") {
-			for (const name of message.addedToolNames ?? []) {
+			for (const name of legacyAddedToolNames(message)) {
 				if (!usedNames.has(name)) deferredNames.add(name);
 			}
 		}
@@ -72,11 +240,15 @@ export function splitDeferredTools(context: Context, enabled: boolean): { immedi
 
 	const immediate: Tool[] = [];
 	const deferred = new Map<string, Tool>();
-	for (const [name, tool] of uniqueTools) {
-		if (deferredNames.has(name)) deferred.set(name, tool);
+	for (const tool of requestTools) {
+		if (deferredNames.has(tool.name)) deferred.set(tool.name, tool);
 		else immediate.push(tool);
 	}
-	return { immediate, deferred };
+	// Tools anchored on a later system message are absent from the top-level declaration.
+	for (const tool of anchoredAdditions) {
+		if (!deferred.has(tool.name)) deferred.set(tool.name, tool);
+	}
+	return { immediate, deferred, anchorsAdditions: true };
 }
 
 function sanitizeSurrogates(text: string): string {
@@ -119,15 +291,66 @@ export function convertResponsesMessages<TApi extends Api>(
 		return `${normalizedCallId}|${normalizedItemId}`;
 	};
 
-	const transformedMessages = normalizeResponsesMessageHistory(context.messages, model as Model<Api>, normalizeToolCallId as never);
+	const normalizedContext = resolveTranscript(
+		normalizeProviderContext(context),
+		options?.supportsMidConvoSystemMessages,
+	);
+	const startsAtTranscriptHead = options?.startsAtTranscriptHead !== false;
+	const transformedMessages = normalizeResponsesMessageHistory(normalizedContext.messages, model as Model<Api>, normalizeToolCallId as never);
 	const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-	if (includeSystemPrompt && context.systemPrompt) {
-		messages.push({ role: model.reasoning ? "developer" : "system", content: sanitizeSurrogates(context.systemPrompt) });
-	}
+	const supportsMidConvoSystemMessages = options?.supportsMidConvoSystemMessages === true;
+	const anchorsToolAdditions = options?.anchorsToolAdditions === true;
+	const appendSystemToolAdditions = (message: SystemMessage): void => {
+		const tools = anchorsToolAdditions ? (message.toolsAdded ?? []) : [];
+		if (tools.length === 0) return;
+		if (options?.deferredToolsMode === "additional-tools") {
+			messages.push({
+				type: "additional_tools",
+				role: "developer",
+				tools: convertResponsesTools(tools, options.toolOptions),
+			} as unknown as ResponseInputItem);
+			return;
+		}
+		if (options?.deferredToolsMode !== "tool-search") return;
+		const names = tools.map((tool) => tool.name);
+		// Derive the id from the anchor itself (not its index) so a replayed slice of the same
+		// transcript produces the same tool_search pair as the full request.
+		const seed = `${message.timestamp ?? 0}:${renderSystemMessageUpdate(message)}`;
+		const searchCallId = `pi_tool_load_${shortHash(`${seed}:${names.join(",")}`)}`;
+		messages.push({
+			type: "tool_search_call",
+			call_id: searchCallId,
+			execution: "client",
+			status: "completed",
+			arguments: { query: names.join(" "), limit: names.length },
+		} satisfies ResponseInputItem);
+		messages.push({
+			type: "tool_search_output",
+			call_id: searchCallId,
+			execution: "client",
+			status: "completed",
+			tools: convertResponsesTools(tools, { ...options.toolOptions, deferLoading: true }),
+		} satisfies ResponseToolSearchOutputItemParam);
+	};
+	const compat = model.compat as { supportsDeveloperRole?: boolean | undefined } | undefined;
+	const instructionRole: "developer" | "system" = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
 
 	let msgIndex = 0;
+	let sourceIndex = 0;
 	for (const msg of transformedMessages) {
-		if (msg.role === "user") {
+		const isLeadingSystemMessage = startsAtTranscriptHead && sourceIndex++ === 0 && msg.role === "system";
+		if (msg.role === "system") {
+			if (!isLeadingSystemMessage) appendSystemToolAdditions(msg);
+			if (isLeadingSystemMessage) {
+				if (includeSystemPrompt) {
+					const text = getSystemMessageText(msg);
+					if (text.length > 0) messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
+				}
+			} else if (supportsMidConvoSystemMessages) {
+				const text = renderSystemMessageUpdate(msg);
+				if (text.length > 0) messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
+			}
+		} else if (msg.role === "user") {
 			if (typeof msg.content === "string") {
 				messages.push({ role: "user", content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }] });
 			} else {
@@ -241,19 +464,19 @@ export function convertResponsesMessages<TApi extends Api>(
 			} as ResponseInput[number]);
 
 			const newlyLoadedTools: Tool[] = [];
-			for (const name of msg.addedToolNames ?? []) {
+			for (const name of legacyAddedToolNames(msg)) {
 				const tool = options?.deferredTools?.get(name);
 				if (!tool || loadedTools.has(name)) continue;
 				loadedTools.set(name, tool);
 				newlyLoadedTools.push(tool);
 			}
-			if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "additional-tools") {
+			if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "additional-tools") {
 				messages.push({
 					type: "additional_tools",
 					role: "developer",
 					tools: convertResponsesTools([...loadedTools.values()], options.toolOptions),
 				} as unknown as ResponseInputItem);
-			} else if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "tool-search") {
+			} else if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "tool-search") {
 				const names = newlyLoadedTools.map((tool) => tool.name);
 				const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
 				messages.push({

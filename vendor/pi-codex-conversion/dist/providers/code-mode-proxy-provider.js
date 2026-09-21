@@ -1,5 +1,6 @@
 import { createAssistantMessageEventStream, } from "@earendil-works/pi-ai";
 import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+import { declaredToolsOf } from "./transcript.js";
 import { resolveCodexRuntimePlan, resolveCodexRuntimePlanForState } from "../adapter/activation/runtime-plan.js";
 import { buildRequestBody } from "./openai-codex/request-body.js";
 import { applyResponsesLiteRequest, isResponsesLiteRequest, namespaceExistingResponsesLiteRequest, prepareResponsesLiteRequestImages, RESPONSES_LITE_HEADER } from "./openai-codex/responses-lite.js";
@@ -61,7 +62,7 @@ export function streamCodeModeResponsesProxy(model, context, options) {
     void (async () => {
         try {
             const { default: OpenAI, APIError } = await import("openai");
-            const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, true);
+            const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), true);
             const effectiveOptions = { ...options, grammarToolInputProperties };
             let headers = mergeHeaders(model.headers, options?.headers);
             let body = buildRequestBody(model, context, effectiveOptions);

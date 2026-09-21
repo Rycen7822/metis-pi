@@ -1,6 +1,6 @@
 {
   "name": "@rycen7822/metis-pi",
-  "version": "0.19.5",
+  "version": "0.19.6",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",
@@ -34,7 +34,7 @@
     "vendor:fresh": "node scripts/vendor-codex-conversion.mjs build && git diff --exit-code --stat -- vendor/pi-codex-conversion/dist vendor/pi-codex-conversion/changelog.js"
   },
   "dependencies": {
-    "marked": "18.0.5",
+    "marked": "18.0.11",
     "openai": "^7.10.0",
     "partial-json": "^0.1.7",
     "proxy-from-env": "^2.1.0",
@@ -45,8 +45,8 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "@earendil-works/pi-tui": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.86.1",
+    "@earendil-works/pi-tui": "0.86.1",
     "@types/node": "^22.20.2",
     "@types/ws": "^8.18.1",
     "typescript": "5.9.3"

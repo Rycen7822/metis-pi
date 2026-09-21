@@ -1,4 +1,5 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { toProviderTranscript } from "../providers/transcript.js";
 import { buildSessionContext, } from "@earendil-works/pi-coding-agent";
 import { createNativeVoiceContextSummary } from "./native-context.js";
 import { projectTreeCheckpointBranch } from "../context-management/tree-checkpoint.js";
@@ -144,7 +145,7 @@ async function completeWithSelectedModel(ctx, model, context, reasoning, signal)
         throw new Error(auth.error);
     const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
     let completed;
-    for await (const event of provider.streamSimple(requestModel, context, {
+    for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
         ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
         ...(auth.headers ? { headers: auth.headers } : {}),
         ...(auth.env ? { env: auth.env } : {}),

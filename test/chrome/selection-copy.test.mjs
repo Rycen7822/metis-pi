@@ -69,6 +69,8 @@ const CORPUS = [
   ["quote", "> quoted wisdom that is long enough to wrap around at this width for sure yes\n> second line"],
   ["inline styles", "normal **bold text** and `code span` and *emphasized* and ~~struck~~ end"],
   ["heading + paragraphs", "# Heading\n\nFirst paragraph with several words.\n\nSecond paragraph follows here."],
+  ["table", "| name | value |\n| --- | ---: |\n| alpha | 1 |\n| beta with a longer cell that wraps | 2 |\n\nAfter the table."],
+  ["hard breaks", "first line  \nsecond line after a hard break\\\nthird line"],
 ];
 
 test("differential: real Markdown mirror builds at every width without degradation", () => {

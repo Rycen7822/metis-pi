@@ -13,7 +13,7 @@
 | [architecture.md](architecture.md) | 仓库结构、`src/**` 模块地图、数据流、显示层边界与不变量 |
 | [development.md](development.md) | 安装、门禁脚本、预览、pty 验证、vendor 工作流、改代码时的约定 |
 | [vendor-codex-conversion.md](vendor-codex-conversion.md) | 内置 Codex 转换层：工具清单、目录、patch 记账、上游同步、裁剪 |
-| [compatibility.md](compatibility.md) | （英文，既有）对照 pi v0.85.1 的兼容边界与已知限制 |
+| [compatibility.md](compatibility.md) | （英文，既有）对照 pi v0.85.1 与 v0.86.1 的兼容边界与已知限制 |
 
 ### 功能页 features/
 

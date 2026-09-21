@@ -9,6 +9,11 @@ The classic Pi 0.85.1 component contract was inspected in:
 - Codex execution-row reference: `openai/codex`, `codex-rs/tui/src/exec_cell/snapshots/codex_tui__exec_cell__render__tests__truncated_live_output_preview_and_transcript.snap` (blob `eb47a610cc5d54ede53f8e5faee8dd5fb27578b4`).
 - Codex edit/diff reference: `openai/codex` commit `94697375cb9d2aa8ae74d61957c6b396819bec94`, `codex-rs/tui/src/diff_render.rs`. The supplied Codex CLI screenshot was also used as the target visual reference. The project implements its own TypeScript formatter; it does not embed Codex Rust code.
 
+Pi 0.86.1 was re-checked in `earendil-works/pi`, tag `v0.86.1` (`13cbf77df2396303013a41646bcfa77b4271ae56`) for the two changes that touch this package:
+
+- `packages/ai/src/utils/transcript.ts` and `utils/text.ts` moved the provider-facing prompt and tool declarations out of `Context.systemPrompt` / `Context.tools` into transcript `system` messages, and `models.ts` normalizes before provider dispatch. The vendored Codex transport was migrated to that protocol; `vendor/pi-codex-conversion/src/providers/transcript.ts` is the local copy of the replay semantics it uses.
+- `packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts` wraps the entry in a `MouseRegion` and renders `Box → MouseRegion → Container → Text/Markdown`. The skill-label patch follows that bounded structure and leaves the host's own click handler in place; `packages/tui/src/components/mouse-region.ts` shows a `click` only reaches it after a matching `press` was claimed, so the local fold override and the upstream handler cannot toggle twice.
+
 ## What changes
 
 The `getCallRenderer` and `getResultRenderer` selectors return appearance-specific functions for builtin-owned rows. The `getRenderShell` selector chooses `self` after the first compact render. A wrapper around the tool row's original `render` refreshes its display once when that mode changes. The original render method remains responsible for width, image order, and `selfRenderHeight`; the original mouse method is untouched.

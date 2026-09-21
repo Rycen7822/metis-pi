@@ -1,3 +1,272 @@
+# Validation record — 0.19.6 (Pi 0.85.1 → 0.86.1 compatibility)
+
+Report: the 0.86 audit in `references/pi-0.86-compatibility.md` found two blockers before a host upgrade was safe:
+(1) the vendored Codex provider lost the system prompt and every tool, because Pi 0.86 folds
+`Context.systemPrompt`/`Context.tools` into transcript `system` messages before provider dispatch, and
+(2) the multi-skill label only rendered the first name, because `skill-invocation-message.ts` now nests
+its labels under `MouseRegion → Container`. The upgrade had to ship the fixes, not disable the Codex layer.
+
+The first pass below fixed both, but its tool migration was incomplete: removals and same-name
+redeclarations still dropped the tools they made current, and the compaction/native-replay callers kept
+their own transcript reading (mid-conversation system updates disappeared from replayed history). Both
+gaps were reproduced offline and are fixed and verified in the two review rounds further down; the
+paragraph that claimed the fallback worked is corrected here.
+
+## Findings
+
+- **Codex transport (functional blocker).** Pi 0.86.1 `models.ts` calls `normalizeContext()` before
+  every provider dispatch (`packages/ai/src/utils/transcript.ts`); the provider then sees only
+  `{ messages }`. The vendored 3.0.34 serializers still read the removed top-level fields and did not
+  consume the new system messages. An offline capture against the real bundle showed
+  `instructions = "You are a helpful assistant."` and `tools = []` for the 0.86 shape, while the legacy
+  shape kept both. The same 0.86.1 source ships in 0.86.0, so the patch release was not a workaround.
+- **Other provider-facing consumers.** `createGrammarToolInputProperties(context.tools, …)` and
+  `hasContextNamespaceRouters(context)` silently saw `tools === undefined`; callers that bypass the model
+  registry (voice, remote compaction v2, portable summaries, prewarm/keepalive in `extension/runtime.ts`)
+  still hand over legacy `Context` objects, so the migration has to accept both shapes rather than replace
+  `context.tools` mechanically.
+- **Skill label.** 0.86 wraps the entry in a `MouseRegion` (`child`, not `children`) whose child is a
+  `Container`. The existing patch scanned `this.children`, found no text node, and left the host's
+  first-name-only rendering in place. The host also grew its own click handler on that `MouseRegion`;
+  `tui-alt-screen.js` only dispatches a synthesized `click` to the component that claimed the matching
+  `press`, so the local fold override and the native handler cannot both toggle.
+- **Dependency contract.** `test/package.test.mjs` requires this package's `marked` to match `pi-tui`'s;
+  Pi 0.86.1 `pi-tui` pins marked 18.0.11 while the repo pinned 18.0.5, so that assertion failed under the
+  new host. The assertion is meaningful and stays.
+- **Tool placement (functional blocker, found by review after the first pass).** The first pass made
+  `resolveTranscriptTools()` return the complete current tool list when the history is not additive, but
+  `splitDeferredTools()` still collected the historical additions on its own and subtracted those names
+  from that list, while `convertResponsesMessages()` (reading the same history) stopped anchoring
+  additions. The result was a request with no `tools` and no in-place additions: remove the initial `a`
+  after adding `b` and both vanish; redeclare `a` and it vanishes. `.work/review-pi086-tools.mjs`
+  reproduced both against the built bundle (GPT-6 Astra) before the fix.
+- **Compaction and native replay (functional blocker, found by the second review round).** The first
+  pass migrated the probe and request paths but left the compaction serializer and the native replay
+  with their own transcript reading. `serializeMessagesToResponsesInput()` converted messages without
+  the model's `supportsMidConvoSystemMessages`, so a mid-conversation system update was folded into the
+  leading prompt and then dropped from `input` (the prompt lives in `instructions`, and
+  `includeInstructionsInInput` defaults to false); it also passed no tool placement, so
+  `additional_tools` / `tool_search` items never appeared in serialized history. Native replay compares
+  that serialization against the real payload, so
+  `extractFreshAuthoritativePreamble()` saw the unmatched developer update as an unknown fresh prompt
+  item (`unsupported-instructions`) and `rewriteCodexCompactedProviderRequest()` refused to send.
+  `.work/review-pi086-replay.mjs` reproduced both layers against the built bundle (Astra): layer A the
+  serializer dropped `UPDATE_SENTINEL` / `NEW_GOAL`, layer B replay returned `unsupported-instructions`
+  once a mid-conversation update existed. A slice whose first message is an update (live tail after a
+  checkpoint) had the same shape of bug, and `preCompactionEntries` kept system entries the host folds
+  into the checkpoint (`buildContextEntries` drops them).
+- **Reconstructed compaction request (functional blocker, found by the third review round).** The last
+  caller still computing tools on its own was `handleCodexSessionBeforeCompactInner`: it built the
+  compaction `Context` with `getActiveToolsInActiveOrder` (the complete current set) and empty messages,
+  then injected the history from `buildNativeCompactionInput` into the same request. The provider's
+  top-level `tools` therefore came from one transcript reading while the history's in-place declarations
+  came from another: dynamic tools were declared twice, and a replaced definition kept the old
+  description. `.work/review-pi086-compaction-wire.mjs` reproduced it offline for Astra
+  (`additional_tools`) and GPT-5.5 (`tool_search`).
+- **Not broken (checked, no change).** The host still projects a `before_agent_start` full `systemPrompt`
+  into one forced head with the current tools (`agent-session.ts` `_installAgentForcedPromptProjection`),
+  which is what the goal extension returns; the display transcript only inspects explicit roles, so new
+  system messages cannot be misread as assistant/toolResult; `user_bash` is not subscribed anywhere in
+  this package; and the host cache warmer never fires for `openai-codex` because those models carry no
+  `promptCache` metadata (`getPromptCacheTtlMs` → `undefined`), while metis's Codex keepalive is off by
+  default and absent from this machine's `pi-codex-conversion.json`.
+
+## Fix
+
+- `vendor/pi-codex-conversion/src/providers/transcript.ts` (new) mirrors the 0.86.1 replay helpers with
+  local types so the bundle also runs on hosts that do not export them; `request-body.ts` and
+  `openai-responses/shared.ts` fold legacy contexts into a leading system message, keep later
+  `toolsAdded`/`toolsRemoved`/`sections` deltas in place when the model accepts mid-conversation system
+  messages, and read the prompt through the initial system message. Dynamic tools are anchored on the
+  system message that introduces them (0.86), with `ToolResultMessage.addedToolNames` kept as the 0.85
+  fallback; removals or redeclarations were intended to fall back to the complete current tool list, but
+  `splitDeferredTools()` kept filtering that list with its own history-derived name set — corrected in the
+  review round below, where the placement decision became a single value consumed by both the top-level
+  field and the in-message additions.
+- `providers/openai-responses/shared.ts` now owns the transcript semantics for every provider-facing
+  path: `resolveResponsesTranscriptSemantics(model)` reads the model's mid-conversation support and
+  derives the single `deferredToolsMode`, and `resolveToolPlacement(model, messages, head)` is the one
+  placement decision; `prepareResponsesTranscript(...)` consumes it, resolves the transcript, converts
+  the messages and returns the instructions, tool options and placement. `convertResponsesMessages` has
+  exactly one caller left. The same preparation backs `adapter/compaction/serializer.ts` (which gained
+  `startsAtTranscriptHead` and `toolPlacement`) and `adapter/replay/native-replay-segments.ts`:
+  continuation slices pass `startsAtTranscriptHead: false`, `resolveReplayedToolPlacement()` decides the
+  placement once for a checkpoint transcript (stored system message plus entries) and the replay rewrite
+  passes it to every slice, kept-window system entries are dropped like the host's `buildContextEntries`,
+  and `tool_search` anchor ids are derived from the anchor message instead of its index so
+  full-transcript and slice conversions agree.
+- `adapter/compaction/compaction.ts` + `adapter/compaction/remote-v2-client.ts` now assemble the native
+  compaction request from one value: `buildNativeCompactionInput()` returns `{ input, compactedKeptWindow,
+  tools }` where `tools` is the placement's `immediate` set for that history
+  (`serializeActiveSessionHistory()` returns the placement together with the items for the
+  checkpoint-free branch), and `executeRemoteCompactionV2()` takes `history: { input, tools }` plus
+  `systemPrompt` instead of a caller-built `Context` and a separate `promptInput`, building the provider
+  context itself. The canonical/reconstructed distinction is the presence of `canonicalInput` instead of
+  a `promptInputSource` flag, and a valid canonical replay still keeps its stored tools, prompt and
+  prefix. `buildCompactionTools` (which converted the complete active tool set on every compaction and
+  was never read), the unused `tools` field of `NativeCompactionRequestBody` and the compaction path's
+  `getActiveToolsInActiveOrder` import are gone; `extension/runtime.ts` keeps its own host tool
+  projection.
+- Grammar mappings and namespace routing now read declarations/current names from the transcript;
+  `toProviderTranscript()` folds at the registry-bypass boundaries.
+- `src/skill-label.ts` collects labels with a bounded breadth-first search over `children` and
+  `MouseRegion.child` (stop at the first text level, max 3 levels) and leaves the click contract alone.
+- `pi-coding-agent`/`pi-tui` devDependencies and `marked` are aligned to 0.86.1 / 18.0.11; vendored
+  sources were fixed for 0.86's JSON type tightening (`JsonObject`, no `undefined` diagnostic fields).
+
+## Reproduction and verification
+
+All Pi-version checks used Pi 0.86.1 (npm global `@earendil-works/pi-coding-agent@0.86.1`) plus the
+repo's 0.86.1 dev dependencies; provider checks are offline (fake token, `onPayload` sentinel, `fetch`
+disabled), no model request or cache warm was billed.
+
+| Probe | Result |
+|---|---|
+| `npm test` | 268/268 (253 before; +10 provider protocol, +5 real-host skill label) — the 268 predates the review round below |
+| `npm run check` / `check:core` | 0 errors |
+| `npm run vendor:check` / `vendor:smoke` | clean / PASS |
+| `npm run test:host` (`env -u NO_COLOR`) | PASS; `NO_COLOR` is unset in this shell |
+| `npm run test:chrome` | 17/17 |
+| `npm pack --dry-run --ignore-scripts` | OK |
+| real bundle: legacy `Context` vs `normalizeContext()` | both give `instructions = COMPAT_SENTINEL_SYSTEM`, `tools = [compat_probe_tool]` |
+| real bundle: anchored addition / collapse / removal | addition stays in `input.additional_tools` and out of `tools`; collapsed models fold sections into `instructions`; a later `toolsRemoved` never re-exposes the tool |
+| real bundle: tool call/result pairing | `function_call.call_id === function_call_output.call_id`, output preserved |
+| real bundle: grammar tools (proxy path) | `type: "custom"`, grammar definition and input on the wire |
+| real bundle: prewarm + forced goal projection | legacy prewarm context keeps prompt/tools; projected goal prompt appears once in `instructions` |
+| Responses Lite proxy (`streamCodeModeResponsesProxy`) | captured request carries sentinel prompt, tool name and history |
+| regression strength | reverting only `dist/` fails 7 of the 10 provider cases |
+| real host `SkillInvocationMessageComponent` | collapsed label and expanded title both `alpha + beta`; stock host shows `alpha` only; one press+click toggles exactly once (native `MouseRegion` handler called 0 times); Shift/Ctrl/Alt presses stay unclaimed |
+| selection copy differential (real host Markdown, marked 18.0.11) | unchanged corpus plus new table and hard-break cases: zero degraded rows |
+| real TUI (`pi` 0.86.1 over a pty, isolated HOME, mock provider) | tool run, glyph presentation, todo panel interactions, skill-mux multi-skill fold and click expand, provider-error summary, SGR drag + Ctrl+C exact copy (161 chars), fullscreen margins |
+| installed configuration boot (real `~/.pi`) | `Pi 0.86.1 · metis-pi 0.19.6`, vendored Codex/usage/prune chrome active, no extension-load errors, from both the repo dir and `$HOME` |
+
+### 2026-09 review round (P1 tool placement)
+
+A code review of the first pass found that tool history which cannot be replayed as pure additions loses
+its current tools. Everything below was executed in this round on the same machine (Pi 0.86.1, repo
+0.19.6, vendored 3.0.34 + patches); the sources were changed, the `dist/` bundle rebuilt, and
+`patches/local.patch` regenerated. The pre-fix numbers come from the recorded runs against the pre-fix
+bundle (`.work/p1-prefix-evidence.log`).
+
+| Probe | Result |
+|---|---|
+| `.work/review-pi086-tools.mjs` (real bundle, GPT-6 Astra) | before: `tools: []` for both sequences, exit 1; after: `["b"]` / `["a"]`, exit 0 |
+| `test/vendor-codex-transcript.test.mjs` placement cases (Astra) | before: 4 of 14 fail (removal, redeclaration, `tool_search` removal, legacy `addedToolNames` removal); after: 14/14 |
+| `npm test` | 272/272 (268 first pass + 4 placement regressions) |
+| `npm run check` / `check:core` | 0 errors |
+| `npm run vendor:check` / `vendor:smoke` | clean / PASS, rebuilt `dist/` (deterministic across two builds) |
+| `npm run vendor:patch` | `patches/local.patch` regenerated: 14 files, +432 -66; the first-pass migration was not in the stale patch |
+| patch replay | `git apply -p1` on a pristine 3.0.34 `src/` copy reproduces this tree's `src/` exactly (only the excluded native payload dirs differ) |
+| `env -u NO_COLOR npm run test:host` | PASS |
+| `npm pack --dry-run --ignore-scripts` | OK, `rycen7822-metis-pi-0.19.6.tgz` |
+
+The placement cases assert, per sequence: the complete current tool set is declared, the removed tool is
+gone, no tool is declared both at the top level and in place, a redeclaration keeps only its latest
+definition, the `tool_search_call`/`tool_search_output` pair stays matched, and the legacy
+`addedToolNames` path obeys the same decision. Scroll paths, the skill label, and the UI were not touched
+in this round, so the pty wheel boundary below is unchanged and was not re-run.
+
+### 2026-09 review round 2 (Pi 0.86 transcript: compaction and native replay)
+
+The second review round found that the compaction serializer and the native replay (the two callers
+beyond the probe) still replayed history with their own transcript rules. Fix and evidence below were all
+executed in this round on the same machine (Pi 0.86.1, repo 0.19.6, vendored 3.0.34 + patches); sources
+changed, `dist/` rebuilt, `patches/local.patch` regenerated. Pre-fix numbers come from
+`.work/replay-prefix.log` (recorded against the pre-fix bundle).
+
+| Probe | Result |
+|---|---|
+| `.work/review-pi086-replay.mjs` (real bundle, Astra) | before: serializer dropped the mid-conversation update, replay with an update returned `unsupported-instructions`, exit 1; after: both layers ok, exit 0 |
+| `test/vendor-codex-compaction-replay.test.mjs` | before: 6 of 8 fail (serializer parity, replay with update, slice-head update, `additional_tools` slice, `tool_search` slice, fresh compaction), collapse control and non-additive control pass; after: 8/8 |
+| `test/vendor-codex-transcript.test.mjs` (previous round) | 14/14, unchanged |
+| `npm test` | 280/280 (272 + 8 compaction/replay regressions) |
+| `npm run check` / `check:core` | 0 errors |
+| `npm run vendor:check` / `vendor:smoke` | clean / PASS, rebuilt `dist/` (deterministic across two builds) |
+| `npm run vendor:patch` | `patches/local.patch` regenerated: 16 files (adds `serializer.ts`, `native-replay-segments.ts`) |
+| patch replay | `git apply -p1` on a pristine 3.0.34 `src/` copy reproduces this tree's sources byte for byte (only the excluded native payload dirs differ); `git diff --check` reports only patch-context space-before-tab lines in `local.patch`, which are diff markers, not source whitespace |
+| `env -u NO_COLOR npm run verify` | exit 0 (test, check, vendor:check, vendor:smoke, test:host, pack) |
+| `npm pack --dry-run --ignore-scripts` | OK, `rycen7822-metis-pi-0.19.6.tgz`, 13.7 MB unpacked |
+
+The new file drives real sessions (`buildSessionContext` + `convertToLlm`) through the built provider,
+the built serializer and the built native replay, and captures the provider payload through the actually
+registered `openai-codex` provider. Its cases: serializer/provider parity for a mid-conversation update
+(content and `sections`); the collapsing model keeps its own shape on both paths (control); native replay
+keeps the update, the checkpoint window and the tool declarations, and matches the provider slice exactly
+with and without an update; an update at the head of a replayed slice is replayed in place and does not
+re-inject the leading prompt; a fresh compaction replays the full session with the provider's shape;
+`additional_tools` and `tool_search` additions survive replay with matched call/output ids and the
+complete current tool set when the history is non-additive (redeclaration, removal, removal after a
+kept-window addition); and a kept-window system delta stays folded into the checkpoint. The
+`compactedWindow` fixture is a handmade offline stand-in, not a real server-side encrypted window. The
+six pre-fix failures were re-checked in an isolated scratch copy that reverts only the serializer call
+(`.work/replay-prefix-emulated.log`); the two controls pass on both sides.
+
+**Not covered in this round:** a real Codex account request (offline captures only), the full `test:pty`
+run (only `checkpoint`/replay paths changed; the unrelated `wheelUntil` boundary below still applies),
+and real server-side compaction behaviour (only the reconstructed, offline fixtures).
+
+### 2026-09 review round 3 (reconstructed compaction request: tool declaration placement)
+
+The third review round found the last caller that derived tools on its own: the native compaction
+request. `handleCodexSessionBeforeCompactInner` built a `Context` with `getActiveToolsInActiveOrder`
+(the complete active set) and empty messages, while the history injected into the same request came from
+`buildNativeCompactionInput`, whose transcript head declares only the initial set and anchors later
+additions in place. The final body therefore declared dynamic tools twice (`tools: [alpha, beta]` plus
+`additional_tools` / `tool_search_output` for `beta`), and a tool with a replaced definition kept its
+old description. Everything below was executed in this round (Pi 0.86.1, repo 0.19.6, vendored 3.0.34 +
+patches, `dist/` rebuilt, `patches/local.patch` regenerated).
+
+| Probe | Result |
+|---|---|
+| `.work/review-pi086-compaction-wire.mjs` (real bundle, Astra + GPT-5.5) | before: top level `[alpha, beta]` plus an in-place `beta`, exit 1; after: top level `[alpha]`, one in-place `beta`, exit 0 (the probe now calls the production assembly; its pre-fix shape hand-built the context, see `.work/wire-prefix.log`) |
+| `test/vendor-codex-compaction-request.test.mjs` | before: 5 of 8 fail (additive Astra, additive GPT-5.5, checkpointed additive, replaced definition, reconstructed-with-stale-canonical-state), controls and the canonical-baseline guard pass; after: 8/8 |
+| `test/vendor-codex-compaction-replay.test.mjs` / `test/vendor-codex-transcript.test.mjs` | 8/8 and 14/14, unchanged |
+| `npm test` | 288/288 (280 + 8 compaction-request regressions) |
+| `npm run check` / `check:core` | 0 errors |
+| `npm run vendor:check` / `vendor:smoke` | clean / PASS; `dist/` deterministic across two builds |
+| `npm run vendor:patch` | `patches/local.patch` regenerated: 18 files (adds `compaction.ts`, `remote-v2-client.ts` writes); regenerating again is byte-identical |
+| patch replay | `git apply -p1` on a pristine 3.0.34 copy reproduces this tree's `src/` with zero content differences (only the excluded native payload dirs are missing) |
+| `env -u NO_COLOR npm run verify` | exit 0 (test, check, vendor:check, vendor:smoke, test:host, pack) |
+
+The new file drives the real pipeline: `buildNativeCompactionInput` for the history, the canonical
+replay decision, `executeRemoteCompactionV2`, the registered provider and the adapter's own `onPayload`
+(the capture aborts before any transport). It asserts, per case, the top-level tool names, the in-place
+declarations by position/count/definition, that the final top-level set equals the *normal* request's for
+the same session (independent oracle), that the replayed history equals the normal request's input plus
+one `compaction_trigger`, and that a valid canonical baseline keeps its own tools/prompt/prefix while a
+stale one falls back to the reconstructed placement without mutating the baseline. Cases: GPT-6 Astra
+and GPT-5.5 with a dynamic add (and their no-add controls), a checkpointed session, a Pi-shaped
+replacement delta (`toolsRemoved` + `toolsAdded` in one system message), the canonical baseline and the
+stale-baseline fallback. `compactedWindow` fixtures are handmade offline stand-ins, not real
+server-side encrypted windows. The pre-fix run of the same assertions used the pre-fix caller's context
+shape (the complete active tool set), which the tightened API no longer accepts; that run is recorded in
+`.work/wire-prefix.log`.
+
+**Not covered in this round:** driving `handleCodexSessionBeforeCompactInner` itself (it needs a full
+`ExtensionContext`), so the test feeds the production assembly the object production builds and asserts the
+resulting wire body; a real Codex account request; and real server-side compaction.
+
+**Boundary — reasoning-peek wheel stages.** `npm run test:pty` aborts at `wheelUntil` (`timeout waiting for wheel
+scrolls the reasoning window`) in this environment. Current evidence says the harness cannot deliver the raw SGR
+wheel bytes here and that our changes are not involved: the untouched HEAD tree with the 0.85.1 host fails at the
+same assertion (`.work/pty-pristine.log`), the fixed tree with 0.85.1-matched `node_modules` fails too
+(`.work/pty-skew-controlled.log`), and 0.86.1 fails as well (`.work/pty-0.86.1.log`). The component-level wheel
+contract stays covered by `test/transcript/thinking-view.test.mts` and `test/chrome/history-window.test.mjs`. A copy
+of the harness that skips only that wheel-dependent block runs to `rc=0` and covers everything listed in the real
+TUI row above (`.work/pty-0.86.1-targeted.log`).
+
+**Not covered:** a real Codex account request (no credentials used), system clipboard outside the pty harness,
+image terminals, and the other 15 installed extensions (untouched, out of scope).
+
+## Local install
+
+- Pi: npm global `@earendil-works/pi-coding-agent` 0.85.1 → 0.86.1 (`npm install -g …@0.86.1`, exact version).
+- metis-pi source: `git:git@github.com:Rycen7822/metis-pi.git` → local path `../../project/harness/metis-pi`
+  (settings-relative, resolves from any cwd; the old git checkout was removed, so only one metis loads).
+- Backups and the exact rollback commands: `.work/upgrade-backup/ROLLBACK.md` + `settings.json.*`.
+- Rollback: `npm install -g @earendil-works/pi-coding-agent@0.85.1`, then `pi remove /home/xu/project/harness/metis-pi`
+  and `pi install git:git@github.com:Rycen7822/metis-pi.git`.
+
 # Validation record — 0.19.5 (todo references are hierarchical paths)
 
 Report: the panel showed `#12 demo…`, `#13 …`, `#14 …` after a new list had started, and the user asked why the

@@ -253,9 +253,10 @@ export async function processResponsesStream(openaiStream, output, stream, model
                 const property = state?.kind === "custom_tool_call"
                     ? state.property
                     : options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
+                const toolCallArguments = customInput === undefined ? {} : { [property]: customInput };
                 const toolCall = state?.kind === "custom_tool_call"
-                    ? { ...state.block, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
-                    : { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
+                    ? { ...state.block, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
+                    : { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
                 if (state?.kind !== "custom_tool_call") {
                     output.content.push(toolCall);
                     stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });

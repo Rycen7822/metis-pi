@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.19.6
+
+**适配 Pi 0.86.1：Codex 转换层改用 transcript 协议，skill 标签跟随新的宿主组件结构，依赖对齐 marked 18.0.11。**
+
+后台审查（`references/pi-0.86-compatibility.md`）确认 0.85.1 → 0.86.1 有两个真实断裂：Codex provider 丢掉系统提示与工具，多
+skill 标签只剩首个名称。修复后本机 Pi 与已安装插件一起升级到 0.86.1；后续三轮复查又在同一条 transcript 迁移里找出三处功能阻断
+（工具放置、压缩/原生回放、重建压缩请求的顶层工具），同样修在这个未发布的 0.19.6 里。
+
+1. **Codex 转换层（功能阻断）**：0.86 在派发 provider 前把 `Context.systemPrompt` / `Context.tools` 折进 transcript
+   的 system 消息（`packages/ai/src/models.ts` 的 `normalizeContext`），vendored 3.0.34 仍读被移除的顶层字段，也不消费新的
+   system 消息 —— 离线捕获证实 `instructions` 退回 `"You are a helpful assistant."`、`tools` 为空。现在
+   `vendor/pi-codex-conversion/src/providers/transcript.ts` 本地复刻 0.86.1 的 replay 语义（不依赖 0.86 才导出的宿主函数），
+   `request-body.ts` / `openai-responses/shared.ts` 折入旧式 Context、按 `getInitialSystemMessage` 取 instructions，并保留
+   中途 system 消息的 `toolsAdded` / `toolsRemoved` / `sections` 语义；grammar 工具、namespace 路由、prewarm/keepalive、
+   压缩与 Responses Lite 代理都改从 transcript 取工具，动态工具的锚点也从 0.85 的 `ToolResultMessage.addedToolNames` 迁到
+   0.86 的 system 消息（旧形状保留为回退）。删除/重声明工具时退回完整当前工具表，不留下“已移除却仍声明”的工具。
+2. **工具放置（功能阻断，后续审查补丁）**：第一阶段只改了 `resolveTranscriptTools`，却漏了 `splitDeferredTools` —— 非增量历史
+   （`toolsRemoved` 或同名重声明）下它仍用自己收集的历史新增名从完整当前工具表里二次扣除，`convertResponsesMessages` 又因历史非增量
+   而不再生成追加项，于是工具既不在顶层也不在消息里（离线探针：新增 b 后删除 a，`tools` 为空；重声明 a，`tools` 为空）。现在
+   `splitDeferredTools` 是唯一的放置决策（顶层 `immediate`、就地 `deferred`、是否允许就地 `toolsAdded`），`convertResponsesMessages`
+   消费该决策而不再自行推导：非增量历史下完整当前工具表出现在顶层，就地声明与 legacy `addedToolNames` 路径都不得再造声明（否则会丢工具、
+   复活已删除工具或重复声明），纯新增仍保持按消息位置追加，`additional_tools` 与 `tool_search` 两条路径同受一个决策约束。顺带把与
+   `deferredToolsMode` 重复的 `supportsAdditionalTools` / `supportsToolSearch` 能力开关合并，并删掉 `transcript.ts` 里无消费者的
+   `withoutInitialSystemMessage` / `getCurrentSystemPrompt` / `hasToolRedefinitions` / `declarationsEqual` / `toToolDeclaration`。
+3. **压缩与原生回放（功能阻断，第二轮复查）**：0.86 的压缩/回放调用方各自重算 transcript。`serializeMessagesToResponsesInput` 转换时
+   不传模型的中途 system 能力，于是中途更新先被折进首条 system 消息、再因 `includeInstructionsInInput` 为 false 而整段丢弃（提示只活在
+   `instructions`）；它也不带任何工具放置决策，`additional_tools` / `tool_search` 追加项从不出现在被回放的历史里。原生回放拿这份序列化结果去
+   对照真实 payload，`extractFreshAuthoritativePreamble` 把对不上的 developer 更新当成未知提示项（`unsupported-instructions`），
+   `rewriteCodexCompactedProviderRequest` 因此拒绝发送。现在 `resolveResponsesTranscriptSemantics(model)` 与
+   `prepareResponsesTranscript(...)` 是请求体、serializer 和每个切片共用的唯一准备逻辑（中途 system 能力、`deferredToolsMode`、工具放置、
+   工具转换选项都出自同一处）；切片显式传 `startsAtTranscriptHead: false`，位于切片首部的中途更新会就地回放而不是被当成全局提示丢掉；回放侧的
+   放置决策只算一次（检查点存储的 system 消息 + kept window + live tail），再作为 `toolPlacement` 下传，任何切片都不重新自判。同一调用链上
+   另外两处：kept window 里的 system 条目按宿主 `buildContextEntries` 的规则丢弃（其提示与工具变化已折进检查点），`tool_search` 锚点 id 改由
+   锚点消息本身推导（timestamp + 渲染后的更新 + 工具名），不再依赖消息下标，否则整段转换与切片转换会生成不同的 call/output 对。
+4. **重建压缩请求的顶层工具（功能阻断，第三轮复查）**：native 压缩请求里最后一个自行推导工具表的地方是调用方——它用
+   `getActiveToolsInActiveOrder`（完整当前工具表）加空 messages 拼出一个 `Context`，而同一个请求注入的历史来自
+   `buildNativeCompactionInput`（其 transcript 头部只声明初始工具，后续新增就地声明）。于是最终请求把动态工具声明两次
+   （`tools: [alpha, beta]` 加上 `beta` 的 `additional_tools` / `tool_search_output`），同名替换的定义也停留在旧描述。
+   现在请求由同一份值组装：`buildNativeCompactionInput` 返回 `{ input, compactedKeptWindow, tools }`，`tools` 就是该历史的
+   放置决策的 `immediate` 集合；`buildNativeCompactionContext` 折进 `executeRemoteCompactionV2`（改为接收
+   `history: { input, tools }` + `systemPrompt`，不再收调用方自建的 `Context` 和另一个 `promptInput`），canonical /
+   reconstructed 的来源改用是否提供 `canonicalInput` 表示，取消 `promptInputSource` 标志。调用方已无法传入与所回放历史不一致的
+   工具表；canonical 分支仍保留自己的工具、提示与缓存前缀。同时删除 `buildCompactionTools`（每轮压缩都转换完整工具表却从不被读）、
+   `NativeCompactionRequestBody` 的未用 `tools` 字段，以及压缩路径对 `getActiveToolsInActiveOrder` 的引用（宿主工具投影在
+   `extension/runtime.ts` 里保留自己的用途）。
+5. **skill 标签（显示回归）**：0.86 把条目结构改成 `Box → MouseRegion → Container → Text/Markdown`，原来的直接 children
+   遍历静默跳过，收起标签与展开标题都只显示 alpha。改为有界 BFS（只沿 `children` / `MouseRegion.child` 前进，遇到 text 节点
+   即停，最多 3 层），保留保守回退。点击仍由本地 fold 覆盖在 0.86 上生效：未按住的 press 不认领手势，宿主 `MouseRegion` 的
+   原生 click 只在 press 被认领后才派发，因此不会双重切换，Shift/Ctrl/Alt press 仍留给宿主选区。
+6. **依赖与契约**：devDependencies 的 `pi-coding-agent` / `pi-tui` 对齐 0.86.1，`marked` 18.0.5 → 18.0.11（与 0.86.1
+   `pi-tui` 的依赖一致），`test/package.test.mjs` 的版本一致性断言保留。vendored 源码按 0.86.1 收紧的 JSON 类型修正
+   （`ToolCall.arguments` 为 `JsonObject`、诊断 details 不再写 `undefined`），`vendor` 自身 `tsc` 通过。
+7. 未改动：其他已安装插件、用户设置、默认模型（仍为 `commandcode` / `deepseek/deepseek-v4.1-flash`）；`user_bash` 本包从未订阅。
+
+验证：`test/vendor-codex-transcript.test.mjs`（14 例）加载**构建后的真实 bundle**、取真实注册的 `openai-codex` provider 并在
+`onPayload` 捕获请求体，覆盖旧式 Context 与 0.86 transcript 的提示/工具、中途新增与移除、**非增量工具变更（删除、同名重声明、
+`tool_search` 路径、legacy `addedToolNames` 与删除共存）**、goal 强投影、历史 tool call/result 配对、grammar custom 工具、
+prewarm 路径、Responses Lite 代理与 namespace 路由；只回退 `dist/` 时 7 例失败，修复前 4 个放置用例失败（见
+`.work/p1-prefix-evidence.log`）。新增 `test/vendor-codex-compaction-replay.test.mjs`（8 例）用真实 `buildSessionContext` +
+`convertToLlm` 生成带原生压缩检查点的会话，经真实 provider 捕获 payload 后驱动构建好的 serializer 与 native replay：修复前 6 例失败
+（serializer 丢中途更新、replay 返回 `unsupported-instructions`、切片首条更新被丢、`additional_tools` 与 `tool_search` 回放缺失、
+全新压缩的全量输入也丢更新；隔离副本复核），折叠模型与非增量历史两个对照组界时均通过；`.work/review-pi086-replay.mjs` 修复前 exit 1、
+修复后 exit 0，`.work/review-pi086-tools.mjs` 保持 exit 0。第三个新增文件 `test/vendor-codex-compaction-request.test.mjs`（8 例）直接跑真实
+`executeRemoteCompactionV2`：真实 `buildNativeCompactionInput` 历史 + 真实注册 provider + 适配器自己的 `onPayload`，在发送前捕获最终请求体；
+修复前 5 例失败（顶层带完整 active 工具表而历史又就地声明 `beta`；同名替换保留旧描述），修复后顶层集合与同会话普通请求完全一致、每个工具
+只声明一次，覆盖 gpt-6-astra 的 `additional_tools`、gpt-5.5 的 `tool_search`（含 call/output 配对）、无新增对照组、首次压缩、已有检查点的再次压缩、
+非增量替换、canonical 基线保持自身工具/前缀，以及平旧 canonical 回退到 reconstructed；`.work/review-pi086-compaction-wire.mjs` 修复前 exit 1、
+修复后 exit 0（该探针改用生产组装入口以匹配收紧后的契约）。`test/skill/skill-host-label.test.mts`（5 例）用**真实宿主组件**验证收起标签/展开标题、
+单次点击只切换一次、修饰键不认领。选区复制差分语料补入表格与硬换行，与宿主真实 Markdown 渲染逐行一致（零降级）。
+全套 253→268（第一阶段）→272（工具放置）→280（压缩/回放）→**288/288** 通过；`check` / `check:core` 0；`vendor:check` / `vendor:smoke` PASS；
+`vendor:patch` 重新生成 `patches/local.patch`（18 文件，含第一阶段迁移、工具放置、压缩/回放与压缩请求组装修复），并在 pristine 3.0.34 副本上
+`git apply -p1` 复放出与本树逐字节一致的 `src/`（仅被排除的原生 payload 目录不同）；`test:host` PASS；`pack --dry-run` OK
+（`rycen7822-metis-pi-0.19.6.tgz`）。
+
 ## 0.19.5
 
 **todos 编号改为层级路径：子任务是 `#1.1` / `#1.2`，每张新列表从 `#1` 重新开始。**

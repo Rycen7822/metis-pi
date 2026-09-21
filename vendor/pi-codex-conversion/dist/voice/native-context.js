@@ -1,4 +1,5 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { toProviderTranscript } from "../providers/transcript.js";
 import { DEFAULT_VOICE_CONTEXT_REASONING, } from "../adapter/activation/config.js";
 import { normalizeBaseUrl } from "../adapter/compaction/compaction-runtime.js";
 import { findLatestCompactionEntryIndex } from "../adapter/compaction/details-store.js";
@@ -46,7 +47,7 @@ export async function createNativeVoiceContextSummary(request) {
     };
     const reasoning = request.model.reasoning ?? DEFAULT_VOICE_CONTEXT_REASONING;
     let completed;
-    for await (const event of provider.streamSimple(requestModel, context, {
+    for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
         ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
         ...(auth.headers ? { headers: auth.headers } : {}),
         ...(auth.env ? { env: auth.env } : {}),

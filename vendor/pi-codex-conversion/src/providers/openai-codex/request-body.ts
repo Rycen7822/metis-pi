@@ -1,5 +1,10 @@
 import { clampThinkingLevel, type Api, type Context, type Model } from "@earendil-works/pi-ai";
-import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages, convertResponsesTools, splitDeferredTools } from "../openai-responses/shared.ts";
+import {
+	CODEX_TOOL_CALL_PROVIDERS,
+	convertResponsesTools,
+	prepareResponsesTranscript,
+} from "../openai-responses/shared.ts";
+import { normalizeProviderContext } from "../transcript.ts";
 import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "./constants.ts";
 import type { OpenAICodexStreamOptions, ResponsesBody } from "./types.ts";
 
@@ -26,36 +31,27 @@ export function buildRequestBody<TApi extends Api>(
 	context: Context,
 	options?: OpenAICodexStreamOptions,
 ): ResponsesBody {
-	const compat = model.compat as {
-		supportsStrictMode?: boolean | undefined;
-		supportsAdditionalTools?: boolean | undefined;
-		supportsToolSearch?: boolean | undefined;
-	} | undefined;
-	const supportsStrictMode = compat?.supportsStrictMode ?? true;
-	const deferredToolsMode = compat?.supportsAdditionalTools
-		? "additional-tools"
-		: compat?.supportsToolSearch
-			? "tool-search"
-			: undefined;
 	const grammarToolInputProperties = options?.grammarToolInputProperties ?? new Map<string, string>();
 	const supportsOpenAIGrammarTools = grammarToolInputProperties.size > 0;
 	const allowedToolCallProviders = supportsOpenAIGrammarTools && !CODEX_TOOL_CALL_PROVIDERS.has(model.provider)
 		? new Set([...CODEX_TOOL_CALL_PROVIDERS, model.provider])
 		: CODEX_TOOL_CALL_PROVIDERS;
-	const toolPlacement = splitDeferredTools(context, deferredToolsMode !== undefined);
-	const messages = convertResponsesMessages(model, context, allowedToolCallProviders, {
+	// Accept both shapes: 0.85 hosts hand over `Context.systemPrompt`/`Context.tools`
+	// (compaction and replay build these internally), 0.86 hosts a normalized transcript.
+	const prepared = prepareResponsesTranscript({
+		model,
+		messages: normalizeProviderContext(context).messages,
 		includeSystemPrompt: false,
 		grammarToolInputProperties,
-		deferredTools: toolPlacement.deferred,
-		deferredToolsMode,
-		toolOptions: { supportsStrictMode, supportsOpenAIGrammarTools },
+		allowedToolCallProviders,
 	});
+	const { instructions, input: messages, toolOptions, toolPlacement } = prepared;
 
 	const body: ResponsesBody = {
 		model: model.id,
 		store: false,
 		stream: true,
-		instructions: context.systemPrompt || "You are a helpful assistant.",
+		instructions: instructions || "You are a helpful assistant.",
 		input: messages,
 		text: { verbosity: ((options as { textVerbosity?: string | undefined } | undefined)?.textVerbosity ?? "low") as string },
 		include: ["reasoning.encrypted_content"],
@@ -80,11 +76,7 @@ export function buildRequestBody<TApi extends Api>(
 	}
 
 	if (toolPlacement.immediate.length > 0) {
-		body.tools = convertResponsesTools(toolPlacement.immediate, {
-			strict: false,
-			supportsStrictMode,
-			supportsOpenAIGrammarTools,
-		});
+		body.tools = convertResponsesTools(toolPlacement.immediate, toolOptions);
 	}
 
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;

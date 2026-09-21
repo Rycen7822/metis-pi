@@ -12,6 +12,7 @@ import {
 	NOTES_ACTIONS,
 	NOTES_DESCRIPTION,
 } from "./tool-contract.ts";
+import { currentToolNamesOf } from "../providers/transcript.ts";
 
 type JsonSchema = Record<string, unknown>;
 type ContextNamespace = "history" | "notes";
@@ -292,9 +293,9 @@ export function rewriteContextNamespaceTools(
 }
 
 export function hasContextNamespaceRouters(
-	context: Pick<Context, "tools">,
+	context: Pick<Context, "messages">,
 ): boolean {
-	const names = new Set(context.tools?.map((tool) => tool.name));
+	const names = currentToolNamesOf(context);
 	return names.has("history") && names.has("notes");
 }
 

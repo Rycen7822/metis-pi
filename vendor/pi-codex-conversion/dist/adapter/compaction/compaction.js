@@ -1,17 +1,15 @@
 import {} from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { findLatestNativeCompactionEntryIndex, resolveLatestNativeCompactionEntry } from "./details-store.js";
-import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "../replay/payload-rewrite.js";
+import { rewriteResponsesPayloadWithNativeReplay, resolveReplayedToolPlacement, serializeLiveTailToResponsesInput } from "../replay/payload-rewrite.js";
 import { DEFAULT_SUPPORTED_PROVIDERS, isResponsesCompatiblePayload, resolveNativeCompactionEnvironment } from "./compaction-runtime.js";
-import { convertResponsesTools } from "../../providers/openai-responses/shared.js";
-import { serializeActiveSessionToResponsesInput, } from "./serializer.js";
+import { serializeActiveSessionHistory, } from "./serializer.js";
 import { createNativeCompactionDetails, createNativeCompactionShimResult, hasPortableNativeCompactionSummary, NATIVE_COMPACTION_SHIM_SUMMARY } from "../compaction/types.js";
 import { isResponsesContext } from "../prompt/codex-model.js";
 import { isCodeModeRuntime, resolveCodexRuntimePlanForState } from "../activation/runtime-plan.js";
 import { executeRemoteCompactionV2 } from "./remote-v2-client.js";
 import { buildRemoteCompactionV2Window } from "./remote-v2-history.js";
 import { CODE_MODE_EXEC_GRAMMAR_INPUTS } from "../../tools/code-mode/exec-contract.js";
-import { getActiveToolsInActiveOrder } from "../active-tools.js";
 import { resolveCanonicalCompactionPromptInput } from "../../providers/openai-codex/session-continuity.js";
 import { extractAccountId, resolveCodexWebSocketUrl } from "../../providers/openai-codex/headers.js";
 import { prepareResponsesLiteConversationInput } from "../../providers/openai-codex/responses-lite.js";
@@ -56,12 +54,6 @@ function cloneCompactedWindow(window) {
         return undefined;
     return window.filter((item) => item["type"] !== "configuration_update").map((item) => structuredClone(item));
 }
-function buildCompactionTools(pi, codeMode) {
-    const tools = getActiveToolsInActiveOrder(pi, codeMode);
-    if (tools.length === 0)
-        return undefined;
-    return convertResponsesTools(tools, { strict: false });
-}
 function buildCompactionReasoning(pi, ctx, state, compactionTargetModel) {
     const level = pi.getThinkingLevel();
     if (!compactionTargetModel.reasoning || level === "off")
@@ -95,15 +87,13 @@ function clampOpenAIPromptCacheKey(key) {
         return key;
     return chars.slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join("");
 }
-function buildCompactionRequestOptions(pi, ctx, state, compactionTargetModel, codeMode) {
-    const tools = buildCompactionTools(pi, codeMode);
+function buildCompactionRequestOptions(pi, ctx, state, compactionTargetModel) {
     const reasoning = buildCompactionReasoning(pi, ctx, state, compactionTargetModel);
     return {
         parallel_tool_calls: true,
         prompt_cache_key: clampOpenAIPromptCacheKey(ctx.sessionManager.getSessionId()),
         ...(resolveCodexRuntimePlanForState(ctx, state).effectiveOpenAICodex && state.config.openai.fast ? { service_tier: "priority" } : {}),
         text: { verbosity: state.config.openai.verbosity },
-        ...(tools ? { tools } : {}),
         ...(reasoning ? { reasoning } : {}),
     };
 }
@@ -145,22 +135,36 @@ export function buildNativeCompactionInput(args) {
         if (!compactedWindow)
             return undefined;
         const liveTailEntries = args.branchEntries.slice(args.latestNativeCompaction.index + 1);
+        // The replayed transcript starts at the checkpoint's stored system message, so the request's
+        // top-level tools and the tail's in-place additions both come from this one placement.
+        const toolPlacement = resolveReplayedToolPlacement({
+            model: args.model,
+            checkpointSystemMessage: args.latestNativeCompaction.entry.systemMessage,
+            entries: liveTailEntries,
+        });
         return {
             input: [
                 ...compactedWindow,
-                ...serializeLiveTailToResponsesInput({ model: args.model, entries: liveTailEntries, serializationOptions: args.serializationOptions }),
+                ...serializeLiveTailToResponsesInput({
+                    model: args.model,
+                    entries: liveTailEntries,
+                    serializationOptions: { ...args.serializationOptions, toolPlacement },
+                }),
             ],
             compactedKeptWindow: false,
+            tools: toolPlacement.immediate,
         };
     }
+    const history = serializeActiveSessionHistory({
+        model: args.model,
+        entries: args.allEntries,
+        leafId: args.leafId,
+        options: args.serializationOptions,
+    });
     return {
-        input: serializeActiveSessionToResponsesInput({
-            model: args.model,
-            entries: args.allEntries,
-            leafId: args.leafId,
-            options: args.serializationOptions,
-        }),
+        input: history.input,
         compactedKeptWindow: true,
+        tools: history.toolPlacement.immediate,
     };
 }
 export async function resolveCanonicalCompactionReplay(args) {
@@ -208,7 +212,7 @@ async function handleCodexSessionBeforeCompactInner(event, ctx, state, pi) {
     const serializationOptions = plan.transport === "responses-lite"
         ? { grammarToolInputProperties: CODE_MODE_EXEC_GRAMMAR_INPUTS }
         : undefined;
-    const requestOptions = buildCompactionRequestOptions(pi, ctx, state, compactionTargetModel, codeMode);
+    const requestOptions = buildCompactionRequestOptions(pi, ctx, state, compactionTargetModel);
     const branchEntries = compactionBranch(ctx, state);
     const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
         provider: runtime.provider,
@@ -292,20 +296,14 @@ async function handleCodexSessionBeforeCompactInner(event, ctx, state, pi) {
             ? "Responses compaction v2 ignores custom /compact guidance; the portable Pi summary still uses it."
             : "Responses compaction v2 uses the active session instructions and ignores custom /compact guidance.", "warning");
     }
-    const tools = getActiveToolsInActiveOrder(pi, codeMode);
-    const context = {
-        // Match the active provider lane so cached WebSocket compaction can send
-        // only previous_response_id plus the trigger instead of the full history.
-        systemPrompt: state.activeProviderSystemPrompt ?? ctx.getSystemPrompt(),
-        messages: [],
-        ...(tools.length > 0 ? { tools } : {}),
-    };
     const compactResult = await executeRemoteCompactionV2({
         runtime,
         modelRegistry: ctx.modelRegistry,
-        context,
-        promptInput: input,
-        promptInputSource: compactionDiagnostic.inputSource,
+        // The replayed transcript and its top-level tools travel together: the request must not
+        // declare tools from a different context than the history it replays.
+        history: builtInput,
+        systemPrompt: state.activeProviderSystemPrompt ?? ctx.getSystemPrompt(),
+        ...(validatedCanonicalInput ? { canonicalInput: validatedCanonicalInput } : {}),
         compactionDiagnostic,
         requestOptions,
         ...(plan.contextManagement ? {

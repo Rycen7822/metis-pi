@@ -8,6 +8,7 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+import { declaredToolsOf } from "./transcript.ts";
 import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import type { CodexConversionConfig } from "../adapter/activation/config.ts";
@@ -92,7 +93,7 @@ export function streamCodeModeResponsesProxy<TApi extends Api>(
 	void (async () => {
 		try {
 			const { default: OpenAI, APIError } = await import("openai");
-			const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, true);
+			const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), true);
 			const effectiveOptions = { ...options, grammarToolInputProperties };
 			let headers = mergeHeaders(model.headers, options?.headers);
 			let body: ResponsesBody = buildRequestBody(model, context, effectiveOptions);

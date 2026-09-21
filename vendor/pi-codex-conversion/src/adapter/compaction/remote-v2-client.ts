@@ -1,4 +1,4 @@
-import { type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Transport } from "@earendil-works/pi-ai";
+import { type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Tool, type TranscriptContext, type Transport } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { NativeCompactionRuntime } from "./compaction-runtime.ts";
 import type { NativeCompactionRequestOptions, ResponsesInputItem } from "./serializer.ts";
@@ -8,12 +8,13 @@ import { withRemoteCompactionV2Feature } from "../../providers/openai-responses/
 import type { OpenAICodexStreamOptions, ResponsesBody } from "../../providers/openai-codex/types.ts";
 import { sleep } from "../../providers/openai-codex/sse.ts";
 import { isWebSocketSseFallbackActive } from "../../providers/openai-codex/websocket.ts";
-import { canonicalCompactionPromptInput, canonicalCompactionRequestBody } from "../../providers/openai-codex/session-continuity.ts";
+import { canonicalCompactionRequestBody } from "../../providers/openai-codex/session-continuity.ts";
 import { extractAccountId, resolveCodexWebSocketUrl } from "../../providers/openai-codex/headers.ts";
+import { toProviderTranscript } from "../../providers/transcript.ts";
 import type { CodexCompactionDiagnostic } from "./diagnostics.ts";
 
 const MAX_STREAM_RETRIES = 2;
-type V2Stream = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AsyncIterable<unknown>;
+type V2Stream = (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => AsyncIterable<unknown>;
 
 export type RemoteCompactionV2Result =
 	| { ok: true; compaction: Record<string, unknown>; responseId: string; createdAt: string; usage?: RemoteCompactionV2Usage | undefined }
@@ -27,21 +28,48 @@ export type RemoteCompactionV2Usage = {
 	diagnostic?: CodexCompactionDiagnostic | undefined;
 };
 
+/**
+ * The replayed transcript for a native compaction request: the history items together with the
+ * top-level tools of the same placement decision that produced them. Keeping them in one value is
+ * what prevents a request from declaring the current tool set at the top level while the history
+ * announces those same tools in place.
+ */
+export type NativeCompactionHistory = {
+	input: readonly ResponsesInputItem[];
+	tools: readonly Tool[];
+};
+
 export type ExecuteRemoteCompactionV2Options = {
 	runtime: NativeCompactionRuntime;
 	modelRegistry: ModelRegistry;
-	context: Context;
-	promptInput: readonly ResponsesInputItem[];
+	/** The replayed transcript; `systemPrompt` is the prompt it belongs to. */
+	history: NativeCompactionHistory;
+	systemPrompt: string;
 	requestOptions: NativeCompactionRequestOptions;
 	tokensBefore: number;
 	sessionId: string;
+	/** Validated canonical history; when set, the request replays the canonical baseline instead. */
+	canonicalInput?: readonly ResponsesInputItem[] | undefined;
 	signal?: AbortSignal | undefined;
 	transport?: Transport | undefined;
 	retryDelayMs?: number | undefined;
-	promptInputSource?: "canonical" | "reconstructed" | undefined;
 	compactionDiagnostic?: CodexCompactionDiagnostic | undefined;
 	rewritePayload?: ((payload: unknown) => unknown) | undefined;
 };
+
+/**
+ * Provider context for the compaction request. Only the prompt and the replayed history's own
+ * top-level tools travel here: the history is the source of truth for both halves of the request.
+ */
+function nativeCompactionContext(options: ExecuteRemoteCompactionV2Options): Context {
+	return {
+		// Match the active provider lane so cached WebSocket compaction can send
+		// only previous_response_id plus the trigger instead of the full history.
+		systemPrompt: options.systemPrompt,
+		messages: [],
+		...(options.history.tools.length > 0 ? { tools: [...options.history.tools] } : {}),
+	};
+}
 
 function resolveStream(options: ExecuteRemoteCompactionV2Options): V2Stream | undefined {
 	if (options.runtime.codexTransport) {
@@ -84,7 +112,7 @@ function diagnosticTransport(transport: Transport | undefined): "websocket" | "s
 }
 
 function canonicalSessionIdentity(options: ExecuteRemoteCompactionV2Options): { url: string; accountId: string } | undefined {
-	if (options.promptInputSource === "reconstructed" || !options.runtime.codexTransport || !options.runtime.apiKey) return undefined;
+	if (options.canonicalInput === undefined || !options.runtime.codexTransport || !options.runtime.apiKey) return undefined;
 	return {
 		url: resolveCodexWebSocketUrl(options.runtime.baseUrl),
 		accountId: extractAccountId(options.runtime.apiKey),
@@ -115,7 +143,7 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
 	const outputItems: unknown[] = [];
 	let responseStatus: number | undefined;
 	const compactionDiagnostic = options.compactionDiagnostic ?? {
-		inputSource: options.promptInputSource ?? "reconstructed",
+	inputSource: options.canonicalInput !== undefined ? "canonical" : "reconstructed",
 		canonicalReplay: "not_applicable" as const,
 		checkpointReused: false,
 	};
@@ -123,12 +151,8 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
 		compactionDiagnostic.transport = diagnosticTransport(options.transport);
 	}
 	const canonicalIdentity = canonicalSessionIdentity(options);
-	const canonicalInput = options.promptInputSource === "canonical"
-		? options.promptInput
-		: options.promptInputSource === undefined && canonicalIdentity
-		? canonicalCompactionPromptInput(options.sessionId, options.runtime.model, canonicalIdentity)
-		: undefined;
-	const canonicalBody = options.promptInputSource !== "reconstructed" && canonicalIdentity
+	const canonicalInput = options.canonicalInput;
+	const canonicalBody = canonicalInput !== undefined && canonicalIdentity
 		? canonicalCompactionRequestBody(options.sessionId, options.runtime.model, canonicalIdentity)
 		: undefined;
 	const streamOptions = {
@@ -149,7 +173,7 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
 			const requestBody = canonicalBody
 				? withCurrentCompactionControls(canonicalBody, body)
 				: body;
-			const promptInput = normalizeRemoteCompactionV2PromptInput(canonicalInput ?? options.promptInput) as ResponsesInputItem[];
+			const promptInput = normalizeRemoteCompactionV2PromptInput(canonicalInput ?? options.history.input) as ResponsesInputItem[];
 			const request = await shrinkNativeCompactionRequestForEndpoint({
 				model: requestBody.model,
 				input: promptInput,
@@ -171,7 +195,7 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
 
 	let completed: AssistantMessage | undefined;
 	let completedNormally = false;
-	for await (const rawEvent of streamSimple(options.runtime.currentModel, options.context, streamOptions)) {
+	for await (const rawEvent of streamSimple(options.runtime.currentModel, toProviderTranscript(nativeCompactionContext(options)), streamOptions)) {
 		const event = rawEvent as { type?: string; reason?: string; message?: AssistantMessage; error?: AssistantMessage };
 		if (event.type === "done") {
 			completed = event.message;

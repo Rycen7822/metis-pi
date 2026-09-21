@@ -1,5 +1,5 @@
 import { type CompactionResult, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import { type Api, type Model } from "@earendil-works/pi-ai";
+import { type Api, type Model, type Tool } from "@earendil-works/pi-ai";
 import { type LatestNativeCompactionResolution } from "./details-store.ts";
 import { type ResponsesInputItem, type SerializeResponsesMessagesOptions } from "./serializer.ts";
 import { type NativeCompactionEntry } from "../compaction/types.ts";
@@ -19,6 +19,7 @@ export declare function buildNativeCompactionInput(args: {
 }): {
     input: ResponsesInputItem[];
     compactedKeptWindow: boolean;
+    tools: Tool[];
 } | undefined;
 export declare function resolveCanonicalCompactionReplay(args: {
     codeMode: boolean;

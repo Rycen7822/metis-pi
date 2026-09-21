@@ -123,8 +123,12 @@ function patch() {
       diff = error.stdout ?? "";
     }
     // Re-root at `src/` so the patch applies with `git apply -p1` from the vendored directory.
+    // Both trees appear on both sides: `git diff --no-index` reuses the only available path for
+    // files that exist in a single tree (for example a newly added helper).
     const normalized = diff
       .replaceAll(`a${baselineSrc}${sep}`, "a/src/")
+      .replaceAll(`b${baselineSrc}${sep}`, "b/src/")
+      .replaceAll(`a${join(VENDOR, "src")}${sep}`, "a/src/")
       .replaceAll(`b${join(VENDOR, "src")}${sep}`, "b/src/");
     mkdirSync(dirname(PATCH_FILE), { recursive: true });
     writeFileSync(PATCH_FILE, normalized);

@@ -1,4 +1,5 @@
 import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+import { declaredToolsOf } from "./transcript.js";
 import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexWebSocketUrl } from "./openai-codex/headers.js";
 import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.js";
 import { buildRequestBody } from "./openai-codex/request-body.js";
@@ -51,7 +52,7 @@ export async function prewarmOpenAICodexWebSocket(model, context, options, deps)
     const responsesLite = deps.useResponsesLite?.(model)
         ?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
             && supportsResponsesLiteModel(model.id));
-    const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, responsesLite);
+    const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
     const effectiveOptions = runtimeConfig?.compaction?.responsesCompaction
         ? { ...options, grammarToolInputProperties, headers: withRemoteCompactionV2Feature(options.headers) }
         : { ...options, grammarToolInputProperties };

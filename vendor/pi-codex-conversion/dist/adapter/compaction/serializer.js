@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { convertToLlm, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages } from "../../providers/openai-responses/shared.js";
+import { CODEX_TOOL_CALL_PROVIDERS, prepareResponsesTranscript } from "../../providers/openai-responses/shared.js";
 import { isCodexTransportModel } from "../prompt/codex-model.js";
 import { isProviderContextExcludedMessage } from "../prompt/context-filter.js";
 import { CodexDeveloperMessageBridge } from "../developer-messages.js";
 import { projectCodexReasoningHistory } from "../reasoning-history.js";
+import { createInitialSystemMessage } from "../../providers/transcript.js";
 function isRecord(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -42,25 +43,42 @@ function applyBlockImages(messages, blockImages) {
         return message;
     });
 }
-export function serializeActiveSessionToResponsesInput(args) {
+/**
+ * Reconstruct the provider history for a session branch. Returns the placement decision together
+ * with the items: a caller that assembles a request from this history (native compaction) must
+ * declare the same top-level tools instead of deriving them from another context.
+ */
+export function serializeActiveSessionHistory(args) {
     const messages = projectCodexReasoningHistory(args.entries, undefined, args.leafId)
         .filter((message) => !isProviderContextExcludedMessage(message));
-    return serializeMessagesToResponsesInput(args.model, messages, args.options);
+    return serializeMessagesToResponsesHistory(args.model, messages, args.options);
 }
 export function serializeMessagesToResponsesInput(model, messages, options = {}) {
+    return serializeMessagesToResponsesHistory(model, messages, options).input;
+}
+function serializeMessagesToResponsesHistory(model, messages, options = {}) {
     const developerMessages = new CodexDeveloperMessageBridge();
     const llmMessages = applyBlockImages(convertToLlm(developerMessages.prepare(messages, true, model)), options.blockImages ?? readBlockImagesSetting());
     const allowedToolCallProviders = isCodexTransportModel(model) && !CODEX_TOOL_CALL_PROVIDERS.has(model.provider)
         ? new Set([...CODEX_TOOL_CALL_PROVIDERS, model.provider])
         : CODEX_TOOL_CALL_PROVIDERS;
-    const input = convertResponsesMessages(model, {
-        messages: llmMessages,
-        ...(options.includeInstructionsInInput && options.instructions ? { systemPrompt: options.instructions } : {}),
-    }, allowedToolCallProviders, {
+    const prepared = prepareResponsesTranscript({
+        model,
+        // `includeInstructionsInInput` asks for the prompt as an input item as well; a caller that
+        // supplies its own text still gets it at the head without touching the transcript.
+        messages: options.includeInstructionsInInput && options.instructions
+            ? [createInitialSystemMessage(options.instructions, undefined), ...llmMessages]
+            : llmMessages,
+        startsAtTranscriptHead: options.startsAtTranscriptHead,
+        toolPlacement: options.toolPlacement,
         includeSystemPrompt: options.includeInstructionsInInput ?? false,
-        ...(options.grammarToolInputProperties ? { grammarToolInputProperties: options.grammarToolInputProperties } : {}),
+        grammarToolInputProperties: options.grammarToolInputProperties,
+        allowedToolCallProviders,
     });
-    return developerMessages.rewritePayload({ input }, model).input;
+    return {
+        input: developerMessages.rewritePayload({ input: prepared.input }, model).input,
+        toolPlacement: prepared.toolPlacement,
+    };
 }
 export function createResponsesInputParitySignature(input) {
     return input.map(describeResponsesInputItem);

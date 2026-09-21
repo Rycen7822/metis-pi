@@ -1,3 +1,1422 @@
+diff --git a/src/adapter/compaction/compaction.ts b/src/adapter/compaction/compaction.ts
+index 8827152..56129b9 100644
+--- a/src/adapter/compaction/compaction.ts
++++ b/src/adapter/compaction/compaction.ts
+@@ -1,11 +1,10 @@
+ import { type CompactionResult, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
+-import { clampThinkingLevel, type Api, type Context, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
++import { clampThinkingLevel, type Api, type Model, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
+ import { findLatestNativeCompactionEntryIndex, resolveLatestNativeCompactionEntry, type LatestNativeCompactionResolution } from "./details-store.ts";
+-import { rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput } from "../replay/payload-rewrite.ts";
++import { rewriteResponsesPayloadWithNativeReplay, resolveReplayedToolPlacement, serializeLiveTailToResponsesInput } from "../replay/payload-rewrite.ts";
+ import { DEFAULT_SUPPORTED_PROVIDERS, isResponsesCompatiblePayload, resolveNativeCompactionEnvironment, type ResponsesCompatibleRequestPayload } from "./compaction-runtime.ts";
+-import { convertResponsesTools } from "../../providers/openai-responses/shared.ts";
+ import {
+-	serializeActiveSessionToResponsesInput,
++	serializeActiveSessionHistory,
+ 	type NativeCompactionRequestOptions,
+ 	type ResponsesInputItem,
+ 	type SerializeResponsesMessagesOptions,
+@@ -17,7 +16,6 @@ import type { AdapterState } from "../activation/state.ts";
+ import { executeRemoteCompactionV2 } from "./remote-v2-client.ts";
+ import { buildRemoteCompactionV2Window } from "./remote-v2-history.ts";
+ import { CODE_MODE_EXEC_GRAMMAR_INPUTS } from "../../tools/code-mode/exec-contract.ts";
+-import { getActiveToolsInActiveOrder } from "../active-tools.ts";
+ import { resolveCanonicalCompactionPromptInput } from "../../providers/openai-codex/session-continuity.ts";
+ import { extractAccountId, resolveCodexWebSocketUrl } from "../../providers/openai-codex/headers.ts";
+ import type { CodexCompactionDiagnostic } from "./diagnostics.ts";
+@@ -75,12 +73,6 @@ function cloneCompactedWindow(window: readonly unknown[]): ResponsesInputItem[]
+ 	return window.filter((item) => item["type"] !== "configuration_update").map((item) => structuredClone(item));
+ }
+ 
+-function buildCompactionTools(pi: ExtensionAPI, codeMode: boolean): unknown[] | undefined {
+-	const tools = getActiveToolsInActiveOrder(pi, codeMode);
+-	if (tools.length === 0) return undefined;
+-	return convertResponsesTools(tools, { strict: false });
+-}
+-
+ function buildCompactionReasoning(
+ 	pi: Pick<ExtensionAPI, "getThinkingLevel">,
+ 	ctx: ExtensionContext,
+@@ -117,15 +109,13 @@ function clampOpenAIPromptCacheKey(key: string): string {
+ 	return chars.slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join("");
+ }
+ 
+-function buildCompactionRequestOptions(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState, compactionTargetModel: Model<Api>, codeMode: boolean): NativeCompactionRequestOptions {
+-	const tools = buildCompactionTools(pi, codeMode);
++function buildCompactionRequestOptions(pi: ExtensionAPI, ctx: ExtensionContext, state: AdapterState, compactionTargetModel: Model<Api>): NativeCompactionRequestOptions {
+ 	const reasoning = buildCompactionReasoning(pi, ctx, state, compactionTargetModel);
+ 	return {
+ 		parallel_tool_calls: true,
+ 		prompt_cache_key: clampOpenAIPromptCacheKey(ctx.sessionManager.getSessionId()),
+ 		...(resolveCodexRuntimePlanForState(ctx, state).effectiveOpenAICodex && state.config.openai.fast ? { service_tier: "priority" } : {}),
+ 		text: { verbosity: state.config.openai.verbosity },
+-		...(tools ? { tools } : {}),
+ 		...(reasoning ? { reasoning } : {}),
+ 	};
+ }
+@@ -168,28 +158,42 @@ export function buildNativeCompactionInput(args: {
+ 	leafId?: string | null | undefined;
+ 	latestNativeCompaction: LatestNativeCompactionResolution;
+ 	serializationOptions?: SerializeResponsesMessagesOptions | undefined;
+-}): { input: ResponsesInputItem[]; compactedKeptWindow: boolean } | undefined {
++}): { input: ResponsesInputItem[]; compactedKeptWindow: boolean; tools: Tool[] } | undefined {
+ 	if (args.latestNativeCompaction.ok) {
+ 		const compactedWindow = cloneCompactedWindow(args.latestNativeCompaction.entry.details?.compactedWindow ?? []);
+ 		if (!compactedWindow) return undefined;
+ 		const liveTailEntries = args.branchEntries.slice(args.latestNativeCompaction.index + 1);
++		// The replayed transcript starts at the checkpoint's stored system message, so the request's
++		// top-level tools and the tail's in-place additions both come from this one placement.
++		const toolPlacement = resolveReplayedToolPlacement({
++			model: args.model,
++			checkpointSystemMessage: args.latestNativeCompaction.entry.systemMessage,
++			entries: liveTailEntries,
++		});
+ 		return {
+ 			input: [
+ 				...compactedWindow,
+-				...serializeLiveTailToResponsesInput({ model: args.model, entries: liveTailEntries, serializationOptions: args.serializationOptions }),
++				...serializeLiveTailToResponsesInput({
++					model: args.model,
++					entries: liveTailEntries,
++					serializationOptions: { ...args.serializationOptions, toolPlacement },
++				}),
+ 			],
+ 			compactedKeptWindow: false,
++			tools: toolPlacement.immediate,
+ 		};
+ 	}
+ 
++	const history = serializeActiveSessionHistory({
++		model: args.model,
++		entries: args.allEntries,
++		leafId: args.leafId,
++		options: args.serializationOptions,
++	});
+ 	return {
+-		input: serializeActiveSessionToResponsesInput({
+-			model: args.model,
+-			entries: args.allEntries,
+-			leafId: args.leafId,
+-			options: args.serializationOptions,
+-		}),
++		input: history.input,
+ 		compactedKeptWindow: true,
++		tools: history.toolPlacement.immediate,
+ 	};
+ }
+ 
+@@ -252,7 +256,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
+ 	const serializationOptions = plan.transport === "responses-lite"
+ 		? { grammarToolInputProperties: CODE_MODE_EXEC_GRAMMAR_INPUTS }
+ 		: undefined;
+-	const requestOptions = buildCompactionRequestOptions(pi, ctx, state, compactionTargetModel, codeMode);
++	const requestOptions = buildCompactionRequestOptions(pi, ctx, state, compactionTargetModel);
+ 	const branchEntries = compactionBranch(ctx, state);
+ 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
+ 		provider: runtime.provider,
+@@ -342,20 +346,14 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
+ 			"warning",
+ 		);
+ 	}
+-	const tools = getActiveToolsInActiveOrder(pi, codeMode);
+-	const context: Context = {
+-		// Match the active provider lane so cached WebSocket compaction can send
+-		// only previous_response_id plus the trigger instead of the full history.
+-		systemPrompt: state.activeProviderSystemPrompt ?? ctx.getSystemPrompt(),
+-		messages: [],
+-		...(tools.length > 0 ? { tools } : {}),
+-	};
+ 	const compactResult = await executeRemoteCompactionV2({
+ 		runtime,
+ 		modelRegistry: ctx.modelRegistry,
+-		context,
+-		promptInput: input,
+-		promptInputSource: compactionDiagnostic.inputSource,
++		// The replayed transcript and its top-level tools travel together: the request must not
++		// declare tools from a different context than the history it replays.
++		history: builtInput,
++		systemPrompt: state.activeProviderSystemPrompt ?? ctx.getSystemPrompt(),
++		...(validatedCanonicalInput ? { canonicalInput: validatedCanonicalInput } : {}),
+ 		compactionDiagnostic,
+ 		requestOptions,
+ 		...(plan.contextManagement ? {
+diff --git a/src/adapter/compaction/portable-summary.ts b/src/adapter/compaction/portable-summary.ts
+index 49464a8..d37e733 100644
+--- a/src/adapter/compaction/portable-summary.ts
++++ b/src/adapter/compaction/portable-summary.ts
+@@ -8,16 +8,16 @@ import {
+ 	uuidv7,
+ 	type Api,
+ 	type AssistantMessageEventStream,
+-	type Context,
+ 	type Model,
+ 	type ProviderHeaders,
+ 	type SimpleStreamOptions,
++	type TranscriptContext,
+ } from "@earendil-works/pi-ai";
+ import { openAICodexResponsesApi, openAIResponsesApi } from "@earendil-works/pi-ai/compat";
+ 
+ type PortableSummaryStream = (
+ 	model: Model<Api>,
+-	context: Context,
++	context: TranscriptContext,
+ 	options?: SimpleStreamOptions,
+ ) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
+ 
+diff --git a/src/adapter/compaction/remote-v2-client.ts b/src/adapter/compaction/remote-v2-client.ts
+index 964e0fb..81a6726 100644
+--- a/src/adapter/compaction/remote-v2-client.ts
++++ b/src/adapter/compaction/remote-v2-client.ts
+@@ -1,4 +1,4 @@
+-import { type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Transport } from "@earendil-works/pi-ai";
++import { type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Tool, type TranscriptContext, type Transport } from "@earendil-works/pi-ai";
+ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+ import type { NativeCompactionRuntime } from "./compaction-runtime.ts";
+ import type { NativeCompactionRequestOptions, ResponsesInputItem } from "./serializer.ts";
+@@ -8,12 +8,13 @@ import { withRemoteCompactionV2Feature } from "../../providers/openai-responses/
+ import type { OpenAICodexStreamOptions, ResponsesBody } from "../../providers/openai-codex/types.ts";
+ import { sleep } from "../../providers/openai-codex/sse.ts";
+ import { isWebSocketSseFallbackActive } from "../../providers/openai-codex/websocket.ts";
+-import { canonicalCompactionPromptInput, canonicalCompactionRequestBody } from "../../providers/openai-codex/session-continuity.ts";
++import { canonicalCompactionRequestBody } from "../../providers/openai-codex/session-continuity.ts";
+ import { extractAccountId, resolveCodexWebSocketUrl } from "../../providers/openai-codex/headers.ts";
++import { toProviderTranscript } from "../../providers/transcript.ts";
+ import type { CodexCompactionDiagnostic } from "./diagnostics.ts";
+ 
+ const MAX_STREAM_RETRIES = 2;
+-type V2Stream = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AsyncIterable<unknown>;
++type V2Stream = (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => AsyncIterable<unknown>;
+ 
+ export type RemoteCompactionV2Result =
+ 	| { ok: true; compaction: Record<string, unknown>; responseId: string; createdAt: string; usage?: RemoteCompactionV2Usage | undefined }
+@@ -27,22 +28,49 @@ export type RemoteCompactionV2Usage = {
+ 	diagnostic?: CodexCompactionDiagnostic | undefined;
+ };
+ 
++/**
++ * The replayed transcript for a native compaction request: the history items together with the
++ * top-level tools of the same placement decision that produced them. Keeping them in one value is
++ * what prevents a request from declaring the current tool set at the top level while the history
++ * announces those same tools in place.
++ */
++export type NativeCompactionHistory = {
++	input: readonly ResponsesInputItem[];
++	tools: readonly Tool[];
++};
++
+ export type ExecuteRemoteCompactionV2Options = {
+ 	runtime: NativeCompactionRuntime;
+ 	modelRegistry: ModelRegistry;
+-	context: Context;
+-	promptInput: readonly ResponsesInputItem[];
++	/** The replayed transcript; `systemPrompt` is the prompt it belongs to. */
++	history: NativeCompactionHistory;
++	systemPrompt: string;
+ 	requestOptions: NativeCompactionRequestOptions;
+ 	tokensBefore: number;
+ 	sessionId: string;
++	/** Validated canonical history; when set, the request replays the canonical baseline instead. */
++	canonicalInput?: readonly ResponsesInputItem[] | undefined;
+ 	signal?: AbortSignal | undefined;
+ 	transport?: Transport | undefined;
+ 	retryDelayMs?: number | undefined;
+-	promptInputSource?: "canonical" | "reconstructed" | undefined;
+ 	compactionDiagnostic?: CodexCompactionDiagnostic | undefined;
+ 	rewritePayload?: ((payload: unknown) => unknown) | undefined;
+ };
+ 
++/**
++ * Provider context for the compaction request. Only the prompt and the replayed history's own
++ * top-level tools travel here: the history is the source of truth for both halves of the request.
++ */
++function nativeCompactionContext(options: ExecuteRemoteCompactionV2Options): Context {
++	return {
++		// Match the active provider lane so cached WebSocket compaction can send
++		// only previous_response_id plus the trigger instead of the full history.
++		systemPrompt: options.systemPrompt,
++		messages: [],
++		...(options.history.tools.length > 0 ? { tools: [...options.history.tools] } : {}),
++	};
++}
++
+ function resolveStream(options: ExecuteRemoteCompactionV2Options): V2Stream | undefined {
+ 	if (options.runtime.codexTransport) {
+ 		// The Codex API implementation is registered once under the stock
+@@ -84,7 +112,7 @@ function diagnosticTransport(transport: Transport | undefined): "websocket" | "s
+ }
+ 
+ function canonicalSessionIdentity(options: ExecuteRemoteCompactionV2Options): { url: string; accountId: string } | undefined {
+-	if (options.promptInputSource === "reconstructed" || !options.runtime.codexTransport || !options.runtime.apiKey) return undefined;
++	if (options.canonicalInput === undefined || !options.runtime.codexTransport || !options.runtime.apiKey) return undefined;
+ 	return {
+ 		url: resolveCodexWebSocketUrl(options.runtime.baseUrl),
+ 		accountId: extractAccountId(options.runtime.apiKey),
+@@ -115,7 +143,7 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
+ 	const outputItems: unknown[] = [];
+ 	let responseStatus: number | undefined;
+ 	const compactionDiagnostic = options.compactionDiagnostic ?? {
+-		inputSource: options.promptInputSource ?? "reconstructed",
++	inputSource: options.canonicalInput !== undefined ? "canonical" : "reconstructed",
+ 		canonicalReplay: "not_applicable" as const,
+ 		checkpointReused: false,
+ 	};
+@@ -123,12 +151,8 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
+ 		compactionDiagnostic.transport = diagnosticTransport(options.transport);
+ 	}
+ 	const canonicalIdentity = canonicalSessionIdentity(options);
+-	const canonicalInput = options.promptInputSource === "canonical"
+-		? options.promptInput
+-		: options.promptInputSource === undefined && canonicalIdentity
+-		? canonicalCompactionPromptInput(options.sessionId, options.runtime.model, canonicalIdentity)
+-		: undefined;
+-	const canonicalBody = options.promptInputSource !== "reconstructed" && canonicalIdentity
++	const canonicalInput = options.canonicalInput;
++	const canonicalBody = canonicalInput !== undefined && canonicalIdentity
+ 		? canonicalCompactionRequestBody(options.sessionId, options.runtime.model, canonicalIdentity)
+ 		: undefined;
+ 	const streamOptions = {
+@@ -149,7 +173,7 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
+ 			const requestBody = canonicalBody
+ 				? withCurrentCompactionControls(canonicalBody, body)
+ 				: body;
+-			const promptInput = normalizeRemoteCompactionV2PromptInput(canonicalInput ?? options.promptInput) as ResponsesInputItem[];
++			const promptInput = normalizeRemoteCompactionV2PromptInput(canonicalInput ?? options.history.input) as ResponsesInputItem[];
+ 			const request = await shrinkNativeCompactionRequestForEndpoint({
+ 				model: requestBody.model,
+ 				input: promptInput,
+@@ -171,7 +195,7 @@ async function runAttempt(options: ExecuteRemoteCompactionV2Options, streamSimpl
+ 
+ 	let completed: AssistantMessage | undefined;
+ 	let completedNormally = false;
+-	for await (const rawEvent of streamSimple(options.runtime.currentModel, options.context, streamOptions)) {
++	for await (const rawEvent of streamSimple(options.runtime.currentModel, toProviderTranscript(nativeCompactionContext(options)), streamOptions)) {
+ 		const event = rawEvent as { type?: string; reason?: string; message?: AssistantMessage; error?: AssistantMessage };
+ 		if (event.type === "done") {
+ 			completed = event.message;
+diff --git a/src/adapter/compaction/serializer.ts b/src/adapter/compaction/serializer.ts
+index 4cccc05..d15b4df 100644
+--- a/src/adapter/compaction/serializer.ts
++++ b/src/adapter/compaction/serializer.ts
+@@ -3,11 +3,12 @@ import { join } from "node:path";
+ import type { AgentMessage } from "@earendil-works/pi-agent-core";
+ import { convertToLlm, getAgentDir, type SessionEntry } from "@earendil-works/pi-coding-agent";
+ import type { Api, ImageContent, Message, Model, TextContent, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+-import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages } from "../../providers/openai-responses/shared.ts";
++import { CODEX_TOOL_CALL_PROVIDERS, prepareResponsesTranscript, type DeferredToolPlacement } from "../../providers/openai-responses/shared.ts";
+ import { isCodexTransportModel } from "../prompt/codex-model.ts";
+ import { isProviderContextExcludedMessage } from "../prompt/context-filter.ts";
+ import { CodexDeveloperMessageBridge } from "../developer-messages.ts";
+ import { projectCodexReasoningHistory } from "../reasoning-history.ts";
++import { createInitialSystemMessage } from "../../providers/transcript.ts";
+ 
+ /**
+  * Responses compaction reuses the provider's serializer.
+@@ -84,13 +85,12 @@ export type NativeCompactionRequestBody = {
+ 	prompt_cache_key?: string | undefined;
+ 	service_tier?: string | undefined;
+ 	text?: { verbosity: string } | undefined;
+-	tools?: unknown[] | undefined;
+ 	reasoning?: unknown | undefined;
+ };
+ 
+ export type NativeCompactionRequestOptions = Pick<
+ 	NativeCompactionRequestBody,
+-	"parallel_tool_calls" | "prompt_cache_key" | "service_tier" | "text" | "tools" | "reasoning"
++	"parallel_tool_calls" | "prompt_cache_key" | "service_tier" | "text" | "reasoning"
+ >;
+ 
+ export type SerializeResponsesMessagesOptions = {
+@@ -98,6 +98,16 @@ export type SerializeResponsesMessagesOptions = {
+ 	includeInstructionsInInput?: boolean | undefined;
+ 	blockImages?: boolean | undefined;
+ 	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
++	/**
++	 * Whether `messages` starts at the transcript head. Compaction live tails and replay windows
++	 * continue a longer transcript, so their first system message is a mid-conversation update.
++	 */
++	startsAtTranscriptHead?: boolean | undefined;
++	/**
++	 * Tool placement decided once for the whole transcript. Replay callers that serialize several
++	 * slices of one transcript pass it, so no slice re-decides how tools are declared.
++	 */
++	toolPlacement?: DeferredToolPlacement | undefined;
+ };
+ 
+ export type ResponsesParityReport = {
+@@ -144,15 +154,29 @@ function applyBlockImages(messages: Message[], blockImages: boolean): Message[]
+ 	});
+ }
+ 
+-export function serializeActiveSessionToResponsesInput<TApi extends Api>(args: {
++export type SerializedResponsesHistory = {
++	input: ResponsesInputItem[];
++	/**
++	 * The placement that produced `input`. Its `immediate` tools are the request's top-level set,
++	 * so an assembler that replays this history declares exactly the same tools as the transcript.
++	 */
++	toolPlacement: DeferredToolPlacement;
++};
++
++/**
++ * Reconstruct the provider history for a session branch. Returns the placement decision together
++ * with the items: a caller that assembles a request from this history (native compaction) must
++ * declare the same top-level tools instead of deriving them from another context.
++ */
++export function serializeActiveSessionHistory<TApi extends Api>(args: {
+ 	model: Model<TApi>;
+ 	entries: SessionEntry[];
+ 	leafId?: string | null | undefined;
+ 	options?: SerializeResponsesMessagesOptions | undefined;
+-}): ResponsesInputItem[] {
++}): SerializedResponsesHistory {
+ 	const messages = projectCodexReasoningHistory(args.entries, undefined, args.leafId)
+ 		.filter((message) => !isProviderContextExcludedMessage(message));
+-	return serializeMessagesToResponsesInput(args.model, messages, args.options);
++	return serializeMessagesToResponsesHistory(args.model, messages, args.options);
+ }
+ 
+ export function serializeMessagesToResponsesInput<TApi extends Api>(
+@@ -160,6 +184,14 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
+ 	messages: AgentMessage[],
+ 	options: SerializeResponsesMessagesOptions = {},
+ ): ResponsesInputItem[] {
++	return serializeMessagesToResponsesHistory(model, messages, options).input;
++}
++
++function serializeMessagesToResponsesHistory<TApi extends Api>(
++	model: Model<TApi>,
++	messages: AgentMessage[],
++	options: SerializeResponsesMessagesOptions = {},
++): SerializedResponsesHistory {
+ 	const developerMessages = new CodexDeveloperMessageBridge();
+ 	const llmMessages = applyBlockImages(
+ 		convertToLlm(developerMessages.prepare(messages, true, model)),
+@@ -168,19 +200,23 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
+ 	const allowedToolCallProviders = isCodexTransportModel(model) && !CODEX_TOOL_CALL_PROVIDERS.has(model.provider)
+ 		? new Set([...CODEX_TOOL_CALL_PROVIDERS, model.provider])
+ 		: CODEX_TOOL_CALL_PROVIDERS;
+-	const input = convertResponsesMessages(
++	const prepared = prepareResponsesTranscript({
+ 		model,
+-		{
+-			messages: llmMessages,
+-			...(options.includeInstructionsInInput && options.instructions ? { systemPrompt: options.instructions } : {}),
+-		},
++		// `includeInstructionsInInput` asks for the prompt as an input item as well; a caller that
++		// supplies its own text still gets it at the head without touching the transcript.
++		messages: options.includeInstructionsInInput && options.instructions
++			? [createInitialSystemMessage(options.instructions, undefined)!, ...llmMessages]
++			: llmMessages,
++		startsAtTranscriptHead: options.startsAtTranscriptHead,
++		toolPlacement: options.toolPlacement,
++		includeSystemPrompt: options.includeInstructionsInInput ?? false,
++		grammarToolInputProperties: options.grammarToolInputProperties,
+ 		allowedToolCallProviders,
+-		{
+-			includeSystemPrompt: options.includeInstructionsInInput ?? false,
+-			...(options.grammarToolInputProperties ? { grammarToolInputProperties: options.grammarToolInputProperties } : {}),
+-		},
+-	) as ResponsesInputItem[];
+-	return (developerMessages.rewritePayload({ input }, model) as { input: ResponsesInputItem[] }).input;
++	});
++	return {
++		input: (developerMessages.rewritePayload({ input: prepared.input }, model) as { input: ResponsesInputItem[] }).input,
++		toolPlacement: prepared.toolPlacement,
++	};
+ }
+ 
+ export function createResponsesInputParitySignature(input: readonly unknown[]): string[] {
+diff --git a/src/adapter/replay/native-replay-segments.ts b/src/adapter/replay/native-replay-segments.ts
+index 557af59..4b7b9f7 100644
+--- a/src/adapter/replay/native-replay-segments.ts
++++ b/src/adapter/replay/native-replay-segments.ts
+@@ -2,6 +2,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
+ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+ import type { ResponsesCompatibleRequestPayload } from "../compaction/compaction-runtime.ts";
+ import type { NativeCompactionEntry } from "../compaction/types.js";
++import { resolveToolPlacement, type DeferredToolPlacement } from "../../providers/openai-responses/shared.ts";
+ import { compareResponsesInputParity, serializeMessagesToResponsesInput, type ResponsesInputItem, type ResponsesInputMessageItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.js";
+ import { cloneOpaqueCompactedWindow, cloneResponsesInputSlice } from "./payload-structured.ts";
+ import { extractFreshAuthoritativePreamble } from "./payload-preamble.ts";
+@@ -72,7 +73,41 @@ export function serializeLiveTailToResponsesInput<TApi extends Api>(args: {
+ 	entries: readonly SessionEntry[];
+ 	serializationOptions?: SerializeResponsesMessagesOptions | undefined;
+ }): ResponsesInputItem[] {
+-	return serializeMessagesToResponsesInput(args.model, collectReplayMessages(args.entries), args.serializationOptions);
++	return serializeMessagesToResponsesInput(args.model, collectReplayMessages(args.entries), {
++		...args.serializationOptions,
++		// The tail continues the transcript whose head is stored in the checkpoint.
++		startsAtTranscriptHead: false,
++	});
++}
++
++/**
++ * Session entries a checkpoint keeps as replayed history. Pi's `buildContextEntries` drops
++ * system message entries from the kept window: their prompt and tool deltas are already folded
++ * into the checkpoint's stored system message, so replaying them would duplicate or contradict it.
++ */
++function keptWindowEntries(entries: readonly SessionEntry[]): SessionEntry[] {
++	return entries.filter((entry) => !(entry.type === "message" && entry.message.role === "system"));
++}
++
++/**
++ * Placement for every tool in the transcript a checkpoint will replay: the stored system message
++ * plus the kept window and the live tail. One decision keeps all slices of that transcript aligned
++ * with the payload the provider built from it.
++ */
++/**
++ * Tool placement for a transcript a checkpoint replays: its stored system message leads, the given
++ * entries follow. Both the replay rewrite and the reconstructed compaction request decide through
++ * here, so a transcript assembled in pieces has exactly one placement.
++ */
++export function resolveReplayedToolPlacement<TApi extends Api>(args: {
++	model: Model<TApi>;
++	checkpointSystemMessage?: NativeCompactionEntry["systemMessage"] | undefined;
++	entries: readonly SessionEntry[];
++}): DeferredToolPlacement {
++	return resolveToolPlacement(args.model, [
++		...(args.checkpointSystemMessage ? [args.checkpointSystemMessage] : []),
++		...collectReplayMessages(args.entries),
++	]);
+ }
+ 
+ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+@@ -102,12 +137,26 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+ 		};
+ 	}
+ 
+-	const preCompactionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex)
+-		.filter((entry) => (entry.type !== "custom" && entry.type !== "custom_message") || entry.customType !== CODEX_REASONING_UPDATE_TYPE);
++	const preCompactionEntries = keptWindowEntries(
++		args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex)
++			.filter((entry) => (entry.type !== "custom" && entry.type !== "custom_message") || entry.customType !== CODEX_REASONING_UPDATE_TYPE),
++	);
+ 	const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
++	// Every slice below is part of one transcript: the checkpoint's stored system message leads it,
++	// and the kept window plus the live tail follow. Decide tool placement once for that transcript
++	// so no slice declares a tool the provider declared elsewhere.
++	const replaySerializationOptions: SerializeResponsesMessagesOptions = {
++		...args.serializationOptions,
++		startsAtTranscriptHead: false,
++		toolPlacement: resolveReplayedToolPlacement({
++			model: args.model,
++			checkpointSystemMessage: args.compactionEntry.systemMessage,
++			entries: [...preCompactionEntries, ...postCompactionEntries],
++		}),
++	};
+ 	// Window markers and persisted developer updates belong to history, not the fresh prompt envelope.
+ 	const persistedInput = serializeMessagesToResponsesInput(args.model,
+-		collectReplayMessages([...preCompactionEntries, ...postCompactionEntries]), args.serializationOptions);
++		collectReplayMessages([...preCompactionEntries, ...postCompactionEntries]), replaySerializationOptions);
+ 	const freshPreamble = extractFreshAuthoritativePreamble(args.payload, persistedInput);
+ 	if (!freshPreamble) {
+ 		return {
+@@ -128,7 +177,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+ 		.slice(boundaryIndex + 1)
+ 		.some((entry) => entry.type === "compaction");
+ 	if (newerCompactionEntry) {
+-		const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [createCompactionSummaryAgentMessage(args.compactionEntry)], args.serializationOptions);
++		const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [createCompactionSummaryAgentMessage(args.compactionEntry)], replaySerializationOptions);
+ 		const lenientReplay = buildLenientNativeReplayPayload({ payload: args.payload, freshPreamble, compactedWindow, compactionSummaryInput });
+ 		const originalPiReplayInput = cloneResponsesInputSlice(args.payload.input);
+ 		if (!lenientReplay || !originalPiReplayInput) {
+@@ -170,11 +219,11 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+ 		compactionSummaryMessage,
+ 		preCompactionEntries,
+ 		postCompactionEntries,
+-		serializationOptions: args.serializationOptions,
++		serializationOptions: replaySerializationOptions,
+ 	});
+ 
+ 	if (!replayMatch) {
+-		const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [compactionSummaryMessage], args.serializationOptions);
++		const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [compactionSummaryMessage], replaySerializationOptions);
+ 		const lenientReplay = buildLenientNativeReplayPayload({ payload: args.payload, freshPreamble, compactedWindow, compactionSummaryInput });
+ 		if (lenientReplay) {
+ 			return {
+@@ -202,8 +251,8 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+ 		const expectedInput = [
+ 			...freshPreamble.leadingInput,
+ 			...compactionSummaryInput,
+-			...serializeMessagesToResponsesInput(args.model, collectReplayMessages(preCompactionEntries), args.serializationOptions),
+-			...serializeMessagesToResponsesInput(args.model, collectReplayMessages(postCompactionEntries), args.serializationOptions),
++			...serializeMessagesToResponsesInput(args.model, collectReplayMessages(preCompactionEntries), replaySerializationOptions),
++			...serializeMessagesToResponsesInput(args.model, collectReplayMessages(postCompactionEntries), replaySerializationOptions),
+ 			...freshPreamble.trailingInput,
+ 		];
+ 		const parity = compareResponsesInputParity(args.payload.input, expectedInput);
+@@ -219,7 +268,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+ 	}
+ 
+ 	const freshPreambleCount = freshPreamble.leadingInput.length;
+-	const compactionSummaryCount = serializeMessagesToResponsesInput(args.model, [compactionSummaryMessage], args.serializationOptions).length;
++	const compactionSummaryCount = serializeMessagesToResponsesInput(args.model, [compactionSummaryMessage], replaySerializationOptions).length;
+ 	const preCompactionKeptCount = replayMatch.preCompactionKept.input.length;
+ 	const actualCompactionSummary = cloneResponsesInputSlice(
+ 		args.payload.input.slice(freshPreambleCount, freshPreambleCount + compactionSummaryCount),
+@@ -232,7 +281,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
+ 	);
+ 	const actualPostCompactionTail = replayMatch.actualPostCompactionTail;
+ 	const contextPostCompactionTail = [
+-		...serializeMessagesToResponsesInput(args.model, contextPostCompactionTailMessages, args.serializationOptions),
++		...serializeMessagesToResponsesInput(args.model, contextPostCompactionTailMessages, replaySerializationOptions),
+ 		...replayMatch.extraPostCompactionTail,
+ 	];
+ 	if (!actualCompactionSummary || !actualPreCompactionKeptWindow || !actualPostCompactionTail) {
+diff --git a/src/adapter/replay/payload-rewrite.ts b/src/adapter/replay/payload-rewrite.ts
+index 40c7ec8..aea4c3d 100644
+--- a/src/adapter/replay/payload-rewrite.ts
++++ b/src/adapter/replay/payload-rewrite.ts
+@@ -1,5 +1,6 @@
+ export {
+ 	buildNativeReplaySegments,
++	resolveReplayedToolPlacement,
+ 	rewriteResponsesPayloadWithNativeReplay,
+ 	serializeLiveTailToResponsesInput,
+ } from "./native-replay-segments.ts";
+diff --git a/src/context-management/namespace-tools.ts b/src/context-management/namespace-tools.ts
+index 23a4ee4..fbef4e1 100644
+--- a/src/context-management/namespace-tools.ts
++++ b/src/context-management/namespace-tools.ts
+@@ -12,6 +12,7 @@ import {
+ 	NOTES_ACTIONS,
+ 	NOTES_DESCRIPTION,
+ } from "./tool-contract.ts";
++import { currentToolNamesOf } from "../providers/transcript.ts";
+ 
+ type JsonSchema = Record<string, unknown>;
+ type ContextNamespace = "history" | "notes";
+@@ -292,9 +293,9 @@ export function rewriteContextNamespaceTools(
+ }
+ 
+ export function hasContextNamespaceRouters(
+-	context: Pick<Context, "tools">,
++	context: Pick<Context, "messages">,
+ ): boolean {
+-	const names = new Set(context.tools?.map((tool) => tool.name));
++	const names = currentToolNamesOf(context);
+ 	return names.has("history") && names.has("notes");
+ }
+ 
+diff --git a/src/providers/code-mode-proxy-provider.ts b/src/providers/code-mode-proxy-provider.ts
+index b1e1cb2..762a3dd 100644
+--- a/src/providers/code-mode-proxy-provider.ts
++++ b/src/providers/code-mode-proxy-provider.ts
+@@ -8,6 +8,7 @@ import {
+ 	type SimpleStreamOptions,
+ } from "@earendil-works/pi-ai";
+ import { createGrammarToolInputProperties } from "./constrained-sampling.js";
++import { declaredToolsOf } from "./transcript.ts";
+ import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
+ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+ import type { CodexConversionConfig } from "../adapter/activation/config.ts";
+@@ -92,7 +93,7 @@ export function streamCodeModeResponsesProxy<TApi extends Api>(
+ 	void (async () => {
+ 		try {
+ 			const { default: OpenAI, APIError } = await import("openai");
+-			const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, true);
++			const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), true);
+ 			const effectiveOptions = { ...options, grammarToolInputProperties };
+ 			let headers = mergeHeaders(model.headers, options?.headers);
+ 			let body: ResponsesBody = buildRequestBody(model, context, effectiveOptions);
+diff --git a/src/providers/openai-codex/model-catalog.ts b/src/providers/openai-codex/model-catalog.ts
+index dff3dc5..c8c0446 100644
+--- a/src/providers/openai-codex/model-catalog.ts
++++ b/src/providers/openai-codex/model-catalog.ts
+@@ -45,7 +45,7 @@ const SUPPLEMENTAL_MODELS: Model<"openai-codex-responses">[] = [
+ 		contextWindow: 272_000,
+ 		maxTokens: 128_000,
+ 		thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+-		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
++		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true, supportsMidConvoSystemMessages: true },
+ 	},
+ 	{
+ 		id: "gpt-daybreak-red-latest",
+@@ -59,7 +59,7 @@ const SUPPLEMENTAL_MODELS: Model<"openai-codex-responses">[] = [
+ 		contextWindow: 372_000,
+ 		maxTokens: 128_000,
+ 		thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+-		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
++		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true, supportsMidConvoSystemMessages: true },
+ 	},
+ ];
+ 
+diff --git a/src/providers/openai-codex/request-body.ts b/src/providers/openai-codex/request-body.ts
+index 236093c..2e0a25a 100644
+--- a/src/providers/openai-codex/request-body.ts
++++ b/src/providers/openai-codex/request-body.ts
+@@ -1,5 +1,10 @@
+ import { clampThinkingLevel, type Api, type Context, type Model } from "@earendil-works/pi-ai";
+-import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages, convertResponsesTools, splitDeferredTools } from "../openai-responses/shared.ts";
++import {
++	CODEX_TOOL_CALL_PROVIDERS,
++	convertResponsesTools,
++	prepareResponsesTranscript,
++} from "../openai-responses/shared.ts";
++import { normalizeProviderContext } from "../transcript.ts";
+ import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "./constants.ts";
+ import type { OpenAICodexStreamOptions, ResponsesBody } from "./types.ts";
+ 
+@@ -26,36 +31,27 @@ export function buildRequestBody<TApi extends Api>(
+ 	context: Context,
+ 	options?: OpenAICodexStreamOptions,
+ ): ResponsesBody {
+-	const compat = model.compat as {
+-		supportsStrictMode?: boolean | undefined;
+-		supportsAdditionalTools?: boolean | undefined;
+-		supportsToolSearch?: boolean | undefined;
+-	} | undefined;
+-	const supportsStrictMode = compat?.supportsStrictMode ?? true;
+-	const deferredToolsMode = compat?.supportsAdditionalTools
+-		? "additional-tools"
+-		: compat?.supportsToolSearch
+-			? "tool-search"
+-			: undefined;
+ 	const grammarToolInputProperties = options?.grammarToolInputProperties ?? new Map<string, string>();
+ 	const supportsOpenAIGrammarTools = grammarToolInputProperties.size > 0;
+ 	const allowedToolCallProviders = supportsOpenAIGrammarTools && !CODEX_TOOL_CALL_PROVIDERS.has(model.provider)
+ 		? new Set([...CODEX_TOOL_CALL_PROVIDERS, model.provider])
+ 		: CODEX_TOOL_CALL_PROVIDERS;
+-	const toolPlacement = splitDeferredTools(context, deferredToolsMode !== undefined);
+-	const messages = convertResponsesMessages(model, context, allowedToolCallProviders, {
++	// Accept both shapes: 0.85 hosts hand over `Context.systemPrompt`/`Context.tools`
++	// (compaction and replay build these internally), 0.86 hosts a normalized transcript.
++	const prepared = prepareResponsesTranscript({
++		model,
++		messages: normalizeProviderContext(context).messages,
+ 		includeSystemPrompt: false,
+ 		grammarToolInputProperties,
+-		deferredTools: toolPlacement.deferred,
+-		deferredToolsMode,
+-		toolOptions: { supportsStrictMode, supportsOpenAIGrammarTools },
++		allowedToolCallProviders,
+ 	});
++	const { instructions, input: messages, toolOptions, toolPlacement } = prepared;
+ 
+ 	const body: ResponsesBody = {
+ 		model: model.id,
+ 		store: false,
+ 		stream: true,
+-		instructions: context.systemPrompt || "You are a helpful assistant.",
++		instructions: instructions || "You are a helpful assistant.",
+ 		input: messages,
+ 		text: { verbosity: ((options as { textVerbosity?: string | undefined } | undefined)?.textVerbosity ?? "low") as string },
+ 		include: ["reasoning.encrypted_content"],
+@@ -80,11 +76,7 @@ export function buildRequestBody<TApi extends Api>(
+ 	}
+ 
+ 	if (toolPlacement.immediate.length > 0) {
+-		body.tools = convertResponsesTools(toolPlacement.immediate, {
+-			strict: false,
+-			supportsStrictMode,
+-			supportsOpenAIGrammarTools,
+-		});
++		body.tools = convertResponsesTools(toolPlacement.immediate, toolOptions);
+ 	}
+ 
+ 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+diff --git a/src/providers/openai-codex/transport-recovery.ts b/src/providers/openai-codex/transport-recovery.ts
+index 0aa6db7..618cda4 100644
+--- a/src/providers/openai-codex/transport-recovery.ts
++++ b/src/providers/openai-codex/transport-recovery.ts
+@@ -11,6 +11,7 @@ import {
+ } from "@earendil-works/pi-ai";
+ import type { CodexConversionConfig } from "../../adapter/activation/config.ts";
+ import { createGrammarToolInputProperties } from "../constrained-sampling.ts";
++import { declaredToolsOf } from "../transcript.ts";
+ import { DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_SSE_HEADER_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_RETRIES, INITIAL_STREAM_RETRY_DELAY_MS, MAX_SSE_REQUEST_RETRIES, MAX_STREAM_MAX_RETRIES } from "./constants.ts";
+ import { createErrorMessage, isRetryableRequestStatus, isRetryableStreamStatus, NonRetryableProviderError, parseErrorResponse } from "./errors.ts";
+ import { buildSSEHeaders, buildWebSocketHeaders, createCodexRequestId, extractAccountId, headersToRecord, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexUrl, resolveCodexWebSocketUrl } from "./headers.ts";
+@@ -172,7 +173,7 @@ export function createCodexTransportStream<TApi extends Api>(
+ 	const responsesLite = deps.useResponsesLite?.(model)
+ 		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
+ 			&& supportsResponsesLiteModel(model.id));
+-	const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, responsesLite);
++	const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
+ 	const preferredTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai);
+ 	const effectiveTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai, options?.sessionId);
+ 	const effectiveOptions: OpenAICodexStreamOptions | undefined = options
+@@ -314,7 +315,7 @@ export function createCodexTransportStream<TApi extends Api>(
+ 							output,
+ 							createAssistantMessageDiagnostic(retryableWebSocketError ? "provider_transport_failure" : "provider_stream_failure", error, {
+ 								configuredTransport: preferredTransport,
+-								fallbackTransport: fallbackArmed ? "sse" : undefined,
++								...(fallbackArmed ? { fallbackTransport: "sse" } : {}),
+ 								eventsEmitted: websocketStarted,
+ 								phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
+ 								requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+diff --git a/src/providers/openai-codex-custom-provider.ts b/src/providers/openai-codex-custom-provider.ts
+index eaa1e6e..d84eba3 100644
+--- a/src/providers/openai-codex-custom-provider.ts
++++ b/src/providers/openai-codex-custom-provider.ts
+@@ -1,6 +1,7 @@
+ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
+ import { createGrammarToolInputProperties } from "./constrained-sampling.js";
++import { declaredToolsOf } from "./transcript.ts";
+ import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexWebSocketUrl } from "./openai-codex/headers.ts";
+ import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";
+ import { buildRequestBody } from "./openai-codex/request-body.ts";
+@@ -81,7 +82,7 @@ export async function prewarmOpenAICodexWebSocket<TApi extends Api>(
+ 	const responsesLite = deps.useResponsesLite?.(model)
+ 		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
+ 			&& supportsResponsesLiteModel(model.id));
+-	const grammarToolInputProperties = createGrammarToolInputProperties(context.tools, responsesLite);
++	const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
+ 	const effectiveOptions = runtimeConfig?.compaction?.responsesCompaction
+ 		? { ...options, grammarToolInputProperties, headers: withRemoteCompactionV2Feature(options.headers) }
+ 		: { ...options, grammarToolInputProperties };
+diff --git a/src/providers/openai-responses/shared.ts b/src/providers/openai-responses/shared.ts
+index 4568455..3a06c6d 100644
+--- a/src/providers/openai-responses/shared.ts
++++ b/src/providers/openai-responses/shared.ts
+@@ -1,4 +1,4 @@
+-import type { Api, Context, Model, Tool, Usage } from "@earendil-works/pi-ai";
++import type { Api, Context, Model, SystemMessage, Tool, Usage } from "@earendil-works/pi-ai";
+ import type {
+ 	ResponseCreateParamsStreaming,
+ 	ResponseInput,
+@@ -17,6 +17,17 @@ import { normalizeResponsesToolHistory } from "./tool-history.ts";
+ import { normalizeResponsesMessageHistory } from "./message-history.ts";
+ import { encryptedToolOutputFromDetails, imageDetailForResponses, isImageGenerationCallBlock, isWebSearchCallBlock, sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageDetail, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
+ import { unrouteContextNamespaceToolCall } from "../../context-management/namespace-tools.ts";
++import {
++	getAnchoredToolAdditions,
++	getInitialSystemMessage,
++	getSystemMessageText,
++	legacyAddedToolNames,
++	normalizeProviderContext,
++	renderSystemMessageUpdate,
++	resolveTranscript,
++	resolveTranscriptTools,
++	type TranscriptMessages,
++} from "../transcript.ts";
+ 
+ type Message = Context["messages"][number];
+ 
+@@ -39,6 +50,16 @@ interface ConvertResponsesMessagesOptions {
+ 	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
+ 	deferredTools?: ReadonlyMap<string, Tool> | undefined;
+ 	deferredToolsMode?: "additional-tools" | "tool-search" | undefined;
++	/** Placement from `splitDeferredTools`: later system messages declare their additions in place. */
++	anchorsToolAdditions?: boolean | undefined;
++	/** Model accepts system/developer messages in the middle of the transcript. */
++	supportsMidConvoSystemMessages?: boolean | undefined;
++	/**
++	 * Whether `context.messages` starts at the transcript head. Slices that continue a longer
++	 * transcript pass false so a leading update is replayed in place instead of being dropped
++	 * as the global prompt.
++	 */
++	startsAtTranscriptHead?: boolean | undefined;
+ 	toolOptions?: ConvertResponsesToolsOptions | undefined;
+ }
+ 
+@@ -51,20 +72,167 @@ interface ConvertResponsesToolsOptions {
+ 
+ export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+ 
+-export function splitDeferredTools(context: Context, enabled: boolean): { immediate: Tool[]; deferred: Map<string, Tool> } {
+-	const uniqueTools = new Map<string, Tool>();
+-	for (const tool of context.tools ?? []) uniqueTools.set(tool.name, tool);
+-	if (!enabled) return { immediate: [...uniqueTools.values()], deferred: new Map() };
++export type ResponsesToolDeclarationMode = "additional-tools" | "tool-search";
++
++/** Model capabilities that decide how a transcript is replayed on the wire. */
++export interface ResponsesTranscriptSemantics {
++	/** The model accepts system/developer messages between turns. */
++	supportsMidConvoSystemMessages: boolean;
++	/** How tools declared after the first turn travel; `undefined` when the model has no in-place additions. */
++	deferredToolsMode: ResponsesToolDeclarationMode | undefined;
++	supportsStrictMode: boolean;
++}
++
++/**
++ * Read the transcript semantics a model declares. Every provider-facing path (normal request,
++ * compaction serializer, native replay) resolves them here, so the same transcript is replayed
++ * the same way and no caller re-invents a second, independent decision.
++ */
++export function resolveResponsesTranscriptSemantics(model: Model<Api>): ResponsesTranscriptSemantics {
++	const compat = model.compat as {
++		supportsStrictMode?: boolean | undefined;
++		supportsAdditionalTools?: boolean | undefined;
++		supportsToolSearch?: boolean | undefined;
++		supportsMidConvoSystemMessages?: boolean | undefined;
++	} | undefined;
++	return {
++		supportsStrictMode: compat?.supportsStrictMode ?? true,
++		supportsMidConvoSystemMessages: compat?.supportsMidConvoSystemMessages === true,
++		deferredToolsMode: compat?.supportsAdditionalTools === true
++			? "additional-tools"
++			: compat?.supportsToolSearch === true
++				? "tool-search"
++				: undefined,
++	};
++}
++
++/**
++ * Whether the resolved transcript starts at its head: collapsing synthesizes a leading system
++ * message, so a collapsed continuation does start at a head even when the caller passed a slice.
++ */
++function transcriptHeadIncluded(semantics: ResponsesTranscriptSemantics, startsAtTranscriptHead: boolean | undefined): boolean {
++	return !(semantics.supportsMidConvoSystemMessages && startsAtTranscriptHead === false);
++}
++
++/**
++ * The single tool placement decision for `messages`: which tools the request declares at the top
++ * level and which ones its later system messages announce in place. Callers that serialize slices
++ * of an already decided transcript pass the result on instead of asking again. Agent-level entries
++ * are accepted: the decision only reads system messages and tool declarations.
++ */
++export function resolveToolPlacement<TApi extends Api>(
++	model: Model<TApi>,
++	messages: TranscriptMessages,
++	startsAtTranscriptHead = true,
++): DeferredToolPlacement {
++	const semantics = resolveResponsesTranscriptSemantics(model);
++	return splitDeferredTools(
++		resolveTranscript(
++			normalizeProviderContext({ messages } as unknown as Context),
++			semantics.supportsMidConvoSystemMessages,
++		),
++		semantics.deferredToolsMode !== undefined,
++		transcriptHeadIncluded(semantics, startsAtTranscriptHead),
++	);
++}
++
++/** Everything a provider-facing path needs to replay one transcript. */
++export interface PreparedResponsesTranscript {
++	/** Provider input items for the transcript; the leading prompt is not part of it. */
++	input: ResponseInput;
++	/** Complete text of the leading system message, or `""` when the transcript has none. */
++	instructions: string;
++	/** Where every current tool is declared; the same decision owns the in-message additions. */
++	toolPlacement: DeferredToolPlacement;
++	/** Tool conversion options matching the placement. */
++	toolOptions: ConvertResponsesToolsOptions;
++}
++
++/**
++ * Replay one transcript into provider input plus the placement decision that owns every tool
++ * declaration. Callers pass `toolPlacement` when they serialize slices of a transcript whose
++ * decision was already made (native replay), so no slice decides on its own.
++ */
++export function prepareResponsesTranscript<TApi extends Api>(args: {
++	model: Model<TApi>;
++	messages: Message[];
++	startsAtTranscriptHead?: boolean | undefined;
++	toolPlacement?: DeferredToolPlacement | undefined;
++	includeSystemPrompt?: boolean | undefined;
++	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
++	allowedToolCallProviders?: ReadonlySet<string> | undefined;
++}): PreparedResponsesTranscript {
++	const semantics = resolveResponsesTranscriptSemantics(args.model);
++	const toolOptions: ConvertResponsesToolsOptions = {
++		strict: false,
++		supportsStrictMode: semantics.supportsStrictMode,
++		supportsOpenAIGrammarTools: (args.grammarToolInputProperties?.size ?? 0) > 0,
++	};
++	const resolved = resolveTranscript(
++		normalizeProviderContext({ messages: args.messages } as Context),
++		semantics.supportsMidConvoSystemMessages,
++	);
++	const startsAtTranscriptHead = transcriptHeadIncluded(semantics, args.startsAtTranscriptHead);
++	const toolPlacement = args.toolPlacement
++		?? splitDeferredTools(resolved, semantics.deferredToolsMode !== undefined, startsAtTranscriptHead);
++	const input = convertResponsesMessages(args.model, resolved, args.allowedToolCallProviders ?? CODEX_TOOL_CALL_PROVIDERS, {
++		includeSystemPrompt: args.includeSystemPrompt ?? false,
++		...(args.grammarToolInputProperties ? { grammarToolInputProperties: args.grammarToolInputProperties } : {}),
++		deferredTools: toolPlacement.deferred,
++		deferredToolsMode: semantics.deferredToolsMode,
++		anchorsToolAdditions: toolPlacement.anchorsAdditions,
++		supportsMidConvoSystemMessages: semantics.supportsMidConvoSystemMessages,
++		startsAtTranscriptHead,
++		toolOptions,
++	});
++	const initialSystemMessage = getInitialSystemMessage(resolved.messages, startsAtTranscriptHead);
++	return {
++		input,
++		instructions: initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "",
++		toolPlacement,
++		toolOptions,
++	};
++}
++
++export interface DeferredToolPlacement {
++	/** Tools declared in the top-level request field. */
++	immediate: Tool[];
++	/** Tools declared in place from a later system message or a pre-0.86 `addedToolNames` result. */
++	deferred: Map<string, Tool>;
++	/** Whether later system messages declare their own additions in place. */
++	anchorsAdditions: boolean;
++}
++
++/**
++ * Decide where every current tool is declared: the top-level request field or a later in-place
++ * addition. This is the single placement decision for the request — the caller hands it to
++ * `convertResponsesMessages`, so the top-level declarations and the in-message additions cannot
++ * disagree.
++ *
++ * Pi 0.86 anchors dynamic tools on system messages (`toolsAdded`); the bundled 3.0.34 transport
++ * predates that and used `ToolResultMessage.addedToolNames`. Both shapes are read here so code-mode
++ * tool deferral keeps its cache-friendly shape on either host.
++ *
++ * Removals and same-name redeclarations are not expressible as additions: the request then carries
++ * the complete current tool set, and nothing is declared in place (which would duplicate a tool or
++ * resurrect a removed one).
++ */
++export function splitDeferredTools(context: Pick<Context, "messages">, enabled: boolean, startsAtTranscriptHead = true): DeferredToolPlacement {
++	const messages = normalizeProviderContext(context as Context).messages;
++	const { requestTools, anchorsAdditions } = resolveTranscriptTools(messages, enabled, startsAtTranscriptHead);
++	if (!anchorsAdditions) return { immediate: requestTools, deferred: new Map(), anchorsAdditions: false };
+ 
+-	const deferredNames = new Set<string>();
++	const anchoredAdditions = getAnchoredToolAdditions(messages, startsAtTranscriptHead);
++	const deferredNames = new Set(anchoredAdditions.map((tool) => tool.name));
++	// Pre-0.86 transcripts recorded each dynamic tool on the tool result that introduced it.
+ 	const usedNames = new Set<string>();
+-	for (const message of context.messages) {
++	for (const message of messages) {
+ 		if (message.role === "assistant") {
+ 			for (const block of message.content) {
+ 				if (block.type === "toolCall") usedNames.add(block.name);
+ 			}
+ 		} else if (message.role === "toolResult") {
+-			for (const name of message.addedToolNames ?? []) {
++			for (const name of legacyAddedToolNames(message)) {
+ 				if (!usedNames.has(name)) deferredNames.add(name);
+ 			}
+ 		}
+@@ -72,11 +240,15 @@ export function splitDeferredTools(context: Context, enabled: boolean): { immedi
+ 
+ 	const immediate: Tool[] = [];
+ 	const deferred = new Map<string, Tool>();
+-	for (const [name, tool] of uniqueTools) {
+-		if (deferredNames.has(name)) deferred.set(name, tool);
++	for (const tool of requestTools) {
++		if (deferredNames.has(tool.name)) deferred.set(tool.name, tool);
+ 		else immediate.push(tool);
+ 	}
+-	return { immediate, deferred };
++	// Tools anchored on a later system message are absent from the top-level declaration.
++	for (const tool of anchoredAdditions) {
++		if (!deferred.has(tool.name)) deferred.set(tool.name, tool);
++	}
++	return { immediate, deferred, anchorsAdditions: true };
+ }
+ 
+ function sanitizeSurrogates(text: string): string {
+@@ -119,15 +291,66 @@ export function convertResponsesMessages<TApi extends Api>(
+ 		return `${normalizedCallId}|${normalizedItemId}`;
+ 	};
+ 
+-	const transformedMessages = normalizeResponsesMessageHistory(context.messages, model as Model<Api>, normalizeToolCallId as never);
++	const normalizedContext = resolveTranscript(
++		normalizeProviderContext(context),
++		options?.supportsMidConvoSystemMessages,
++	);
++	const startsAtTranscriptHead = options?.startsAtTranscriptHead !== false;
++	const transformedMessages = normalizeResponsesMessageHistory(normalizedContext.messages, model as Model<Api>, normalizeToolCallId as never);
+ 	const includeSystemPrompt = options?.includeSystemPrompt ?? true;
+-	if (includeSystemPrompt && context.systemPrompt) {
+-		messages.push({ role: model.reasoning ? "developer" : "system", content: sanitizeSurrogates(context.systemPrompt) });
+-	}
++	const supportsMidConvoSystemMessages = options?.supportsMidConvoSystemMessages === true;
++	const anchorsToolAdditions = options?.anchorsToolAdditions === true;
++	const appendSystemToolAdditions = (message: SystemMessage): void => {
++		const tools = anchorsToolAdditions ? (message.toolsAdded ?? []) : [];
++		if (tools.length === 0) return;
++		if (options?.deferredToolsMode === "additional-tools") {
++			messages.push({
++				type: "additional_tools",
++				role: "developer",
++				tools: convertResponsesTools(tools, options.toolOptions),
++			} as unknown as ResponseInputItem);
++			return;
++		}
++		if (options?.deferredToolsMode !== "tool-search") return;
++		const names = tools.map((tool) => tool.name);
++		// Derive the id from the anchor itself (not its index) so a replayed slice of the same
++		// transcript produces the same tool_search pair as the full request.
++		const seed = `${message.timestamp ?? 0}:${renderSystemMessageUpdate(message)}`;
++		const searchCallId = `pi_tool_load_${shortHash(`${seed}:${names.join(",")}`)}`;
++		messages.push({
++			type: "tool_search_call",
++			call_id: searchCallId,
++			execution: "client",
++			status: "completed",
++			arguments: { query: names.join(" "), limit: names.length },
++		} satisfies ResponseInputItem);
++		messages.push({
++			type: "tool_search_output",
++			call_id: searchCallId,
++			execution: "client",
++			status: "completed",
++			tools: convertResponsesTools(tools, { ...options.toolOptions, deferLoading: true }),
++		} satisfies ResponseToolSearchOutputItemParam);
++	};
++	const compat = model.compat as { supportsDeveloperRole?: boolean | undefined } | undefined;
++	const instructionRole: "developer" | "system" = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
+ 
+ 	let msgIndex = 0;
++	let sourceIndex = 0;
+ 	for (const msg of transformedMessages) {
+-		if (msg.role === "user") {
++		const isLeadingSystemMessage = startsAtTranscriptHead && sourceIndex++ === 0 && msg.role === "system";
++		if (msg.role === "system") {
++			if (!isLeadingSystemMessage) appendSystemToolAdditions(msg);
++			if (isLeadingSystemMessage) {
++				if (includeSystemPrompt) {
++					const text = getSystemMessageText(msg);
++					if (text.length > 0) messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
++				}
++			} else if (supportsMidConvoSystemMessages) {
++				const text = renderSystemMessageUpdate(msg);
++				if (text.length > 0) messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
++			}
++		} else if (msg.role === "user") {
+ 			if (typeof msg.content === "string") {
+ 				messages.push({ role: "user", content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }] });
+ 			} else {
+@@ -241,19 +464,19 @@ export function convertResponsesMessages<TApi extends Api>(
+ 			} as ResponseInput[number]);
+ 
+ 			const newlyLoadedTools: Tool[] = [];
+-			for (const name of msg.addedToolNames ?? []) {
++			for (const name of legacyAddedToolNames(msg)) {
+ 				const tool = options?.deferredTools?.get(name);
+ 				if (!tool || loadedTools.has(name)) continue;
+ 				loadedTools.set(name, tool);
+ 				newlyLoadedTools.push(tool);
+ 			}
+-			if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "additional-tools") {
++			if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "additional-tools") {
+ 				messages.push({
+ 					type: "additional_tools",
+ 					role: "developer",
+ 					tools: convertResponsesTools([...loadedTools.values()], options.toolOptions),
+ 				} as unknown as ResponseInputItem);
+-			} else if (newlyLoadedTools.length > 0 && options?.deferredToolsMode === "tool-search") {
++			} else if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "tool-search") {
+ 				const names = newlyLoadedTools.map((tool) => tool.name);
+ 				const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
+ 				messages.push({
+diff --git a/src/providers/openai-responses/stream.ts b/src/providers/openai-responses/stream.ts
+index dc12154..17c9799 100644
+--- a/src/providers/openai-responses/stream.ts
++++ b/src/providers/openai-responses/stream.ts
+@@ -1,4 +1,4 @@
+-import { calculateCost, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
++import { calculateCost, type Api, type AssistantMessage, type JsonObject, type Model } from "@earendil-works/pi-ai";
+ import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
+ import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
+ import {
+@@ -13,13 +13,13 @@ type InternalAssistantContent = AssistantMessage["content"][number] | ImageGener
+ 
+ type PartialJsonParser = (value: string) => unknown;
+ 
+-function parseStreamingJson(partialJson: string, partialParse: PartialJsonParser): Record<string, unknown> {
++function parseStreamingJson(partialJson: string, partialParse: PartialJsonParser): JsonObject {
+ 	if (!partialJson || partialJson.trim() === "") return {};
+ 	try {
+-		return JSON.parse(partialJson) as Record<string, unknown>;
++		return JSON.parse(partialJson) as JsonObject;
+ 	} catch {
+ 		try {
+-			return (partialParse(partialJson) ?? {}) as Record<string, unknown>;
++			return (partialParse(partialJson) ?? {}) as JsonObject;
+ 		} catch {
+ 			return {};
+ 		}
+@@ -302,9 +302,10 @@ export async function processResponsesStream<TApi extends Api>(
+ 				const property = state?.kind === "custom_tool_call"
+ 					? state.property
+ 					: options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
++				const toolCallArguments = customInput === undefined ? {} : { [property]: customInput };
+ 				const toolCall: ToolCallBlock = state?.kind === "custom_tool_call"
+-					? { ...state.block, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
+-					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
++					? { ...state.block, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
++					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
+ 				if (state?.kind !== "custom_tool_call") {
+ 					output.content.push(toolCall);
+ 					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+diff --git a/src/providers/transcript.ts b/src/providers/transcript.ts
+new file mode 100644
+index 0000000..e37ff97
+--- /dev/null
++++ b/src/providers/transcript.ts
+@@ -0,0 +1,270 @@
++/**
++ * Local transcript replay helpers (vendored from Pi 0.86.1).
++ *
++ * Pi 0.86 moved the provider-facing prompt and tool declarations out of
++ * `Context.systemPrompt` / `Context.tools` and into a transcript that carries
++ * `system` messages. Providers now receive a normalized transcript whose later
++ * system messages can add or remove tools and patch prompt sections.
++ *
++ * The vendored upstream (3.0.34) predates that change, and the host helpers are
++ * not exported by 0.85.x (where this bundle must keep working), so this file
++ * keeps the subset of replay semantics from
++ * `packages/ai/src/utils/transcript.ts` and `utils/text.ts` at Pi v0.86.1 that the
++ * vendored transport consumes; helpers without a caller are not carried along
++ * (see `PATCHES.md`, patch 2). Every entry point takes a plain `{ messages }`, so
++ * the same code path serves legacy `Context` objects (compaction, replay) and
++ * normalized transcripts.
++ */
++
++import type { Context, Message, SystemMessage, Tool, ToolReference, TranscriptContext } from "@earendil-works/pi-ai";
++
++/** A context whose prompt and tool declarations live in `system` messages. */
++export interface ResolvedTranscript {
++	messages: Message[];
++}
++
++/** Any message list; the replay helpers only inspect entries whose role is `"system"`. */
++export type TranscriptMessages = readonly { role: string }[];
++
++type SystemContent = string | readonly { type?: string; text?: string }[];
++
++function isSystemMessage(message: { role: string }): boolean {
++	return message.role === "system";
++}
++
++/** Extract and join text from message content. */
++export function contentText(content: SystemContent, separator = "\n"): string {
++	if (typeof content === "string") return content;
++	return content
++		.filter((block) => block.type === "text")
++		.map((block) => block.text ?? "")
++		.join(separator);
++}
++
++/** Render a system message as a complete prompt: its content followed by its sections. */
++export function getSystemMessageText(message: SystemMessage): string {
++	const parts = [contentText(message.content as SystemContent)];
++	for (const text of Object.values(message.sections ?? {})) {
++		if (text !== null) parts.push(text);
++	}
++	return parts.filter((part) => part.length > 0).join("\n\n");
++}
++
++/**
++ * Render a later system message for APIs that accept system messages mid-conversation.
++ * Section changes are framed by name so the model can relate them to the leading prompt.
++ */
++export function renderSystemMessageUpdate(message: SystemMessage): string {
++	const parts: string[] = [];
++	const text = contentText(message.content as SystemContent);
++	if (text.length > 0) parts.push(text);
++	for (const [name, value] of Object.entries(message.sections ?? {})) {
++		parts.push(
++			value === null
++				? `Removed system prompt section "${name}".`
++				: `Updated system prompt section "${name}":\n\n${value}`,
++		);
++	}
++	return parts.join("\n\n");
++}
++
++/**
++ * Build the leading system message for a prompt and tool set. Returns undefined when
++ * both are empty, so an empty transcript stays empty.
++ */
++export function createInitialSystemMessage(
++	systemPrompt: string | undefined,
++	tools: Tool[] | undefined,
++): SystemMessage | undefined {
++	const hasSystemPrompt = systemPrompt !== undefined && systemPrompt.length > 0;
++	const hasTools = tools !== undefined && tools.length > 0;
++	if (!hasSystemPrompt && !hasTools) return undefined;
++	return {
++		role: "system",
++		content: systemPrompt ?? "",
++		...(hasTools ? { toolsAdded: tools } : {}),
++		timestamp: 0,
++	};
++}
++
++/**
++ * Fold legacy `Context.systemPrompt` / `Context.tools` into a leading system message.
++ * Idempotent: a context that already carries its prompt in system messages is returned
++ * unchanged, which keeps provider entry points safe when the host normalized first.
++ */
++export function normalizeProviderContext(context: Context): ResolvedTranscript {
++	const initialMessage = createInitialSystemMessage(context.systemPrompt, context.tools);
++	const messages = initialMessage ? [initialMessage, ...context.messages] : context.messages;
++	return { messages };
++}
++
++/**
++ * Context for host APIs that consume a normalized transcript (Pi 0.86 `streamSimple`
++ * entry points). Internal callers that bypass the model registry (voice context, remote
++ * compaction v2, portable summaries) build plain `Context` objects, so fold them here.
++ * The transcript brand exists only in the host type; the runtime value is the folded
++ * `{ messages }` shape the host produces itself.
++ */
++export function toProviderTranscript(context: Context): TranscriptContext {
++	return normalizeProviderContext(context) as unknown as TranscriptContext;
++}
++
++/**
++ * Return the leading system message, if the transcript starts with one. A slice that continues
++ * a longer transcript (`startsAtTranscriptHead === false`) has no leading prompt: its first
++ * system message is a mid-conversation update, not the head.
++ */
++export function getInitialSystemMessage(messages: TranscriptMessages, startsAtTranscriptHead = true): SystemMessage | undefined {
++	if (!startsAtTranscriptHead) return undefined;
++	const first = messages[0];
++	return first && isSystemMessage(first) ? (first as SystemMessage) : undefined;
++}
++
++/** Resolve the tools available after applying every transcript delta in order. */
++export function getCurrentTools(messages: TranscriptMessages): Tool[] {
++	const tools = new Map<string, Tool>();
++	for (const message of messages) {
++		if (!isSystemMessage(message)) continue;
++		const systemMessage = message as SystemMessage;
++		for (const tool of systemMessage.toolsRemoved ?? []) tools.delete(tool.name);
++		for (const tool of systemMessage.toolsAdded ?? []) tools.set(tool.name, tool);
++	}
++	return [...tools.values()];
++}
++
++/**
++ * Replay every system message into one leading system message holding the current
++ * prompt and tools. Later `content` is appended to the base prompt, sections are
++ * patched by name, and tools are resolved with {@link getCurrentTools}.
++ */
++export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMessage | undefined {
++	const content: string[] = [];
++	const sections = new Map<string, string>();
++	let timestamp: number | undefined;
++	for (const message of messages) {
++		if (!isSystemMessage(message)) continue;
++		const systemMessage = message as SystemMessage;
++		timestamp ??= systemMessage.timestamp;
++		const text = contentText(systemMessage.content as SystemContent);
++		if (text.length > 0) content.push(text);
++		for (const [name, value] of Object.entries(systemMessage.sections ?? {})) {
++			if (value === null) sections.delete(name);
++			else sections.set(name, value);
++		}
++	}
++	const tools = getCurrentTools(messages);
++	if (timestamp === undefined && tools.length === 0) return undefined;
++	return {
++		role: "system",
++		content: content.join("\n\n"),
++		...(sections.size > 0 ? { sections: Object.fromEntries(sections) } : {}),
++		...(tools.length > 0 ? { toolsAdded: tools } : {}),
++		timestamp: timestamp ?? 0,
++	};
++}
++
++/**
++ * Rebuild the transcript for APIs without mid-conversation system messages: the replayed
++ * system message leads, and every later system message is dropped.
++ */
++export function collapseSystemMessages(context: ResolvedTranscript): ResolvedTranscript {
++	const head = getCurrentSystemMessage(context.messages);
++	const messages = context.messages.filter((message) => message.role !== "system");
++	return { messages: head ? [head, ...messages] : messages };
++}
++
++/** Keep later system messages in place when the model accepts them; otherwise collapse them. */
++export function resolveTranscript(
++	context: ResolvedTranscript,
++	supportsMidConvoSystemMessages: boolean | undefined,
++): ResolvedTranscript {
++	return supportsMidConvoSystemMessages ? context : collapseSystemMessages(context);
++}
++
++/** Every definition referenced by transcript tool state, in first-declaration order. */
++export function getDeclaredTools(messages: TranscriptMessages): Tool[] {
++	const definitions = new Map<string, Tool>();
++	for (const message of messages) {
++		if (!isSystemMessage(message)) continue;
++		for (const tool of (message as SystemMessage).toolsAdded ?? []) definitions.set(tool.name, tool);
++	}
++	return [...definitions.values()];
++}
++
++/**
++ * Declarations reachable from a provider context, removed tools included. Grammar-tool
++ * mappings must still cover a historical call to a tool that has since been removed.
++ */
++export function declaredToolsOf(context: Context): Tool[] {
++	return getDeclaredTools(normalizeProviderContext(context).messages);
++}
++
++/** Names of the tools that are currently available for a provider context. */
++export function currentToolNamesOf(context: Pick<Context, "messages">): Set<string> {
++	return new Set(getCurrentTools(normalizeProviderContext(context as Context).messages).map((tool) => tool.name));
++}
++
++/** Whether tool history contains a removal or same-name redeclaration that an addition-only transport cannot replay. */
++export function hasNonAdditiveToolChanges(messages: TranscriptMessages): boolean {
++	const declared = new Set<string>();
++	for (const message of messages) {
++		if (!isSystemMessage(message)) continue;
++		const systemMessage = message as SystemMessage;
++		if ((systemMessage.toolsRemoved?.length ?? 0) > 0) return true;
++		for (const tool of systemMessage.toolsAdded ?? []) {
++			if (declared.has(tool.name)) return true;
++			declared.add(tool.name);
++		}
++	}
++	return false;
++}
++
++export interface TranscriptTools {
++	/** Tools sent in the top-level request field. */
++	requestTools: Tool[];
++	/**
++	 * Whether later system messages carry their own `toolsAdded` as in-place additions.
++	 * When false, `requestTools` already holds the complete current tool set.
++	 */
++	anchorsAdditions: boolean;
++}
++
++/**
++ * Split tool declarations between the top-level request field and in-place additions.
++ * Transports that can anchor additions at a system message keep the initial tools at the
++ * top and load later ones where they appear; that only works when no tool was removed or
++ * redeclared, so everything else sends the current tool list.
++ */
++export function resolveTranscriptTools(messages: TranscriptMessages, supportsToolAdditions: boolean, startsAtTranscriptHead = true): TranscriptTools {
++	const anchorsAdditions = supportsToolAdditions && !hasNonAdditiveToolChanges(messages);
++	return {
++		requestTools: anchorsAdditions
++			? (getInitialSystemMessage(messages, startsAtTranscriptHead)?.toolsAdded ?? [])
++			: getCurrentTools(messages),
++		anchorsAdditions,
++	};
++}
++
++/**
++ * Tool names a pre-0.86 transcript recorded on an individual tool result. Pi 0.85 put
++ * dynamic tool introductions on `ToolResultMessage.addedToolNames`; 0.86 replaced that
++ * field with system-message `toolsAdded`, so this reads the legacy shape defensively.
++ */
++export function legacyAddedToolNames(message: { role: string }): readonly string[] {
++	const value = (message as { addedToolNames?: unknown }).addedToolNames;
++	if (!Array.isArray(value)) return [];
++	return value.filter((name): name is string => typeof name === "string");
++}
++
++/** Tools that later system messages introduce on top of the leading declaration. */
++export function getAnchoredToolAdditions(messages: TranscriptMessages, startsAtTranscriptHead = true): Tool[] {
++	const initial = getInitialSystemMessage(messages, startsAtTranscriptHead);
++	const additions: Tool[] = [];
++	for (const message of messages) {
++		if (!isSystemMessage(message) || (message as object) === (initial as object | undefined)) continue;
++		for (const tool of (message as SystemMessage).toolsAdded ?? []) additions.push(tool);
++	}
++	return additions;
++}
++
++export type { ToolReference };
 diff --git a/src/tools/code-mode/notebook-tool.ts b/src/tools/code-mode/notebook-tool.ts
 index 19a57e1..1e17b2d 100644
 --- a/src/tools/code-mode/notebook-tool.ts
@@ -42,3 +1461,41 @@ index 19a57e1..1e17b2d 100644
  
  const NOTEBOOK_DESCRIPTION = "Control persistent notebook state: status inspects memory/bindings by query glob; checkpoint; pin/unpin/release names; prune unpinned matches; list/save/load profiles; restart; diagnostics; reset";
  
+diff --git a/src/voice/context.ts b/src/voice/context.ts
+index 174753c..7df7724 100644
+--- a/src/voice/context.ts
++++ b/src/voice/context.ts
+@@ -1,4 +1,5 @@
+ import { type Context, type Model, uuidv7 } from "@earendil-works/pi-ai";
++import { toProviderTranscript } from "../providers/transcript.ts";
+ import {
+ 	buildSessionContext,
+ 	type ExtensionContext,
+@@ -218,7 +219,7 @@ async function completeWithSelectedModel(
+ 	let completed:
+ 		| { content: Array<{ type: string; text?: string }> }
+ 		| undefined;
+-	for await (const event of provider.streamSimple(requestModel, context, {
++	for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
+ 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+ 		...(auth.headers ? { headers: auth.headers } : {}),
+ 		...(auth.env ? { env: auth.env } : {}),
+diff --git a/src/voice/native-context.ts b/src/voice/native-context.ts
+index 65bd0d2..af4d906 100644
+--- a/src/voice/native-context.ts
++++ b/src/voice/native-context.ts
+@@ -1,4 +1,5 @@
+ import { type Context, type Model, uuidv7 } from "@earendil-works/pi-ai";
++import { toProviderTranscript } from "../providers/transcript.ts";
+ import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+ import {
+ 	DEFAULT_VOICE_CONTEXT_REASONING,
+@@ -80,7 +81,7 @@ export async function createNativeVoiceContextSummary(
+ 	let completed:
+ 		| { content: Array<{ type: string; text?: string }>; errorMessage?: string }
+ 		| undefined;
+-	for await (const event of provider.streamSimple(requestModel, context, {
++	for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
+ 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+ 		...(auth.headers ? { headers: auth.headers } : {}),
+ 		...(auth.env ? { env: auth.env } : {}),

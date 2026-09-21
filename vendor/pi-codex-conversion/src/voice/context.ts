@@ -1,4 +1,5 @@
 import { type Context, type Model, uuidv7 } from "@earendil-works/pi-ai";
+import { toProviderTranscript } from "../providers/transcript.ts";
 import {
 	buildSessionContext,
 	type ExtensionContext,
@@ -218,7 +219,7 @@ async function completeWithSelectedModel(
 	let completed:
 		| { content: Array<{ type: string; text?: string }> }
 		| undefined;
-	for await (const event of provider.streamSimple(requestModel, context, {
+	for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
 		...(auth.headers ? { headers: auth.headers } : {}),
 		...(auth.env ? { env: auth.env } : {}),

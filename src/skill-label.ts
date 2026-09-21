@@ -16,9 +16,12 @@
 //
 // The surgery is deliberately conservative: only the plain block name is swapped
 // for the joined list, and the search starts after the `[skill]` token so a
-// skill literally named "skill" cannot hit the token itself. Anything unexpected
-// — no token in the label, name not found, a child without a readable and
-// writable text — leaves the host's rendering untouched.
+// skill literally named "skill" cannot hit the token itself. Labels are found by a
+// bounded search over `children`/`child` links that stops at the first level holding
+// text nodes — Pi 0.86 renders them as `Box → MouseRegion → Container → Text/Markdown`,
+// 0.85 renders them as direct children. Anything unexpected — no token in the label,
+// name not found, a node without a readable and writable text, an extra wrapper level —
+// leaves the host's rendering untouched.
 
 import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
 
@@ -35,6 +38,48 @@ export interface SkillLabelComponent {
 interface LabelChild {
   text?: unknown;
   setText?: (text: string) => void;
+}
+
+/**
+ * How far below the entry the rendered labels may live. 0.85 renders them as direct
+ * children; 0.86 wraps them in `MouseRegion` → `Container`. One spare level covers a
+ * further host wrapper without letting the patch wander into unrelated text.
+ */
+const MAX_LABEL_DEPTH = 3;
+
+/** Children of a pi-tui node: containers expose `children`, `MouseRegion` exposes `child`. */
+function childNodes(node: unknown): unknown[] {
+  if (node === null || typeof node !== "object") return [];
+  const children = (node as { children?: unknown }).children;
+  if (Array.isArray(children)) return children;
+  const child = (node as { child?: unknown }).child;
+  return child === undefined ? [] : [child];
+}
+
+function isLabelChild(value: unknown): value is LabelChild {
+  const label = value as LabelChild | undefined;
+  return typeof label?.text === "string" && typeof label.setText === "function";
+}
+
+/**
+ * Collect the label nodes the host built for this entry, breadth-first and bounded.
+ * Only `children`/`child` links are followed, only nodes without a text API are
+ * descended into, and the search stops at the first level that yields a label node.
+ * A renamed field or an extra wrapper therefore yields nothing and leaves the host's
+ * rendering untouched, instead of rewriting arbitrary text elsewhere in the tree.
+ */
+function collectLabelChildren(root: unknown): LabelChild[] {
+  const queue: Array<{ node: unknown; depth: number }> = [{ node: root, depth: 0 }];
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    const labels: LabelChild[] = [];
+    for (const child of childNodes(node)) {
+      if (isLabelChild(child)) labels.push(child);
+      else if (depth < MAX_LABEL_DEPTH) queue.push({ node: child, depth: depth + 1 });
+    }
+    if (labels.length > 0) return labels;
+  }
+  return [];
 }
 
 /** The block's own name plus every nested skill name, in invocation order. */
@@ -81,12 +126,11 @@ export function installSkillLabelNames(component: unknown): SkillPatchResult {
       const names = skillNames(this.skillBlock);
       if (names.length < 2) return;
       // Rewrite what the host just built: the collapsed line, and (when expanded)
-      // the `**name**` header of the markdown body. Both expose text/setText.
-      for (const child of Array.isArray(this.children) ? this.children : []) {
-        const label = child as LabelChild;
-        if (typeof label?.text !== "string" || typeof label.setText !== "function") continue;
-        const rewritten = joinSkillLabel(label.text, name, names);
-        if (rewritten !== label.text) label.setText(rewritten);
+      // the `**name**` header of the markdown body. Both expose text/setText, but
+      // on 0.86 they sit behind MouseRegion → Container rather than directly.
+      for (const label of collectLabelChildren(this)) {
+        const rewritten = joinSkillLabel(String(label.text), name, names);
+        if (rewritten !== label.text) label.setText?.(rewritten);
       }
     };
   });

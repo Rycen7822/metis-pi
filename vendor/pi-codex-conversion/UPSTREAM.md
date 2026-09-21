@@ -13,6 +13,10 @@ owns it: patches live in this repo's git history instead of being wiped by `pi u
 | License | MIT — see `LICENSE` (upstream copyright, unchanged) |
 | Pristine checkout | `references/howaboua-pi-stuff/` (local-only, gitignored) |
 
+npm now also publishes **3.0.35**. This copy deliberately stays on 3.0.34 + the patches in `PATCHES.md`: the
+0.86 transcript migration is local-only for now, and the vendored "behind npm" notice is expected until the next
+`vendor:sync` (run it with the 0.86 sources and re-apply patches 2-6).
+
 ## What is here
 
 - `src/**` — the 321 upstream TypeScript sources. **This is where patches are made.**

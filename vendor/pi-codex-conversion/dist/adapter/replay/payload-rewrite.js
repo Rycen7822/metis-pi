@@ -1,1 +1,1 @@
-export { buildNativeReplaySegments, rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput, } from "./native-replay-segments.js";
+export { buildNativeReplaySegments, resolveReplayedToolPlacement, rewriteResponsesPayloadWithNativeReplay, serializeLiveTailToResponsesInput, } from "./native-replay-segments.js";

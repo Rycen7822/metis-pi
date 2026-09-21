@@ -1,4 +1,4 @@
-import { calculateCost, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
+import { calculateCost, type Api, type AssistantMessage, type JsonObject, type Model } from "@earendil-works/pi-ai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
@@ -13,13 +13,13 @@ type InternalAssistantContent = AssistantMessage["content"][number] | ImageGener
 
 type PartialJsonParser = (value: string) => unknown;
 
-function parseStreamingJson(partialJson: string, partialParse: PartialJsonParser): Record<string, unknown> {
+function parseStreamingJson(partialJson: string, partialParse: PartialJsonParser): JsonObject {
 	if (!partialJson || partialJson.trim() === "") return {};
 	try {
-		return JSON.parse(partialJson) as Record<string, unknown>;
+		return JSON.parse(partialJson) as JsonObject;
 	} catch {
 		try {
-			return (partialParse(partialJson) ?? {}) as Record<string, unknown>;
+			return (partialParse(partialJson) ?? {}) as JsonObject;
 		} catch {
 			return {};
 		}
@@ -302,9 +302,10 @@ export async function processResponsesStream<TApi extends Api>(
 				const property = state?.kind === "custom_tool_call"
 					? state.property
 					: options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
+				const toolCallArguments = customInput === undefined ? {} : { [property]: customInput };
 				const toolCall: ToolCallBlock = state?.kind === "custom_tool_call"
-					? { ...state.block, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
-					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: { [property]: customInput }, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
+					? { ...state.block, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
+					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
 				if (state?.kind !== "custom_tool_call") {
 					output.content.push(toolCall);
 					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });

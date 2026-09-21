@@ -27,10 +27,176 @@ pristine upstream checkout in `references/`). `npm run vendor:sync` replays it o
   built with `typebox` + `StringEnum` from the host, plus `node --check` on the emitted `.js`.
 - **Upstream status:** not reported upstream (as of 3.0.34).
 
+### 2. Provider-facing paths consume the Pi 0.86 transcript
+
+- **Files:** `src/providers/transcript.ts` (new), `src/providers/openai-responses/shared.ts`,
+  `src/providers/openai-codex/request-body.ts`, `src/adapter/compaction/serializer.ts`,
+  `src/adapter/compaction/compaction.ts`, `src/adapter/compaction/remote-v2-client.ts`,
+  `src/adapter/replay/native-replay-segments.ts`, `src/adapter/replay/payload-rewrite.ts`.
+- **Symptom:** on Pi 0.86 everything loads and registers, but Codex requests lose the system
+  prompt and every tool: `instructions` falls back to `"You are a helpful assistant."` and
+  `tools` is empty. Any Codex session that needs tools is unusable.
+- **Root cause:** Pi 0.86 folded `Context.systemPrompt` / `Context.tools` into transcript
+  `system` messages before provider dispatch (`normalizeContext`). The vendored 3.0.34
+  serializers still read the removed top-level fields and ignored the new system messages.
+- **Fix:** `src/providers/transcript.ts` mirrors the 0.86.1 replay helpers
+  (`utils/transcript.ts`, `utils/text.ts`) with local types, so the bundle behaves the same on
+  hosts that do not export them. `buildRequestBody` and `convertResponsesMessages` now fold a
+  legacy `Context` into a leading system message, keep later `toolsAdded` / `toolsRemoved` /
+  `sections` deltas in place when the model accepts mid-conversation system messages, and read
+  the prompt through `getInitialSystemMessage` / `getSystemMessageText`.
+- **Deferred tools:** dynamic tools are anchored on the system messages that introduce them
+  (0.86), with the old `ToolResultMessage.addedToolNames` anchoring kept as a fallback for
+  0.85 hosts. `splitDeferredTools` is the single placement decision: it returns the top-level
+  `immediate` tools, the in-place `deferred` tools and whether later system messages may anchor
+  their `toolsAdded` (it is the only caller-visible capability flag; the old
+  `supportsAdditionalTools`/`supportsToolSearch` options are gone and everything reads the same
+  `deferredToolsMode`). `convertResponsesMessages` receives that decision instead of deriving
+  its own, so the top-level field and the in-message `additional_tools`/`tool_search` items can
+  not disagree.
+- **Non-additive history:** a removal or a same-name redeclaration makes the transcript
+  non-additive. `splitDeferredTools` then declares the complete current tool set at the top
+  level, and neither the anchored additions nor the legacy `addedToolNames` lookup may add
+  anything in place — otherwise a current tool would be missing from both places, a removed
+  tool could come back, or a tool could be declared twice. Pure additions keep the previous
+  per-message anchoring.
+- **Reconstructed compaction request:** the last caller that still derived tools on its own was the
+  native compaction request. It built a `Context` whose `tools` were `getActiveToolsInActiveOrder`
+  (the complete active set) with empty messages, while the history injected into the same request
+  came from `buildNativeCompactionInput` (whose transcript head declares only the initial set and
+  anchors later additions in place). The final body therefore declared dynamic tools twice —
+  `tools: [alpha, beta]` plus `additional_tools`/`tool_search_output` for `beta` — and a tool whose
+  definition had been replaced also kept its old description. The request is now assembled from one
+  value: `buildNativeCompactionInput` returns `{ input, compactedKeptWindow, tools }` where `tools`
+  is the placement's `immediate` set for exactly that history, `buildNativeCompactionContext` was
+  folded into `executeRemoteCompactionV2` (which takes `history: { input, tools }` and
+  `systemPrompt` instead of a caller-built `Context` and a separate `promptInput`), and the
+  canonical/reconstructed choice is the presence of `canonicalInput` instead of a
+  `promptInputSource` flag. A caller can no longer pass a tool list that disagrees with the history
+  it replays, and the canonical branch still keeps its own stored tools, prompt and prefix.
+- **Single placement owner:** `resolveToolPlacement(model, messages, startsAtTranscriptHead?)` is the
+  one decision function; `prepareResponsesTranscript` consumes it, `resolveReplayedToolPlacement`
+  assembles the head-plus-entries transcript for entry-based replays (used by both the replay
+  rewrite and the reconstructed compaction request), and `serializeActiveSessionHistory` returns the
+  placement together with the items so the session transcript is decided once.
+- **Removed with the same change:** `buildCompactionTools` (converted the complete active tool set on
+  every compaction and was never read), the unused `tools` field on `NativeCompactionRequestBody`,
+  the `promptInput`/`promptInputSource` pair (`canonicalInput` replaces both), and the compaction
+  path's `getActiveToolsInActiveOrder` import (the host tool projection in `extension/runtime.ts`
+  keeps its own use).
+- **Compaction and native replay:** both paths used to replay history with their own idea of the
+  transcript. `serializeMessagesToResponsesInput` converted messages without the model's
+  `supportsMidConvoSystemMessages`, so a mid-conversation update was folded into the leading
+  prompt and then dropped from the input (the prompt only lives in `instructions`); it also had
+  no placement decision, so `additional_tools` / `tool_search` items never reached the
+  serialized history. Native replay compares that serialization against the real payload,
+  `extractFreshAuthoritativePreamble` then treated the unmatched developer update as an unknown
+  prompt item (`unsupported-instructions`), and `rewriteCodexCompactedProviderRequest` refused
+  to send. Now `resolveResponsesTranscriptSemantics(model)` and
+  `prepareResponsesTranscript(...)` are the single preparation used by the request body, the
+  serializer and every slice: the model's mid-conversation support, the derived
+  `deferredToolsMode`, the tool placement and the tool conversion options all come from one
+  place. The serializer takes `startsAtTranscriptHead: false` for continuation slices, so a
+  leading update is replayed in place instead of being dropped as the global prompt, and the
+  replay decides the placement once over the checkpoint's stored system message plus the kept
+  window and the live tail (`toolPlacement` is passed down, so no slice re-decides). Two
+  follow-ups from the same call chain: kept-window system entries are dropped like the host's
+  `buildContextEntries` does (their prompt and tool delta is already folded into the
+  checkpoint), and a `tool_search` anchor id is derived from the anchor message
+  (`timestamp` + rendered update + names) instead of its position, so a full-transcript
+  conversion and a replayed slice produce the same pair.
+- **Verified:** `test/vendor-codex-transcript.test.mjs` loads the built entry and captures the
+  request body for legacy and normalized contexts, anchored/removed tools, tool-call pairing,
+  grammar tools, the prewarm path and the Responses Lite proxy. Before this fix its four
+  placement cases failed (removal, redeclaration, `tool_search` removal, legacy
+  `addedToolNames` removal) and `.work/review-pi086-tools.mjs` reported empty `tools`; reverting
+  only `dist/` still makes the placement cases fail.
+- **Verified (compaction/replay):** `test/vendor-codex-compaction-replay.test.mjs` feeds real
+  `buildSessionContext` + `convertToLlm` sessions through the built provider, the built
+  serializer and the built native replay. Before the fix 6 of its 8 cases failed (the serializer
+  dropped the update, replay returned `unsupported-instructions`, a slice-head update was
+  dropped, `additional_tools` and `tool_search` were missing from the replayed slice, and the
+  fresh-compaction input dropped the update too; re-checked in an isolated scratch copy) and
+  `.work/review-pi086-replay.mjs` exited 1; after the fix all pass and the probe exits 0, while
+  the collapse and non-additive controls passed on both sides.
+- **Verified (final compaction request):** `test/vendor-codex-compaction-request.test.mjs` runs the
+  real pipeline (`buildNativeCompactionInput`, the canonical replay decision, the registered
+  provider and the adapter's own `onPayload`) and asserts the final body. Before the fix 5 of its 8
+  cases failed (top level carried the complete active set while the history anchored `beta`; a
+  replaced definition kept the old description) and `.work/review-pi086-compaction-wire.mjs`
+  exited 1; after the fix all pass, the probe exits 0, and the final body's top-level tools equal
+  the normal request's for the same session (the two controls and the canonical-baseline guard pass
+  on both sides). `tools` and the in-place declarations are asserted by position, count and
+  definition, for `additional_tools` and `tool_search` (with the call/output pair) as well as for a
+  checkpoint-free and a checkpointed session.
+- **Upstream status:** not reported upstream (as of 3.0.35).
+
+### 3. Grammar tools and namespace routing read tools from the transcript
+
+- **Files:** `src/providers/openai-codex/transport-recovery.ts`,
+  `src/providers/openai-codex-custom-provider.ts`, `src/providers/code-mode-proxy-provider.ts`,
+  `src/context-management/namespace-tools.ts`.
+- **Symptom:** `createGrammarToolInputProperties(context.tools, …)` and
+  `hasContextNamespaceRouters(context)` saw `tools === undefined` on 0.86, so grammar
+  (`custom_tool_call`) mappings and context-namespace routing silently switched off.
+- **Fix:** read declarations through `declaredToolsOf(context)` (history, removed tools
+  included, for grammar replay) and current names through `currentToolNamesOf(context)`.
+- **Verified:** covered by the same regression file (grammar wire format on the proxy path,
+  namespace routers before/after a removal).
+- **Upstream status:** not reported upstream (as of 3.0.35).
+
+### 4. Internal provider calls hand over a normalized transcript
+
+- **Files:** `src/providers/transcript.ts` (`toProviderTranscript`),
+  `src/adapter/compaction/portable-summary.ts`, `src/adapter/compaction/remote-v2-client.ts`,
+  `src/voice/context.ts`, `src/voice/native-context.ts`.
+- **Symptom:** internal callers that bypass the model registry built a legacy `Context` and
+  passed it straight to a provider `streamSimple`, which Pi 0.86 types as `TranscriptContext`.
+- **Fix:** the new `toProviderTranscript()` folds legacy top-level prompt/tools once at that
+  boundary (idempotent for a context that is already a transcript),
+  and portable summaries now accept the host's `TranscriptContext` directly. This also covers
+  the prewarm/keepalive path in `extension/runtime.ts`, which still builds a legacy `Context`.
+- **Verified:** type-checks with `npx tsc -p tsconfig.build.json` against
+  `@earendil-works/pi-coding-agent@0.86.1`; prewarm body covered by
+  `test/vendor-codex-transcript.test.mjs`.
+- **Upstream status:** not reported upstream (as of 3.0.35).
+
+### 5. Pi 0.86.1 type tightening
+
+- **Files:** `src/providers/openai-responses/stream.ts`,
+  `src/providers/openai-codex/transport-recovery.ts`.
+- **Symptom:** the vendored sources no longer compile against 0.86.1: `ToolCall.arguments` is
+  now `JsonObject`, and diagnostics details reject `undefined` values under
+  `exactOptionalPropertyTypes`.
+- **Fix:** `parseStreamingJson` returns `JsonObject`; the grammar custom-tool call omits its
+  `arguments` property when the grammar value is undefined (identical on the wire, where
+  `JSON.stringify` dropped it anyway); the transport diagnostic uses a conditional spread
+  instead of an explicit `undefined`.
+- **Verified:** `npx tsc -p tsconfig.build.json` is clean; the request-body tests exercise the
+  custom-tool-call path.
+- **Upstream status:** not reported upstream (as of 3.0.35).
+
+### 6. Supplemental models declare mid-conversation system messages
+
+- **File:** `src/providers/openai-codex/model-catalog.ts` (`gpt-daybreak-blue-latest`,
+  `gpt-daybreak-red-latest`).
+- **Symptom:** the supplemental entries declared `supportsAdditionalTools` / `supportsToolSearch`
+  but not `supportsMidConvoSystemMessages`, so on 0.86 their transcript is collapsed and the
+  anchored `additional_tools`/`tool_search` items have nowhere to land.
+- **Fix:** add `supportsMidConvoSystemMessages: true`, matching the host catalog's entries for
+  the same model family.
+- **Verified:** the two entries now keep the same deferral shape as the host-declared models;
+  request-body tests cover anchoring with `gpt-6-astra`.
+- **Upstream status:** the upstream catalog predates the 0.86 transcript work; re-check on the
+  next `vendor:sync`.
+
 ## Adding a patch
 
-1. Edit the file in `src/**`.
+1. Edit the file in `src/**`. New files are fine — `npm run vendor:patch` re-roots both diff sides at
+   `src/`, so the replay stays `git apply -p1`-able.
 0. Never edit `dist/**` by hand — it is build output and `npm run vendor:fresh` will catch the drift.
 2. Add an entry here: file, symptom, root cause, fix, how you verified it.
-3. `npm run vendor:build && npm run vendor:patch && npm run vendor:check`.
+3. `npm run vendor:build && npm run vendor:patch && npm run vendor:check`, then confirm the regenerated
+   `patches/local.patch` replays onto a pristine upstream `src/` checkout (`git apply -p1` in a temp copy)
+   and matches this tree. A patch that only lives in `src/` and `dist/` is lost on the next `vendor:sync`.
 4. Note the patch in the repo's `CHANGELOG.md` with the version bump.

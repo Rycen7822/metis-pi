@@ -3,11 +3,12 @@ import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertToLlm, getAgentDir, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Api, ImageContent, Message, Model, TextContent, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
-import { CODEX_TOOL_CALL_PROVIDERS, convertResponsesMessages } from "../../providers/openai-responses/shared.ts";
+import { CODEX_TOOL_CALL_PROVIDERS, prepareResponsesTranscript, type DeferredToolPlacement } from "../../providers/openai-responses/shared.ts";
 import { isCodexTransportModel } from "../prompt/codex-model.ts";
 import { isProviderContextExcludedMessage } from "../prompt/context-filter.ts";
 import { CodexDeveloperMessageBridge } from "../developer-messages.ts";
 import { projectCodexReasoningHistory } from "../reasoning-history.ts";
+import { createInitialSystemMessage } from "../../providers/transcript.ts";
 
 /**
  * Responses compaction reuses the provider's serializer.
@@ -84,13 +85,12 @@ export type NativeCompactionRequestBody = {
 	prompt_cache_key?: string | undefined;
 	service_tier?: string | undefined;
 	text?: { verbosity: string } | undefined;
-	tools?: unknown[] | undefined;
 	reasoning?: unknown | undefined;
 };
 
 export type NativeCompactionRequestOptions = Pick<
 	NativeCompactionRequestBody,
-	"parallel_tool_calls" | "prompt_cache_key" | "service_tier" | "text" | "tools" | "reasoning"
+	"parallel_tool_calls" | "prompt_cache_key" | "service_tier" | "text" | "reasoning"
 >;
 
 export type SerializeResponsesMessagesOptions = {
@@ -98,6 +98,16 @@ export type SerializeResponsesMessagesOptions = {
 	includeInstructionsInInput?: boolean | undefined;
 	blockImages?: boolean | undefined;
 	grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
+	/**
+	 * Whether `messages` starts at the transcript head. Compaction live tails and replay windows
+	 * continue a longer transcript, so their first system message is a mid-conversation update.
+	 */
+	startsAtTranscriptHead?: boolean | undefined;
+	/**
+	 * Tool placement decided once for the whole transcript. Replay callers that serialize several
+	 * slices of one transcript pass it, so no slice re-decides how tools are declared.
+	 */
+	toolPlacement?: DeferredToolPlacement | undefined;
 };
 
 export type ResponsesParityReport = {
@@ -144,15 +154,29 @@ function applyBlockImages(messages: Message[], blockImages: boolean): Message[] 
 	});
 }
 
-export function serializeActiveSessionToResponsesInput<TApi extends Api>(args: {
+export type SerializedResponsesHistory = {
+	input: ResponsesInputItem[];
+	/**
+	 * The placement that produced `input`. Its `immediate` tools are the request's top-level set,
+	 * so an assembler that replays this history declares exactly the same tools as the transcript.
+	 */
+	toolPlacement: DeferredToolPlacement;
+};
+
+/**
+ * Reconstruct the provider history for a session branch. Returns the placement decision together
+ * with the items: a caller that assembles a request from this history (native compaction) must
+ * declare the same top-level tools instead of deriving them from another context.
+ */
+export function serializeActiveSessionHistory<TApi extends Api>(args: {
 	model: Model<TApi>;
 	entries: SessionEntry[];
 	leafId?: string | null | undefined;
 	options?: SerializeResponsesMessagesOptions | undefined;
-}): ResponsesInputItem[] {
+}): SerializedResponsesHistory {
 	const messages = projectCodexReasoningHistory(args.entries, undefined, args.leafId)
 		.filter((message) => !isProviderContextExcludedMessage(message));
-	return serializeMessagesToResponsesInput(args.model, messages, args.options);
+	return serializeMessagesToResponsesHistory(args.model, messages, args.options);
 }
 
 export function serializeMessagesToResponsesInput<TApi extends Api>(
@@ -160,6 +184,14 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 	messages: AgentMessage[],
 	options: SerializeResponsesMessagesOptions = {},
 ): ResponsesInputItem[] {
+	return serializeMessagesToResponsesHistory(model, messages, options).input;
+}
+
+function serializeMessagesToResponsesHistory<TApi extends Api>(
+	model: Model<TApi>,
+	messages: AgentMessage[],
+	options: SerializeResponsesMessagesOptions = {},
+): SerializedResponsesHistory {
 	const developerMessages = new CodexDeveloperMessageBridge();
 	const llmMessages = applyBlockImages(
 		convertToLlm(developerMessages.prepare(messages, true, model)),
@@ -168,19 +200,23 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 	const allowedToolCallProviders = isCodexTransportModel(model) && !CODEX_TOOL_CALL_PROVIDERS.has(model.provider)
 		? new Set([...CODEX_TOOL_CALL_PROVIDERS, model.provider])
 		: CODEX_TOOL_CALL_PROVIDERS;
-	const input = convertResponsesMessages(
+	const prepared = prepareResponsesTranscript({
 		model,
-		{
-			messages: llmMessages,
-			...(options.includeInstructionsInInput && options.instructions ? { systemPrompt: options.instructions } : {}),
-		},
+		// `includeInstructionsInInput` asks for the prompt as an input item as well; a caller that
+		// supplies its own text still gets it at the head without touching the transcript.
+		messages: options.includeInstructionsInInput && options.instructions
+			? [createInitialSystemMessage(options.instructions, undefined)!, ...llmMessages]
+			: llmMessages,
+		startsAtTranscriptHead: options.startsAtTranscriptHead,
+		toolPlacement: options.toolPlacement,
+		includeSystemPrompt: options.includeInstructionsInInput ?? false,
+		grammarToolInputProperties: options.grammarToolInputProperties,
 		allowedToolCallProviders,
-		{
-			includeSystemPrompt: options.includeInstructionsInInput ?? false,
-			...(options.grammarToolInputProperties ? { grammarToolInputProperties: options.grammarToolInputProperties } : {}),
-		},
-	) as ResponsesInputItem[];
-	return (developerMessages.rewritePayload({ input }, model) as { input: ResponsesInputItem[] }).input;
+	});
+	return {
+		input: (developerMessages.rewritePayload({ input: prepared.input }, model) as { input: ResponsesInputItem[] }).input,
+		toolPlacement: prepared.toolPlacement,
+	};
 }
 
 export function createResponsesInputParitySignature(input: readonly unknown[]): string[] {

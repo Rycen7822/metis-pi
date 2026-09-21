@@ -12,7 +12,7 @@ declare const HISTORY_PARAMETERS: Type.TObject<{
     offset_chars: Type.TOptional<Type.TInteger>;
     query: Type.TOptional<Type.TString>;
     recent_first: Type.TOptional<Type.TBoolean>;
-    role: Type.TOptional<Type.TUnion<[Type.TUnsafe<"assistant" | "user" | "tool" | "system" | "developer">, Type.TNull]>>;
+    role: Type.TOptional<Type.TUnion<[Type.TUnsafe<"assistant" | "system" | "user" | "tool" | "developer">, Type.TNull]>>;
     tool_name: Type.TOptional<Type.TUnion<[Type.TString, Type.TNull]>>;
     tool_namespace: Type.TOptional<Type.TUnion<[Type.TString, Type.TNull]>>;
     window_id: Type.TOptional<Type.TUnion<[Type.TString, Type.TNull]>>;
