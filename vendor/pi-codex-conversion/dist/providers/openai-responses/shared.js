@@ -4,14 +4,14 @@ import { normalizeResponsesToolHistory } from "./tool-history.js";
 import { normalizeResponsesMessageHistory } from "./message-history.js";
 import { encryptedToolOutputFromDetails, imageDetailForResponses, isImageGenerationCallBlock, isWebSearchCallBlock, sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem } from "./native-items.js";
 import { unrouteContextNamespaceToolCall } from "../../context-management/namespace-tools.js";
-import { getAnchoredToolAdditions, getInitialSystemMessage, getSystemMessageText, legacyAddedToolNames, normalizeProviderContext, renderSystemMessageUpdate, resolveTranscript, resolveTranscriptTools, } from "../transcript.js";
+import { getCurrentTools, hasNonAdditiveToolChanges, getInitialSystemMessage, getSystemMessageText, legacyAddedToolNames, renderSystemMessageUpdate, resolveTranscript, } from "../transcript.js";
 export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 /**
  * Read the transcript semantics a model declares. Every provider-facing path (normal request,
  * compaction serializer, native replay) resolves them here, so the same transcript is replayed
  * the same way and no caller re-invents a second, independent decision.
  */
-export function resolveResponsesTranscriptSemantics(model) {
+function resolveResponsesTranscriptSemantics(model) {
     const compat = model.compat;
     return {
         supportsStrictMode: compat?.supportsStrictMode ?? true,
@@ -38,7 +38,7 @@ function transcriptHeadIncluded(semantics, startsAtTranscriptHead) {
  */
 export function resolveToolPlacement(model, messages, startsAtTranscriptHead = true) {
     const semantics = resolveResponsesTranscriptSemantics(model);
-    return splitDeferredTools(resolveTranscript(normalizeProviderContext({ messages }), semantics.supportsMidConvoSystemMessages), semantics.deferredToolsMode !== undefined, transcriptHeadIncluded(semantics, startsAtTranscriptHead));
+    return splitDeferredTools(resolveTranscript({ messages: messages }, semantics.supportsMidConvoSystemMessages).messages, semantics.deferredToolsMode !== undefined, transcriptHeadIncluded(semantics, startsAtTranscriptHead));
 }
 /**
  * Replay one transcript into provider input plus the placement decision that owns every tool
@@ -52,17 +52,15 @@ export function prepareResponsesTranscript(args) {
         supportsStrictMode: semantics.supportsStrictMode,
         supportsOpenAIGrammarTools: (args.grammarToolInputProperties?.size ?? 0) > 0,
     };
-    const resolved = resolveTranscript(normalizeProviderContext({ messages: args.messages }), semantics.supportsMidConvoSystemMessages);
+    const resolved = resolveTranscript({ messages: args.messages }, semantics.supportsMidConvoSystemMessages);
     const startsAtTranscriptHead = transcriptHeadIncluded(semantics, args.startsAtTranscriptHead);
     const toolPlacement = args.toolPlacement
-        ?? splitDeferredTools(resolved, semantics.deferredToolsMode !== undefined, startsAtTranscriptHead);
-    const input = convertResponsesMessages(args.model, resolved, args.allowedToolCallProviders ?? CODEX_TOOL_CALL_PROVIDERS, {
+        ?? splitDeferredTools(resolved.messages, semantics.deferredToolsMode !== undefined, startsAtTranscriptHead);
+    const input = convertResponsesMessages(args.model, resolved.messages, args.allowedToolCallProviders ?? CODEX_TOOL_CALL_PROVIDERS, {
         includeSystemPrompt: args.includeSystemPrompt ?? false,
         ...(args.grammarToolInputProperties ? { grammarToolInputProperties: args.grammarToolInputProperties } : {}),
-        deferredTools: toolPlacement.deferred,
+        toolPlacement,
         deferredToolsMode: semantics.deferredToolsMode,
-        anchorsToolAdditions: toolPlacement.anchorsAdditions,
-        supportsMidConvoSystemMessages: semantics.supportsMidConvoSystemMessages,
         startsAtTranscriptHead,
         toolOptions,
     });
@@ -88,12 +86,13 @@ export function prepareResponsesTranscript(args) {
  * the complete current tool set, and nothing is declared in place (which would duplicate a tool or
  * resurrect a removed one).
  */
-export function splitDeferredTools(context, enabled, startsAtTranscriptHead = true) {
-    const messages = normalizeProviderContext(context).messages;
-    const { requestTools, anchorsAdditions } = resolveTranscriptTools(messages, enabled, startsAtTranscriptHead);
-    if (!anchorsAdditions)
-        return { immediate: requestTools, deferred: new Map(), anchorsAdditions: false };
-    const anchoredAdditions = getAnchoredToolAdditions(messages, startsAtTranscriptHead);
+function splitDeferredTools(messages, enabled, startsAtTranscriptHead) {
+    if (!enabled || hasNonAdditiveToolChanges(messages)) {
+        return { immediate: getCurrentTools(messages), deferred: new Map(), anchorsAdditions: false };
+    }
+    const initial = getInitialSystemMessage(messages, startsAtTranscriptHead);
+    const requestTools = initial?.toolsAdded ?? [];
+    const anchoredAdditions = messages.flatMap((message) => message.role === "system" && message !== initial ? message.toolsAdded ?? [] : []);
     const deferredNames = new Set(anchoredAdditions.map((tool) => tool.name));
     // Pre-0.86 transcripts recorded each dynamic tool on the tool result that introduced it.
     const usedNames = new Set();
@@ -137,7 +136,8 @@ function parseResponsesThinkingSignature(signature) {
         return undefined;
     }
 }
-export function convertResponsesMessages(model, context, allowedToolCallProviders, options) {
+// Only prepared transcripts reach wire serialization; model resolution belongs to the caller.
+function convertResponsesMessages(model, transcript, allowedToolCallProviders, options) {
     const messages = [];
     const loadedTools = new Map();
     const normalizeIdPart = (part) => {
@@ -162,17 +162,12 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
             normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
         return `${normalizedCallId}|${normalizedItemId}`;
     };
-    const normalizedContext = resolveTranscript(normalizeProviderContext(context), options?.supportsMidConvoSystemMessages);
-    const startsAtTranscriptHead = options?.startsAtTranscriptHead !== false;
-    const transformedMessages = normalizeResponsesMessageHistory(normalizedContext.messages, model, normalizeToolCallId);
-    const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-    const supportsMidConvoSystemMessages = options?.supportsMidConvoSystemMessages === true;
-    const anchorsToolAdditions = options?.anchorsToolAdditions === true;
-    const appendSystemToolAdditions = (message) => {
-        const tools = anchorsToolAdditions ? (message.toolsAdded ?? []) : [];
+    const transformedMessages = normalizeResponsesMessageHistory(transcript, model, normalizeToolCallId);
+    const { startsAtTranscriptHead, includeSystemPrompt, toolPlacement } = options;
+    const appendToolAdditions = (tools, seed) => {
         if (tools.length === 0)
             return;
-        if (options?.deferredToolsMode === "additional-tools") {
+        if (options.deferredToolsMode === "additional-tools") {
             messages.push({
                 type: "additional_tools",
                 role: "developer",
@@ -180,12 +175,11 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
             });
             return;
         }
-        if (options?.deferredToolsMode !== "tool-search")
+        if (options.deferredToolsMode !== "tool-search")
             return;
         const names = tools.map((tool) => tool.name);
         // Derive the id from the anchor itself (not its index) so a replayed slice of the same
         // transcript produces the same tool_search pair as the full request.
-        const seed = `${message.timestamp ?? 0}:${renderSystemMessageUpdate(message)}`;
         const searchCallId = `pi_tool_load_${shortHash(`${seed}:${names.join(",")}`)}`;
         messages.push({
             type: "tool_search_call",
@@ -209,8 +203,9 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
     for (const msg of transformedMessages) {
         const isLeadingSystemMessage = startsAtTranscriptHead && sourceIndex++ === 0 && msg.role === "system";
         if (msg.role === "system") {
-            if (!isLeadingSystemMessage)
-                appendSystemToolAdditions(msg);
+            if (!isLeadingSystemMessage && toolPlacement.anchorsAdditions) {
+                appendToolAdditions(msg.toolsAdded ?? [], `${msg.timestamp ?? 0}:${renderSystemMessageUpdate(msg)}`);
+            }
             if (isLeadingSystemMessage) {
                 if (includeSystemPrompt) {
                     const text = getSystemMessageText(msg);
@@ -218,7 +213,7 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
                         messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
                 }
             }
-            else if (supportsMidConvoSystemMessages) {
+            else {
                 const text = renderSystemMessageUpdate(msg);
                 if (text.length > 0)
                     messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
@@ -277,7 +272,7 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
                 else if (block.type === "toolCall") {
                     const wireCall = unrouteContextNamespaceToolCall(block);
                     const [callId, itemIdRaw] = block.id.split("|");
-                    const customInputProperty = options?.grammarToolInputProperties?.get(block.name);
+                    const customInputProperty = options.grammarToolInputProperties?.get(block.name);
                     let itemId = itemIdRaw;
                     if (customInputProperty !== undefined && itemId?.startsWith("fc_")) {
                         itemId = `ctc_${itemId.slice(3)}`;
@@ -285,7 +280,7 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
                     if ((isDifferentModel && itemId?.startsWith("fc_"))
                         || (customInputProperty === undefined && !itemId?.startsWith("fc_")))
                         itemId = undefined;
-                    const canReplayNamespace = isSameModel || options?.deferredTools?.has(block.name) === true;
+                    const canReplayNamespace = isSameModel || toolPlacement.deferred.has(block.name);
                     output.push(customInputProperty === undefined
                         ? {
                             type: "function_call",
@@ -340,7 +335,7 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
                     ]
                     : sanitizeSurrogates(hasText ? textResult : "(see attached image)");
             messages.push({
-                type: options?.grammarToolInputProperties?.has(msg.toolName)
+                type: options.grammarToolInputProperties?.has(msg.toolName)
                     ? "custom_tool_call_output"
                     : "function_call_output",
                 call_id: callId,
@@ -348,39 +343,15 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
             });
             const newlyLoadedTools = [];
             for (const name of legacyAddedToolNames(msg)) {
-                const tool = options?.deferredTools?.get(name);
+                const tool = toolPlacement.deferred.get(name);
                 if (!tool || loadedTools.has(name))
                     continue;
                 loadedTools.set(name, tool);
                 newlyLoadedTools.push(tool);
             }
-            if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "additional-tools") {
-                messages.push({
-                    type: "additional_tools",
-                    role: "developer",
-                    tools: convertResponsesTools([...loadedTools.values()], options.toolOptions),
-                });
-            }
-            else if (newlyLoadedTools.length > 0 && anchorsToolAdditions && options?.deferredToolsMode === "tool-search") {
-                const names = newlyLoadedTools.map((tool) => tool.name);
-                const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
-                messages.push({
-                    type: "tool_search_call",
-                    call_id: searchCallId,
-                    execution: "client",
-                    status: "completed",
-                    arguments: { query: names.join(" "), limit: names.length },
-                });
-                messages.push({
-                    type: "tool_search_output",
-                    call_id: searchCallId,
-                    execution: "client",
-                    status: "completed",
-                    tools: convertResponsesTools(newlyLoadedTools, {
-                        ...options.toolOptions,
-                        deferLoading: true,
-                    }),
-                });
+            if (newlyLoadedTools.length > 0 && toolPlacement.anchorsAdditions) {
+                // The legacy additional_tools payload is cumulative; tool_search loads only the delta.
+                appendToolAdditions(options.deferredToolsMode === "additional-tools" ? [...loadedTools.values()] : newlyLoadedTools, msg.toolCallId);
             }
         }
         msgIndex++;

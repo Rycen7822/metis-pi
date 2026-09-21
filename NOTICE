@@ -29,7 +29,7 @@ Codex diff visual/behavior reference additionally inspected for 0.3.0:
 The implementation here is an independent TypeScript renderer. No Codex Rust
 source is embedded or redistributed by this package.
 
-The goal extension (goal.ts) is vendored third-party code:
+The goal extension (extensions/goal.ts and src/goal-state.ts) derives from third-party code:
 Upstream: https://github.com/mitsuhiko/agent-stuff (extensions/goal.ts @ 122e299)
 Upstream copyright: the mitsuhiko/agent-stuff authors. Apache License 2.0
   (full text in LICENSE-APACHE-2.0).
@@ -37,7 +37,8 @@ Upstream copyright: the mitsuhiko/agent-stuff authors. Apache License 2.0
 Modifications: Copyright (c) 2026 Rycen7822. MIT License.
 - Modified goal.ts: added a one-second footer status refresh while a goal is active
   (syncStatusTimer), so elapsed time ticks during a long single agent run, where
-  upstream fires no goal event in between. The change is marked in the file header.
+  upstream fires no goal event in between. Goal state/accounting now lives in
+  src/goal-state.ts, while the extension retains host I/O and the existing wire format.
 
 The codex-conversion runtime (vendor/pi-codex-conversion) is vendored third-party code:
 Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-conversion)

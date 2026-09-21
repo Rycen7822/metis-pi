@@ -32,6 +32,5 @@ export declare function profilesDirectory(agentDir: string): string;
 export declare function assertProfileName(name: string): void;
 export declare function readProfileStateManifest(path: string, expectedName?: string): ProfileStateManifest | undefined;
 export declare function assertSafeProfileDirectory(directory: string, agentDir: string): void;
-export declare function readProfileStatePayload(manifest: ProfileStateManifest, path: string, maxBytes: number): Buffer | undefined;
+export { readProjectStatePayload as readProfileStatePayload, hashStateBytes as hashProfileBytes } from "./project-state-format.ts";
 export declare function profileSummary(manifest: ProfileStateManifest): ProfileStateSummary;
-export declare function hashProfileBytes(bytes: Uint8Array): string;

@@ -1,11 +1,8 @@
 import { DEFAULT_CODEX_CONVERSION_CONFIG, LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS, normalizeCodexVerbosity, } from "../../adapter/activation/config.js";
-import { projectCacheKeepalive, setting, toggle } from "./config-items-shared.js";
+import { configToggle, projectCacheKeepalive, setting } from "./config-items-shared.js";
 export function buildOpenAISettings(config) {
     return [
-        toggle("fast", "Fast mode", config.openai.fast, (enabled, current) => ({
-            ...current,
-            openai: { ...current.openai, fast: enabled },
-        }), "Request priority processing where supported. May use more quota or cost more."),
+        configToggle(config, "openai", "fast", "Fast mode", "Request priority processing where supported. May use more quota or cost more."),
         {
             item: {
                 id: "lunaCacheKeepaliveMinutes",
@@ -33,14 +30,8 @@ export function buildOpenAISettings(config) {
                     DEFAULT_CODEX_CONVERSION_CONFIG.openai.verbosity,
             },
         })),
-        toggle("responsesLite", "Proxy Responses Lite", config.openai.proxyResponsesLite, (enabled, current) => ({
-            ...current,
-            openai: { ...current.openai, proxyResponsesLite: enabled },
-        }), "Use Responses Lite for supported models on configured proxies in Code or Notebook mode. Requires proxy support."),
-        toggle("forceCachedWebSockets", "Cached WebSocket upgrade", config.openai.forceCachedWebSockets, (enabled, current) => ({
-            ...current,
-            openai: { ...current.openai, forceCachedWebSockets: enabled },
-        }), "Upgrade explicit WebSocket transport to reuse connections between requests. Leaves SSE unchanged."),
+        configToggle(config, "openai", "proxyResponsesLite", "Proxy Responses Lite", "Use Responses Lite for supported models on configured proxies in Code or Notebook mode. Requires proxy support.", "responsesLite"),
+        configToggle(config, "openai", "forceCachedWebSockets", "Cached WebSocket upgrade", "Upgrade explicit WebSocket transport to reuse connections between requests. Leaves SSE unchanged."),
         setting({
             id: "harnessIdentifierHeader",
             description: "Identify this extension in the request originator header instead of the default Pi identifier.",

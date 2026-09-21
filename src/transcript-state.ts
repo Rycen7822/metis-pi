@@ -227,7 +227,6 @@ export function renderedThinkingRuns(
 }
 
 interface ThinkingRunState {
-  runIndex: number;
   firstContentIndex: number;
   startedAt?: number;
   endedAt?: number;
@@ -239,6 +238,7 @@ interface ThinkingRunState {
 
 interface MessagePlan {
   readonly key: MessageViewKey;
+  finalized: boolean;
   /** Separator is owed before the FIRST non-empty text run of this message. */
   separatorBefore: boolean;
   /** Number of content blocks seen so far (update-count independent). */
@@ -268,18 +268,10 @@ export class TranscriptState {
   private readonly memberOf = new Map<string, number>();
   private lastNode: PresentationKind = "barrier";
   private openGroupId: number | undefined;
-  /**
-   * Plans keyed by STABLE logical message identity. The identity survives
-   * streaming object replacement: host streaming re-uses one AssistantMessage
-   * object, and history replay assigns identities in the same deterministic
-   * order (generation + per-generation message sequence).
-   */
+  // A plan keeps its identity when finalized; components and messages share that key.
   private readonly messagePlans = new Map<MessageViewKey, MessagePlan>();
   private nextMessageSeq = 1;
-  /** Identity of the assistant message currently streaming (object-anchored). */
-  private readonly identityByObject = new WeakMap<object, MessageViewKey>();
-  /** open→sealed key aliases so adopted components survive message_end. */
-  private readonly openKeyAliases = new Map<string, MessageViewKey>();
+  private identityByObject = new WeakMap<object, MessageViewKey>();
   /**
    * Content fingerprints of sealed plans. The host re-renders FINALIZED
    * transcripts through a message CLONE (a different object), so the object
@@ -310,6 +302,7 @@ export class TranscriptState {
     this.lastNode = "barrier";
     this.openGroupId = undefined;
     this.messagePlans.clear();
+    this.identityByObject = new WeakMap();
     this.nextMessageSeq = 1;
     this.sealedFingerprints.clear();
     this.dirtyViews.clear();
@@ -324,11 +317,11 @@ export class TranscriptState {
     // Without an object anchor the host streaming model re-uses one message
     // object per turn, so the CURRENT open assistant plan (if any) continues.
     for (const plan of this.messagePlans.values()) {
-      if (plan.key.startsWith(`${this.generation}:`) && plan.blockCount > 0 && (plan.key as string).endsWith(":open")) {
+      if (!plan.finalized && plan.blockCount > 0) {
         return plan.key;
       }
     }
-    return `${this.generation}:${this.nextMessageSeq++}:open`;
+    return `${this.generation}:${this.nextMessageSeq++}`;
   }
 
   apply(event: TranscriptEvent, sourceObject?: object): void {
@@ -346,18 +339,10 @@ export class TranscriptState {
           break;
         }
         if (message.role === "assistant") {
-          // A NEW logical message: ALWAYS a fresh plan — message_start is a
-          // message boundary by definition. The group is NOT closed here —
-          // tool-call-only assistant messages are transparent: the group must
-          // survive them (closeOpenGroup happens in message_update below).
-          const key = sourceObject && this.identityByObject.get(sourceObject)
-            ? this.identityByObject.get(sourceObject)!
-            : `${this.generation}:${this.nextMessageSeq++}:open`;
-          if (sourceObject) this.identityByObject.set(sourceObject, key);
-          if (!this.messagePlans.has(key)) {
-            const followsTools = this.lastNode === "exploration" || this.lastNode === "other-tool";
-            this.messagePlans.set(key, { key, separatorBefore: followsTools, blockCount: 0, thinkingRuns: [] });
-          }
+          const known = sourceObject ? this.identityOf(sourceObject) : undefined;
+          const key = known && !this.messagePlans.get(known)?.finalized
+            ? known : `${this.generation}:${this.nextMessageSeq++}`;
+          this.ensureMessagePlan(key, sourceObject);
         }
         break;
       }
@@ -365,13 +350,8 @@ export class TranscriptState {
         const message = event.message;
         if (!message || message.role !== "assistant") break;
         const key = this.messageKeyFor(sourceObject);
-        if (sourceObject) this.identityByObject.set(sourceObject, key);
-        let plan = this.messagePlans.get(key);
-        if (!plan) {
-          const followsTools = this.lastNode === "exploration" || this.lastNode === "other-tool";
-          plan = { key, separatorBefore: followsTools, blockCount: 0, thinkingRuns: [] };
-          this.messagePlans.set(key, plan);
-        }
+        const plan = this.ensureMessagePlan(key, sourceObject);
+        if (plan.finalized) break;
         const grew = message.content.length > plan.blockCount;
         plan.blockCount = Math.max(plan.blockCount, message.content.length);
         // ONLY VISIBLE content is a boundary: a tool-call-only message_update
@@ -383,11 +363,9 @@ export class TranscriptState {
         // rendered run — repeated cumulative updates never reset it. End: the
         // first non-thinking block after the run; message_end closes the rest.
         for (const run of renderedThinkingRuns(message.content)) {
-          let state = plan.thinkingRuns.find((r) => r.runIndex === run.runIndex);
-          if (!state) {
-            state = { runIndex: run.runIndex, firstContentIndex: run.firstContentIndex };
-            plan.thinkingRuns.push(state);
-          }
+          const state = plan.thinkingRuns[run.runIndex] ??= {
+            firstContentIndex: run.firstContentIndex,
+          };
           if (state.startedAt === undefined) state.startedAt = this.now();
           if (state.endedAt === undefined && run.endedInContent) state.endedAt = this.now();
         }
@@ -410,29 +388,10 @@ export class TranscriptState {
         if (message.role === "assistant") {
           const key = this.messageKeyFor(sourceObject);
           const plan = this.messagePlans.get(key);
-          // Seal identity: further updates with the same object map here; the
-          // open key becomes an alias of the sealed one (WeakMap is not
-          // iterable, so rewrites go through the alias table).
-          const sealedKey = key.replace(/:open$/, ":sealed");
-          if (plan) {
-            // A run still streaming at message_end ends here (conservative
-            // close). Runs are copied so the sealed plan owns its clocks.
-            const sealed: MessagePlan = {
-              ...plan,
-              key: sealedKey,
-              thinkingRuns: plan.thinkingRuns.map((run) => {
-                const copy = { ...run };
-                if (copy.endedAt === undefined) copy.endedAt = this.now();
-                return copy;
-              }),
-            };
-            this.messagePlans.set(sealedKey, sealed);
-            this.sealedFingerprints.set(sealedFingerprint(message.content, message.stopReason), sealedKey);
-          }
-          this.openKeyAliases.set(key, sealedKey);
-          this.messagePlans.delete(key);
-          if (!assistantHasVisibleText(message) && !assistantHasVisibleThinking(message)) {
-            // Tool-call-only: transparent, does not disturb the segment.
+          if (plan && !plan.finalized) {
+            plan.finalized = true;
+            for (const run of plan.thinkingRuns) run.endedAt ??= this.now();
+            this.rememberFinalized(message, key);
           }
         }
         break;
@@ -477,6 +436,24 @@ export class TranscriptState {
     }
   }
 
+  private ensureMessagePlan(key: MessageViewKey, sourceObject?: object): MessagePlan {
+    if (sourceObject) this.identityByObject.set(sourceObject, key);
+    let plan = this.messagePlans.get(key);
+    if (!plan) {
+      plan = { key, finalized: false, separatorBefore: this.lastNode === "exploration" || this.lastNode === "other-tool", blockCount: 0, thinkingRuns: [] };
+      this.messagePlans.set(key, plan);
+    }
+    return plan;
+  }
+
+  private rememberFinalized(message: NonNullable<TranscriptEvent["message"]>, key: MessageViewKey): void {
+    const fingerprint = sealedFingerprint(message.content, message.stopReason);
+    if (!this.sealedFingerprints.has(fingerprint) && this.sealedFingerprints.size >= MAX_SEALED_FINGERPRINTS) {
+      this.sealedFingerprints.delete(this.sealedFingerprints.keys().next().value!);
+    }
+    this.sealedFingerprints.set(fingerprint, key);
+  }
+
   private applyUserBoundary(): void {
     this.closeOpenGroup();
     this.lastNode = "barrier";
@@ -493,26 +470,19 @@ export class TranscriptState {
   private joinOrCreateGroup(toolCallId: string, toolName: string): void {
     const existing = this.memberOf.get(toolCallId);
     if (existing !== undefined) return;
-    if (this.openGroupId !== undefined) {
-      const group = this.groups.get(this.openGroupId)!;
-      const previousTail = group.members.at(-1);
-      group.members.push({ toolCallId, toolName, order: group.members.length, isError: false, images: 0, done: false });
-      this.memberOf.set(toolCallId, group.id);
-      // Footer migration: the OLD tail loses the aggregated notice, the new
-      // tail gains it. Mark both dirty (plus the header's running state).
-      if (previousTail) this.dirtyViews.add(`member:${previousTail.toolCallId}`);
-      this.dirtyViews.add(`member:${toolCallId}`);
-      this.dirtyViews.add(`group:${group.id}`);
-      return;
+    let group = this.openGroupId === undefined ? undefined : this.groups.get(this.openGroupId);
+    if (!group) {
+      group = { id: this.nextGroupId++, members: [], open: true };
+      this.groups.set(group.id, group);
+      this.openGroupId = group.id;
     }
-    const id = this.nextGroupId++;
-    const group: ExplorationGroup = { id, members: [], open: true };
-    group.members.push({ toolCallId, toolName, order: 0, isError: false, images: 0, done: false });
-    this.groups.set(id, group);
-    this.memberOf.set(toolCallId, id);
-    this.openGroupId = id;
+    const previousTail = group.members.at(-1);
+    group.members.push({ toolCallId, toolName, order: group.members.length, isError: false, images: 0, done: false });
+    this.memberOf.set(toolCallId, group.id);
+    // Appending moves footer ownership from the old tail to the new member.
+    if (previousTail) this.dirtyViews.add(`member:${previousTail.toolCallId}`);
     this.dirtyViews.add(`member:${toolCallId}`);
-    this.dirtyViews.add(`group:${id}`);
+    this.dirtyViews.add(`group:${group.id}`);
   }
 
   /** Display plan for an exploration member row (or undefined if ungrouped). */
@@ -558,11 +528,11 @@ export class TranscriptState {
   /** One thinking run's lifecycle for a message (host runIndex semantics). */
   thinkingRunPlan(messageKey: MessageViewKey, runIndex: number): ThinkingRunPlan | undefined {
     const plan = this.messagePlans.get(messageKey);
-    const state = plan?.thinkingRuns.find((run) => run.runIndex === runIndex);
+    const state = plan?.thinkingRuns[runIndex];
     if (!plan || !state) return undefined;
     return {
       messageKey: plan.key,
-      runIndex: state.runIndex,
+      runIndex,
       firstContentIndex: state.firstContentIndex,
       startedAt: state.startedAt,
       endedAt: state.endedAt,
@@ -577,9 +547,7 @@ export class TranscriptState {
   thinkingRunPlans(messageKey: MessageViewKey): readonly ThinkingRunPlan[] {
     const plan = this.messagePlans.get(messageKey);
     if (!plan) return [];
-    return [...plan.thinkingRuns]
-      .sort((a, b) => a.runIndex - b.runIndex)
-      .map((run) => this.thinkingRunPlan(messageKey, run.runIndex)!);
+    return plan.thinkingRuns.map((_, runIndex) => this.thinkingRunPlan(messageKey, runIndex)!);
   }
 
   /**
@@ -590,7 +558,7 @@ export class TranscriptState {
    * the factory runs at most once per run.
    */
   thinkingViewControl(messageKey: MessageViewKey, runIndex: number, create: () => ViewControl): ViewControl {
-    const run = this.messagePlans.get(messageKey)?.thinkingRuns.find((entry) => entry.runIndex === runIndex);
+    const run = this.messagePlans.get(messageKey)?.thinkingRuns[runIndex];
     if (!run) return create();
     return (run.viewControl ??= create());
   }
@@ -600,9 +568,7 @@ export class TranscriptState {
    * resolves identity from the host message object (streaming-anchored).
    */
   identityOf(sourceObject: object): MessageViewKey | undefined {
-    const direct = this.identityByObject.get(sourceObject);
-    if (!direct) return undefined;
-    return this.openKeyAliases.get(direct) ?? direct;
+    return this.identityByObject.get(sourceObject);
   }
 
   /** Convenience for tests/history: register a finalized message explicitly.
@@ -618,23 +584,18 @@ export class TranscriptState {
       if (sourceObject) this.identityByObject.set(sourceObject, existing);
       return existing;
     }
-    const key = `${this.generation}:${this.nextMessageSeq++}:sealed`;
+    const key = `${this.generation}:${this.nextMessageSeq++}`;
     this.messagePlans.set(key, {
       key,
+      finalized: true,
       separatorBefore: followsTools,
       blockCount: message.content.length,
       thinkingRuns: renderedThinkingRuns(message.content).map((run) => ({
-        runIndex: run.runIndex,
         firstContentIndex: run.firstContentIndex,
         endedAt: this.now(),
       })),
     });
-    while (this.sealedFingerprints.size >= MAX_SEALED_FINGERPRINTS) {
-      const oldest = this.sealedFingerprints.keys().next().value;
-      if (oldest === undefined) break;
-      this.sealedFingerprints.delete(oldest);
-    }
-    this.sealedFingerprints.set(fingerprint, key);
+    this.rememberFinalized(message, key);
     if (sourceObject) this.identityByObject.set(sourceObject, key);
     return key;
   }
@@ -659,7 +620,7 @@ export class TranscriptState {
   ): MessageViewKey | undefined {
     let adopted: MessageViewKey | undefined;
     for (const plan of this.messagePlans.values()) {
-      if (!plan.key.startsWith(`${this.generation}:`) || !(plan.key as string).endsWith(":open")) continue;
+      if (plan.finalized) continue;
       if (plan.blockCount < content.length) continue;
       adopted = plan.key; // keep the LAST match: insertion order = stream order
     }

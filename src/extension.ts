@@ -1,5 +1,5 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
-import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy } from "./transcript-adapter.ts";
+import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
 import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
@@ -13,7 +13,6 @@ import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-l
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker } from "./git-changes.ts";
 import { createGlyphPresentation } from "./glyph-presentation.ts";
-import type { ThinkingView, ThinkingViewControl } from "./thinking-view.ts";
 import { createSnapshotSource } from "./chrome/snapshots.ts";
 import { createChromeLifecycle, SUMMARY_STATUS_KEY } from "./chrome/install.ts";
 import { registerDiagnosticsCommand } from "./diagnostics.ts";
@@ -35,7 +34,11 @@ export interface AppearanceAPI {
   on(event: "model_select" | "thinking_level_select" | "session_tree" | "session_compact" | "session_compact_failed" | "ui_prompt_start" | "ui_prompt_end" | "input", handler: (event: { type: string; level?: unknown }) => void): void;
   getAllTools(): readonly unknown[];
 }
-export interface Bindings {
+// Decoration factories have one contract, owned by the adapter that consumes them.
+export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
+  "makeSeparator" | "makeSpacer" | "makeRail" | "makeThoughtSummary" |
+  "isCollapsedLabel" | "makePeek" | "makeClickable"
+>> {
   prototype: object;
   makeText: TextFactory;
   expandHint(): string;
@@ -48,33 +51,6 @@ export interface Bindings {
   layoutOps?: import("./tool-names.ts").DiffLayoutOps;
   /** Pi AssistantMessageComponent prototype (separator decoration target). */
   assistantPrototype?: object;
-  /** Build a width-aware separator component (host TUI Text). */
-  makeSeparator?: () => unknown;
-  /** Build a 1-row spacer component (host TUI Spacer). */
-  makeSpacer?: () => unknown;
-  /** Wrap a thinking display node with our rail (host TUI primitives). */
-  makeRail?: (child: unknown) => unknown;
-  /**
-   * Build the collapsed-run summary label ("Thought for 13s") as a
-   * display-only host Text (index.ts owns host styling).
-   */
-  makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number }) => unknown;
-  /** Structural guard for the host's collapsed-label Text (real class check). */
-  isCollapsedLabel?: (node: unknown) => boolean;
-  /** Wrap a thinking body in the peek window (newest N rows, wheel-scrollable). */
-  makePeek?: (input: {
-    inner: unknown;
-    control: ThinkingViewControl;
-    windowLines: number;
-    onScroll: () => void;
-  }) => unknown;
-  /** Wrap a thinking body/label so left clicks drive the run's view state. */
-  makeClickable?: (input: {
-    inner: unknown;
-    control: ThinkingViewControl;
-    fallback: ThinkingView;
-    apply: (next: ThinkingView) => void;
-  }) => unknown;
   /** Build the live write call component (header + stage + preview body). */
   makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
 

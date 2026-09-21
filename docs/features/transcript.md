@@ -67,8 +67,8 @@
 - 不重复实现完整终端客户端：输入区、页脚、Working 行、审批流程、快捷键都沿用宿主/既有插件。
 - 连续探索**不会**完全复现 Codex 的跨调用聚合；每个调用各自成行。
 - 单次组件 `render()` 是宿主给的整体接口，因此边界处的单个超大输出仍可能被完整排版一次再裁切。
-- 已核对的宿主是 classic Pi 0.85.1；内部 UI 接口未来仍可能变化，届时按上面的校验规则整块退避。
+- 当前真实组件和终端验证使用 Pi 0.86.1；内部 UI 接口变化时，按上面的校验规则整块退避。验证边界见 [VALIDATION](../../VALIDATION.md)。
 
 ## 验证
 
-`test/adapter.test.mjs`（安装/退避/归属）、`test/renderers.test.mjs`、`test/shell.golden.test.mjs`、`test/golden.layout.test.mjs`、`test/diff.parser.test.mjs`、`test/write-tracker.test.mjs`、`test/write-stream-crash.test.mts`、`test/transcript.test.mts`（最大的一份，覆盖状态与协调逻辑）、`scripts/pty-verify.mjs`（真实 TUI 逐帧断言）。
+`test/transcript/adapter.test.mjs`（安装/退避/归属）、`test/transcript/renderers.test.mjs`、`test/shell.golden.test.mjs`、`test/golden.layout.test.mjs`、`test/diff.parser.test.mjs`、`test/unit/write-tracker.test.mjs`、`test/host/write-stream-crash.test.mts`、`test/transcript/transcript.test.mts`（最大的一份，覆盖状态与协调逻辑）、`scripts/pty-verify.mjs`（真实 TUI 逐帧断言）。

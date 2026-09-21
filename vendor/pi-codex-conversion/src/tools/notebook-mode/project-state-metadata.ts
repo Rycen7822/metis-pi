@@ -1,8 +1,8 @@
-import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	type ProjectStateEntry,
 	projectStatePaths,
+	hasPayloadLayout,
 	readProjectStateManifest,
 } from "./project-state-format.ts";
 
@@ -36,21 +36,4 @@ export function readRetainedProjectBindings(
 		...(entry.description === undefined ? {} : { description: entry.description }),
 		...(entry.usage === undefined ? {} : { usage: entry.usage }),
 	}));
-}
-
-function hasPayloadLayout(entries: ProjectStateEntry[], path: string, maxBytes: number): boolean {
-	try {
-		const stat = lstatSync(path);
-		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) return false;
-		let offset = 0;
-		const names = new Set<string>();
-		for (const entry of entries) {
-			if (names.has(entry.name) || entry.offset !== offset) return false;
-			names.add(entry.name);
-			offset += entry.length;
-		}
-		return offset === stat.size;
-	} catch {
-		return false;
-	}
 }

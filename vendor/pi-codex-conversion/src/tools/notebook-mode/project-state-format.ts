@@ -97,7 +97,7 @@ export function readProjectStateManifest(path: string): ProjectStateManifest | u
 			|| value["skipped"].length > MAX_PROJECT_ENTRIES
 		) return undefined;
 		const entries = value["entries"].map((entry) => parseEntry(entry, Number.MAX_SAFE_INTEGER, true));
-		const skipped = value["skipped"].map(parseSkipped);
+		const skipped = value["skipped"].map(parseSkippedBinding);
 		if (entries.some((entry) => !entry) || skipped.some((entry) => !entry)) return undefined;
 		return {
 			schema: PROJECT_STATE_SCHEMA,
@@ -131,7 +131,7 @@ export function readProjectStateCandidate(
 		const payloadLength = statSync(payloadPath).size;
 		if (payloadLength > maxBytes) return undefined;
 		const entries = value["entries"].map((entry) => parseEntry(entry, payloadLength, false));
-		const skipped = value["skipped"].map(parseSkipped);
+		const skipped = value["skipped"].map(parseSkippedBinding);
 		if (entries.some((entry) => !entry) || skipped.some((entry) => !entry)) return undefined;
 		return {
 			deno: value["deno"],
@@ -145,7 +145,7 @@ export function readProjectStateCandidate(
 }
 
 export function readProjectStatePayload(
-	manifest: ProjectStateManifest,
+	manifest: Pick<ProjectStateManifest, "entries">,
 	path: string,
 	maxBytes: number,
 ): Buffer | undefined {
@@ -265,7 +265,7 @@ function parseMetadataText(value: unknown, maxBytes: number, multiline: boolean)
 	return value;
 }
 
-function parseSkipped(value: unknown): { name: string; reason: string } | undefined {
+export function parseSkippedBinding(value: unknown): { name: string; reason: string } | undefined {
 	return isRecord(value)
 		&& typeof value["name"] === "string"
 		&& Buffer.byteLength(value["name"]) <= MAX_PROJECT_NAME_BYTES
@@ -276,4 +276,21 @@ function parseSkipped(value: unknown): { name: string; reason: string } | undefi
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function hasPayloadLayout(entries: readonly Pick<ProjectStateEntry, "name" | "offset" | "length">[], path: string, maxBytes: number): boolean {
+	try {
+		const stat = lstatSync(path);
+		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) return false;
+		let offset = 0;
+		const names = new Set<string>();
+		for (const entry of entries) {
+			if (names.has(entry.name) || entry.offset !== offset) return false;
+			names.add(entry.name);
+			offset += entry.length;
+		}
+		return offset === stat.size;
+	} catch {
+		return false;
+	}
 }

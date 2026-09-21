@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } f
 import { basename, join, resolve } from "node:path";
 import { CHECKPOINT_SCHEMA, } from "./checkpoint-format.js";
 import { checkpointSource, restoreSource } from "./checkpoint-runtime.js";
-import { MAX_PROJECT_ENTRIES, MAX_PROJECT_MANIFEST_BYTES, MAX_PROJECT_NAME_BYTES, parseProjectBindingMetadata, } from "./project-state-format.js";
+import { MAX_PROJECT_ENTRIES, MAX_PROJECT_MANIFEST_BYTES, MAX_PROJECT_NAME_BYTES, parseProjectBindingMetadata, hasPayloadLayout, } from "./project-state-format.js";
 export const NOTEBOOK_CHECKPOINT_MAX_BYTES = 256 * 1024 * 1024;
 const NOTEBOOK_CHECKPOINT_MIN_BYTES = 8 * 1024 * 1024;
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -43,7 +43,7 @@ export function notebookCheckpointBindingNames(identity, maxBytes) {
     const manifest = readManifest(checkpointPaths(identity).manifest);
     return manifest?.project === identity.project
         && manifest.session === identity.session
-        && isValidCheckpointPayload(manifest, join(checkpointPaths(identity).directory, manifest.payload), maxBytes)
+        && hasPayloadLayout(manifest.entries, join(checkpointPaths(identity).directory, manifest.payload), maxBytes)
         ? manifest.entries.map(({ name }) => name)
         : [];
 }
@@ -99,7 +99,7 @@ export async function restoreNotebookCheckpoint(kernel, identity, maxBytes, proj
         return { restored: [], skipped: manifest.skipped, message: "Notebook checkpoint identity was incompatible and was not restored" };
     }
     const payloadPath = join(paths.directory, manifest.payload);
-    if (!isValidCheckpointPayload(manifest, payloadPath, maxBytes)) {
+    if (!hasPayloadLayout(manifest.entries, payloadPath, maxBytes)) {
         return { restored: [], skipped: manifest.skipped, message: "Notebook checkpoint payload was missing or invalid and was not restored" };
     }
     signal?.throwIfAborted();
@@ -184,25 +184,6 @@ function readManifest(path) {
     }
     catch {
         return undefined;
-    }
-}
-function isValidCheckpointPayload(manifest, path, maxBytes) {
-    try {
-        const stat = lstatSync(path);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes)
-            return false;
-        let offset = 0;
-        const names = new Set();
-        for (const entry of manifest.entries) {
-            if (names.has(entry.name) || entry.offset !== offset)
-                return false;
-            names.add(entry.name);
-            offset += entry.length;
-        }
-        return offset === stat.size;
-    }
-    catch {
-        return false;
     }
 }
 function parseEntry(value) {

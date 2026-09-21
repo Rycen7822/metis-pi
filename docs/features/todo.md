@@ -99,4 +99,4 @@ Todos 2/5 done
 
 ## 验证
 
-`test/todo-model.test.mts`、`test/todo-store.test.mts`、`test/todo-tools.test.mts`、`test/todo-widget.test.mts`、`test/todo-extension.test.mts`；`scripts/pty-verify.mjs` 覆盖真实 TUI 的面板展开/收起、`+N more`、完成后收起。
+`test/todo/todo-model.test.mts`、`test/todo/todo-store.test.mts`、`test/todo/todo-tools.test.mts`、`test/todo/todo-widget.test.mts`、`test/todo/todo-extension.test.mts`；`scripts/pty-verify.mjs` 覆盖真实 TUI 的面板展开/收起、`+N more`、完成后收起。

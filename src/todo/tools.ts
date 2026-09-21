@@ -14,7 +14,7 @@
 // - Optional evidenceFiles paths are checked against cwd: claiming work whose
 //   artifacts don't exist yet is the cheapest lie to catch.
 
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { existsSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import {
@@ -68,20 +68,9 @@ export const TodoToolParams = Type.Object({
   force: Type.Optional(Type.Boolean({ description: "claim/release: take over or release a task claimed by another session." })),
 });
 
-export type TaskReference = string | number;
+export type TaskReference = Static<typeof TaskRefSchema>;
 
-export interface TodoToolCall {
-  action: string;
-  tasks?: { title: string; parentId?: TaskReference }[];
-  id?: TaskReference;
-  title?: string;
-  parentId?: TaskReference | null;
-  evidence?: string;
-  evidenceFiles?: string[];
-  reason?: string;
-  blockedBy?: TaskReference;
-  force?: boolean;
-}
+export type TodoToolCall = Static<typeof TodoToolParams>;
 
 export interface TodoToolResult {
   content: { type: "text"; text: string }[];
@@ -212,29 +201,20 @@ export function createTodoToolHandlers(system: CodexTodoSystem, cwd: () => strin
         }
         // Run each sub-update independently — a no-op title must not swallow a
         // real parent move (and vice versa).
-        let lastNoop: string | null = null;
-        let anyChange = false;
-        let lastState: TodoState | null = null;
-        let lastId: number | null = null;
+        const outcomes: RunOutcome<Task>[] = [];
         if (params.title !== undefined) {
-          const outcome = await run((s) => updateTitle(s, refId(s, ref), params.title!, now()));
-          if (outcome.kind === "changed") {
-            anyChange = true;
-            lastState = outcome.state;
-            lastId = outcome.value.id;
-          } else lastNoop = outcome.message;
+          outcomes.push(await run((s) => updateTitle(s, refId(s, ref), params.title!, now())));
         }
         if (params.parentId !== undefined) {
           const parent = params.parentId;
-          const outcome = await run((s) => moveTask(s, refId(s, ref), parent === null ? null : refId(s, parent), now()));
-          if (outcome.kind === "changed") {
-            anyChange = true;
-            lastState = outcome.state;
-            lastId = outcome.value.id;
-          } else lastNoop = outcome.message;
+          outcomes.push(await run((s) => moveTask(s, refId(s, ref), parent === null ? null : refId(s, parent), now())));
         }
-        if (!anyChange) return text(lastNoop ?? "No change: nothing to update");
-        return text(`updated ${lastState && lastId !== null ? pathOf(lastState, lastId) : String(ref)}`);
+        // Prefer the latest successful mutation; a following no-op must not hide it.
+        for (const outcome of outcomes.reverse()) {
+          if (outcome.kind === "changed") return text(`updated ${pathOf(outcome.state, outcome.value.id)}`);
+        }
+        const last = outcomes[0];
+        return text(last?.kind === "noop" ? last.message : "No change: nothing to update");
       }
 
       case "complete": {
@@ -273,32 +253,20 @@ export function createTodoToolHandlers(system: CodexTodoSystem, cwd: () => strin
         return text(`released ${pathOf(outcome.state, outcome.value.id)}`);
       }
 
-      case "addBlockedBy": {
-        const ref = requireRef(params.id, "addBlockedBy");
-        const dependency = requireRef(params.blockedBy, "addBlockedBy");
-        let target = 0;
-        let blocker = 0;
-        const outcome = await run((s) => {
-          target = refId(s, ref);
-          blocker = refId(s, dependency);
-          return addBlockedBy(s, target, blocker, now());
-        });
-        if (outcome.kind === "noop") return text(outcome.message);
-        return text(`${pathOf(outcome.state, target)} is now blocked by ${pathOf(outcome.state, blocker)}`);
-      }
-
+      case "addBlockedBy":
       case "removeBlockedBy": {
-        const ref = requireRef(params.id, "removeBlockedBy");
-        const dependency = requireRef(params.blockedBy, "removeBlockedBy");
+        const ref = requireRef(params.id, params.action);
+        const dependency = requireRef(params.blockedBy, params.action);
+        const add = params.action === "addBlockedBy";
         let target = 0;
         let blocker = 0;
         const outcome = await run((s) => {
           target = refId(s, ref);
           blocker = refId(s, dependency);
-          return removeBlockedBy(s, target, blocker, now());
+          return (add ? addBlockedBy : removeBlockedBy)(s, target, blocker, now());
         });
         if (outcome.kind === "noop") return text(outcome.message);
-        return text(`${pathOf(outcome.state, target)} is no longer blocked by ${pathOf(outcome.state, blocker)}`);
+        return text(`${pathOf(outcome.state, target)} is ${add ? "now" : "no longer"} blocked by ${pathOf(outcome.state, blocker)}`);
       }
 
       default:

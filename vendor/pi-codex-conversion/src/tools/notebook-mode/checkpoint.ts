@@ -14,6 +14,7 @@ import {
 	MAX_PROJECT_MANIFEST_BYTES,
 	MAX_PROJECT_NAME_BYTES,
 	parseProjectBindingMetadata,
+	hasPayloadLayout,
 	type ProjectStateBaseline,
 } from "./project-state-format.ts";
 
@@ -64,7 +65,7 @@ export function notebookCheckpointBindingNames(identity: NotebookCheckpointIdent
 	const manifest = readManifest(checkpointPaths(identity).manifest);
 	return manifest?.project === identity.project
 		&& manifest.session === identity.session
-		&& isValidCheckpointPayload(manifest, join(checkpointPaths(identity).directory, manifest.payload), maxBytes)
+		&& hasPayloadLayout(manifest.entries, join(checkpointPaths(identity).directory, manifest.payload), maxBytes)
 		? manifest.entries.map(({ name }) => name)
 		: [];
 }
@@ -133,7 +134,7 @@ export async function restoreNotebookCheckpoint(
 		return { restored: [], skipped: manifest.skipped, message: "Notebook checkpoint identity was incompatible and was not restored" };
 	}
 	const payloadPath = join(paths.directory, manifest.payload);
-	if (!isValidCheckpointPayload(manifest, payloadPath, maxBytes)) {
+	if (!hasPayloadLayout(manifest.entries, payloadPath, maxBytes)) {
 		return { restored: [], skipped: manifest.skipped, message: "Notebook checkpoint payload was missing or invalid and was not restored" };
 	}
 	signal?.throwIfAborted();
@@ -232,23 +233,6 @@ function readManifest(path: string): CheckpointManifest | undefined {
 		};
 	} catch {
 		return undefined;
-	}
-}
-
-function isValidCheckpointPayload(manifest: CheckpointManifest, path: string, maxBytes: number): boolean {
-	try {
-		const stat = lstatSync(path);
-		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) return false;
-		let offset = 0;
-		const names = new Set<string>();
-		for (const entry of manifest.entries) {
-			if (names.has(entry.name) || entry.offset !== offset) return false;
-			names.add(entry.name);
-			offset += entry.length;
-		}
-		return offset === stat.size;
-	} catch {
-		return false;
 	}
 }
 

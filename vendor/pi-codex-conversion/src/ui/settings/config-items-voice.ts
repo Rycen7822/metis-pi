@@ -6,7 +6,7 @@ import {
 	VOICE_CONTEXT_REASONING_LEVELS,
 	type VoiceContextModel,
 } from "../../adapter/activation/config.ts";
-import { type ConfigSetting, setting } from "./config-items-shared.ts";
+import { type ConfigSetting, configToggle, setting } from "./config-items-shared.ts";
 
 export function buildVoiceSettings(
 	config: CodexConversionConfig,
@@ -38,54 +38,12 @@ export function buildVoiceSettings(
 				},
 			}),
 		),
-		setting(
-			{
-				id: "autoResumeRealtime",
-				description: "Reconnect automatically if an active realtime voice call drops.",
-				label: "Auto-resume realtime voice",
-				currentValue: config.voice.autoResumeRealtime ? "on" : "off",
-				values: ["off", "on"],
-			},
-			(value, current) => ({
-				...current,
-				voice: {
-					...current.voice,
-					autoResumeRealtime: value === "on",
-				},
-			}),
-		),
-		setting(
-			{
-				id: "delegationAcknowledgements",
-				description: "Let the voice model speak a brief acknowledgement when handing a task to the coding agent.",
-				label: "Speak delegation acknowledgements",
-				currentValue: config.voice.delegationAcknowledgements ? "on" : "off",
-				values: ["off", "on"],
-			},
-			(value, current) => ({
-				...current,
-				voice: {
-					...current.voice,
-					delegationAcknowledgements: value === "on",
-				},
-			}),
-		),
-		setting(
-			{
-				id: "forwardReasoningSummaries",
-				description: "Let voice relay reasoning summaries as progress when the coding agent has no spoken text update.",
-				label: "Speak reasoning summaries",
-				currentValue: config.voice.forwardReasoningSummaries ? "on" : "off",
-				values: ["off", "on"],
-			},
-			(value, current) => ({
-				...current,
-				voice: {
-					...current.voice,
-					forwardReasoningSummaries: value === "on",
-				},
-			}),
-		),
+		configToggle(config, "voice", "autoResumeRealtime", "Auto-resume realtime voice",
+			"Reconnect automatically if an active realtime voice call drops."),
+		configToggle(config, "voice", "delegationAcknowledgements", "Speak delegation acknowledgements",
+			"Let the voice model speak a brief acknowledgement when handing a task to the coding agent."),
+		configToggle(config, "voice", "forwardReasoningSummaries", "Speak reasoning summaries",
+			"Let voice relay reasoning summaries as progress when the coding agent has no spoken text update."),
 		setting(
 			{
 				id: "dictationShortcutMode",

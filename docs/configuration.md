@@ -35,7 +35,7 @@
 | 某个 section 不是对象（如 `"thinking": 5`） | 该 section 全部默认值，其余 section 照常 |
 | 某个键类型错 / 取值非法 | 该项回退默认值，并记录一条人类可读的 `problem` |
 
-**已知限制**：`loadConfig` 返回的 `problems` 数组目前**没有任何地方展示**（只有 `test/config.test.mts` 消费它）。也就是说写错配置是**静默回退**的——不会警告、不会报错、不会出现在 `/codex-ui` 里。要确认某个值有没有生效，请对照 `/codex-ui` 里报告的组件真实状态。
+**已知限制**：`loadConfig` 返回的 `problems` 数组目前**没有任何地方展示**（只有 `test/unit/config.test.mts` 消费它）。也就是说写错配置是**静默回退**的——不会警告、不会报错、不会出现在 `/codex-ui` 里。要确认某个值有没有生效，请对照 `/codex-ui` 里报告的组件真实状态。
 
 回退语义分两类，别混淆：
 
@@ -185,4 +185,4 @@
 
 ## 验证
 
-`test/config.test.mts` 覆盖：无文件、坏 JSON、部分 section、越界值、`glyphs.include` 清洗、默认值形状。
+`test/unit/config.test.mts` 覆盖：无文件、坏 JSON、部分 section、越界值、`glyphs.include` 清洗、默认值形状。

@@ -89,4 +89,4 @@ pi remove pi-copy-soft-wrap
 
 ## 验证
 
-`test/selection-copy.test.mjs`（481 行）、`test/copy-provenance.test.mjs`、`test/host-surface.test.mjs`（真实宿主组件）、`scripts/copy-perf.mjs`（性能与覆盖表）；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"）。
+`test/chrome/selection-copy.test.mjs`（481 行）、`test/shell/copy-provenance.test.mjs`、`test/host/host-surface.test.mjs`（真实宿主组件）、`scripts/copy-perf.mjs`（性能与覆盖表）；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"）。

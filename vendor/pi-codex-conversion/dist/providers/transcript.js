@@ -201,21 +201,6 @@ export function hasNonAdditiveToolChanges(messages) {
     return false;
 }
 /**
- * Split tool declarations between the top-level request field and in-place additions.
- * Transports that can anchor additions at a system message keep the initial tools at the
- * top and load later ones where they appear; that only works when no tool was removed or
- * redeclared, so everything else sends the current tool list.
- */
-export function resolveTranscriptTools(messages, supportsToolAdditions, startsAtTranscriptHead = true) {
-    const anchorsAdditions = supportsToolAdditions && !hasNonAdditiveToolChanges(messages);
-    return {
-        requestTools: anchorsAdditions
-            ? (getInitialSystemMessage(messages, startsAtTranscriptHead)?.toolsAdded ?? [])
-            : getCurrentTools(messages),
-        anchorsAdditions,
-    };
-}
-/**
  * Tool names a pre-0.86 transcript recorded on an individual tool result. Pi 0.85 put
  * dynamic tool introductions on `ToolResultMessage.addedToolNames`; 0.86 replaced that
  * field with system-message `toolsAdded`, so this reads the legacy shape defensively.
@@ -225,16 +210,4 @@ export function legacyAddedToolNames(message) {
     if (!Array.isArray(value))
         return [];
     return value.filter((name) => typeof name === "string");
-}
-/** Tools that later system messages introduce on top of the leading declaration. */
-export function getAnchoredToolAdditions(messages, startsAtTranscriptHead = true) {
-    const initial = getInitialSystemMessage(messages, startsAtTranscriptHead);
-    const additions = [];
-    for (const message of messages) {
-        if (!isSystemMessage(message) || message === initial)
-            continue;
-        for (const tool of message.toolsAdded ?? [])
-            additions.push(tool);
-    }
-    return additions;
 }

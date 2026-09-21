@@ -2,7 +2,7 @@
 
 ## Target and sources
 
-The classic Pi 0.85.1 component contract was inspected in:
+Current runtime checks target Pi 0.86.1; see [VALIDATION](../VALIDATION.md). The classic two-slot component contract was initially traced in:
 
 - `earendil-works/pi`, tag `v0.85.1`, `packages/coding-agent/src/modes/interactive/components/tool-execution.ts` (blob `5355a3637aad9df5871ac907b680378ffd67b677`).
 - The same tag's `packages/coding-agent/src/core/source-info.ts` and `packages/tui/src/components/text.ts`.

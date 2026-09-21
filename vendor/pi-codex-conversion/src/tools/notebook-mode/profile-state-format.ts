@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import {
@@ -6,6 +5,7 @@ import {
 	MAX_PROJECT_MANIFEST_BYTES,
 	MAX_PROJECT_NAME_BYTES,
 	parseProjectBindingMetadata,
+	parseSkippedBinding,
 	type ProjectStateEntry,
 } from "./project-state-format.ts";
 
@@ -71,7 +71,7 @@ export function readProfileStateManifest(path: string, expectedName?: string): P
 		) return undefined;
 		if (expectedName !== undefined && value["name"] !== expectedName) return undefined;
 		const entries = value["entries"].map(parseEntry);
-		const skipped = value["skipped"].map(parseSkipped);
+		const skipped = value["skipped"].map(parseSkippedBinding);
 		if (entries.some((entry) => !entry) || skipped.some((entry) => !entry)) return undefined;
 		return {
 			schema: PROFILE_STATE_SCHEMA,
@@ -103,24 +103,8 @@ export function assertSafeProfileDirectory(directory: string, agentDir: string):
 	}
 }
 
-export function readProfileStatePayload(manifest: ProfileStateManifest, path: string, maxBytes: number): Buffer | undefined {
-	try {
-		const stat = lstatSync(path);
-		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) return undefined;
-		const payload = readFileSync(path);
-		const names = new Set<string>();
-		let offset = 0;
-		for (const entry of manifest.entries) {
-			if (names.has(entry.name) || entry.offset !== offset || entry.offset + entry.length > payload.length) return undefined;
-			names.add(entry.name);
-			if (hashProfileBytes(payload.subarray(entry.offset, entry.offset + entry.length)) !== entry.hash) return undefined;
-			offset += entry.length;
-		}
-		return offset === payload.length ? payload : undefined;
-	} catch {
-		return undefined;
-	}
-}
+// Profiles use the same hashed payload format as project snapshots.
+export { readProjectStatePayload as readProfileStatePayload, hashStateBytes as hashProfileBytes } from "./project-state-format.ts";
 
 export function profileSummary(manifest: ProfileStateManifest): ProfileStateSummary {
 	const values = manifest.entries.filter(({ kind }) => kind === "value").length;
@@ -134,10 +118,6 @@ export function profileSummary(manifest: ProfileStateManifest): ProfileStateSumm
 	};
 }
 
-export function hashProfileBytes(bytes: Uint8Array): string {
-	return createHash("sha256").update(bytes).digest("hex");
-}
-
 function parseEntry(value: unknown): ProjectStateEntry | undefined {
 	if (!isRecord(value)) return undefined;
 	const { name, kind, offset, length, hash } = value;
@@ -149,15 +129,6 @@ function parseEntry(value: unknown): ProjectStateEntry | undefined {
 		&& typeof hash === "string" && HASH.test(hash)
 		&& metadata !== undefined
 		? { name, kind, offset: offset as number, length: length as number, hash, ...metadata }
-		: undefined;
-}
-
-function parseSkipped(value: unknown): { name: string; reason: string } | undefined {
-	return isRecord(value)
-		&& typeof value["name"] === "string"
-		&& Buffer.byteLength(value["name"]) <= MAX_PROJECT_NAME_BYTES
-		&& typeof value["reason"] === "string"
-		? { name: value["name"], reason: value["reason"] }
 		: undefined;
 }
 

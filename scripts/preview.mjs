@@ -181,22 +181,19 @@ const groupRows = [];
 for (let gi = 0; gi < GROUP_IMAGES.length; gi++) {
   groupRows.push(lifecycle("read", { path: `figures/${GROUP_IMAGES[gi]}` }, { content: [{ type: "image", data: "omitted", mimeType: "image/png" }] }, { toolCallId: `img${gi}` }));
 }
-// Boundary text after the group (stable plan query — non-consuming, 0.7.0).
-transcript.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "compare" }] } });
-const sep1 = transcript.textRunPlan(`0:9:open`)?.separatorBefore ? SEPARATOR_LINE : "";
+// Resolve by the same message object as the adapter, without encoding private keys.
+function textSeparator(text) {
+  const message = { role: "assistant", content: [{ type: "text", text }] };
+  for (const type of ["message_start", "message_update", "message_end"]) {
+    transcript.apply({ type, message }, message);
+  }
+  return transcript.textRunPlan(transcript.messageKeyFor(message))?.separatorBefore ? SEPARATOR_LINE : "";
+}
+const sep1 = textSeparator("compare");
 // bash segment
 transcript.apply({ type: "tool_execution_start", toolCallId: "pvbash", toolName: "bash" });
 transcript.apply({ type: "tool_execution_end", toolCallId: "pvbash", toolName: "bash", isError: false });
-transcript.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "next" }] } });
-const sep2 = (() => {
-  // The bash text is a NEW logical message after tool activity: resolve it the
-  // way the coordinator does — the most recent open assistant plan.
-  for (let seq = 10; seq >= 1; seq--) {
-    const plan = transcript.textRunPlan(`0:${seq}:open`);
-    if (plan) return plan.separatorBefore ? SEPARATOR_LINE : "";
-  }
-  return "";
-})();
+const sep2 = textSeparator("next");
 const examples = [
   groupRows.join("\n"),
   // Exploration rows (Codex: cyan titles, dim " in ").

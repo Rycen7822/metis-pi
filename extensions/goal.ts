@@ -9,9 +9,10 @@
  * (Apache-2.0 — see LICENSE-APACHE-2.0 and NOTICE) and modified here:
  * syncStatusTimer() refreshes the footer status once a second while a goal is active, so the
  * elapsed time ticks during long agent runs, where no goal event fires in between.
+ * State and accounting live in src/goal-state.ts; this entry owns host I/O.
  */
 
-import { randomUUID } from "node:crypto";
+import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,21 +21,6 @@ import { Type } from "typebox";
 const STATE_TYPE = "goal";
 const UI_MESSAGE_TYPE = "goal-ui";
 const CONTINUATION_MESSAGE_TYPE = "goal-continuation";
-const MAX_OBJECTIVE_CHARS = 4_000;
-
-type GoalStatus = "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete";
-
-interface Goal {
-	id: string;
-	objective: string;
-	status: GoalStatus;
-	tokenBudget?: number;
-	tokensUsed: number;
-	timeUsedSeconds: number;
-	createdAt: number;
-	updatedAt: number;
-}
-
 interface PersistedGoalState {
 	version: 2;
 	action: "set" | "edit" | "status" | "clear" | "account";
@@ -55,102 +41,12 @@ const UpdateGoalParams = Type.Object({
 	status: StringEnum(["complete", "blocked"] as const),
 });
 
-function nowSeconds(): number {
-	return Math.floor(Date.now() / 1000);
-}
-
-function cloneGoal(goal: Goal): Goal {
-	return { ...goal };
-}
-
-function charCount(value: string): number {
-	return [...value].length;
-}
-
 function escapeXmlText(input: string): string {
 	return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-function validateObjective(input: string): string {
-	const objective = input.trim();
-	if (!objective) {
-		throw new Error("goal objective must not be empty");
-	}
-	if (charCount(objective) > MAX_OBJECTIVE_CHARS) {
-		throw new Error(
-			`Goal objective is too long: ${charCount(objective).toLocaleString()} characters. Limit: ${MAX_OBJECTIVE_CHARS.toLocaleString()} characters. Put longer instructions in a file and refer to that file in the goal, for example: /goal follow the instructions in docs/goal.md.`,
-		);
-	}
-	return objective;
-}
-
-function validateTokenBudget(value: number | undefined): number | undefined {
-	if (value === undefined) return undefined;
-	if (!Number.isInteger(value) || value <= 0) {
-		throw new Error("goal budgets must be positive integers when provided");
-	}
-	return value;
-}
-
-function normalizeStatus(value: unknown): GoalStatus {
-	switch (value) {
-		case "active":
-		case "paused":
-		case "blocked":
-		case "complete":
-			return value;
-		case "usageLimited":
-		case "usage_limited":
-			return "usageLimited";
-		case "budgetLimited":
-		case "budget_limited":
-			return "budgetLimited";
-		default:
-			return "active";
-	}
-}
-
-function normalizeNonNegativeInteger(value: unknown, fallback = 0): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-	return Math.max(0, Math.floor(value));
-}
-
-function normalizeGoal(value: unknown): Goal | null {
-	if (!value || typeof value !== "object") return null;
-	const raw = value as Partial<Goal> & Record<string, unknown>;
-	const objective = typeof raw.objective === "string" ? raw.objective : "";
-	if (!objective.trim()) return null;
-	const tokenBudget = typeof raw.tokenBudget === "number" && Number.isFinite(raw.tokenBudget) && raw.tokenBudget > 0
-		? Math.floor(raw.tokenBudget)
-		: undefined;
-	const ts = nowSeconds();
-	return {
-		id: typeof raw.id === "string" && raw.id ? raw.id : randomUUID(),
-		objective,
-		status: normalizeStatus(raw.status),
-		tokenBudget,
-		tokensUsed: normalizeNonNegativeInteger(raw.tokensUsed),
-		timeUsedSeconds: normalizeNonNegativeInteger(raw.timeUsedSeconds),
-		createdAt: normalizeNonNegativeInteger(raw.createdAt, ts),
-		updatedAt: normalizeNonNegativeInteger(raw.updatedAt, ts),
-	};
-}
-
 function statusLabel(status: GoalStatus): string {
-	switch (status) {
-		case "active":
-			return "active";
-		case "paused":
-			return "paused";
-		case "blocked":
-			return "blocked";
-		case "usageLimited":
-			return "usage limited";
-		case "budgetLimited":
-			return "limited by budget";
-		case "complete":
-			return "complete";
-	}
+	return status === "usageLimited" ? "usage limited" : status === "budgetLimited" ? "limited by budget" : status;
 }
 
 function formatTokensCompact(value: number): string {
@@ -176,24 +72,6 @@ function formatElapsedSeconds(totalSeconds: number): string {
 	if (hours > 0) return `${hours}h ${minutes}m`;
 	if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
 	return `${remainingSeconds}s`;
-}
-
-function assistantUsageTokens(messages: unknown[]): number {
-	let total = 0;
-	for (const message of messages) {
-		if (!message || typeof message !== "object") continue;
-		const msg = message as {
-			role?: string;
-			usage?: { input?: number; output?: number; cacheRead?: number; totalTokens?: number };
-		};
-		if (msg.role !== "assistant" || !msg.usage) continue;
-		const input = Math.max(0, msg.usage.input ?? 0);
-		const cacheRead = Math.max(0, msg.usage.cacheRead ?? 0);
-		const output = Math.max(0, msg.usage.output ?? 0);
-		const measured = Math.max(0, input - cacheRead) + output;
-		total += measured > 0 ? measured : Math.max(0, msg.usage.totalTokens ?? 0);
-	}
-	return total;
 }
 
 function isUnfinishedGoal(goal: Goal): boolean {
@@ -245,19 +123,9 @@ function goalSummary(goal: Goal): string {
 	if (goal.tokenBudget !== undefined) {
 		lines.push(`Token budget: ${formatTokensCompact(goal.tokenBudget)}`);
 	}
-	const commandHint = (() => {
-		switch (goal.status) {
-			case "active":
-				return "Commands: /goal edit, /goal pause, /goal clear";
-			case "paused":
-			case "blocked":
-			case "usageLimited":
-				return "Commands: /goal edit, /goal resume, /goal clear";
-			case "budgetLimited":
-			case "complete":
-				return "Commands: /goal edit, /goal clear";
-		}
-	})();
+	const commandHint = goal.status === "active" ? "Commands: /goal edit, /goal pause, /goal clear"
+		: goal.status === "budgetLimited" || goal.status === "complete" ? "Commands: /goal edit, /goal clear"
+		: "Commands: /goal edit, /goal resume, /goal clear";
 	lines.push("", commandHint);
 	return lines.join("\n");
 }
@@ -346,19 +214,6 @@ ${goalSummary(goal)}
 The active thread goal has reached its token budget. No new automatic continuation will be queued. Summarize progress or use /goal edit, /goal clear, or /goal resume when you want to continue.`;
 }
 
-function statusAfterObjectiveEdit(status: GoalStatus): GoalStatus {
-	switch (status) {
-		case "complete":
-		case "budgetLimited":
-			return "active";
-		case "active":
-		case "paused":
-		case "blocked":
-		case "usageLimited":
-			return status;
-	}
-}
-
 function lastAssistantMessage(messages: Array<{ role?: string; stopReason?: string; errorMessage?: string }>) {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
@@ -367,20 +222,13 @@ function lastAssistantMessage(messages: Array<{ role?: string; stopReason?: stri
 	return undefined;
 }
 
-function wasLastAssistantAborted(messages: Array<{ role?: string; stopReason?: string }>): boolean {
-	return lastAssistantMessage(messages)?.stopReason === "aborted";
-}
-
 function goalStopStatusForAssistantError(message: { errorMessage?: string } | undefined): GoalStatus {
 	const errorMessage = message?.errorMessage ?? "";
 	return /\b(usage|rate|quota|limit)\b/i.test(errorMessage) ? "usageLimited" : "blocked";
 }
 
 export default function goalExtension(pi: ExtensionAPI) {
-	let goal: Goal | null = null;
-	let activeSinceMs: number | null = null;
-	let activeGoalIdAtAgentStart: string | null = null;
-	let continuationQueued = false;
+	const state = new GoalState();
 
 	// Local patch (not upstream): keep the footer status fresh once a second so the
 	// elapsed time ticks during a long single agent run, where no goal event fires.
@@ -401,7 +249,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		}
 		if (statusTimer !== undefined) return;
 		statusTimer = setInterval(() => {
-			if (!statusCtx || goal?.status !== "active") {
+			if (!statusCtx || state.current?.status !== "active") {
 				stopStatusTimer();
 				return;
 			}
@@ -410,68 +258,37 @@ export default function goalExtension(pi: ExtensionAPI) {
 		(statusTimer as unknown as { unref?: () => void }).unref?.();
 	}
 
-	function currentGoalSnapshot(): Goal | null {
-		if (!goal) return null;
-		const snapshot = cloneGoal(goal);
-		if (snapshot.status === "active" && activeSinceMs !== null) {
-			snapshot.timeUsedSeconds += Math.max(0, Math.floor((Date.now() - activeSinceMs) / 1000));
-		}
-		return snapshot;
-	}
-
-	function accountElapsed(): boolean {
-		if (!goal || goal.status !== "active" || activeSinceMs === null) return false;
-		const seconds = Math.max(0, Math.floor((Date.now() - activeSinceMs) / 1000));
-		if (seconds <= 0) return false;
-		goal.timeUsedSeconds += seconds;
-		goal.updatedAt = nowSeconds();
-		activeSinceMs += seconds * 1000;
-		return true;
-	}
-
 	function persist(action: PersistedGoalState["action"]): void {
 		pi.appendEntry(STATE_TYPE, {
 			version: 2,
 			action,
-			goal: goal ? cloneGoal(goal) : null,
+			goal: state.current ? { ...state.current } : null,
 		} satisfies PersistedGoalState);
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
+		const goal = state.snapshot();
+		if (!goal || goal.status !== "active") syncStatusTimer(ctx, false);
 		if (!goal) {
-			syncStatusTimer(ctx, false);
 			ctx.ui.setStatus("goal", undefined);
 			return;
 		}
 		const theme = ctx.ui.theme;
-		if (goal.status !== "active") syncStatusTimer(ctx, false);
-		switch (goal.status) {
-			case "active": {
-				const snapshot = currentGoalSnapshot() ?? goal;
-				const usage = snapshot.tokenBudget === undefined
-					? ` (${formatElapsedSeconds(snapshot.timeUsedSeconds)})`
-					: ` (${formatTokensCompact(snapshot.tokensUsed)} / ${formatTokensCompact(snapshot.tokenBudget)})`;
-				ctx.ui.setStatus("goal", theme.fg("accent", `Pursuing goal${usage}`));
-				syncStatusTimer(ctx, true);
-				break;
-			}
-			case "paused":
-				ctx.ui.setStatus("goal", theme.fg("warning", "Goal paused (/goal resume)"));
-				break;
-			case "blocked":
-				ctx.ui.setStatus("goal", theme.fg("warning", "Goal blocked (/goal resume)"));
-				break;
-			case "usageLimited":
-				ctx.ui.setStatus("goal", theme.fg("warning", "Goal hit usage limits (/goal resume)"));
-				break;
-			case "budgetLimited":
-				ctx.ui.setStatus("goal", theme.fg("warning", "Goal budget reached"));
-				break;
-			case "complete":
-				ctx.ui.setStatus("goal", theme.fg("success", "Goal complete"));
-				break;
+		if (goal.status === "active") {
+			const usage = goal.tokenBudget === undefined
+				? ` (${formatElapsedSeconds(goal.timeUsedSeconds)})`
+				: ` (${formatTokensCompact(goal.tokensUsed)} / ${formatTokensCompact(goal.tokenBudget)})`;
+			ctx.ui.setStatus("goal", theme.fg("accent", `Pursuing goal${usage}`));
+			syncStatusTimer(ctx, true);
+			return;
 		}
+		const labels = {
+			paused: "Goal paused (/goal resume)", blocked: "Goal blocked (/goal resume)",
+			usageLimited: "Goal hit usage limits (/goal resume)", budgetLimited: "Goal budget reached",
+			complete: "Goal complete",
+		};
+		ctx.ui.setStatus("goal", theme.fg(goal.status === "complete" ? "success" : "warning", labels[goal.status]));
 	}
 
 	function showGoalMessage(content: string): void {
@@ -485,89 +302,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 		);
 	}
 
-	function setGoal(objectiveInput: string, tokenBudgetInput?: number): Goal {
-		const objective = validateObjective(objectiveInput);
-		const tokenBudget = validateTokenBudget(tokenBudgetInput);
-		const ts = nowSeconds();
-		goal = {
-			id: randomUUID(),
-			objective,
-			status: "active",
-			tokenBudget,
-			tokensUsed: 0,
-			timeUsedSeconds: 0,
-			createdAt: ts,
-			updatedAt: ts,
-		};
-		activeSinceMs = Date.now();
-		continuationQueued = false;
-		return goal;
-	}
-
-	function editGoalObjective(objectiveInput: string): Goal {
-		if (!goal) {
-			throw new Error("cannot edit goal because no goal exists");
-		}
-		const objective = validateObjective(objectiveInput);
-		if (goal.status === "active") accountElapsed();
-		const nextStatus = statusAfterObjectiveEdit(goal.status);
-		if (nextStatus === "active" && goal.status !== "active") {
-			activeSinceMs = Date.now();
-			continuationQueued = false;
-		}
-		goal.objective = objective;
-		goal.status = nextStatus;
-		goal.updatedAt = nowSeconds();
-		return goal;
-	}
-
-	function setGoalStatus(status: GoalStatus): Goal {
-		if (!goal) {
-			throw new Error("cannot update goal because no goal exists");
-		}
-		if (goal.status === "active" && status !== "active") {
-			accountElapsed();
-			activeSinceMs = null;
-		}
-		if (status === "active" && goal.status !== "active") {
-			activeSinceMs = Date.now();
-			continuationQueued = false;
-		}
-		if (status !== "active") {
-			continuationQueued = false;
-		}
-		goal.status = status;
-		goal.updatedAt = nowSeconds();
-		return goal;
-	}
-
-	function clearGoal(): boolean {
-		if (!goal) return false;
-		if (goal.status === "active") accountElapsed();
-		goal = null;
-		activeSinceMs = null;
-		activeGoalIdAtAgentStart = null;
-		continuationQueued = false;
-		return true;
-	}
-
-	function maybeApplyBudgetLimit(): boolean {
-		if (!goal || goal.status !== "active" || goal.tokenBudget === undefined) return false;
-		if (goal.tokensUsed < goal.tokenBudget) return false;
-		accountElapsed();
-		goal.status = "budgetLimited";
-		goal.updatedAt = nowSeconds();
-		activeSinceMs = null;
-		continuationQueued = false;
-		return true;
-	}
-
 	function queueContinuation(ctx: ExtensionContext): void {
-		const snapshot = currentGoalSnapshot();
+		const snapshot = state.snapshot();
 		if (!snapshot || snapshot.status !== "active") return;
-		if (continuationQueued || ctx.hasPendingMessages()) return;
+		if (state.continuationQueued || ctx.hasPendingMessages()) return;
 
-		continuationQueued = true;
+		state.continuationQueued = true;
 		const message = {
 			customType: CONTINUATION_MESSAGE_TYPE,
 			content: continuationPrompt(snapshot),
@@ -575,31 +315,15 @@ export default function goalExtension(pi: ExtensionAPI) {
 			details: { goalId: snapshot.id },
 		};
 		try {
-			if (ctx.isIdle()) {
-				pi.sendMessage(message, { triggerTurn: true });
-			} else {
-				pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
-			}
+			pi.sendMessage(message, ctx.isIdle() ? { triggerTurn: true } : { triggerTurn: true, deliverAs: "followUp" });
 		} catch (err) {
-			continuationQueued = false;
+			state.continuationQueued = false;
 			ctx.ui.notify(`Failed to queue goal continuation: ${err instanceof Error ? err.message : String(err)}`, "error");
 		}
 	}
 
 	function reconstructState(ctx: ExtensionContext): void {
-		goal = null;
-		activeSinceMs = null;
-		activeGoalIdAtAgentStart = null;
-		continuationQueued = false;
-
-		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type !== "custom" || entry.customType !== STATE_TYPE) continue;
-			const data = entry.data as Partial<PersistedGoalState> | undefined;
-			goal = normalizeGoal(data?.goal);
-		}
-		if (goal?.status === "active") {
-			activeSinceMs = Date.now();
-		}
+		state.restore(ctx.sessionManager.getBranch());
 		updateStatus(ctx);
 	}
 
@@ -607,7 +331,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 
 	pi.on("before_agent_start", async (event) => {
-		const snapshot = currentGoalSnapshot();
+		const snapshot = state.snapshot();
 		if (!snapshot || snapshot.status !== "active") return;
 		return {
 			systemPrompt: `${event.systemPrompt}\n\n${activeGoalSystemPrompt(snapshot)}`,
@@ -615,47 +339,32 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_start", async (_event, _ctx) => {
-		continuationQueued = false;
-		activeGoalIdAtAgentStart = goal?.status === "active" ? goal.id : null;
+		state.startTurn();
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (!goal) return;
-		let changed = false;
-		if (activeGoalIdAtAgentStart === goal.id) {
-			const tokens = assistantUsageTokens(event.messages as unknown[]);
-			if (tokens > 0) {
-				goal.tokensUsed += tokens;
-				goal.updatedAt = nowSeconds();
-				changed = true;
-			}
-		}
-		if (goal.status === "active" && accountElapsed()) {
-			changed = true;
-		}
-		if (maybeApplyBudgetLimit()) {
-			changed = true;
-			showGoalMessage(budgetLimitMessage(goal));
-		}
+		if (!state.current) return;
+		const { changed, limited } = state.accountTurn(event.messages);
+		if (limited) showGoalMessage(budgetLimitMessage(state.current));
 		if (changed) persist("account");
 		updateStatus(ctx);
-		activeGoalIdAtAgentStart = null;
+		state.finishTurn();
 
-		if (goal.status !== "active") return;
+		if (state.current.status !== "active") return;
 
 		const lastAssistant = lastAssistantMessage(event.messages);
 		if (lastAssistant?.stopReason === "error") {
 			const status = goalStopStatusForAssistantError(lastAssistant);
-			setGoalStatus(status);
+			state.transition(status);
 			persist("status");
-			showGoalMessage(`Goal ${statusLabel(status)}\n\nThe last goal turn ended with an error, so automatic continuation was stopped.\n\n${goalSummary(goal)}`);
+			showGoalMessage(`Goal ${statusLabel(status)}\n\nThe last goal turn ended with an error, so automatic continuation was stopped.\n\n${goalSummary(state.current)}`);
 			updateStatus(ctx);
 			return;
 		}
 
-		if (wasLastAssistantAborted(event.messages)) {
+		if (lastAssistant?.stopReason === "aborted") {
 			if (!ctx.hasUI) {
-				setGoalStatus("paused");
+				state.transition("paused");
 				persist("status");
 				updateStatus(ctx);
 				return;
@@ -665,9 +374,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 				"Operation aborted. Pause this goal instead of automatically continuing?",
 			);
 			if (pause) {
-				setGoalStatus("paused");
+				state.transition("paused");
 				persist("status");
-				showGoalMessage(`Goal paused\n\n${goalSummary(goal)}`);
+				showGoalMessage(`Goal paused\n\n${goalSummary(state.current)}`);
 				updateStatus(ctx);
 				return;
 			}
@@ -680,7 +389,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		let lastContinuationIndex = -1;
 		for (let i = 0; i < event.messages.length; i++) {
 			const msg = event.messages[i] as { customType?: string; details?: { goalId?: string } };
-			if (msg.customType === CONTINUATION_MESSAGE_TYPE && msg.details?.goalId === goal?.id) {
+			if (msg.customType === CONTINUATION_MESSAGE_TYPE && msg.details?.goalId === state.current?.id) {
 				lastContinuationIndex = i;
 			}
 		}
@@ -690,7 +399,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				const msg = message as { customType?: string; details?: { goalId?: string } };
 				if (msg.customType === UI_MESSAGE_TYPE) return false;
 				if (msg.customType === CONTINUATION_MESSAGE_TYPE) {
-					return goal?.status === "active" && msg.details?.goalId === goal.id && index === lastContinuationIndex;
+					return state.current?.status === "active" && msg.details?.goalId === state.current.id && index === lastContinuationIndex;
 				}
 				return true;
 			}),
@@ -712,7 +421,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
 			if (!trimmed) {
-				const snapshot = currentGoalSnapshot();
+				const snapshot = state.snapshot();
 				showGoalMessage(snapshot ? goalSummary(snapshot) : "Usage: /goal <objective>\n\nNo goal is currently set.");
 				updateStatus(ctx);
 				return;
@@ -720,37 +429,28 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 			switch (trimmed.toLowerCase()) {
 				case "clear": {
-					const cleared = clearGoal();
+					const cleared = state.clear();
 					persist("clear");
 					showGoalMessage(cleared ? "Goal cleared" : "No goal to clear\n\nThis thread does not currently have a goal.");
 					updateStatus(ctx);
 					return;
 				}
-				case "pause": {
-					try {
-						setGoalStatus("paused");
-						persist("status");
-						showGoalMessage(`Goal paused\n\n${goalSummary(goal!)}`);
-						updateStatus(ctx);
-					} catch (err) {
-						showGoalMessage(`Failed to update thread goal: ${err instanceof Error ? err.message : String(err)}`);
-					}
-					return;
-				}
+				case "pause":
 				case "resume": {
+					const status = trimmed.toLowerCase() === "pause" ? "paused" : "active";
 					try {
-						setGoalStatus("active");
+						state.transition(status);
 						persist("status");
-						showGoalMessage(`Goal active\n\n${goalSummary(currentGoalSnapshot()!)}`);
+						showGoalMessage(`Goal ${status}\n\n${goalSummary(state.snapshot()!)}`);
 						updateStatus(ctx);
-						queueContinuation(ctx);
+						if (status === "active") queueContinuation(ctx);
 					} catch (err) {
 						showGoalMessage(`Failed to update thread goal: ${err instanceof Error ? err.message : String(err)}`);
 					}
 					return;
 				}
 				case "edit": {
-					if (!goal) {
+					if (!state.current) {
 						showGoalMessage("No goal is currently set.\n\nUsage: /goal <objective>");
 						return;
 					}
@@ -758,17 +458,17 @@ export default function goalExtension(pi: ExtensionAPI) {
 						showGoalMessage("/goal edit requires interactive mode. Use /goal <objective> to replace the current goal.");
 						return;
 					}
-					const edited = await ctx.ui.editor("Edit goal objective:", goal.objective);
+					const edited = await ctx.ui.editor("Edit goal objective:", state.current.objective);
 					if (edited === undefined) {
 						ctx.ui.notify("Goal edit cancelled", "info");
 						return;
 					}
 					try {
-						editGoalObjective(edited);
+						state.edit(edited);
 						persist("edit");
-						showGoalMessage(`Goal ${statusLabel(goal!.status)}\n\n${goalSummary(currentGoalSnapshot()!)}`);
+						showGoalMessage(`Goal ${statusLabel(state.current!.status)}\n\n${goalSummary(state.snapshot()!)}`);
 						updateStatus(ctx);
-						if (goal?.status === "active") queueContinuation(ctx);
+						if (state.current?.status === "active") queueContinuation(ctx);
 					} catch (err) {
 						showGoalMessage(`Failed to edit thread goal: ${err instanceof Error ? err.message : String(err)}`);
 					}
@@ -784,7 +484,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			if (goal && isUnfinishedGoal(goal)) {
+			if (state.current && isUnfinishedGoal(state.current)) {
 				if (!ctx.hasUI) {
 					showGoalMessage("An unfinished goal already exists. Run /goal clear first, or use interactive mode to confirm replacement.");
 					return;
@@ -793,13 +493,18 @@ export default function goalExtension(pi: ExtensionAPI) {
 				if (!replace) return;
 			}
 
-			setGoal(objective);
+			state.create(objective);
 			persist("set");
-			showGoalMessage(`Goal active\n\n${goalSummary(goal!)}`);
+			showGoalMessage(`Goal active\n\n${goalSummary(state.current!)}`);
 			updateStatus(ctx);
 			queueContinuation(ctx);
 		},
 	});
+
+	function toolResult(ctx: ExtensionContext, complete = false) {
+		const response = goalResponse(state.snapshot(), ctx.sessionManager.getSessionId(), complete);
+		return { content: [{ type: "text" as const, text: JSON.stringify(response, null, 2) }], details: response };
+	}
 
 	pi.registerTool({
 		name: "get_goal",
@@ -809,12 +514,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		promptSnippet: "Get the current long-running thread goal and its usage/budget state",
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-			const snapshot = currentGoalSnapshot();
-			const response = goalResponse(snapshot, ctx.sessionManager.getSessionId());
-			return {
-				content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
-				details: response,
-			};
+			return toolResult(ctx);
 		},
 	});
 
@@ -831,19 +531,15 @@ export default function goalExtension(pi: ExtensionAPI) {
 		],
 		parameters: CreateGoalParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (goal && isUnfinishedGoal(goal)) {
+			if (state.current && isUnfinishedGoal(state.current)) {
 				throw new Error(
 					"cannot create a new goal because this thread already has an unfinished goal; complete it with update_goal or ask the user to clear or replace it",
 				);
 			}
-			setGoal(params.objective, params.token_budget);
+			state.create(params.objective, params.token_budget);
 			persist("set");
 			updateStatus(ctx);
-			const response = goalResponse(currentGoalSnapshot(), ctx.sessionManager.getSessionId());
-			return {
-				content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
-				details: response,
-			};
+			return toolResult(ctx);
 		},
 	});
 
@@ -863,14 +559,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 					"update_goal can only mark the existing goal complete or blocked; pause, resume, budget-limited, and usage-limited status changes are controlled by the user or system",
 				);
 			}
-			setGoalStatus(params.status);
+			state.transition(params.status);
 			persist("status");
 			updateStatus(ctx);
-			const response = goalResponse(currentGoalSnapshot(), ctx.sessionManager.getSessionId(), params.status === "complete");
-			return {
-				content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
-				details: response,
-			};
+			return toolResult(ctx, params.status === "complete");
 		},
 	});
 }

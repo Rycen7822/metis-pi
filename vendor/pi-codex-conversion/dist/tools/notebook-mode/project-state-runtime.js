@@ -1,4 +1,5 @@
-import { BINDING_METADATA_READER_SOURCE, BINDING_METADATA_RESTORE_SOURCE } from "./binding-metadata-source.js";
+import { captureBindingsSource } from "./capture-bindings-source.js";
+import { BINDING_METADATA_RESTORE_SOURCE } from "./binding-metadata-source.js";
 import { MAX_PROJECT_ENTRIES, MAX_PROJECT_MANIFEST_BYTES, } from "./project-state-format.js";
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 export function projectBindingNamesSource(marker) {
@@ -29,55 +30,8 @@ export function syncProjectBindingsSource(names) {
     return `if (typeof globalThis.__piNotebook?.syncProjectBindings !== "function") throw new Error("Notebook runtime bootstrap unavailable: __piNotebook.syncProjectBindings"); globalThis.__piNotebook.syncProjectBindings(${JSON.stringify(names)}); undefined;`;
 }
 export function projectStateCaptureSource(options) {
-    const captures = options.candidates.map((name) => `
-  try {
-    const __value = ${name};
-    let __kind = "value";
-    let __captured = __value;
-    if (typeof __value === "function") {
-      const __source = Function.prototype.toString.call(__value);
-      if (__source.includes("[native code]")) throw new Error("native or bound function");
-      const __candidate = (0, eval)("(" + __source + ")");
-      if (typeof __candidate !== "function") throw new Error("function source did not reanimate");
-      __kind = "function";
-      __captured = __source;
-    }
-    if (__captured instanceof Promise) throw new Error("promise");
-    if (__value instanceof WeakMap || __value instanceof WeakSet) throw new Error("weak collection");
-    const __bytes = serialize(__captured);
-    if (__bytes.byteLength > __max) throw new Error("exceeds per-value checkpoint cap");
-    if (__total + __bytes.byteLength > __max) throw new Error("exceeds total project checkpoint cap");
-	const __metadata = __readBindingMetadata(__value);
-	await __writeAll(__bytes);
-	    __entries.push({
-	      name: ${JSON.stringify(name)},
-	      kind: __kind,
-	      offset: __total,
-	      length: __bytes.byteLength,
-	      ...(__metadata.description === undefined ? {} : { description: __metadata.description }),
-	      ...(__metadata.usage === undefined ? {} : { usage: __metadata.usage }),
-	    });
-    __total += __bytes.byteLength;
-  } catch (__error) {
-    __skipped.push({ name: ${JSON.stringify(name)}, reason: String(__error instanceof Error ? __error.message : __error).slice(0, 240) });
-  }`).join("");
     return `{
-  const { serialize } = await import("node:v8");
-  const __max = ${options.maxBytes};
-	  const __entries = [];
-	  const __skipped = [];
-	  let __total = 0;
-${BINDING_METADATA_READER_SOURCE}
-	const __file = await Deno.open(${JSON.stringify(options.payloadPath)}, { create: true, write: true, truncate: true, mode: 0o600 });
-	const __writeAll = async (__bytes) => {
-	  let __offset = 0;
-	  while (__offset < __bytes.byteLength) {
-		const __written = await __file.write(__bytes.subarray(__offset));
-		if (__written === 0) throw new Error("project payload write made no progress");
-		__offset += __written;
-	  }
-	};
-	try { ${captures} } finally { __file.close(); }
+${captureBindingsSource(options, "project")}
   const __manifest = JSON.stringify({
     deno: Deno.version.deno,
     v8: Deno.version.v8,

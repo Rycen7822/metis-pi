@@ -24,20 +24,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { captureBody, FAKE_API_KEY, modelNamed } from "./helpers/vendor-codex-provider.mjs";
 
-const ENTRY = new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url).href;
 const PROXY_ENTRY = new URL("../vendor/pi-codex-conversion/dist/providers/code-mode-proxy-provider.js", import.meta.url).href;
 const NAMESPACE_ENTRY = new URL("../vendor/pi-codex-conversion/dist/context-management/namespace-tools.js", import.meta.url).href;
 const PREWARM_ENTRY = new URL("../vendor/pi-codex-conversion/dist/providers/openai-codex-custom-provider.js", import.meta.url).href;
-
-const FAKE_API_KEY = "x." + Buffer.from(
-	JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "offline-test" } }),
-).toString("base64url") + ".x";
-
-// Any transport that got past the payload capture would try to reach the network here.
-globalThis.fetch = async () => {
-	throw new Error("NETWORK_DISABLED");
-};
 
 const tool = (name, extra = {}) => ({
 	name,
@@ -74,66 +65,6 @@ const inPlaceToolItems = (body) =>
 	body.input.filter(
 		(item) => item.type === "additional_tools" || item.type === "tool_search_call" || item.type === "tool_search_output",
 	);
-
-let loaded;
-async function loadRegistration() {
-	loaded ??= (async () => {
-		const extension = (await import(ENTRY)).default;
-		assert.equal(typeof extension, "function", "vendored entry must export an extension factory");
-		const calls = { providers: [], tools: [] };
-		const recorded = {
-			events: { emit: () => {}, on: () => {}, off: () => {} },
-			on: () => {},
-			registerTool: (options) => calls.tools.push(options),
-			registerProvider: (...args) => calls.providers.push(args),
-			getAllTools: () => [],
-			getActiveTools: () => [],
-			getSettings: () => ({}),
-			getFlag: () => undefined,
-			setFlag: () => {},
-		};
-		const pi = new Proxy(recorded, {
-			get(target, property) {
-				if (property in target) return target[property];
-				if (typeof property !== "string") return undefined;
-				return (...args) => {
-					calls[property] = calls[property] ?? [];
-					calls[property].push(args.length === 1 ? args[0] : args);
-					return undefined;
-				};
-			},
-		});
-		await extension(pi);
-		const registration = calls.providers.find(([first]) => first?.id === "openai-codex");
-		assert.ok(registration, "vendored entry must register the openai-codex provider");
-		return registration[0];
-	})();
-	return loaded;
-}
-
-async function captureBody(model, context, options = {}) {
-	let payload;
-	const provider = await loadRegistration();
-	const stream = provider.streamSimple(model, context, {
-		apiKey: FAKE_API_KEY,
-		transport: "sse",
-		...options,
-		onPayload(body) {
-			payload = body;
-			throw new Error("OFFLINE_CAPTURE_COMPLETE");
-		},
-	});
-	const result = await stream.result();
-	assert.ok(payload, `onPayload must capture a body (stream ended with: ${result?.errorMessage ?? "no error"})`);
-	return payload;
-}
-
-const modelNamed = (id) => {
-	const models = getBuiltinModels("openai-codex");
-	const model = models.find((candidate) => candidate.id === id);
-	assert.ok(model, `expected builtin openai-codex model ${id}`);
-	return model;
-};
 
 const systemMessage = (content, extra = {}) => ({ role: "system", content, timestamp: 0, ...extra });
 

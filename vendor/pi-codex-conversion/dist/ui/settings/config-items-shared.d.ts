@@ -17,4 +17,11 @@ export declare class TextSettingSubmenu extends Container implements Focusable {
 }
 export declare function setting(item: ConfigSetting["item"], update?: ConfigSetting["update"]): ConfigSetting;
 export declare function toggle(id: string, label: string, current: boolean, update: (enabled: boolean, config: CodexConversionConfig) => CodexConversionConfig, description: string): ConfigSetting;
+type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
+type BooleanKey<T> = {
+    [K in keyof T]-?: T[K] extends boolean ? K : never;
+}[keyof T] & string;
+/** A single-field toggle reads the displayed snapshot but updates the latest draft. */
+export declare function configToggle<S extends ConfigSection>(config: CodexConversionConfig, section: S, key: BooleanKey<CodexConversionConfig[S]>, label: string, description: string, id?: string): ConfigSetting;
 export declare function projectCacheKeepalive(id: string, label: string, current: boolean): ConfigSetting;
+export {};

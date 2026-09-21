@@ -219,32 +219,6 @@ export function hasNonAdditiveToolChanges(messages: TranscriptMessages): boolean
 	return false;
 }
 
-export interface TranscriptTools {
-	/** Tools sent in the top-level request field. */
-	requestTools: Tool[];
-	/**
-	 * Whether later system messages carry their own `toolsAdded` as in-place additions.
-	 * When false, `requestTools` already holds the complete current tool set.
-	 */
-	anchorsAdditions: boolean;
-}
-
-/**
- * Split tool declarations between the top-level request field and in-place additions.
- * Transports that can anchor additions at a system message keep the initial tools at the
- * top and load later ones where they appear; that only works when no tool was removed or
- * redeclared, so everything else sends the current tool list.
- */
-export function resolveTranscriptTools(messages: TranscriptMessages, supportsToolAdditions: boolean, startsAtTranscriptHead = true): TranscriptTools {
-	const anchorsAdditions = supportsToolAdditions && !hasNonAdditiveToolChanges(messages);
-	return {
-		requestTools: anchorsAdditions
-			? (getInitialSystemMessage(messages, startsAtTranscriptHead)?.toolsAdded ?? [])
-			: getCurrentTools(messages),
-		anchorsAdditions,
-	};
-}
-
 /**
  * Tool names a pre-0.86 transcript recorded on an individual tool result. Pi 0.85 put
  * dynamic tool introductions on `ToolResultMessage.addedToolNames`; 0.86 replaced that
@@ -254,17 +228,6 @@ export function legacyAddedToolNames(message: { role: string }): readonly string
 	const value = (message as { addedToolNames?: unknown }).addedToolNames;
 	if (!Array.isArray(value)) return [];
 	return value.filter((name): name is string => typeof name === "string");
-}
-
-/** Tools that later system messages introduce on top of the leading declaration. */
-export function getAnchoredToolAdditions(messages: TranscriptMessages, startsAtTranscriptHead = true): Tool[] {
-	const initial = getInitialSystemMessage(messages, startsAtTranscriptHead);
-	const additions: Tool[] = [];
-	for (const message of messages) {
-		if (!isSystemMessage(message) || (message as object) === (initial as object | undefined)) continue;
-		for (const tool of (message as SystemMessage).toolsAdded ?? []) additions.push(tool);
-	}
-	return additions;
 }
 
 export type { ToolReference };

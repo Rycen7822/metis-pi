@@ -68,4 +68,4 @@ codex app-server  ← stdio JSON-RPC
 
 ## 验证
 
-`test/quota.test.mts`（217 行：归一化、错误类别、单飞行、stale 保留、`remaining` 方向）。
+`test/unit/quota.test.mts`（217 行：归一化、错误类别、单飞行、stale 保留、`remaining` 方向）。

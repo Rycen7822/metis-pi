@@ -8,6 +8,7 @@
 // painter therefore re-asserts the bg after every bg-clearing SGR inside the
 // row, honoring extended-color argument consumption (48;2;R;G;B / 48;5;N).
 
+import { appendAfterSgr } from "./sgr.ts";
 import { rgbToAnsi256, type ColorLevel, type Rgb } from "./palette.ts";
 import { cellWidth } from "./segments.ts";
 
@@ -20,49 +21,16 @@ function bgAnsi(rgb: Rgb, level: ColorLevel): string {
   return ""; // ansi16 cannot represent the surface honestly; none = no SGR
 }
 
-/** Re-emit `bg` after every SGR that cleared the background inside `segment`.
- * Extended-color prefixes (38/48/58) consume their arguments so component
- * values like 0/49/2 can never read as resets. */
+/** Restore our background only if the final background command cleared it. */
 function reassertBackground(segment: string, bg: string): string {
-  if (!segment.includes("\x1b")) return segment;
-  let out = "";
-  let index = 0;
-  while (index < segment.length) {
-    const char = segment[index]!;
-    if (char === "\x1b" && segment[index + 1] === "[") {
-      const match = /^\x1b\[([0-9;:]*)([a-zA-Z])/.exec(segment.slice(index));
-      if (match && match[2] === "m") {
-        const raw = match[1] ?? "";
-        const colon = raw.includes(":");
-        const parts = raw === "" ? [] : raw.split(";");
-        const hasEmpty = raw === "" || parts.some((p) => p === "");
-        const numeric = parts.map((p) => Number.parseInt(p, 10)).filter(Number.isFinite) as number[];
-        let clearsBg = hasEmpty && !colon;
-        let setsBg = false;
-        for (let i = 0; i < numeric.length && !clearsBg; i++) {
-          const p = numeric[i]!;
-          if (p === 38 || p === 48 || p === 58) {
-            const mode = numeric[i + 1];
-            if (mode === 2) i += 5;
-            else if (mode === 5) i += 3;
-            else i += 1;
-            if (p === 48) setsBg = true;
-          } else if (p === 0) {
-            clearsBg = true;
-          } else if (p === 49) {
-            clearsBg = true;
-          }
-        }
-        out += match[0];
-        if (clearsBg && !setsBg) out += bg;
-        index += match[0].length;
-        continue;
-      }
+  return appendAfterSgr(segment, (commands) => {
+    let cleared = false;
+    for (const code of commands) {
+      if (code === 0 || code === 49) cleared = true;
+      else if (code === 48 || (code >= 40 && code <= 47) || (code >= 100 && code <= 107)) cleared = false;
     }
-    out += char;
-    index += 1;
-  }
-  return out;
+    return cleared ? bg : "";
+  });
 }
 
 export interface SurfaceOps {

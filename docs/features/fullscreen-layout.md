@@ -48,4 +48,4 @@
 
 ## 验证
 
-`test/fullscreen-margin.test.mjs`、`test/history-window.test.mjs`、`test/shell-scroll.test.mjs`（滚动/性能路径）、`scripts/pty-verify.mjs`（真实 TUI 的留白与滚动行为）。
+`test/chrome/fullscreen-margin.test.mjs`、`test/chrome/history-window.test.mjs`、`test/host/shell-scroll.test.mjs`（滚动/性能路径）、`scripts/pty-verify.mjs`（真实 TUI 的留白与滚动行为）。

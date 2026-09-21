@@ -15,7 +15,7 @@ test("partial file merges over defaults; unknown keys are ignored", () => {
     (p) => (p === "/agent/metis-pi.json" ? JSON.stringify({ thinking: { rail: false } }) : undefined),
   );
   assert.equal(config.thinking.rail, false);
-  assert.equal(config.thinking.autoCollapse, DEFAULT_CONFIG.thinking.autoCollapse);
+  assert.equal(config.thinking.completed, DEFAULT_CONFIG.thinking.completed);
   assert.equal(problems.length, 0);
 });
 
@@ -31,3 +31,44 @@ test("top-level enabled=false is the kill switch", () => {
   assert.equal(config.enabled, false);
 });
 
+test("numeric options preserve clamp versus reject boundaries", () => {
+  for (const [section, key, min, max, clamps] of [
+    ["thinking", "peekLines", 1, 40, true],
+    ["working", "animationIntervalMs", 32, 1000, true],
+    ["writePreview", "rows", 0, 64, false],
+    ["quota", "refreshSeconds", 30, 3600, false],
+    ["quota", "timeoutMs", 1000, 60000, false],
+    ["fullscreen", "marginX", 0, 8, false],
+    ["fullscreen", "minWidth", 40, 400, false],
+  ] as const) {
+    const fallback = (DEFAULT_CONFIG[section] as Record<string, unknown>)[key];
+    for (const [value, expected, errors] of [
+      [null, fallback, 0], ["3", fallback, 1],
+      [min, min, 0], [max, max, 0], [min + 0.9, min, 0],
+      [min - 1, clamps ? min : fallback, clamps ? 0 : 1],
+      [max + 1, clamps ? max : fallback, clamps ? 0 : 1],
+    ]) {
+      const { config, problems } = loadConfig("/agent", () => JSON.stringify({ [section]: { [key]: value } }));
+      assert.equal((config[section] as Record<string, unknown>)[key], expected, `${section}.${key}=${value}`);
+      assert.equal(problems.length, errors);
+    }
+  }
+});
+
+test("invalid sections and fields report actual defaults without sharing mutable defaults", () => {
+  const loaded = loadConfig("/agent", () => JSON.stringify({
+    thinking: { completed: "invalid", rail: "false" },
+    composer: false,
+    footer: { enabled: false, details: null, unknown: true },
+    glyphs: { include: ["★", "★", "😀", "ascii", 4] },
+  }));
+  assert.equal(loaded.config.thinking.completed, "collapsed");
+  assert.deepEqual(loaded.config.composer, DEFAULT_CONFIG.composer);
+  assert.deepEqual(loaded.config.footer, { ...DEFAULT_CONFIG.footer, enabled: false });
+  assert.deepEqual(loaded.config.glyphs.include, ["★", "😀"]);
+  assert.equal(loaded.problems.length, 5);
+  assert.match(loaded.problems[0]!, /using "collapsed"/);
+  assert.match(loaded.problems[1]!, /thinking.rail: expected boolean/);
+  loaded.config.glyphs.include.push("✓");
+  assert.deepEqual(loadConfig(undefined).config.glyphs.include, []);
+});

@@ -1,61 +1,10 @@
-import { BINDING_METADATA_READER_SOURCE, BINDING_METADATA_RESTORE_SOURCE } from "./binding-metadata-source.js";
+import { captureBindingsSource } from "./capture-bindings-source.js";
+import { BINDING_METADATA_RESTORE_SOURCE } from "./binding-metadata-source.js";
 import { CHECKPOINT_SCHEMA } from "./checkpoint-format.js";
 import { MAX_PROJECT_MANIFEST_BYTES } from "./project-state-format.js";
 export function checkpointSource(options) {
-    const captures = options.candidates.map((name) => `
-  try {
-    const __value = ${name};
-    let __kind = "value";
-    let __captured = __value;
-    if (typeof __value === "function") {
-      const __source = Function.prototype.toString.call(__value);
-      if (__source.includes("[native code]")) throw new Error("native or bound function");
-      const __candidate = (0, eval)("(" + __source + ")");
-      if (typeof __candidate !== "function") throw new Error("function source did not reanimate");
-      __kind = "function";
-      __captured = __source;
-	  }
-    if (__captured instanceof Promise) __skip(${JSON.stringify(name)}, "promise");
-    else if (__value instanceof WeakMap || __value instanceof WeakSet) __skip(${JSON.stringify(name)}, "weak collection");
-    else {
-      const __bytes = serialize(__captured);
-      if (__bytes.byteLength > __max) __skip(${JSON.stringify(name)}, "exceeds per-variable checkpoint cap");
-      else if (__total + __bytes.byteLength > __max) __skip(${JSON.stringify(name)}, "exceeds total checkpoint cap");
-      else {
-		const __metadata = __readBindingMetadata(__value);
-		await __writeAll(__bytes);
-		__entries.push({
-		  name: ${JSON.stringify(name)},
-		  kind: __kind,
-		  offset: __total,
-		  length: __bytes.byteLength,
-		  ...(__metadata.description === undefined ? {} : { description: __metadata.description }),
-		  ...(__metadata.usage === undefined ? {} : { usage: __metadata.usage }),
-		});
-        __total += __bytes.byteLength;
-      }
-    }
-  } catch (__error) {
-    __skip(${JSON.stringify(name)}, __error instanceof Error ? __error.message : String(__error));
-  }`).join("");
     return `{
-  const { serialize } = await import("node:v8");
-  const __max = ${options.maxBytes};
-  const __entries = [];
-  const __skipped = ${JSON.stringify(options.skippedInvalid)};
-  let __total = 0;
-${BINDING_METADATA_READER_SOURCE}
-  const __skip = (name, reason) => __skipped.push({ name, reason: String(reason).slice(0, 240) });
-	const __file = await Deno.open(${JSON.stringify(options.payloadPath)}, { create: true, write: true, truncate: true, mode: 0o600 });
-	const __writeAll = async (__bytes) => {
-	  let __offset = 0;
-	  while (__offset < __bytes.byteLength) {
-		const __written = await __file.write(__bytes.subarray(__offset));
-		if (__written === 0) throw new Error("checkpoint payload write made no progress");
-		__offset += __written;
-  }
-	};
-	try { ${captures} } finally { __file.close(); }
+${captureBindingsSource(options, "checkpoint")}
   const __manifestPath = ${JSON.stringify(options.manifestPath)};
   const __previousPayload = ${JSON.stringify(options.previousPayload)};
   const __manifest = {

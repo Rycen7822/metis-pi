@@ -1,5 +1,5 @@
 import { normalizeRealtimeV3Voice, normalizeVoiceContextReasoning, REALTIME_V3_VOICES, VOICE_CONTEXT_REASONING_LEVELS, } from "../../adapter/activation/config.js";
-import { setting } from "./config-items-shared.js";
+import { configToggle, setting } from "./config-items-shared.js";
 export function buildVoiceSettings(config, availableContextModels) {
     const contextModels = new Map(availableContextModels.map((model) => [formatContextModel(model), model]));
     const currentContextModel = config.voice.contextModel
@@ -21,45 +21,9 @@ export function buildVoiceSettings(config, availableContextModels) {
                     current.voice.v3Voice,
             },
         })),
-        setting({
-            id: "autoResumeRealtime",
-            description: "Reconnect automatically if an active realtime voice call drops.",
-            label: "Auto-resume realtime voice",
-            currentValue: config.voice.autoResumeRealtime ? "on" : "off",
-            values: ["off", "on"],
-        }, (value, current) => ({
-            ...current,
-            voice: {
-                ...current.voice,
-                autoResumeRealtime: value === "on",
-            },
-        })),
-        setting({
-            id: "delegationAcknowledgements",
-            description: "Let the voice model speak a brief acknowledgement when handing a task to the coding agent.",
-            label: "Speak delegation acknowledgements",
-            currentValue: config.voice.delegationAcknowledgements ? "on" : "off",
-            values: ["off", "on"],
-        }, (value, current) => ({
-            ...current,
-            voice: {
-                ...current.voice,
-                delegationAcknowledgements: value === "on",
-            },
-        })),
-        setting({
-            id: "forwardReasoningSummaries",
-            description: "Let voice relay reasoning summaries as progress when the coding agent has no spoken text update.",
-            label: "Speak reasoning summaries",
-            currentValue: config.voice.forwardReasoningSummaries ? "on" : "off",
-            values: ["off", "on"],
-        }, (value, current) => ({
-            ...current,
-            voice: {
-                ...current.voice,
-                forwardReasoningSummaries: value === "on",
-            },
-        })),
+        configToggle(config, "voice", "autoResumeRealtime", "Auto-resume realtime voice", "Reconnect automatically if an active realtime voice call drops."),
+        configToggle(config, "voice", "delegationAcknowledgements", "Speak delegation acknowledgements", "Let the voice model speak a brief acknowledgement when handing a task to the coding agent."),
+        configToggle(config, "voice", "forwardReasoningSummaries", "Speak reasoning summaries", "Let voice relay reasoning summaries as progress when the coding agent has no spoken text update."),
         setting({
             id: "dictationShortcutMode",
             description: "Hold the shortcut to record and release to finish, or press once to start and again to stop.",

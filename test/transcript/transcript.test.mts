@@ -25,6 +25,33 @@ const IMAGE_NAMES = [
   "trace_results.png.png", "trace_comparison_results.png.png",
 ];
 
+test("message identity and thinking controls survive finalization, duplicate ends and late updates", () => {
+  let now = 10;
+  const state = new TranscriptState(() => now);
+  const source = { role: "assistant", content: [{ type: "thinking", thinking: "working" }] };
+  state.apply({ type: "message_start", message: source }, source);
+  state.apply({ type: "message_update", message: source }, source);
+  const key = state.identityOf(source)!;
+  let cancelled = 0;
+  const control = { cancel: () => { cancelled++; } } as ThinkingViewControl;
+  state.thinkingViewControl(key, 0, () => control);
+  now = 30;
+  state.apply({ type: "message_end", message: source }, source);
+  assert.equal(state.identityOf(source), key);
+  assert.equal(state.thinkingRunPlan(key, 0)?.thinkingMs, 20);
+  now = 60;
+  state.apply({ type: "message_end", message: source }, source);
+  state.apply({ type: "message_update", message: source }, source);
+  assert.equal(state.thinkingRunPlan(key, 0)?.thinkingMs, 20);
+  assert.equal(state.thinkingViewControl(key, 0, () => { throw new Error("control replaced"); }), control);
+  assert.equal(state.registerFinalizedMessage(structuredClone(source), false), key);
+  state.resetSession("next");
+  assert.equal(cancelled, 1);
+  assert.equal(state.identityOf(source), undefined);
+  state.apply({ type: "message_start", message: source }, source);
+  assert.notEqual(state.identityOf(source), key, "an object reused after a session reset gets a fresh identity");
+});
+
 function fakeStateSession() {
   return {
     colorLevel: { kind: "truecolor" },

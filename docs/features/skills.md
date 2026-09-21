@@ -83,4 +83,4 @@
 
 ## 验证
 
-`test/skill-mux.test.mts`（415 行：令牌解析、展开、补全触发）、`test/skill-fold.test.mts`（点击、修饰键、缺失方法）、`test/skill-label.test.mts`（多 skill 名字、退避）；`scripts/pty-verify.mjs` 端到端断言"多 skill 折叠成一条并列出两个名字 + 点击可展开/收起"。
+`test/skill/skill-mux.test.mts`（415 行：令牌解析、展开、补全触发）、`test/skill/skill-fold.test.mts`（点击、修饰键、缺失方法）、`test/skill/skill-label.test.mts`（多 skill 名字、退避）；`scripts/pty-verify.mjs` 端到端断言"多 skill 折叠成一条并列出两个名字 + 点击可展开/收起"。

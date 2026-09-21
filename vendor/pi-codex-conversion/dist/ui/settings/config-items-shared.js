@@ -31,6 +31,12 @@ export function setting(item, update) {
 export function toggle(id, label, current, update, description) {
     return setting({ id, label, currentValue: current ? "on" : "off", values: ["off", "on"], description }, (value, config) => update(value === "on", config));
 }
+/** A single-field toggle reads the displayed snapshot but updates the latest draft. */
+export function configToggle(config, section, key, label, description, id = key) {
+    return toggle(id, label, config[section][key], (enabled, current) => ({
+        ...current, [section]: { ...current[section], [key]: enabled },
+    }), description);
+}
 export function projectCacheKeepalive(id, label, current) {
     return {
         item: {

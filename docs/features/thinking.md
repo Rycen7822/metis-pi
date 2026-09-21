@@ -68,4 +68,4 @@
 
 ## 验证
 
-`test/thinking-view.test.mts`（形态/手势/延迟落地）、`test/transcript.test.mts`（run 与协调）、`scripts/pty-verify.mjs`（真实 TUI：窥视窗行数、提示行、单击/双击、自动折叠、计时增长一致）。
+`test/transcript/thinking-view.test.mts`（形态/手势/延迟落地）、`test/transcript/transcript.test.mts`（run 与协调）、`scripts/pty-verify.mjs`（真实 TUI：窥视窗行数、提示行、单击/双击、自动折叠、计时增长一致）。

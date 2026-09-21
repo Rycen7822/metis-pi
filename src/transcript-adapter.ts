@@ -24,7 +24,7 @@
 // passive while the separator stays active.
 
 import { asRecord } from "./tool-names.ts";
-import { TranscriptState, normalizeMessageBlocks, renderedThinkingRuns, semanticRuns, type SemanticRun, type MessageViewKey } from "./transcript-state.ts";
+import { TranscriptState, normalizeMessageBlocks, semanticRuns, type SemanticRun, type MessageViewKey } from "./transcript-state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "./thinking-view.ts";
 
 const TOOL_SLOT = Symbol.for("Rycen7822.metis-pi.tool-row.v4");
@@ -72,7 +72,6 @@ export interface TranscriptAdapterInput {
    * host shape is not supported (the caller then leaves the node untouched).
    */
   makeRail: ((child: unknown) => unknown) | undefined;
-  /** True when an external owner already renders thinking rails. */
   /**
    * Wrap a thinking body so left clicks drive the run's view state: a single
    * click folds/peeks, a double click toggles peek ↔ full (the control owns the
@@ -263,8 +262,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   // Auto policy state: applied transitions are remembered PER COMPONENT and
   // PER RUN so the policy fires once per lifecycle transition — never on every
   // repaint. This is what keeps manual toggles and Ctrl+T sticky.
-  const streamingApplied = new WeakMap<object, Set<number>>();
-  const completionApplied = new WeakMap<object, Set<number>>();
+  const appliedPhases = new WeakMap<object, Map<number, "streaming" | "completed">>();
 
   // The spacer prototype is stable for the session — build one probe spacer
   // lazily instead of allocating one per rebuild.
@@ -281,19 +279,22 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   const wrapper = function (this: unknown, ...args: unknown[]): void {
     original.apply(this, args);
     if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
+    let view: AssistantView | undefined;
+    try { view = readAssistantView(input, this); } catch { return; }
+    if (!view) return;
     try {
       // A visibility transition needs the host to REBUILD so the run renders
       // under its new hidden state. Call the CAPTURED original (never
       // this.updateContent — no wrapper recursion), at most ONE extra rebuild,
       // only when the override map actually changed.
-      if (input.thinkingPolicy && applyThinkingPolicy(input, this as object, streamingApplied, completionApplied, autoApplied)) {
+      if (input.thinkingPolicy && applyThinkingPolicy(input, view, appliedPhases, autoApplied)) {
         original.apply(this, args);
       }
     } catch {
       // A policy failure must not break the original message display.
     }
     try {
-      coordinateSubtree(input, this as object, getSpacerProto(), rebuild);
+      coordinateSubtree(input, view, getSpacerProto(), rebuild);
     } catch {
       // A presentation failure must not break the original message display.
     }
@@ -324,6 +325,21 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   };
 }
 
+interface AssistantView {
+  component: Record<string, unknown>;
+  planKey: MessageViewKey | undefined;
+  runs: SemanticRun[];
+}
+
+/** Resolve identity and semantic content once per host rebuild; both policy and decoration use it. */
+function readAssistantView(input: TranscriptAdapterInput, component: object): AssistantView | undefined {
+  const record = asRecord(component);
+  const message = asRecord(record.lastMessage);
+  if (message.role !== "assistant") return undefined;
+  const content = normalizeMessageBlocks(message.content);
+  return { component: record, planKey: resolveMessagePlan(input, component, message, content), runs: semanticRuns(content) };
+}
+
 /**
  * Apply the thinking visibility policy to the host's override map. Each
  * transition (a run first renders while active; a run becomes ended) is
@@ -335,14 +351,10 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
  */
 function applyThinkingPolicy(
   input: TranscriptAdapterInput,
-  component: object,
-  streamingApplied: WeakMap<object, Set<number>>,
-  completionApplied: WeakMap<object, Set<number>>,
+  { component: record, planKey: key, runs }: AssistantView,
+  appliedPhases: WeakMap<object, Map<number, "streaming" | "completed">>,
   autoApplied: { count: number },
 ): boolean {
-  const record = asRecord(component);
-  const message = asRecord(record.lastMessage);
-  if (!message || message.role !== "assistant") return false;
   const overrides = record.thinkingVisibilityOverrides;
   if (!overrides || typeof (overrides as Map<number, boolean>).get !== "function" || typeof (overrides as Map<number, boolean>).set !== "function") {
     return false; // host shape changed — native visibility stays in charge
@@ -350,8 +362,6 @@ function applyThinkingPolicy(
   const map = overrides as Map<number, boolean>;
   const policy = input.thinkingPolicy!();
   const hideAll = record.hideThinkingBlock === true;
-  const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : [];
-  const key = resolveMessagePlan(input, component, message, content);
   const apply = (runIndex: number, desired: boolean): boolean => {
     if ((map.get(runIndex) ?? hideAll) !== desired) {
       map.set(runIndex, desired);
@@ -361,39 +371,30 @@ function applyThinkingPolicy(
     return false;
   };
   let changed = false;
-  for (const run of renderedThinkingRuns(normalizeMessageBlocks(content))) {
-    const plan = key !== undefined ? input.state.thinkingRunPlan(key, run.runIndex) : undefined;
-    const ended = plan ? plan.ended : run.endedInContent;
+  let phases = appliedPhases.get(record);
+  if (!phases) appliedPhases.set(record, (phases = new Map()));
+  for (const run of runs) {
+    const runIndex = run.thinkingRunIndex;
+    if (runIndex === undefined) continue;
+    const plan = key !== undefined ? input.state.thinkingRunPlan(key, runIndex) : undefined;
+    const ended = plan ? plan.ended : run.ended === true;
     // Per-run display state (click choice + peek scroll), stored with the run
     // clock so every later rebuild reuses the same one.
     const control = key !== undefined
-      ? input.state.thinkingViewControl(key, run.runIndex, createThinkingViewControl)
+      ? input.state.thinkingViewControl(key, runIndex, createThinkingViewControl)
       : createThinkingViewControl();
-    // Streaming policy: fires when the run first renders WHILE ACTIVE — an
-    // already-ended run (restored history) goes straight to the completion
-    // policy instead.
-    let streaming = streamingApplied.get(component);
-    if (!streaming) streamingApplied.set(component, (streaming = new Set()));
-    if (!streaming.has(run.runIndex)) {
-      streaming.add(run.runIndex);
-      if (!ended && apply(run.runIndex, policy.streaming === "collapsed")) changed = true;
+    const previous = phases.get(runIndex);
+    if (previous === undefined) {
+      phases.set(runIndex, "streaming");
+      if (!ended && apply(runIndex, policy.streaming === "collapsed")) changed = true;
     }
-    // Completion policy: fires once on the active→ended transition and owns the
-    // auto-fold — it forgets a shape the user opened while the run was still
-    // streaming ("clicked it open, it folds when the thought ends") and hides
-    // the run. A forced open (completed=full) only happens when an override
-    // entry already exists; a run hidden only by the host's global
-    // hideThinkingBlock is left alone.
-    if (ended) {
-      let completion = completionApplied.get(component);
-      if (!completion) completionApplied.set(component, (completion = new Set()));
-      if (!completion.has(run.runIndex)) {
-        completion.add(run.runIndex);
-        const desired = policy.completed === "collapsed";
-        const forceOpen = !desired && map.has(run.runIndex);
-        control.foldOnEnd();
-        if ((desired || forceOpen) && apply(run.runIndex, desired)) changed = true;
-      }
+    // Auto-fold once; preserve manual overrides and the host's global hidden state.
+    if (ended && previous !== "completed") {
+      phases.set(runIndex, "completed");
+      const desired = policy.completed === "collapsed";
+      const forceOpen = !desired && map.has(runIndex);
+      control.foldOnEnd();
+      if ((desired || forceOpen) && apply(runIndex, desired)) changed = true;
     }
   }
   return changed;
@@ -406,16 +407,12 @@ function applyThinkingPolicy(
  * and swap the host's collapsed labels for duration summaries.
  * Runs on every rebuild; each pass leaves exactly one matching decoration.
  */
-function coordinateSubtree(input: TranscriptAdapterInput, component: object, spacerProto: object | undefined, rebuild: (target: object) => void): void {
-  const record = component as Record<string, unknown>;
-  const message = asRecord(record.lastMessage);
-  if (!message || message.role !== "assistant") return;
+function coordinateSubtree(input: TranscriptAdapterInput, { component: record, planKey, runs }: AssistantView, spacerProto: object | undefined, rebuild: (target: object) => void): void {
+  const component = record;
   const container = asRecord(record.contentContainer);
   const children = container.children;
   if (!Array.isArray(children)) return;
 
-  const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : [];
-  const planKey = resolveMessagePlan(input, component, message, content);
   const textRunPlan = planKey !== undefined ? input.state.textRunPlan(planKey) : undefined;
 
   // 1) Remove OUR stale decorations from the current subtree (they get
@@ -449,7 +446,6 @@ function coordinateSubtree(input: TranscriptAdapterInput, component: object, spa
   //    builds: [Spacer?] then per content order: Markdown(text) / MouseRegion
   //    (thinking) with optional Spacers between. We match by ORDER of
   //    visible children against content runs — never by string content.
-  const runs = semanticRuns(content);
   const slots = mapChildrenToRuns(children, runs, spacerProto);
 
   // 3) Attach the separator before the FIRST text-run slot (not message top).
@@ -594,7 +590,7 @@ function resolveMessagePlan(
   input: TranscriptAdapterInput,
   component: object,
   message: Record<string, unknown>,
-  content: Array<Record<string, unknown>>,
+  content: ReturnType<typeof normalizeMessageBlocks>,
 ): MessageViewKey | undefined {
   const known = input.state.identityOf(component) ?? input.state.identityOf(message);
   if (known) return known;
@@ -604,7 +600,7 @@ function resolveMessagePlan(
   // whose message object was never anchored (history replay, cold start):
   // the state may already hold the OPEN plan for this message; reuse it
   // instead of sealing a second plan whose followsTools flag would be wrong.
-  const contentBlocks = normalizeMessageBlocks(content);
+  const contentBlocks = content;
   const hasText = contentBlocks.some((block) => block.type === "text" && block.text?.trim() !== "");
   const hasThinking = contentBlocks.some((block) => block.type === "thinking" && block.thinking?.trim() !== "");
   if (!hasText && !hasThinking) return undefined;

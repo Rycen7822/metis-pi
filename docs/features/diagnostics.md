@@ -66,4 +66,4 @@
 
 ## 验证
 
-`test/host-surface.test.mjs`、`test/chrome.test.mjs`（组件状态）、`test/todo-store.test.mts`（坏档/锁/GC）、`scripts/pty-verify.mjs`（真实会话中执行命令并断言输出行）。
+`test/host/host-surface.test.mjs`、`test/chrome/chrome.test.mjs`（组件状态）、`test/todo/todo-store.test.mts`（坏档/锁/GC）、`scripts/pty-verify.mjs`（真实会话中执行命令并断言输出行）。

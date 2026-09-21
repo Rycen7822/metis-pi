@@ -73,9 +73,14 @@ export declare function projectStatePaths(project: string, agentDir: string): {
 };
 export declare function readProjectStateManifest(path: string): ProjectStateManifest | undefined;
 export declare function readProjectStateCandidate(manifestPath: string, payloadPath: string, maxBytes: number): ProjectStateCandidate | undefined;
-export declare function readProjectStatePayload(manifest: ProjectStateManifest, path: string, maxBytes: number): Buffer | undefined;
+export declare function readProjectStatePayload(manifest: Pick<ProjectStateManifest, "entries">, path: string, maxBytes: number): Buffer | undefined;
 export declare function readProjectConflictRecord(path: string): ProjectConflictRecord | undefined;
 export declare function baselineFromProjectManifest(manifest: ProjectStateManifest): ProjectStateBaseline;
 export declare function emptyProjectStateSummary(): ProjectStateSummary;
 export declare function hashStateBytes(bytes: Uint8Array): string;
 export declare function parseProjectBindingMetadata(value: Record<string, unknown>): ProjectBindingMetadata | undefined;
+export declare function parseSkippedBinding(value: unknown): {
+    name: string;
+    reason: string;
+} | undefined;
+export declare function hasPayloadLayout(entries: readonly Pick<ProjectStateEntry, "name" | "offset" | "length">[], path: string, maxBytes: number): boolean;

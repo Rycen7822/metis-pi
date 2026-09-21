@@ -9,23 +9,6 @@ export interface OpenAIResponsesStreamOptions {
     applyServiceTierPricing?: (usage: Usage, serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined) => void;
     onOutputItemDone?: (item: unknown) => void;
 }
-interface ConvertResponsesMessagesOptions {
-    includeSystemPrompt?: boolean | undefined;
-    grammarToolInputProperties?: ReadonlyMap<string, string> | undefined;
-    deferredTools?: ReadonlyMap<string, Tool> | undefined;
-    deferredToolsMode?: "additional-tools" | "tool-search" | undefined;
-    /** Placement from `splitDeferredTools`: later system messages declare their additions in place. */
-    anchorsToolAdditions?: boolean | undefined;
-    /** Model accepts system/developer messages in the middle of the transcript. */
-    supportsMidConvoSystemMessages?: boolean | undefined;
-    /**
-     * Whether `context.messages` starts at the transcript head. Slices that continue a longer
-     * transcript pass false so a leading update is replayed in place instead of being dropped
-     * as the global prompt.
-     */
-    startsAtTranscriptHead?: boolean | undefined;
-    toolOptions?: ConvertResponsesToolsOptions | undefined;
-}
 interface ConvertResponsesToolsOptions {
     strict?: boolean | null | undefined;
     supportsStrictMode?: boolean | undefined;
@@ -34,20 +17,6 @@ interface ConvertResponsesToolsOptions {
 }
 export declare const CODEX_TOOL_CALL_PROVIDERS: Set<string>;
 export type ResponsesToolDeclarationMode = "additional-tools" | "tool-search";
-/** Model capabilities that decide how a transcript is replayed on the wire. */
-export interface ResponsesTranscriptSemantics {
-    /** The model accepts system/developer messages between turns. */
-    supportsMidConvoSystemMessages: boolean;
-    /** How tools declared after the first turn travel; `undefined` when the model has no in-place additions. */
-    deferredToolsMode: ResponsesToolDeclarationMode | undefined;
-    supportsStrictMode: boolean;
-}
-/**
- * Read the transcript semantics a model declares. Every provider-facing path (normal request,
- * compaction serializer, native replay) resolves them here, so the same transcript is replayed
- * the same way and no caller re-invents a second, independent decision.
- */
-export declare function resolveResponsesTranscriptSemantics(model: Model<Api>): ResponsesTranscriptSemantics;
 /**
  * The single tool placement decision for `messages`: which tools the request declares at the top
  * level and which ones its later system messages announce in place. Callers that serialize slices
@@ -56,7 +25,7 @@ export declare function resolveResponsesTranscriptSemantics(model: Model<Api>): 
  */
 export declare function resolveToolPlacement<TApi extends Api>(model: Model<TApi>, messages: TranscriptMessages, startsAtTranscriptHead?: boolean): DeferredToolPlacement;
 /** Everything a provider-facing path needs to replay one transcript. */
-export interface PreparedResponsesTranscript {
+interface PreparedResponsesTranscript {
     /** Provider input items for the transcript; the leading prompt is not part of it. */
     input: ResponseInput;
     /** Complete text of the leading system message, or `""` when the transcript has none. */
@@ -88,21 +57,5 @@ export interface DeferredToolPlacement {
     /** Whether later system messages declare their own additions in place. */
     anchorsAdditions: boolean;
 }
-/**
- * Decide where every current tool is declared: the top-level request field or a later in-place
- * addition. This is the single placement decision for the request — the caller hands it to
- * `convertResponsesMessages`, so the top-level declarations and the in-message additions cannot
- * disagree.
- *
- * Pi 0.86 anchors dynamic tools on system messages (`toolsAdded`); the bundled 3.0.34 transport
- * predates that and used `ToolResultMessage.addedToolNames`. Both shapes are read here so code-mode
- * tool deferral keeps its cache-friendly shape on either host.
- *
- * Removals and same-name redeclarations are not expressible as additions: the request then carries
- * the complete current tool set, and nothing is declared in place (which would duplicate a tool or
- * resurrect a removed one).
- */
-export declare function splitDeferredTools(context: Pick<Context, "messages">, enabled: boolean, startsAtTranscriptHead?: boolean): DeferredToolPlacement;
-export declare function convertResponsesMessages<TApi extends Api>(model: Model<TApi>, context: Context, allowedToolCallProviders: ReadonlySet<string>, options?: ConvertResponsesMessagesOptions): ResponseInput;
 export declare function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[];
 export { processResponsesStream } from "./stream.ts";

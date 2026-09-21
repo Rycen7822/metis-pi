@@ -29,14 +29,26 @@ import {
 } from "./config-values.ts";
 import { normalizeExecutionMode } from "./execution-mode.ts";
 
+type Section = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
+type BooleanFields<T> = { [K in keyof T as T[K] extends boolean ? K : never]: T[K] };
+
+// Default booleans have one rule. Enum/string/optional fields and dependencies stay explicit below.
+function booleans<K extends Section>(section: K, values: Record<string, unknown>): BooleanFields<CodexConversionConfig[K]> {
+	return Object.fromEntries(Object.entries(DEFAULT_CODEX_CONVERSION_CONFIG[section])
+		.filter(([, fallback]) => typeof fallback === "boolean")
+		.map(([key, fallback]) => [key, normalizeBoolean(values[key], fallback as boolean)])) as BooleanFields<CodexConversionConfig[K]>;
+}
+
 export function normalizeCodexConversionConfig(
 	value: unknown,
 ): CodexConversionConfig {
-	if (!isObject(value)) return structuredClone(DEFAULT_CODEX_CONVERSION_CONFIG);
+	const defaults = DEFAULT_CODEX_CONVERSION_CONFIG;
+	if (!isObject(value)) return structuredClone(defaults);
 	const prompt = isObject(value["prompt"]) ? value["prompt"] : {};
 	const scope = isObject(value["scope"]) ? value["scope"] : {};
 	const tools = isObject(value["tools"]) ? value["tools"] : {};
-	const ui = isObject(value["ui"]) ? value["ui"] : {};
+	const ui = { ...(isObject(value["ui"]) ? value["ui"] : {}) };
+	if (typeof ui["toolRenaming"] !== "boolean") ui["toolRenaming"] = ui["toolRendering"];
 	const compaction = isObject(value["compaction"]) ? value["compaction"] : {};
 	const notebook = isObject(value["notebook"]) ? value["notebook"] : {};
 	const voice = isObject(value["voice"]) ? value["voice"] : {};
@@ -47,162 +59,93 @@ export function normalizeCodexConversionConfig(
 	const notebookProfile = normalizeNotebookProfile(notebook["profile"]);
 	const executionMode =
 		normalizeExecutionMode(value["executionMode"]) ??
-		DEFAULT_CODEX_CONVERSION_CONFIG.executionMode;
+		defaults.executionMode;
 	const contextManagement =
 		normalizeContextManagementMode(compaction["contextManagement"]) ??
-		DEFAULT_CODEX_CONVERSION_CONFIG.compaction.contextManagement;
-	const hybridCompaction = contextManagement !== "off" && normalizeBoolean(
-		compaction["hybridCompaction"],
-		DEFAULT_CODEX_CONVERSION_CONFIG.compaction.hybridCompaction,
-	);
-	const responsesCompaction = normalizeBoolean(
-		compaction["responsesCompaction"],
-		DEFAULT_CODEX_CONVERSION_CONFIG.compaction.responsesCompaction,
-	) && contextManagement === "off";
-	return {
+		defaults.compaction.contextManagement;
+	const config: CodexConversionConfig = {
 		executionMode,
 		voiceFeaturesOnly: normalizeBoolean(
 			value["voiceFeaturesOnly"],
-			DEFAULT_CODEX_CONVERSION_CONFIG.voiceFeaturesOnly,
+			defaults.voiceFeaturesOnly,
 		),
 		prompt: {
-			heavySystemPromptOverwrite: normalizeBoolean(
-				prompt["heavySystemPromptOverwrite"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.prompt.heavySystemPromptOverwrite,
-			),
+			...booleans("prompt", prompt),
 		},
 		scope: {
 			allProviders:
 				normalizeAllProvidersMode(scope["allProviders"]) ??
-				DEFAULT_CODEX_CONVERSION_CONFIG.scope["allProviders"],
+				defaults.scope["allProviders"],
 			additionalProviders: normalizeProviderList(scope["additionalProviders"]),
 		},
 		tools: {
-			autoReasoning: normalizeBoolean(tools["autoReasoning"], DEFAULT_CODEX_CONVERSION_CONFIG.tools.autoReasoning),
+			...booleans("tools", tools),
 			customRustBinariesDir: normalizeCustomRustBinariesDir(
 				tools["customRustBinariesDir"],
 			),
-			viewImageFallback: normalizeBoolean(
-				tools["viewImageFallback"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.tools["viewImageFallback"],
-			),
-			applyPatchOnly: normalizeBoolean(
-				tools["applyPatchOnly"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.tools["applyPatchOnly"],
-			),
-			viewImageOnly: normalizeBoolean(
-				tools["viewImageOnly"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.tools["viewImageOnly"],
-			),
 		},
 		ui: {
-			statusLine: normalizeBoolean(
-				ui["statusLine"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["statusLine"],
-			),
-			toolRenaming: normalizeBoolean(
-				ui["toolRenaming"],
-				normalizeBoolean(
-					ui["toolRendering"],
-					DEFAULT_CODEX_CONVERSION_CONFIG.ui["toolRenaming"],
-				),
-			),
+			...booleans("ui", ui),
 			compactTools: normalizeCompactToolsMode(ui["compactTools"])
-				?? DEFAULT_CODEX_CONVERSION_CONFIG.ui.compactTools,
-			codeModeDetails: normalizeBoolean(
-				ui["codeModeDetails"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["codeModeDetails"],
-			),
-			backgroundShellWidget: normalizeBoolean(
-				ui["backgroundShellWidget"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["backgroundShellWidget"],
-			),
+				?? defaults.ui.compactTools,
 			backgroundShellToggleShortcut: normalizeString(
 				ui["backgroundShellToggleShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["backgroundShellToggleShortcut"],
+				defaults.ui["backgroundShellToggleShortcut"],
 			),
 			backgroundShellPrevShortcut: normalizeString(
 				ui["backgroundShellPrevShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["backgroundShellPrevShortcut"],
+				defaults.ui["backgroundShellPrevShortcut"],
 			),
 			backgroundShellNextShortcut: normalizeString(
 				ui["backgroundShellNextShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["backgroundShellNextShortcut"],
+				defaults.ui["backgroundShellNextShortcut"],
 			),
 			backgroundShellCloseShortcut: normalizeString(
 				ui["backgroundShellCloseShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.ui["backgroundShellCloseShortcut"],
+				defaults.ui["backgroundShellCloseShortcut"],
 			),
 		},
 		compaction: {
+			...booleans("compaction", compaction),
 			contextManagement,
-			hybridCompaction,
-			responsesCompaction,
-			portableSummary:
-				normalizeBoolean(
-					compaction["portableSummary"],
-					DEFAULT_CODEX_CONVERSION_CONFIG.compaction["portableSummary"],
-				) && responsesCompaction && contextManagement === "off",
 			v2UserMessageRetention:
 				normalizeV2UserMessageRetention(compaction["v2UserMessageRetention"]) ??
-				DEFAULT_CODEX_CONVERSION_CONFIG.compaction.v2UserMessageRetention,
+				defaults.compaction.v2UserMessageRetention,
 		},
 		notebook: {
+			...booleans("notebook", notebook),
 			maxHeapMiB: normalizeIntegerInRange(
 				notebook["maxHeapMiB"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.notebook.maxHeapMiB,
+				defaults.notebook.maxHeapMiB,
 				MIN_NOTEBOOK_HEAP_MIB,
 				MAX_NOTEBOOK_HEAP_MIB,
-			),
-			plainCommandOutput: normalizeBoolean(
-				notebook["plainCommandOutput"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.notebook.plainCommandOutput,
 			),
 			...(notebookProfile ? { profile: notebookProfile } : {}),
 		},
 		voice: {
+			...booleans("voice", voice),
 			v3Voice:
 				normalizeRealtimeV3Voice(voice["v3Voice"]) ??
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.v3Voice,
-			autoResumeRealtime: normalizeBoolean(
-				voice["autoResumeRealtime"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.autoResumeRealtime,
-			),
-			refreshRealtimeAfterCompaction: normalizeBoolean(
-				voice["refreshRealtimeAfterCompaction"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.refreshRealtimeAfterCompaction,
-			) && contextModel !== undefined,
-			audioSetupCompleted: normalizeBoolean(
-				voice["audioSetupCompleted"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.audioSetupCompleted,
-			),
-			delegationAcknowledgements: normalizeBoolean(
-				voice["delegationAcknowledgements"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.delegationAcknowledgements,
-			),
-			forwardReasoningSummaries: normalizeBoolean(
-				voice["forwardReasoningSummaries"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.forwardReasoningSummaries,
-			),
+				defaults.voice.v3Voice,
 			dictationShortcut: normalizeString(
 				voice["dictationShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.dictationShortcut,
+				defaults.voice.dictationShortcut,
 			),
 			realtimeShortcut: normalizeString(
 				voice["realtimeShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.realtimeShortcut,
+				defaults.voice.realtimeShortcut,
 			),
 			muteShortcut: normalizeString(
 				voice["muteShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.muteShortcut,
+				defaults.voice.muteShortcut,
 			),
 			serverShortcut: normalizeString(
 				voice["serverShortcut"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.serverShortcut,
+				defaults.voice.serverShortcut,
 			),
 			dictationShortcutMode:
 				normalizeDictationShortcutMode(voice["dictationShortcutMode"]) ??
-				DEFAULT_CODEX_CONVERSION_CONFIG.voice.dictationShortcutMode,
+				defaults.voice.dictationShortcutMode,
 			...(contextModel ? { contextModel } : {}),
 			contextReasoning: normalizeVoiceContextReasoning(
 				voice["contextReasoning"],
@@ -211,36 +154,23 @@ export function normalizeCodexConversionConfig(
 			...(outputDevice ? { outputDevice } : {}),
 		},
 		openai: {
-			fast: normalizeBoolean(
-				openai["fast"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai["fast"],
-			),
+			...booleans("openai", openai),
 			verbosity:
 				normalizeCodexVerbosity(openai["verbosity"]) ??
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai["verbosity"],
+				defaults.openai["verbosity"],
 			lunaCacheKeepaliveMinutes:
 				normalizeLunaCacheKeepaliveMinutes(
 					openai["lunaCacheKeepaliveMinutes"],
-				) ?? DEFAULT_CODEX_CONVERSION_CONFIG.openai.lunaCacheKeepaliveMinutes,
-			cacheKeepalive: normalizeBoolean(
-				openai["cacheKeepalive"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai["cacheKeepalive"],
-			),
-			proxyResponsesLite: normalizeBoolean(
-				openai["proxyResponsesLite"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai.proxyResponsesLite,
-			),
-			forceCachedWebSockets: normalizeBoolean(
-				openai["forceCachedWebSockets"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai["forceCachedWebSockets"],
-			),
+				) ?? defaults.openai.lunaCacheKeepaliveMinutes,
 			cacheDiagnostics:
 				normalizeCacheDiagnosticsMode(openai["cacheDiagnostics"]) ??
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai.cacheDiagnostics,
-			harnessIdentifierHeader: normalizeBoolean(
-				openai["harnessIdentifierHeader"],
-				DEFAULT_CODEX_CONVERSION_CONFIG.openai["harnessIdentifierHeader"],
-			),
+				defaults.openai.cacheDiagnostics,
 		},
 	};
+	// Apply dependent switches once, after their own values have been normalized.
+	config.compaction.hybridCompaction &&= contextManagement !== "off";
+	config.compaction.responsesCompaction &&= contextManagement === "off";
+	config.compaction.portableSummary &&= config.compaction.responsesCompaction;
+	config.voice.refreshRealtimeAfterCompaction &&= contextModel !== undefined;
+	return config;
 }

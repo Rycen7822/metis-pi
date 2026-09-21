@@ -5,8 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openTodoStore } from "../../src/todo/store.ts";
-import { createTodoToolHandlers, renderListText } from "../../src/todo/tools.ts";
-import {} from "../../src/todo/commands.ts";
+import { createTodoToolHandlers, renderListText, type CodexTodoSystem } from "../../src/todo/tools.ts";
 
 const makeSystem = (dir: string) => {
   let turn = 3;
@@ -19,7 +18,54 @@ const makeSystem = (dir: string) => {
   return { system, turns: { bump: () => { turn += 1; } }, changed: () => changedCount };
 };
 
-type Execute = ReturnType<typeof createTodoToolHandlers>;
+test("compound updates preserve write notifications and a saved title when the move fails", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "codex-todo-update-"));
+  try {
+    const { system, changed } = makeSystem(dir);
+    const exec = createTodoToolHandlers(system, () => dir);
+    await exec({ action: "add", tasks: [{ title: "a" }, { title: "b" }, { title: "child", parentId: "1" }] }, "s");
+    const moved = await exec({ action: "update", id: "1.1", title: "child", parentId: "2" }, "s");
+    assert.equal(moved.content[0].text, "updated #2.1");
+    assert.equal(changed(), 3);
+    const renamed = await exec({ action: "update", id: "2.1", title: "renamed", parentId: "2" }, "s");
+    assert.equal(renamed.content[0].text, "updated #2.1");
+    assert.equal(changed(), 5);
+    const unchanged = await exec({ action: "update", id: "2.1", title: "renamed", parentId: "2" }, "s");
+    assert.equal(unchanged.content[0].text, "updated #2.1");
+    assert.equal(changed(), 7);
+    const empty = await exec({ action: "update", id: "2.1" }, "s");
+    assert.match(empty.content[0].text, /^No change:/);
+    assert.equal(changed(), 7);
+    await assert.rejects(exec({ action: "update", id: "2.1", title: "saved", parentId: "2.1" }, "s"), /own parent/);
+    assert.equal(system.store.read().tasks.at(-1)?.title, "saved", "title is persisted before the independent move");
+    assert.equal(changed(), 8);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dependency changes preserve paths, no-op handling and mutation notifications", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "codex-todo-dependency-"));
+  try {
+    const { system, changed } = makeSystem(dir);
+    const exec = createTodoToolHandlers(system, () => dir);
+    await exec({ action: "add", tasks: [{ title: "a" }, { title: "b" }] }, "s");
+    for (const [action, phrase, dependencies] of [
+      ["addBlockedBy", "now", [2]], ["removeBlockedBy", "no longer", []],
+    ] as const) {
+      const result = await exec({ action, id: "1", blockedBy: "2" }, "s");
+      assert.equal(result.content[0].text, `#1 is ${phrase} blocked by #2`);
+      assert.deepEqual(system.store.read().tasks[0].blockedBy, dependencies);
+      const before = changed();
+      const noop = await exec({ action, id: "1", blockedBy: "2" }, "s");
+      assert.match(noop.content[0].text, /^no change:/);
+      assert.equal(changed(), before);
+    }
+    assert.equal(changed(), 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("add returns created ids and fires changed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "codex-todo-tools-"));

@@ -39,7 +39,7 @@ export function readProjectStateManifest(path) {
             || value["skipped"].length > MAX_PROJECT_ENTRIES)
             return undefined;
         const entries = value["entries"].map((entry) => parseEntry(entry, Number.MAX_SAFE_INTEGER, true));
-        const skipped = value["skipped"].map(parseSkipped);
+        const skipped = value["skipped"].map(parseSkippedBinding);
         if (entries.some((entry) => !entry) || skipped.some((entry) => !entry))
             return undefined;
         return {
@@ -75,7 +75,7 @@ export function readProjectStateCandidate(manifestPath, payloadPath, maxBytes) {
         if (payloadLength > maxBytes)
             return undefined;
         const entries = value["entries"].map((entry) => parseEntry(entry, payloadLength, false));
-        const skipped = value["skipped"].map(parseSkipped);
+        const skipped = value["skipped"].map(parseSkippedBinding);
         if (entries.some((entry) => !entry) || skipped.some((entry) => !entry))
             return undefined;
         return {
@@ -212,7 +212,7 @@ function parseMetadataText(value, maxBytes, multiline) {
     }
     return value;
 }
-function parseSkipped(value) {
+export function parseSkippedBinding(value) {
     return isRecord(value)
         && typeof value["name"] === "string"
         && Buffer.byteLength(value["name"]) <= MAX_PROJECT_NAME_BYTES
@@ -222,4 +222,23 @@ function parseSkipped(value) {
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+export function hasPayloadLayout(entries, path, maxBytes) {
+    try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes)
+            return false;
+        let offset = 0;
+        const names = new Set();
+        for (const entry of entries) {
+            if (names.has(entry.name) || entry.offset !== offset)
+                return false;
+            names.add(entry.name);
+            offset += entry.length;
+        }
+        return offset === stat.size;
+    }
+    catch {
+        return false;
+    }
 }

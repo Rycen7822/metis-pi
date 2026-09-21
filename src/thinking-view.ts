@@ -94,13 +94,6 @@ export function peekHintText(above: number, below: number, total: number): strin
   return `… ${clipped} lines (scroll · double-click for all)`;
 }
 
-/** Peek window height from config; invalid values fall back rather than throw
- * (the loader reports the problem separately). */
-export function resolvePeekLines(value: unknown, fallback = 6): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.min(40, Math.max(1, Math.trunc(value)));
-}
-
 /** Display state of one reasoning run, shared across host rebuilds.
  *
  * Only a CLICK is stored. Everything else is derived per render from the run's

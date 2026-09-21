@@ -4,16 +4,14 @@ import {
 	LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS,
 	normalizeCodexVerbosity,
 } from "../../adapter/activation/config.ts";
-import { type ConfigSetting, projectCacheKeepalive, setting, toggle } from "./config-items-shared.ts";
+import { type ConfigSetting, configToggle, projectCacheKeepalive, setting } from "./config-items-shared.ts";
 
 export function buildOpenAISettings(
 	config: CodexConversionConfig,
 ): ConfigSetting[] {
 	return [
-		toggle("fast", "Fast mode", config.openai.fast, (enabled, current) => ({
-			...current,
-			openai: { ...current.openai, fast: enabled },
-		}), "Request priority processing where supported. May use more quota or cost more."),
+		configToggle(config, "openai", "fast", "Fast mode",
+			"Request priority processing where supported. May use more quota or cost more."),
 		{
 			item: {
 				id: "lunaCacheKeepaliveMinutes",
@@ -49,26 +47,10 @@ export function buildOpenAISettings(
 				},
 			}),
 		),
-		toggle(
-			"responsesLite",
-			"Proxy Responses Lite",
-			config.openai.proxyResponsesLite,
-			(enabled, current) => ({
-				...current,
-				openai: { ...current.openai, proxyResponsesLite: enabled },
-			}),
-			"Use Responses Lite for supported models on configured proxies in Code or Notebook mode. Requires proxy support.",
-		),
-		toggle(
-			"forceCachedWebSockets",
-			"Cached WebSocket upgrade",
-			config.openai.forceCachedWebSockets,
-			(enabled, current) => ({
-				...current,
-				openai: { ...current.openai, forceCachedWebSockets: enabled },
-			}),
-			"Upgrade explicit WebSocket transport to reuse connections between requests. Leaves SSE unchanged.",
-		),
+		configToggle(config, "openai", "proxyResponsesLite", "Proxy Responses Lite",
+			"Use Responses Lite for supported models on configured proxies in Code or Notebook mode. Requires proxy support.", "responsesLite"),
+		configToggle(config, "openai", "forceCachedWebSockets", "Cached WebSocket upgrade",
+			"Upgrade explicit WebSocket transport to reuse connections between requests. Leaves SSE unchanged."),
 		setting(
 			{
 				id: "harnessIdentifierHeader",

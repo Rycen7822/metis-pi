@@ -104,24 +104,10 @@ export function truncateMiddleRows(
   const headBudget = Math.floor(available / 2);
   const tailBudget = available - headBudget;
 
-  let headRows = 0;
-  let headEnd = 0;
-  const head: VisualRow[] = [];
-  while (headEnd < rows.length) {
-    if (headRows + 1 > headBudget) break;
-    headRows += 1;
-    head.push(rows[headEnd]!);
-    headEnd += 1;
-  }
-  let tailRows = 0;
-  let tailStart = rows.length;
-  const tail: VisualRow[] = [];
-  while (tailStart > headEnd) {
-    if (tailRows + 1 > tailBudget) break;
-    tailRows += 1;
-    tail.unshift(rows[tailStart - 1]!);
-    tailStart -= 1;
-  }
+  const head = rows.slice(0, headBudget);
+  const tailStart = Math.max(head.length, rows.length - Math.floor(tailBudget));
+  const tail = rows.slice(tailStart);
+  const headEnd = head.length;
   const omittedLogicalLines = countLogicalLines(rows.slice(headEnd, tailStart));
   const omittedRows = rows.length - head.length - tail.length;
   const n = Math.max(omittedLogicalLines, omittedRows, 1);

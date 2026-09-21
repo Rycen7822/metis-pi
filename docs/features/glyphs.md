@@ -50,4 +50,4 @@ grep -n "✖\|# fail"     →   ✖# fail        # 反斜杠被笔画盖住
 
 ## 验证
 
-`test/glyph-presentation.test.mts`；host-smoke 的宽度断言；`scripts/pty-verify.mjs` 的"复制逐字精确"用例（确认选择子没有污染复制文本）。
+`test/unit/glyph-presentation.test.mts`；host-smoke 的宽度断言；`scripts/pty-verify.mjs` 的"复制逐字精确"用例（确认选择子没有污染复制文本）。

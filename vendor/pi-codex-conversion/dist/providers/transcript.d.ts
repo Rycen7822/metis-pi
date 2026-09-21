@@ -88,22 +88,6 @@ export declare function declaredToolsOf(context: Context): Tool[];
 export declare function currentToolNamesOf(context: Pick<Context, "messages">): Set<string>;
 /** Whether tool history contains a removal or same-name redeclaration that an addition-only transport cannot replay. */
 export declare function hasNonAdditiveToolChanges(messages: TranscriptMessages): boolean;
-export interface TranscriptTools {
-    /** Tools sent in the top-level request field. */
-    requestTools: Tool[];
-    /**
-     * Whether later system messages carry their own `toolsAdded` as in-place additions.
-     * When false, `requestTools` already holds the complete current tool set.
-     */
-    anchorsAdditions: boolean;
-}
-/**
- * Split tool declarations between the top-level request field and in-place additions.
- * Transports that can anchor additions at a system message keep the initial tools at the
- * top and load later ones where they appear; that only works when no tool was removed or
- * redeclared, so everything else sends the current tool list.
- */
-export declare function resolveTranscriptTools(messages: TranscriptMessages, supportsToolAdditions: boolean, startsAtTranscriptHead?: boolean): TranscriptTools;
 /**
  * Tool names a pre-0.86 transcript recorded on an individual tool result. Pi 0.85 put
  * dynamic tool introductions on `ToolResultMessage.addedToolNames`; 0.86 replaced that
@@ -112,6 +96,4 @@ export declare function resolveTranscriptTools(messages: TranscriptMessages, sup
 export declare function legacyAddedToolNames(message: {
     role: string;
 }): readonly string[];
-/** Tools that later system messages introduce on top of the leading declaration. */
-export declare function getAnchoredToolAdditions(messages: TranscriptMessages, startsAtTranscriptHead?: boolean): Tool[];
 export type { ToolReference };

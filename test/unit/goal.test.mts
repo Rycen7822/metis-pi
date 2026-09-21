@@ -29,7 +29,7 @@ function makeHost() {
 
   const ctx = {
     hasUI: true,
-    sessionManager: { getBranch: () => [], getSessionId: () => "goal-test-session" },
+    sessionManager: { getBranch: (): Array<{ type: string; customType?: string; data?: unknown }> => [], getSessionId: () => "goal-test-session" },
     hasPendingMessages: () => false,
     isIdle: () => true,
     ui: {
@@ -37,7 +37,7 @@ function makeHost() {
       setStatus: (key: string, text: string | undefined) => statusCalls.push({ key, text }),
       notify: () => {},
       confirm: async () => false,
-      editor: async () => undefined,
+      editor: async (): Promise<string | undefined> => undefined,
     },
   };
 
@@ -123,4 +123,74 @@ test("the 1s refresh never double-counts elapsed time", async (t) => {
   const accounts = h.entries.filter((entry) => entry.type === "goal" && entry.data.action === "account");
   assert.equal(accounts.length, 1);
   assert.equal(accounts[0].data.goal.timeUsedSeconds, 3);
+});
+
+test("turn accounting stays with the goal that started the turn and stops at its budget", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
+  const h = makeHost();
+  await h.tool("create_goal", { objective: "old goal" });
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 2);
+  await h.command("clear");
+  await h.tool("create_goal", { objective: "new goal", token_budget: 20 });
+  const messages = [{ role: "assistant", stopReason: "stop", usage: { input: 15, cacheRead: 10, output: 15 } }];
+  await h.fire("agent_end", { messages }, h.ctx);
+  assert.equal((await h.tool("get_goal", {})).details.goal.tokensUsed, 0);
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 3);
+  await h.fire("agent_end", { messages }, h.ctx);
+  const result = (await h.tool("get_goal", {})).details;
+  assert.equal(result.goal.tokensUsed, 20);
+  assert.equal(result.goal.timeUsedSeconds, 3);
+  assert.equal(result.goal.status, "budgetLimited");
+  assert.equal(result.remainingTokens, 0);
+  assert.equal(h.entries.at(-1)?.data.action, "account");
+  const sent = h.sent.length;
+  tick(t, 2);
+  assert.equal(h.sent.length, sent, "a budget-limited goal does not continue");
+});
+
+test("branch restore, paused edits and completion preserve usage and elapsed-time boundaries", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
+  const h = makeHost();
+  await h.tool("create_goal", { objective: "persist me", token_budget: 100 });
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 2);
+  await h.command("pause");
+  const saved = structuredClone(h.entries.at(-1)!.data);
+  h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+  await h.fire("session_tree", {}, h.ctx);
+  h.ctx.ui.editor = async () => "edited while paused";
+  await h.command("edit");
+  tick(t, 3);
+  let goal = (await h.tool("get_goal", {})).details.goal;
+  assert.equal(goal.status, "paused");
+  assert.equal(goal.timeUsedSeconds, 2);
+  assert.equal(goal.objective, "edited while paused");
+  await h.command("resume");
+  await h.fire("agent_start", {}, h.ctx);
+  tick(t, 1);
+  await h.tool("update_goal", { status: "complete" });
+  await h.fire("agent_end", { messages: [{ role: "assistant", usage: { totalTokens: 7 } }] }, h.ctx);
+  goal = (await h.tool("get_goal", {})).details.goal;
+  assert.equal(goal.status, "complete", "final accounting must not reopen a completed goal");
+  assert.equal(goal.tokensUsed, 7);
+  assert.equal(goal.timeUsedSeconds, 3);
+});
+
+test("errors stop continuation and context keeps only the current goal's last continuation", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
+  const h = makeHost();
+  await h.command("keep the right continuation");
+  const first = structuredClone(h.sent.at(-1));
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
+  const last = structuredClone(h.sent.at(-1));
+  const user = { role: "user", content: "keep" };
+  const filtered = await h.fire("context", { messages: [first, user, { customType: "goal-ui" }, last] });
+  assert.deepEqual(filtered.messages, [user, last]);
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "rate limit" }] }, h.ctx);
+  assert.equal((await h.tool("get_goal", {})).details.goal.status, "usageLimited");
+  assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [user]);
 });

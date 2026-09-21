@@ -78,6 +78,19 @@ export function toggle(
 	);
 }
 
+type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
+type BooleanKey<T> = { [K in keyof T]-?: T[K] extends boolean ? K : never }[keyof T] & string;
+
+/** A single-field toggle reads the displayed snapshot but updates the latest draft. */
+export function configToggle<S extends ConfigSection>(
+	config: CodexConversionConfig, section: S, key: BooleanKey<CodexConversionConfig[S]>,
+	label: string, description: string, id: string = key,
+): ConfigSetting {
+	return toggle(id, label, config[section][key] as boolean, (enabled, current) => ({
+		...current, [section]: { ...current[section], [key]: enabled },
+	}), description);
+}
+
 export function projectCacheKeepalive(id: string, label: string, current: boolean): ConfigSetting {
 	return {
 		item: {
