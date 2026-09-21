@@ -185,7 +185,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     const wrap = selectionCopy.wrapPrototypes();
     if (!wrap.installed) {
       // Wrapping failed: keep native copy semantics, no half-applied state.
-      process.stderr.write(`pi-codex-appearance: selection-copy prototypes unavailable (${wrap.details})\n`);
+      process.stderr.write(`metis-pi: selection-copy prototypes unavailable (${wrap.details})\n`);
     }
   }
   // Fullscreen gutters: install retries ride captureTui / agent_start — the
@@ -344,7 +344,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
       renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps),
     });
-    if (!handle.installed) ctx.ui.notify(`pi-codex-appearance: ${handle.reason}. Compact transcript was not installed.`, "warning");
+    if (!handle.installed) ctx.ui.notify(`metis-pi: ${handle.reason}. Compact transcript was not installed.`, "warning");
     // Scoped transcript decorations (member spacing + assistant separator +
     // thinking rail). Failures are reported PER FEATURE; per-member rows,
     // native text and the output dimming keep working regardless.
@@ -371,7 +371,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       const failedFeatures = decorations.features.filter((f) => !f.installed);
       if (failedFeatures.length) {
         const detail = failedFeatures.map((f) => `${f.name}: ${f.reason}`).join("; ");
-        ctx.ui.notify(`pi-codex-appearance: decorations partially unavailable (${detail}).`, "warning");
+        ctx.ui.notify(`metis-pi: decorations partially unavailable (${detail}).`, "warning");
       }
     }
   });

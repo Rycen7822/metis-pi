@@ -262,10 +262,10 @@ const FOOTER_SOURCES_LINE =
 /** Register the `/codex-ui` command (best-effort: absent host API → no-op). */
 export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
   (deps.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
-    description: "pi-codex-appearance capability diagnostics",
+    description: "metis-pi capability diagnostics",
     handler: (args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
       if (!deps.hostData.bound) {
-        commandCtx?.ui?.notify?.("pi-codex-appearance: no active session");
+        commandCtx?.ui?.notify?.("metis-pi: no active session");
         return;
       }
       if (typeof args === "string" && args.trim().toLowerCase() === "refresh-quota") {
@@ -276,7 +276,7 @@ export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
       const appearanceVersion = deps.appearanceVersion ?? "?";
       const piVersion = deps.piVersion ?? "?";
       const lines = [
-        `pi-codex-appearance ${appearanceVersion} diagnostics (mode=${deps.hostData.mode}, pi=${piVersion}, revision=${deps.hostData.revision}):`,
+        `metis-pi ${appearanceVersion} diagnostics (mode=${deps.hostData.mode}, pi=${piVersion}, revision=${deps.hostData.revision}):`,
         composerLine(deps, config),
         workingLine(config, snap),
         FOOTER_SOURCES_LINE,

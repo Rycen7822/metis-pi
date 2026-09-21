@@ -1,6 +1,6 @@
 # Vendored upstream: `@howaboua/pi-codex-conversion`
 
-This directory is a **local copy of one npm package**, vendored into pi-codexy so that pi-codexy
+This directory is a **local copy of one npm package**, vendored into metis-pi so that metis-pi
 owns it: patches live in this repo's git history instead of being wiped by `pi update`.
 
 | | |

@@ -41,7 +41,7 @@ export interface WorkingAnimation {
   intervalMs: number; // clamped 32..1000
 }
 
-export const WORKING_WIDGET_KEY = "pi-codex-appearance:working";
+export const WORKING_WIDGET_KEY = "metis-pi:working";
 export const INTERRUPT_HINT = "esc to interrupt";
 
 export interface WorkingFrame {

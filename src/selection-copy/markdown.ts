@@ -578,8 +578,8 @@ function wrapRenderPrototype<INST extends { text: string }>(
   return true;
 }
 
-export const MARKDOWN_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-markdown");
-export const TEXT_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-text");
+export const MARKDOWN_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-markdown");
+export const TEXT_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-text");
 
 export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolean {
   return wrapRenderPrototype<MarkdownInstance>(prototype, MARKDOWN_COPY_OWNER, deps,

@@ -26,7 +26,7 @@
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 • Ran npm test
-  └ > pi-codex-appearance@0.4.0 test
+  └ > @rycen7822/metis-pi@0.4.0 test
     Running unit tests...
     … +7 lines (ctrl+o to expand)
     pass 93

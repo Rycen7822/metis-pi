@@ -4,8 +4,8 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 const load = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 
 test("theme removes tool backgrounds through the supported palette mechanism", () => {
-  const theme = load("themes/codex-appearance.json");
-  assert.equal(theme.name, "codex-appearance");
+  const theme = load("themes/metis-pi.json");
+  assert.equal(theme.name, "metis-pi");
   for (const key of ["toolPendingBg", "toolSuccessBg", "toolErrorBg"]) assert.equal(theme.colors[key], "");
   for (const value of Object.values(theme.colors)) {
     assert.ok(value === "" || /^#[0-9a-f]{6}$/i.test(value) || Object.hasOwn(theme.vars, value));
@@ -16,7 +16,7 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
 });
 
 test("user messages regain the Codex gray surface through the native theme slot", () => {
-  const theme = load("themes/codex-appearance.json");
+  const theme = load("themes/metis-pi.json");
   // 0.9.2: userMessageBg resolves to a non-empty low-contrast surface via a
   // vars entry (the host's UserMessageComponent paints it through a Box).
   assert.equal(theme.colors.userMessageBg, "userMessageSurface");
@@ -45,7 +45,7 @@ test("package exposes the display, goal, todo and vendored codex-conversion entr
   assert.ok(pkg.files.includes("LICENSE-APACHE-2.0"));
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
-  assert.deepEqual(pkg.pi.themes, ["./themes/codex-appearance.json"]);
+  assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);
   // Runtime dependencies are exactly: marked (the copy-provenance lexer must see the
   // host's token stream, pinned to the version pi-tui uses) plus the vendored
   // codex-conversion's own runtime deps, declared so pi installs them for the git
@@ -70,7 +70,7 @@ test("display runtime has no registration, result mutation or tool activation; c
     }
   };
   walk(rootUrl, "src/");
-  // Scope: the codex-appearance display runtime only (src/** minus src/todo/).
+  // Scope: the metis-pi display runtime only (src/** minus src/todo/).
   // goal.ts (extensions/goal.ts) is the one deliberate non-display entry — it
   // registers /goal, the goal tools and the session/context hooks those
   // features need — and is covered by goal.test.mts. src/todo/ is the

@@ -2,7 +2,7 @@
   "name": "@howaboua/pi-codex-conversion",
   "version": "3.0.34",
   "private": true,
-  "description": "Vendored runtime of @howaboua/pi-codex-conversion, rebuilt and maintained inside pi-codexy (see UPSTREAM.md / PATCHES.md).",
+  "description": "Vendored runtime of @howaboua/pi-codex-conversion, rebuilt and maintained inside metis-pi (see UPSTREAM.md / PATCHES.md).",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

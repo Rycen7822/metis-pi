@@ -9,11 +9,11 @@ for command in git gh node; do
 done
 node --input-type=module -e '
 import { readFileSync } from "node:fs";
-if (JSON.parse(readFileSync("package.json", "utf8")).name !== "@rycen7822/pi-codex-appearance") process.exit(1);
+if (JSON.parse(readFileSync("package.json", "utf8")).name !== "@rycen7822/metis-pi") process.exit(1);
 '
 login="$(gh api user --jq .login)"
 [[ "$login" == "Rycen7822" ]] || { printf 'Expected Rycen7822, got %s. Stopping.\n' "$login" >&2; exit 1; }
-repo="$login/pi-codex-appearance"
+repo="$login/metis-pi"
 probe="$(mktemp)"
 trap 'rm -f "$probe"' EXIT
 if gh api "repos/$repo" --silent 2>"$probe"; then
@@ -31,7 +31,7 @@ git init -b main
 # Exact allowlist: no directory globbing, staged leftovers, local settings or credentials.
 git add -- \
   index.ts src/adapter.ts src/extension.ts src/renderers.ts \
-  themes/codex-appearance.json \
+  themes/metis-pi.json \
   test/adapter.test.mjs test/helpers.mjs test/package.test.mjs test/renderers.test.mjs \
   scripts/host-smoke.mjs scripts/publish-github.sh scripts/preview.mjs \
   package.json tsconfig.json tsconfig.core.json \

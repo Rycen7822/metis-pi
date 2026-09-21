@@ -30,9 +30,9 @@ interface ContainerLike {
 
 type RenderFn<W, R> = (this: W, width: number) => R;
 
-export const MOUSE_REGION_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-mouse-region");
-export const BOX_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-box");
-export const CONTAINER_COPY_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.copy-container");
+export const MOUSE_REGION_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-mouse-region");
+export const BOX_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-box");
+export const CONTAINER_COPY_OWNER = Symbol.for("Rycen7822.metis-pi.copy-container");
 
 /** MouseRegion forwards its child's exact row array but does not inherit a
  * wrapped render method. Publish that array without adding another render or

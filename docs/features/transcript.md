@@ -48,7 +48,7 @@
 `src/adapter.ts` 不注册工具、不替换执行、不加 context 中间件、不 patch TUI 根渲染器。它只装饰宿主 `ToolExecutionComponent` 原型的四个方法：三个 renderer/shell selector（`getCallRenderer`、`getResultRenderer`、`getRenderShell`）与该组件自身的 `render`。
 
 - **安装前逐字校验**：三个 selector 的**函数源码**必须与预期字符串一致，`render` 的方法体必须含 `this.selfRenderContainer.render(`、`this.selfRenderHeight=`、`this.imageComponents` 三个标记；任何一个不符 → 直接退避（`skipped(reason)`），启动时给出警告而不是默默声称已启用。
-- **自己的占位标记**：`Symbol.for("Rycen7822.pi-codex-appearance.tool-view.v2")` 作为原型自有属性，第二份副本会退避。
+- **自己的占位标记**：`Symbol.for("Rycen7822.metis-pi.tool-view.v2")` 作为原型自有属性，第二份副本会退避。
 - **来源核对**：只有 `sourceInfo.source === "builtin"` 且 `path === "<builtin:name>"` 的工具才使用新 renderer。FFF / LSP 等覆盖同名工具的插件不受影响。
 - **只在首次实际绘制时切 self-shell**：默认构造的子组件树保持原样，因此卸载/禁用可以还原原生卡片，不需要剪切 children、不改写鼠标命中、不动图片协议。
 - **每帧核对归属**：`ownsMethods()` 用身份比较确认原型上仍是自己的包装；后来者替换了就立即停止接管，卸载时也不会覆盖后来者。

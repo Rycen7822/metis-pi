@@ -5,7 +5,7 @@
 ## 文件位置
 
 ```
-<agent dir>/codex-appearance.json
+<agent dir>/metis-pi.json
 ```
 
 `<agent dir>` 的解析顺序（`extensions/appearance.ts` 的 `getAgentDir`）：
@@ -180,7 +180,7 @@
 只想关掉显示入口里的某一项时，也可以只在 `~/.pi/agent/settings.json` 里过滤扩展入口（`-` 前缀 = 强制排除），例如不要 goal：
 
 ```jsonc
-{ "source": "git:git@github.com:Rycen7822/pi-codexy.git", "extensions": ["-goal.ts"] }
+{ "source": "git:git@github.com:Rycen7822/metis-pi.git", "extensions": ["-goal.ts"] }
 ```
 
 ## 验证

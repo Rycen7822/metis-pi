@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/earendil-works/pi/v0.85.1/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
-  "name": "codex-appearance",
+  "name": "metis-pi",
   "vars": {
     "muted": "#a3a3a3",
     "dim": "#737373",

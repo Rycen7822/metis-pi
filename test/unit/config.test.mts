@@ -12,7 +12,7 @@ test("missing file yields defaults", () => {
 test("partial file merges over defaults; unknown keys are ignored", () => {
   const { config, problems } = loadConfig(
     "/agent",
-    (p) => (p === "/agent/codex-appearance.json" ? JSON.stringify({ thinking: { rail: false } }) : undefined),
+    (p) => (p === "/agent/metis-pi.json" ? JSON.stringify({ thinking: { rail: false } }) : undefined),
   );
   assert.equal(config.thinking.rail, false);
   assert.equal(config.thinking.autoCollapse, DEFAULT_CONFIG.thinking.autoCollapse);

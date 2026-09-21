@@ -8,7 +8,7 @@
 // mode is never touched, and a root mounted before install is wrapped
 // retroactively by re-dispatching it through the setter.
 
-export const FULLSCREEN_MARGIN_OWNER = Symbol.for("Rycen7822.pi-codex-appearance.fullscreen-margin");
+export const FULLSCREEN_MARGIN_OWNER = Symbol.for("Rycen7822.metis-pi.fullscreen-margin");
 
 interface ViewportLike {
   width?: unknown;

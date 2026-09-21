@@ -1,12 +1,12 @@
 {
-  "name": "@rycen7822/pi-codex-appearance",
+  "name": "@rycen7822/metis-pi",
   "version": "0.19.5",
   "description": "Display-only Codex-style compact transcript for Pi, including width-aware Codex diff surfaces",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Rycen7822/pi-codex-appearance.git"
+    "url": "git+https://github.com/Rycen7822/metis-pi.git"
   },
   "pi": {
     "extensions": [
@@ -14,7 +14,7 @@
       "./vendor/pi-codex-conversion/dist/index.js"
     ],
     "themes": [
-      "./themes/codex-appearance.json"
+      "./themes/metis-pi.json"
     ]
   },
   "scripts": {

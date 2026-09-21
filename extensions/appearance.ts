@@ -166,7 +166,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
   if (!prototype || typeof Tui.Text !== "function" || typeof Pi.keyHint !== "function"
       || typeof Tui.wrapTextWithAnsi !== "function" || typeof Tui.visibleWidth !== "function") {
     pi.on("session_start", (_event, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify("pi-codex-appearance: unsupported Pi UI exports; compact transcript was not installed.", "warning");
+      if (ctx.hasUI) ctx.ui.notify("metis-pi: unsupported Pi UI exports; compact transcript was not installed.", "warning");
     });
     return;
   }

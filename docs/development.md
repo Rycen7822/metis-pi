@@ -17,11 +17,11 @@ npm install --ignore-scripts --no-audit --no-fund
 ## 装到 pi 里
 
 ```bash
-pi install /绝对路径/pi-codex-appearance      # 本目录
+pi install /绝对路径/metis-pi      # 本目录
 # 或从 git / npm 源安装（见 pi 的 packages 文档）
 ```
 
-重启 pi 后紧凑转录**默认生效**，无需另开 optional 扩展。主题在 `/settings` 里选 `codex-appearance`（或直接写 `~/.pi/agent/settings.json` 的 `"theme"` 字段）。
+重启 pi 后紧凑转录**默认生效**，无需另开 optional 扩展。主题在 `/settings` 里选 `metis-pi`（或直接写 `~/.pi/agent/settings.json` 的 `"theme"` 字段）。
 
 > **注意**：以 git 源安装时，pi 只装**生产依赖**（不装 devDependencies）。因此 `npm test` 在安装副本里会有若干条因缺 `@earendil-works/*` 而失败的用例——那是环境造成，不是回归；完整套件必须在开发检出里跑。
 

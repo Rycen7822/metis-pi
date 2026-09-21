@@ -6,7 +6,7 @@
 | --- | --- |
 | 入口 | `extensions/skill-mux.ts`（输入展开）、`extensions/skill-entry.ts`（两个显示补丁的入口） |
 | 实现 | `src/skill-mux.ts`、`src/skill-tokens.ts`（令牌解析 + 补丁守卫）、`src/skill-fold.ts`（点击折叠）、`src/skill-label.ts`（名字补全） |
-| 配置 | 无（不受 `codex-appearance.json` 控制） |
+| 配置 | 无（不受 `metis-pi.json` 控制） |
 
 ## 令牌语法
 

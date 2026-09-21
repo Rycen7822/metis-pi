@@ -73,7 +73,7 @@ export function releaseCopyCache(component: object): void {
  * either resolves the product built for exactly these rows or misses (native
  * extraction) — a stale product can never attach to new rows.
  */
-export const LAST_ROWS = Symbol.for("Rycen7822.pi-codex-appearance.last-rendered-rows");
+export const LAST_ROWS = Symbol.for("Rycen7822.metis-pi.last-rendered-rows");
 
 export function publishRows(component: object, rows: readonly string[]): void {
   (component as Record<symbol, unknown>)[LAST_ROWS] = rows;

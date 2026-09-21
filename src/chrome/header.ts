@@ -15,7 +15,7 @@ export interface HeaderDeps {
 
 export function headerLines(deps: HeaderDeps): string[] {
   const lines: string[] = [];
-  lines.push(`Pi ${deps.piVersion} · codex-appearance ${deps.appearanceVersion}`);
+  lines.push(`Pi ${deps.piVersion} · metis-pi ${deps.appearanceVersion}`);
   const model = deps.getModel()?.id;
   const dir = deps.getCwd();
   const second = [model, dir].filter(Boolean).join(" · ");

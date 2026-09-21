@@ -17,7 +17,7 @@ import { COMPOSER_META_WIDGET_KEY } from "./composer-metadata.ts";
 import type { SnapshotSource } from "./snapshots.ts";
 
 /** Agent-dir status slot used by the transient settled-summary line. */
-export const SUMMARY_STATUS_KEY = "pi-codex-appearance:summary";
+export const SUMMARY_STATUS_KEY = "metis-pi:summary";
 
 type ChromeMods = typeof import("./editor.ts") & typeof import("./footer.ts") & typeof import("./header.ts")
   & typeof import("./working.ts") & typeof import("./composer-metadata.ts");

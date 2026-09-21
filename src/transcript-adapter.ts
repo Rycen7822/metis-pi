@@ -27,10 +27,10 @@ import { asRecord } from "./tool-names.ts";
 import { TranscriptState, normalizeMessageBlocks, renderedThinkingRuns, semanticRuns, type SemanticRun, type MessageViewKey } from "./transcript-state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "./thinking-view.ts";
 
-const TOOL_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-row.v4");
-const ASSISTANT_SLOT = Symbol.for("Rycen7822.pi-codex-appearance.assistant-deco.v2");
-const THOUGHT_LABEL = Symbol.for("Rycen7822.pi-codex-appearance.thought-label.v1");
-const CLICK_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.thinking-click.v1");
+const TOOL_SLOT = Symbol.for("Rycen7822.metis-pi.tool-row.v4");
+const ASSISTANT_SLOT = Symbol.for("Rycen7822.metis-pi.assistant-deco.v2");
+const THOUGHT_LABEL = Symbol.for("Rycen7822.metis-pi.thought-label.v1");
+const CLICK_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-click.v1");
 
 /** Per-feature install diagnostics (never aggregate with .some()). */
 export interface DecorationFeature {
@@ -121,8 +121,8 @@ export interface TranscriptAdapterInput {
  * resilient to trailing code changes, strict about its identity). */
 const UPDATE_DISPLAY_HEAD = "letbgFn=this.isPartial?";
 const UPDATE_DISPLAY_HEAD_ALT = "constbgFn=this.isPartial?(";
-const RAIL_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.thinking-rail");
-const SEP_SYMBOL = Symbol.for("Rycen7822.pi-codex-appearance.separator");
+const RAIL_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-rail");
+const SEP_SYMBOL = Symbol.for("Rycen7822.metis-pi.separator");
 
 export function installTranscriptDecorations(input: TranscriptAdapterInput): DecorationHandle {
   const features: DecorationFeature[] = [];

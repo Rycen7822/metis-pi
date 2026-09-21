@@ -60,7 +60,7 @@
 
 | 路径 | 写入者 | 说明 |
 | --- | --- | --- |
-| `<agent dir>/codex-appearance.json` | 用户 | 配置。**本插件只读，永不改写** |
+| `<agent dir>/metis-pi.json` | 用户 | 配置。**本插件只读，永不改写** |
 | `<cwd>/.pi/codex-todos/tasks.json` | todo | 任务列表（带 `version` 字段、原子写）。可用 `PI_CODEX_TODO_PATH` 整体搬迁 |
 | `<cwd>/.pi/codex-todos/tasks.json.bak-<ts>` | todo | 损坏存档（`/todos-doctor` 可查） |
 | `<cwd>/.pi/codex-todos/tasks.lock` | todo | 跨进程文件锁，`0600` + `wx` 独占创建，TTL 30 分钟 |

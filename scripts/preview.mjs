@@ -11,7 +11,7 @@ import { TranscriptState } from "../src/transcript-state.ts";
 import { renderShellCall, renderShellResult } from "../src/shell.ts";
 import { renderWritePreview } from "../src/write-preview.ts";
 const root = new URL("../", import.meta.url);
-const palette = JSON.parse(readFileSync(new URL("themes/codex-appearance.json", root), "utf8"));
+const palette = JSON.parse(readFileSync(new URL("themes/metis-pi.json", root), "utf8"));
 function hexColor(key) {
   let value = palette.colors[key] || "#e5e7eb";
   for (let i = 0; i < 8 && !value.startsWith("#"); i++) value = palette.vars[value] || "#e5e7eb";
@@ -159,7 +159,7 @@ function lifecycle(name, args, value, context = {}) {
 const longOld = "来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，旧实现保留重复路径并把推断混入事实。";
 const longNew = "来源摘要必须由 Domain、Engine、jobs、Store、projections 等模块共同确认，不复制 provider 或调度逻辑，保持单一事实来源。";
 const testOutput = [
-  "> pi-codex-appearance@0.4.0 test", "Running unit tests...",
+  "> @rycen7822/metis-pi@0.4.0 test", "Running unit tests...",
   "fixture 1", "fixture 2", "fixture 3", "fixture 4", "fixture 5", "fixture 6",
   "tests 93", "pass 93", "fail 0",
 ].join("\n");
@@ -294,7 +294,7 @@ function ansiHtml(text) {
 }
 const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Codex appearance 0.5 — renderer snapshot</title>
 <style>body{margin:0;background:#0c0c0c;color:#e5e7eb;font:14px/1.55 ui-monospace,"DejaVu Sans Mono",Consolas,monospace}.label{padding:18px 28px;border-bottom:1px solid #27272a;color:#a1a1aa;font:12px/1.5 system-ui,sans-serif;letter-spacing:.03em}pre{white-space:pre;margin:0;padding:26px 28px 32px;tab-size:3;overflow:hidden}.note{padding:0 28px 24px;color:#888;font:12px/1.5 system-ui,sans-serif}</style>
-<div class="label">pi-codex-appearance 0.5.0 · GENERATED FORMATTER/LAYOUT SNAPSHOT · NOT A LIVE PI SESSION</div>
+<div class="label">metis-pi 0.5.0 · GENERATED FORMATTER/LAYOUT SNAPSHOT · NOT A LIVE PI SESSION</div>
 <pre>${ansiHtml(transcriptOut)}</pre><div class="note">Every row above goes through the production two-slot combination (renderCall = header, renderResult = body) — the same entry points the Pi adapter invokes. Shell rows use the width-aware Codex exec-cell layout (Mocha bash palette, "  │ " continuation, "  └ " output with middle truncation); write rows exercise Added/unchanged/unavailable/failed; the edit block uses the single diff renderer.</div></html>`;
 mkdirSync(new URL("docs/", root), { recursive: true });
 writeFileSync(new URL("docs/transcript.ansi", root), transcriptOut);

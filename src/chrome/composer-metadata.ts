@@ -9,7 +9,7 @@
 import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
 import { formatCount, joined, realizeRow, type RowPlan, type Segment } from "../segments.ts";
 
-export const COMPOSER_META_WIDGET_KEY = "pi-codex-appearance:composer-meta";
+export const COMPOSER_META_WIDGET_KEY = "metis-pi:composer-meta";
 
 export interface ComposerMetaSnapshot {
   model: ModelSnapshot | undefined;

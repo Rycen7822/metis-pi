@@ -25,7 +25,7 @@ export interface AppearanceConfig {
   glyphs: { textPresentation: boolean; include: string[] };
 }
 
-const CONFIG_FILE = "codex-appearance.json";
+const CONFIG_FILE = "metis-pi.json";
 
 export const DEFAULT_CONFIG: AppearanceConfig = {
   enabled: true,

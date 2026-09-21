@@ -1,7 +1,7 @@
 // goal.test.mts — the vendored goal extension (goal.ts).
 // Upstream recomputes the footer status only at goal lifecycle events, so a goal
 // running inside one long agent run stayed frozen at "Pursuing goal (0s)" until a
-// state transition. pi-codexy's patch adds a 1s refresh (syncStatusTimer). These
+// state transition. metis-pi's patch adds a 1s refresh (syncStatusTimer). These
 // cases drive the real extension against a stub Pi host under Node mock timers and
 // pin the refresh, its stop conditions, and that reading the snapshot every second
 // never double-counts elapsed time.

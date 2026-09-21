@@ -25,11 +25,11 @@ const strip = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pcx-theme-"));
 fs.mkdirSync(path.join(agentDir, "themes"), { recursive: true });
 fs.copyFileSync(
-  new URL("../../themes/codex-appearance.json", import.meta.url).pathname,
-  path.join(agentDir, "themes", "codex-appearance.json"),
+  new URL("../../themes/metis-pi.json", import.meta.url).pathname,
+  path.join(agentDir, "themes", "metis-pi.json"),
 );
 process.env.PI_CODING_AGENT_DIR = agentDir;
-Core.initTheme("codex-appearance", false);
+Core.initTheme("metis-pi", false);
 
 test("real UserMessageComponent paints the gray surface from the native theme slot", () => {
   const text = "帮我看看这段很长的用户消息在终端宽度下如何折行，背景应当铺满每一行包括右侧内边距，并且不能泄漏到下一块。";

@@ -5,7 +5,7 @@
  * appended as custom session entries and reconstructed from the active branch
  * on reload/tree navigation; no external database is used.
  *
- * Vendored into pi-codexy from mitsuhiko/agent-stuff extensions/goal.ts @122e299
+ * Vendored into metis-pi from mitsuhiko/agent-stuff extensions/goal.ts @122e299
  * (Apache-2.0 — see LICENSE-APACHE-2.0 and NOTICE) and modified here:
  * syncStatusTimer() refreshes the footer status once a second while a goal is active, so the
  * elapsed time ticks during long agent runs, where no goal event fires in between.

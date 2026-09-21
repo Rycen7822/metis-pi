@@ -37,7 +37,7 @@ function tempDir(t: TestContext, prefix: string): string {
 
 /** Minimal repo marker so findGitDir() accepts the directory. */
 function fakeRepo(t: TestContext): string {
-  const dir = tempDir(t, "pi-codexy-git-");
+  const dir = tempDir(t, "metis-pi-git-");
   mkdirSync(join(dir, ".git"));
   return dir;
 }
@@ -52,7 +52,7 @@ function git(cwd: string, ...args: string[]): void {
 
 /** A real repo with one commit and a clean tree. */
 function realRepo(t: TestContext): string {
-  const dir = tempDir(t, "pi-codexy-real-");
+  const dir = tempDir(t, "metis-pi-real-");
   git(dir, "init", "-q");
   writeFileSync(join(dir, "a.txt"), "one\ntwo\nthree\n");
   git(dir, "add", "-A");
@@ -99,7 +99,7 @@ test("untracked paths split on NUL, ignoring the trailing empty entry", () => {
 });
 
 test("readLineCount streams: text, no trailing newline, binary, oversized, missing", async (t) => {
-  const dir = tempDir(t, "pi-codexy-lines-");
+  const dir = tempDir(t, "metis-pi-lines-");
   const text = join(dir, "text.txt");
   writeFileSync(text, "a\nb\n");
   assert.deepEqual(await readLineCount(text), { lines: 2, size: 4, mtimeMs: statSync(text).mtimeMs });

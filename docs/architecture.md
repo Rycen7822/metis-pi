@@ -9,7 +9,7 @@
 ```jsonc
 "pi": {
   "extensions": ["./extensions/*.ts", "./vendor/pi-codex-conversion/dist/index.js"],
-  "themes": ["./themes/codex-appearance.json"]
+  "themes": ["./themes/metis-pi.json"]
 }
 ```
 
@@ -33,7 +33,7 @@
 | `vendor/pi-codex-conversion/` | 内置 Codex 转换层（源码 + 提交进 git 的 `dist/` + patch 记账） |
 | `test/` | 单元/集成/宿主形状测试（`*.test.mjs` / `*.test.mts`） |
 | `scripts/` | 预览、真实 PTY 验证、宿主 smoke、vendor 工具、性能测量、发布脚本 |
-| `themes/codex-appearance.json` | 配套主题 |
+| `themes/metis-pi.json` | 配套主题 |
 | `docs/` | **本手册** + 旧实施计划 + `preview.*` 生成物 |
 | `VALIDATION.md` | 逐版本验证记录（证据，不是功能文档） |
 | `CHANGELOG.md` | 版本差异 |

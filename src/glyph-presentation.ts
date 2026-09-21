@@ -28,7 +28,7 @@
 //   * the fast path is a single regex probe, so a frame with none of these
 //     glyphs costs one scan and is passed through by identity.
 
-const OWNER = Symbol.for("Rycen7822.pi-codex-appearance.glyph-presentation.v1");
+const OWNER = Symbol.for("Rycen7822.metis-pi.glyph-presentation.v1");
 
 /**
  * Marks a terminal may render from an emoji font, which monospace fonts

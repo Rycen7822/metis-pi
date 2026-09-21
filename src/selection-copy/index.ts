@@ -219,7 +219,7 @@ export interface CopyControllerDeps {
   prototypePatchedByOther(): string | undefined;
 }
 
-const OWNER = Symbol.for("Rycen7822.pi-codex-appearance.selection-serializer");
+const OWNER = Symbol.for("Rycen7822.metis-pi.selection-serializer");
 
 /** Install the exact serializer on the TuiAltScreen PROTOTYPE. The host hands
  * extensions a Proxy facade (createInteractiveTuiReference) whose target is an
@@ -304,7 +304,7 @@ export function installInstanceSerializer(tui: AltScreenLike, deps: CopyControll
     configurable: true,
     enumerable: false,
   });
-  Object.defineProperty(replacement, "ownerMarker", { value: "pi-codex-appearance", enumerable: false });
+  Object.defineProperty(replacement, "ownerMarker", { value: "metis-pi", enumerable: false });
   prototype[OWNER] = true;
   return true;
 }
@@ -313,7 +313,7 @@ export function installInstanceSerializer(tui: AltScreenLike, deps: CopyControll
 export function serializerIsLive(tui: AltScreenLike): boolean {
   const prototype = Object.getPrototypeOf(tui) as Record<string, unknown>;
   const method = prototype?.getActiveSelectionText as { ownerMarker?: string } | undefined;
-  return method?.ownerMarker === "pi-codex-appearance";
+  return method?.ownerMarker === "metis-pi";
 }
 
 function scrollContentLinesOf(tui: AltScreenLike, scrollView: unknown): readonly string[] | undefined {

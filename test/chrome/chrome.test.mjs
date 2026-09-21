@@ -138,7 +138,7 @@ test("REAL shape → activation → composer metadata + footer, all fields from 
   await tick();
 
   await t.test("composer metadata widget: model/effort/provider/context", () => {
-    const call = widgetByKey(slots, "pi-codex-appearance:composer-meta");
+    const call = widgetByKey(slots, "metis-pi:composer-meta");
     assert.ok(call, "metadata widget installed below the editor");
     assert.deepEqual(call.options, { placement: "belowEditor" });
     const component = call.content({ requestRender() {} }, { fg: (_k, text) => text });
@@ -171,7 +171,7 @@ test("REAL shape → activation → composer metadata + footer, all fields from 
     wrapped.model = { id: "switched-model", provider: "other-provider", contextWindow: 2_000_000 };
     wrapped.getContextUsage = () => ({ tokens: 172_000, contextWindow: 2_000_000, percent: 8.6 });
     handlers.get("model_select")({ type: "model_select" });
-    const call = widgetByKey(slots, "pi-codex-appearance:composer-meta");
+    const call = widgetByKey(slots, "metis-pi:composer-meta");
     const after = plain(call.content({ requestRender() {} }, { fg: (_k, text) => text }).render(120).join("\n"));
     assert.ok(after.includes("switched-model"), "new model id visible");
     assert.ok(after.includes("other-provider"), "new provider visible");
@@ -397,11 +397,11 @@ test("Working widget: above-editor placement, Codex format, native loader hidden
   const { ctx } = realShapeCtx();
   handlers.get("session_start")({}, wrapUi(ctx));
   await tick();
-  assert.ok(slots.widgetCalls.some((c) => c.key === "pi-codex-appearance:working"), "widget key registered");
+  assert.ok(slots.widgetCalls.some((c) => c.key === "metis-pi:working"), "widget key registered");
   assert.equal(slots.workingVisible.at(-1), false, "native loader hidden only after widget install");
 
   handlers.get("agent_start")({}, {});
-  const installCall = widgetByKey(slots, "pi-codex-appearance:working");
+  const installCall = widgetByKey(slots, "metis-pi:working");
   assert.ok(installCall, "widget shown for the active interaction");
   assert.deepEqual(installCall.options, { placement: "aboveEditor" });
 
@@ -425,7 +425,7 @@ test("Working widget: above-editor placement, Codex format, native loader hidden
   handlers.get("message_end")({ message: { role: "assistant", content: [], stopReason: "stop", usage: { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0 } } });
   handlers.get("agent_settled")({}, {});
   assert.equal(slots.widgetCalls.at(-1).content, undefined, "widget cleared at settle");
-  assert.equal(slots.statuses.get("pi-codex-appearance:summary"), undefined, "persist=true → CustomEntry path");
+  assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persist=true → CustomEntry path");
 });
 
 test("outcome through REAL handlers: mid-run tool error then clean stop = Worked (not Failed)", async () => {
@@ -535,14 +535,14 @@ test("header component: real identity, never impersonates OpenAI", async () => {
   };
   const component = createHeaderComponent(deps, { fg: (_k, t) => t });
   const joined = component.render(80).join("\n");
-  assert.ok(joined.includes("codex-appearance"), "own identity shown");
+  assert.ok(joined.includes("metis-pi"), "own identity shown");
   assert.ok(joined.includes("test-model"), "real model id shown");
   assert.ok(!/OpenAI/i.test(joined), "never claims OpenAI");
 });
 
 /** Real repo: one tracked edit (−1/+2) plus one untracked file (+2). */
 function makeRepo(t) {
-  const dir = mkdtempSync(join(tmpdir(), "pi-codexy-chrome-"));
+  const dir = mkdtempSync(join(tmpdir(), "metis-pi-chrome-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", args, {
     cwd: dir,

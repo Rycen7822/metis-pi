@@ -40,7 +40,7 @@
 不需要目标模式时，给本包加一条只含显示入口的过滤即可：
 
 ```jsonc
-{ "source": "git:git@github.com:Rycen7822/pi-codexy.git", "extensions": ["-goal.ts"] }
+{ "source": "git:git@github.com:Rycen7822/metis-pi.git", "extensions": ["-goal.ts"] }
 ```
 
 ## 代码位置

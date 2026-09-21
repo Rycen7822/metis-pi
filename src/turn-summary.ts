@@ -15,7 +15,7 @@ import type { InteractionOutcome, TerminalEvidence } from "./interaction-outcome
 import { resolveThemePainter } from "./palette.ts";
 import { clipLine } from "./segments.ts";
 
-export const SUMMARY_CUSTOM_TYPE = "pi-codex-appearance:interaction-summary:v1";
+export const SUMMARY_CUSTOM_TYPE = "metis-pi:interaction-summary:v1";
 
 export type SummaryOutcome = InteractionOutcome | "completed-estimate";
 

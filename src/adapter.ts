@@ -3,7 +3,7 @@ import { publishRows } from "./selection-copy/model.ts";
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.
 // No tool registration, execution replacement, context middleware or TUI root patch.
-const SLOT = Symbol.for("Rycen7822.pi-codex-appearance.tool-view.v2");
+const SLOT = Symbol.for("Rycen7822.metis-pi.tool-view.v2");
 const SELECTORS = ["getCallRenderer", "getResultRenderer", "getRenderShell"] as const;
 const METHODS = [...SELECTORS, "render"] as const;
 type Method = typeof METHODS[number];

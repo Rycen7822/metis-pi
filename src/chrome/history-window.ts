@@ -2,7 +2,7 @@ import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyPr
 
 export const HISTORY_ROW_BUDGET = 5000;
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
-const OWNER = Symbol.for("Rycen7822.pi-codex-appearance.history-window");
+const OWNER = Symbol.for("Rycen7822.metis-pi.history-window");
 
 interface Component {
   render(width: number): string[];

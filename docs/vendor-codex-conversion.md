@@ -2,7 +2,7 @@
 
 `vendor/pi-codex-conversion/` 是 npm 包 `@howaboua/pi-codex-conversion` 的本地整包副本（上游版本
 **3.0.34**，来自 monorepo `github.com/IgorWarzocha/howaboua-pi-stuff` 的 `packages/pi-codex-conversion`，
-MIT）。纳入本仓库是为了让 patch 落在 pi-codexy 的 git 里、不被 `pi update` 覆盖。pi 通过根
+MIT）。纳入本仓库是为了让 patch 落在 metis-pi 的 git 里、不被 `pi update` 覆盖。pi 通过根
 `package.json` 的 `pi.extensions` 条目 `./vendor/pi-codex-conversion/dist/index.js` 直接加载它；
 该入口 default-export 一个扩展工厂，内部先注册 changelog，再调用 `registerCodexConversion`
 （`src/extension/register.ts`，组合根）。上游自身约定见同目录 `UPSTREAM-AGENTS.md`、

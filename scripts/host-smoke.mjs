@@ -159,7 +159,7 @@ assert.ok(codexUi, "/codex-ui command registered");
 const notified = [];
 codexUi.handler("", { ui: { notify: (t) => notified.push(t) } });
 const diagnostics = notified.join("\n");
-assert.match(diagnostics, /pi-codex-appearance [\w.-]+ diagnostics \(mode=\w+, pi=[\w.-]+/);
+assert.match(diagnostics, /metis-pi [\w.-]+ diagnostics \(mode=\w+, pi=[\w.-]+/);
 assert.match(diagnostics, /thinking=peek\/collapsed/, "effective thinking policy surfaced (peek/collapsed default)");
 assert.match(diagnostics, /thinking: policy=peek\/collapsed peekLines=6 autoVisibility=\d+/, "0.9.2 thinking policy + 0.12.0 peek height + applied-transition count");
 assert.match(diagnostics, /composer: surface=\S+.*prefix=\S+ metadata=\S+/);
@@ -169,7 +169,7 @@ assert.match(diagnostics, /chrome: editor=\S+ footer=\S+ header=\S+ working=\S+/
 assert.match(diagnostics, /transcript:/);
 assert.match(diagnostics, /decorations:/);
 assert.match(diagnostics, /outcome: /);
-assert.ok(registeredEntryRenderers.some((r) => r.type === "pi-codex-appearance:interaction-summary:v1"), "summary entry renderer registered");
+assert.ok(registeredEntryRenderers.some((r) => r.type === "metis-pi:interaction-summary:v1"), "summary entry renderer registered");
 
 // ---- 9b. TUI-mode chrome install: widget above editor, native loader hidden --
 const chromeSlots = {
@@ -199,9 +199,9 @@ handlers.get("session_start")({}, {
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
 assert.equal(chromeSlots.workingVisible.at(-1), false, "native loader hidden after widget install");
-assert.ok(chromeSlots.widgets.some((c) => c.key === "pi-codex-appearance:composer-meta" && c.content !== undefined),
+assert.ok(chromeSlots.widgets.some((c) => c.key === "metis-pi:composer-meta" && c.content !== undefined),
   "composer metadata widget installed below the editor");
-const metaComponent = chromeSlots.widgets.find((c) => c.key === "pi-codex-appearance:composer-meta" && c.content !== undefined)
+const metaComponent = chromeSlots.widgets.find((c) => c.key === "metis-pi:composer-meta" && c.content !== undefined)
   .content({ requestRender() {} }, { fg: (_k, t) => t });
 const metaFrame = metaComponent.render(120).join("\n");
 const metaPlain = metaFrame.replace(/\x1b\[[0-9;]*m/g, "");
@@ -213,9 +213,9 @@ assert.match(metaPlain, /1\.2%/, "metadata context percent");
 // While idle the widget row is hidden (setWidget(undefined)); agent_start
 // shows it for the active interaction.
 handlers.get("agent_start")({ type: "agent_start" }, {});
-const showCall = chromeSlots.widgets.find((c) => c.content !== undefined && c.key === "pi-codex-appearance:working");
+const showCall = chromeSlots.widgets.find((c) => c.content !== undefined && c.key === "metis-pi:working");
 assert.ok(showCall, "widget shown for the active interaction");
-assert.equal(showCall.key, "pi-codex-appearance:working");
+assert.equal(showCall.key, "metis-pi:working");
 assert.deepEqual(showCall.options, { placement: "aboveEditor" });
 // The installed footer renders the REAL host fields.
 assert.ok(chromeSlots.footers.length >= 1, "footer factory installed");
@@ -236,15 +236,15 @@ handlers.get("agent_settled")({ type: "agent_settled" }, {});
 assert.equal(chromeSlots.widgets.at(-1).content, undefined, "widget cleared at settle");
 
 // ---- 10. agent lifecycle drives the interaction clock ------------------------
-const summariesBefore = appendedEntries.filter((e) => e.type === "pi-codex-appearance:interaction-summary:v1").length;
+const summariesBefore = appendedEntries.filter((e) => e.type === "metis-pi:interaction-summary:v1").length;
 handlers.get("agent_start")({ type: "agent_start" }, {});
 handlers.get("message_start")({ type: "message_start", message: { role: "assistant", content: [] } }, {});
 handlers.get("message_update")({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] } }, {});
 handlers.get("message_end")({ type: "message_end", message: { role: "assistant", content: [], stopReason: "stop", usage: { input: 50, output: 10, cacheRead: 0, cacheWrite: 0 } } });
 handlers.get("agent_settled")({ type: "agent_settled" }, {});
 // Summary recorded only when config.summary.enabled — default config in the
-// smoke path has no codex-appearance.json, so defaults apply.
-const summariesAfter = appendedEntries.filter((e) => e.type === "pi-codex-appearance:interaction-summary:v1").length;
+// smoke path has no metis-pi.json, so defaults apply.
+const summariesAfter = appendedEntries.filter((e) => e.type === "metis-pi:interaction-summary:v1").length;
 assert.equal(summariesAfter - summariesBefore, 1, "exactly one summary per settled interaction");
 const lastSummary = appendedEntries.at(-1).data;
 assert.equal(lastSummary.schemaVersion, 2, "0.8.4 writes the v2 runtime verdict schema");
@@ -275,7 +275,7 @@ assert.doesNotMatch(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "body h
 // double-click window, then the run renders as its peek window (the whole body
 // here, since it fits). The gesture layer is the region's child, outside the
 // host's own node.
-const THINKING_CLICK = Symbol.for("Rycen7822.pi-codex-appearance.thinking-click.v1");
+const THINKING_CLICK = Symbol.for("Rycen7822.metis-pi.thinking-click.v1");
 regionOf(thinkComp).handleMouse({ type: "click", button: "left", x: 5, y: 0 });
 assert.doesNotMatch(thinkFrame(thinkComp), /EXPANDED_THINKING_SENTINEL/, "the click waits for a possible second one");
 await new Promise((resolve) => setTimeout(resolve, 500));

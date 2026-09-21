@@ -1,4 +1,4 @@
-# pi-codex-appearance
+# metis-pi
 
 **默认启用的 Codex 风格工具转录界面。** 安装后，Pi 原生工具使用紧凑工具行、运行状态、探索记录、折叠输出与 diff 预览。模型、工具执行与上下文处理保持原有路径。
 
@@ -15,7 +15,7 @@
 
 既有能力保留：运行时终止证据判定（v2 摘要 schema：stop=Worked / error=Failed / aborted=Interrupted / length=Ended·output limit / 证据不足=Ended；旧 v1 `failed` 显示 `legacy status unverified`，历史不改写）、极简真实身份启动头（运行时读取真实版本号）、`agent_start`→`agent_settled` 单一交互时钟、`Worked for … · thought for … · ↑↓` 结束摘要（可随会话恢复；`summary.persist:false` 走 footer 状态行临时路径）、thinking 光条（**0.12.0 起默认 `peek/collapsed`**：流式期间只显示最新的 6 行思路窗口，滚轮在窗口内滚动，结束后自动折叠；单击在折叠 ↔ 6 行窗口之间切换，双击在 6 行窗口 ↔ 全展开之间切换，Ctrl+T 仍是全局显示/隐藏）、write 实时预览（结构化标题 + 物理行尾部预算）、文档/代码 edit 整行背景 diff surface、探索分组。以 openai/codex 固定参考提交 1b83e5c 为视觉与行为 reference，全部仅作用于显示层。
 
-配置：`~/.pi/agent/codex-appearance.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `thinking.streaming`（`peek`/`full`/`collapsed`，默认 `peek`）/ `thinking.completed`（`collapsed`/`full`，默认 `collapsed`）/ `thinking.peekLines`（1..40，默认 6）/ `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showChanges` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` / `glyphs.textPresentation`（默认 true）/ `glyphs.include`（追加字符）可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
+配置：`~/.pi/agent/metis-pi.json`（可省略，非法值回退默认、用户文件永不改写）。`enabled: false` 为总开关；`composer.surface` / `composer.promptPrefix` / `composer.metadata` / `thinking.rail` / `thinking.streaming`（`peek`/`full`/`collapsed`，默认 `peek`）/ `thinking.completed`（`collapsed`/`full`，默认 `collapsed`）/ `thinking.peekLines`（1..40，默认 6）/ `writePreview.enabled` / `writePreview.rows` / `working.elapsed` / `working.thought` / `working.tool` / `working.tokens`（默认 false）/ `working.animation` / `working.animationIntervalMs`（32..1000，默认 32）/ `footer.enabled` / `footer.details` / `footer.showCache` / `footer.showChanges` / `footer.showCodexQuota` / `footer.showSpeed`（默认 true） / `quota.codex`（auto/on/off）/ `quota.refreshSeconds`（30..3600，默认 120）/ `quota.timeoutMs`（默认 8000）/ `summary.enabled` / `summary.persist` / `selectionCopy.enabled` / `selectionCopy.ctrlC` / `glyphs.textPresentation`（默认 true）/ `glyphs.include`（追加字符）可分别关闭。诊断命令：`/codex-ui`（各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态；`/codex-ui refresh-quota` 手动刷新额度）。
 
 **统计口径（三个范围不混淆）**：`ctx …` 是当前上下文占用（宿主实时接口）；`Σ` 是本 session 文件已记录的标准 usage 累计（assistant 消息 + compaction/branch_summary；本插件自己的摘要 CustomEntry 不计回）；`cache(last)` 是活动分支最近一条已确认请求的命中率 `cacheRead/(input+cacheRead+cacheWrite)`，session 加权比率在 `/codex-ui` 可查；`↑`/`↓` 沿用 Pi 归一化口径的 `usage.input`/`usage.output`（input 为不含缓存的输入）；`tok/s` 是**当前或最近一次 assistant 回复**的 `usage.output ÷ 观测输出窗口`（首个→末个流式 delta，排除 TTFT；无非流式 delta 时退回 `message_start`→`message_end`），窗口 <300ms、无已确认 output token 或速率越界时整段不显示（`/codex-ui` 同时给出 token 数与窗口长度，`scope` 区分流式中实时值与 `message_end` 确认值）；`+A -D` 是**本 session 观察到的累计改动量（churn）**：每次读取都把每个变更路径的**内容**与此前观察到的内容做真实 diff 并**累加** —— 加了 14 行、后来又删掉这 14 行，计 `+14` 与 `-14`（不会被抵消，删掉自己刚写的行同样计入删除）；session 第一次读取是**内容基线**（之前的未提交改动不算你的，而此后的编辑精确计入，**哪怕编辑发生在既有未提交改动内部**）；HEAD 移动（commit / amend / rebase / pull）时把**已提交的部分折掉**，工作区干净（无 diff、无未跟踪文件）时归零；只统计**绝对**新增与绝对删除 —— 文件 A `+11 -9`、文件 B `+6 -5` 就是 `+17 -14`，永远不会被压成净变化 `+3 -0`；数字不做 k/M 缩写。所有写入者一视同仁：agent 的工具、bash/sed/python 脚本、另一个终端，都从**内容**读取（不经任何工具记账）。内容比较用 `git hash-object -w --no-filters`（写进 session 私有临时对象库）加 `git diff --numstat <旧 blob> <新 blob>`：**绝不写用户的 index / 工作区 / 对象库**，也不触发 diff 驱动或 smudge 过滤器（`--no-filters`）。未跟踪文件按 ≤200 个、单个 ≤256 KiB 流式计数（按 size+mtime 缓存，未变不重读）；git 调用有 5 秒超时与 `--no-ext-diff --no-textconv --no-optional-locks`，读取失败保留上一次正确数字而不是清零。节奏：2 秒轮询 + agent 活动触发的 250ms 去抖刷新。`/codex-ui` 的 `git-changes` 行同时给出 churn 总量、已读取次数与**工作区 vs HEAD 的原始值**（可用 `git diff --numstat` 自行对账）。未知值显示 `—`，从不伪造为 0。
 
@@ -56,15 +56,15 @@
 解压本版本压缩包，然后执行：
 
 ```bash
-pi install /绝对路径/pi-codex-appearance
+pi install /绝对路径/metis-pi
 ```
 
 重新启动 Pi。**紧凑转录布局默认生效，无需另行启用 optional 扩展。**
 
-在 `/settings` 选择 `codex-appearance` 可同时应用中性配色。也可以只修改现有 `~/.pi/agent/settings.json` 的这个字段，保留其他内容：
+在 `/settings` 选择 `metis-pi` 可同时应用中性配色。也可以只修改现有 `~/.pi/agent/settings.json` 的这个字段，保留其他内容：
 
 ```json
-"theme": "codex-appearance"
+"theme": "metis-pi"
 ```
 
 原生工具采用 self-shell，因此即便仍使用原有 `dark` 主题，也会移除这些工具的外层卡片。第三方工具自带的布局继续保留；配套主题可以统一使用主题 token 的背景色，但不会强行覆盖插件硬编码的颜色。
@@ -82,7 +82,7 @@ pi install /绝对路径/pi-codex-appearance
 本扩展是本包唯一的非显示层入口：它注册 `/goal` 命令、三个目标工具，并监听 `session_start` / `session_tree` / `before_agent_start` / `agent_start` / `agent_end` / `context`。`index.ts` 与 `src/**` 的“不注册工具、不改写结果与上下文”边界不变（`test/package.test.mjs` 显式限定该范围）。不需要目标模式时，给本包加一条只含显示入口的过滤即可：
 
 ```json
-{ "source": "git:git@github.com:Rycen7822/pi-codexy.git", "extensions": ["-goal.ts"] }
+{ "source": "git:git@github.com:Rycen7822/metis-pi.git", "extensions": ["-goal.ts"] }
 ```
 
 ## 思考块交互（0.12.0）
