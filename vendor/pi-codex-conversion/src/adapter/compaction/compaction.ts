@@ -2,6 +2,7 @@ import { type CompactionResult, type ExtensionAPI, type ExtensionContext, type S
 import { clampThinkingLevel, type Api, type Model, type ModelThinkingLevel, type Tool } from "@earendil-works/pi-ai";
 import { findLatestNativeCompactionEntryIndex, resolveLatestNativeCompactionEntry, type LatestNativeCompactionResolution } from "./details-store.ts";
 import { rewriteResponsesPayloadWithNativeReplay, resolveReplayedToolPlacement, serializeLiveTailToResponsesInput } from "../replay/payload-rewrite.ts";
+import { applyContextEdits, inspectCheckpointWindow } from "../replay/context-edits.ts";
 import { DEFAULT_SUPPORTED_PROVIDERS, isResponsesCompatiblePayload, resolveNativeCompactionEnvironment, type ResponsesCompatibleRequestPayload } from "./compaction-runtime.ts";
 import {
 	serializeActiveSessionHistory,
@@ -12,7 +13,7 @@ import {
 import { createNativeCompactionDetails, createNativeCompactionShimResult, hasPortableNativeCompactionSummary, NATIVE_COMPACTION_SHIM_SUMMARY, type NativeCompactionEntry } from "../compaction/types.ts";
 import { isResponsesContext } from "../prompt/codex-model.ts";
 import { isCodeModeRuntime, resolveCodexRuntimePlanForState } from "../activation/runtime-plan.ts";
-import type { AdapterState } from "../activation/state.ts";
+import type { AdapterState, PendingPiCompactionNativeWindow } from "../activation/state.ts";
 import { executeRemoteCompactionV2 } from "./remote-v2-client.ts";
 import { buildRemoteCompactionV2Window } from "./remote-v2-history.ts";
 import { CODE_MODE_EXEC_GRAMMAR_INPUTS } from "../../tools/code-mode/exec-contract.ts";
@@ -42,9 +43,31 @@ export function resolveOpaqueNativeCompactionFallbackEntry(
 	runtime: { provider: string; api: string; baseUrl: string },
 ): NativeCompactionEntry | undefined {
 	const latest = resolveLatestNativeCompactionEntry(branchEntries, runtime);
-	return latest.ok && !hasPortableNativeCompactionSummary(latest.entry)
-		? latest.entry
-		: undefined;
+	if (!latest.ok || hasPortableNativeCompactionSummary(latest.entry)) return undefined;
+	return inspectCheckpointWindow({
+		branchEntries,
+		checkpoint: latest.entry,
+		checkpointIndex: latest.index,
+	}).ok ? latest.entry : undefined;
+}
+
+/** The window a checkpoint can hand to a summarization request, or undefined when it cannot be used. */
+function buildNativeFallbackWindow(
+	ctx: ExtensionContext,
+	branchEntries: ReturnType<ExtensionContext["sessionManager"]["getBranch"]>,
+	runtime: { provider: string; api: string; baseUrl: string },
+): PendingPiCompactionNativeWindow | undefined {
+	const nativeEntry = resolveOpaqueNativeCompactionFallbackEntry(branchEntries, runtime);
+	const window = cloneCompactedWindow(nativeEntry?.details?.compactedWindow ?? []);
+	if (!window || window.length === 0) return undefined;
+	return {
+		window,
+		provider: runtime.provider,
+		api: runtime.api,
+		baseUrl: runtime.baseUrl,
+		sessionId: ctx.sessionManager.getSessionId(),
+		sourceCompactionEntryId: nativeEntry?.id,
+	};
 }
 
 function stashLatestNativeWindowForPiCompactionFallback(
@@ -53,19 +76,8 @@ function stashLatestNativeWindowForPiCompactionFallback(
 	runtime: { provider: string; api: string; baseUrl: string },
 	state: AdapterState,
 ): boolean {
-	state.pendingPiCompactionNativeWindow = undefined;
-	const nativeEntry = resolveOpaqueNativeCompactionFallbackEntry(branchEntries, runtime);
-	const compactedWindow = cloneCompactedWindow(nativeEntry?.details?.compactedWindow ?? []);
-	if (!compactedWindow || compactedWindow.length === 0) return false;
-	state.pendingPiCompactionNativeWindow = {
-		window: compactedWindow,
-		provider: runtime.provider,
-		api: runtime.api,
-		baseUrl: runtime.baseUrl,
-		sessionId: ctx.sessionManager.getSessionId(),
-		sourceCompactionEntryId: nativeEntry?.id,
-	};
-	return true;
+	state.pendingPiCompactionNativeWindow = buildNativeFallbackWindow(ctx, branchEntries, runtime);
+	return state.pendingPiCompactionNativeWindow !== undefined;
 }
 
 function cloneCompactedWindow(window: readonly unknown[]): ResponsesInputItem[] | undefined {
@@ -151,6 +163,17 @@ function getSupportedNativeCompactionProviders(state: AdapterState): string[] {
 	return [...new Set([...DEFAULT_SUPPORTED_PROVIDERS, ...state.config.scope.additionalProviders])];
 }
 
+/** A checkpoint build either produces a request history or names why it cannot. */
+export type NativeCompactionInputResult =
+	| {
+			ok: true;
+			input: ResponsesInputItem[];
+			compactedKeptWindow: boolean;
+			tools: Tool[];
+			checkpointReused: boolean;
+	  }
+	| { ok: false; reason: "first-kept-entry-not-found" | "invalid-compacted-window" };
+
 export function buildNativeCompactionInput(args: {
 	model: Model<Api>;
 	branchEntries: SessionEntry[];
@@ -158,32 +181,53 @@ export function buildNativeCompactionInput(args: {
 	leafId?: string | null | undefined;
 	latestNativeCompaction: LatestNativeCompactionResolution;
 	serializationOptions?: SerializeResponsesMessagesOptions | undefined;
-}): { input: ResponsesInputItem[]; compactedKeptWindow: boolean; tools: Tool[] } | undefined {
+}): NativeCompactionInputResult {
 	if (args.latestNativeCompaction.ok) {
-		const compactedWindow = cloneCompactedWindow(args.latestNativeCompaction.entry.details?.compactedWindow ?? []);
-		if (!compactedWindow) return undefined;
-		const liveTailEntries = args.branchEntries.slice(args.latestNativeCompaction.index + 1);
-		// The replayed transcript starts at the checkpoint's stored system message, so the request's
-		// top-level tools and the tail's in-place additions both come from this one placement.
-		const toolPlacement = resolveReplayedToolPlacement({
-			model: args.model,
-			checkpointSystemMessage: args.latestNativeCompaction.entry.systemMessage,
-			entries: liveTailEntries,
+		const checkpoint = args.latestNativeCompaction;
+		// The boundary and the absorbed edits are one decision. Edits the checkpoint already
+		// absorbed stay reusable; a later edit to a kept-window target cannot be written into the
+		// opaque window, so that input is rebuilt from the effective context below.
+		const window = inspectCheckpointWindow({
+			branchEntries: args.branchEntries,
+			checkpoint: checkpoint.entry,
+			checkpointIndex: checkpoint.index,
 		});
-		return {
-			input: [
-				...compactedWindow,
-				...serializeLiveTailToResponsesInput({
-					model: args.model,
-					entries: liveTailEntries,
-					serializationOptions: { ...args.serializationOptions, toolPlacement },
-				}),
-			],
-			compactedKeptWindow: false,
-			tools: toolPlacement.immediate,
-		};
+		if (!window.ok && window.reason === "first-kept-entry-not-found") {
+			// Rebuilding would silently drop the encrypted history this checkpoint holds; the caller
+			// cancels with this reason instead of sending a window it cannot place.
+			return { ok: false, reason: window.reason };
+		}
+		if (window.ok) {
+			const compactedWindow = cloneCompactedWindow(checkpoint.entry.details?.compactedWindow ?? []);
+			if (!compactedWindow) return { ok: false, reason: "invalid-compacted-window" };
+			const liveTailEntries = args.branchEntries.slice(checkpoint.index + 1);
+			const editableTailEntries = applyContextEdits(liveTailEntries, window.edits);
+			// The replayed transcript starts at the checkpoint's stored system message, so the request's
+			// top-level tools and the tail's in-place additions both come from this one placement.
+			const toolPlacement = resolveReplayedToolPlacement({
+				model: args.model,
+				checkpointSystemMessage: checkpoint.entry.systemMessage,
+				entries: editableTailEntries,
+			});
+			return {
+				ok: true,
+				input: [
+					...compactedWindow,
+					...serializeLiveTailToResponsesInput({
+						model: args.model,
+						entries: editableTailEntries,
+						serializationOptions: { ...args.serializationOptions, toolPlacement },
+					}),
+				],
+				compactedKeptWindow: false,
+				tools: toolPlacement.immediate,
+				checkpointReused: true,
+			};
+		}
 	}
 
+	// A fresh session and an invalidated checkpoint share the effective-history reconstruction:
+	// the host's projection already applies context edits and keeps system/tool state in order.
 	const history = serializeActiveSessionHistory({
 		model: args.model,
 		entries: args.allEntries,
@@ -191,9 +235,11 @@ export function buildNativeCompactionInput(args: {
 		options: args.serializationOptions,
 	});
 	return {
+		ok: true,
 		input: history.input,
 		compactedKeptWindow: true,
 		tools: history.toolPlacement.immediate,
+		checkpointReused: false,
 	};
 }
 
@@ -220,9 +266,13 @@ export async function handleCodexSessionBeforeCompact(event: SessionBeforeCompac
 		return undefined;
 	}
 
+	// Every attempt decides its own fallback window; a window stashed for an abandoned attempt must
+	// not survive into this one.
+	state.pendingPiCompactionNativeWindow = undefined;
 	try {
 		return await handleCodexSessionBeforeCompactInner(event, ctx, state, pi);
 	} catch (error) {
+		state.pendingPiCompactionNativeWindow = undefined;
 		const message = error instanceof Error ? error.message : String(error);
 		ctx.ui.notify(`OpenAI native compaction failed unexpectedly: ${message}; Pi compaction was not run.`, "error");
 		return { cancel: true };
@@ -271,30 +321,9 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		ctx.ui.notify("OpenAI native compaction cannot reuse the latest checkpoint with this provider or endpoint; compaction was cancelled to preserve its encrypted history.", "error");
 		return { cancel: true };
 	}
-	let portableCompaction: CompactionResult | undefined;
-	if (state.config.compaction.portableSummary) {
-		const stashedOpaqueWindow = stashLatestNativeWindowForPiCompactionFallback(ctx, branchEntries, runtime, state);
-		try {
-			const result = await runPortablePiCompaction(event, {
-				model: compactionTargetModel,
-				thinkingLevel: ctx.thinkingLevel,
-				apiKey: runtime.apiKey,
-				headers: runtime.headers,
-				env: runtime.env,
-				onPayload: async (payload) => (
-					await injectPendingNativeWindowIntoPiCompactionRequest(payload, ctx, state)
-				) ?? payload,
-			});
-			if (stashedOpaqueWindow && state.pendingPiCompactionNativeWindow) {
-				throw new Error("the previous native checkpoint was not included in the summarization request");
-			}
-			portableCompaction = result;
-		} catch (error) {
-			if (event.signal.aborted) return { cancel: true };
-			const message = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Portable Pi summary failed (${message}); native compaction will continue without it.`, "warning");
-		}
-	}
+	// The deterministic checkpoint judgment runs before any summary request. An unresolvable boundary
+	// or an unclonable window cancels here, so neither the optional portable summary nor the native
+	// attempt can put a request on the wire for a checkpoint the handler cannot reuse.
 	const builtInput = buildNativeCompactionInput({
 		model: compactionTargetModel,
 		branchEntries,
@@ -303,9 +332,45 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		latestNativeCompaction,
 		serializationOptions,
 	});
-	if (!builtInput) {
-		ctx.ui.notify("OpenAI native compaction could not clone the previous compacted window; Pi compaction was not run.", "error");
+	if (!builtInput.ok) {
+		ctx.ui.notify(
+			builtInput.reason === "first-kept-entry-not-found"
+				? "OpenAI native compaction cannot reuse the latest checkpoint: its first-kept boundary does not resolve on the active conversation; Pi compaction was not run."
+				: "OpenAI native compaction could not clone the previous compacted window; Pi compaction was not run.",
+			"error",
+		);
 		return { cancel: true };
+	}
+	if (latestNativeCompaction.ok && !builtInput.checkpointReused) {
+		ctx.ui.notify("A context edit recorded after the latest native checkpoint rewrites content inside its opaque window; native compaction rebuilds from the visible edited conversation and does not carry that window forward.", "warning");
+	}
+	let portableCompaction: CompactionResult | undefined;
+	if (state.config.compaction.portableSummary) {
+		// The window only feeds this one request; keep it local instead of parking it in shared state.
+		const portableWindow = buildNativeFallbackWindow(ctx, branchEntries, runtime);
+		let portableWindowInjected = false;
+		try {
+			const result = await runPortablePiCompaction(event, {
+				model: compactionTargetModel,
+				thinkingLevel: ctx.thinkingLevel,
+				apiKey: runtime.apiKey,
+				headers: runtime.headers,
+				env: runtime.env,
+				onPayload: async (payload) => {
+					const injection = await injectNativeWindowIntoPiCompactionRequest(payload, ctx, state, portableWindow);
+					portableWindowInjected = injection.status === "injected";
+					return injection.status === "injected" ? injection.payload : payload;
+				},
+			});
+			if (portableWindow && !portableWindowInjected) {
+				throw new Error("the previous native checkpoint was not included in the summarization request");
+			}
+			portableCompaction = result;
+		} catch (error) {
+			if (event.signal.aborted) return { cancel: true };
+			const message = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Portable Pi summary failed (${message}); native compaction will continue without it.`, "warning");
+		}
 	}
 	const canonicalReplay = runtime.codexTransport && runtime.apiKey
 		? await resolveCanonicalCompactionReplay({
@@ -328,7 +393,7 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		model: runtime.model,
 		inputSource: validatedCanonicalInput ? "canonical" : "reconstructed",
 		canonicalReplay: canonicalReplay.decision,
-		checkpointReused: latestNativeCompaction.ok,
+		checkpointReused: builtInput.checkpointReused,
 		...(latestNativeCompaction.ok && latestNativeCompaction.entry.details?.model
 			? { checkpointModel: latestNativeCompaction.entry.details.model }
 			: {}),
@@ -371,7 +436,6 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		if (compactResult.reason === "aborted") return { cancel: true };
 		const message = `Responses compaction v2 failed (${compactResult.reason}): ${compactResult.errorMessage}`;
 		if (portableCompaction) {
-			state.pendingPiCompactionNativeWindow = undefined;
 			ctx.ui.notify(`${message}; the saved portable Pi summary will be used.`, "error");
 			return { compaction: portableCompaction };
 		}
@@ -406,7 +470,6 @@ async function handleCodexSessionBeforeCompactInner(event: SessionBeforeCompactE
 		};
 	} catch {
 		if (portableCompaction) {
-			state.pendingPiCompactionNativeWindow = undefined;
 			ctx.ui.notify("Responses compaction v2 produced details Pi could not store; the saved portable Pi summary will be used.", "error");
 			return { compaction: portableCompaction };
 		}
@@ -440,28 +503,56 @@ export async function rewriteCodexCompactedProviderRequest(payload: unknown, ctx
 			: undefined,
 	});
 	if (rewrite.ok) return rewrite.rewrittenPayload;
+	if (rewrite.reason === "context-edit-targets-compacted-content") {
+		const message = "A context edit recorded after the previous native checkpoint rewrites kept content that its opaque window already absorbed; the request was not sent with the replaced content. Run /compact to rebuild the checkpoint from the edited conversation.";
+		ctx.ui.notify(message, "error");
+		throw new Error(message);
+	}
 	const detail = rewrite.parity?.mismatches.slice(0, 3).join("; ");
 	const message = `OpenAI native compaction replay failed (${rewrite.reason})${detail ? `: ${detail}` : ""}; request was not sent with placeholder compaction context.`;
 	ctx.ui.notify(message, "error");
 	throw new Error(message);
 }
 
-export async function injectPendingNativeWindowIntoPiCompactionRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState): Promise<unknown | undefined> {
-	const pending = state.pendingPiCompactionNativeWindow;
-	if (!pending || pending.window.length === 0) return undefined;
-	if (!isResponsesCompatiblePayload(payload)) return undefined;
-	if (pending.sessionId !== ctx.sessionManager.getSessionId()) {
-		state.pendingPiCompactionNativeWindow = undefined;
-		return undefined;
-	}
-	if (!isPiCompactionSummarizationPayload(payload)) return undefined;
+/** How a summarization request boundary handled the window it was offered. */
+export type NativeWindowInjectionResult =
+	/** The request now carries the window. */
+	| { status: "injected"; payload: ResponsesCompatibleRequestPayload }
+	/** No window, not the summarization request, or no runtime yet: nothing was consumed. */
+	| { status: "not-applicable" }
+	/** The window does not belong to this session, endpoint, or source checkpoint. */
+	| { status: "rejected"; reason: "session-mismatch" | "endpoint-mismatch" | "source-checkpoint-invalid" };
+
+/**
+ * Insert a previously selected opaque window into a Pi summarization request. The caller owns the
+ * window's lifetime: it passes the snapshot it wants injected and clears its own state from the
+ * returned status. A window selected before an awaited summary started is re-resolved here, so
+ * edits or a newer checkpoint that appeared meanwhile cannot leak stale content into the request.
+ */
+export async function injectNativeWindowIntoPiCompactionRequest(
+	payload: unknown,
+	ctx: ExtensionContext,
+	state: AdapterState,
+	window: PendingPiCompactionNativeWindow | undefined,
+): Promise<NativeWindowInjectionResult> {
+	if (!window || window.window.length === 0) return { status: "not-applicable" };
+	if (!isResponsesCompatiblePayload(payload)) return { status: "not-applicable" };
+	if (window.sessionId !== ctx.sessionManager.getSessionId()) return { status: "rejected", reason: "session-mismatch" };
+	if (!isPiCompactionSummarizationPayload(payload)) return { status: "not-applicable" };
 
 	const resolution = await resolveNativeCompactionEnvironment(ctx, { enabled: true, supportedProviders: getSupportedNativeCompactionProviders(state) }, payload);
-	if (!resolution.ok) return undefined;
+	if (!resolution.ok) return { status: "not-applicable" };
 	const runtime = resolution.runtime;
-	if (pending.provider !== runtime.provider || pending.api !== runtime.api || pending.baseUrl !== runtime.baseUrl) {
-		state.pendingPiCompactionNativeWindow = undefined;
-		return undefined;
+	if (window.provider !== runtime.provider || window.api !== runtime.api || window.baseUrl !== runtime.baseUrl) {
+		return { status: "rejected", reason: "endpoint-mismatch" };
+	}
+	const currentFallback = resolveOpaqueNativeCompactionFallbackEntry(compactionBranch(ctx, state), {
+		provider: runtime.provider,
+		api: runtime.api,
+		baseUrl: runtime.baseUrl,
+	});
+	if (!currentFallback || currentFallback.id !== window.sourceCompactionEntryId) {
+		return { status: "rejected", reason: "source-checkpoint-invalid" };
 	}
 
 	const input = [...payload.input];
@@ -471,14 +562,15 @@ export async function injectPendingNativeWindowIntoPiCompactionRequest(payload: 
 		if (!isRecord(item) || (item["role"] !== "system" && item["role"] !== "developer")) break;
 		insertAt++;
 	}
-
-	state.pendingPiCompactionNativeWindow = undefined;
 	return {
-		...payload,
-		input: [
-			...input.slice(0, insertAt),
-			...pending.window.map((item) => structuredClone(item)),
-			...input.slice(insertAt),
-		],
+		status: "injected",
+		payload: {
+			...payload,
+			input: [
+				...input.slice(0, insertAt),
+				...window.window.map((item) => structuredClone(item)),
+				...input.slice(insertAt),
+			],
+		},
 	};
 }

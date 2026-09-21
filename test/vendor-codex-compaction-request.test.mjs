@@ -70,7 +70,7 @@ async function compactionRequest({ model, session: fixture, sessionId, canonical
 		leafId: fixture.leafId,
 		latestNativeCompaction,
 	});
-	assert.ok(built, "the reconstructed compaction history must be serializable");
+	assert.equal(built.ok, true, `the reconstructed compaction history must be serializable (${built.reason ?? "?"})`);
 	const identity = { url: resolveCodexWebSocketUrl(model.baseUrl), accountId: extractAccountId(FAKE_API_KEY) };
 	if (canonical) {
 		recordCanonicalSessionResponse({

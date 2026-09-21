@@ -4,6 +4,7 @@ import type { ResponsesCompatibleRequestPayload } from "../compaction/compaction
 import type { NativeCompactionEntry } from "../compaction/types.js";
 import { resolveToolPlacement, type DeferredToolPlacement } from "../../providers/openai-responses/shared.ts";
 import { compareResponsesInputParity, serializeMessagesToResponsesInput, type ResponsesInputItem, type ResponsesInputMessageItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.js";
+import { applyContextEdits, inspectCheckpointWindow } from "./context-edits.ts";
 import { cloneOpaqueCompactedWindow, cloneResponsesInputSlice } from "./payload-structured.ts";
 import { extractFreshAuthoritativePreamble } from "./payload-preamble.ts";
 import { buildLenientNativeReplayPayload, collectReplayMessages, createCompactionSummaryAgentMessage, createReplaySlice, findReplayMatch, type SerializedReplaySlice } from "./native-replay-matching.ts";
@@ -32,6 +33,7 @@ export type NativeReplayPayloadRewrite = {
 export type NativeReplayPayloadRewriteFailureReason =
 	| "compaction-boundary-not-found"
 	| "first-kept-entry-not-found"
+	| "context-edit-targets-compacted-content"
 	| "unsupported-instructions"
 	| "invalid-compacted-window"
 	| "unexpected-compaction-after-boundary"
@@ -50,15 +52,6 @@ export type NativeReplayPayloadRewriteFailure = {
 export type NativeReplayPayloadRewriteResult =
 	| NativeReplayPayloadRewrite
 	| NativeReplayPayloadRewriteFailure;
-
-function findEntryIndexByIdBeforeBoundary(
-	entries: readonly SessionEntry[],
-	entryId: string,
-	boundaryIndex: number,
-): number | undefined {
-	const index = entries.findIndex((entry, candidateIndex) => candidateIndex < boundaryIndex && entry.id === entryId);
-	return index >= 0 ? index : undefined;
-}
 
 export function findCompactionBoundaryIndex(
 	entries: readonly SessionEntry[],
@@ -125,23 +118,31 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 		};
 	}
 
-	const firstKeptEntryIndex = findEntryIndexByIdBeforeBoundary(
-		args.branchEntries,
-		args.compactionEntry.firstKeptEntryId,
-		boundaryIndex,
-	);
-	if (firstKeptEntryIndex === undefined) {
+	// The checkpoint's boundary and its absorbed edits are one decision: a later edit to a
+	// kept-window target would be lost inside the opaque window, so replay must fail instead of
+	// serializing stale content.
+	const checkpointWindow = inspectCheckpointWindow({
+		branchEntries: args.branchEntries,
+		checkpoint: args.compactionEntry,
+		checkpointIndex: boundaryIndex,
+	});
+	if (!checkpointWindow.ok) {
 		return {
 			ok: false,
-			reason: "first-kept-entry-not-found",
+			reason: checkpointWindow.reason,
 		};
 	}
 
+	const firstKeptEntryIndex = checkpointWindow.firstKeptEntryIndex;
+	const keptRegionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex);
+	const rawPostCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
+	const contextEdits = checkpointWindow.edits;
+
 	const preCompactionEntries = keptWindowEntries(
-		args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex)
+		applyContextEdits(keptRegionEntries, contextEdits)
 			.filter((entry) => (entry.type !== "custom" && entry.type !== "custom_message") || entry.customType !== CODEX_REASONING_UPDATE_TYPE),
 	);
-	const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
+	const postCompactionEntries = applyContextEdits(rawPostCompactionEntries, contextEdits);
 	// Every slice below is part of one transcript: the checkpoint's stored system message leads it,
 	// and the kept window plus the live tail follow. Decide tool placement once for that transcript
 	// so no slice declares a tool the provider declared elsewhere.
@@ -173,8 +174,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 		};
 	}
 
-	const newerCompactionEntry = args.branchEntries
-		.slice(boundaryIndex + 1)
+	const newerCompactionEntry = rawPostCompactionEntries
 		.some((entry) => entry.type === "compaction");
 	if (newerCompactionEntry) {
 		const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [createCompactionSummaryAgentMessage(args.compactionEntry)], replaySerializationOptions);
@@ -198,7 +198,7 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 				compactionSummary: [],
 				preCompactionKeptWindow: createReplaySlice([], [], []),
 				compactedWindow,
-				postCompactionTail: createReplaySlice(args.branchEntries.slice(boundaryIndex + 1), [], lenientReplay.conversationInput),
+				postCompactionTail: createReplaySlice(postCompactionEntries, [], lenientReplay.conversationInput),
 				originalPiReplayInput,
 				replayInput: lenientReplay.input,
 			},

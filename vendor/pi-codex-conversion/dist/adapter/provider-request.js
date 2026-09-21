@@ -1,7 +1,7 @@
 import { isResponsesContext } from "./prompt/codex-model.js";
 import { applyCodexRequestOptions } from "./request-options.js";
 import { isAdapterRuntime, resolveCodexRuntimePlanForState } from "./activation/runtime-plan.js";
-import { injectPendingNativeWindowIntoPiCompactionRequest, rewriteCodexCompactedProviderRequest } from "./compaction/compaction.js";
+import { injectNativeWindowIntoPiCompactionRequest, rewriteCodexCompactedProviderRequest } from "./compaction/compaction.js";
 import { applyResponsesLiteRequest, RESPONSES_LITE_HEADER } from "../providers/openai-codex/responses-lite.js";
 import { usesRemoteHistoryNotes } from "../context-management/history-notes.js";
 import { rewriteContextNamespaceTools } from "../context-management/namespace-tools.js";
@@ -67,8 +67,15 @@ export async function rewriteCodexProviderRequest(payload, ctx, state) {
             rewrittenPayload = state.contextWindows.rewritePayload(rewrittenPayload, ctx);
     }
     if (plan.nativeCompaction || state.pendingPiCompactionNativeWindow) {
-        const piCompactionPayload = await injectPendingNativeWindowIntoPiCompactionRequest(rewrittenPayload, ctx, state);
-        rewrittenPayload = piCompactionPayload ?? (await rewriteCodexCompactedProviderRequest(rewrittenPayload, ctx, state)) ?? rewrittenPayload;
+        // The pending window is the caller's state: hand the snapshot to the injection and decide its
+        // fate from the returned status, not from whether the field happens to be empty afterwards.
+        const pending = state.pendingPiCompactionNativeWindow;
+        const injection = await injectNativeWindowIntoPiCompactionRequest(rewrittenPayload, ctx, state, pending);
+        if (pending && injection.status !== "not-applicable")
+            state.pendingPiCompactionNativeWindow = undefined;
+        rewrittenPayload = injection.status === "injected"
+            ? injection.payload
+            : (await rewriteCodexCompactedProviderRequest(rewrittenPayload, ctx, state)) ?? rewrittenPayload;
     }
     const finalPayload = applyCodexRuntimePayload(rewrittenPayload, plan.transport === "responses-lite");
     // Stock Responses providers and configured Code Mode overlays have no

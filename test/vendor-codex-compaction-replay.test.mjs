@@ -311,6 +311,7 @@ test("a fresh compaction replays the full session with its updates", async () =>
 		leafId: "second",
 		latestNativeCompaction: { ok: false },
 	});
+	assert.equal(built.ok, true, `a checkpoint-free session must build (${built.reason ?? "?"})`);
 
 	const payload = await captureBody(model, normalizeContext({
 		messages: convertToLlm(buildSessionContext(session, "second").messages),

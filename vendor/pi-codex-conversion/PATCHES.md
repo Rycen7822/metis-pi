@@ -6,9 +6,9 @@ Edit `src/**`, run `npm run vendor:build`, then `npm run vendor:patch`. `patches
 
 `tools/code-mode/notebook-tool.ts`: replace the top-level union with an object containing all action variants and optional fields. Strict providers reject a union with no top-level `type`. Keep `additionalProperties: false` and runtime normalization; all previously valid inputs remain accepted.
 
-## 2. Pi 0.86 transcript, tool placement and compaction/replay
+## 2. Pi 0.86/0.87 transcript, tool placement and compaction/replay
 
-`providers/transcript.ts` implements the required 0.86.1 semantic subset without importing 0.86-only host helpers. Provider boundaries still accept legacy Context, needed by direct registry callers and old sessions.
+`providers/transcript.ts` implements the required 0.86.1/0.87.0 semantic subset without importing 0.87-only host helpers. Provider boundaries still accept legacy Context, needed by direct registry callers and old sessions.
 
 `providers/openai-responses/shared.ts` owns preparation once: normalize Context, resolve model system-message capability, place tools, convert wire items. Request bodies, compaction serializers and native replay consume this same preparation. The tool placement object is authoritative:
 
@@ -18,8 +18,10 @@ Edit `src/**`, run `npm run vendor:build`, then `npm run vendor:patch`. `patches
 - Full transcripts and slices distinguish their head explicitly. A slice-leading system update is not a global prompt. Replay slices inherit the full-history placement decision; kept-window system entries follow the host's checkpoint folding.
 - tool_search IDs derive from anchor content rather than slice position. Existing tool-search sessions can incur one cache-prefix change; full and sliced conversion then agree.
 - Reconstructed compacted input and top-level tools are updated together. A canonical request retains its own verified baseline. Final tool call/result pairing stays at the dedicated history-normalization boundary.
+- `adapter/replay/context-edits.ts` owns one `inspectCheckpointWindow` result: the checkpoint boundary together with the effective `context_edit` projection. Edits the checkpoint already absorbed stay reusable, a later edit that rewrites kept content is not replayed stale, and live-tail targets keep the host projection. Replay, repeated compaction, the portable summary and the Pi-fallback window consume that one judgment, and a pending window is re-resolved at the injection boundary. An unresolvable `firstKeptEntryId` is reported as such: ordinary replay fails explicitly, and native compaction cancels with that reason before any summary request, so neither the native attempt nor the optional portable summary falls back to an empty kept window or sends the previous opaque window. A genuinely stale window rebuilds from the edited context without carrying the old encrypted history forward. Sessions without edits keep the previous request prefix.
+- A retain-none checkpoint (`appendCompaction(summary, null, ...)`: 0.87 stores the checkpoint's own id, 0.86 stored null; both hosts project either shape as an empty kept window) replays an empty kept window plus the live tail. Only those two markers are accepted: a missing field, an explicit `undefined`, an unknown id, an id after the checkpoint or a wrong-branch id keep failing the existing checks.
 
-Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{serializer,compaction,remote-v2-client}.ts`, `adapter/replay/{native-replay-segments,payload-rewrite}.ts`. Thirty built-provider cases in `test/vendor-codex-{transcript,compaction-replay,compaction-request}.test.mjs` protect normal, replay and final rewritten requests.
+Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{serializer,compaction,remote-v2-client}.ts`, `adapter/replay/{context-edits,native-replay-segments,payload-rewrite}.ts`. Built-provider cases in `test/vendor-codex-{transcript,compaction-replay,compaction-request}.test.mjs` plus the 0.87 `test/vendor-codex-context-edits.test.mjs` protect normal, replay and final rewritten requests.
 
 ## 3. Grammar and namespace tools
 

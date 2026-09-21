@@ -13,7 +13,7 @@
  * Run through `npm run vendor:<action>`.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -67,6 +67,13 @@ function requireUpstream() {
 function copyFromUpstream(entry) {
   const source = join(UPSTREAM, entry);
   if (!existsSync(source)) return 0;
+  // A vendored path can be a single file (`changelog.ts`), which `walk` cannot read.
+  if (statSync(source).isFile()) {
+    const target = join(VENDOR, entry);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(source));
+    return 1;
+  }
   let copied = 0;
   for (const path of walk(source)) {
     const relativePath = relative(UPSTREAM, path);
@@ -78,6 +85,8 @@ function copyFromUpstream(entry) {
     }
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(path));
+    // `writeFileSync` drops the executable bit the vendored native tools carry.
+    chmodSync(target, statSync(path).mode);
     copied += 1;
   }
   return copied;
@@ -157,7 +166,9 @@ function sync() {
   if (existsSync(PATCH_FILE) && readFileSync(PATCH_FILE, "utf8").trim() !== "") {
     log("replaying patches/local.patch");
     try {
-      run("git", ["apply", "-p1", "--whitespace=nowarn", relative(VENDOR, PATCH_FILE)], { cwd: VENDOR });
+      // `git apply` resolves patch paths against the repository root, so run it from there and
+      // prepend the vendored directory — running it inside the subdirectory skips every file.
+      run("git", ["apply", "-p1", "--whitespace=nowarn", `--directory=${relative(ROOT, VENDOR)}`, relative(ROOT, PATCH_FILE)], { cwd: ROOT });
       log("  applied cleanly");
     } catch (error) {
       log("  PATCH DID NOT APPLY — reconcile by hand, then update PATCHES.md");

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- 适配 Pi 0.87.0：开发依赖、CI 与真实宿主检查目标更新；运行期不静态导入 0.87 专有 API，旧宿主请求前缀与旧会话行为保留。
+- vendored Codex 在重建压缩输入和回放片段前应用 `context_edit` 投影，并由同一 `inspectCheckpointWindow` 判定 checkpoint 边界与窗口可复用性：已吸收的编辑保持可复用，后续改写 kept 内容的编辑不会被旧窗口复活（普通回放显式失败、再次压缩从编辑后上下文重建）。无法解析的 `firstKeptEntryId`（字段缺失、显式 `undefined`、未知/后置 id）不再退化为空保留窗口：在任何摘要请求前就明确取消，native 与 portable 请求均不会发出；只有 0.87 的 checkpoint 自身 id 与 0.86 的 `null` 视为零保留。
+- 外部 `agent-stuff` `/btw` 的 0.87 种子历史补丁保存在 `.work/pi087/btw-fix`（不属于本包发布内容，未改动已安装缓存）。
+- vendor 维护脚本修正文件条目复制、从仓库根重放补丁并保留原生工具可执行位，`vendor:sync` 可在 pristine 3.0.34 上完整重放。
 - 显示消息保留稳定身份，删除结束时的别名、状态复制和重复内容解析；goal 的状态、计时与用量交由独立核心管理，宿主入口负责 I/O。
 - 自有/vendor 配置校验、15 个设置开关、todo 参数/更新状态与 Responses transcript 准备收拢为各自的单一契约；Notebook 捕获和载荷校验共用实现，清单与事务边界保留。
 - DIM/背景共用 SGR 参数解析，修复 RGB/indexed/colon 颜色之后的复位遗漏和同一序列内的复位顺序；shell 物理行截断去掉冗余计数循环。

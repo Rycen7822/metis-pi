@@ -4,7 +4,7 @@ import { isResponsesContext } from "./prompt/codex-model.ts";
 import { applyCodexRequestOptions } from "./request-options.ts";
 import type { AdapterState } from "./activation/state.ts";
 import { isAdapterRuntime, resolveCodexRuntimePlanForState } from "./activation/runtime-plan.ts";
-import { injectPendingNativeWindowIntoPiCompactionRequest, rewriteCodexCompactedProviderRequest } from "./compaction/compaction.ts";
+import { injectNativeWindowIntoPiCompactionRequest, rewriteCodexCompactedProviderRequest } from "./compaction/compaction.ts";
 import { applyResponsesLiteRequest, RESPONSES_LITE_HEADER, type ResponsesLiteCompatibleBody } from "../providers/openai-codex/responses-lite.ts";
 import { usesRemoteHistoryNotes } from "../context-management/history-notes.ts";
 import { rewriteContextNamespaceTools } from "../context-management/namespace-tools.ts";
@@ -86,8 +86,14 @@ export async function rewriteCodexProviderRequest(payload: unknown, ctx: Extensi
 			rewrittenPayload = state.contextWindows.rewritePayload(rewrittenPayload, ctx);
 	}
 	if (plan.nativeCompaction || state.pendingPiCompactionNativeWindow) {
-		const piCompactionPayload = await injectPendingNativeWindowIntoPiCompactionRequest(rewrittenPayload, ctx, state);
-		rewrittenPayload = piCompactionPayload ?? (await rewriteCodexCompactedProviderRequest(rewrittenPayload, ctx, state)) ?? rewrittenPayload;
+		// The pending window is the caller's state: hand the snapshot to the injection and decide its
+		// fate from the returned status, not from whether the field happens to be empty afterwards.
+		const pending = state.pendingPiCompactionNativeWindow;
+		const injection = await injectNativeWindowIntoPiCompactionRequest(rewrittenPayload, ctx, state, pending);
+		if (pending && injection.status !== "not-applicable") state.pendingPiCompactionNativeWindow = undefined;
+		rewrittenPayload = injection.status === "injected"
+			? injection.payload
+			: (await rewriteCodexCompactedProviderRequest(rewrittenPayload, ctx, state)) ?? rewrittenPayload;
 	}
 	const finalPayload = applyCodexRuntimePayload(
 		rewrittenPayload,

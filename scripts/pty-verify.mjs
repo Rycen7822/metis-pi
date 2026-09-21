@@ -300,6 +300,19 @@ const capture = () => {
     return "";
   }
 };
+/** Capture with ANSI escapes for properties plain screen text cannot show (selection video). */
+const captureStyled = () => {
+  try {
+    return execFileSync("tmux", ["capture-pane", "-p", "-e", "-t", SESSION, "-S", "-200"], { encoding: "utf8" });
+  } catch {
+    return "";
+  }
+};
+// PCX_PTY_SKIP_WHEEL=1 runs every stage except the two wheel-driven scroll assertions (tmux's
+// synthesized wheel bytes scroll nothing in this environment on Pi 0.86.1 and 0.87.0; see
+// VALIDATION.md). Skipped checks are reported as skipped and never as passed.
+const SKIP_WHEEL = process.env.PCX_PTY_SKIP_WHEEL === "1";
+const skippedChecks = [];
 const sendKeys = (keys) => execFileSync("tmux", ["send-keys", "-t", SESSION, ...keys]);
 const type = (text) => sendKeys(["-l", text]);
 const waitFor = async (pattern, timeoutMs, label) => {
@@ -609,9 +622,6 @@ try {
     }
     assert.fail(`timeout waiting for ${label} (visible rows only):\n${capture().slice(-2200)}`);
   };
-  frames.scrolled = await wheelUntil(/below of \d+ lines/, 20_000, "wheel scrolls the reasoning window");
-  assert.ok(!visibleRows(frames.scrolled).some((l) => l.includes("PCX_THINK_HEAD")), "one wheel line up still clips the very beginning");
-
   const refollow = async (timeoutMs) => {
     const start = Date.now();
     let attempt = 0;
@@ -625,8 +635,14 @@ try {
     }
     assert.fail(`timeout waiting for the peek window to follow its tail again:\n${capture().slice(-2200)}`);
   };
-  frames.refollowed = await refollow(20_000);
-  assert.ok(visibleRows(frames.refollowed).some((l) => l.includes("PCX_THINK_TAIL")), "newest rows back in view");
+  if (SKIP_WHEEL) {
+    skippedChecks.push("wheel scrolls the reasoning window and refollows its tail");
+  } else {
+    frames.scrolled = await wheelUntil(/below of \d+ lines/, 20_000, "wheel scrolls the reasoning window");
+    assert.ok(!visibleRows(frames.scrolled).some((l) => l.includes("PCX_THINK_HEAD")), "one wheel line up still clips the very beginning");
+    frames.refollowed = await refollow(20_000);
+    assert.ok(visibleRows(frames.refollowed).some((l) => l.includes("PCX_THINK_TAIL")), "newest rows back in view");
+  }
 
   frames.fullBody = await gotoState("full", 30_000);
   assert.ok(!/scroll · double-click for all/.test(visibleText()), "fully expanded body carries no peek hint");
@@ -812,13 +828,20 @@ try {
   sendKeys(["-H", ...sgrSeq(32, endX, endRow + 1)]);
   sendKeys(["-H", ...sgrSeq(0, endX, endRow + 1, true)]);
   await new Promise((resolve) => setTimeout(resolve, 400));
-  // Ctrl+C through the PTY: with a selection this copies (consumed), the
-  // draft and the app survive; a second Ctrl+C would clear — send exactly one.
+  // The drag itself must be a real selection: the styled capture shows the reply rows in
+  // reverse video before Ctrl+C consumes it.
+  assert.ok(
+    captureStyled().split("\n").some((line) => line.includes("\u001b[7m") && /SELECT_|alpha beta gamma/.test(line)),
+    "the drag establishes a reverse-video selection over the reply",
+  );
+  // Ctrl+C through the PTY: with a selection this copies (consumed), the draft and the app
+  // survive; a second Ctrl+C would clear — send exactly one. Pi shows "Copied!" only for the
+  // last-assistant-text fallback; the selection path (handleCopyCommand →
+  // copyActiveSelectionToClipboard) copies silently on 0.86.1 and 0.87.0, so the telemetry below
+  // is the oracle for the copy itself.
   sendKeys(["C-c"]);
   await new Promise((resolve) => setTimeout(resolve, 500));
   frames.aliveAfterCopy = capture();
-  const flashLine = frames.aliveAfterCopy.split("\n").find((l) => /Copied|Copy failed/.test(l));
-  assert.ok(flashLine, "copy flash (Copied!) visible on screen");
   assert.doesNotMatch(frames.aliveAfterCopy, /exited|Goodbye/, "app must survive copy Ctrl+C");
   type("/codex-ui");
   sendKeys(["Enter"]);
@@ -829,6 +852,8 @@ try {
   const copyStats = flat.match(/copy-stats:calls=(\d+)exact=(\d+)mixed=(\d+)native=(\d+)empty=(\d+)failed=(\d+)last=(\S+?)chars=(\d+)/);
   assert.ok(copyStats, "copy telemetry present");
   assert.ok(Number(copyStats[2]) >= 1, `at least one exact copy (got ${copyStats[2]})`);
+  assert.equal(Number(copyStats[6]), 0, "no failed or empty copy");
+  assert.equal(copyStats[7], "exact", "the last copy used the exact serializer mode");
   assert.equal(Number(copyStats[8]), expectedChars, `copied char count matches the reply length (${expectedChars})`);
 
   // 0.9.4: fullscreen side gutters are active in this same run — transcript
@@ -842,16 +867,20 @@ try {
   // and assert the speed scope there; everything below reads from the bottom-
   // anchored frame above.
   let flatTop = flat;
-  for (let attempt = 0; attempt < 10 && !/outputspeed:/.test(flatTop); attempt += 1) {
-    for (let i = 0; i < 3; i += 1) wheelRow(4, 30, true);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    flatTop = visibleText().replace(/\s+/g, "");
+  if (SKIP_WHEEL) {
+    skippedChecks.push("diagnostics speed scope (needs transcript wheel scrolling)");
+  } else {
+    for (let attempt = 0; attempt < 10 && !/outputspeed:/.test(flatTop); attempt += 1) {
+      for (let i = 0; i < 3; i += 1) wheelRow(4, 30, true);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      flatTop = visibleText().replace(/\s+/g, "");
+    }
+    assert.match(flatTop, /outputspeed:[\d.]+tok\/s\(output=80tokens/, "diagnostics expose the measured speed with its scope");
+    // Back to the live tail: the TUI keeps the scroll position after a manual
+    // scroll, so later stages would otherwise assert against an old viewport.
+    for (let i = 0; i < 40; i += 1) wheelRow(4, 30, false);
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  assert.match(flatTop, /outputspeed:[\d.]+tok\/s\(output=80tokens/, "diagnostics expose the measured speed with its scope");
-  // Back to the live tail: the TUI keeps the scroll position after a manual
-  // scroll, so later stages would otherwise assert against an old viewport.
-  for (let i = 0; i < 40; i += 1) wheelRow(4, 30, false);
-  await new Promise((resolve) => setTimeout(resolve, 400));
 
   assert.ok(flat.includes('history-window:{"installed":true'), "bounded history installed in real fullscreen TUI");
   const glyphDiag = flat.match(/glyphs:applied\(terminalprototypewrite\)marks=5\[[^\]]*\]frames=(\d+)changed=(\d+)/);
@@ -1005,12 +1034,13 @@ try {
       ? "  git changes:  session churn +8 -2 absolute, commit clears, post-commit edits re-count, rewriting self-added lines keeps their deletions (+5 -3)"
       : "  git changes:  not asserted (git unavailable)",
   );
-  console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand, wheel scrolls the window");
+  console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand");
+  if (!SKIP_WHEEL) console.log("  thinking:     wheel scrolls the peek window in place and refollows its tail (full run)");
   console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
   console.log("  auto-collapse: 'Thought for Ns' label; 1 click = 6-row peek window, 2 clicks = full body");
-  console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place");
+  if (!SKIP_WHEEL) console.log("  peek window:  live reasoning clipped to the newest rows; wheel scrolls it in place (full run)");
   console.log("  tool run:     real bash output, summary still Worked");
   console.log("  codex-todo:   mock model calls the todo tool -> \"Todos 0/1 done\" panel + store on disk");
   console.log("  codex-todo:   ✓ rows fold on the next prompt, a finished panel disappears, new work starts a fresh list");
@@ -1022,6 +1052,7 @@ try {
   console.log("  provider err: summary Failed after (real terminal evidence)");
   console.log(`  selection:    SGR mouse drag + Ctrl+C → exact copy, ${copyStats[8]} chars (exact=${copyStats[2]} mixed=${copyStats[3]} native=${copyStats[4]})`);
   console.log("  margins:      fullscreen side gutters applied (margin=2), transcript inset verified");
+  if (skippedChecks.length > 0) console.log(`  SKIPPED (PCX_PTY_SKIP_WHEEL=1): ${skippedChecks.join("; ")} — not verified in this run`);
 } finally {
   try { execFileSync("tmux", ["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* already gone */ }
   server.close();

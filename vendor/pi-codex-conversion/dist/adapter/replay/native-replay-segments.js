@@ -1,13 +1,10 @@
 import { resolveToolPlacement } from "../../providers/openai-responses/shared.js";
 import { compareResponsesInputParity, serializeMessagesToResponsesInput } from "../compaction/serializer.js";
+import { applyContextEdits, inspectCheckpointWindow } from "./context-edits.js";
 import { cloneOpaqueCompactedWindow, cloneResponsesInputSlice } from "./payload-structured.js";
 import { extractFreshAuthoritativePreamble } from "./payload-preamble.js";
 import { buildLenientNativeReplayPayload, collectReplayMessages, createCompactionSummaryAgentMessage, createReplaySlice, findReplayMatch } from "./native-replay-matching.js";
 import { CODEX_REASONING_UPDATE_TYPE } from "../reasoning-updates.js";
-function findEntryIndexByIdBeforeBoundary(entries, entryId, boundaryIndex) {
-    const index = entries.findIndex((entry, candidateIndex) => candidateIndex < boundaryIndex && entry.id === entryId);
-    return index >= 0 ? index : undefined;
-}
 export function findCompactionBoundaryIndex(entries, compactionEntryId) {
     const boundaryIndex = entries.findIndex((entry) => entry.id === compactionEntryId);
     return boundaryIndex >= 0 ? boundaryIndex : undefined;
@@ -51,16 +48,27 @@ function buildNativeReplaySegmentsInternal(args) {
             reason: "compaction-boundary-not-found",
         };
     }
-    const firstKeptEntryIndex = findEntryIndexByIdBeforeBoundary(args.branchEntries, args.compactionEntry.firstKeptEntryId, boundaryIndex);
-    if (firstKeptEntryIndex === undefined) {
+    // The checkpoint's boundary and its absorbed edits are one decision: a later edit to a
+    // kept-window target would be lost inside the opaque window, so replay must fail instead of
+    // serializing stale content.
+    const checkpointWindow = inspectCheckpointWindow({
+        branchEntries: args.branchEntries,
+        checkpoint: args.compactionEntry,
+        checkpointIndex: boundaryIndex,
+    });
+    if (!checkpointWindow.ok) {
         return {
             ok: false,
-            reason: "first-kept-entry-not-found",
+            reason: checkpointWindow.reason,
         };
     }
-    const preCompactionEntries = keptWindowEntries(args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex)
+    const firstKeptEntryIndex = checkpointWindow.firstKeptEntryIndex;
+    const keptRegionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex);
+    const rawPostCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
+    const contextEdits = checkpointWindow.edits;
+    const preCompactionEntries = keptWindowEntries(applyContextEdits(keptRegionEntries, contextEdits)
         .filter((entry) => (entry.type !== "custom" && entry.type !== "custom_message") || entry.customType !== CODEX_REASONING_UPDATE_TYPE));
-    const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
+    const postCompactionEntries = applyContextEdits(rawPostCompactionEntries, contextEdits);
     // Every slice below is part of one transcript: the checkpoint's stored system message leads it,
     // and the kept window plus the live tail follow. Decide tool placement once for that transcript
     // so no slice declares a tool the provider declared elsewhere.
@@ -89,8 +97,7 @@ function buildNativeReplaySegmentsInternal(args) {
             reason: "invalid-compacted-window",
         };
     }
-    const newerCompactionEntry = args.branchEntries
-        .slice(boundaryIndex + 1)
+    const newerCompactionEntry = rawPostCompactionEntries
         .some((entry) => entry.type === "compaction");
     if (newerCompactionEntry) {
         const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [createCompactionSummaryAgentMessage(args.compactionEntry)], replaySerializationOptions);
@@ -113,7 +120,7 @@ function buildNativeReplaySegmentsInternal(args) {
                 compactionSummary: [],
                 preCompactionKeptWindow: createReplaySlice([], [], []),
                 compactedWindow,
-                postCompactionTail: createReplaySlice(args.branchEntries.slice(boundaryIndex + 1), [], lenientReplay.conversationInput),
+                postCompactionTail: createReplaySlice(postCompactionEntries, [], lenientReplay.conversationInput),
                 originalPiReplayInput,
                 replayInput: lenientReplay.input,
             },

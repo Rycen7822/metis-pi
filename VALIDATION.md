@@ -1,23 +1,28 @@
 # Validation
 
-Current working tree after `4b1319a`, checked on 2026-09-22 with Node 24.15.0 and Pi 0.86.1. This page records current evidence and limits; implementation history belongs in Git. Commands are documented in [development.md](docs/development.md).
+Current working tree after `e01d1ca`, checked on 2026-09-22 with Node 24.15.0 and Pi 0.87.0. This page records current evidence and limits; implementation history belongs in Git. Commands are documented in [development.md](docs/development.md).
 
 ## Checks
 
 | Check | Result |
 | --- | --- |
-| `env -u NO_COLOR npm run verify` | Exit 0: 303/303 tests, project/vendor type checks, vendor activation, real Pi host smoke and package dry-run. |
+| `env -u NO_COLOR npm run verify` | Exit 0: 343/343 tests, project/vendor type checks, vendor activation, real Pi 0.87.0 host smoke and package dry-run. |
 | `npm run check:core` | Exit 0. Pure rendering/state code retains the host-effect boundary. |
 | `npm run preview` | Exit 0. Message separators resolve through object identity; plaintext matches the committed preview. ANSI/HTML were regenerated. |
-| `env -u NO_COLOR npm run test:pty` | Fails at `wheelUntil`; the full PTY suite is not green. |
-| Isolated PTY copy omitting only wheel/refollow assertions | Exit 0: tool folding, todo persistence/restart, skills, failure summary, 161-character exact copy and fullscreen margins. This does not validate scrolling. |
-| Vendor patch replay | All 31 patch files apply to pristine 3.0.34; 423 retained files match bytes and modes after documented native-payload exclusions. |
+| `env -u NO_COLOR npm run test:pty` | Pi 0.87.0 binary, isolated HOME and local mock provider: still fails at `wheelUntil`. The same binary and arguments fail identically with the global Pi 0.86.1: synthesized SGR wheel bytes move neither the transcript nor the reasoning window in this tmux harness, while click and drag injection work (peek/full toggles and selection rows). Treated as a harness input limitation; the full PTY suite is not green. |
+| `PCX_PTY_SKIP_WHEEL=1 env -u NO_COLOR npm run test:pty` | Runs the same stages with the two wheel-driven scroll checks skipped and reports them as `SKIPPED … not verified in this run` instead of passing them. The selection stage now asserts the reverse-video drag through `capture-pane -e` and the copy through `/codex-ui` telemetry: `copy-stats` with `exact>=1`, `failed=0`, `last=exact` and the exact character count. Pi flashes nothing on the selection copy path in 0.86.1 or 0.87.0, so the previous flash assertion was removed in favour of those oracles. |
+| Vendor patch replay | All 33 patch files apply to pristine 3.0.34 via `npm run vendor:sync`; the replayed `src` and `dist` trees are byte-identical across 1,153 compared files, with identical modes. |
 | Repeated `vendor:build` / `vendor:patch` | Identical dist digest and byte-identical patch. |
+| `/btw` seeding patch | Offline harness against real 0.87.0 and 0.86.1 `createAgentSession`: baseline fails on 0.87.0, patched passes on both. No auth, network or user session involved. |
 
 ## Behavior protected
 
 | Area | Evidence |
 | --- | --- |
+| Pi 0.87 context edits | `test/vendor-codex-context-edits.test.mjs` builds real 0.87 `SessionManager` sessions (`appendMessage`/`appendContextEdit`/`appendCompaction`) and compares reconstruction and replay with the payload Pi builds from the same session. Thirty-nine cases cover deletion, replacement, repeated edits on one target, absorbed edits that predate the checkpoint, same-target edits on both sides of it, a rebuild that recovers through a new checkpoint (including a third checkpoint), retain-none windows (0.87's checkpoint-id form and the legacy 0.86 null form, which the 0.86.1 host case also exercises), tool-call pairing, untouched prefixes, system sections, the canonical baseline, and a parameterized handler block that runs seven boundary shapes (missing field, explicit `undefined`, unknown id, id after the checkpoint, legacy `null`, the checkpoint's own id, a kept entry) through the production `handleCodexSessionBeforeCompact` with the portable summary both off and on, asserting native and portable request counts for each. Five of the missing/undefined and portable-request cases fail against the round-3 vendor build. |
+| Outbound window gating | `buildNativeCompactionInput` returns `{ok:false,reason}` for a checkpoint whose `firstKeptEntryId` is missing, explicitly `undefined`, or does not resolve on the active path, and the handler cancels before any summary request, so an unresolvable boundary can never put the old opaque window on the wire and the optional portable summary is not attempted either. `resolveOpaqueNativeCompactionFallbackEntry` and `injectNativeWindowIntoPiCompactionRequest` (returning `injected` / `not-applicable` / `rejected`) share `inspectCheckpointWindow`, which also keeps a later kept-window edit out of replay, the portable summary and the Pi fallback. The portable summary keeps its window locally instead of parking it in shared state, and a window that an asynchronous consumer re-reads is re-validated against its source checkpoint at that boundary. |
+| Retain-none checkpoints | The same file generates `appendCompaction(..., null, ...)` through the real session manager, asserts the empty kept window plus live tail replayed in strict mode, and keeps `first-kept-entry-not-found` for unknown ids and normal kept windows for old sessions. Only the two host markers are retain-none: the checkpoint's own id (0.87) and a present `null` (the 0.86 stored form). A missing field, an explicit `undefined` or an id after the checkpoint is rejected instead of degrading into an empty kept window. |
+| External `/btw` seeding | `.work/pi087/btw-verify/verify-btw.mjs` drives the patched `btw.ts` verbatim (host import redirected to an instrumented real-host shim): first request carries main context once, later requests do not repeat the seed, a restored side thread carries prior Q&A once, reset drops it, shutdown leaves main history untouched. The baseline extension fails the same harness on 0.87.0. |
 | Responses preparation and replay | Built-provider tests cover legacy Context and transcript input, system sections, full transcripts versus slices, additive tools versus deletion/redeclaration, namespace/grammar mapping, tool-search pairing, model folding, prewarm and compaction replay. One preparation path owns tool placement. |
 | Transcript and rendering | Lifecycle tests preserve stable identity across streaming/finalization, duplicate-end suppression, separate thinking-run clocks, exploration boundaries, selection provenance and teardown. Preview fixtures no longer encode private message-key strings. |
 | Goal state | Seven host-entry tests cover replacement during a turn, cached-token accounting, elapsed time, pause/edit/resume, branch restore, completed-goal accounting and continuation filtering. The same seven tests pass against the entrypoint saved before extraction. |
@@ -27,14 +32,16 @@ Current working tree after `4b1319a`, checked on 2026-09-22 with Node 24.15.0 an
 | Notebook state | Generated capture code tests cover values/functions/metadata, partial writes, close/commit, caps and scope-specific skips/errors. Hashed payloads and checkpoint layout mismatches are tested. |
 | Shell truncation | 270 comparisons against the saved implementation match across empty/long input, narrow/wide output and row budgets. |
 
-The real-host smoke assembles Pi's actual components and validates tool title ownership, write states, mouse folding, skills and chrome. It is separate from terminal input injection and from a real provider request. Temporary differential probes and logs are local `.work/refactor3/` artifacts; maintained regressions live under `test/`.
+The real-host smoke assembles Pi's actual components and validates tool title ownership, write states, mouse folding, skills and chrome. It is separate from terminal input injection and from a real provider request. Temporary differential probes and logs are local `.work/pi087/` artifacts; maintained regressions live under `test/`.
 
 ## Limits
 
-- Full PTY scrolling remains unverified here. Historical baseline runs on Pi 0.85.1 and 0.86.1 also failed at `wheelUntil`; that evidence does not establish that every current wheel behavior is correct.
-- Codex provider tests use offline payload capture. No real paid Codex request or server-produced encrypted compaction checkpoint was used; compaction fixtures are offline substitutes.
+- Full PTY scrolling remains unverified: synthesized SGR wheel bytes do not scroll either the transcript or the reasoning window in the tmux harness, and the same failure reproduces with the Pi 0.86.1 binary with an identical screen state, so it is not a 0.87 or product regression. `PCX_PTY_SKIP_WHEEL=1` covers the rest of the suite (selection video, exact-copy telemetry, app survival) and names the skipped wheel checks explicitly; it is not a full PTY pass.
+- The CI lane runs `npm run verify` on Pi 0.87.0. `@earendil-works/pi-ai` 0.85.x does not export `normalizeContext`, so the 0.85.1 lane failed at import; 0.86.1 exports it and the suite loads with the 0.87-only context-edit cases skipped by their capability gate (verified against a 0.86.1 host). Runtime code still avoids 0.87-only static imports.
+- Codex provider tests use offline payload capture. No real paid Codex request or server-produced encrypted compaction checkpoint was used; compaction/checkpoint fixtures are offline substitutes.
+- The `/btw` patch is delivered under `.work/pi087/btw-fix` (baseline `mitsuhiko/agent-stuff` `122e299`); it was not applied to the installed extension cache, not published and not referenced from `settings.json`.
 - Notebook capture tests exercise generated code in Node, not the native Deno runtime. Native payload binaries were not rebuilt or changed.
 - No real OS clipboard or image-terminal validation. Mouse selection/copy tests compare bytes through the isolated fixture clipboard.
-- No user configuration, Pi version or other installed plugins were changed by this refactor. Running Pi processes need a restart to load rebuilt vendor code.
+- No user configuration, credentials, default model, plugin sources or installed Pi were changed. Running Pi processes need a restart to load rebuilt vendor code.
 
 Vendor baseline, retained payload exclusions and patch maintenance are documented in [UPSTREAM.md](vendor/pi-codex-conversion/UPSTREAM.md) and [PATCHES.md](vendor/pi-codex-conversion/PATCHES.md).

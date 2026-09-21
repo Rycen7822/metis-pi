@@ -20,7 +20,7 @@
 ## 维护边界
 
 - [UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md)：精确来源/commit、载荷裁剪与升级步骤。
-- [PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md)：本地补丁契约，包括 Pi 0.86 transcript、回放、工具放置与 Notebook 共享捕获。
+- [PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md)：本地补丁契约，包括 Pi 0.86/0.87 transcript、回放、工具放置与 Notebook 共享捕获。
 - [开发说明](development.md)：构建和检查命令；`patches/local.patch` 由脚本生成，不手改 `dist/`。
 - `dist/`、`vendor/`、`code-mode/`、原生工具目录、`changelog.js` 和 `package.json` 的相对位置参与运行时资源定位，不可只因目录较多就移动或删除。
 

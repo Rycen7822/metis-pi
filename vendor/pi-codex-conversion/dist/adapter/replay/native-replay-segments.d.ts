@@ -23,7 +23,7 @@ export type NativeReplayPayloadRewrite = {
     segments: NativeReplaySegments;
     rewrittenPayload: ResponsesCompatibleRequestPayload;
 };
-export type NativeReplayPayloadRewriteFailureReason = "compaction-boundary-not-found" | "first-kept-entry-not-found" | "unsupported-instructions" | "invalid-compacted-window" | "unexpected-compaction-after-boundary" | "expected-pi-replay-mismatch";
+export type NativeReplayPayloadRewriteFailureReason = "compaction-boundary-not-found" | "first-kept-entry-not-found" | "context-edit-targets-compacted-content" | "unsupported-instructions" | "invalid-compacted-window" | "unexpected-compaction-after-boundary" | "expected-pi-replay-mismatch";
 export type NativeReplayPayloadRewriteFailure = {
     ok: false;
     reason: NativeReplayPayloadRewriteFailureReason;
