@@ -53,19 +53,19 @@
 
 `tok/s` 的隐藏条件：观测窗口 < 300ms、没有已确认的 output token、或速率越界时**整段不显示**（不是显示 0）。`/codex-ui` 会同时给出 token 数与窗口长度，并用 `scope` 区分流式中的实时值与 `message_end` 的确认值。
 
-### `+A -D`：会话观察到的累计改动量（churn）
+### `+A -D`：当前工作树相对 HEAD 的未提交改动
 
-**是绝对值累计，不是净变化**；加过又删掉的同样计入。
+**是当前样本，不是累计量**；加过又删掉的按最终状态显示，不累计 churn。
 
-- 每次读取把每个变更路径的**内容**与此前观察到的内容做真实 diff 并**累加**：加了 14 行、后来又删掉这 14 行 → 记 `+14` 和 `-14`，不互相抵消（删掉自己刚写的行同样计入删除）。
-- **session 第一次读取是内容基线**：之前的未提交改动不算你的，此后的编辑精确计入——**哪怕编辑发生在既有未提交改动内部**。
-- **HEAD 移动**（commit / amend / rebase / pull）时把**已提交的部分折掉**；工作区干净（无 diff、无未跟踪文件）时归零。
-- 只统计**绝对**新增与绝对删除：文件 A `+11 -9`、文件 B `+6 -5` → `+17 -14`，绝不压成净变化 `+3 -0`；数字不做 k/M 缩写（`formatExactCount`）。
-- **所有写入者一视同仁**：agent 工具、bash/sed/python 脚本、另一个终端，全部从**内容**读取，不经任何工具记账。
-- 实现：`git hash-object -w --no-filters`（写进会话私有 `GIT_OBJECT_DIRECTORY`）+ `git diff --numstat <旧 blob> <新 blob>`。**不写**用户的 index / 工作区 / 对象库，也不触发 diff 驱动或 smudge 过滤器。
-- 未跟踪文件按 ≤200 个、单个 ≤256 KiB 流式计数（按 size+mtime 缓存，未变不重读）；git 调用 5 秒超时 + `--no-ext-diff --no-textconv --no-optional-locks`；读取失败**保留上一次正确数字**而不是清零。
+- 每次读取重新采样：`git diff --numstat HEAD`（暂存 + 未暂存从工作树侧计一次，不重复叠加）加上未跟踪、未忽略的文本文件行数。
+- 启动时已存在的 WIP **立即显示**；commit / 撤销后下一次读取数字随之下降，干净时归零；反复刷新同一状态不会累积。
+- additions 与 deletions 分开显示绝对行数，绝不压成净变化；数字不做 k/M 缩写（`formatExactCount`）。
+- rename 由 git 的 diff 判定（按新路径计入），删除按整文件行数计入。
+- 未跟踪文件按 ≤200 个、单个 ≤256 KiB 流式计数（按 size+mtime 缓存，未变不重读；二进制跳过）；git 调用 5 秒超时 + `--no-ext-diff --no-textconv --no-optional-locks`；读取失败**保留上一次正确数字**而不是清零。
+- 无 HEAD（尚未 commit，HEAD 仍是指向不存在分支的活跃 symbolic ref）时与空树比较，已 `git add` 的新文件按工作树内容计入；空树 OID 按 `git rev-parse --show-object-format` 查询，查询失败按读取失败处理，**不猜测** SHA-1/SHA-256。HEAD 查询超时、一般 git 错误或损坏的 ref 均保留上次数字，不会退回空树造成数字暴涨。
+- 只读：不写用户的 index / 工作区 / 对象库，不创建临时目录，不触发 diff 驱动或 smudge 过滤器。
 
-对账方法：`/codex-ui` 的 `git-changes` 行同时给出 churn 总量、读取次数与**工作区 vs HEAD 的原始值**（可直接用 `git diff --numstat` 自行核对）。
+对账方法：`/codex-ui` 的 `git-changes` 行给出同口径总量、文件数、读取次数与基线（HEAD 或空树）；也可直接用 `git diff --numstat HEAD` 核对。
 
 ## 代码位置
 
@@ -79,14 +79,14 @@
 | 交互时钟 | `src/ui-metrics.ts` |
 | usage 账本 | `src/usage-ledger.ts` |
 | 输出速度 | `src/output-speed.ts` |
-| churn | `src/git-changes.ts` |
+| 工作树改动量 | `src/git-changes.ts` |
 | 安装/卸载 | `src/chrome/install.ts` |
 
 ## 不变量与已知限制
 
 - footer 数字**只读**：不写 git 状态、不读额度凭据（见 [commands.md](../commands.md) §只读保证）。
 - 三个 usage 范围（ctx / Σ / last）**永不混用**，`/codex-ui` 逐一标注来源。
-- churn 的"第一次读取即基线"意味着**重启 pi 后旧改动不再计入**；这是刻意设计，不是丢数据。
+- 未跟踪文件与 git 的 diff 不同：超过 200 个或单文件超过 256 KiB 的未跟踪文件、以及未跟踪的二进制文件不计入（跟踪文件的 diff 不设此上限）。
 - 额度失败绝不影响 agent 交互与终止判定；失败只显示 `—` 或在有上次好值时继续用上次值。
 - 窄屏只降级不整块消失；`footer.details: false` 会关掉右侧细节块（P0 的会话 I/O 与速度也在其中）。
 

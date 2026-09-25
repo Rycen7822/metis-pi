@@ -24,7 +24,7 @@
 | 转录/思考 | `transcript-state.ts` 拥有稳定消息身份、语义 run、计时和控制器；adapter 每次更新解析一次 `AssistantView`，供阶段策略和组件装饰共用。`thinking-view.ts` 拥有交互形态。 |
 | 颜色/文字 | `palette.ts` 解析颜色能力；`sgr.ts` 只解析有序命令并跳过颜色参数，`output-style.ts` 与 `surface.ts` 各自决定 DIM/背景策略；`glyph-presentation.ts` 处理字形。 |
 | chrome | `chrome/install.ts` 管理安装/撤销；editor、header、footer、working、metadata 和 transcript-components 拥有各自组件；history-window/fullscreen-margin 管理窗口与留白。 |
-| 度量 | `ui-metrics.ts` 管交互计时，`interaction-outcome.ts` 管终止证据，`usage-ledger.ts` 管用量去重，`output-speed.ts` 管采样；`git-changes.ts` 统计真实内容 churn，`quota/` 只读 Codex app-server。 |
+| 度量 | `ui-metrics.ts` 管交互计时，`interaction-outcome.ts` 管终止证据，`usage-ledger.ts` 管用量去重，`output-speed.ts` 管采样；`git-changes.ts` 采样工作树 vs HEAD 的未提交改动，`quota/` 只读 Codex app-server。 |
 | 摘要 | `turn-summary.ts` 是显示层唯一写会话条目的模块；仅依据终止证据生成结果，不把工具错误直接判为整个交互失败。 |
 | 精确复制 | `selection-copy/` 从渲染行建立来源映射，序列化所选内容；与真实宿主行不一致时回退。映射/缓存按已提交渲染数组身份绑定，不重新渲染猜测位置。 |
 | todo | model 验证领域规则，store 拥有锁与磁盘，tools 拥有路径解析/通知，widget 拥有可见状态。参数类型由 TypeBox schema 推导。 |

@@ -578,11 +578,10 @@ test("footer: real git changes reach the frame in the diff's green/red", async (
   ).render(140).join("\n");
 
   assert.ok(!plain(frame()).includes(" +"), "a clean session start shows no change segment");
-  // The baseline read is async; edits that land before it completes fold into
-  // the baseline and never show. Exact counts are pinned by the git-changes
-  // unit tests — this case only proves the frame plumbing (snapshot →
-  // segment → diff colors), so send edits in two waves: whichever wave the
-  // first published read sees, both signs (+ and −) must arrive painted.
+  // The sample read is async; this case only proves the frame plumbing
+  // (snapshot → segment → diff colors), so send edits in two waves: whichever
+  // wave the first published read sees, both signs (+ and −) must arrive
+  // painted. Exact counts are pinned by the git-changes unit tests.
   dirtyRepo(repo); // wave 1: tracked rewrite (+2 −1) + untracked script (+2)
   await new Promise((resolve) => setTimeout(resolve, 300));
   writeFileSync( // wave 2: swap a line and extend the file (+2 −1 over wave 1)

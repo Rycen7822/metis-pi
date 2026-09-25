@@ -34,7 +34,7 @@
 | `glyphs:` | 是否应用、标记数量与字符集、已处理帧数、改写次数、`include` 追加项 |
 | `config:` | 生效配置全量（用于确认文件里的值真的进来了） |
 | `resources:` | 定时器与资源占用：ticker、working 定时器（仅 active）、quota 定时器、git 定时器、widget |
-| `git-changes:` | churn 总量、读取次数、**工作区 vs HEAD 的原始值**（可直接用 `git diff --numstat` 对账）、基线引用、轮询/去抖参数 |
+| `git-changes:` | 工作树 vs HEAD（无 HEAD 时 vs 空树）的 `+A -D`、文件数、读取次数、基线引用、轮询/去抖参数（可直接用 `git diff --numstat HEAD` 对账） |
 | `selection-copy:` | serializer 状态、镜像 built/degraded/throttled 计数、`other-wrapper=`（是否有外来包装）、最近失败原因 |
 | `copy-stats:` | 复制调用次数、各模式计数（exact/mixed/native/empty-decoration/failed）、最近模式/字符数/耗时/缓存命中 |
 | `history-window:` | 历史窗口状态 JSON（已装载页、是否还有更早/更晚、行预算） |

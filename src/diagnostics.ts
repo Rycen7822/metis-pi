@@ -228,10 +228,10 @@ const resourcesLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string 
 
 const gitChangesLine = (deps: DiagnosticsDeps): string => {
   const stat = deps.gitChanges.snapshot();
-  if (!stat) return "  git-changes: unavailable (no git metadata in cwd)";
+  if (!stat) return "  git-changes: unavailable (no git metadata in cwd, or no successful read yet)";
   const session = deps.gitChanges.session();
-  const state = `work tree vs HEAD now +${session.state.additions} -${session.state.deletions}`;
-  return `  git-changes: +${stat.additions} -${stat.deletions} session churn (${stat.files} files, ${session.observations} reads, ${state} — reconcile that one with \`git diff --numstat\`; churn counts what each read saw change, so work that was added and removed again still counts; ${session.tracking ? `reference ${session.rev ?? "index (unborn HEAD)"}` : "no reference yet"}, ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`;
+  const base = session.rev ? `HEAD ${session.rev.slice(0, 12)}` : "the empty tree (unborn HEAD)";
+  return `  git-changes: work tree vs ${base} now +${stat.additions} -${stat.deletions} (${stat.files} files, ${session.observations} reads; staged + unstaged counted once, untracked text files included — reconcile with \`git diff --numstat HEAD\`; ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`;
 };
 
 const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {

@@ -181,9 +181,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     } catch { /* render happens on the next host cycle */ }
   }
 
-  // Session change counts for the footer: display-only git reads on a 2s poll
-  // plus activity-driven refreshes (agent ticks, tool work), armed only while a
-  // TUI session is live (see git-changes.ts).
+  // Working-tree change counts for the footer: display-only git reads on a 2s
+  // poll plus activity-driven refreshes (agent ticks, tool work), armed only
+  // while a TUI session is live (see git-changes.ts).
   const gitChanges = createGitChangesTracker({
     getCwd: () => hostData.getCwd(),
     onUpdate: requestRender,

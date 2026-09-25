@@ -443,30 +443,31 @@ try {
   const footerLines = frames.idle.split("\n").filter((l) => l.trim() && !l.includes("pcx-mock-model") && !l.includes("Ask anything"));
   assert.ok(footerLines.some((l) => l.includes("pcx-mock-pty") || (l.includes("/") && !l.includes("ctx "))), "footer carries cwd/branch rows");
   assert.ok(!footerLines.some((l) => l.includes("pcx-mock-model ·")), "footer does NOT duplicate the model line");
-  // 0.13.0: session change counts ride with the branch, straight from git.
+  // 0.13.0: working-tree change counts ride with the branch, straight from git.
   if (hasGit) {
-    // The counts are the SESSION's delta: work that predates the session (the
-    // pre-existing untracked file above) must not appear at all. The poll (2s)
-    // and the frames are asynchronous, so assert on a settled frame.
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    const cleanFrame = capture();
-    assert.ok(!/\+\d+ -\d+/.test(visibleRows(cleanFrame).join("\n")), "pre-existing work is the baseline, not the session's");
+    // The counts are the work tree vs HEAD right now (staged + unstaged once,
+    // plus untracked text files): the pre-existing untracked file above shows
+    // immediately — there is no session baseline. The poll (2s) and the frames
+    // are asynchronous, so assert on a settled frame.
+    frames.gitChangesPreexisting = await waitFor(/\(main\) \+4 -0/, 15_000, "pre-existing untracked work shows in the footer");
+    assert.match(frames.gitChangesPreexisting, /\(main\) \+4 -0/, "existing WIP is displayed, not hidden");
 
     // An edit from outside the agent (a script / another terminal) counts the
-    // same way the agent's own tools do: untracked 3 lines → "+3 -0".
+    // same way the agent's own tools do: the new 3-line untracked file joins
+    // the pre-existing 4 → "+7 -0".
     fs.writeFileSync(path.join(WORKSPACE, "scripted.txt"), "alpha\nbeta\ngamma\n");
-    frames.gitChanges = await waitFor(/\+3 -0/, 15_000, "footer session change counts (+3 for one script-written 3-line file)");
-    assert.match(frames.gitChanges, /\(main\) \+3 -0/, "counts follow the branch");
+    frames.gitChanges = await waitFor(/\+7 -0/, 15_000, "footer working-tree change counts");
+    assert.match(frames.gitChanges, /\(main\) \+7 -0/, "counts follow the branch");
 
-    // A tracked rewrite with real deletions (5 added, 2 removed): the footer
-    // must show the absolute pair — never a net "+1 -0" or a line-count delta.
+    // A tracked rewrite with real deletions (5 added, 2 removed) joins the 7
+    // untracked lines: the footer must show the absolute pair (+12 -2), never a
+    // net "+5 -0" or a line-count delta.
     fs.writeFileSync(path.join(WORKSPACE, "tracked.txt"), "one\nfour\nfive\nsix\nseven\neight\n");
-    frames.gitChangesEdit = await waitFor(/\+8 -2/, 15_000, "absolute counts: +3 untracked and +5 tracked, 2 deletions");
-    assert.match(frames.gitChangesEdit, /\(main\) \+8 -2/, "additions and deletions are absolute, not a net");
+    frames.gitChangesEdit = await waitFor(/\+12 -2/, 15_000, "absolute counts: +7 untracked and +5 tracked, 2 deletions");
+    assert.match(frames.gitChangesEdit, /\(main\) \+12 -2/, "additions and deletions are absolute, not a net");
 
-    // A commit mid-session (the agent's /commit, or git from a script) clears
-    // the stat: the tree is clean against the new HEAD, so no counts by the
-    // branch. (0.15.4 — the committed delta folds out of the baseline.)
+    // A commit makes the sample empty: the tree is clean against the new HEAD,
+    // so no counts by the branch.
     execFileSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "ignore" });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mid-session"], { cwd: WORKSPACE, stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 4000));
@@ -478,14 +479,12 @@ try {
     fs.appendFileSync(path.join(WORKSPACE, "scripted.txt"), "delta\nepsilon\nzeta\n");
     frames.gitChangesAfter = await waitFor(/\(main\) \+3 -0/, 15_000, "post-commit edits count against the new HEAD");
 
-    // 0.19.3: the counts are observed CHURN, not a snapshot of the current diff.
-    // Rewriting the three lines the session itself just added has to raise the
-    // deletion total too (+3 −0, then +2 −3 → +5 −3). The old per-path numstat
-    // subtraction reported "+2 -0" here, which is the bug that was reported: the
-    // deletions of work the session added and then replaced never showed up.
+    // Rewriting the three lines that were just added replaces them in the
+    // current diff: the 6 committed lines become 5, i.e. +2 −3. Nothing
+    // accumulates — the old churn mode reported +5 −3 here.
     fs.writeFileSync(path.join(WORKSPACE, "scripted.txt"), "alpha\nbeta\ngamma\nTHE1\nTHE2\n");
-    frames.gitChangesChurn = await waitFor(/\(main\) \+5 -3/, 20_000, "churn keeps the deletions of lines this session added itself");
-    assert.match(frames.gitChangesChurn, /\(main\) \+5 -3/, "absolute churn, not the +2 -0 work-tree state");
+    frames.gitChangesRewrite = await waitFor(/\(main\) \+2 -3/, 20_000, "the sample follows the rewrite exactly");
+    assert.match(frames.gitChangesRewrite, /\(main\) \+2 -3/, "current diff, not accumulated churn");
   } else {
     console.log("  NOTE: git unavailable — session change counts not asserted");
   }
@@ -1031,7 +1030,7 @@ try {
   console.log("  idle footer:  model/effort/provider/capacity visible");
   console.log(
     hasGit
-      ? "  git changes:  session churn +8 -2 absolute, commit clears, post-commit edits re-count, rewriting self-added lines keeps their deletions (+5 -3)"
+      ? "  git changes:  work tree vs HEAD (staged+unstaged once, untracked text): +4 -0 existing WIP, +12 -2 with tracked deletions, commit clears, rewrite reports +2 -3"
       : "  git changes:  not asserted (git unavailable)",
   );
   console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand");

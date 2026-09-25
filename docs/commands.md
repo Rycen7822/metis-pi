@@ -65,14 +65,13 @@
 | `<cwd>/.pi/codex-todos/tasks.json.bak-<ts>` | todo | 损坏存档（`/todos-doctor` 可查） |
 | `<cwd>/.pi/codex-todos/tasks.lock` | todo | 跨进程文件锁，`0600` + `wx` 独占创建，TTL 30 分钟 |
 | `<cwd>/.pi/codex-todos/stale-lock-<session>-<at>.json` | todo | 过期锁被自动归档到这里 |
-| `<os tmp>/pi-codex-churn-*/` | git-changes | 会话私有的 `GIT_OBJECT_DIRECTORY`：churn 计数把文件内容 `git hash-object -w` 到这里比较 |
 | 会话记录（session entries） | goal / summary | 目标状态与摘要作为 CustomEntry 追加；无外部数据库 |
 
 ## 只读保证（安全边界）
 
 | 子系统 | 承诺 |
 | --- | --- |
-| git-changes | **不写**用户的 `.git` 索引 / 工作区 / 对象库；用 `GIT_OBJECT_DIRECTORY` 指向临时目录，`hash-object --no-filters` 不触发 diff 驱动与 smudge 过滤器；git 调用带 5 秒超时与 `--no-ext-diff --no-textconv --no-optional-locks`；读取失败保留上次正确数字而非清零 |
+| git-changes | **不写**用户的 `.git` 索引 / 工作区 / 对象库，也不创建临时对象目录；只跑 `git rev-parse / diff / ls-files` 读路径，diff 带 `--no-ext-diff --no-textconv`、git 调用带 5 秒超时与 `--no-optional-locks`；读取失败保留上次正确数字而非清零 |
 | quota | **不读**任何凭据文件、不发私有 HTTP、不 scrape Codex TUI；只经本机已登录 Codex CLI 的 `codex app-server` stdio JSON-RPC |
 | 显示层 | 不改写工具参数、执行结果、会话记录、模型上下文、系统提示词；不注册内建同名工具 |
 | 配置 | 永不改写用户配置文件 |
