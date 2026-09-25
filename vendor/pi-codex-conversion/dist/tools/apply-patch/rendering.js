@@ -2,6 +2,16 @@ import { isAbsolute, relative } from "node:path";
 import { keyHint, renderDiff } from "@earendil-works/pi-coding-agent";
 import { openFileAtPath } from "../../patch/paths.js";
 import { parsePatchActions } from "../../patch/parser.js";
+export function buildApplyPatchPreviews(patchText, cwd = process.cwd()) {
+    let actions;
+    try {
+        actions = parsePatchActions({ text: patchText });
+    }
+    catch {
+        return [];
+    }
+    return buildFilePreviews(actions, cwd);
+}
 function expandHint() {
     try {
         return keyHint("app.tools.expand", "to expand");
@@ -10,15 +20,7 @@ function expandHint() {
         return "ctrl+o to expand";
     }
 }
-export function formatApplyPatchSummary(patchText, cwd = process.cwd()) {
-    let actions;
-    try {
-        actions = parsePatchActions({ text: patchText });
-    }
-    catch {
-        return "";
-    }
-    const files = buildFilePreviews(actions, cwd);
+export function formatApplyPatchSummary(patchText, cwd = process.cwd(), files = buildApplyPatchPreviews(patchText, cwd)) {
     if (files.length === 0) {
         return "";
     }
@@ -37,10 +39,10 @@ export function formatApplyPatchSummary(patchText, cwd = process.cwd()) {
     }
     return lines.join("\n");
 }
-export function formatApplyPatchCollapsedDiff(patchText, cwd = process.cwd(), maxPreviewLines = 10) {
-    const full = renderApplyPatchCall(patchText, cwd);
+export function formatApplyPatchCollapsedDiff(patchText, cwd = process.cwd(), maxPreviewLines = 10, files = buildApplyPatchPreviews(patchText, cwd)) {
+    const full = renderApplyPatchCall(patchText, cwd, files);
     if (!full)
-        return formatApplyPatchSummary(patchText, cwd);
+        return formatApplyPatchSummary(patchText, cwd, files);
     const fullLines = full.split("\n");
     const visibleLines = fullLines.slice(0, maxPreviewLines + 1);
     const remaining = fullLines.length - visibleLines.length;
@@ -50,15 +52,7 @@ export function formatApplyPatchCollapsedDiff(patchText, cwd = process.cwd(), ma
     }
     return lines.join("\n");
 }
-export function renderApplyPatchCall(patchText, cwd = process.cwd()) {
-    let actions;
-    try {
-        actions = parsePatchActions({ text: patchText });
-    }
-    catch {
-        return "";
-    }
-    const files = buildFilePreviews(actions, cwd);
+export function renderApplyPatchCall(patchText, cwd = process.cwd(), files = buildApplyPatchPreviews(patchText, cwd)) {
     if (files.length === 0) {
         return "";
     }

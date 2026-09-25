@@ -19,7 +19,7 @@
 | 领域 | 模块与所有权 |
 | --- | --- |
 | 装配/宿主 | `extension.ts` 装配；`host-data.ts` 收敛公开数据；`adapter.ts` 守卫工具行 selector；`config.ts` 统一字段校验和默认值。 |
-| 工具显示 | `tool-names.ts` 定义契约；`renderers.ts` 装配 call/result 两槽；`shell.ts` 按物理行预算；`diff.ts`/`diff-component.ts` 共享 diff；`explore.ts` 管理探索显示。 |
+| 工具显示 | `tool-names.ts` 定义契约；`renderers.ts` 装配 call/result 两槽；`shell.ts` 按物理行预算；`diff.ts`/`diff-component.ts` 共享 diff；`apply-patch-view.ts` 只读取内置转换层的执行前快照并绘制展开 diff；`explore.ts` 管理探索显示。 |
 | 写入预览 | `write-tracker.ts` 记录真实 pre/post image；`write-preview.ts` 展示状态；不能从新内容臆造删除行数。 |
 | 转录/思考 | `transcript-state.ts` 拥有稳定消息身份、语义 run、计时和控制器；adapter 每次更新解析一次 `AssistantView`，供阶段策略和组件装饰共用。`thinking-view.ts` 拥有交互形态。 |
 | 颜色/文字 | `palette.ts` 解析颜色能力；`sgr.ts` 只解析有序命令并跳过颜色参数，`output-style.ts` 与 `surface.ts` 各自决定 DIM/背景策略；`glyph-presentation.ts` 处理字形。 |

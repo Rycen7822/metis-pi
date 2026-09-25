@@ -4,19 +4,29 @@ import { openFileAtPath } from "../../patch/paths.ts";
 import { parsePatchActions } from "../../patch/parser.ts";
 import type { ParsedPatchAction } from "../../patch/types.ts";
 
-interface PreviewLine {
+export interface PreviewLine {
 	lineNumber: number;
 	marker: " " | "+" | "-";
 	text: string;
 }
 
-interface FilePreview {
+export interface FilePreview {
 	verb: "Added" | "Deleted" | "Edited";
 	path: string;
 	movePath?: string | undefined;
 	added: number;
 	removed: number;
 	lines: PreviewLine[];
+}
+
+export function buildApplyPatchPreviews(patchText: string, cwd = process.cwd()): FilePreview[] {
+	let actions: ParsedPatchAction[];
+	try {
+		actions = parsePatchActions({ text: patchText });
+	} catch {
+		return [];
+	}
+	return buildFilePreviews(actions, cwd);
 }
 
 function expandHint(): string {
@@ -27,15 +37,11 @@ function expandHint(): string {
 	}
 }
 
-export function formatApplyPatchSummary(patchText: string, cwd = process.cwd()): string {
-	let actions: ParsedPatchAction[];
-	try {
-		actions = parsePatchActions({ text: patchText });
-	} catch {
-		return "";
-	}
-
-	const files = buildFilePreviews(actions, cwd);
+export function formatApplyPatchSummary(
+	patchText: string,
+	cwd = process.cwd(),
+	files: readonly FilePreview[] = buildApplyPatchPreviews(patchText, cwd),
+): string {
 	if (files.length === 0) {
 		return "";
 	}
@@ -59,9 +65,14 @@ export function formatApplyPatchSummary(patchText: string, cwd = process.cwd()):
 	return lines.join("\n");
 }
 
-export function formatApplyPatchCollapsedDiff(patchText: string, cwd = process.cwd(), maxPreviewLines = 10): string {
-	const full = renderApplyPatchCall(patchText, cwd);
-	if (!full) return formatApplyPatchSummary(patchText, cwd);
+export function formatApplyPatchCollapsedDiff(
+	patchText: string,
+	cwd = process.cwd(),
+	maxPreviewLines = 10,
+	files: readonly FilePreview[] = buildApplyPatchPreviews(patchText, cwd),
+): string {
+	const full = renderApplyPatchCall(patchText, cwd, files);
+	if (!full) return formatApplyPatchSummary(patchText, cwd, files);
 	const fullLines = full.split("\n");
 	const visibleLines = fullLines.slice(0, maxPreviewLines + 1);
 	const remaining = fullLines.length - visibleLines.length;
@@ -72,15 +83,11 @@ export function formatApplyPatchCollapsedDiff(patchText: string, cwd = process.c
 	return lines.join("\n");
 }
 
-export function renderApplyPatchCall(patchText: string, cwd = process.cwd()): string {
-	let actions: ParsedPatchAction[];
-	try {
-		actions = parsePatchActions({ text: patchText });
-	} catch {
-		return "";
-	}
-
-	const files = buildFilePreviews(actions, cwd);
+export function renderApplyPatchCall(
+	patchText: string,
+	cwd = process.cwd(),
+	files: readonly FilePreview[] = buildApplyPatchPreviews(patchText, cwd),
+): string {
 	if (files.length === 0) {
 		return "";
 	}

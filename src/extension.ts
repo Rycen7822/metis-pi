@@ -1,4 +1,5 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
+import { createOwnedApplyPatchView } from "./apply-patch-view.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
@@ -319,6 +320,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
       renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps),
+      ownedApplyPatch: bindings.makeDiff ? createOwnedApplyPatchView(bindings.makeText, bindings.makeDiff, bindings.expandHint) : undefined,
     });
     if (!handle.installed) ctx.ui.notify(`metis-pi: ${handle.reason}. Compact transcript was not installed.`, "warning");
     // Scoped transcript decorations (member spacing + assistant separator +

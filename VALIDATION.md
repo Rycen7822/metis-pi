@@ -1,11 +1,12 @@
 # Validation
 
-Current working tree after `e01d1ca`, checked on 2026-09-22 with Node 24.15.0 and Pi 0.87.0. This page records current evidence and limits; implementation history belongs in Git. Commands are documented in [development.md](docs/development.md).
+Baseline integration checks below were recorded after `e01d1ca` on 2026-09-22 with Node 24.15.0 and Pi 0.87.0. The apply_patch display checks were rerun after `8cb7af6` on 2026-09-25, including an installed Pi 0.87.1 loader probe. This page records evidence and limits; implementation history belongs in Git. Commands are documented in [development.md](docs/development.md).
 
 ## Checks
 
 | Check | Result |
 | --- | --- |
+| apply_patch display regression | `npm test`: 356/356; `npm run check`, `vendor:check`, `test:host` and `vendor:smoke`: exit 0. Vendor build and local patch regenerated. Installed Pi 0.87.1 fresh-loader probe passed; PTY and pristine patch replay were not rerun for this change. |
 | `env -u NO_COLOR npm run verify` | Exit 0: 343/343 tests, project/vendor type checks, vendor activation, real Pi 0.87.0 host smoke and package dry-run. |
 | `npm run check:core` | Exit 0. Pure rendering/state code retains the host-effect boundary. |
 | `npm run preview` | Exit 0. Message separators resolve through object identity; plaintext matches the committed preview. ANSI/HTML were regenerated. |
@@ -32,7 +33,7 @@ Current working tree after `e01d1ca`, checked on 2026-09-22 with Node 24.15.0 an
 | Notebook state | Generated capture code tests cover values/functions/metadata, partial writes, close/commit, caps and scope-specific skips/errors. Hashed payloads and checkpoint layout mismatches are tested. |
 | Shell truncation | 270 comparisons against the saved implementation match across empty/long input, narrow/wide output and row budgets. |
 
-The real-host smoke assembles Pi's actual components and validates tool title ownership, write states, mouse folding, skills and chrome. It is separate from terminal input injection and from a real provider request. Temporary differential probes and logs are local `.work/pi087/` artifacts; maintained regressions live under `test/`.
+The real-host smoke assembles Pi's actual components and validates tool title ownership, write states, mouse folding, skills and chrome. It also executes the shipped multi-file `apply_patch` (add/edit/move/delete), verifies expanded Codex backgrounds, CJK wrapping at 32/80 columns, pre-deletion content and failure fallback. An isolated fresh `DefaultResourceLoader` probe with installed Pi 0.87.1 loaded appearance + vendor from their real paths, executed a patch and confirmed that the shared snapshot reaches the Codex renderer. These are component/loader checks, not a new PTY screenshot or a real provider request. Temporary differential probes and logs are local artifacts; maintained regressions live under `test/` and `scripts/host-smoke.mjs`.
 
 ## Limits
 

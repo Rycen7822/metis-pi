@@ -59,6 +59,17 @@ comparison and checkout-path detection. metis-pi owns releases and updates; the 
 manifest retains upstream provenance only. Do not restore this check during manual sync.
 `test/package.test.mjs` guards both source and shipped output against its return.
 
+## 10. Shared apply_patch diff display
+
+`tools/apply-patch/render-state.ts` owns a single structured pre-execution file
+preview, exposed read-only by `getApplyPatchRenderSnapshot`. Native text views
+derive from that snapshot instead of caching three formatted strings or rereading
+changed/deleted files. metis-pi's appearance adapter recognizes only this package's
+exact extension entry and paints expanded successful/pending patch previews using
+the same Codex diff component as edit/write. Compact preferences, failure results,
+third-party tools and execution remain unchanged. `scripts/host-smoke.mjs` checks
+real multi-file patch execution and rendering, including CJK wrapping and deletion.
+
 ## Maintenance verification
 
 Run project/vendor checks and real built-provider tests. Rebuild twice to check deterministic output; regenerate the patch twice to check idempotence. Apply it to an isolated pristine 3.0.34 source copy using the documented payload exclusions and compare file contents and modes. New-file diff headers must use `a/src/` and `b/src/` on both sides. Do not remove unified-diff context prefixes to silence patch-file whitespace diagnostics.

@@ -2480,6 +2480,190 @@ index 0000000..e5dae54
 +}
 +
 +export type { ToolReference };
+diff --git a/src/tools/apply-patch/render-state.ts b/src/tools/apply-patch/render-state.ts
+index d6d50e3..523716b 100644
+--- a/src/tools/apply-patch/render-state.ts
++++ b/src/tools/apply-patch/render-state.ts
+@@ -1,14 +1,14 @@
+ import type { ExecutePatchResult } from "../../patch/types.ts";
+-import { formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.ts";
++import { buildApplyPatchPreviews, type FilePreview, formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.ts";
+ 
+-interface ApplyPatchRenderState {
++export interface ApplyPatchRenderSnapshot {
++	readonly files: readonly FilePreview[];
++	readonly status: "pending" | "partial_failure" | "failed";
++	readonly failedTargets?: readonly string[] | undefined;
++}
++
++interface ApplyPatchRenderState extends ApplyPatchRenderSnapshot {
+ 	cwd: string;
+-	patchText: string;
+-	collapsed: string;
+-	collapsedDiff: string;
+-	expanded: string;
+-	status: "pending" | "partial_failure" | "failed";
+-	failedTargets?: string[] | undefined;
+ }
+ 
+ export interface ApplyPatchSuccessDetails {
+@@ -26,6 +26,10 @@ export type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartial
+ 
+ const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
+ 
++export function getApplyPatchRenderSnapshot(toolCallId: string): ApplyPatchRenderSnapshot | undefined {
++	return applyPatchRenderStates.get(toolCallId);
++}
++
+ export function isApplyPatchToolDetails(details: unknown): details is ApplyPatchToolDetails {
+ 	if (!details || typeof details !== "object") return false;
+ 	const record = details as Record<string, unknown>;
+@@ -64,10 +68,8 @@ export function setApplyPatchRenderState(
+ 	status: "pending" | "partial_failure" | "failed" = "pending",
+ 	failedTargets?: string[],
+ ): void {
+-	const collapsed = formatApplyPatchSummary(patchText, cwd);
+-	const collapsedDiff = formatApplyPatchCollapsedDiff(patchText, cwd);
+-	const expanded = renderApplyPatchCall(patchText, cwd);
+-	applyPatchRenderStates.set(toolCallId, { cwd, patchText, collapsed, collapsedDiff, expanded, status, failedTargets });
++	const files = buildApplyPatchPreviews(patchText, cwd);
++	applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets });
+ }
+ 
+ export function markApplyPatchPartialFailure(toolCallId: string, failedTargets?: string[]): void {
+@@ -94,7 +96,7 @@ function markFailedTargetLine(line: string, failedTarget: string): string | unde
+ 	return undefined;
+ }
+ 
+-function renderPartialFailureCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: string[]): string {
++function renderPartialFailureCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: readonly string[]): string {
+ 	const lines = text.split("\n");
+ 	if (lines.length === 0) return theme.fg("warning", "• Edit partially failed");
+ 	lines[0] = lines[0]!.replace(/^• (Added|Edited|Deleted)\b/, "• Edit partially failed");
+@@ -118,7 +120,7 @@ function renderPartialFailureCall(text: string, theme: { fg(role: string, text:
+ 	}).join("\n");
+ }
+ 
+-function renderFailedCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: string[]): string {
++function renderFailedCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: readonly string[]): string {
+ 	const lines = text.split("\n");
+ 	if (lines.length === 0) return theme.fg("error", "• Edit failed");
+ 	lines[0] = lines[0]!.replace(/^• (Added|Edited|Deleted)\b/, "• Edit failed");
+@@ -143,13 +145,12 @@ export function renderApplyPatchCallFromState(args: { input?: unknown | undefine
+ 	const patchText = typeof args.input === "string" ? args.input : "";
+ 	if (patchText.trim().length === 0) return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
+ 	const cached = context?.toolCallId ? applyPatchRenderStates.get(context.toolCallId) : undefined;
+-	const cwd = context?.cwd ?? cached?.cwd;
+-	const effectivePatchText = cached?.patchText ?? patchText;
++	const cwd = cached?.cwd ?? context?.cwd;
+ 	const baseText = context?.expanded
+-		? cached?.expanded ?? renderApplyPatchCall(effectivePatchText, cwd)
++		? renderApplyPatchCall(patchText, cwd, cached?.files)
+ 		: context?.showCollapsedDiff
+-			? cached?.collapsedDiff ?? formatApplyPatchCollapsedDiff(effectivePatchText, cwd)
+-		: cached?.collapsed ?? formatApplyPatchSummary(effectivePatchText, cwd);
++			? formatApplyPatchCollapsedDiff(patchText, cwd, undefined, cached?.files)
++			: formatApplyPatchSummary(patchText, cwd, cached?.files);
+ 	if (baseText.trim().length === 0) {
+ 		if (cached?.status === "failed") return theme.fg("error", "• Edit failed");
+ 		return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
+diff --git a/src/tools/apply-patch/rendering.ts b/src/tools/apply-patch/rendering.ts
+index 77911b3..72d98fa 100644
+--- a/src/tools/apply-patch/rendering.ts
++++ b/src/tools/apply-patch/rendering.ts
+@@ -4,13 +4,13 @@ import { openFileAtPath } from "../../patch/paths.ts";
+ import { parsePatchActions } from "../../patch/parser.ts";
+ import type { ParsedPatchAction } from "../../patch/types.ts";
+ 
+-interface PreviewLine {
++export interface PreviewLine {
+ 	lineNumber: number;
+ 	marker: " " | "+" | "-";
+ 	text: string;
+ }
+ 
+-interface FilePreview {
++export interface FilePreview {
+ 	verb: "Added" | "Deleted" | "Edited";
+ 	path: string;
+ 	movePath?: string | undefined;
+@@ -19,23 +19,29 @@ interface FilePreview {
+ 	lines: PreviewLine[];
+ }
+ 
+-function expandHint(): string {
++export function buildApplyPatchPreviews(patchText: string, cwd = process.cwd()): FilePreview[] {
++	let actions: ParsedPatchAction[];
+ 	try {
+-		return keyHint("app.tools.expand", "to expand");
++		actions = parsePatchActions({ text: patchText });
+ 	} catch {
+-		return "ctrl+o to expand";
++		return [];
+ 	}
++	return buildFilePreviews(actions, cwd);
+ }
+ 
+-export function formatApplyPatchSummary(patchText: string, cwd = process.cwd()): string {
+-	let actions: ParsedPatchAction[];
++function expandHint(): string {
+ 	try {
+-		actions = parsePatchActions({ text: patchText });
++		return keyHint("app.tools.expand", "to expand");
+ 	} catch {
+-		return "";
++		return "ctrl+o to expand";
+ 	}
++}
+ 
+-	const files = buildFilePreviews(actions, cwd);
++export function formatApplyPatchSummary(
++	patchText: string,
++	cwd = process.cwd(),
++	files: readonly FilePreview[] = buildApplyPatchPreviews(patchText, cwd),
++): string {
+ 	if (files.length === 0) {
+ 		return "";
+ 	}
+@@ -59,9 +65,14 @@ export function formatApplyPatchSummary(patchText: string, cwd = process.cwd()):
+ 	return lines.join("\n");
+ }
+ 
+-export function formatApplyPatchCollapsedDiff(patchText: string, cwd = process.cwd(), maxPreviewLines = 10): string {
+-	const full = renderApplyPatchCall(patchText, cwd);
+-	if (!full) return formatApplyPatchSummary(patchText, cwd);
++export function formatApplyPatchCollapsedDiff(
++	patchText: string,
++	cwd = process.cwd(),
++	maxPreviewLines = 10,
++	files: readonly FilePreview[] = buildApplyPatchPreviews(patchText, cwd),
++): string {
++	const full = renderApplyPatchCall(patchText, cwd, files);
++	if (!full) return formatApplyPatchSummary(patchText, cwd, files);
+ 	const fullLines = full.split("\n");
+ 	const visibleLines = fullLines.slice(0, maxPreviewLines + 1);
+ 	const remaining = fullLines.length - visibleLines.length;
+@@ -72,15 +83,11 @@ export function formatApplyPatchCollapsedDiff(patchText: string, cwd = process.c
+ 	return lines.join("\n");
+ }
+ 
+-export function renderApplyPatchCall(patchText: string, cwd = process.cwd()): string {
+-	let actions: ParsedPatchAction[];
+-	try {
+-		actions = parsePatchActions({ text: patchText });
+-	} catch {
+-		return "";
+-	}
+-
+-	const files = buildFilePreviews(actions, cwd);
++export function renderApplyPatchCall(
++	patchText: string,
++	cwd = process.cwd(),
++	files: readonly FilePreview[] = buildApplyPatchPreviews(patchText, cwd),
++): string {
+ 	if (files.length === 0) {
+ 		return "";
+ 	}
 diff --git a/src/tools/code-mode/notebook-tool.ts b/src/tools/code-mode/notebook-tool.ts
 index 19a57e1..1e17b2d 100644
 --- a/src/tools/code-mode/notebook-tool.ts

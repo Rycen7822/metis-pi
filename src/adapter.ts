@@ -17,6 +17,11 @@ export interface AdapterOptions {
   getTools(): readonly unknown[];
   enabled(): boolean;
   renderers: Record<ToolName, Renderers>;
+  /** Only the conversion layer shipped by this package, never another plugin. */
+  ownedApplyPatch?: {
+    sourcePath: string;
+    renderCall: (...args: Parameters<Renderers["renderCall"]>) => ReturnType<Renderers["renderCall"]> | undefined;
+  };
 }
 export interface AdapterHandle {
   readonly installed: boolean;
@@ -64,13 +69,25 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (!active || !ownsMethods() || !options.enabled()) return;
     const current = asRecord(row);
     const name = current.toolName;
-    if (typeof name !== "string" || !TOOL_NAMES.includes(name as ToolName)) return;
+    if (typeof name !== "string") return;
     const definition = asRecord(current.toolDefinition);
     if (Object.keys(definition).length === 0) return;
     // Respect FFF/LSP/etc. even when they override the SAME builtin name.
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const source = asRecord(info.sourceInfo);
+    const patch = options.ownedApplyPatch;
+    if (name === "apply_patch" && patch && typeof source.source === "string" && source.path === patch.sourcePath) {
+      const call = definition.renderCall;
+      const result = definition.renderResult;
+      if (typeof call !== "function" || typeof result !== "function") return;
+      return {
+        renderCall: (args, theme, context) => patch.renderCall(args, theme, context) ?? call(args, theme, context),
+        // Preserve the conversion layer's success/error/partial-failure protocol.
+        renderResult: (value, options, theme, context) => result(value, options, theme, context),
+      };
+    }
+    if (!TOOL_NAMES.includes(name as ToolName)) return;
     if (source.source !== "builtin" || source.path !== `<builtin:${name}>`) return;
     // An EXACT builtin self-shell (edit renders its own rows) takes the same
     // renderer as every other text tool; third-party self-shells back off above.

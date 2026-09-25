@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 内置 `apply_patch` 的展开 diff 接入 metis-pi 的 Codex 整行底色、行号和换行布局；复用转换层唯一的执行前快照，保留收起配置、失败诊断和第三方工具所有权。
 - footer 的 `+A -D` 改为当前工作树相对 HEAD 的未提交改动：暂存 + 未暂存从工作树侧计一次，另计未跟踪非忽略文本文件；启动时已存在的 WIP 立即显示，commit/撤销后数字随之下降，反复刷新不再累积。删除了旧的会话累计 churn、内容 blob 私有对象库、commit 折算与 observed 快照等机制；无 HEAD 仓库改与空树比较，已暂存新文件不再遗漏。
 - 适配 Pi 0.87.0：开发依赖、CI 与真实宿主检查目标更新；运行期不静态导入 0.87 专有 API，旧宿主请求前缀与旧会话行为保留。
 - vendored Codex 在重建压缩输入和回放片段前应用 `context_edit` 投影，并由同一 `inspectCheckpointWindow` 判定 checkpoint 边界与窗口可复用性：已吸收的编辑保持可复用，后续改写 kept 内容的编辑不会被旧窗口复活（普通回放显式失败、再次压缩从编辑后上下文重建）。无法解析的 `firstKeptEntryId`（字段缺失、显式 `undefined`、未知/后置 id）不再退化为空保留窗口：在任何摘要请求前就明确取消，native 与 portable 请求均不会发出；只有 0.87 的 checkpoint 自身 id 与 0.86 的 `null` 视为零保留。

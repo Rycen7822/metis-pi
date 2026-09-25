@@ -67,6 +67,38 @@ test("tools outside the takeover list are never decorated", () => {
   }
 });
 
+test("only the packaged apply_patch entry can use the owned diff renderer", () => {
+  const Host = fakeHost();
+  const definition = { renderCall: () => bindings.makeText("native patch"), renderResult: () => bindings.makeText("native result") };
+  const sourcePath = "/metis/vendor/pi-codex-conversion/dist/index.js";
+  let sourceInfo = { source: "../../project/metis", path: sourcePath };
+  let ready = true;
+  const handle = installAdapter(Host.prototype, {
+    getTools: () => [{ name: "apply_patch", sourceInfo }], enabled: () => true,
+    renderers: makeRenderers(bindings.makeText, bindings.expandHint),
+    ownedApplyPatch: { sourcePath, renderCall: () => ready ? bindings.makeText("owned diff") : undefined },
+  });
+  try {
+    const row = new Host("apply_patch", definition);
+    assert.match(row.render(80).join("\n"), /owned diff/);
+    row.updateResult({ content: [] });
+    assert.match(row.render(80).join("\n"), /native result/);
+    ready = false;
+    row.updateDisplay();
+    assert.match(row.render(80).join("\n"), /native patch/);
+    for (const source of [
+      { source: "npm:other-plugin", path: "/other/dist/index.js" },
+      { source: "builtin", path: "<builtin:apply_patch>" },
+      { path: sourcePath },
+    ]) {
+      sourceInfo = source;
+      assert.equal(row.getCallRenderer(), definition.renderCall);
+      assert.equal(row.getResultRenderer(), definition.renderResult);
+    }
+    assert.equal(row.toolDefinition, definition);
+  } finally { handle.dispose(); }
+});
+
 test("an earlier patch on ANY intercepted method prevents installation, atomically", () => {
   for (const key of ["getResultRenderer", "getRenderShell", "render"]) {
     const Host = fakeHost();

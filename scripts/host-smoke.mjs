@@ -142,6 +142,61 @@ assert.match(editRaw, /\x1b\[48;2;33;58;43m/);
 assert.match(editPlain, /10 -old value/);
 assert.match(editPlain, /10 \+new value/);
 
+// ---- 7b. The shipped apply_patch (not a fake builtin edit) shares that surface.
+const { createApplyPatchTool } = await import("../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js");
+const patchTool = createApplyPatchTool();
+const root = path.resolve(import.meta.dirname, "..");
+definitions.push({ name: "apply_patch", sourceInfo: {
+  source: root, path: path.join(root, "vendor/pi-codex-conversion/dist/index.js"),
+} });
+fs.writeFileSync(path.join(dir, "before.txt"), "原来的中文内容\n");
+fs.writeFileSync(path.join(dir, "deleted.txt"), Array.from({ length: 30 }, (_, i) => `deleted line ${i + 1}`).join("\n") + "\n");
+const patchArgs = { input: `*** Begin Patch
+*** Update File: before.txt
+*** Move to: after.txt
+@@
+-原来的中文内容
++新的中文内容，需要在窄终端里正确换行
+*** Add File: created.ts
++export const added = true;
+*** Delete File: deleted.txt
+*** End Patch` };
+const patchRow = new Core.ToolExecutionComponent("apply_patch", "patch-smoke", patchArgs, { showImages: false }, patchTool, ui, dir);
+patchRow.setArgsComplete();
+patchRow.markExecutionStarted();
+const patchResult = await patchTool.execute("patch-smoke", patchArgs, undefined, undefined, { cwd: dir });
+assert.equal(patchResult.details.status, "success");
+patchRow.updateResult({ ...patchResult, isError: false });
+const patchCollapsed = patchRow.render(44).join("\n");
+assert.match(stripVTControlCharacters(patchCollapsed), /Edited 3 files/);
+assert.doesNotMatch(stripVTControlCharacters(patchCollapsed), /deleted line 30/);
+patchRow.setExpanded(true);
+for (const width of [32, 80]) {
+  const rows = patchRow.render(width);
+  assert.match(rows.join("\n"), /\x1b\[48;2;74;34;29m/);
+  assert.match(rows.join("\n"), /\x1b\[48;2;33;58;43m/);
+  assert.doesNotMatch(rows.join("\n"), /\x1b\[7m/, "no native inverse token highlighting");
+  assert.ok(rows.every((line) => visibleWidth(line) <= width), "multi-file diff respects terminal width");
+  const plain = stripVTControlCharacters(rows.join("\n"));
+  assert.match(plain, /1 -原来的中文内容/, "old content survives actual mutation/deletion");
+  assert.match(plain, /1 \+新的中文内容/);
+  assert.match(plain, /deleted line 30/);
+  assert.match(plain, /created.ts/);
+}
+assert.equal(fs.existsSync(path.join(dir, "deleted.txt")), false);
+assert.equal(fs.existsSync(path.join(dir, "before.txt")), false);
+assert.match(fs.readFileSync(path.join(dir, "after.txt"), "utf8"), /新的中文内容/);
+
+const failedArgs = { input: "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch" };
+const failedRow = new Core.ToolExecutionComponent("apply_patch", "patch-failed", failedArgs, { showImages: false }, patchTool, ui, dir);
+failedRow.setArgsComplete();
+failedRow.markExecutionStarted();
+await assert.rejects(patchTool.execute("patch-failed", failedArgs, undefined, undefined, { cwd: dir }));
+failedRow.updateResult({ content: [{ type: "text", text: "apply_patch failed" }], isError: true });
+assert.match(stripVTControlCharacters(failedRow.render(80).join("\n")), /failed/i);
+assert.doesNotMatch(failedRow.render(80).join("\n"), /\x1b\[48;2;33;58;43m/);
+definitions.pop();
+
 // ---- 8. Foreign renderer + teardown unchanged --------------------------------
 const custom = new Core.ToolExecutionComponent("grep", "custom-smoke", {}, {},
   { renderCall: nativeCall }, ui, process.cwd());

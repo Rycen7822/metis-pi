@@ -1,14 +1,14 @@
 import type { ExecutePatchResult } from "../../patch/types.ts";
-import { formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.ts";
+import { buildApplyPatchPreviews, type FilePreview, formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.ts";
 
-interface ApplyPatchRenderState {
+export interface ApplyPatchRenderSnapshot {
+	readonly files: readonly FilePreview[];
+	readonly status: "pending" | "partial_failure" | "failed";
+	readonly failedTargets?: readonly string[] | undefined;
+}
+
+interface ApplyPatchRenderState extends ApplyPatchRenderSnapshot {
 	cwd: string;
-	patchText: string;
-	collapsed: string;
-	collapsedDiff: string;
-	expanded: string;
-	status: "pending" | "partial_failure" | "failed";
-	failedTargets?: string[] | undefined;
 }
 
 export interface ApplyPatchSuccessDetails {
@@ -25,6 +25,10 @@ export interface ApplyPatchPartialFailureDetails {
 export type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDetails;
 
 const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
+
+export function getApplyPatchRenderSnapshot(toolCallId: string): ApplyPatchRenderSnapshot | undefined {
+	return applyPatchRenderStates.get(toolCallId);
+}
 
 export function isApplyPatchToolDetails(details: unknown): details is ApplyPatchToolDetails {
 	if (!details || typeof details !== "object") return false;
@@ -64,10 +68,8 @@ export function setApplyPatchRenderState(
 	status: "pending" | "partial_failure" | "failed" = "pending",
 	failedTargets?: string[],
 ): void {
-	const collapsed = formatApplyPatchSummary(patchText, cwd);
-	const collapsedDiff = formatApplyPatchCollapsedDiff(patchText, cwd);
-	const expanded = renderApplyPatchCall(patchText, cwd);
-	applyPatchRenderStates.set(toolCallId, { cwd, patchText, collapsed, collapsedDiff, expanded, status, failedTargets });
+	const files = buildApplyPatchPreviews(patchText, cwd);
+	applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets });
 }
 
 export function markApplyPatchPartialFailure(toolCallId: string, failedTargets?: string[]): void {
@@ -94,7 +96,7 @@ function markFailedTargetLine(line: string, failedTarget: string): string | unde
 	return undefined;
 }
 
-function renderPartialFailureCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: string[]): string {
+function renderPartialFailureCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: readonly string[]): string {
 	const lines = text.split("\n");
 	if (lines.length === 0) return theme.fg("warning", "• Edit partially failed");
 	lines[0] = lines[0]!.replace(/^• (Added|Edited|Deleted)\b/, "• Edit partially failed");
@@ -118,7 +120,7 @@ function renderPartialFailureCall(text: string, theme: { fg(role: string, text: 
 	}).join("\n");
 }
 
-function renderFailedCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: string[]): string {
+function renderFailedCall(text: string, theme: { fg(role: string, text: string): string }, failedTargets?: readonly string[]): string {
 	const lines = text.split("\n");
 	if (lines.length === 0) return theme.fg("error", "• Edit failed");
 	lines[0] = lines[0]!.replace(/^• (Added|Edited|Deleted)\b/, "• Edit failed");
@@ -143,13 +145,12 @@ export function renderApplyPatchCallFromState(args: { input?: unknown | undefine
 	const patchText = typeof args.input === "string" ? args.input : "";
 	if (patchText.trim().length === 0) return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
 	const cached = context?.toolCallId ? applyPatchRenderStates.get(context.toolCallId) : undefined;
-	const cwd = context?.cwd ?? cached?.cwd;
-	const effectivePatchText = cached?.patchText ?? patchText;
+	const cwd = cached?.cwd ?? context?.cwd;
 	const baseText = context?.expanded
-		? cached?.expanded ?? renderApplyPatchCall(effectivePatchText, cwd)
+		? renderApplyPatchCall(patchText, cwd, cached?.files)
 		: context?.showCollapsedDiff
-			? cached?.collapsedDiff ?? formatApplyPatchCollapsedDiff(effectivePatchText, cwd)
-		: cached?.collapsed ?? formatApplyPatchSummary(effectivePatchText, cwd);
+			? formatApplyPatchCollapsedDiff(patchText, cwd, undefined, cached?.files)
+			: formatApplyPatchSummary(patchText, cwd, cached?.files);
 	if (baseText.trim().length === 0) {
 		if (cached?.status === "failed") return theme.fg("error", "• Edit failed");
 		return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;

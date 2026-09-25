@@ -35,6 +35,7 @@
 - **文件探索**：`read` / `grep` / `find` / `ls` 归入 `Exploring` → `Explored`；动作动词用 Codex cyan（`CODEX_CYAN`），查询与路径之间的 ` in ` 用 dim（`src/explore.ts`）。成功输出默认折叠。
 - **文件修改（edit/diff）**：Codex 式 `行号 + 空格 + +/- + 内容`。删除行整行底色 `#4A221D`（256 色 `52`），新增行 `#213A2B`（256 色 `22`），ANSI-16 只保留前景色；diff 正文按文件扩展名做语法高亮，且前景 `reset` **不会**清掉 diff 底色；换行后内容悬挂对齐到正文列；context 行无底色；宿主自带的 compact context window 不再二次截断。整条路径只有**一个** diff 渲染实现（`src/diff.ts` → `src/diff-component.ts`）。
 - **写入（write）**：`tool_execution_start` 抓 pre-image、`tool_execution_end` 校验 post-image，只在可靠时呈现：新文件 `Added path (+N -0)` 全绿；覆盖写 `Edited path (+A -D)` 真实 diff；二进制 / 超大 / 不可读 / post 不匹配 / 任何不确定 → 回退成原始内容预览。**绝不伪造 diff**（`src/write-tracker.ts`，状态仅存进程内存，不写盘、不进会话记录）。
+- **内置 apply_patch**：展开单文件/多文件修改时复用同一 Codex diff（`src/apply-patch-view.ts`），包括新增、删除和移动；预览来自转换层执行前的结构化快照，不在执行后重读文件。收起视图保留转换层原有配置，失败/部分失败及无快照的历史记录保留原生诊断，不伪造成功 diff。
 - **写入实时预览**：模型还在生成 `write` 参数时实时显示标题 + 阶段行 + 物理行尾部预算内的正文。`writePreview.rows` 是**整块**屏幕行预算（标题行 + 阶段行 + 正文 + 省略行），且至少保留 1 行正文；`0` 表示只留标题与阶段行。
 - **图像结果**：保留宿主原生图片路径，服从 `terminal.showImages`；关闭图片预览时只显示轻量数量提示，不输出 Base64。
 - **启动头**：1–2 行极简身份行，运行时读取**真实**版本号（`src/chrome/header.ts`）。
@@ -49,7 +50,7 @@
 
 - **安装前逐字校验**：三个 selector 的**函数源码**必须与预期字符串一致，`render` 的方法体必须含 `this.selfRenderContainer.render(`、`this.selfRenderHeight=`、`this.imageComponents` 三个标记；任何一个不符 → 直接退避（`skipped(reason)`），启动时给出警告而不是默默声称已启用。
 - **自己的占位标记**：`Symbol.for("Rycen7822.metis-pi.tool-view.v2")` 作为原型自有属性，第二份副本会退避。
-- **来源核对**：只有 `sourceInfo.source === "builtin"` 且 `path === "<builtin:name>"` 的工具才使用新 renderer。FFF / LSP 等覆盖同名工具的插件不受影响。
+- **来源核对**：原生工具要求 `sourceInfo.source === "builtin"` 且 `path === "<builtin:name>"`；内置 `apply_patch` 只允许本包 `vendor/pi-codex-conversion/dist/index.js` 的精确来源路径。FFF / LSP 或其他来源的同名工具不受影响。
 - **只在首次实际绘制时切 self-shell**：默认构造的子组件树保持原样，因此卸载/禁用可以还原原生卡片，不需要剪切 children、不改写鼠标命中、不动图片协议。
 - **每帧核对归属**：`ownsMethods()` 用身份比较确认原型上仍是自己的包装；后来者替换了就立即停止接管，卸载时也不会覆盖后来者。
 - **呈现失败降级**：单行渲染抛错时把该行退回默认视图，绝不让渲染路径把宿主进程带崩。

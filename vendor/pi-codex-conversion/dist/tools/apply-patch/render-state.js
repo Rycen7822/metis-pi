@@ -1,5 +1,8 @@
-import { formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.js";
+import { buildApplyPatchPreviews, formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.js";
 const applyPatchRenderStates = new Map();
+export function getApplyPatchRenderSnapshot(toolCallId) {
+    return applyPatchRenderStates.get(toolCallId);
+}
 export function isApplyPatchToolDetails(details) {
     if (!details || typeof details !== "object")
         return false;
@@ -28,10 +31,8 @@ export function clearApplyPatchRenderState() {
     applyPatchRenderStates.clear();
 }
 export function setApplyPatchRenderState(toolCallId, patchText, cwd, status = "pending", failedTargets) {
-    const collapsed = formatApplyPatchSummary(patchText, cwd);
-    const collapsedDiff = formatApplyPatchCollapsedDiff(patchText, cwd);
-    const expanded = renderApplyPatchCall(patchText, cwd);
-    applyPatchRenderStates.set(toolCallId, { cwd, patchText, collapsed, collapsedDiff, expanded, status, failedTargets });
+    const files = buildApplyPatchPreviews(patchText, cwd);
+    applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets });
 }
 export function markApplyPatchPartialFailure(toolCallId, failedTargets) {
     markApplyPatchFailure(toolCallId, "partial_failure", failedTargets);
@@ -109,13 +110,12 @@ export function renderApplyPatchCallFromState(args, theme, context) {
     if (patchText.trim().length === 0)
         return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
     const cached = context?.toolCallId ? applyPatchRenderStates.get(context.toolCallId) : undefined;
-    const cwd = context?.cwd ?? cached?.cwd;
-    const effectivePatchText = cached?.patchText ?? patchText;
+    const cwd = cached?.cwd ?? context?.cwd;
     const baseText = context?.expanded
-        ? cached?.expanded ?? renderApplyPatchCall(effectivePatchText, cwd)
+        ? renderApplyPatchCall(patchText, cwd, cached?.files)
         : context?.showCollapsedDiff
-            ? cached?.collapsedDiff ?? formatApplyPatchCollapsedDiff(effectivePatchText, cwd)
-            : cached?.collapsed ?? formatApplyPatchSummary(effectivePatchText, cwd);
+            ? formatApplyPatchCollapsedDiff(patchText, cwd, undefined, cached?.files)
+            : formatApplyPatchSummary(patchText, cwd, cached?.files);
     if (baseText.trim().length === 0) {
         if (cached?.status === "failed")
             return theme.fg("error", "• Edit failed");
