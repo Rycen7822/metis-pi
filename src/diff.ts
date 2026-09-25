@@ -28,7 +28,7 @@ export interface DiffRow {
 export interface DiffStats { added: number; removed: number }
 
 /**
- * Parse Pi's display diff: exactly `sign` + optional single line number + one
+ * Parse Pi's display diff: exactly `sign` + optional space-padded line number + one
  * separator space + content VERBATIM. Content-initial digits and leading
  * indentation are never reinterpreted:
  *   "+ 10 123 value"  => number=10, content="123 value"
@@ -44,7 +44,7 @@ export function parseDisplayDiff(diffText: string): DiffRow[] {
     const sign = raw[0];
     if (sign === "+" || sign === "-" || sign === " ") {
       let index = 1;
-      if (raw[index] === " " && /[0-9]/.test(raw[index + 1] ?? "")) index += 1;
+      while (raw[index] === " ") index += 1;
       let digits = "";
       while (index < raw.length && raw[index]! >= "0" && raw[index]! <= "9") {
         digits += raw[index]!;
@@ -63,9 +63,10 @@ export function parseDisplayDiff(diffText: string): DiffRow[] {
         });
         continue;
       }
-      if (!digits && index < raw.length && raw[index] === " ") {
-        // No line number: the first space was the separator.
-        const content = raw.slice(index + 1).replace(/\t/g, "    ");
+      if (!digits && raw[1] === " ") {
+        // No line number: only the first space was the separator; the rest
+        // belongs to the content, not a padded gutter.
+        const content = raw.slice(2).replace(/\t/g, "    ");
         const kind: DiffRowKind = sign === "+" ? "add" : sign === "-" ? "remove" : "context";
         rows.push({ kind, content });
         continue;

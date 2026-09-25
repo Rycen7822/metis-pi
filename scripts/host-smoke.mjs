@@ -142,6 +142,31 @@ assert.match(editRaw, /\x1b\[48;2;33;58;43m/);
 assert.match(editPlain, /10 -old value/);
 assert.match(editPlain, /10 \+new value/);
 
+// Use the real edit tool's padded diff, including disjoint edits whose line
+// numbers span all four widths. Handwritten unpadded diffs missed this regression.
+const paddedPath = path.join(dir, "padded.txt");
+const changedNumbers = [4, 40, 161, 1000];
+fs.writeFileSync(paddedPath, Array.from({ length: 1100 }, (_, i) => `  123 value_${i + 1}`).join("\n"));
+const paddedArgs = { path: paddedPath, edits: changedNumbers.map(number => ({
+  oldText: `  123 value_${number}\n`, newText: `  456 value_${number} 中文\n`,
+})) };
+const paddedResult = await Core.createEditTool(dir).execute("edit-padded", paddedArgs);
+assert.match(paddedResult.details.diff, /-   4 /, "the actual host supplies a padded gutter");
+const paddedRow = new Core.ToolExecutionComponent("edit", "edit-padded", paddedArgs, { showImages: false }, { name: "edit", renderCall: nativeCall }, ui, dir);
+paddedRow.markExecutionStarted();
+paddedRow.updateResult({ ...paddedResult, isError: false });
+for (const width of [32, 80]) {
+  const rendered = paddedRow.render(width);
+  assert.ok(rendered.every(line => visibleWidth(line) <= width));
+  const plainRows = rendered.map(stripVTControlCharacters);
+  for (const number of changedNumbers) {
+    for (const [sign, digits] of [["-", "123"], ["+", "456"]]) {
+      const expected = `  ${String(number).padStart(4)} ${sign}  ${digits} value_${number}`;
+      assert.ok(plainRows.some(line => line.startsWith(expected)), `aligned gutter and intact content: ${expected}`);
+    }
+  }
+}
+
 // ---- 7b. The shipped apply_patch (not a fake builtin edit) shares that surface.
 const { createApplyPatchTool } = await import("../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js");
 const patchTool = createApplyPatchTool({ showDiffWhenCollapsed: true });

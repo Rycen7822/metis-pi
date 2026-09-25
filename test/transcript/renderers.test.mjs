@@ -49,6 +49,11 @@ test("Pi display diff parser keeps line numbers and hunk separators, and never e
   // Boundary invariants (absorbed from the former diff.parser.test.mjs):
   // digits and indentation inside content are never reinterpreted.
   const cases = [
+    ["-  4   123 value", "oldNumber", 4, "  123 value"],
+    ["+   4 \t123 value", "newNumber", 4, "    123 value"],
+    ["   40   context", "newNumber", 40, "  context"],
+    ["+ 161 ", "newNumber", 161, ""],
+    ["-1000 old", "oldNumber", 1000, "old"],
     ["+ 10 123 value", "newNumber", 10, "123 value"],
     ["+ 10   return x", "newNumber", 10, "  return x"],
     ["- 7 ", "oldNumber", 7, ""],
@@ -61,6 +66,10 @@ test("Pi display diff parser keeps line numbers and hunk separators, and never e
     assert.equal(rows[0][numberField], number, source);
     assert.equal(rows[0].content, content, source);
   }
+  assert.deepEqual(parseDisplayDiff("+    unnumbered\n- "), [
+    { kind: "add", content: "   unnumbered" },
+    { kind: "remove", content: "" },
+  ], "without a number, preserve whitespace after the separator");
 });
 
 test("Codex rich diff uses exact dark backgrounds, full-row fill and hanging indentation", () => {
