@@ -76,6 +76,39 @@ assert.match(bashDone, /  └ hello/);
 assert.match(bashDone, /world/);
 assert.doesNotMatch(bashDone, /• Ran[\s\S]*• Ran/);
 
+// The owned exec tool retains its own state/result renderer, but shares bash colors.
+const { createExecCommandTool } = await import("../vendor/pi-codex-conversion/dist/tools/exec/command-tool.js");
+const { createExecCommandTracker } = await import("../vendor/pi-codex-conversion/dist/tools/exec/command-state.js");
+const { highlightBashScript } = await import("../src/bash-lexer.ts");
+const execTracker = createExecCommandTracker();
+const execTool = createExecCommandTool(execTracker, {}, { showOutputWhenCollapsed: true });
+definitions.push({ name: "exec_command", sourceInfo: {
+  source: "local", path: path.resolve(import.meta.dirname, "../vendor/pi-codex-conversion/dist/index.js"),
+} });
+const execArgs = { cmd: "node --version && printf '%s' 中文" };
+execTracker.recordStart("exec-colors", execArgs.cmd);
+const execRow = new Core.ToolExecutionComponent("exec_command", "exec-colors", execArgs, { showImages: false }, execTool, ui, process.cwd());
+execRow.setArgsComplete();
+execRow.markExecutionStarted();
+assert.match(stripVTControlCharacters(execRow.render(80).join("\n")), /Running/);
+execTracker.recordPersistentSession("exec-colors", 123);
+execTracker.recordEnd("exec-colors");
+execRow.updateResult({ content: [{ type: "text", text: "output" }], details: { output: "output", session_id: 123 }, isError: false });
+assert.match(stripVTControlCharacters(execRow.render(80).join("\n")), /Session 123 still running/);
+execTracker.recordSessionFinished(123);
+execRow.updateResult({ content: [{ type: "text", text: "output" }], details: { output: "output", exit_code: 1 }, isError: true });
+for (const expanded of [false, true, false]) {
+  execRow.setExpanded(expanded);
+  const lines = execRow.render(80);
+  const rendered = lines.join("\n");
+  assert.ok(rendered.includes(highlightBashScript([execArgs.cmd], { kind: "truecolor" })[0]));
+  assert.match(stripVTControlCharacters(rendered), /Ran/);
+  assert.match(stripVTControlCharacters(rendered), /Exit code: 1/);
+  assert.ok(lines.every(line => visibleWidth(line) <= 80));
+}
+assert.equal(execRow.toolDefinition, execTool);
+assert.equal(execRow.getRenderShell(), "default");
+
 // ---- 3. Mouse: title click expands, second click folds -----------------------
 const beforeClick = bashRow.expanded;
 bashRow.handleMouse({ type: "click", button: "left", x: 1, y: 1, width: 80, height: 6 });

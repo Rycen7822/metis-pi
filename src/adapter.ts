@@ -1,5 +1,8 @@
 import { asRecord, TOOL_NAMES, type Renderers, type ToolName } from "./tool-names.ts";
 import { publishRows } from "./selection-copy/model.ts";
+import { fileURLToPath } from "node:url";
+
+export const OWNED_CONVERSION_ENTRY = fileURLToPath(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url));
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.
 // No tool registration, execution replacement, context middleware or TUI root patch.
@@ -22,6 +25,8 @@ export interface AdapterOptions {
     sourcePath: string;
     renderCall: (...args: Parameters<Renderers["renderCall"]>) => ReturnType<Renderers["renderCall"]> | undefined;
   };
+  /** Paint only command text; the owned tool retains grouping and execution state. */
+  highlightOwnedCommand?: (lines: readonly string[]) => string[];
 }
 export interface AdapterHandle {
   readonly installed: boolean;
@@ -76,6 +81,19 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const source = asRecord(info.sourceInfo);
+    if (name === "exec_command" && options.highlightOwnedCommand && typeof source.source === "string" && source.path === OWNED_CONVERSION_ENTRY) {
+      const call = definition.renderCall;
+      const result = definition.renderResult;
+      if (typeof call !== "function" || typeof result !== "function") return;
+      return {
+        renderCall: (args, theme, context) => call(args, {
+          fg: (role: string, text: string) => theme.fg(role, text),
+          bold: (text: string) => theme.bold(text),
+          highlightCommandLines: options.highlightOwnedCommand,
+        }, context),
+        renderResult: (value, options, theme, context) => result(value, options, theme, context),
+      };
+    }
     const patch = options.ownedApplyPatch;
     if (name === "apply_patch" && patch && typeof source.source === "string" && source.path === patch.sourcePath) {
       const call = definition.renderCall;
@@ -110,6 +128,8 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       if (renderers) {
         if (key === "getCallRenderer") return renderers.renderCall;
         if (key === "getResultRenderer") return renderers.renderResult;
+        // Command coloring is a call-only decoration, not a shell/layout replacement.
+        if (asRecord(this).toolName === "exec_command") return original.call(this);
         // IMPORTANT: leave the constructor's child tree in its STOCK default-shell
         // form. Activate self-shell only at first render, then populate it below.
         // This makes disabling/unloading revert without splicing children, moving

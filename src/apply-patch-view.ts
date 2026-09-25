@@ -1,17 +1,16 @@
 // Read the conversion layer's pre-execution snapshot; never rebuild a diff from
 // files that the tool has already changed. Painting is shared with edit/write.
-import { fileURLToPath } from "node:url";
 import { getApplyPatchRenderSnapshot } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/render-state.js";
 import { shouldCompactApplyPatchDisplay } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/display-broker.js";
 import { formatPatchTarget } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/rendering.js";
-import type { AdapterOptions } from "./adapter.ts";
+import { OWNED_CONVERSION_ENTRY, type AdapterOptions } from "./adapter.ts";
 import type { DiffRow } from "./diff.ts";
 import { productFor, publishRows, registerProduct, type CopyRow } from "./selection-copy/model.ts";
 import { safeText, type Component, type DiffFactory, type TextFactory } from "./tool-names.ts";
 
 export function createOwnedApplyPatchView(makeText: TextFactory, makeDiff: DiffFactory, expandHint: () => string): NonNullable<AdapterOptions["ownedApplyPatch"]> {
   return {
-    sourcePath: fileURLToPath(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url)),
+    sourcePath: OWNED_CONVERSION_ENTRY,
     renderCall(_args, theme, context) {
       const snapshot = context.toolCallId ? getApplyPatchRenderSnapshot(context.toolCallId) : undefined;
       // Streaming, replay without a snapshot, and failures keep the native

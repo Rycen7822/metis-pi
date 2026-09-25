@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installAdapter } from "../../src/adapter.ts";
+import { installAdapter, OWNED_CONVERSION_ENTRY } from "../../src/adapter.ts";
 import { makeRenderers, TOOL_NAMES } from "../../src/renderers.ts";
 import { activate } from "../../src/extension.ts";
 import { fakeHost, toolInfo, bindings, deepFreeze, theme, sessionStub } from "../helpers.mjs";
@@ -97,6 +97,45 @@ test("only the packaged apply_patch entry can use the owned diff renderer", () =
     }
     assert.equal(row.toolDefinition, definition);
   } finally { handle.dispose(); }
+});
+
+test("command coloring is owned, call-only, reversible and leaves the theme untouched", () => {
+  const Host = fakeHost();
+  const painter = (lines) => lines.map(line => `colored:${line}`);
+  let sourceInfo = { source: "git:metis", path: OWNED_CONVERSION_ENTRY };
+  let enabled = true;
+  let receivedTheme;
+  const definition = {
+    renderCall(_args, theme) { receivedTheme = theme; return bindings.makeText(theme.highlightCommandLines?.(["printf hi"])[0] ?? "native"); },
+    renderResult: () => bindings.makeText("native result"),
+  };
+  const handle = installAdapter(Host.prototype, {
+    getTools: () => [{ name: "exec_command", sourceInfo }], enabled: () => enabled,
+    renderers: {}, highlightOwnedCommand: painter,
+  });
+  const row = new Host("exec_command", definition);
+  try {
+    assert.match(row.render(80).join("\n"), /colored:printf hi/);
+    assert.equal(row.getRenderShell(), "default");
+    assert.equal(receivedTheme.fg("accent", "x"), theme.fg("accent", "x"));
+    assert.equal(theme.highlightCommandLines, undefined);
+    assert.equal(row.toolDefinition, definition);
+    row.updateResult({ content: [] });
+    assert.match(row.render(80).join("\n"), /native result/);
+    enabled = false;
+    assert.equal(row.getCallRenderer(), definition.renderCall);
+    enabled = true;
+    for (const source of [
+      { source: "npm:other", path: "/other/dist/index.js" },
+      { source: "builtin", path: "<builtin:exec_command>" },
+      { path: OWNED_CONVERSION_ENTRY },
+    ]) {
+      sourceInfo = source;
+      assert.equal(row.getCallRenderer(), definition.renderCall);
+      assert.equal(row.getResultRenderer(), definition.renderResult);
+    }
+  } finally { handle.dispose(); }
+  assert.equal(row.getCallRenderer(), definition.renderCall);
 });
 
 test("an earlier patch on ANY intercepted method prevents installation, atomically", () => {

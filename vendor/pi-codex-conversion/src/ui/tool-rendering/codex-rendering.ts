@@ -4,6 +4,8 @@ import type { ExecCommandStatus } from "../../tools/exec/command-state.ts";
 export interface RenderTheme {
 	fg(role: string, text: string): string;
 	bold(text: string): string;
+	/** Optional metis-pi call-only painter; no shared state across extension loaders. */
+	highlightCommandLines?(lines: readonly string[]): string[];
 }
 
 export function renderExecCommandCall(command: string, state: ExecCommandStatus, theme: RenderTheme, expanded = false): string {
@@ -48,8 +50,10 @@ function renderExplorationText(actionGroups: ShellAction[][], state: ExecCommand
 	}
 
 	for (const command of commands ?? []) {
-		for (const line of formatCommandLines(command, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)) {
-			text += `\n${theme.fg("dim", "    ")}${theme.fg("muted", line)}`;
+		const lines = formatCommandLines(command, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+		const painted = theme.highlightCommandLines?.(lines) ?? lines.map((line) => theme.fg("muted", line));
+		for (const line of painted) {
+			text += `\n${theme.fg("dim", "    ")}${line}`;
 		}
 	}
 
@@ -61,9 +65,11 @@ function renderCommandText(command: string, state: ExecCommandStatus, theme: Ren
 	let text = `${theme.fg("dim", "•")} ${theme.bold(verb)}`;
 	const maxLines = expanded ? Number.POSITIVE_INFINITY : 5;
 	const maxLength = expanded ? Number.POSITIVE_INFINITY : 100;
-	for (const [index, line] of formatCommandLines(command, maxLines, maxLength).entries()) {
+	const lines = formatCommandLines(command, maxLines, maxLength);
+	const painted = theme.highlightCommandLines?.(lines) ?? lines.map((line) => theme.fg("accent", line));
+	for (const [index, line] of painted.entries()) {
 		const prefix = index === 0 ? "  └ " : "    ";
-		text += `\n${theme.fg("dim", prefix)}${theme.fg("accent", line)}`;
+		text += `\n${theme.fg("dim", prefix)}${line}`;
 	}
 	return text;
 }
