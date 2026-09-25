@@ -20,6 +20,15 @@
 
 `ctrl+c` 的具体键位来自**宿主键位管理器**（匹配 `app.clear` 动作，取不到才退回裸 `\x03`），因此用户自定义键位不会被覆盖。**零新按键注入、零 prototype 工具执行改动。**
 
+## 剪贴板传输
+
+本地 WSL 在缺少 Linux 剪贴板工具时，宿主原路径每次复制都启动 PowerShell，可能增加约一秒延迟。metis-pi 在捕获 fullscreen 界面时预热一个 Windows 剪贴板写入进程，后续请求通过管道发送原文，收到实际写入成功的确认后才显示宿主的复制成功提示。`Ctrl+C`、鼠标复制和其他宿主选区复制共用同一路径，不改变选区提取或草稿。
+
+- 中文、emoji、缩进、LF/CRLF 和字面 BOM 均保持原样；不使用会改写换行的 `clip.exe`，也不假定 Warp 已允许 OSC 52。
+- Windows Terminal 已有快速通道、远程会话和非 WSL 环境仍使用宿主原路径。
+- 写入进程启动失败、退出或超时后回退到原宿主；不把“已发送”当成“已复制”。刚启动时若预热尚未完成，第一次复制仍需等待进程就绪。
+- 只保留当前界面的一个写入进程；卸载、重载或会话关闭时取消待处理请求并结束进程，不在关闭后启动回退复制。
+
 ## 复制模式（`/codex-ui` 报告）
 
 | 模式 | 含义 |
@@ -72,6 +81,7 @@ pi remove pi-copy-soft-wrap
 | 关注点 | 位置 |
 | --- | --- |
 | 系统装配、Ctrl+C 路由、模式汇总 | `src/selection-copy/index.ts`（`createSelectionCopySystem`、`tryConsumeCopyKey`、`installInstanceSerializer`、`detectExternalSerializerPatch`） |
+| WSL 低延迟剪贴板与退出清理 | `src/selection-copy/clipboard.ts`（宿主路由租约）、`windows-clipboard.ts`（预热进程与写入确认） |
 | 选区 → 逻辑文本 | `src/selection-copy/serialize.ts`（`SelectionSerializer`、`findScrollViewBox`） |
 | Markdown / Text 溯源 | `src/selection-copy/markdown.ts` |
 | 布局级溯源 | `src/selection-copy/structure.ts` |
@@ -90,3 +100,5 @@ pi remove pi-copy-soft-wrap
 ## 验证
 
 `test/chrome/selection-copy.test.mjs`、`test/chrome/copy-provenance-text.test.mjs`（精确空白、列选区和保留堆上限）、`test/shell/copy-provenance.test.mjs`、`test/host/shell-scroll.test.mjs`（完整原生工具边界、旧帧和图片回退）、`test/host/host-surface.test.mjs`、`scripts/copy-perf.mjs`；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"），实际运行范围见 `VALIDATION.md`。
+
+`test/chrome/selection-clipboard.test.mjs` 覆盖当前界面身份、代理切换、失败回退、卸载与第三方包装；`test/chrome/windows-clipboard.test.mjs` 覆盖传输字节、就绪确认、并发顺序、超时、断管及进程关闭边界。`scripts/copy-perf.mjs` 只测文本提取和渲染，不能代替实际系统剪贴板的写入/回读延迟测量。

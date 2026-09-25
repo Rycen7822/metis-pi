@@ -555,6 +555,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     decorations?.dispose();
     decorations = undefined;
     fullscreenLayout?.dispose();
+    selectionCopy?.dispose();
     // Chrome restore: only OUR factories are removed (identity comparison);
     // a successor extension's editor/footer/header is left untouched.
     chrome.restore();

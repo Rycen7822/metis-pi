@@ -7,7 +7,8 @@
 // heuristic wrapper installed there by other extensions, e.g.
 // pi-copy-soft-wrap — independent of load order), and gives the composer
 // editor a selection-aware Ctrl+C. Selection geometry stays host-native
-// (getSelectionBounds / getSelectionColumns); only serialization changes.
+// (getSelectionBounds / getSelectionColumns). Clipboard transport stays behind
+// the host's completion/error handling; local WSL keeps one warmed writer.
 //
 // Behavioral contract:
 // - No geometric selection → identical to the stock implementation.
@@ -28,6 +29,7 @@ import {
   wrapMarkdownPrototype, wrapTextPrototype, setLatexPainter, type MarkdownDiagnostics, type WrapDeps,
 } from "./markdown.ts";
 import { cacheStats } from "./model.ts";
+import { createSelectionClipboard } from "./clipboard.ts";
 import { stripAnsi } from "./wrap.ts";
 import { createCopyLexer } from "./parser.ts";
 import { SelectionSerializer, findScrollViewBox, type LayoutFrameLike, type SerializeHostFns, type AdapterHostFns } from "./serialize.ts";
@@ -52,6 +54,7 @@ export interface SelectionCopyHost {
 export interface SelectionCopySystem {
   wrapPrototypes(): { installed: boolean; details: string };
   installOnTui(tui: unknown): boolean;
+  dispose(): void;
   /** Editor input hook: consume Ctrl+C when a selection exists. */
   editorHook(): { tryConsume: (data: string, editor: unknown) => boolean } | undefined;
   diagnostics(): {
@@ -92,6 +95,7 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
   let installBlocker = "not attempted (no live TUI captured)";
   let installedTui: AltScreenLike | undefined;
   const copyState = { inFlight: false, queued: 0 };
+  const clipboard = createSelectionClipboard();
 
   // ONE host-fns adapter per activation: the prototype wrappers (via deps) and
   // the instance serializer (via controllerDeps) read the same object, so the
@@ -139,6 +143,7 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
     },
 
     installOnTui(tui: unknown): boolean {
+      if (hostFns) clipboard.install(tui);
       if (serializerInstalled) return true;
       if (!hostFns) { installBlocker = "host bindings unavailable"; return false; }
       if (!tui || typeof tui !== "object") { installBlocker = "invalid tui"; return false; }
@@ -156,6 +161,11 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
           : `${kind}: already owned`;
       }
       return serializerInstalled;
+    },
+
+    dispose(): void {
+      copyState.queued = 0;
+      clipboard.dispose();
     },
 
     editorHook() {
@@ -221,12 +231,9 @@ export interface CopyControllerDeps {
 
 const OWNER = Symbol.for("Rycen7822.metis-pi.selection-serializer");
 
-/** Install the exact serializer on the TuiAltScreen PROTOTYPE. The host hands
- * extensions a Proxy facade (createInteractiveTuiReference) whose target is an
- * empty object, so instance-level property assignment is invisible to the real
- * TUI; the prototype is reachable through the proxy's getPrototypeOf and is
- * the one seam that all internal callers (hasActiveSelection,
- * copySelectionToClipboard, copy-on-select, Ctrl+X) dispatch through. */
+/** Patch the native renderer prototype so internal selection/copy callers and
+ * replacement renderers share the serializer. The host's live Proxy forwards
+ * assignment, but own property descriptors still belong to its empty target. */
 export function installInstanceSerializer(tui: AltScreenLike, deps: CopyControllerDeps): boolean {
   const prototype = Object.getPrototypeOf(tui) as Record<string | symbol, unknown>;
   if (!prototype || typeof prototype !== "object") return false;
