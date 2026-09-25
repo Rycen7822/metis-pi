@@ -24,6 +24,6 @@
 - [开发说明](development.md)：构建和检查命令；`patches/local.patch` 由脚本生成，不手改 `dist/`。
 - `dist/`、`vendor/`、`code-mode/`、原生工具目录、`changelog.js` 和 `package.json` 的相对位置参与运行时资源定位，不可只因目录较多就移动或删除。
 
-当前只保留 **linux-x64** 原生工具；语音 helper 被裁剪，依赖这些 helper 的语音功能不可用。其它平台需补齐载荷并验证。后台 shell 默认快捷键 `alt+q` 可能与 Pi 冲突，可在 vendor 配置中改 `ui.backgroundShellPrevShortcut`。
+当前只保留 **linux-x64** 原生工具；语音 helper 被裁剪，依赖这些 helper 的语音功能不可用。其它平台需补齐载荷并验证。后台 shell 面板在 fullscreen 模式支持左键单击展开、再次单击折叠，与 `alt+w` 共用状态；普通终端模式继续使用快捷键。拖动和滚轮不触发折叠。默认快捷键 `alt+q` 可能与 Pi 冲突，可在 vendor 配置中改 `ui.backgroundShellPrevShortcut`。
 
 转换层的发布与更新由 metis-pi 管理：已移除上游 npm 版本查询、比较和本地 checkout 落后提示，不会在启动时检查上游更新。保留上游版本号仅用于记录来源，手动同步上游时必须保留本地补丁。正常请求、prewarm、压缩、回放和代理必须共同验证；公开 facade、原生 ABI 和惰性加载不能仅靠静态不可达分析删除。真实服务端与可选运行时的验证范围见 [VALIDATION](../VALIDATION.md)。

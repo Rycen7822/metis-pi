@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { MouseRegion, Text } from "@earendil-works/pi-tui";
 import type { CodexConversionConfig } from "../adapter/activation/config.ts";
 import { renderTerminalOutput } from "../tools/exec/output.ts";
 import type { ExecSessionManager, ExecSessionSnapshot } from "../tools/exec/session-manager.ts";
@@ -47,6 +48,12 @@ function resolveActiveSessionId(state: BackgroundBashWidgetState, snapshots: Exe
 	return fallback;
 }
 
+function toggleBackgroundBashWidget(ctx: ExtensionContext, state: BackgroundBashWidgetState, sessions: ExecSessionManager): void {
+	state.folded = !state.folded;
+	state.ctx = ctx;
+	renderBackgroundBashWidget(ctx, state, sessions);
+}
+
 export function renderBackgroundBashWidget(ctx: ExtensionContext, state: BackgroundBashWidgetState, sessions: ExecSessionManager): void {
 	if (ctx.mode !== "tui") return;
 	const snapshots = sessions.listSessions(OUTPUT_TAIL_CHARS);
@@ -78,8 +85,14 @@ export function renderBackgroundBashWidget(ctx: ExtensionContext, state: Backgro
 		lines.push(`${theme.fg("muted", "│")} ${theme.fg("dim", `session ${active.id} · updated ${ageLabel(active.updatedAt)} ago`)}`);
 	}
 
-	lines.push(`${theme.fg("muted", "╰─")} ${theme.fg("dim", "alt+q/e select · alt+w fold/open · alt+r close")}`);
-	ctx.ui.setWidget(BACKGROUND_BASH_WIDGET_ID, lines, { placement: "aboveEditor" });
+	lines.push(`${theme.fg("muted", "╰─")} ${theme.fg("dim", "alt+q/e select · click / alt+w fold/open · alt+r close")}`);
+	ctx.ui.setWidget(BACKGROUND_BASH_WIDGET_ID, () => new MouseRegion(new Text(lines.join("\n"), 1, 0), (event) => {
+		// Match tool cards: only a completed primary click toggles. Leave drags,
+		// wheel events and other buttons available to the host's normal routing.
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		toggleBackgroundBashWidget(ctx, state, sessions);
+		return { handled: true, requestRender: true };
+	}), { placement: "aboveEditor" });
 }
 
 export function registerBackgroundBashWidgetShortcuts(
@@ -99,8 +112,7 @@ export function registerBackgroundBashWidgetShortcuts(
 		description: "Fold or open Codex background shell widget",
 		handler: async (ctx) => {
 			if (!isEnabled()) return;
-			state.folded = !state.folded;
-			rerender(ctx);
+			toggleBackgroundBashWidget(ctx, state, sessions);
 		},
 	});
 	pi.registerShortcut(config.backgroundShellPrevShortcut as "alt+q", {

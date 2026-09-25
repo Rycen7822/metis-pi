@@ -1,3 +1,4 @@
+import { MouseRegion, Text } from "@earendil-works/pi-tui";
 import { renderTerminalOutput } from "../tools/exec/output.js";
 export const BACKGROUND_BASH_WIDGET_ID = "codex-background-bashes";
 const OUTPUT_TAIL_CHARS = 4_000;
@@ -39,6 +40,11 @@ function resolveActiveSessionId(state, snapshots) {
     state.activeSessionId = fallback;
     return fallback;
 }
+function toggleBackgroundBashWidget(ctx, state, sessions) {
+    state.folded = !state.folded;
+    state.ctx = ctx;
+    renderBackgroundBashWidget(ctx, state, sessions);
+}
 export function renderBackgroundBashWidget(ctx, state, sessions) {
     if (ctx.mode !== "tui")
         return;
@@ -70,8 +76,15 @@ export function renderBackgroundBashWidget(ctx, state, sessions) {
         }
         lines.push(`${theme.fg("muted", "│")} ${theme.fg("dim", `session ${active.id} · updated ${ageLabel(active.updatedAt)} ago`)}`);
     }
-    lines.push(`${theme.fg("muted", "╰─")} ${theme.fg("dim", "alt+q/e select · alt+w fold/open · alt+r close")}`);
-    ctx.ui.setWidget(BACKGROUND_BASH_WIDGET_ID, lines, { placement: "aboveEditor" });
+    lines.push(`${theme.fg("muted", "╰─")} ${theme.fg("dim", "alt+q/e select · click / alt+w fold/open · alt+r close")}`);
+    ctx.ui.setWidget(BACKGROUND_BASH_WIDGET_ID, () => new MouseRegion(new Text(lines.join("\n"), 1, 0), (event) => {
+        // Match tool cards: only a completed primary click toggles. Leave drags,
+        // wheel events and other buttons available to the host's normal routing.
+        if (event.type !== "click" || event.button !== "left")
+            return undefined;
+        toggleBackgroundBashWidget(ctx, state, sessions);
+        return { handled: true, requestRender: true };
+    }), { placement: "aboveEditor" });
 }
 export function registerBackgroundBashWidgetShortcuts(pi, state, sessions, config, isEnabled) {
     function rerender(ctx) {
@@ -85,8 +98,7 @@ export function registerBackgroundBashWidgetShortcuts(pi, state, sessions, confi
         handler: async (ctx) => {
             if (!isEnabled())
                 return;
-            state.folded = !state.folded;
-            rerender(ctx);
+            toggleBackgroundBashWidget(ctx, state, sessions);
         },
     });
     pi.registerShortcut(config.backgroundShellPrevShortcut, {

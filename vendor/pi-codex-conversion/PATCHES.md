@@ -97,6 +97,17 @@ and the real host smoke cover ownership, color capability, multiline previews,
 background-session status, failure output, terminal resizing and folded/expanded
 single-line chains without the legacy 100-character cutoff.
 
+## 12. Background shell mouse toggle
+
+`ui/background-bash-widget.ts` installs its above-editor content as a component
+factory wrapped in Pi's native `MouseRegion`, just like tool cards. Only a left
+click toggles it; pointer motion, dragging, wheels and other buttons pass through.
+Mouse and keyboard use the same toggle function and existing `state.folded`.
+Session selection, output refresh, termination and empty-widget removal remain
+unchanged; no global mouse hook or secondary expansion state is introduced.
+`test/vendor-background-bash-widget.test.mjs` exercises both inputs, rendering at
+narrow widths, headless contexts, cleanup and real host widget hit routing.
+
 ## Maintenance verification
 
 Run project/vendor checks and real built-provider tests. Rebuild twice to check deterministic output; regenerate the patch twice to check idempotence. Apply it to an isolated pristine 3.0.34 source copy using the documented payload exclusions and compare file contents and modes. New-file diff headers must use `a/src/` and `b/src/` on both sides. Do not remove unified-diff context prefixes to silence patch-file whitespace diagnostics.
