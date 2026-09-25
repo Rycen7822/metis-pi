@@ -3,6 +3,7 @@ import { buildApplyPatchPreviews, type FilePreview, formatApplyPatchCollapsedDif
 
 export interface ApplyPatchRenderSnapshot {
 	readonly files: readonly FilePreview[];
+	readonly showDiffWhenCollapsed: boolean;
 	readonly status: "pending" | "partial_failure" | "failed";
 	readonly failedTargets?: readonly string[] | undefined;
 }
@@ -67,9 +68,10 @@ export function setApplyPatchRenderState(
 	cwd: string,
 	status: "pending" | "partial_failure" | "failed" = "pending",
 	failedTargets?: string[],
+	showDiffWhenCollapsed = false,
 ): void {
 	const files = buildApplyPatchPreviews(patchText, cwd);
-	applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets });
+	applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets, showDiffWhenCollapsed });
 }
 
 export function markApplyPatchPartialFailure(toolCallId: string, failedTargets?: string[]): void {

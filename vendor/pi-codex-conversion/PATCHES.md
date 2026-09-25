@@ -65,8 +65,10 @@ manifest retains upstream provenance only. Do not restore this check during manu
 preview, exposed read-only by `getApplyPatchRenderSnapshot`. Native text views
 derive from that snapshot instead of caching three formatted strings or rereading
 changed/deleted files. metis-pi's appearance adapter recognizes only this package's
-exact extension entry and paints expanded successful/pending patch previews using
-the same Codex diff component as edit/write. Compact preferences, failure results,
+exact extension entry and paints folded and expanded successful/pending patch previews using
+the same Codex diff component as edit/write. The snapshot carries the tool's
+`showDiffWhenCollapsed` policy; folded previews share a wrapped row budget across
+files instead of falling back to the native text painter. Compact preferences, failure results,
 third-party tools and execution remain unchanged. `scripts/host-smoke.mjs` checks
 real multi-file patch execution and rendering, including CJK wrapping and deletion.
 

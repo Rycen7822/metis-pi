@@ -198,7 +198,7 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): Apply
 
 			const typedParams = parseApplyPatchParams(params);
 			recordApplyPatchDisplayInput(toolCallId, typedParams.patchText);
-			setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd);
+			setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd, "pending", undefined, options.showDiffWhenCollapsed);
 			let result: ExecutePatchResult;
 			try {
 				result = await withTouchedFileMutationQueues(ctx.cwd, typedParams.patchText, () =>

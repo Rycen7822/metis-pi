@@ -30,9 +30,9 @@ function isStringArray(value) {
 export function clearApplyPatchRenderState() {
     applyPatchRenderStates.clear();
 }
-export function setApplyPatchRenderState(toolCallId, patchText, cwd, status = "pending", failedTargets) {
+export function setApplyPatchRenderState(toolCallId, patchText, cwd, status = "pending", failedTargets, showDiffWhenCollapsed = false) {
     const files = buildApplyPatchPreviews(patchText, cwd);
-    applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets });
+    applyPatchRenderStates.set(toolCallId, { cwd, files, status, failedTargets, showDiffWhenCollapsed });
 }
 export function markApplyPatchPartialFailure(toolCallId, failedTargets) {
     markApplyPatchFailure(toolCallId, "partial_failure", failedTargets);

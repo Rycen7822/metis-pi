@@ -147,7 +147,7 @@ export function createApplyPatchTool(options = {}) {
                 throw new Error("apply_patch aborted");
             const typedParams = parseApplyPatchParams(params);
             recordApplyPatchDisplayInput(toolCallId, typedParams.patchText);
-            setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd);
+            setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd, "pending", undefined, options.showDiffWhenCollapsed);
             let result;
             try {
                 result = await withTouchedFileMutationQueues(ctx.cwd, typedParams.patchText, () => executePatchWithRust({ cwd: ctx.cwd, patchText: typedParams.patchText, signal, customRustBinariesDir: options.customRustBinariesDir }));

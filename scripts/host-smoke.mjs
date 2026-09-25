@@ -144,7 +144,7 @@ assert.match(editPlain, /10 \+new value/);
 
 // ---- 7b. The shipped apply_patch (not a fake builtin edit) shares that surface.
 const { createApplyPatchTool } = await import("../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js");
-const patchTool = createApplyPatchTool();
+const patchTool = createApplyPatchTool({ showDiffWhenCollapsed: true });
 const root = path.resolve(import.meta.dirname, "..");
 definitions.push({ name: "apply_patch", sourceInfo: {
   source: root, path: path.join(root, "vendor/pi-codex-conversion/dist/index.js"),
@@ -170,22 +170,43 @@ patchRow.updateResult({ ...patchResult, isError: false });
 const patchCollapsed = patchRow.render(44).join("\n");
 assert.match(stripVTControlCharacters(patchCollapsed), /Edited 3 files/);
 assert.doesNotMatch(stripVTControlCharacters(patchCollapsed), /deleted line 30/);
-patchRow.setExpanded(true);
-for (const width of [32, 80]) {
-  const rows = patchRow.render(width);
-  assert.match(rows.join("\n"), /\x1b\[48;2;74;34;29m/);
-  assert.match(rows.join("\n"), /\x1b\[48;2;33;58;43m/);
-  assert.doesNotMatch(rows.join("\n"), /\x1b\[7m/, "no native inverse token highlighting");
-  assert.ok(rows.every((line) => visibleWidth(line) <= width), "multi-file diff respects terminal width");
-  const plain = stripVTControlCharacters(rows.join("\n"));
-  assert.match(plain, /1 -原来的中文内容/, "old content survives actual mutation/deletion");
-  assert.match(plain, /1 \+新的中文内容/);
-  assert.match(plain, /deleted line 30/);
-  assert.match(plain, /created.ts/);
+for (const expanded of [false, true, false]) {
+  patchRow.setExpanded(expanded);
+  for (const width of [32, 80]) {
+    const rows = patchRow.render(width);
+    assert.match(rows.join("\n"), /\x1b\[48;2;74;34;29m/);
+    assert.match(rows.join("\n"), /\x1b\[48;2;33;58;43m/);
+    assert.doesNotMatch(rows.join("\n"), /\x1b\[7m/, "no native inverse token highlighting");
+    assert.ok(rows.every((line) => visibleWidth(line) <= width), "multi-file diff respects terminal width");
+    const plain = stripVTControlCharacters(rows.join("\n"));
+    assert.match(plain, /1 -原来的中文内容/, "old content survives actual mutation/deletion");
+    assert.match(plain, /1 \+新的中文内容/);
+    if (expanded) assert.match(plain, /deleted line 30/);
+    else {
+      assert.doesNotMatch(plain, /deleted line 30/);
+      assert.match(plain, /more rows/);
+      assert.ok(rows.length < 16, "one wrapped preview budget across files");
+    }
+    assert.match(plain, /created.ts/);
+  }
 }
 assert.equal(fs.existsSync(path.join(dir, "deleted.txt")), false);
 assert.equal(fs.existsSync(path.join(dir, "before.txt")), false);
 assert.match(fs.readFileSync(path.join(dir, "after.txt"), "utf8"), /新的中文内容/);
+
+// The screenshot's single-file, folded case at a three-digit line number.
+fs.writeFileSync(path.join(dir, "single.txt"), "context\n".repeat(124) + "old value that wraps over several cells\n");
+const singleArgs = { input: "*** Begin Patch\n*** Update File: single.txt\n@@\n-old value that wraps over several cells\n+new value that wraps over several cells\n*** End Patch" };
+const singleRow = new Core.ToolExecutionComponent("apply_patch", "patch-single", singleArgs, { showImages: false }, patchTool, ui, dir);
+singleRow.setArgsComplete();
+singleRow.markExecutionStarted();
+const singleResult = await patchTool.execute("patch-single", singleArgs, undefined, undefined, { cwd: dir });
+singleRow.updateResult({ ...singleResult, isError: false });
+const singleRows = singleRow.render(32);
+assert.match(singleRows.join("\n"), /\x1b\[48;2;74;34;29m/);
+assert.match(singleRows.join("\n"), /\x1b\[48;2;33;58;43m/);
+assert.match(stripVTControlCharacters(singleRows.join("\n")), /125 \+new value/);
+assert.ok(singleRows.every(line => visibleWidth(line) <= 32), "three-digit gutters must fit the folded viewport");
 
 const failedArgs = { input: "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch" };
 const failedRow = new Core.ToolExecutionComponent("apply_patch", "patch-failed", failedArgs, { showImages: false }, patchTool, ui, dir);

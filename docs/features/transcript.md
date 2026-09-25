@@ -35,7 +35,7 @@
 - **文件探索**：`read` / `grep` / `find` / `ls` 归入 `Exploring` → `Explored`；动作动词用 Codex cyan（`CODEX_CYAN`），查询与路径之间的 ` in ` 用 dim（`src/explore.ts`）。成功输出默认折叠。
 - **文件修改（edit/diff）**：Codex 式 `行号 + 空格 + +/- + 内容`。删除行整行底色 `#4A221D`（256 色 `52`），新增行 `#213A2B`（256 色 `22`），ANSI-16 只保留前景色；diff 正文按文件扩展名做语法高亮，且前景 `reset` **不会**清掉 diff 底色；换行后内容悬挂对齐到正文列；context 行无底色；宿主自带的 compact context window 不再二次截断。整条路径只有**一个** diff 渲染实现（`src/diff.ts` → `src/diff-component.ts`）。
 - **写入（write）**：`tool_execution_start` 抓 pre-image、`tool_execution_end` 校验 post-image，只在可靠时呈现：新文件 `Added path (+N -0)` 全绿；覆盖写 `Edited path (+A -D)` 真实 diff；二进制 / 超大 / 不可读 / post 不匹配 / 任何不确定 → 回退成原始内容预览。**绝不伪造 diff**（`src/write-tracker.ts`，状态仅存进程内存，不写盘、不进会话记录）。
-- **内置 apply_patch**：展开单文件/多文件修改时复用同一 Codex diff（`src/apply-patch-view.ts`），包括新增、删除和移动；预览来自转换层执行前的结构化快照，不在执行后重读文件。收起视图保留转换层原有配置，失败/部分失败及无快照的历史记录保留原生诊断，不伪造成功 diff。
+- **内置 apply_patch**：单文件/多文件的默认 diff 预览和展开视图均复用与 `edit` 相同的 Codex 整行背景、行号与换行布局（`src/apply-patch-view.ts`），包括新增、删除和移动。折叠预览在换行后跨文件合计保留 11 个屏幕行，随后显示展开提示；展开后显示完整 diff。转换层仍决定是否只显示摘要，预览来自其唯一的执行前结构化快照，不在执行后重读文件。失败/部分失败及无快照的历史记录保留原生诊断，不伪造成功 diff。
 - **写入实时预览**：模型还在生成 `write` 参数时实时显示标题 + 阶段行 + 物理行尾部预算内的正文。`writePreview.rows` 是**整块**屏幕行预算（标题行 + 阶段行 + 正文 + 省略行），且至少保留 1 行正文；`0` 表示只留标题与阶段行。
 - **图像结果**：保留宿主原生图片路径，服从 `terminal.showImages`；关闭图片预览时只显示轻量数量提示，不输出 Base64。
 - **启动头**：1–2 行极简身份行，运行时读取**真实**版本号（`src/chrome/header.ts`）。

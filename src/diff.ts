@@ -234,7 +234,8 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
 
   const maxNew = Math.max(0, ...rows.map((row) => row.newNumber ?? 0));
   const maxOld = Math.max(0, ...rows.map((row) => row.oldNumber ?? 0));
-  const numberWidth = lineNumberWidth(Math.max(maxNew, maxOld));
+  const maxSingle = Math.max(0, ...rows.map((row) => row.lineNumber ?? 0));
+  const numberWidth = lineNumberWidth(Math.max(maxNew, maxOld, maxSingle));
   // Codex prefix: left inset + gutter(number + space) + sign char.
   const prefixCols = DIFF_LEFT_INSET + numberWidth + 1 + 1;
   const contentWidth = Math.max(1, usable - prefixCols);

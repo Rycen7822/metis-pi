@@ -2,6 +2,7 @@
 // files that the tool has already changed. Painting is shared with edit/write.
 import { fileURLToPath } from "node:url";
 import { getApplyPatchRenderSnapshot } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/render-state.js";
+import { shouldCompactApplyPatchDisplay } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/display-broker.js";
 import { formatPatchTarget } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/rendering.js";
 import type { AdapterOptions } from "./adapter.ts";
 import type { DiffRow } from "./diff.ts";
@@ -12,12 +13,14 @@ export function createOwnedApplyPatchView(makeText: TextFactory, makeDiff: DiffF
   return {
     sourcePath: fileURLToPath(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url)),
     renderCall(_args, theme, context) {
-      // Keep the conversion layer's configured compact/summary presentation.
-      if (!context.expanded) return;
       const snapshot = context.toolCallId ? getApplyPatchRenderSnapshot(context.toolCallId) : undefined;
       // Streaming, replay without a snapshot, and failures keep the native
       // diagnostic renderer. In particular, never present failed edits as done.
       if (!snapshot || snapshot.status !== "pending" || context.isError || !snapshot.files.length) return;
+      if (context.argsComplete === false || shouldCompactApplyPatchDisplay(context.toolCallId, context.executionStarted)) return;
+      // The tool owns the summary-vs-preview policy; folding changes only the
+      // visible row budget, never the diff painter.
+      if (!context.expanded && !snapshot.showDiffWhenCollapsed) return;
       const files = snapshot.files;
       const added = files.reduce((sum, file) => sum + file.added, 0);
       const removed = files.reduce((sum, file) => sum + file.removed, 0);
@@ -46,6 +49,19 @@ export function createOwnedApplyPatchView(makeText: TextFactory, makeDiff: DiffF
             copyRows.push(...(product?.rows ?? childLines.map(() => ({
               spans: [{ colStart: 0, colEnd: width, kind: "unknown" as const }], breakBefore: "hard" as const,
             }))));
+          }
+          // One physical-row budget across all files, after ANSI-aware wrapping.
+          // Keep copy provenance aligned with the visible rows, including gaps.
+          const previewRows = 11;
+          if (!context.expanded && lines.length > previewRows) {
+            const hidden = lines.length - previewRows;
+            lines.length = previewRows;
+            copyRows.length = previewRows;
+            const hint = makeText(theme.fg("dim", `    … (${hidden} more rows, ${expandHint()})`)).render(width);
+            lines.push(...hint);
+            copyRows.push(...hint.map(() => ({
+              spans: [{ colStart: 0, colEnd: width, kind: "decoration" as const }], breakBefore: "gap" as const,
+            })));
           }
           registerProduct(lines, { componentId: "apply-patch", width, rows: copyRows });
           publishRows(this, lines);
