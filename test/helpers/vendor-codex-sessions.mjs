@@ -14,10 +14,26 @@ export const tool = (name, description = `${name} description`) => ({
 	parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
 });
 
-export const systemMessage = (content, timestamp, extra = {}) => ({ role: "system", content, timestamp, ...extra });
-export const userMessage = (text, timestamp) => ({ role: "user", content: text, timestamp });
+export const systemMessage = (content, timestamp = 0, extra = {}) => ({ role: "system", content, timestamp, ...extra });
+export const userMessage = (text, timestamp = 1) => ({ role: "user", content: text, timestamp });
+export const assistantToolCall = (model, id, name, args = { value: "x" }) => ({
+	role: "assistant",
+	content: [{ type: "toolCall", id, name, arguments: args }],
+	provider: model.provider, api: model.api, model: model.id,
+	usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+	stopReason: "toolUse", timestamp: 2,
+});
+export const toolResult = (toolCallId, toolName, text, timestamp = 3) => ({
+	role: "toolResult", toolCallId, toolName, content: [{ type: "text", text }], timestamp,
+});
 
-export const messageEntry = (id, parentId, message) => ({
+export const checkpointDetails = (model, compactedWindow = [SEALED_WINDOW_ITEM]) => ({
+	strategy: "openai-responses-compaction-v2",
+	provider: model.provider, api: model.api, model: model.id, baseUrl: model.baseUrl,
+	createdAt: new Date(4).toISOString(), compactedWindow,
+});
+
+const messageEntry = (id, parentId, message) => ({
 	type: "message",
 	id,
 	parentId,
@@ -25,15 +41,14 @@ export const messageEntry = (id, parentId, message) => ({
 	message,
 });
 
-/** Link message entries after `parentId`; each spec is `[id, message]`. */
-export function linkFrom(parentId, specs) {
-	const entries = [];
+/** Link messages with deterministic, branch-local ids. */
+function linkFrom(parentId, messages) {
 	let previous = parentId;
-	for (const [id, message] of specs) {
-		entries.push(messageEntry(id, previous, message));
-		previous = id;
-	}
-	return entries;
+	return messages.map((message, index) => {
+		const entry = messageEntry(`${parentId}-${index}`, previous, message);
+		previous = entry.id;
+		return entry;
+	});
 }
 
 /**
@@ -55,22 +70,14 @@ export function checkpointSession({ model, kept = [], tail, checkpointSystemMess
 		firstKeptEntryId: "pre",
 		tokensBefore: 100,
 		systemMessage: checkpointSystemMessage ?? systemMessage("BASE_PROMPT", 4, { toolsAdded: [tool("tool_alpha")] }),
-		details: {
-			strategy: "openai-responses-compaction-v2",
-			provider: model.provider,
-			api: model.api,
-			model: model.id,
-			baseUrl: model.baseUrl,
-			createdAt: new Date(4).toISOString(),
-			compactedWindow: [SEALED_WINDOW_ITEM],
-		},
+		details: checkpointDetails(model),
 	};
 	const tailEntries = linkFrom("compact", tail);
 	const entries = [head, pre, ...keptEntries, compaction, ...tailEntries];
-	return { entries, compaction, preEntries: [head, pre, ...keptEntries], tailEntries, leafId: entries[entries.length - 1].id };
+	return { entries, compaction, tailEntries, leafId: entries[entries.length - 1].id };
 }
 
-/** A checkpoint-free session: `head` plus the message specs, linked in order. */
+/** A checkpoint-free session: `head` plus messages linked in order. */
 export function session({ headTools = [tool("tool_alpha")], messages }) {
 	const head = messageEntry("head", null, systemMessage("BASE_PROMPT", 0, { toolsAdded: headTools }));
 	const entries = [head, ...linkFrom("head", messages)];

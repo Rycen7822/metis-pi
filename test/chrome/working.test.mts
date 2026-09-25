@@ -50,11 +50,6 @@ test("shimmer cycle: one wave fully exits before the next enters (no overlap)", 
   const word = "Working".length; // 7
   const trail = 5;
   const cycle = Math.ceil((word + trail + 1) / 0.25) + 16;
-  // Front-of-wave position per frame: rightmost cell with a comet color.
-  const frontAt = (f: number): number => {
-    const { head } = shimmerPhase(f, word);
-    return Math.ceil(head) - 1; // rightmost cell with dist >= 0
-  };
   const litAt = (f: number): number[] => {
     const { head } = shimmerPhase(f, word);
     const out: number[] = [];
@@ -115,12 +110,11 @@ function harness(overrides = {}) {
     active: true, phase: "working", elapsedMs: 1000, thinkingMs: 0, thinkingOpen: false,
     tools: undefined, usage: { input: 0, output: 0 },
   };
-  let renders = 0;
   const component = createWorkingComponent({
     getSnapshot: () => snapshot,
     getShow: () => SHOW,
     getAnimation: () => ({ enabled: true, intervalMs: 64 }),
-    requestRender: () => { renders += 1; },
+    requestRender: () => {},
     colorKind: overrides.colorKind ?? "truecolor",
     // Real ANSI paints (the width guard measures visible cells; tag-style
     // fake paints would inflate it).
@@ -128,8 +122,9 @@ function harness(overrides = {}) {
       : tone === "accent" ? `\x1b[38;2;137;180;250m${text}\x1b[39m`
       : `\x1b[2m${text}\x1b[22m`),
     schedule: (fn, ms) => {
-      scheduled.push({ fn, ms });
-      return () => {};
+      const timer = { fn, ms, cancelled: false };
+      scheduled.push(timer);
+      return () => { timer.cancelled = true; };
     },
     ...overrides,
   });
@@ -137,7 +132,6 @@ function harness(overrides = {}) {
     component,
     scheduled,
     setSnapshot: (next) => { snapshot = { ...snapshot, ...next }; },
-    renderCount: () => renders,
   };
 }
 
@@ -150,9 +144,10 @@ test("animation lifecycle: exactly one 64ms timer while active; stopped at idle/
   assert.equal(h.scheduled.length, 1);
   h.setSnapshot({ active: false });
   h.component.render(80); // inactive → timer stopped
+  assert.equal(h.scheduled[0].cancelled, true, "idle cancels the only timer");
   h.component.stopAnimation();
   h.component.dispose?.();
-  assert.ok(true, "lifecycle exercised without leaks");
+  assert.equal(h.scheduled.length, 1, "cleanup does not schedule again");
 });
 
 test("NO_COLOR / ansi16 renders static (no timer, no per-frame change)", () => {

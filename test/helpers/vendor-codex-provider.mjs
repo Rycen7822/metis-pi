@@ -4,7 +4,9 @@
 // and captures the request body it would send. Nothing opens a transport: the capture
 // hook throws first and `globalThis.fetch` is disabled.
 import assert from "node:assert/strict";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 
 const ENTRY = new URL("../../vendor/pi-codex-conversion/dist/index.js", import.meta.url).href;
 
@@ -99,26 +101,34 @@ export function modelNamed(id) {
 	return model;
 }
 
-/**
- * Run `executeRemoteCompactionV2` through the registered provider and return the **final** request
- * body, i.e. what the adapter's own `onPayload` produced. The capture hook throws before any
- * transport is opened, so nothing is sent and no credentials are used.
- */
-export async function withFinalPayloadCapture(run) {
+export function captureSession(model, entries, leafId) {
+	const context = buildSessionContext(entries, leafId);
+	return captureBody(model, normalizeContext({ messages: convertToLlm(context.messages) }));
+}
+
+export const declaredToolNames = (body) => body.tools?.map(({ name }) => name) ?? [];
+export const inPlaceToolItems = (input) => input.filter(({ type }) =>
+	["additional_tools", "tool_search_call", "tool_search_output"].includes(type));
+export const kindsOf = (input) => input.map((item) =>
+	item.role && (!item.type || item.type === "message") ? `message:${item.role}` : item.type);
+
+/** Capture after the adapter's payload hook, before any transport; count even uncaptured attempts. */
+export async function captureRegistration() {
 	const registered = await loadRegistration();
-	let captured;
+	const bodies = [];
+	let calls = 0;
 	const registration = {
 		...registered,
-		streamSimple: (model, context, options) => registered.streamSimple(model, context, {
-			...options,
-			transport: "sse",
-			onPayload: async (body) => {
-				captured = await options.onPayload(body);
-				throw new Error("OFFLINE_CAPTURE_COMPLETE");
-			},
-		}),
+		streamSimple(model, context, options = {}) {
+			calls++;
+			return registered.streamSimple(model, context, {
+				...options, transport: "sse",
+				async onPayload(body) {
+					bodies.push((await options.onPayload?.(body)) ?? body);
+					throw new Error("OFFLINE_CAPTURE_COMPLETE");
+				},
+			});
+		},
 	};
-	await run(registration);
-	assert.ok(captured, "the adapter's final payload hook must run before any transport is opened");
-	return captured;
+	return { registration, bodies, get calls() { return calls; } };
 }

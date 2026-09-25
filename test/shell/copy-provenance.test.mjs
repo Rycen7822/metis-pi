@@ -7,14 +7,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import * as Tui from "@earendil-works/pi-tui";
 import { renderShellCall, renderShellResult, OUTPUT_MAX_ROWS } from "../../src/shell.ts";
 import { renderWritePreview } from "../../src/write-preview.ts";
 import { detectColorLevel } from "../../src/palette.ts";
+import { layout } from "../helpers/ui-fixtures.mjs";
 
 // Host wrap preserves ANSI in its output segments (unlike a plain-text stub),
 // so colored renders exercise the real span-text path.
-const layout = { wrap: (text, width) => Tui.wrapTextWithAnsi(text, width), visibleWidth: Tui.visibleWidth };
 const trueColor = detectColorLevel({ COLORTERM: "truecolor" });
 const ANSI = /\x1b/;
 
@@ -45,33 +44,24 @@ function reconstruct(copyOut) {
   return parts.join("");
 }
 
-test("shell call copy spans are plain text under active syntax highlighting", () => {
-  const copyOut = [];
-  const command = "python3 - <<'EOF'\nprint(1)\nEOF";
-  const lines = renderShellCall({ row: baseRow({ command, language: "bash" }), ...baseInput, copyOut });
-  assert.equal(copyOut.length, lines.length, "one copy row per visual row");
-  for (const row of copyOut) {
-    for (const span of row.spans) {
-      if (span.text !== undefined) assert.ok(!ANSI.test(span.text), `span text ANSI-free: ${JSON.stringify(span.text)}`);
+for (const [name, command, expanded] of [
+  ["heredoc", "python3 - <<'EOF'\nprint(1)\nEOF", false],
+  ["long wrapped command", `bash deploy.sh ${"--flag value ".repeat(30)}`.trimEnd(), true],
+]) {
+  test(`shell ${name}: highlighted call copy spans stay plain`, () => {
+    const copyOut = [];
+    const lines = renderShellCall({ row: baseRow({ command, language: "bash", expanded }), ...baseInput, copyOut });
+    assert.equal(copyOut.length, lines.length, "one copy row per visual row");
+    if (expanded) assert.ok(lines.length > 3, "command actually wraps");
+    for (const span of copyOut.flatMap((row) => row.spans)) {
+      if (span.text !== undefined) assert.ok(!ANSI.test(span.text), `ANSI-free: ${JSON.stringify(span.text)}`);
     }
-  }
-  assert.equal(reconstruct(copyOut), command, "logical command reconstructed through boundary semantics");
-});
-
-test("shell call copy spans stay plain for a wrapping long command", () => {
-  const copyOut = [];
-  const command = `bash deploy.sh ${"--flag value ".repeat(30)}`.trimEnd();
-  const lines = renderShellCall({ row: baseRow({ command, language: "bash", expanded: true }), ...baseInput, copyOut });
-  assert.ok(lines.length > 3, "command actually wraps onto continuation rows");
-  for (const row of copyOut) {
-    for (const span of row.spans) {
-      if (span.text !== undefined) assert.ok(!ANSI.test(span.text), `span text ANSI-free: ${JSON.stringify(span.text)}`);
-    }
-  }
-  // Soft joins lose the whitespace the wrapper consumed at the break (a
-  // documented caveat of own-renderer products) — compare whitespace-free.
-  assert.equal(reconstruct(copyOut).replace(/\s+/g, ""), command.replace(/\s+/g, ""));
-});
+    // Own-renderer soft joins omit consumed wrap spaces; hard heredoc breaks
+    // must still round-trip verbatim, including whitespace.
+    const normalize = expanded ? (text) => text.replace(/\s+/g, "") : (text) => text;
+    assert.equal(normalize(reconstruct(copyOut)), normalize(command));
+  });
+}
 
 test("shell call header-only copy span is stripped of title styling", () => {
   const copyOut = [];

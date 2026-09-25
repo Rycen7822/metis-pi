@@ -3,14 +3,10 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { HISTORY_ROW_BUDGET } from "../../src/chrome/history-window.ts";
 import { createFullscreenLayout } from "../../src/chrome/fullscreen-layout.ts";
-import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
-import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
+import { altScreen, container, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 
-createSelectionCopySystem({ prototypes: { Text: Tui.Text.prototype, Markdown: Tui.Markdown.prototype,
-  Container: Tui.Container.prototype, Box: Tui.Box.prototype, MouseRegion: Tui.MouseRegion.prototype },
-  fns: { visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences, wrapTextWithAnsi: Tui.wrapTextWithAnsi } }).wrapPrototypes();
+installCopyPrototypes(["Text", "Markdown", "Container", "Box", "MouseRegion"]);
 
 class Block {
   renders = 0;
@@ -26,13 +22,9 @@ const longHistory = () => Array.from({ length: 120 }, (_, i) => new Block(i));
 const renderCount = (blocks) => blocks.reduce((sum, block) => sum + block.renders, 0);
 
 function setup(t, blocks = longHistory(), width = 80) {
-  const source = new Tui.Container();
-  blocks.forEach((block) => source.addChild(block));
+  const source = container(...blocks);
   const scroll = new Tui.ScrollView(source, { primary: true, follow: "end" });
-  const terminal = { columns: width, rows: 20, write() {} };
-  const tui = new Tui.TuiAltScreen(terminal);
-  tui.requestRender = () => {};
-  tui.beforeTerminalStart();
+  const { tui, terminal } = altScreen(width, 20);
   tui.setLayoutRoot(scroll);
   const system = createFullscreenLayout(Tui, { margin: 0, minWidth: 0 });
   assert.equal(system.installOnTui(tui), true);
@@ -52,7 +44,12 @@ function setup(t, blocks = longHistory(), width = 80) {
     render();
   };
   render();
-  return { source, scroll, tui, terminal, system, lines, render, page, wheel };
+  const selection = (row) => {
+    tui.getSelectionBounds = () => row === null ? undefined : ({
+      start: { row, col: 0, scrollView: scroll }, end: { row, col: 1, scrollView: scroll },
+    });
+  };
+  return { source, scroll, tui, terminal, system, lines, render, page, wheel, selection };
 }
 
 test("initial replay and resize stop at a 5000-row suffix; warm scroll never renders source blocks", (t) => {
@@ -170,11 +167,7 @@ test("giant boundary block is sliced with collectible native/mirror caches and e
   assert.ok(!block.cachedLines, "native rows evicted");
   const rows = view.lines();
   assert.ok(productFor(rows));
-  const result = new SelectionSerializer({ visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences }).serialize(view.tui.currentLayout, {
-      scrollView: view.scroll, startRow: rows.length - 2, endRow: rows.length - 1, sourceLines: rows,
-      columnsFor: (r) => ({ start: 0, end: Tui.visibleWidth(rows[r]) }),
-    });
+  const result = select(view.tui.currentLayout, rows.length - 2);
   assert.equal(result.text, "line 5998\nline 5999");
   assert.equal(result.nativeRows, 0);
 });
@@ -183,11 +176,11 @@ test("active selection pins the committed rows until released", (t) => {
   const block = new Block("before", 2);
   const view = setup(t, [block]);
   const committed = view.lines();
-  view.tui.getSelectionBounds = () => ({ start: { row: 0, col: 0, scrollView: view.scroll }, end: { row: 0, col: 1, scrollView: view.scroll } });
+  view.selection(0);
   block.setText("after"); view.source.addChild(new Block("append", 1));
   view.render();
   assert.equal(view.lines(), committed);
-  view.tui.getSelectionBounds = () => undefined; view.render();
+  view.selection(null); view.render();
   assert.deepEqual(view.lines(), ["after:0", "after:1", "append:0"]);
 });
 
@@ -228,11 +221,11 @@ test("selection holds an uncommitted page position until its new rows can be lai
   view.scroll.scrollTo(0, { disableFollow: true }); view.render();
   const committed = view.lines();
   view.scroll.scrollBy(-1);
-  view.tui.getSelectionBounds = () => ({ start: { row: 1, col: 0, scrollView: view.scroll }, end: { row: 1, col: 1, scrollView: view.scroll } });
+  view.selection(1);
   view.render();
   assert.equal(view.lines(), committed);
   assert.equal(view.scroll.scrollTop, 0, "a pending target must not move the frozen frame");
-  view.tui.getSelectionBounds = () => undefined; view.render();
+  view.selection(null); view.render();
   assert.notEqual(view.lines(), committed);
   assert.equal(view.scroll.scrollTop, view.scroll.contentHeight - view.scroll.viewportHeight);
 });
@@ -252,9 +245,9 @@ test("dispose cancels a pending position without replacing a later layout wrappe
 
 test("submitting input releases the selected window so command output can appear", (t) => {
   const view = setup(t, [new Block("first", 1)]);
-  view.tui.getSelectionBounds = () => ({ start: { row: 0, col: 0, scrollView: view.scroll }, end: { row: 0, col: 1, scrollView: view.scroll } });
+  view.selection(0);
   let cleared = false;
-  view.tui.clearTextSelection = () => { cleared = true; view.tui.getSelectionBounds = () => undefined; };
+  view.tui.clearTextSelection = () => { cleared = true; view.selection(null); };
   view.source.addChild(new Block("reply", 1));
   for (const listener of view.tui.inputListeners) listener("\r");
   assert.equal(cleared, true);

@@ -83,4 +83,4 @@
 
 ## 验证
 
-`test/transcript/adapter.test.mjs`（安装/退避/归属）、`test/transcript/renderers.test.mjs`、`test/shell.golden.test.mjs`、`test/golden.layout.test.mjs`、`test/diff.parser.test.mjs`、`test/unit/write-tracker.test.mjs`、`test/host/write-stream-crash.test.mts`、`test/transcript/transcript.test.mts`（最大的一份，覆盖状态与协调逻辑）、`scripts/pty-verify.mjs`（真实 TUI 逐帧断言）。
+`test/transcript/adapter.test.mjs`（安装/退避/归属）、`test/transcript/renderers.test.mjs`、`test/shell/copy-provenance.test.mjs`、`test/shell/layout.test.mjs`、`test/unit/write-tracker.test.mjs`（diff 与写入跟踪）、`test/host/write-stream-crash.test.mts`、`test/transcript/transcript.test.mjs`（状态与协调逻辑）、`scripts/pty-verify.mjs`（真实 TUI 逐帧断言）。

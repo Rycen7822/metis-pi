@@ -5,8 +5,8 @@ import * as Core from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import extension from "../../extensions/appearance.ts";
 import { productFor, publishedRowsOf } from "../../src/selection-copy/model.ts";
-import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
 import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
+import { altScreen, container, select } from "../helpers/ui-fixtures.mjs";
 
 Core.initTheme("dark", false);
 const handlers = new Map();
@@ -28,14 +28,15 @@ function shell(text = "first\nlast") {
   return row;
 }
 
+function scrollScreen(children, width = 40, rows = 8) {
+  const { tui } = altScreen(width, rows);
+  tui.setLayoutRoot(new Tui.ScrollView(container(...children), { primary: true, follow: "end" }));
+  return tui;
+}
+
 test("settled shell scroll frames render each leaf once and reuse its copy product", () => {
-  const chat = new Tui.Container();
   const rows = Array.from({ length: 8 }, (_, i) => shell(`command ${i}\n${"long output words ".repeat(300)}\nlast`));
-  for (const row of rows) chat.addChild(row);
-  const tui = new Tui.TuiAltScreen({ columns: 80, rows: 12, write() {} });
-  tui.requestRender = () => {};
-  tui.beforeTerminalStart();
-  tui.setLayoutRoot(new Tui.ScrollView(chat, { primary: true, follow: "end" }));
+  const tui = scrollScreen(rows, 80, 12);
   tui.doRender();
   const observations = [];
   for (const row of rows) {
@@ -121,22 +122,10 @@ test("MouseRegion preserves logical copy through warm cached shell frames", () =
   row.render(40);
   const result = row.resultRendererComponent;
   const region = new Tui.MouseRegion(result, () => undefined);
-  const content = new Tui.Container();
-  content.addChild(region);
-  const tui = new Tui.TuiAltScreen({ columns: 40, rows: 8, write() {} });
-  tui.requestRender = () => {};
-  tui.beforeTerminalStart();
-  tui.setLayoutRoot(new Tui.ScrollView(content, { primary: true, follow: "end" }));
-  const serializer = new SelectionSerializer({ visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences });
+  const tui = scrollScreen([region]);
   for (let i = 0; i < 2; i++) {
     tui.doRender();
-    const box = tui.currentLayout.root;
-    const lines = box.scrollContentLines;
-    const copied = serializer.serialize(tui.currentLayout, {
-      scrollView: box.scrollView, startRow: 0, endRow: lines.length - 1, sourceLines: lines,
-      columnsFor: (r) => ({ start: 0, end: Tui.visibleWidth(lines[r]) }),
-    });
+    const copied = select(tui.currentLayout);
     assert.equal(copied.text, text, "soft wraps join and display gutters stay out of copy");
     assert.equal(copied.nativeRows, 0);
     assert.equal(publishedRowsOf(region), result.render(40));
@@ -147,23 +136,11 @@ test("whole native self-shell rows preserve copy provenance, old frames and imag
   const text = "甲乙丙丁".repeat(30);
   const row = shell(text);
   row.setExpanded(true);
-  const content = new Tui.Container();
-  content.addChild(row); // Keep the actual host ToolExecutionComponent boundary.
-  const tui = new Tui.TuiAltScreen({ columns: 40, rows: 8, write() {} });
-  tui.requestRender = () => {};
-  tui.beforeTerminalStart();
-  tui.setLayoutRoot(new Tui.ScrollView(content, { primary: true, follow: "end" }));
-  const serializer = new SelectionSerializer({ visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences });
+  const tui = scrollScreen([row]); // Keep the actual host ToolExecutionComponent boundary.
   const copy = (frame, startText, endRow = frame.root.scrollContentLines.length - 1) => {
-    const box = frame.root;
-    const lines = box.scrollContentLines;
-    const startRow = lines.findIndex((line) => line.includes(startText));
+    const startRow = frame.root.scrollContentLines.findIndex((line) => line.includes(startText));
     assert.ok(startRow >= 0);
-    return serializer.serialize(frame, {
-      scrollView: box.scrollView, startRow, endRow, sourceLines: lines,
-      columnsFor: (r) => ({ start: 0, end: Tui.visibleWidth(lines[r]) }),
-    });
+    return select(frame, startRow, endRow);
   };
   for (let i = 0; i < 2; i++) {
     tui.doRender();
@@ -185,10 +162,7 @@ test("whole native self-shell rows preserve copy provenance, old frames and imag
 test("repeated selection-copy setup does not stack render wrappers", () => {
   const prototypes = Object.fromEntries(["Text", "Markdown", "Container", "Box", "MouseRegion"].map((key) => [key, Tui[key].prototype]));
   const before = Object.values(prototypes).map((p) => p.render);
-  const system = createSelectionCopySystem({ prototypes, fns: {
-    visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences, wrapTextWithAnsi: Tui.wrapTextWithAnsi,
-  } });
+  const system = createSelectionCopySystem({ prototypes, fns: Tui });
   system.wrapPrototypes();
   const second = system.wrapPrototypes();
   assert.deepEqual(Object.values(prototypes).map((p) => p.render), before);
@@ -196,10 +170,7 @@ test("repeated selection-copy setup does not stack render wrappers", () => {
   assert.match(second.details, /markdown=self/, "self-owned entries are labelled, not 'already-owned'");
   const nonExtensible = Object.fromEntries(Object.keys(prototypes).map((key) => [key, Object.preventExtensions({ render() { return []; } })]));
   const original = Object.values(nonExtensible).map((p) => p.render);
-  const blocked = createSelectionCopySystem({ prototypes: nonExtensible, fns: {
-    visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences, wrapTextWithAnsi: Tui.wrapTextWithAnsi,
-  } });
+  const blocked = createSelectionCopySystem({ prototypes: nonExtensible, fns: Tui });
   assert.equal(blocked.wrapPrototypes().installed, false);
   assert.deepEqual(Object.values(nonExtensible).map((p) => p.render), original, "non-extensible prototypes are unchanged");
 });

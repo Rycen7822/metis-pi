@@ -54,9 +54,7 @@ test("real UserMessageComponent paints the gray surface from the native theme sl
   assert.ok(multiRows.some((row) => row.includes("第二行")));
 });
 
-test("real AssistantMessageComponent: auto-collapse fires once through the HOST override map", () => {
-  let clock = 5_000;
-  const state = new TranscriptState(() => clock);
+function decorate(state) {
   const labels = [];
   const handle = installTranscriptDecorations({
     state,
@@ -73,6 +71,13 @@ test("real AssistantMessageComponent: auto-collapse fires once through the HOST 
     isCollapsedLabel: (node) => node instanceof Tui.Text,
     enabled: () => true,
   });
+  return { labels, handle };
+}
+
+test("real AssistantMessageComponent: auto-collapse fires once through the HOST override map", () => {
+  let clock = 5_000;
+  const state = new TranscriptState(() => clock);
+  const { labels, handle } = decorate(state);
   try {
     const messageObj = { role: "assistant", content: [], stopReason: null };
     state.apply({ type: "message_start", message: { role: "assistant", content: [] } }, messageObj);
@@ -125,24 +130,7 @@ test("real AssistantMessageComponent: auto-collapse fires once through the HOST 
 });
 
 test("real AssistantMessageComponent: history rebuild collapses without timing ('Thought')", () => {
-  let clock = 0;
-  const state = new TranscriptState(() => clock);
-  const labels = [];
-  const handle = installTranscriptDecorations({
-    state,
-    assistantPrototype: Core.AssistantMessageComponent.prototype,
-    makeSeparator: () => new Tui.Text("─".repeat(40), 0, 0),
-    makeSpacer: () => new Tui.Spacer(1),
-    makeRail: undefined,
-    thinkingPolicy: () => ({ streaming: "full", completed: "collapsed" }),
-    makeThoughtSummary: (input) => {
-      const label = new Tui.Text(thoughtSummaryText(input.durationMs), input.paddingX, 0);
-      labels.push(label);
-      return label;
-    },
-    isCollapsedLabel: (node) => node instanceof Tui.Text,
-    enabled: () => true,
-  });
+  const { labels, handle } = decorate(new TranscriptState(() => 0));
   try {
     // Finalized message rendered straight from history: no transcript events.
     const messageObj = {

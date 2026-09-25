@@ -5,13 +5,17 @@ import { makeRenderers, TOOL_NAMES } from "../../src/renderers.ts";
 import { activate } from "../../src/extension.ts";
 import { fakeHost, toolInfo, bindings, deepFreeze, theme, sessionStub } from "../helpers.mjs";
 
-function setup(tools = TOOL_NAMES.map((name) => toolInfo(name))) {
-  const Host = fakeHost();
-  const state = { tools, enabled: true };
-  const renderers = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+const ownRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+function setup(tools = TOOL_NAMES.map((name) => toolInfo(name)), options = {}, Host = fakeHost()) {
+  const renderers = ownRenderers();
   const original = Object.getOwnPropertyDescriptors(Host.prototype);
-  const handle = installAdapter(Host.prototype, { getTools: () => state.tools, enabled: () => state.enabled, renderers });
-  return { Host, state, renderers, original, handle };
+  const handle = installAdapter(Host.prototype, { getTools: () => tools, enabled: () => true, renderers, ...options });
+  return { Host, renderers, original, handle };
+}
+
+function assertNative(row) {
+  assert.equal(row.getCallRenderer(), row.toolDefinition.renderCall, row.toolName);
+  assert.equal(row.getResultRenderer(), row.toolDefinition.renderResult, row.toolName);
 }
 
 test("decorates builtin UI selectors, leaving definition and executor identical", () => {
@@ -35,47 +39,27 @@ test("decorates builtin UI selectors, leaving definition and executor identical"
   assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), original);
 });
 
-test("FFF override owns grep and find: both remain unchanged", () => {
-  const { Host, handle } = setup([toolInfo("grep", false), toolInfo("find", false)]);
-  for (const name of ["grep", "find"]) {
-    const definition = deepFreeze({ renderCall: () => "fff", renderResult: () => "fff result" });
-    const row = new Host(name, definition);
-    assert.equal(row.getCallRenderer(), definition.renderCall);
-    assert.equal(row.getResultRenderer(), definition.renderResult);
-  }
-  handle.dispose();
-});
-
-test("an extension overriding any tool keeps both custom renderers", () => {
-  for (const name of ["read", "write", "edit", "bash", "ls"]) {
-    const { Host, handle } = setup([toolInfo(name, false)]);
-    const definition = { renderCall: () => "custom", renderResult: () => "custom result" };
-    assert.equal(new Host(name, definition).getCallRenderer(), definition.renderCall, name);
-    assert.equal(new Host(name, definition).getResultRenderer(), definition.renderResult, name);
-    handle.dispose();
-  }
-});
-
-test("tools outside the takeover list are never decorated", () => {
-  for (const name of ["web_search", "get_search_content", "fetch_content", "mcp", "mcp_search", "session_search", "fffind", "ffgrep", "exec_command", "apply_patch", "subagent", "lsp", "ask_user_question"]) {
-    const { Host, handle } = setup([toolInfo(name)]);
-    const definition = { renderCall: () => "custom", renderResult: () => "custom result" };
-    const row = new Host(name, definition);
-    assert.equal(row.getCallRenderer(), definition.renderCall, name);
-    assert.equal(row.getResultRenderer(), definition.renderResult, name);
-    handle.dispose();
-  }
-});
+for (const [owner, names, builtin] of [
+  ["FFF overrides", ["grep", "find"], false],
+  ["other extensions", ["read", "write", "edit", "bash", "ls"], false],
+  ["outside takeover list", ["web_search", "get_search_content", "fetch_content", "mcp", "mcp_search", "session_search", "fffind", "ffgrep", "exec_command", "apply_patch", "subagent", "lsp", "ask_user_question"], true],
+]) {
+  test(`${owner}: both native renderers remain unchanged`, (t) => {
+    const { Host, handle } = setup(names.map((name) => toolInfo(name, builtin)));
+    t.after(() => handle.dispose());
+    for (const name of names) {
+      assertNative(new Host(name, deepFreeze({ renderCall: () => "custom", renderResult: () => "custom result" })));
+    }
+  });
+}
 
 test("only the packaged apply_patch entry can use the owned diff renderer", () => {
-  const Host = fakeHost();
   const definition = { renderCall: () => bindings.makeText("native patch"), renderResult: () => bindings.makeText("native result") };
   const sourcePath = "/metis/vendor/pi-codex-conversion/dist/index.js";
   let sourceInfo = { source: "../../project/metis", path: sourcePath };
   let ready = true;
-  const handle = installAdapter(Host.prototype, {
-    getTools: () => [{ name: "apply_patch", sourceInfo }], enabled: () => true,
-    renderers: makeRenderers(bindings.makeText, bindings.expandHint),
+  const { Host, handle } = setup([], {
+    getTools: () => [{ name: "apply_patch", sourceInfo }],
     ownedApplyPatch: { sourcePath, renderCall: () => ready ? bindings.makeText("owned diff") : undefined },
   });
   try {
@@ -92,15 +76,13 @@ test("only the packaged apply_patch entry can use the owned diff renderer", () =
       { path: sourcePath },
     ]) {
       sourceInfo = source;
-      assert.equal(row.getCallRenderer(), definition.renderCall);
-      assert.equal(row.getResultRenderer(), definition.renderResult);
+      assertNative(row);
     }
     assert.equal(row.toolDefinition, definition);
   } finally { handle.dispose(); }
 });
 
 test("command presentation is owned, call-only, reversible and leaves the theme untouched", () => {
-  const Host = fakeHost();
   const painter = (lines) => lines.map(line => `colored:${line}`);
   let sourceInfo = { source: "git:metis", path: OWNED_CONVERSION_ENTRY };
   let enabled = true;
@@ -109,7 +91,7 @@ test("command presentation is owned, call-only, reversible and leaves the theme 
     renderCall(_args, theme) { receivedTheme = theme; return bindings.makeText(theme.highlightCommandLines?.(["printf hi"])[0] ?? "native"); },
     renderResult: () => bindings.makeText("native result"),
   };
-  const handle = installAdapter(Host.prototype, {
+  const { Host, handle } = setup([], {
     getTools: () => [{ name: "exec_command", sourceInfo }], enabled: () => enabled,
     renderers: {}, highlightOwnedCommand: painter,
     renderOwnedCommand: (command, state, expanded, originalTheme) => {
@@ -137,8 +119,7 @@ test("command presentation is owned, call-only, reversible and leaves the theme 
       { path: OWNED_CONVERSION_ENTRY },
     ]) {
       sourceInfo = source;
-      assert.equal(row.getCallRenderer(), definition.renderCall);
-      assert.equal(row.getResultRenderer(), definition.renderResult);
+      assertNative(row);
     }
   } finally { handle.dispose(); }
   assert.equal(row.getCallRenderer(), definition.renderCall);
@@ -149,7 +130,7 @@ test("an earlier patch on ANY intercepted method prevents installation, atomical
     const Host = fakeHost();
     Host.prototype[key] = function () { return "another extension"; };
     const before = Object.getOwnPropertyDescriptors(Host.prototype);
-    const handle = installAdapter(Host.prototype, { getTools: () => [], enabled: () => true, renderers: {} });
+    const { handle } = setup([], { renderers: {} }, Host);
     assert.equal(handle.installed, false, key);
     assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), before, key);
   }
@@ -158,7 +139,7 @@ test("an earlier patch on ANY intercepted method prevents installation, atomical
 test("sealed prototypes and unrecognized host versions fail closed", () => {
   for (const Host of [fakeHost(), class Unknown {}]) {
     Object.preventExtensions(Host.prototype);
-    const handle = installAdapter(Host.prototype, { getTools: () => [], enabled: () => true, renderers: {} });
+    const { handle } = setup([], { renderers: {} }, Host);
     assert.equal(handle.installed, false);
   }
 });
@@ -170,8 +151,7 @@ test("later plugin patches are neither overridden nor undone", () => {
   Host.prototype.getCallRenderer = later;
   const definition = { renderCall: () => "original", renderResult: () => "original result" };
   const row = new Host("bash", definition);
-  assert.equal(row.getCallRenderer(), definition.renderCall);
-  assert.equal(row.getResultRenderer(), definition.renderResult);
+  assertNative(row);
   handle.dispose();
   assert.equal(Host.prototype.getCallRenderer, later);
   assert.equal(row.getCallRenderer(), definition.renderCall);
@@ -180,7 +160,7 @@ test("later plugin patches are neither overridden nor undone", () => {
 test("duplicate installations do not stack or steal ownership", () => {
   const { Host, handle, original } = setup();
   const after = Host.prototype.getCallRenderer;
-  const duplicate = installAdapter(Host.prototype, { getTools: () => [], enabled: () => true, renderers: {} });
+  const { handle: duplicate } = setup([], { renderers: {} }, Host);
   assert.equal(duplicate.installed, false);
   duplicate.dispose();
   assert.equal(Host.prototype.getCallRenderer, after);
@@ -300,8 +280,7 @@ test("historical rows created before installation are populated before their fir
   const Host = fakeHost();
   const row = new Host("bash", { renderCall: () => "stock" }, { command: "pwd" });
   assert.match(row.render(80).join("\n"), /BOX TOP/);
-  const handle = installAdapter(Host.prototype, { getTools: () => [toolInfo("bash")], enabled: () => true,
-    renderers: makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub) });
+  const { handle } = setup([toolInfo("bash")], {}, Host);
   const output = row.render(80).join("\n");
   assert.match(output, /• Running pwd/);
   assert.doesNotMatch(output, /BOX/);

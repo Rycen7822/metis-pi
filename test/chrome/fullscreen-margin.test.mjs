@@ -7,32 +7,26 @@ import assert from "node:assert/strict";
 
 import * as Tui from "@earendil-works/pi-tui";
 import { createFullscreenLayout, FULLSCREEN_MARGIN_OWNER } from "../../src/chrome/fullscreen-layout.ts";
-import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
-import { fakeTerminal, sgr } from "../helpers.mjs";
+import { sgr } from "../helpers.mjs";
+import { altScreen, container, drag, installCopyPrototypes, markdownTheme as theme, screenLines } from "../helpers/ui-fixtures.mjs";
 
 const MARGIN_HOST = { HStack: Tui.HStack, Spacer: Tui.Spacer };
 
-function makeAltScreen(width) {
-  const terminal = fakeTerminal(width);
-  const tui = new Tui.TuiAltScreen(terminal);
-  tui.beforeTerminalStart();
-  tui.setCopyOnSelect(false);
-  return { tui, terminal };
-}
-
-function screenLines(tui) {
-  return tui.previousScreen.map((line) => Tui.stripTerminalSequences(line).trimEnd());
+function marginScreen(t, width = 60) {
+  const screen = altScreen(width);
+  const margin = createFullscreenLayout(MARGIN_HOST, { margin: 2, minWidth: 40 });
+  t.after(() => margin.dispose());
+  assert.equal(margin.installOnTui(screen.tui), true);
+  return { ...screen, margin };
 }
 
 test("auto scrollbar keeps colored history inside both gutters on wheel input and resize", (t) => {
-  const { tui, terminal } = makeAltScreen(60);
-  tui.requestRender = () => {};
+  const { tui, terminal } = altScreen(60);
   const layout = createFullscreenLayout(Tui, { margin: 2, minWidth: 40 });
   t.after(() => layout.dispose());
   layout.installOnTui(tui);
   const colors = ["\x1b[48;2;32;55;40m", "\x1b[48;2;70;30;28m"];
-  const source = new Tui.Container();
-  source.addChild({ render: (width) => Array.from({ length: 6000 }, (_, i) =>
+  const source = container({ render: (width) => Array.from({ length: 6000 }, (_, i) =>
     `${colors[i % 2]}${`diff ${i}`.padEnd(width)}\x1b[49m`) });
   const scroll = new Tui.ScrollView(source, { primary: true, follow: "end", scrollbar: "auto" });
   tui.setLayoutRoot(scroll);
@@ -71,12 +65,10 @@ test("auto scrollbar keeps colored history inside both gutters on wheel input an
 });
 
 test("repeated fullscreen capture restores the native layout and all history resources", (t) => {
-  const { tui } = makeAltScreen(60);
-  tui.requestRender = () => {};
+  const { tui } = altScreen(60);
   const proto = Object.getPrototypeOf(tui);
   const nativeSet = proto.setLayoutRoot;
-  const source = new Tui.Container();
-  source.addChild(new Tui.Text("history", 0, 0));
+  const source = container(new Tui.Text("history", 0, 0));
   const scroll = new Tui.ScrollView(source, { primary: true });
   const wheel = scroll.scrollBy;
   let listeners = 0;
@@ -109,13 +101,11 @@ test("repeated fullscreen capture restores the native layout and all history res
 });
 
 test("a later layout wrapper survives retries, disposal and reacquisition without reviving old hooks", (t) => {
-  const { tui } = makeAltScreen(60);
-  tui.requestRender = () => {};
+  const { tui } = altScreen(60);
   const nativeListeners = new Set(tui.inputListeners);
   const proto = Object.getPrototypeOf(tui);
   const nativeSet = proto.setLayoutRoot;
-  const source = new Tui.Container();
-  source.addChild(new Tui.Text("history", 0, 0));
+  const source = container(new Tui.Text("history", 0, 0));
   const scroll = new Tui.ScrollView(source, { primary: true });
   const layout = createFullscreenLayout(Tui, { margin: 2, minWidth: 40 });
   t.after(() => { layout.dispose(); proto.setLayoutRoot = nativeSet; });
@@ -146,35 +136,32 @@ test("a later layout wrapper survives retries, disposal and reacquisition withou
   assert.ok(foreignCalls >= 3, "root restoration honors the foreign setter");
 });
 
-test("install wraps setLayoutRoot: content is inset by the margin, gutters blank", (t) => {
-  const { tui } = makeAltScreen(60);
-  const margin = createFullscreenLayout(MARGIN_HOST, { margin: 2, minWidth: 40 });
-  t.after(() => margin.dispose());
-  assert.equal(margin.installOnTui(tui), true);
-  const root = new Tui.Container();
-  root.addChild(new Tui.Text("hello margin world", 0, 0));
-  tui.setLayoutRoot(root);
-  assert.notEqual(tui.layoutRoot, root, "layout root is the wrapper");
-  assert.equal(tui.layoutRoot[FULLSCREEN_MARGIN_OWNER], root, "wrapper carries the real root");
-  tui.doRender();
-  const line = screenLines(tui).find((l) => l.includes("hello margin world"));
-  assert.ok(line, "content rendered");
-  assert.equal(line.indexOf("hello"), 2, `content starts at column 2, got ${JSON.stringify(line)}`);
-});
+for (const [width, offset] of [[60, 2], [30, 0]]) {
+  test(`margin at width ${width}: inset ${offset} cells and disposal restores native layout`, (t) => {
+    const nativeSet = Tui.TuiAltScreen.prototype.setLayoutRoot;
+    const { tui, margin } = marginScreen(t, width);
+    const root = container(new Tui.Text("hello margin world", 0, 0));
+    tui.setLayoutRoot(root);
+    assert.notEqual(tui.layoutRoot, root, "layout root is the wrapper");
+    assert.equal(tui.layoutRoot[FULLSCREEN_MARGIN_OWNER], root);
+    tui.doRender();
+    assert.equal(screenLines(tui).find((line) => line.includes("hello")).indexOf("hello"), offset);
+    margin.dispose();
+    assert.equal(Tui.TuiAltScreen.prototype.setLayoutRoot, nativeSet);
+    assert.equal(tui.layoutRoot, root, "live root unwrapped");
+    tui.doRender();
+    assert.equal(screenLines(tui).find((line) => line.includes("hello")).indexOf("hello"), 0);
+  });
+}
 
 test("mouse click through the shifted frame hits MouseRegion; gutter click is a no-op", (t) => {
-  const { tui } = makeAltScreen(60);
-  const margin = createFullscreenLayout(MARGIN_HOST, { margin: 2, minWidth: 40 });
-  t.after(() => margin.dispose());
-  margin.installOnTui(tui);
+  const { tui } = marginScreen(t);
   const clicks = [];
   const region = new Tui.MouseRegion(new Tui.Text("click target row", 0, 0), (event) => {
     clicks.push({ type: event.type, x: event.x, y: event.y, width: event.width });
     return { render: true };
   });
-  const root = new Tui.Container();
-  root.addChild(region);
-  tui.setLayoutRoot(root);
+  tui.setLayoutRoot(container(region));
   tui.doRender();
   const screen = screenLines(tui);
   const row = screen.findIndex((l) => l.includes("click target row"));
@@ -194,71 +181,12 @@ test("mouse click through the shifted frame hits MouseRegion; gutter click is a 
   assert.equal(clicks.length, 0, `gutter click must not hit the region, got ${JSON.stringify(clicks)}`);
 });
 
-test("narrow terminal: gutters vanish below minWidth", (t) => {
-  const { tui } = makeAltScreen(30);
-  const margin = createFullscreenLayout(MARGIN_HOST, { margin: 2, minWidth: 40 });
-  t.after(() => margin.dispose());
-  margin.installOnTui(tui);
-  const root = new Tui.Container();
-  root.addChild(new Tui.Text("narrow full width", 0, 0));
-  tui.setLayoutRoot(root);
-  tui.doRender();
-  const line = screenLines(tui).find((l) => l.includes("narrow full width"));
-  assert.equal(line.indexOf("narrow"), 0, `narrow terminal keeps full width, got ${JSON.stringify(line)}`);
-});
-
-test("dispose restores the prototype method and unwraps the live root", (t) => {
-  const { tui } = makeAltScreen(60);
-  const proto = Object.getPrototypeOf(tui);
-  const nativeSet = proto.setLayoutRoot;
-  const margin = createFullscreenLayout(MARGIN_HOST, { margin: 2, minWidth: 40 });
-  margin.installOnTui(tui);
-  const root = new Tui.Container();
-  root.addChild(new Tui.Text("restore me", 0, 0));
-  tui.setLayoutRoot(root);
-  assert.notEqual(tui.layoutRoot, root);
-  margin.dispose();
-  assert.equal(proto.setLayoutRoot, nativeSet, "prototype method restored");
-  assert.equal(tui.layoutRoot, root, "live root unwrapped");
-  tui.doRender();
-  const line = screenLines(tui).find((l) => l.includes("restore me"));
-  assert.equal(line.indexOf("restore"), 0, "render is full-width again");
-});
-
 // Selection-copy regression: logical copy must stay exact through the offset
 // frame (the gutter columns are layout, not content).
-
-const theme = {
-  bold: (t) => t, italic: (t) => t, underline: (t) => t, strikethrough: (t) => t,
-  heading: (t) => t, code: (t) => t, codeBlock: (t) => t, codeBlockBorder: (t) => t,
-  codeBlockIndent: "  ", listBullet: (t) => t, quote: (t) => t, quoteBorder: (t) => t,
-  hr: (t) => t, link: (t) => t,
-};
-
-// One system per process: the prototype wraps and the instance serializer are
-// owner-symbol singletons — a second system would observe its own empty
-// telemetry while the FIRST system's serializer does the work.
-const SHARED_COPY_SYS = createSelectionCopySystem({
-  prototypes: { Text: Tui.Text.prototype, Markdown: Tui.Markdown.prototype, Box: Tui.Box.prototype, Container: Tui.Container.prototype },
-  fns: {
-    visibleWidth: Tui.visibleWidth,
-    sliceByColumn: Tui.sliceByColumn,
-    stripTerminalSequences: Tui.stripTerminalSequences,
-    wrapTextWithAnsi: Tui.wrapTextWithAnsi,
-    renderLatex: (text, options) => Tui.renderLatex(text, options) ?? null,
-  },
-}, undefined);
-SHARED_COPY_SYS.wrapPrototypes();
-function makeCopySys() {
-  return SHARED_COPY_SYS;
-}
+const sys = installCopyPrototypes();
 
 test("selection copy stays exact inside a scrolled, gutter-offset viewport (content-space x anchor)", (t) => {
-  const sys = makeCopySys();
-  const { tui } = makeAltScreen(60);
-  const margin = createFullscreenLayout(MARGIN_HOST, { margin: 2, minWidth: 40 });
-  t.after(() => margin.dispose());
-  margin.installOnTui(tui);
+  const { tui } = marginScreen(t);
   // Real-UI shape: document inside a ScrollView, dock beside it.
   const doc = new Tui.Container();
   doc.addChild(new Tui.Markdown("填充行用来把转录撑出滚动条 filler line to overflow\n".repeat(40), 1, 1, theme, undefined, {}));
@@ -278,9 +206,7 @@ test("selection copy stays exact inside a scrolled, gutter-offset viewport (cont
   assert.ok(beginRow >= 0 && endRow > beginRow, `markers visible, got ${JSON.stringify(screen)}`);
   const pressX = screen[beginRow].indexOf("SELECT_BEGIN_MARK") + 1;
   const endX = screen[endRow].indexOf("SELECT_END_MARK") + "SELECT_END_MARK".length + 1;
-  tui.handleTerminalInput(sgr(0, pressX, beginRow + 1));
-  tui.handleTerminalInput(sgr(32, endX, endRow + 1));
-  tui.handleTerminalInput(sgr(0, endX, endRow + 1, true));
+  drag(tui, pressX, beginRow + 1, endX, endRow + 1);
   const copied = tui.getActiveSelectionText();
   assert.equal(sys.diagnostics().telemetry.lastMode, "exact");
   assert.equal(copied, text, `exact copy inside the offset scroll viewport, got ${JSON.stringify(copied)}`);

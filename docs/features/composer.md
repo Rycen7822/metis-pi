@@ -63,4 +63,4 @@
 
 ## 验证
 
-`test/transcript/transcript.test.mts`（editor 工厂与 surface 行为）、`test/chrome/chrome.test.mjs`、`test/host/host-surface.test.mjs`（真实宿主组件）、`scripts/pty-verify.mjs`（真实 TUI 的输入区几何与占位符）。
+`test/chrome/chrome.test.mjs`（editor 工厂与 surface 行为）、`test/host/host-surface.test.mjs`（真实宿主组件）、`scripts/pty-verify.mjs`（真实 TUI 的输入区几何与占位符）。

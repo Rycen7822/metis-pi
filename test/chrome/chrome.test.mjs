@@ -7,11 +7,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { activate } from "../../src/extension.ts";
 import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
+import { temporaryDirectory } from "../helpers/temp-dir.mjs";
+import { theme } from "../helpers.mjs";
+import { makeCodexEditorFactory } from "../../src/chrome/editor.ts";
+import { layoutFooter } from "../../src/chrome/footer.ts";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER } from "../../src/surface.ts";
+import { altScreen } from "../helpers/ui-fixtures.mjs";
 
 /** Real host data shapes (Pi 0.85.1). `ui` deliberately has NO
  * getContextUsage/requestRender — those are not ui-surface methods. */
@@ -104,32 +111,48 @@ function activateHarness(bindingsExtra = {}) {
       ...ctx.ui,
     },
   });
-  return { handlers, slots, wrapUi };
+  const footer = (data = {}) => slots.footerFactories.at(-1)({ requestRender() {} }, theme, {
+    getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
+    ...data,
+  });
+  return { handlers, slots, wrapUi, footer };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+async function session(t, bindings = {}, overrides = {}) {
+  const h = activateHarness(bindings);
+  t.after(() => h.handlers.get("session_shutdown")());
+  const ctx = h.wrapUi(realShapeCtx(overrides).ctx);
+  h.handlers.get("session_start")({}, ctx);
+  await tick(); // Chrome preloading installs the factories asynchronously.
+  return { ...h, ctx };
+}
+
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/<\/?S>/g, "").replace(/<\/?(accent|dim|warning|normal)>/g, "");
 const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
 
+function nativeEditor(options = {}) {
+  const { tui } = altScreen();
+  const editor = makeCodexEditorFactory({ host: { CustomEditor }, ...options })(
+    tui, { ...theme, borderColor: (text) => text }, new KeybindingsManager(TUI_KEYBINDINGS),
+  );
+  editor.focused = true;
+  return editor;
+}
+
 test("footer animation frames reuse context usage while host events and late appends stay fresh", async (t) => {
-  const { handlers, slots, wrapUi } = activateHarness();
-  t.after(() => handlers.get("session_shutdown")());
   let reads = 0;
   let tokens = 10;
   let leaf = "first";
-  const ctx = wrapUi(realShapeCtx({
+  const { handlers, footer: makeFooter, ctx } = await session(t, {}, {
     sessionManager: { getEntries: () => [], getLeafId: () => leaf },
     getContextUsage() {
       reads += 1;
       return { tokens, contextWindow: 100, percent: tokens };
     },
-  }).ctx);
-  handlers.get("session_start")({}, ctx);
-  await tick();
-  const footer = slots.footerFactories.at(-1)(
-    { requestRender() {} }, { fg: (_kind, text) => text }, {},
-  );
+  });
+  const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
   assert.match(frame(), /ctx 10\/100 · 10%/);
   for (let i = 0; i < 64; i += 1) frame();
@@ -157,16 +180,12 @@ test("footer animation frames reuse context usage while host events and late app
 });
 
 test("hidden footer metadata never requests a context projection", async (t) => {
-  const { handlers, slots, wrapUi } = activateHarness({
+  let reads = 0;
+  const { footer } = await session(t, {
     getAgentDir: () => "/unused",
     readFile: () => JSON.stringify({ composer: { metadata: false } }),
-  });
-  t.after(() => handlers.get("session_shutdown")());
-  let reads = 0;
-  handlers.get("session_start")({}, wrapUi(realShapeCtx({ getContextUsage() { reads += 1; } }).ctx));
-  await tick();
-  const footer = slots.footerFactories.at(-1)({ requestRender() {} }, { fg: (_kind, text) => text }, {});
-  footer.render(140);
+  }, { getContextUsage() { reads += 1; } });
+  footer().render(140);
   assert.equal(reads, 0);
 });
 
@@ -230,18 +249,10 @@ test("chrome modules have no direct host imports (src/ rule)", () => {
 });
 
 test("REAL shape → activation → one ordered footer below the editor", async (t) => {
-  const { handlers, slots, wrapUi } = activateHarness();
-  const { ctx } = realShapeCtx();
-  const wrapped = wrapUi(ctx);
-  handlers.get("session_start")({}, wrapped);
-  await tick();
+  const { handlers, slots, ctx: wrapped, footer: makeFooter } = await session(t);
 
   assert.equal(widgetByKey(slots, "metis-pi:composer-meta"), undefined, "no metadata widget inside the input surface");
-  const footer = slots.footerFactories[0](
-    { requestRender() {} },
-    { fg: (_k, text) => text },
-    { getGitBranch: () => "main", getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
-  );
+  const footer = makeFooter({ getGitBranch: () => "main" });
 
   await t.test("footer: model → effort → provider → path → context → I/O → cache", () => {
     const frame = plain(footer.render(140).join("\n"));
@@ -270,8 +281,7 @@ test("REAL shape → activation → one ordered footer below the editor", async 
   });
 });
 
-test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", async () => {
-  const { layoutFooter } = await import("../../src/chrome/footer.ts");
+test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", () => {
   const snapshot = {
     model: { id: "gpt-6-sol", provider: "openai-codex", contextWindow: 272_000 },
     thinkingLevel: "xhigh",
@@ -312,8 +322,7 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
   assert.doesNotMatch(hidden, /gpt-6-sol|openai-codex|ctx 49\.6k/);
 });
 
-test("footer keeps unknown context distinct from zero usage", async () => {
-  const { layoutFooter } = await import("../../src/chrome/footer.ts");
+test("footer keeps unknown context distinct from zero usage", () => {
   const snapshot = {
     model: { id: "m", provider: "p", contextWindow: 272_000 },
     thinkingLevel: undefined, contextUsage: { tokens: null, contextWindow: 272_000, percent: null },
@@ -326,34 +335,20 @@ test("footer keeps unknown context distinct from zero usage", async () => {
   assert.match(text({ ...snapshot, contextUsage: { tokens: 0, contextWindow: 272_000, percent: 0 } }), /ctx 0\/272k · 0%/);
 });
 
-test("footer preserves vendor status but never adds Codex quota with either provider", async () => {
-  for (const provider of ["openai-codex", "test-provider"]) {
-    const { handlers, slots, wrapUi } = activateHarness();
-    const { ctx } = realShapeCtx({ model: { id: "test-model", provider, contextWindow: 1_000_000 } });
-    handlers.get("session_start")({}, wrapUi(ctx));
-    await tick();
-    const footer = slots.footerFactories[0](
-      { requestRender() {} },
-      { fg: (_k, text) => text },
-      { getGitBranch: () => "main", getExtensionStatuses: () => new Map([["codex-adapter", "Codex adapter V: low · weekly: 20% left"]]), onBranchChange: () => () => {} },
-    );
+for (const provider of ["openai-codex", "test-provider"]) {
+  test(`footer preserves ${provider} vendor status without adding Codex quota`, async (t) => {
+    const { footer: makeFooter } = await session(t, {}, { model: { id: "test-model", provider, contextWindow: 1_000_000 } });
+    const footer = makeFooter({ getGitBranch: () => "main",
+      getExtensionStatuses: () => new Map([["codex-adapter", "Codex adapter V: low · weekly: 20% left"]]) });
     const frame = plain(footer.render(140).join("\n"));
     assert.match(frame, /Codex adapter V: low · weekly: 20% left/, `${provider}: vendor status remains`);
     assert.doesNotMatch(frame, /Codex (?:5h|week) \d+%/, `${provider}: no independent footer quota`);
-    handlers.get("session_shutdown")({}, wrapUi(ctx));
-  }
-});
+  });
+}
 
-test("output speed reaches the footer from real events (confirmed usage ÷ observed window)", async () => {
-  const { handlers, slots, wrapUi } = activateHarness();
-  const { ctx } = realShapeCtx();
-  handlers.get("session_start")({}, wrapUi(ctx));
-  await tick();
-  const footer = slots.footerFactories[0](
-    { requestRender() {} },
-    { fg: (_k, text) => text },
-    { getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
-  );
+test("output speed reaches the footer from real events (confirmed usage ÷ observed window)", async (t) => {
+  const { handlers, footer: makeFooter } = await session(t);
+  const footer = makeFooter();
   const msg = (usage) => ({ role: "assistant", content: [], stopReason: "stop", responseId: "req-speed", provider: "test-provider", timestamp: 1, usage });
   const delta = (usage, deltaText) => ({
     message: msg(usage),
@@ -383,39 +378,15 @@ test("output speed reaches the footer from real events (confirmed usage ÷ obser
   assert.ok(settled, "the measured rate persists after the response settles");
 });
 
-test("editor factory: surface mode replaces borders; legacy mode keeps accent border", async () => {
-  const { makeCodexEditorFactory } = await import("../../src/chrome/editor.ts");
-  // Minimal real-shape Editor base: the structural contract the factory relies on.
-  class FakeEditorBase {
-    focused = true;
-    constructor(_tui, _theme, _kb, options) {
-      this.options = options;
-      this.text = "";
-    }
-    renderTopBorder(width, hidden) {
-      return hidden > 0 ? `↑ ${hidden} more` : "─".repeat(width);
-    }
-    renderBottomBorder(width, hidden) {
-      return hidden > 0 ? `↓ ${hidden} more` : "─".repeat(width);
-    }
-    render(width) {
-      const rows = [this.renderTopBorder(width, 0)];
-      // Real host shape: the cursor line always carries the cursor cell
-      // (highlighted char, or the exact end-of-text cell `\x1b[7m \x1b[0m`).
-      const content = this.text || "";
-      const cursor = this.text ? "" : "\x1b[7m \x1b[0m";
-      rows.push(`  ${content}${cursor}${" ".repeat(Math.max(0, width - 4 - content.length - (cursor ? 1 : 0)))}  `);
-      rows.push(this.renderBottomBorder(width, 0));
-      return rows;
-    }
-    getText() { return this.text; }
+test("editor factory: surface mode replaces borders; legacy mode keeps accent border", () => {
+  class ObservedEditor extends CustomEditor {
+    constructor(...args) { super(...args); this.options = args[3]; }
   }
   const surface = {
     paintRow: (row, width) => `[bg:${width}]${row}`,
     paintGlyph: (text, tone) => `<${tone}>${text}</${tone}>`,
   };
-  const factory = makeCodexEditorFactory({ host: { CustomEditor: FakeEditorBase }, surface, promptPrefix: true, placeholder: "Ask anything..." });
-  const editor = factory({}, {}, {});
+  const editor = nativeEditor({ host: { CustomEditor: ObservedEditor }, surface, promptPrefix: true, placeholder: "Ask anything..." });
   assert.deepEqual(editor.options, { embedWorkingStatus: false, paddingX: 2 });
 
   // Empty editor: blank surface rows, `> ` prefix, dim placeholder, no ─ border.
@@ -424,12 +395,12 @@ test("editor factory: surface mode replaces borders; legacy mode keeps accent bo
   assert.ok(rows.every((r) => r.startsWith("[bg:40]")), "every row carries the surface bg");
   assert.match(rows[1], /^\[bg:40\]<accent>><\/accent> /, "first body row prefix `> `");
   assert.match(rows[1], /<dim>Ask anything\.\.\.<\/dim>/, "placeholder on the empty editor");
-  const widthOf = (r) => r.replace(/\x1b\[[0-9;]*m/g, "").replace(/\[bg:\d+\]|<\/?(accent|dim)>/g, "").length;
+  const widthOf = (r) => visibleWidth(r.replace(/\[bg:\d+\]|<\/?(accent|dim)>/g, ""));
   for (const row of rows) assert.ok(widthOf(row) <= 40, "no row overflows");
   assert.equal(editor.getText(), "", "getText unchanged by display decorations");
 
   // Typed text: placeholder gone, text intact, prefix still exactly 2 cells.
-  editor.text = "hello";
+  editor.setText("hello");
   const typed = editor.render(40);
   assert.doesNotMatch(typed[1], /Ask anything/);
   assert.match(typed[1], /hello/);
@@ -440,54 +411,28 @@ test("editor factory: surface mode replaces borders; legacy mode keeps accent bo
   assert.match(editor.renderBottomBorder(40, 2), /↓ 2 more/);
 
   // Legacy mode (no surface): accent border stays for unsupported terminals.
-  const legacyFactory = makeCodexEditorFactory({ host: { CustomEditor: FakeEditorBase } });
-  const legacy = legacyFactory({}, {}, {});
+  const legacy = nativeEditor();
   assert.match(legacy.render(40).join("\n"), /─{10}/, "legacy border mode intact");
 });
 
-test("hardware cursor keeps the exact character under the IME marker", async () => {
-  const { makeCodexEditorFactory } = await import("../../src/chrome/editor.ts");
-  const { CURSOR_MARKER } = await import("../../src/surface.ts");
-  const { visibleWidth } = await import("@earendil-works/pi-tui");
+test("hardware cursor keeps the exact character under the IME marker", () => {
   const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-  class HostEditor {
-    focused = true;
-    text = "";
-    cursor = 0;
-    renderTopBorder(width) { return " ".repeat(width); }
-    renderBottomBorder(width) { return " ".repeat(width); }
-    getPaddingX() { return 2; }
-    setPaddingX() {}
-    getText() { return this.text; }
-    render(width) {
-      const before = this.text.slice(0, this.cursor);
-      const after = this.text.slice(this.cursor);
-      const first = [...graphemes.segment(after)][0]?.segment ?? " ";
-      const rest = after ? after.slice(first.length) : "";
-      const cell = `${this.focused ? CURSOR_MARKER : ""}\x1b[7m${first}\x1b[0m`;
-      const body = `  ${before}${cell}${rest}`;
-      const pad = " ".repeat(Math.max(0, width - visibleWidth(body) - 2));
-      return [this.renderTopBorder(width), `${body}${pad}  `, this.renderBottomBorder(width)];
-    }
-  }
   const surface = { paintRow: (row) => row, paintGlyph: (text) => text };
-  const host = { CustomEditor: HostEditor };
-  const makeEditor = (withSurface, enabled = true) => makeCodexEditorFactory({
-    host, surface: withSurface ? surface : undefined, accent: (s) => s,
+  const makeEditor = (withSurface, enabled = true) => nativeEditor({
+    surface: withSurface ? surface : undefined, accent: (s) => s,
     hardwareCursor: enabled ? () => () => true : undefined,
-  })({}, {}, {});
-  const strip = (line) => line.replaceAll(CURSOR_MARKER, "").replace(/\x1b\[[\d;]*m/g, "");
+  });
 
   for (const withSurface of [true, false]) {
     const editor = makeEditor(withSurface);
     for (const [text, offset] of [["", 0], ["abc", 1], ["你a", 0], ["👩‍👩‍👦a", 0], ["éa", 0]]) {
-      editor.text = text;
-      editor.cursor = offset;
+      editor.setText(text);
+      editor.setCursorCol(offset);
       const rows = editor.render(45);
       const glyph = [...graphemes.segment(text.slice(offset))][0]?.segment ?? " ";
       assert.ok(rows[1].includes(`${CURSOR_MARKER}${glyph}\x1b[0m`), "original glyph remains at native IME marker");
       assert.doesNotMatch(rows[1], /\x1b\[7m/, "no inverse-video block remains while focused");
-      assert.equal(visibleWidth(strip(rows[1])), 45, "same physical row width even for wide/combined graphemes");
+      assert.equal(visibleWidth(rows[1]), 45, "same physical row width even for wide/combined graphemes");
       assert.equal(editor.getText(), text, "draft content unchanged");
       if (text === "" && withSurface) assert.match(rows[1], / \x1b\[0mAsk anything\.\.\./, "placeholder follows cursor cell");
     }
@@ -495,89 +440,54 @@ test("hardware cursor keeps the exact character under the IME marker", async () 
     assert.doesNotMatch(editor.render(45)[1], /▏/, "inactive editor does not paint a fake caret");
   }
   const fallback = makeEditor(true, false);
-  fallback.text = "world";
-  fallback.cursor = 3;
+  fallback.setText("world");
+  fallback.setCursorCol(3);
   assert.ok(fallback.render(45)[1].includes(`${CURSOR_MARKER}\x1b[7ml\x1b[0m`), "without hardware support the native character and block remain");
 });
 
-test("editor factory: the composer forces the completion query for a second skill trigger", async () => {
-  const { makeCodexEditorFactory } = await import("../../src/chrome/editor.ts");
+test("editor factory: the composer forces the completion query for a second skill trigger", () => {
   const calls = { triggers: 0 };
-  // Real-shape base: the host editor inserts printable keys and exposes the
-  // cursor/lines/isShowingAutocomplete surface the hook reads.
-  class FakeEditorBase {
-    constructor() {
-      this.lines = [""];
-      this.cursor = { line: 0, col: 0 };
-      this.showing = false;
-    }
+  // Count only the extension's forced query, not the native input handler's
+  // own autocomplete attempts. Editing/cursor movement remain real host code.
+  class CompletionProbe extends CustomEditor {
+    showing = false;
     handleInput(data) {
-      if (data.length === 1 && data.charCodeAt(0) >= 32) {
-        const line = this.lines[this.cursor.line];
-        this.lines[this.cursor.line] = line.slice(0, this.cursor.col) + data + line.slice(this.cursor.col);
-        this.cursor.col += data.length;
-      }
+      this.nativeInput = true;
+      try { super.handleInput(data); }
+      finally { this.nativeInput = false; }
     }
-    tryTriggerAutocomplete() { calls.triggers += 1; }
+    tryTriggerAutocomplete() { if (!this.nativeInput) calls.triggers += 1; }
     isShowingAutocomplete() { return this.showing; }
-    getLines() { return this.lines; }
-    getCursor() { return { ...this.cursor }; }
-    getText() { return this.lines.join("\n"); }
-    getPaddingX() { return 2; }
-    setPaddingX() {}
   }
-  const factory = makeCodexEditorFactory({ host: { CustomEditor: FakeEditorBase }, skillTrigger: true });
-  const at = (editor, text) => { editor.lines = [text]; editor.cursor = { line: 0, col: text.length }; };
-  const editor = factory({}, {}, {});
+  const host = { CustomEditor: CompletionProbe };
+  const editor = nativeEditor({ host, skillTrigger: true });
 
-  // The FIRST token is the host's business (it auto-triggers "/" at line start).
-  at(editor, "");
-  editor.handleInput("/");
-  assert.equal(calls.triggers, 0, "first-token slash left to the host");
-  // Ordinary text, paths, and mid-sentence slashes never force a query.
-  at(editor, "hello ");
-  editor.handleInput("/");
-  at(editor, "see src/");
-  editor.handleInput("/");
-  at(editor, "hello /skill:alpha ");
-  editor.handleInput("/");
-  assert.equal(calls.triggers, 0, "no hook outside a leading skill prefix");
-
-  // THE case: a complete skill token + space, then "/" — the host refuses to
-  // auto-trigger here, so the hook must run the query (this is what makes the
-  // menu pop even when the editor's own menu state already died).
-  at(editor, "/skill:alpha ");
-  editor.handleInput("/");
-  assert.equal(calls.triggers, 1, "second-token slash forces the query");
-  at(editor, "￥alpha ");
-  editor.handleInput("/");
-  assert.equal(calls.triggers, 2, "￥ heads count too");
-  at(editor, "/skill:alpha /skill:beta ");
-  editor.handleInput("/");
-  assert.equal(calls.triggers, 3, "fires for every later token");
-
-  // A live menu already queried for this position — don't query twice.
-  at(editor, "/skill:alpha ");
-  editor.showing = true;
-  editor.handleInput("/");
-  assert.equal(calls.triggers, 3, "no duplicate query while the menu is open");
-  editor.showing = false;
-
-  // Non-slash keys, and hosts without the private trigger, stay untouched.
-  at(editor, "/skill:alpha ");
-  editor.handleInput("x");
-  assert.equal(calls.triggers, 3, "only the slash key is hooked");
-  const plain = makeCodexEditorFactory({ host: { CustomEditor: FakeEditorBase } })({}, {}, {});
-  at(plain, "/skill:alpha ");
+  // Only later skill-token slashes force the query; first tokens and a live
+  // menu remain the host's responsibility. Counts are cumulative.
+  for (const [text, key, showing, queries] of [
+    ["", "/", false, 0],
+    ["hello ", "/", false, 0],
+    ["see src/", "/", false, 0],
+    ["hello /skill:alpha ", "/", false, 0],
+    ["/skill:alpha ", "/", false, 1],
+    ["￥alpha ", "/", false, 2],
+    ["/skill:alpha /skill:beta ", "/", false, 3],
+    ["/skill:alpha ", "/", true, 3],
+    ["/skill:alpha ", "x", false, 3],
+  ]) {
+    editor.setText(text);
+    editor.showing = showing;
+    editor.handleInput(key);
+    assert.equal(calls.triggers, queries, `${JSON.stringify(text)} + ${key}, menu=${showing}`);
+  }
+  const plain = nativeEditor({ host });
+  plain.setText("/skill:alpha ");
   plain.handleInput("/");
   assert.equal(calls.triggers, 3, "hook is opt-in");
 });
 
-test("Working widget: above-editor placement, Codex format, native loader hidden", async () => {
-  const { handlers, slots, wrapUi } = activateHarness();
-  const { ctx } = realShapeCtx();
-  handlers.get("session_start")({}, wrapUi(ctx));
-  await tick();
+test("Working widget: above-editor placement, Codex format, native loader hidden", async (t) => {
+  const { handlers, slots } = await session(t);
   assert.ok(slots.widgetCalls.some((c) => c.key === "metis-pi:working"), "widget key registered");
   assert.equal(slots.workingVisible.at(-1), false, "native loader hidden only after widget install");
 
@@ -609,58 +519,30 @@ test("Working widget: above-editor placement, Codex format, native loader hidden
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persist=true → CustomEntry path");
 });
 
-test("outcome through REAL handlers: mid-run tool error then clean stop = Worked (not Failed)", async () => {
-  const appended = [];
-  const { handlers, slots, wrapUi } = activateHarness({
-    api: {
-      appendEntry: (type, data) => appended.push({ type, data }),
-      registerEntryRenderer: () => {},
-      registerCommand: () => {},
-    },
-  });
-  const { ctx } = realShapeCtx();
-  handlers.get("session_start")({}, wrapUi(ctx));
-  await tick();
-  handlers.get("agent_start")({}, {});
-  handlers.get("message_start")({ message: { role: "assistant", content: [] } });
-  handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
-  handlers.get("tool_execution_end")({ toolCallId: "t1", toolName: "bash", result: {}, isError: true });
-  handlers.get("message_end")({ message: { role: "assistant", content: [], stopReason: "stop", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 } } });
-  handlers.get("agent_settled")({}, {});
-  assert.equal(appended.length, 1, "exactly one summary entry");
-  assert.equal(appended[0].data.outcome, "completed", "mid-run tool error must not brand the run Failed");
-  assert.equal(appended[0].data.toolErrorsObserved, 1, "tool error kept as a diagnostic count");
-  assert.equal(slots.widgetCalls.at(-1).content, undefined);
-});
-
-test("outcome: provider error = Failed; user abort = Interrupted; length = incomplete", async () => {
-  for (const [stopReason, expected] of [["error", "failed"], ["aborted", "interrupted"], ["length", "incomplete"]]) {
+for (const [stopReason, expected] of [["stop", "completed"], ["error", "failed"], ["aborted", "interrupted"], ["length", "incomplete"]]) {
+  test(`outcome through real handlers: ${stopReason} → ${expected}`, async (t) => {
     const appended = [];
-    const { handlers, wrapUi } = activateHarness({
+    const { handlers, slots } = await session(t, {
       api: { appendEntry: (type, data) => appended.push({ type, data }), registerEntryRenderer: () => {}, registerCommand: () => {} },
     });
-    const { ctx } = realShapeCtx();
-    handlers.get("session_start")({}, wrapUi(ctx));
-    await tick();
     handlers.get("agent_start")({}, {});
     handlers.get("message_start")({ message: { role: "assistant", content: [] } });
+    if (stopReason === "stop") {
+      handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
+      handlers.get("tool_execution_end")({ toolCallId: "t1", toolName: "bash", result: {}, isError: true });
+    }
     handlers.get("message_end")({ message: { role: "assistant", content: [], stopReason, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } } });
     handlers.get("agent_settled")({}, {});
     assert.equal(appended.length, 1, `one summary for ${stopReason}`);
     assert.equal(appended[0].data.outcome, expected, `${stopReason} → ${expected}`);
-  }
-});
+    assert.equal(appended[0].data.toolErrorsObserved, stopReason === "stop" ? 1 : 0, "tool errors are diagnostic, not a Failed verdict");
+    assert.equal(slots.widgetCalls.at(-1).content, undefined);
+  });
+}
 
-test("usage dedup through real handlers: preview replaces, final confirms once", async () => {
-  const { handlers, slots, wrapUi } = activateHarness();
-  const { ctx } = realShapeCtx({ sessionManager: { getEntries: () => [] } });
-  handlers.get("session_start")({}, wrapUi(ctx));
-  await tick();
-  const footer = slots.footerFactories[0](
-    { requestRender() {} },
-    { fg: (_k, text) => text },
-    { getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
-  );
+test("usage dedup through real handlers: preview replaces, final confirms once", async (t) => {
+  const { handlers, footer: makeFooter } = await session(t, {}, { sessionManager: { getEntries: () => [] } });
+  const footer = makeFooter();
   handlers.get("agent_start")({}, {});
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   const msg = (usage) => ({ role: "assistant", content: [], stopReason: "stop", responseId: "req-1", provider: "test-provider", timestamp: 1, usage });
@@ -703,8 +585,7 @@ test("header component: real identity, never impersonates OpenAI", async () => {
 
 /** Real repo: one tracked edit (−1/+2) plus one untracked file (+2). */
 function makeRepo(t) {
-  const dir = mkdtempSync(join(tmpdir(), "metis-pi-chrome-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = temporaryDirectory(t, "metis-pi-chrome-");
   const git = (...args) => execFileSync("git", args, {
     cwd: dir,
     stdio: "ignore",
@@ -726,17 +607,9 @@ function dirtyRepo(dir) {
 
 test("footer: real git changes reach the frame in the diff's green/red", async (t) => {
   const repo = makeRepo(t);
-  const { handlers, slots, wrapUi } = activateHarness({ colorLevel: { kind: "truecolor" } });
-  const shutdown = () => handlers.get("session_shutdown")?.({}, wrapUi(realShapeCtx().ctx));
-  t.after(shutdown); // stop the 2s poll this test just armed
-  handlers.get("session_start")({}, wrapUi(realShapeCtx({ cwd: repo }).ctx));
-  await tick(); // the chrome preload resolves the footer factory asynchronously
+  const { slots, footer } = await session(t, { colorLevel: { kind: "truecolor" } }, { cwd: repo });
   assert.ok(slots.footerFactories.length > 0, "footer installed");
-  const frame = () => slots.footerFactories.at(-1)(
-    { requestRender() {} },
-    { fg: (_k, text) => text },
-    { getGitBranch: () => "main", getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
-  ).render(140).join("\n");
+  const frame = () => footer({ getGitBranch: () => "main" }).render(140).join("\n");
 
   assert.ok(!plain(frame()).includes(" +"), "a clean session start shows no change segment");
   // The sample read is async; this case only proves the frame plumbing

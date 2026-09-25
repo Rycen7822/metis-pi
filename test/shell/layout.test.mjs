@@ -7,31 +7,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderShellCall, renderShellResult, OUTPUT_MAX_ROWS, COMMAND_CONTINUATION_MAX_ROWS } from "../../src/shell.ts";
 import { sanitizeShellLine } from "../../src/palette.ts";
+import { layout } from "../helpers/ui-fixtures.mjs";
 
-// Real Tui-equivalent wrap: ANSI-aware (the live host injects exactly this).
-const layout = {
-  wrap: (value, width) => {
-    if (!value) return [""];
-    const out = [];
-    let current = "";
-    let cells = 0;
-    let index = 0;
-    while (index < value.length) {
-      const char = value[index];
-      if (char === "\x1b") {
-        const m = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(value.slice(index));
-        if (m) { current += m[0]; index += m[0].length; continue; }
-      }
-      if (cells + 1 > width) { out.push(current); current = ""; cells = 0; }
-      current += char;
-      cells += 1;
-      index += 1;
-    }
-    out.push(current);
-    return out;
-  },
-  visibleWidth: (value) => value.replace(/\x1b\[[0-9;]*m/g, "").length,
-};
 const level = { kind: "truecolor" };
 
 const GOLDEN_COMMANDS = [

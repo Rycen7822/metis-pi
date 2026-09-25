@@ -2,21 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as Tui from "@earendil-works/pi-tui";
-import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
-import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
+import { copyFrame as renderFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 
-const system = createSelectionCopySystem({
-  prototypes: {
-    Text: Tui.Text.prototype,
-    Markdown: Tui.Markdown.prototype,
-    Box: Tui.Box.prototype,
-    Container: Tui.Container.prototype,
-  },
-  fns: { ...Tui, renderLatex: () => null },
-});
-system.wrapPrototypes();
-const serializer = new SelectionSerializer(Tui);
+installCopyPrototypes(undefined, { renderLatex: () => null });
 const theme = {
   bold: (text) => `\x1b[1m${text}\x1b[22m`,
   codeBlock: (text) => text,
@@ -52,17 +41,6 @@ test("retained text spans do not keep per-grapheme string ropes", () => {
   `], { cwd: new URL("../../", import.meta.url), encoding: "utf8", timeout: 15_000 });
   assert.equal(child.status, 0, child.stderr || child.error?.message);
 });
-
-function renderFrame(component, width) {
-  const lines = component.render(width);
-  assert.ok(productFor(lines), system.diagnostics().mirrors.lastDegradedReason);
-  const rect = { x: 0, y: 0, width, height: lines.length };
-  return { root: { component, rect, clip: rect, children: [], lines } };
-}
-
-function select(frame, startRow = 0, endRow = frame.root.lines.length - 1, columnsFor = () => ({ start: 0, end: frame.root.rect.width })) {
-  return serializer.serialize(frame, { scrollView: undefined, startRow, endRow, sourceLines: frame.root.lines, columnsFor });
-}
 
 test("copy provenance: dropped spaces bridge selected rows, never shift partial columns", () => {
   const sources = ["alpha   beta  gamma  "];

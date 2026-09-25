@@ -1,436 +1,152 @@
 #!/usr/bin/env node
-/**
- * Protocol regressions for the vendored Codex conversion transport.
- *
- * These tests load the **built** entry (`vendor/pi-codex-conversion/dist/index.js`), take the
- * provider it registers, and capture the request body it would send, so they fail if the
- * vendored sources and the committed `dist/` drift apart. Everything is offline: the
- * capture hook throws before any transport is opened and `globalThis.fetch` is disabled.
- *
- * Covered here (Pi 0.86 transcript migration):
- *  - prompt and tool declarations survive when the host hands over a normalized transcript
- *    (`normalizeContext`) instead of a legacy `Context`;
- *  - later system messages keep their tool additions anchored and their prompt updates;
- *  - a later `toolsRemoved` never re-exposes the removed tool;
- *  - non-additive tool history (removal or redeclaration) declares the complete current
- *    tool set at the top level and anchors nothing in place (Astra and `tool_search` paths);
- *  - pre-0.86 `addedToolNames` results keep working and obey the same placement decision;
- *  - history tool call/result pairs stay matched;
- *  - grammar (`custom`) tools keep their wire format after the migration;
- *  - the Responses Lite / code-mode proxy request carries the prompt and tools;
- *  - namespace routing sees the current tool set from the transcript.
- */
+// Built-provider protocol tests: payload capture aborts before transport; fetch is disabled.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { captureBody, FAKE_API_KEY, modelNamed } from "./helpers/vendor-codex-provider.mjs";
+import { captureBody, declaredToolNames, FAKE_API_KEY, inPlaceToolItems, kindsOf, modelNamed } from "./helpers/vendor-codex-provider.mjs";
+import { assistantToolCall, systemMessage, tool, toolResult, userMessage } from "./helpers/vendor-codex-sessions.mjs";
+import { streamCodeModeResponsesProxy } from "../vendor/pi-codex-conversion/dist/providers/code-mode-proxy-provider.js";
+import { hasContextNamespaceRouters } from "../vendor/pi-codex-conversion/dist/context-management/namespace-tools.js";
+import { prewarmOpenAICodexWebSocket } from "../vendor/pi-codex-conversion/dist/providers/openai-codex-custom-provider.js";
 
-const PROXY_ENTRY = new URL("../vendor/pi-codex-conversion/dist/providers/code-mode-proxy-provider.js", import.meta.url).href;
-const NAMESPACE_ENTRY = new URL("../vendor/pi-codex-conversion/dist/context-management/namespace-tools.js", import.meta.url).href;
-const PREWARM_ENTRY = new URL("../vendor/pi-codex-conversion/dist/providers/openai-codex-custom-provider.js", import.meta.url).href;
+const astra = modelNamed("gpt-6-astra");
+const toolSearch = { ...astra, compat: { ...astra.compat, supportsAdditionalTools: false, supportsToolSearch: true } };
+const spark = modelNamed("gpt-5.3-codex-spark");
+const head = (tools = [tool("tool_alpha")]) => systemMessage("BASE_PROMPT", 0, { toolsAdded: tools });
+const add = (...tools) => systemMessage("", 5, { toolsAdded: tools });
+const remove = (name) => systemMessage("", 6, { toolsRemoved: [{ name }] });
 
-const tool = (name, extra = {}) => ({
-	name,
-	description: `${name} description`,
-	parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
-	...extra,
-});
-
-const userMessage = (text, timestamp = 1) => ({ role: "user", content: text, timestamp });
-
-const assistantToolCall = (model, { id, name, arguments: args }) => ({
-	role: "assistant",
-	content: [{ type: "toolCall", id, name, arguments: args }],
-	provider: model.provider,
-	api: model.api,
-	model: model.id,
-	usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
-	stopReason: "toolUse",
-	timestamp: 2,
-});
-
-const toolResult = ({ toolCallId, toolName, text, details }, timestamp = 3) => ({
-	role: "toolResult",
-	toolCallId,
-	toolName,
-	content: [{ type: "text", text }],
-	...(details === undefined ? {} : { details }),
-	timestamp,
-});
-
-const declaredToolNames = (body) => body.tools?.map((declared) => declared.name) ?? [];
-const declaredToolsText = (body) => JSON.stringify(body.tools ?? []);
-const inPlaceToolItems = (body) =>
-	body.input.filter(
-		(item) => item.type === "additional_tools" || item.type === "tool_search_call" || item.type === "tool_search_output",
-	);
-
-const systemMessage = (content, extra = {}) => ({ role: "system", content, timestamp: 0, ...extra });
-
-test("normalized 0.86 transcript keeps the system prompt and tool declarations", async () => {
-	const model = modelNamed("gpt-6-astra");
-	const legacy = {
-		systemPrompt: "COMPAT_SENTINEL_SYSTEM",
-		tools: [tool("compat_probe_tool")],
-		messages: [userMessage("hello")],
+test("legacy and normalized contexts keep projected prompts/tools once, including a forced goal", async () => {
+	// before_agent_start goal projection has this same normalized leading-system-message shape.
+	const context = {
+		systemPrompt: "BASE_PROMPT\n\nACTIVE GOAL: finish the compatibility upgrade",
+		tools: [tool("compat_probe_tool")], messages: [userMessage("hello")],
 	};
-	for (const [label, context] of [
-		["legacy Context", legacy],
-		["0.86 transcript", normalizeContext(legacy)],
+	for (const input of [context, normalizeContext(context)]) {
+		const body = await captureBody(astra, input);
+		assert.equal(body.instructions, context.systemPrompt);
+		assert.deepEqual(declaredToolNames(body), ["compat_probe_tool"]);
+		assert.equal(JSON.stringify(body.input).includes("hello"), true);
+		assert.equal(JSON.stringify(body.input).includes("ACTIVE GOAL"), false);
+	}
+});
+
+test("later system additions anchor once through additional_tools or tool_search and keep prompt text", async () => {
+	for (const model of [astra, toolSearch]) for (const [text, tail] of [["GOAL_UPDATE_TEXT", [userMessage("second turn", 6)]], ["", []]]) {
+		const body = await captureBody(model, { messages: [
+			head(), userMessage("first turn"),
+			systemMessage(text, 5, { toolsAdded: [tool("tool_beta")] }), ...tail,
+		] });
+		assert.equal(body.instructions, "BASE_PROMPT");
+		assert.deepEqual(declaredToolNames(body), ["tool_alpha"]);
+		const additions = inPlaceToolItems(body.input);
+		assert.deepEqual(kindsOf(additions), model === astra ? ["additional_tools"] : ["tool_search_call", "tool_search_output"]);
+		assert.deepEqual(declaredToolNames(additions.at(-1)), ["tool_beta"]);
+		if (model === toolSearch) assert.equal(additions[0].call_id, additions[1].call_id);
+		assert.equal(body.input.some((item) => ["developer", "system"].includes(item.role) && String(item.content).includes("GOAL_UPDATE_TEXT")), Boolean(text));
+	}
+});
+
+test("removal, re-addition and same-name replacement declare only the complete latest tool set", async () => {
+	const readded = tool("tool_alpha", "READDED_ALPHA_DESCRIPTION");
+	const replacement = {
+		...tool("tool_alpha", "NEW_ALPHA_DESCRIPTION"),
+		parameters: { type: "object", properties: { replaced: { type: "string" } }, required: ["replaced"] },
+	};
+	for (const model of [astra, toolSearch, spark]) {
+		for (const [initial, deltas, expected] of [
+			[[tool("tool_alpha")], [add(tool("tool_beta")), remove("tool_alpha")], [tool("tool_beta")]],
+			[[tool("tool_alpha")], [add(tool("tool_beta")), remove("tool_beta")], [tool("tool_alpha")]],
+			[[tool("tool_alpha")], [remove("tool_alpha"), add(readded)], [readded]],
+			[[tool("tool_alpha", "OLD_ALPHA_DESCRIPTION")], [add(replacement)], [replacement]],
+			[[tool("tool_alpha"), tool("tool_beta")], [remove("tool_beta")], [tool("tool_alpha")]],
+		]) {
+			const body = await captureBody(model, { messages: [head(initial), userMessage("first turn"), ...deltas] });
+			assert.equal(body.instructions, "BASE_PROMPT");
+			assert.deepEqual(body.tools.map(({ name, description, parameters }) => ({ name, description, parameters })), expected);
+			assert.deepEqual(inPlaceToolItems(body.input), [], "non-additive history never re-announces removed or old definitions");
+			assert.equal(JSON.stringify(body.input).includes("first turn"), true);
+			assert.equal(JSON.stringify(body.input).includes("tool_beta"), false);
+		}
+	}
+});
+
+test("ordinary and legacy addedToolNames histories preserve pairing and share tool placement", async () => {
+	for (const [resultExtra, deltas, topLevel, anchored] of [
+		[{}, [], ["tool_alpha", "tool_beta"], []],
+		[{ addedToolNames: ["tool_beta"] }, [], ["tool_alpha"], ["tool_beta"]],
+		[{ addedToolNames: ["tool_beta"] }, [remove("tool_alpha")], ["tool_beta"], []],
 	]) {
-		const body = await captureBody(model, context);
-		assert.equal(body.instructions, "COMPAT_SENTINEL_SYSTEM", `${label}: instructions`);
-		assert.deepEqual(body.tools?.map((declared) => declared.name), ["compat_probe_tool"], `${label}: tools`);
-		assert.equal(JSON.stringify(body.input).includes("hello"), true, `${label}: user turn kept`);
+		const body = await captureBody(astra, { messages: [
+			head([tool("tool_alpha"), tool("tool_beta")]), userMessage("read it"),
+			assistantToolCall(astra, "call_abc|fc_abc", "tool_alpha"),
+			{ ...toolResult("call_abc|fc_abc", "tool_alpha", "FILE_BODY"), ...resultExtra }, ...deltas,
+		] });
+		assert.deepEqual(declaredToolNames(body), topLevel);
+		const additions = inPlaceToolItems(body.input);
+		assert.deepEqual(kindsOf(additions), anchored.length ? ["additional_tools"] : []);
+		assert.deepEqual(additions.flatMap(declaredToolNames), anchored);
+		const calls = body.input.filter(({ type }) => type === "function_call");
+		const outputs = body.input.filter(({ type }) => type === "function_call_output");
+		assert.equal(calls.length, 1);
+		assert.equal(outputs.length, 1);
+		assert.equal(calls[0].call_id, "call_abc");
+		assert.equal(outputs[0].call_id, "call_abc");
+		assert.ok(JSON.stringify(outputs[0].output).includes("FILE_BODY"));
 	}
 });
 
-test("later system message anchors tool additions without duplicating declarations", async () => {
-	const model = modelNamed("gpt-6-astra");
-	const body = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-			userMessage("first turn"),
-			systemMessage("GOAL_UPDATE_TEXT", { toolsAdded: [tool("tool_beta")], timestamp: 5 }),
-			userMessage("second turn", 6),
-		],
-	});
-
-	assert.equal(body.instructions, "BASE_PROMPT");
-	assert.deepEqual(declaredToolNames(body), ["tool_alpha"], "initial tools stay at the top");
-	const additions = inPlaceToolItems(body);
-	assert.deepEqual(
-		additions.map((item) => item.type),
-		["additional_tools"],
-		"the later system message anchors exactly one additional_tools item",
-	);
-	assert.deepEqual(additions[0].tools.map((declared) => declared.name), ["tool_beta"]);
-	assert.equal(
-		declaredToolsText(body).includes("tool_beta"),
-		false,
-		"an anchored addition must not also appear in the top-level declarations",
-	);
-	const promptUpdates = body.input.filter((item) => item.role === "developer" || item.role === "system");
-	assert.ok(
-		promptUpdates.some((item) => String(item.content).includes("GOAL_UPDATE_TEXT")),
-		"the later system prompt text must reach the request",
-	);
-});
-
-test("non-additive tool history declares the complete current tool set exactly once", async () => {
-	const model = modelNamed("gpt-6-astra");
-	const sequences = [
-		{
-			label: "removing an initial tool keeps the later addition",
-			removed: "tool_alpha",
-			expected: ["tool_beta"],
-			messages: [
-				systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-				userMessage("first turn"),
-				systemMessage("", { toolsAdded: [tool("tool_beta")], timestamp: 5 }),
-				systemMessage("", { toolsRemoved: [{ name: "tool_alpha" }], timestamp: 6 }),
-				userMessage("second turn", 7),
-			],
-		},
-		{
-			label: "removing the later addition leaves the initial tool",
-			removed: "tool_beta",
-			expected: ["tool_alpha"],
-			messages: [
-				systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-				userMessage("first turn"),
-				systemMessage("", { toolsAdded: [tool("tool_beta")], timestamp: 5 }),
-				systemMessage("", { toolsRemoved: [{ name: "tool_beta" }], timestamp: 6 }),
-				userMessage("second turn", 7),
-			],
-		},
-		{
-			label: "a removed tool that comes back is declared with its new definition",
-			expected: ["tool_alpha"],
-			expectedDescription: "READDED_ALPHA_DESCRIPTION",
-			messages: [
-				systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-				userMessage("first turn"),
-				systemMessage("", { toolsRemoved: [{ name: "tool_alpha" }], timestamp: 5 }),
-				systemMessage("", {
-					timestamp: 6,
-					toolsAdded: [tool("tool_alpha", { description: "READDED_ALPHA_DESCRIPTION" })],
-				}),
-			],
-		},
-	];
-	for (const { label, messages, expected, removed, expectedDescription } of sequences) {
-		const body = await captureBody(model, { messages });
-		assert.equal(body.instructions, "BASE_PROMPT", `${label}: instructions`);
-		assert.deepEqual(declaredToolNames(body), expected, `${label}: current tools`);
-		if (removed !== undefined) {
-			assert.equal(declaredToolNames(body).includes(removed), false, `${label}: removed tool must not be declared`);
-		}
-		if (expectedDescription !== undefined) {
-			assert.equal(declaredToolsText(body).includes(expectedDescription), true, `${label}: latest definition`);
-		}
-		assert.deepEqual(inPlaceToolItems(body), [], `${label}: nothing may be declared in place`);
-		assert.equal(JSON.stringify(body.input).includes("first turn"), true, `${label}: history kept`);
-	}
-});
-
-test("a same-name tool redeclaration uses the latest definition exactly once", async () => {
-	const model = modelNamed("gpt-6-astra");
-	const body = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha", { description: "OLD_ALPHA_DESCRIPTION" })] }),
-			userMessage("first turn"),
-			systemMessage("", {
-				timestamp: 5,
-				toolsAdded: [
-					tool("tool_alpha", {
-						description: "NEW_ALPHA_DESCRIPTION",
-						parameters: { type: "object", properties: { replaced: { type: "string" } }, required: ["replaced"] },
-					}),
-				],
-			}),
-		],
-	});
-	assert.deepEqual(declaredToolNames(body), ["tool_alpha"], "the redeclared tool stays available exactly once");
-	assert.equal(declaredToolsText(body).includes("NEW_ALPHA_DESCRIPTION"), true, "latest definition is declared");
-	assert.equal(declaredToolsText(body).includes("OLD_ALPHA_DESCRIPTION"), false, "stale definition must not survive");
-	assert.equal(declaredToolsText(body).includes('"replaced"'), true, "latest parameters are declared");
-	assert.deepEqual(inPlaceToolItems(body), [], "a redeclaration must not be re-anchored in place");
-});
-
-test("tool_search models anchor later additions and keep non-additive history complete", async () => {
-	const astra = modelNamed("gpt-6-astra");
-	const model = { ...astra, compat: { ...astra.compat, supportsAdditionalTools: false, supportsToolSearch: true } };
-	const additive = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-			userMessage("first turn"),
-			systemMessage("", { toolsAdded: [tool("tool_beta")], timestamp: 5 }),
-		],
-	});
-	assert.deepEqual(declaredToolNames(additive), ["tool_alpha"], "initial tools stay at the top");
-	const searchCalls = additive.input.filter((item) => item.type === "tool_search_call");
-	const searchOutputs = additive.input.filter((item) => item.type === "tool_search_output");
-	assert.equal(searchCalls.length, 1, "the later system message anchors one tool_search_call");
-	assert.equal(searchOutputs.length, 1, "the later system message anchors one tool_search_output");
-	assert.equal(searchCalls[0].call_id, searchOutputs[0].call_id, "tool_search call and output must pair");
-	assert.deepEqual(searchOutputs[0].tools.map((declared) => declared.name), ["tool_beta"]);
-	assert.equal(declaredToolsText(additive).includes("tool_beta"), false, "no duplicate top-level declaration");
-
-	const replaced = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-			userMessage("first turn"),
-			systemMessage("", { toolsAdded: [tool("tool_beta")], timestamp: 5 }),
-			systemMessage("", { toolsRemoved: [{ name: "tool_alpha" }], timestamp: 6 }),
-		],
-	});
-	assert.deepEqual(declaredToolNames(replaced), ["tool_beta"], "complete current tool set after a removal");
-	assert.deepEqual(inPlaceToolItems(replaced), [], "a non-additive history anchors nothing in place");
-});
-
-test("legacy addedToolNames results obey the same placement decision", async () => {
-	const model = modelNamed("gpt-6-astra");
-	const history = (extra) => [
-		systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha"), tool("tool_beta")] }),
-		userMessage("first turn"),
-		assistantToolCall(model, { id: "call_1|fc_1", name: "tool_alpha", arguments: { value: "x" } }),
-		{
-			...toolResult({ toolCallId: "call_1|fc_1", toolName: "tool_alpha", text: "DONE" }),
-			addedToolNames: ["tool_beta"],
-		},
-		...extra,
-	];
-
-	const additive = await captureBody(model, { messages: history([]) });
-	assert.deepEqual(declaredToolNames(additive), ["tool_alpha"], "the deferred tool leaves the top-level declaration");
-	const additions = additive.input.filter((item) => item.type === "additional_tools");
-	assert.equal(additions.length, 1, "the tool result anchors the dynamically loaded tool");
-	assert.deepEqual(additions[0].tools.map((declared) => declared.name), ["tool_beta"]);
-
-	const nonAdditive = await captureBody(model, {
-		messages: history([systemMessage("", { toolsRemoved: [{ name: "tool_alpha" }], timestamp: 6 })]),
-	});
-	assert.deepEqual(declaredToolNames(nonAdditive), ["tool_beta"], "complete current tool set after a removal");
-	assert.deepEqual(inPlaceToolItems(nonAdditive), [], "the legacy lookup must not bypass the placement decision");
-});
-
-test("prompt section updates fold into instructions when the model has no mid-convo system messages", async () => {
-	const model = modelNamed("gpt-5.3-codex-spark");
-	const body = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha")] }),
-			userMessage("first turn"),
-			systemMessage("", { sections: { goal: "GOAL_SECTION_TEXT" }, timestamp: 5 }),
-		],
-	});
+test("a section-only update collapses into instructions on models without mid-conversation prompts", async () => {
+	const body = await captureBody(spark, { messages: [head(), userMessage("first turn"), systemMessage("", 5, { sections: { goal: "GOAL_SECTION_TEXT" } })] });
 	assert.equal(body.instructions, "BASE_PROMPT\n\nGOAL_SECTION_TEXT");
-	assert.deepEqual(body.tools?.map((declared) => declared.name), ["tool_alpha"]);
-	assert.equal(
-		body.input.some((item) => item.role === "developer" || item.role === "system"),
-		false,
-		"collapsed transcripts must not carry mid-conversation prompt items",
-	);
+	assert.deepEqual(declaredToolNames(body), ["tool_alpha"]);
+	assert.equal(body.input.some(({ role }) => role === "developer" || role === "system"), false);
 });
 
-test("a later toolsRemoved never re-exposes the removed tool", async () => {
-	const model = modelNamed("gpt-5.3-codex-spark");
-	const body = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT", { toolsAdded: [tool("tool_alpha"), tool("tool_beta")] }),
-			userMessage("first turn"),
-			systemMessage("", { toolsRemoved: [{ name: "tool_beta" }], timestamp: 5 }),
-		],
-	});
-	assert.deepEqual(body.tools?.map((declared) => declared.name), ["tool_alpha"]);
-	assert.equal(JSON.stringify(body.tools).includes("tool_beta"), false, "removed tool must not be declared");
-	assert.equal(JSON.stringify(body.input).includes("tool_beta"), false, "removed tool must not be re-anchored");
-});
-
-test("history tool call/result pairs stay matched", async () => {
-	const model = modelNamed("gpt-6-astra");
-	const body = await captureBody(model, {
-		messages: [
-			systemMessage("PAIRING_PROMPT", { toolsAdded: [tool("read_file")] }),
-			userMessage("read it"),
-			assistantToolCall(model, { id: "call_abc|fc_abc", name: "read_file", arguments: { value: "x" } }),
-			toolResult({ toolCallId: "call_abc|fc_abc", toolName: "read_file", text: "FILE_BODY" }),
-		],
-	});
-	const calls = body.input.filter((item) => item.type === "function_call");
-	const outputs = body.input.filter((item) => item.type === "function_call_output");
-	assert.equal(calls.length, 1);
-	assert.equal(outputs.length, 1);
-	assert.equal(calls[0].call_id, "call_abc");
-	assert.equal(outputs[0].call_id, "call_abc");
-	assert.ok(JSON.stringify(outputs[0].output).includes("FILE_BODY"), "tool output must reach the request");
-});
-
-test("grammar tools keep their custom wire format on the Responses Lite proxy path", async () => {
-	const { streamCodeModeResponsesProxy } = await import(PROXY_ENTRY);
-	const model = getBuiltinModels("openai").find((candidate) => candidate.id === "gpt-4.1");
+test("Responses Lite proxy sends prompts/history and preserves function and grammar tool formats", async (t) => {
+	const model = getBuiltinModels("openai").find(({ id }) => id === "gpt-4.1");
 	assert.ok(model, "expected builtin openai model gpt-4.1");
-	const grammarTool = {
-		name: "shell_command",
-		description: "run a shell command",
+	const grammar = {
+		name: "shell_command", description: "run a shell command",
 		parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
 		constrainedSampling: { type: "grammar", variants: { openai_lark: "start: /[^\\n]+/" } },
 	};
-
-	let recordedBody;
-	const originalFetch = globalThis.fetch;
-	globalThis.fetch = async (_url, init) => {
-		recordedBody = JSON.parse(String(init.body));
+	let body;
+	t.mock.method(globalThis, "fetch", async (_url, init) => {
+		body = JSON.parse(String(init.body));
 		throw new Error("OFFLINE_PROXY_CAPTURE");
-	};
-	try {
-		const context = normalizeContext({
-			systemPrompt: "GRAMMAR_PROXY_PROMPT",
-			tools: [grammarTool],
-			messages: [userMessage("run ls")],
-		});
+	});
+	for (const declared of [tool("proxy_probe_tool"), grammar]) {
+		body = undefined;
+		const context = normalizeContext({ systemPrompt: "PROXY_PROMPT", tools: [declared], messages: [userMessage("proxy hello")] });
 		await streamCodeModeResponsesProxy(model, context, { apiKey: "offline-proxy-key" }).result();
-	} finally {
-		globalThis.fetch = originalFetch;
+		assert.ok(body, "proxy must issue a request");
+		const serialized = JSON.stringify(body);
+		for (const text of ["PROXY_PROMPT", declared.name, "proxy hello"]) assert.ok(serialized.includes(text), text);
+		if (declared === grammar) {
+			assert.ok(serialized.includes('"type":"custom"'));
+			assert.ok(serialized.includes('"definition":"start: /[^\\\\n]+/"'));
+		}
 	}
-
-	const serialized = JSON.stringify(recordedBody);
-	assert.equal(serialized.includes('"type":"custom"'), true, "grammar tool must serialize as a custom tool");
-	assert.equal(serialized.includes('"definition":"start: /[^\\\\n]+/"'), true, "grammar definition must reach the wire");
-	assert.equal(serialized.includes("shell_command"), true, "grammar tool name must reach the wire");
 });
 
-test("namespace routing sees current tools from a normalized transcript", async () => {
-	const { hasContextNamespaceRouters } = await import(NAMESPACE_ENTRY);
-	const withRouters = normalizeContext({ tools: [tool("history"), tool("notes")], messages: [userMessage("hi")] });
-	assert.equal(hasContextNamespaceRouters(withRouters), true);
-	const afterRemoval = {
-		messages: [
-			systemMessage("PROMPT", { toolsAdded: [tool("history"), tool("notes")] }),
-			userMessage("hi"),
-			systemMessage("", { toolsRemoved: [{ name: "notes" }], timestamp: 2 }),
-		],
-	};
-	assert.equal(hasContextNamespaceRouters(afterRemoval), false);
+test("namespace routing sees normalized current tools rather than removed routers", () => {
+	assert.equal(hasContextNamespaceRouters(normalizeContext({ tools: [tool("history"), tool("notes")], messages: [userMessage("hi")] })), true);
+	assert.equal(hasContextNamespaceRouters({ messages: [head([tool("history"), tool("notes")]), userMessage("hi"), remove("notes")] }), false);
 	assert.equal(hasContextNamespaceRouters(normalizeContext({ tools: [tool("history")], messages: [] })), false);
 });
 
-test("forced goal projection keeps the projected prompt and current tools once", async () => {
-	const model = modelNamed("gpt-6-astra");
-	// Shape produced by the host when `before_agent_start` returns a full `systemPrompt`
-	// (metis's goal extension): one leading system message with the merged prompt and the
-	// current tools, and no later system messages.
-	const body = await captureBody(model, {
-		messages: [
-			systemMessage("BASE_PROMPT\n\nACTIVE GOAL: finish the compatibility upgrade", {
-				toolsAdded: [tool("tool_alpha")],
-			}),
-			userMessage("continue"),
-		],
-	});
-	assert.equal(body.instructions, "BASE_PROMPT\n\nACTIVE GOAL: finish the compatibility upgrade");
-	assert.deepEqual(body.tools?.map((declared) => declared.name), ["tool_alpha"]);
-	assert.equal(
-		JSON.stringify(body.input).includes("ACTIVE GOAL"),
-		false,
-		"the projected prompt comes through instructions, not as a duplicate input item",
-	);
-});
-
-test("prewarm/keepalive keeps a legacy context prompt and tools", async () => {
-	const { prewarmOpenAICodexWebSocket } = await import(PREWARM_ENTRY);
-	const model = modelNamed("gpt-6-astra");
+test("prewarm/keepalive preserves legacy prompt/tools before opening its socket", async () => {
 	let payload;
-	await assert.rejects(
-		prewarmOpenAICodexWebSocket(
-			model,
-			{ systemPrompt: "PREWARM_SENTINEL_SYSTEM", tools: [tool("prewarm_tool")], messages: [userMessage("prewarm hello")] },
-			{
-				apiKey: FAKE_API_KEY,
-				sessionId: "offline-session",
-				transport: "websocket",
-				onPayload(body) {
-					payload = body;
-					throw new Error("OFFLINE_CAPTURE_COMPLETE");
-				},
-			},
-			{ getConfig: () => ({ openai: {}, executionMode: "default" }), preserveContinuation: true },
-		),
-		/OFFLINE_CAPTURE_COMPLETE/,
-	);
-	assert.ok(payload, "prewarm must build a request body before opening the socket");
+	await assert.rejects(prewarmOpenAICodexWebSocket(astra, {
+		systemPrompt: "PREWARM_SENTINEL_SYSTEM", tools: [tool("prewarm_tool")], messages: [userMessage("prewarm hello")],
+	}, {
+		apiKey: FAKE_API_KEY, sessionId: "offline-session", transport: "websocket",
+		onPayload(body) { payload = body; throw new Error("OFFLINE_CAPTURE_COMPLETE"); },
+	}, { getConfig: () => ({ openai: {}, executionMode: "default" }), preserveContinuation: true }), /OFFLINE_CAPTURE_COMPLETE/);
+	assert.ok(payload);
 	assert.equal(payload.instructions, "PREWARM_SENTINEL_SYSTEM");
-	assert.deepEqual(payload.tools?.map((declared) => declared.name), ["prewarm_tool"]);
+	assert.deepEqual(declaredToolNames(payload), ["prewarm_tool"]);
 	assert.equal(JSON.stringify(payload.input).includes("prewarm hello"), true);
-});
-
-test("Responses Lite proxy request carries the prompt and tools", async () => {
-	const { streamCodeModeResponsesProxy } = await import(PROXY_ENTRY);
-	const model = getBuiltinModels("openai").find((candidate) => candidate.id === "gpt-4.1");
-	assert.ok(model, "expected builtin openai model gpt-4.1");
-
-	let recordedBody;
-	const originalFetch = globalThis.fetch;
-	globalThis.fetch = async (_url, init) => {
-		recordedBody = JSON.parse(String(init.body));
-		throw new Error("OFFLINE_PROXY_CAPTURE");
-	};
-	try {
-		const context = normalizeContext({
-			systemPrompt: "PROXY_SENTINEL_SYSTEM",
-			tools: [tool("proxy_probe_tool")],
-			messages: [userMessage("proxy hello")],
-		});
-		const stream = streamCodeModeResponsesProxy(model, context, { apiKey: "offline-proxy-key" });
-		await stream.result();
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
-
-	assert.ok(recordedBody, "the proxy must issue a request");
-	const serialized = JSON.stringify(recordedBody);
-	assert.equal(serialized.includes("PROXY_SENTINEL_SYSTEM"), true, "proxy prompt must reach the request");
-	assert.equal(serialized.includes("proxy_probe_tool"), true, "proxy tools must reach the request");
-	assert.equal(serialized.includes("proxy hello"), true, "proxy history must reach the request");
 });

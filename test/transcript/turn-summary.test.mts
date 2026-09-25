@@ -4,26 +4,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { TurnSummary, formatSummaryLine, SUMMARY_CUSTOM_TYPE, makeEntryRenderer } from "../../src/turn-summary.ts";
 
-function harness(persist = true) {
-  const appended: Array<{ type: string; data: unknown }> = [];
-  const renderers: Array<{ type: string }> = [];
-  let wall = 1_700_000_000_000;
-  const summary = new TurnSummary({
-    appendEntry: (type, data) => appended.push({ type, data }),
-    registerEntryRenderer: (type) => renderers.push({ type }),
-    persist,
-    wall: () => wall,
-  });
-  return {
-    summary,
-    appended,
-    renderers,
-    advance: (ms: number) => {
-      wall += ms;
-    },
-  };
-}
-
 const COMPLETED_VERDICT = {
   outcome: "completed" as const,
   evidence: "assistant-stop" as const,
@@ -44,12 +24,19 @@ const SAMPLE = {
 };
 
 test("agent_settled appends exactly one v2 summary entry (idempotent), renderer registered once", () => {
-  const h = harness();
-  assert.deepEqual(h.renderers.map((r) => r.type), [SUMMARY_CUSTOM_TYPE], "renderer registered once with the namespaced type");
-  h.summary.record(SAMPLE, { ...COMPLETED_VERDICT, toolErrorsObserved: 2 });
-  h.summary.record(SAMPLE, { ...COMPLETED_VERDICT, toolErrorsObserved: 2 }); // duplicate settle in same turn
-  assert.equal(h.appended.length, 1);
-  const entry = h.appended[0]!;
+  const appended: Array<{ type: string; data: unknown }> = [];
+  const renderers: string[] = [];
+  const summary = new TurnSummary({
+    appendEntry: (type, data) => appended.push({ type, data }),
+    registerEntryRenderer: (type) => renderers.push(type),
+    persist: true,
+    wall: () => 1_700_000_000_000,
+  });
+  assert.deepEqual(renderers, [SUMMARY_CUSTOM_TYPE], "renderer registered once with the namespaced type");
+  summary.record(SAMPLE, { ...COMPLETED_VERDICT, toolErrorsObserved: 2 });
+  summary.record(SAMPLE, { ...COMPLETED_VERDICT, toolErrorsObserved: 2 }); // duplicate settle in same turn
+  assert.equal(appended.length, 1);
+  const entry = appended[0]!;
   assert.equal(entry.type, SUMMARY_CUSTOM_TYPE);
   const data = entry.data as Record<string, unknown>;
   assert.equal(data.schemaVersion, 2);
@@ -79,39 +66,24 @@ test("thought + tokens follow the duration in the Codex order", () => {
   assert.equal(line, "Worked for 15m 39s · thought for 1m 40s · ↓19.2k · ↑205k");
 });
 
-test("v1 legacy entries: failed renders unverified, completed stays worked", () => {
-  const renderer = makeEntryRenderer() as (entry: unknown) => { render(w: number): string[] } | undefined;
-  const v1Failed = renderer({
-    customType: SUMMARY_CUSTOM_TYPE,
-    data: { schemaVersion: 1, interactionId: "i1", startedAt: 1, settledAt: 2, elapsedMs: 5000, outcome: "failed" },
+for (const [schemaVersion, outcome, matches, absent] of [
+  [1, "failed", [/Ended after 5s/, /legacy status unverified/], undefined],
+  [1, "completed", [/Worked for 5s/], /legacy/],
+  [2, "failed", [/Failed after 5s/], undefined],
+  [2, "unknown", [/Ended after 5s/], /Worked|Failed/],
+] as const) {
+  test(`v${schemaVersion} ${outcome}: legacy status stays unverified; v2 uses terminal evidence`, () => {
+    const renderer = makeEntryRenderer() as (entry: unknown) => { render(w: number): string[] } | undefined;
+    const entry = renderer({
+      customType: SUMMARY_CUSTOM_TYPE,
+      data: {
+        schemaVersion, outcome, interactionId: "entry", startedAt: 1, settledAt: 2, elapsedMs: 5000,
+        ...(schemaVersion === 2 ? { evidence: outcome === "failed" ? "assistant-error" : "settled-only",
+          reason: "r", attempt: outcome === "failed" ? 1 : 0, toolErrorsObserved: 0 } : {}),
+      },
+    });
+    const text = entry!.render(120).join("\n");
+    for (const expected of matches) assert.match(text, expected);
+    if (absent) assert.doesNotMatch(text, absent);
   });
-  assert.match(v1Failed!.render(120).join("\n"), /Ended after 5s/);
-  assert.match(v1Failed!.render(120).join("\n"), /legacy status unverified/);
-  const v1Worked = renderer({
-    customType: SUMMARY_CUSTOM_TYPE,
-    data: { schemaVersion: 1, interactionId: "i2", startedAt: 1, settledAt: 2, elapsedMs: 5000, outcome: "completed" },
-  });
-  assert.match(v1Worked!.render(120).join("\n"), /Worked for 5s/);
-  assert.doesNotMatch(v1Worked!.render(120).join("\n"), /legacy/);
-});
-
-test("v2 failed renders Failed (real terminal evidence); unknown renders Ended", () => {
-  const renderer = makeEntryRenderer() as (entry: unknown) => { render(w: number): string[] } | undefined;
-  const v2Failed = renderer({
-    customType: SUMMARY_CUSTOM_TYPE,
-    data: {
-      schemaVersion: 2, interactionId: "i3", startedAt: 1, settledAt: 2, elapsedMs: 5000,
-      outcome: "failed", evidence: "assistant-error", reason: "r", attempt: 1, toolErrorsObserved: 0,
-    },
-  });
-  assert.match(v2Failed!.render(120).join("\n"), /Failed after 5s/);
-  const v2Unknown = renderer({
-    customType: SUMMARY_CUSTOM_TYPE,
-    data: {
-      schemaVersion: 2, interactionId: "i4", startedAt: 1, settledAt: 2, elapsedMs: 5000,
-      outcome: "unknown", evidence: "settled-only", reason: "r", attempt: 0, toolErrorsObserved: 0,
-    },
-  });
-  assert.match(v2Unknown!.render(120).join("\n"), /Ended after 5s/);
-  assert.doesNotMatch(v2Unknown!.render(120).join("\n"), /Worked|Failed/);
-});
+}

@@ -15,6 +15,18 @@ import type { ThinkingView } from "../../src/thinking-view.ts";
 
 const NOW = 1_700_000_000_000;
 
+function clicks(t: TestContext) {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW });
+  const control = createThinkingViewControl();
+  const applied: ThinkingView[] = [];
+  t.after(() => control.cancel());
+  return {
+    control, applied,
+    click: (fallback: ThinkingView, x = 10, y = 5) =>
+      control.handleClick({ at: Date.now(), x, y }, { fallback, apply: (v) => applied.push(v) }),
+  };
+}
+
 function windowOf(scroll: PeekScroll, total: number, lines = 6) {
   return scroll.resolve(total, lines);
 }
@@ -53,10 +65,8 @@ test("scrolling pins the absolute top so rows streamed below never move it", () 
 });
 
 test("a lone click waits for the double-click window, then applies the single target", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW });
-  const control = createThinkingViewControl();
-  const applied: ThinkingView[] = [];
-  control.handleClick({ at: Date.now(), x: 10, y: 5 }, { fallback: "peek", apply: (v) => applied.push(v) });
+  const { control, applied, click } = clicks(t);
+  click("peek");
   assert.deepEqual(applied, [], "nothing happens while a second click is still possible");
   t.mock.timers.tick(DOUBLE_CLICK_MS);
   assert.deepEqual(applied, ["collapsed"]);
@@ -64,38 +74,32 @@ test("a lone click waits for the double-click window, then applies the single ta
 });
 
 test("a second click inside the window applies the double target instead", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW });
-  const control = createThinkingViewControl();
-  const applied: ThinkingView[] = [];
-  const apply = (v: ThinkingView) => applied.push(v);
-  control.handleClick({ at: Date.now(), x: 10, y: 5 }, { fallback: "peek", apply });
+  const { applied, click } = clicks(t);
+  click("peek");
   t.mock.timers.tick(120);
-  control.handleClick({ at: Date.now(), x: 11, y: 5 }, { fallback: "peek", apply });
+  click("peek", 11, 5);
   assert.deepEqual(applied, ["full"], "the pending single action is cancelled");
   t.mock.timers.tick(DOUBLE_CLICK_MS * 2);
   assert.deepEqual(applied, ["full"], "and never fires later");
   // The same gesture from the full view returns to the peek window.
-  control.handleClick({ at: Date.now(), x: 10, y: 5 }, { fallback: "full", apply });
+  click("full");
   t.mock.timers.tick(120);
-  control.handleClick({ at: Date.now(), x: 10, y: 6 }, { fallback: "full", apply });
+  click("full", 10, 6);
   assert.deepEqual(applied, ["full", "peek"]);
 });
 
 test("clicks apart in time or position stay two single clicks", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW });
-  const control = createThinkingViewControl();
-  const applied: ThinkingView[] = [];
-  const apply = (v: ThinkingView) => applied.push(v);
-  control.handleClick({ at: Date.now(), x: 10, y: 5 }, { fallback: "collapsed", apply });
+  const { control, applied, click } = clicks(t);
+  click("collapsed");
   t.mock.timers.tick(DOUBLE_CLICK_MS);
   assert.deepEqual(applied, ["peek"]);
-  control.handleClick({ at: Date.now(), x: 10, y: 5 }, { fallback: "peek", apply });
+  click("peek");
   t.mock.timers.tick(DOUBLE_CLICK_MS + 1);
   assert.deepEqual(applied, ["peek", "collapsed"]);
   // Far apart in space: not a double click even inside the window.
-  control.handleClick({ at: Date.now(), x: 10, y: 5 }, { fallback: "collapsed", apply });
+  click("collapsed");
   t.mock.timers.tick(100);
-  control.handleClick({ at: Date.now(), x: 60, y: 5 }, { fallback: "collapsed", apply });
+  click("collapsed", 60, 5);
   assert.deepEqual(applied, ["peek", "collapsed", "peek"], "the too-far click lands at once, not dropped");
   t.mock.timers.tick(DOUBLE_CLICK_MS);
   assert.deepEqual(applied, ["peek", "collapsed", "peek", "collapsed"], "and the second click keeps its own wait");
@@ -105,14 +109,11 @@ test("clicks apart in time or position stay two single clicks", (t) => {
 });
 
 test("auto-fold drops a shape the user opened while the run streamed", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: NOW });
-  const control = createThinkingViewControl();
-  const applied: ThinkingView[] = [];
-  const apply = (v: ThinkingView) => applied.push(v);
+  const { control, applied, click } = clicks(t);
   // Double click during streaming: peek → full.
-  control.handleClick({ at: Date.now(), x: 2, y: 2 }, { fallback: "peek", apply });
+  click("peek", 2, 2);
   t.mock.timers.tick(60);
-  control.handleClick({ at: Date.now(), x: 2, y: 2 }, { fallback: "peek", apply });
+  click("peek", 2, 2);
   assert.deepEqual(applied, ["full"]);
   assert.equal(control.userView(), "full");
   // The run ends: the completion policy forgets the shape, so the derived view
@@ -121,7 +122,7 @@ test("auto-fold drops a shape the user opened while the run streamed", (t) => {
   assert.equal(control.userView(), undefined);
   // …and it does so ONCE: a click made AFTER the run finished must survive the
   // rebuilds that follow (the host rebuilds on every update).
-  control.handleClick({ at: Date.now(), x: 2, y: 2 }, { fallback: "collapsed", apply });
+  click("collapsed", 2, 2);
   t.mock.timers.tick(DOUBLE_CLICK_MS);
   assert.equal(control.userView(), "peek");
   control.foldOnEnd();
