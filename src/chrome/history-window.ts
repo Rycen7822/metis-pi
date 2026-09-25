@@ -20,6 +20,7 @@ interface Scroll extends Component {
   isFollowingEnd: boolean;
   scrollBy(lines: number): number;
   scrollTo(row: number, options?: { disableFollow?: boolean }): void;
+  updateLayout(contentHeight: number, viewportHeight: number, requestRender?: () => void): void;
 }
 export interface HistoryWindowTui {
   hasActiveSelection?(): boolean;
@@ -104,6 +105,7 @@ export class HistoryWindow {
   #rows: string[] = [];
   #origins: (RowOrigin | undefined)[] = [];
   #cursor: Cursor | undefined;
+  #scrollTarget: number | undefined;
   #direction: "backward" | "forward" = "backward";
   #older = false;
   #newer = false;
@@ -197,7 +199,7 @@ export class HistoryWindow {
       const tail = this.#origins.at(this.#newer ? -2 : -1);
       if (tail && this.#items.includes(tail.component)) this.#cursor = { component: tail.component, row: tail.row + 1 };
     }
-    const anchor = !this.scroll.isFollowingEnd ? this.#origins[this.scroll.scrollTop] : undefined;
+    const anchor = this.#scrollTarget === undefined && !this.scroll.isFollowingEnd ? this.#origins[this.scroll.scrollTop] : undefined;
     const items = this.#items;
     let index = this.#cursor ? items.indexOf(this.#cursor.component) : items.length - 1;
     const forward = this.#cursor !== undefined && this.#direction === "forward";
@@ -247,11 +249,21 @@ export class HistoryWindow {
     this.#rows = rows; this.#dirty = false;
     if (anchor) {
       const next = this.#origins.findIndex((origin) => origin?.component === anchor.component && origin.row === anchor.row);
-      if (next >= 0) this.scroll.scrollTo(next, { disableFollow: true });
+      if (next >= 0) this.#scrollTarget = next;
     }
     registerProduct(rows, { componentId: "history-window", width, rows: [], children: placements });
     publishRows(this, rows);
     return rows;
+  }
+
+  commitScroll(): void {
+    if (this.#dirty || this.#scrollTarget === undefined) return;
+    const target = this.#scrollTarget;
+    this.#scrollTarget = undefined;
+    // Native layout has measured this window and the viewport, but has not
+    // positioned its child yet. Earlier scrollTo calls clamp against the OLD
+    // page height (e.g. 22 rows instead of 5000) and lose the reading position.
+    this.scroll.scrollTo(target, { disableFollow: true });
   }
 
   page(direction: "older" | "newer"): boolean {
@@ -263,7 +275,8 @@ export class HistoryWindow {
     this.#cursor = { component: origin.component, row: origin.row + (direction === "older" ? 1 : 0) };
     this.#direction = direction === "older" ? "backward" : "forward";
     this.#dirty = true;
-    this.scroll.scrollTo(direction === "older" ? Number.MAX_SAFE_INTEGER : 0, { disableFollow: true });
+    this.#scrollTarget = direction === "older" ? Number.MAX_SAFE_INTEGER : 0;
+    this.scroll.scrollTo(this.scroll.scrollTop, { disableFollow: true });
     return true;
   }
 
@@ -272,6 +285,7 @@ export class HistoryWindow {
     const component = direction === "older" ? this.#items[0] : this.#items.at(-1);
     this.#cursor = component ? { component, row: direction === "older" ? 0 : Number.MAX_SAFE_INTEGER } : undefined;
     this.#direction = direction === "older" ? "forward" : "backward";
+    this.#scrollTarget = direction === "older" ? 0 : undefined;
     this.#dirty = true;
   }
   invalidate(): void {
@@ -288,6 +302,7 @@ export class HistoryWindow {
   status() { return { rows: this.#rows.length, cachedBlocks: [...this.#blocks.values()].filter((block) => block.rows).length, renderedBlocks: this.#renderedBlocks,
     evictedBlocks: this.#evictedBlocks, older: this.#older, newer: this.#newer, budget: HISTORY_ROW_BUDGET }; }
   dispose(): void {
+    this.#scrollTarget = undefined;
     this.#structureRestores.forEach((restore) => restore()); this.#structureRestores = [];
     this.invalidate(); this.#rows = []; this.#origins = []; this.#items = []; this.#structureChecks = []; releaseCopyCache(this);
   }
@@ -322,6 +337,13 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     const window = new HistoryWindow(source, scroll, host.Container, selected);
     const restoreStart = observe(scroll, ["scrollToStart"], () => { window.jump("older"); tui.requestRender?.(); });
     const restoreEnd = observe(scroll, ["scrollToEnd"], () => { window.jump("newer"); tui.requestRender?.(); });
+    const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
+    const updateLayout = scroll.updateLayout;
+    const commitLayout: Scroll["updateLayout"] = function (this: Scroll, ...args) {
+      updateLayout.apply(this, args);
+      window.commitScroll();
+    };
+    scroll.updateLayout = commitLayout;
     const removeInput = tui.addInputListener?.((data) => {
       if (host.matchesKey?.(data, "enter") && selected()) {
         tui.clearTextSelection?.(); tui.requestRender?.();
@@ -336,7 +358,13 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       return wheel.call(this, delta);
     };
     scroll.child = window as unknown as Component; scroll.children = [scroll.child]; scroll.scrollBy = wrapper;
-    installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => { restoreStart(); restoreEnd(); }, removeInput }; reason = "installed";
+    installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => {
+      restoreStart(); restoreEnd();
+      if (scroll.updateLayout === commitLayout) {
+        if (layoutDescriptor) Object.defineProperty(scroll, "updateLayout", layoutDescriptor);
+        else Reflect.deleteProperty(scroll, "updateLayout");
+      }
+    }, removeInput }; reason = "installed";
   }
   return {
     mount,

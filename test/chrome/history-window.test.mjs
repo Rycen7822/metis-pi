@@ -20,7 +20,7 @@ class Block {
   render(width) { this.renders++; return Array.from({ length: this.count }, (_, i) => `${this.id}:${i}`.slice(0, width)); }
   invalidate() { this.invalidations++; }
   setText(text) { this.id = text; }
-  handleMouse(event) { this.clicked = event.y; return { handled: true }; }
+  handleMouse(event) { if (event.type === "wheel") return; this.clicked = event.y; return { handled: true }; }
 }
 const longHistory = () => Array.from({ length: 120 }, (_, i) => new Block(i));
 const renderCount = (blocks) => blocks.reduce((sum, block) => sum + block.renders, 0);
@@ -47,8 +47,12 @@ function setup(t, blocks = longHistory(), width = 80) {
     scroll.scrollBy(direction === "older" ? -1 : 1);
     render();
   };
+  const wheel = (direction) => {
+    tui.handleTerminalInput(`\x1b[<${direction === "older" ? 64 : 65};10;5M`);
+    render();
+  };
   render();
-  return { source, scroll, tui, terminal, system, lines, render, page };
+  return { source, scroll, tui, terminal, system, lines, render, page, wheel };
 }
 
 test("initial replay and resize stop at a 5000-row suffix; warm scroll never renders source blocks", (t) => {
@@ -109,6 +113,54 @@ test("source updates, append, replacement and disposal preserve ownership", (t) 
   assert.doesNotThrow(() => { unopened.dispose(); unopened.dispose(); });
 });
 
+for (const update of ["append", "stream"]) {
+  test(`${update} while reading: wheel-up from a short tail page stays near the reading position`, (t) => {
+    const blocks = longHistory();
+    const view = setup(t, blocks);
+    view.wheel("older");
+    if (update === "append") view.source.addChild(new Block("appended", 1));
+    else { blocks.at(-1).count++; blocks.at(-1).invalidate(); }
+    view.render();
+    for (let i = 0; i < 3; i++) view.wheel("newer");
+    assert.equal(view.scroll.contentHeight, 22, "paging into new output leaves a short tail and a larger thumb");
+    assert.equal(view.scroll.scrollTop, 0);
+
+    view.wheel("older");
+    assert.equal(view.scroll.contentHeight, HISTORY_ROW_BUDGET);
+    assert.equal(view.scroll.scrollTop, HISTORY_ROW_BUDGET - view.scroll.viewportHeight,
+      "restore against the new page height, not the old 22-row tail");
+    assert.equal(view.lines()[view.scroll.scrollTop], "119:81", "keep the overlapping recent messages visible");
+    assert.equal(view.tui.currentLayout.root.children[0].rect.y, -view.scroll.scrollTop,
+      "the first committed frame uses the restored position for native geometry");
+    const top = view.scroll.scrollTop;
+    view.wheel("older");
+    assert.equal(view.scroll.scrollTop, top - 1, "a committed target must not override later wheel events");
+
+    view.tui.scrollToBottom(); view.render();
+    view.source.addChild(new Block("latest", 1)); view.render();
+    assert.equal(view.lines().at(-1), "latest:0");
+    assert.equal(view.scroll.isFollowingEnd, true);
+  });
+}
+
+test("content reflow restores the reading anchor after the new content and viewport sizes are committed", (t) => {
+  const prefix = new Block("prefix", 30);
+  const view = setup(t, [prefix, new Block("body", 100)]);
+  view.scroll.scrollBy(-30); view.render();
+  assert.equal(view.lines()[view.scroll.scrollTop], "body:50");
+  prefix.count = 300; prefix.invalidate();
+  view.terminal.rows = 40;
+  view.render();
+  assert.equal(view.scroll.scrollTop, 350, "a grown prefix can move the anchor beyond the old scroll limit");
+  assert.equal(view.lines()[view.scroll.scrollTop], "body:50");
+  assert.equal(view.scroll.isFollowingEnd, false);
+  prefix.count = 20; prefix.invalidate();
+  view.render();
+  assert.equal(view.scroll.scrollTop, 70);
+  assert.equal(view.lines()[view.scroll.scrollTop], "body:50");
+  assert.equal(view.scroll.isFollowingEnd, false, "clamping during shrink must not resume following");
+});
+
 test("giant boundary block is sliced with collectible native/mirror caches and exact selected text", (t) => {
   const text = Array.from({ length: 6000 }, (_, i) => `line ${i}`).join("\n");
   const block = new Tui.Text(text, 0, 0);
@@ -155,6 +207,47 @@ test("native top and bottom navigation jump across pages within the row budget",
   view.system.dispose();
   assert.equal(Object.hasOwn(view.scroll, "scrollToStart"), false);
   assert.equal(Object.hasOwn(view.scroll, "scrollToEnd"), false);
+  assert.equal(Object.hasOwn(view.scroll, "updateLayout"), false);
+  assert.equal(view.scroll.updateLayout, Tui.ScrollView.prototype.updateLayout);
+});
+
+for (const end of ["Top", "Bottom"]) {
+  test(`jump to ${end.toLowerCase()} supersedes a page waiting for layout`, (t) => {
+    const view = setup(t);
+    view.scroll.scrollTo(0, { disableFollow: true });
+    view.scroll.scrollBy(-1);
+    view.tui[`scrollTo${end}`](); view.render();
+    assert.equal(view.scroll.scrollTop, end === "Top" ? 0 : view.scroll.contentHeight - view.scroll.viewportHeight);
+    assert.equal(end === "Top" ? view.lines()[0] : view.lines().at(-1), end === "Top" ? "0:0" : "119:99");
+    assert.equal(view.scroll.isFollowingEnd, end === "Bottom");
+  });
+}
+
+test("selection holds an uncommitted page position until its new rows can be laid out", (t) => {
+  const view = setup(t);
+  view.scroll.scrollTo(0, { disableFollow: true }); view.render();
+  const committed = view.lines();
+  view.scroll.scrollBy(-1);
+  view.tui.getSelectionBounds = () => ({ start: { row: 1, col: 0, scrollView: view.scroll }, end: { row: 1, col: 1, scrollView: view.scroll } });
+  view.render();
+  assert.equal(view.lines(), committed);
+  assert.equal(view.scroll.scrollTop, 0, "a pending target must not move the frozen frame");
+  view.tui.getSelectionBounds = () => undefined; view.render();
+  assert.notEqual(view.lines(), committed);
+  assert.equal(view.scroll.scrollTop, view.scroll.contentHeight - view.scroll.viewportHeight);
+});
+
+test("dispose cancels a pending position without replacing a later layout wrapper", (t) => {
+  const view = setup(t);
+  const captured = view.scroll.updateLayout;
+  const foreign = function (...args) { return captured.apply(this, args); };
+  view.scroll.updateLayout = foreign;
+  view.scroll.scrollTo(0, { disableFollow: true });
+  view.scroll.scrollBy(-1);
+  view.system.dispose();
+  assert.equal(view.scroll.updateLayout, foreign);
+  view.scroll.updateLayout(100, 20, () => {});
+  assert.equal(view.scroll.scrollTop, 0, "a captured hook must not apply a disposed window's pending target");
 });
 
 test("submitting input releases the selected window so command output can appear", (t) => {
