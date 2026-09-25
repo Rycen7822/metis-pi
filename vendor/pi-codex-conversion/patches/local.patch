@@ -2480,8 +2480,68 @@ index 0000000..e5dae54
 +}
 +
 +export type { ToolReference };
+diff --git a/src/tools/apply-patch/display-broker.ts b/src/tools/apply-patch/display-broker.ts
+index 62f8c68..a831ee7 100644
+--- a/src/tools/apply-patch/display-broker.ts
++++ b/src/tools/apply-patch/display-broker.ts
+@@ -53,27 +53,33 @@ interface ActiveApplyPatchDisplay {
+ 	recordOutcome(toolCallId: string, outcome: CapturedApplyPatchOutcome): void;
+ }
+ 
+-let activeDisplay: ActiveApplyPatchDisplay | undefined;
++// The appearance entry must see the tool entry's controller even when Pi's
++// per-extension Jiti contexts cannot share a native ESM module instance.
++const displayKey = Symbol.for(`metis-pi.apply-patch-display:${import.meta.url}`);
++const sharedDisplay = globalThis as typeof globalThis & {
++	[displayKey]?: { active: ActiveApplyPatchDisplay | undefined };
++};
++const display = sharedDisplay[displayKey] ??= { active: undefined };
+ 
+ export function shouldCompactApplyPatchDisplay(
+ 	toolCallId?: string,
+ 	executionStarted?: boolean,
+ ): boolean {
+-	return activeDisplay?.shouldCompact(toolCallId, executionStarted) ?? false;
++	return display.active?.shouldCompact(toolCallId, executionStarted) ?? false;
+ }
+ 
+ export function recordApplyPatchDisplayInput(
+ 	toolCallId: string,
+ 	input: string,
+ ): void {
+-	activeDisplay?.recordInput(toolCallId, input);
++	display.active?.recordInput(toolCallId, input);
+ }
+ 
+ export function recordApplyPatchDisplayOutcome(
+ 	toolCallId: string,
+ 	outcome: CapturedApplyPatchOutcome,
+ ): void {
+-	activeDisplay?.recordOutcome(toolCallId, outcome);
++	display.active?.recordOutcome(toolCallId, outcome);
+ }
+ 
+ export function registerApplyPatchDisplayBroker(pi: ExtensionAPI): void {
+@@ -120,7 +126,7 @@ export function registerApplyPatchDisplayBroker(pi: ExtensionAPI): void {
+ 			captured.set(toolCallId, { ...call, ...outcome });
+ 		},
+ 	};
+-	activeDisplay = controller;
++	display.active = controller;
+ 
+ 	const announce = () => {
+ 		if (active) pi.events.emit(APPLY_PATCH_DISPLAY_AVAILABLE_CHANNEL, broker);
+@@ -184,7 +190,7 @@ export function registerApplyPatchDisplayBroker(pi: ExtensionAPI): void {
+ 		emitted.clear();
+ 		activeCalls.clear();
+ 		displayedCalls.clear();
+-		if (activeDisplay === controller) activeDisplay = undefined;
++		if (display.active === controller) display.active = undefined;
+ 	});
+ 	announce();
+ }
 diff --git a/src/tools/apply-patch/render-state.ts b/src/tools/apply-patch/render-state.ts
-index d6d50e3..910a51e 100644
+index d6d50e3..a08f542 100644
 --- a/src/tools/apply-patch/render-state.ts
 +++ b/src/tools/apply-patch/render-state.ts
 @@ -1,14 +1,15 @@
@@ -2508,18 +2568,28 @@ index d6d50e3..910a51e 100644
  }
  
  export interface ApplyPatchSuccessDetails {
-@@ -26,6 +27,10 @@ export type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartial
+@@ -24,7 +25,19 @@ export interface ApplyPatchPartialFailureDetails {
  
- const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
+ export type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDetails;
  
+-const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
++// Pi loads extension entries in separate Jiti module contexts when host peers
++// aren't installed beside a package. Keep one store per physical module URL so
++// appearance and the tool read the same pre-mutation snapshot in normal installs.
++// Existing session cleanup still clears this store; separate checkouts stay isolated.
++const renderStateKey = Symbol.for(`metis-pi.apply-patch-render-state:${import.meta.url}`);
++const sharedRenderState = globalThis as typeof globalThis & {
++	[renderStateKey]?: Map<string, ApplyPatchRenderState>;
++};
++const applyPatchRenderStates = sharedRenderState[renderStateKey] ??= new Map<string, ApplyPatchRenderState>();
++
 +export function getApplyPatchRenderSnapshot(toolCallId: string): ApplyPatchRenderSnapshot | undefined {
 +	return applyPatchRenderStates.get(toolCallId);
 +}
-+
+ 
  export function isApplyPatchToolDetails(details: unknown): details is ApplyPatchToolDetails {
  	if (!details || typeof details !== "object") return false;
- 	const record = details as Record<string, unknown>;
-@@ -63,11 +68,10 @@ export function setApplyPatchRenderState(
+@@ -63,11 +76,10 @@ export function setApplyPatchRenderState(
  	cwd: string,
  	status: "pending" | "partial_failure" | "failed" = "pending",
  	failedTargets?: string[],
@@ -2534,7 +2604,7 @@ index d6d50e3..910a51e 100644
  }
  
  export function markApplyPatchPartialFailure(toolCallId: string, failedTargets?: string[]): void {
-@@ -94,7 +98,7 @@ function markFailedTargetLine(line: string, failedTarget: string): string | unde
+@@ -94,7 +106,7 @@ function markFailedTargetLine(line: string, failedTarget: string): string | unde
  	return undefined;
  }
  
@@ -2543,7 +2613,7 @@ index d6d50e3..910a51e 100644
  	const lines = text.split("\n");
  	if (lines.length === 0) return theme.fg("warning", "• Edit partially failed");
  	lines[0] = lines[0]!.replace(/^• (Added|Edited|Deleted)\b/, "• Edit partially failed");
-@@ -118,7 +122,7 @@ function renderPartialFailureCall(text: string, theme: { fg(role: string, text:
+@@ -118,7 +130,7 @@ function renderPartialFailureCall(text: string, theme: { fg(role: string, text:
  	}).join("\n");
  }
  
@@ -2552,7 +2622,7 @@ index d6d50e3..910a51e 100644
  	const lines = text.split("\n");
  	if (lines.length === 0) return theme.fg("error", "• Edit failed");
  	lines[0] = lines[0]!.replace(/^• (Added|Edited|Deleted)\b/, "• Edit failed");
-@@ -143,13 +147,12 @@ export function renderApplyPatchCallFromState(args: { input?: unknown | undefine
+@@ -143,13 +155,12 @@ export function renderApplyPatchCallFromState(args: { input?: unknown | undefine
  	const patchText = typeof args.input === "string" ? args.input : "";
  	if (patchText.trim().length === 0) return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
  	const cached = context?.toolCallId ? applyPatchRenderStates.get(context.toolCallId) : undefined;

@@ -1,15 +1,19 @@
 import { APPLY_PATCH_DISPLAY_AVAILABLE_CHANNEL, APPLY_PATCH_DISPLAY_PROTOCOL, APPLY_PATCH_DISPLAY_REQUEST_CHANNEL, isApplyPatchDisplayRequest, } from "./display-protocol.js";
 import { isApplyPatchToolDetails, } from "./render-state.js";
 const MAX_DISPLAY_IDS = 256;
-let activeDisplay;
+// The appearance entry must see the tool entry's controller even when Pi's
+// per-extension Jiti contexts cannot share a native ESM module instance.
+const displayKey = Symbol.for(`metis-pi.apply-patch-display:${import.meta.url}`);
+const sharedDisplay = globalThis;
+const display = sharedDisplay[displayKey] ??= { active: undefined };
 export function shouldCompactApplyPatchDisplay(toolCallId, executionStarted) {
-    return activeDisplay?.shouldCompact(toolCallId, executionStarted) ?? false;
+    return display.active?.shouldCompact(toolCallId, executionStarted) ?? false;
 }
 export function recordApplyPatchDisplayInput(toolCallId, input) {
-    activeDisplay?.recordInput(toolCallId, input);
+    display.active?.recordInput(toolCallId, input);
 }
 export function recordApplyPatchDisplayOutcome(toolCallId, outcome) {
-    activeDisplay?.recordOutcome(toolCallId, outcome);
+    display.active?.recordOutcome(toolCallId, outcome);
 }
 export function registerApplyPatchDisplayBroker(pi) {
     const registrations = new Map();
@@ -64,7 +68,7 @@ export function registerApplyPatchDisplayBroker(pi) {
             captured.set(toolCallId, { ...call, ...outcome });
         },
     };
-    activeDisplay = controller;
+    display.active = controller;
     const announce = () => {
         if (active)
             pi.events.emit(APPLY_PATCH_DISPLAY_AVAILABLE_CHANNEL, broker);
@@ -129,8 +133,8 @@ export function registerApplyPatchDisplayBroker(pi) {
         emitted.clear();
         activeCalls.clear();
         displayedCalls.clear();
-        if (activeDisplay === controller)
-            activeDisplay = undefined;
+        if (display.active === controller)
+            display.active = undefined;
     });
     announce();
 }

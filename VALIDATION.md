@@ -6,7 +6,7 @@ Baseline integration checks below were recorded after `e01d1ca` on 2026-09-22 wi
 
 | Check | Result |
 | --- | --- |
-| apply_patch display regression | `npm test`: 361/361; `npm run check`, `vendor:check` and `test:host`: exit 0. Vendor build and local patch regenerated. Installed Pi 0.87.1 fresh-loader probe passed in folded, expanded and re-folded states; PTY and pristine patch replay were not rerun for this change. |
+| apply_patch display regression | `npm test`: 363/363; `npm run check`, `vendor:check` and `test:host`: exit 0. Vendor build and local patch regenerated. Installed Pi 0.87.1 fresh-loader probe against the development checkout passed in folded, expanded and re-folded states. A subsequent normal Git installation exposed module-local state isolation; separate Jiti-context regressions now cover shared snapshot, failure state, compact policy and shutdown. PTY and pristine patch replay were not rerun for this change. |
 | `env -u NO_COLOR npm run verify` | Exit 0: 343/343 tests, project/vendor type checks, vendor activation, real Pi 0.87.0 host smoke and package dry-run. |
 | `npm run check:core` | Exit 0. Pure rendering/state code retains the host-effect boundary. |
 | `npm run preview` | Exit 0. Message separators resolve through object identity; plaintext matches the committed preview. ANSI/HTML were regenerated. |

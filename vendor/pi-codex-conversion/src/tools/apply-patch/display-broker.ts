@@ -53,27 +53,33 @@ interface ActiveApplyPatchDisplay {
 	recordOutcome(toolCallId: string, outcome: CapturedApplyPatchOutcome): void;
 }
 
-let activeDisplay: ActiveApplyPatchDisplay | undefined;
+// The appearance entry must see the tool entry's controller even when Pi's
+// per-extension Jiti contexts cannot share a native ESM module instance.
+const displayKey = Symbol.for(`metis-pi.apply-patch-display:${import.meta.url}`);
+const sharedDisplay = globalThis as typeof globalThis & {
+	[displayKey]?: { active: ActiveApplyPatchDisplay | undefined };
+};
+const display = sharedDisplay[displayKey] ??= { active: undefined };
 
 export function shouldCompactApplyPatchDisplay(
 	toolCallId?: string,
 	executionStarted?: boolean,
 ): boolean {
-	return activeDisplay?.shouldCompact(toolCallId, executionStarted) ?? false;
+	return display.active?.shouldCompact(toolCallId, executionStarted) ?? false;
 }
 
 export function recordApplyPatchDisplayInput(
 	toolCallId: string,
 	input: string,
 ): void {
-	activeDisplay?.recordInput(toolCallId, input);
+	display.active?.recordInput(toolCallId, input);
 }
 
 export function recordApplyPatchDisplayOutcome(
 	toolCallId: string,
 	outcome: CapturedApplyPatchOutcome,
 ): void {
-	activeDisplay?.recordOutcome(toolCallId, outcome);
+	display.active?.recordOutcome(toolCallId, outcome);
 }
 
 export function registerApplyPatchDisplayBroker(pi: ExtensionAPI): void {
@@ -120,7 +126,7 @@ export function registerApplyPatchDisplayBroker(pi: ExtensionAPI): void {
 			captured.set(toolCallId, { ...call, ...outcome });
 		},
 	};
-	activeDisplay = controller;
+	display.active = controller;
 
 	const announce = () => {
 		if (active) pi.events.emit(APPLY_PATCH_DISPLAY_AVAILABLE_CHANNEL, broker);
@@ -184,7 +190,7 @@ export function registerApplyPatchDisplayBroker(pi: ExtensionAPI): void {
 		emitted.clear();
 		activeCalls.clear();
 		displayedCalls.clear();
-		if (activeDisplay === controller) activeDisplay = undefined;
+		if (display.active === controller) display.active = undefined;
 	});
 	announce();
 }

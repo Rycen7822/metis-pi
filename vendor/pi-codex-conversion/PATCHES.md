@@ -72,6 +72,13 @@ files instead of falling back to the native text painter. Compact preferences, f
 third-party tools and execution remain unchanged. `scripts/host-smoke.mjs` checks
 real multi-file patch execution and rendering, including CJK wrapping and deletion.
 
+Snapshot and display-controller storage is keyed by physical module URL on
+`globalThis`: Pi uses isolated Jiti contexts per extension when a normal install
+omits host peers, so module-local state alone is not a cross-entry contract.
+Existing clear/shutdown paths still own cleanup, and separate installs stay isolated.
+`test/transcript/apply-patch-module-context.test.mjs` checks isolated contexts,
+failure updates, compact policy and cleanup.
+
 ## Maintenance verification
 
 Run project/vendor checks and real built-provider tests. Rebuild twice to check deterministic output; regenerate the patch twice to check idempotence. Apply it to an isolated pristine 3.0.34 source copy using the documented payload exclusions and compare file contents and modes. New-file diff headers must use `a/src/` and `b/src/` on both sides. Do not remove unified-diff context prefixes to silence patch-file whitespace diagnostics.

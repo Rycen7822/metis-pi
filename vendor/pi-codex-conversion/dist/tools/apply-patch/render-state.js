@@ -1,5 +1,11 @@
 import { buildApplyPatchPreviews, formatApplyPatchCollapsedDiff, formatApplyPatchSummary, renderApplyPatchCall } from "./rendering.js";
-const applyPatchRenderStates = new Map();
+// Pi loads extension entries in separate Jiti module contexts when host peers
+// aren't installed beside a package. Keep one store per physical module URL so
+// appearance and the tool read the same pre-mutation snapshot in normal installs.
+// Existing session cleanup still clears this store; separate checkouts stay isolated.
+const renderStateKey = Symbol.for(`metis-pi.apply-patch-render-state:${import.meta.url}`);
+const sharedRenderState = globalThis;
+const applyPatchRenderStates = sharedRenderState[renderStateKey] ??= new Map();
 export function getApplyPatchRenderSnapshot(toolCallId) {
     return applyPatchRenderStates.get(toolCallId);
 }

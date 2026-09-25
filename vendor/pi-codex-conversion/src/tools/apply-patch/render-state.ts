@@ -25,7 +25,15 @@ export interface ApplyPatchPartialFailureDetails {
 
 export type ApplyPatchToolDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDetails;
 
-const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
+// Pi loads extension entries in separate Jiti module contexts when host peers
+// aren't installed beside a package. Keep one store per physical module URL so
+// appearance and the tool read the same pre-mutation snapshot in normal installs.
+// Existing session cleanup still clears this store; separate checkouts stay isolated.
+const renderStateKey = Symbol.for(`metis-pi.apply-patch-render-state:${import.meta.url}`);
+const sharedRenderState = globalThis as typeof globalThis & {
+	[renderStateKey]?: Map<string, ApplyPatchRenderState>;
+};
+const applyPatchRenderStates = sharedRenderState[renderStateKey] ??= new Map<string, ApplyPatchRenderState>();
 
 export function getApplyPatchRenderSnapshot(toolCallId: string): ApplyPatchRenderSnapshot | undefined {
 	return applyPatchRenderStates.get(toolCallId);
