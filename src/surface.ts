@@ -1,6 +1,5 @@
 // Composer surface painting (OpenCode-style gray prompt surface, Codex-neutral
-// hue). One painter, three consumers (editor, composer metadata, and any
-// future surface block) so the bg RGB is defined exactly once here.
+// hue). The editor owns this painter so the bg RGB is defined exactly once.
 //
 // A stateless "wrap the row in bg…49m" is NOT equivalent (same trap as DIM):
 // the host editor emits inner resets — the cursor cell is `\x1b[7m \x1b[0m` —
@@ -45,7 +44,7 @@ export interface SurfaceOps {
 }
 
 /** Host marker that is zero-width on screen but occupies string length. */
-const CURSOR_MARKER = "\x1b_pi:c\x07";
+export const CURSOR_MARKER = "\x1b_pi:c\x07";
 
 /** Built by index.ts; the pad-to-width uses our own CJK-aware measurement
  * (pi-tui does not export applyBackgroundToLine from its index). */

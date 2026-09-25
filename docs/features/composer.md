@@ -15,7 +15,7 @@
 
 - 去掉整条 accent 边框，改为低对比 **`#1f1f1f`** 背景面（`src/surface.ts` 的 `COMPOSER_BG`）。
 - 降级：truecolor 精确色；ansi256 用最近灰阶；ansi16 / `NO_COLOR` **无背景**但**布局完全不变**。
-- **仍继承宿主 `CustomEditor`**：编辑状态机、补全、鼠标命中、光标几何都不动；宿主的 paddingX 会在自定义编辑器上被重新套用（`src/chrome/editor.ts` 有说明）。
+- **仍继承宿主 `CustomEditor`**：编辑状态机、补全、鼠标命中、光标几何都不动；宿主的 paddingX 会在自定义编辑器上被重新套用（`src/chrome/editor.ts` 有说明）。输入光标只在绘制阶段将反色方块替换为一格宽的左边缘细竖线 `▏`，保留用于输入法定位的宿主 marker；不会修改提交文本。
 - 原 padding 行改为 surface 着色的 padding 行，滚动指示 `↑ N more` / `↓ N more` 保留。
 
 ### 2. `> ` 提示符（`composer.promptPrefix`）
@@ -49,7 +49,7 @@
 | --- | --- |
 | surface 颜色与降级 | `src/surface.ts` 的 `COMPOSER_BG`、`surfacePaint` |
 | editor 工厂与选项 | `src/chrome/editor.ts` 的 `makeCodexEditorFactory`（`paddingX` / `placeholder` / `promptPrefix` / `skillTrigger` / `selectionCopy`） |
-| `> ` 与占位符 | 同文件（padding 行替换逻辑） |
+| `> `、占位符、细竖线光标 | 同文件（padding 行替换逻辑及光标格绘制） |
 | 模型和上下文信息 | `src/chrome/footer.ts` 的 `layoutFooter` |
 | 数据快照 | `src/chrome/snapshots.ts` |
 | 安装/卸载 | `src/chrome/install.ts` |

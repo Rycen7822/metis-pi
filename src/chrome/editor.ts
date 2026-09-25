@@ -15,6 +15,8 @@
 
 import { CODEX_CYAN_RGB } from "../palette.ts";
 import { isSkillPrefixOnly } from "../skill-tokens.ts";
+import { cellWidth } from "../segments.ts";
+import { CURSOR_MARKER } from "../surface.ts";
 
 /** Minimal structural types for the host pieces we touch (no imports). */
 export interface CodexEditorRowHost {
@@ -45,6 +47,8 @@ export interface CodexEditorHost {
     keybindings: unknown,
     options?: { embedWorkingStatus?: boolean; paddingX?: number },
   ) => CodexEditorRowHost;
+  /** Native terminal-cell width, including combined emoji and wide graphemes. */
+  visibleWidth?: (text: string) => number;
 }
 
 export interface CodexSurfaceOps {
@@ -75,6 +79,26 @@ export interface CodexEditorFactoryInput {
 }
 
 const CURSOR_CELL = "\x1b[7m \x1b[0m";
+
+/** The stock editor paints a reverse-video cell after the IME cursor marker.
+ * Replace only that cell with a one-column left-edge caret, never the marker
+ * or the underlying editor text. A wide grapheme still occupies its original
+ * number of cells, so mouse/IME/autocomplete geometry cannot shift. */
+function paintCaret(row: string, paint: (text: string) => string, measure: (text: string) => number): string {
+  const markerAt = row.indexOf(CURSOR_MARKER);
+  if (markerAt < 0) return row;
+  const cursorAt = markerAt + CURSOR_MARKER.length;
+  const reverse = "\x1b[7m";
+  const reset = "\x1b[0m";
+  if (!row.startsWith(reverse, cursorAt)) return row;
+  const glyphAt = cursorAt + reverse.length;
+  const end = row.indexOf(reset, glyphAt);
+  if (end < 0) return row;
+  const cells = Math.max(1, measure(row.slice(glyphAt, end)));
+  // Keep the host reset (the surface painter reasserts its bg after it):
+  // style from a prior text span must not bleed into the rest of this row.
+  return `${row.slice(0, cursorAt)}${paint("▏")}${" ".repeat(cells - 1)}${row.slice(end)}`;
+}
 
 /**
  * Force the completion query the host skips for the second skill trigger.
@@ -107,6 +131,11 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
   const surface = input.surface;
   const paddingX = input.paddingX ?? 2;
   const placeholder = input.placeholder ?? "Ask anything...";
+  const paintCursor = (row: string) => paintCaret(
+    row,
+    (text) => surface ? surface.paintGlyph(text, "accent") : accent(text),
+    input.host.visibleWidth ?? cellWidth,
+  );
 
   class CodexSurfaceEditor extends input.host.CustomEditor {
     // The host re-applies ITS default paddingX to custom editors after
@@ -146,7 +175,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
 
     override render(width: number): string[] {
       const rows = super.render(width);
-      if (!surface || rows.length === 0) return rows;
+      if (!surface || rows.length === 0) return rows.map(paintCursor);
       // Base Editor.render row structure (verified in pi-tui editor.js):
       // [topBorder, ...body rows..., bottomBorder, ...autocomplete rows...].
       // The first BODY row is therefore always index 1 — structural, not a
@@ -175,7 +204,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
         }
         painted[1] = surface.paintRow(decorated, width);
       }
-      return painted;
+      return painted.map(paintCursor);
     }
   }
 

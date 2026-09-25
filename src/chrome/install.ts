@@ -47,7 +47,7 @@ export interface ChromeDeps {
   hostData: HostData;
   /** Terminal color capability, resolved once at boot. */
   colorLevel: ColorLevel;
-  editorHost: { CustomEditor: unknown } | undefined;
+  editorHost: { CustomEditor: unknown; visibleWidth?: (text: string) => number } | undefined;
   surface: CodexSurfaceOps | undefined;
   /** Real versions for the header identity line. */
   appearanceVersion: string | undefined;

@@ -338,6 +338,54 @@ test("editor factory: surface mode replaces borders; legacy mode keeps accent bo
   assert.match(legacy.render(40).join("\n"), /─{10}/, "legacy border mode intact");
 });
 
+test("focused editor paints a thin caret without moving the host cursor marker or text", async () => {
+  const { makeCodexEditorFactory } = await import("../../src/chrome/editor.ts");
+  const { CURSOR_MARKER } = await import("../../src/surface.ts");
+  const { visibleWidth } = await import("@earendil-works/pi-tui");
+  const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  class HostEditor {
+    focused = true;
+    text = "";
+    cursor = 0;
+    renderTopBorder(width) { return " ".repeat(width); }
+    renderBottomBorder(width) { return " ".repeat(width); }
+    getPaddingX() { return 2; }
+    setPaddingX() {}
+    getText() { return this.text; }
+    render(width) {
+      const before = this.text.slice(0, this.cursor);
+      const after = this.text.slice(this.cursor);
+      const first = [...graphemes.segment(after)][0]?.segment ?? " ";
+      const rest = after ? after.slice(first.length) : "";
+      const cell = `${this.focused ? CURSOR_MARKER : ""}\x1b[7m${first}\x1b[0m`;
+      const body = `  ${before}${cell}${rest}`;
+      const pad = " ".repeat(Math.max(0, width - visibleWidth(body) - 2));
+      return [this.renderTopBorder(width), `${body}${pad}  `, this.renderBottomBorder(width)];
+    }
+  }
+  const surface = { paintRow: (row) => row, paintGlyph: (text) => text };
+  const host = { CustomEditor: HostEditor, visibleWidth };
+  const makeEditor = (withSurface) => makeCodexEditorFactory({ host, surface: withSurface ? surface : undefined, accent: (s) => s })({}, {}, {});
+  const strip = (line) => line.replaceAll(CURSOR_MARKER, "").replace(/\x1b\[[\d;]*m/g, "");
+
+  for (const withSurface of [true, false]) {
+    const editor = makeEditor(withSurface);
+    for (const [text, offset] of [["", 0], ["abc", 1], ["你a", 0], ["👩‍👩‍👦a", 0], ["éa", 0]]) {
+      editor.text = text;
+      editor.cursor = offset;
+      const rows = editor.render(45);
+      assert.ok(rows[1].includes(`${CURSOR_MARKER}▏`), "caret drawn exactly at the native IME marker");
+      assert.doesNotMatch(rows[1], /\x1b\[7m/, "no inverse-video block remains while focused");
+      assert.match(rows[1], /▏ *\x1b\[0m/, "host styling reset still follows the caret");
+      assert.equal(visibleWidth(strip(rows[1])), 45, "same physical row width even for wide/combined graphemes");
+      assert.equal(editor.getText(), text, "draft content unchanged");
+      if (text === "" && withSurface) assert.match(rows[1], /▏\x1b\[0mAsk anything\.\.\./, "placeholder follows thin caret");
+    }
+    editor.focused = false;
+    assert.doesNotMatch(editor.render(45)[1], /▏/, "inactive editor does not paint a fake caret");
+  }
+});
+
 test("editor factory: the composer forces the completion query for a second skill trigger", async () => {
   const { makeCodexEditorFactory } = await import("../../src/chrome/editor.ts");
   const calls = { triggers: 0 };

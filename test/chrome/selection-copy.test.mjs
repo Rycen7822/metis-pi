@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem, detectExternalSerializerPatch } from "../../src/selection-copy/index.ts";
 import { makeCodexEditorFactory } from "../../src/chrome/editor.ts";
+import { CURSOR_MARKER, makeSurfaceOps } from "../../src/surface.ts";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { fakeTerminal, sgr } from "../helpers.mjs";
 import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
@@ -114,6 +115,24 @@ function buildAltScreen(text, width = 80) {
   assert.ok(sys.installOnTui(tui), "instance serializer must install");
   return { tui, md, terminal };
 }
+
+test("real CustomEditor draws a bar instead of a block while keeping IME cursor position", () => {
+  const { tui } = buildAltScreen("", 80);
+  const keybindings = new Tui.KeybindingsManager(Tui.TUI_KEYBINDINGS);
+  const editor = makeCodexEditorFactory({
+    host: { CustomEditor, visibleWidth: Tui.visibleWidth },
+    surface: makeSurfaceOps({ kind: "truecolor" }, (text) => `\x1b[36m${text}\x1b[39m`, (text) => text),
+  })(tui, { fg: (_role, text) => text }, keybindings);
+  editor.focused = true;
+  for (const draft of ["", "hello", "你们 👩‍👩‍👦"]) {
+    editor.setText(draft);
+    const row = editor.render(80).find((line) => line.includes(CURSOR_MARKER));
+    assert.ok(row?.includes(`${CURSOR_MARKER}\x1b[36m▏`), "host's IME marker remains immediately before the bar");
+    assert.doesNotMatch(row, /\x1b\[7m/, "host inverse-video block removed");
+    assert.equal(Tui.visibleWidth(row), 80, "real surface row stays within terminal width");
+    assert.equal(editor.getText(), draft, "display does not change draft");
+  }
+});
 
 test("real TUI: mouse drag selects soft-wrapped CJK paragraph; copy is one logical line", () => {
   const text = "这是一个很长的中文段落用来测试软折行复制功能当我们把窗口调窄时中文字符会按宽度折行但复制时应该保持为一行逻辑文本。";

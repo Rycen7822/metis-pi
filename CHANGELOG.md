@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 输入框聚焦时将宿主反色方块光标绘制为细竖线；保留输入法定位 marker、宽字符占位与真实草稿内容。
 - 将模型 id、推理深度、provider 与上下文占用从输入框下沿的 metadata widget 移至 footer，与路径、会话 I/O、cache 按顺序排布；窄屏按字段换行，不再使用同底色 widget。
 - 移除右侧 footer 的重复 Codex 额度及其独立 app-server 查询、轮询、配置和诊断入口；不再在非 Codex 模型下显示历史额度，左侧 Codex adapter 自带状态行不受影响。
 - 后台 shell 面板支持左键单击展开、再次单击折叠（fullscreen 模式），与 `alt+w` 共用折叠状态；保留原有会话切换/关闭快捷键，拖动、滚轮和其他鼠标键不触发折叠。
