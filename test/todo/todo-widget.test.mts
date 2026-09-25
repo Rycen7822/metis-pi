@@ -12,15 +12,16 @@ import type { CodexTodoSystem } from "../../src/todo/tools.ts";
 const setup = () => {
   const dir = mkdtempSync(join(tmpdir(), "codex-todo-widget-"));
   let turn = 5;
+  let session = "sess-A";
   const store = openTodoStore(dir);
   const system: CodexTodoSystem = { store, turn: () => turn, changed: () => {} };
-  const widget = createTodoWidget({ system, sessionId: () => "sess-A" });
+  const widget = createTodoWidget({ system, sessionId: () => session });
   const calls: { key: string; content: unknown; options?: unknown }[] = [];
   const fakeUi = {
     setWidget: (key: string, content: unknown, options?: unknown) => calls.push({ key, content, options }),
   };
   widget.attach(fakeUi);
-  return { dir, store, system, widget, calls, turns: { set: (t: number) => { turn = t; }, get: () => turn } };
+  return { dir, store, system, widget, calls, turns: { set: (t: number) => { turn = t; }, get: () => turn }, setSession: (id: string) => { session = id; } };
 };
 
 const stateWith = async (store: ReturnType<typeof openTodoStore>, items: { title: string; parentId?: number }[]) => {
@@ -261,6 +262,84 @@ test("width truncation keeps lines within budget", async () => {
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unchanged frames reuse raw rows across component factories, but layout/session/turn changes rebuild", async (t) => {
+  const { dir, store, system, widget, turns, setSession } = setup();
+  t.after(() => { widget.detach(); store.dispose(); rmSync(dir, { recursive: true, force: true }); });
+  await stateWith(store, [{ title: "claimed task" }, { title: "completed task" }]);
+  await store.mutate((state) => claimTask(state, 1, "sess-A", 2));
+  await store.mutate((state) => completeTask(state, 2, "evidence", Date.now(), turns.get()));
+  const state = store.read();
+  let traversals = 0;
+  const tracked = { ...state, get tasks() { traversals += 1; return state.tasks; } };
+  system.store = { ...store, snapshot: () => tracked };
+  let color = "first";
+  const frame = (width = 80) => widget.component({}, { fg: (_tone, text) => `${color}:${text}` }).render(width).join("\n");
+  assert.match(frame(), /mine/);
+  const built = traversals;
+  for (let i = 0; i < 100; i += 1) frame();
+  assert.equal(traversals, built, "animation-only frames do not traverse/build the tree");
+  color = "second";
+  assert.match(frame(), /^second:Todos/);
+  assert.equal(traversals, built, "theme painting stays live without rebuilding rows");
+  frame(40);
+  assert.ok(traversals > built, "width invalidates layout");
+  setSession("sess-B");
+  assert.match(frame(), /sess-A/);
+  assert.doesNotMatch(frame(), /mine/);
+  turns.set(6);
+  assert.doesNotMatch(frame(), /completed task/, "turn invalidation folds completed rows");
+  widget.toggleExpanded();
+  assert.match(frame(), /click to collapse/);
+  widget.toggleExpanded();
+  assert.doesNotMatch(frame(), /click to collapse/);
+  const beforeDetach = traversals;
+  widget.detach();
+  frame();
+  assert.ok(traversals > beforeDetach, "detach releases the retained rows");
+});
+
+test("a visible component sees external edits and recovers from explicit, width-bounded snapshot failures", async (t) => {
+  const { dir, store, system, widget } = setup();
+  t.after(() => { widget.detach(); store.dispose(); rmSync(dir, { recursive: true, force: true }); });
+  await stateWith(store, [{ title: "before" }]);
+  const component = widget.component({});
+  assert.match(component.render(80).join("\n"), /before/);
+  const external = store.read();
+  external.tasks[0].title = "after external edit";
+  writeFileSync(join(dir, TODO_STATE_FILE), JSON.stringify(external));
+  assert.match(component.render(80).join("\n"), /after external edit/);
+
+  const snapshot = store.snapshot();
+  let traversals = 0;
+  let reads = 0;
+  let failure: Error | undefined;
+  const tracked = { ...snapshot, get tasks() { traversals += 1; return snapshot.tasks; } };
+  system.store = { ...store, snapshot() {
+    reads += 1;
+    if (failure) throw failure;
+    return tracked;
+  } };
+  assert.match(component.render(80).join("\n"), /after external edit/);
+  for (const code of ["EACCES", "EIO"]) {
+    const built = traversals;
+    failure = Object.assign(new Error("disk unavailable"), { code });
+    assert.deepEqual(component.render(80).filter(Boolean), ["Todos unavailable"], "no stale tasks or empty success");
+    for (const width of [0, 1, 8, 17, 80]) {
+      const before = reads;
+      const frame = component.render(width);
+      assert.ok(frame.every((line) => [...line].length <= width), `unavailable rows fit width ${width}`);
+      assert.equal(reads, before + 1, "failures are retried on every render, not cached");
+    }
+    assert.equal(traversals, built, "failed snapshots do not rebuild stale tasks");
+    failure = undefined;
+    assert.match(component.render(80).join("\n"), /after external edit/, "the next successful read recovers immediately");
+    assert.ok(traversals > built, "failure cleared rows even when recovery returns the same state identity");
+    const recovered = traversals;
+    component.render(80);
+    assert.equal(traversals, recovered, "successful frames still reuse their row cache");
   }
 });
 

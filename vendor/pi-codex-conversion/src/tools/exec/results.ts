@@ -1,5 +1,5 @@
 import type { ExecSessionSnapshot, UnifiedExecResult } from "./session-manager.ts";
-import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, truncateOutput, type ExecOutputSessionState } from "./output.ts";
+import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, type ExecOutputSessionState } from "./output.ts";
 
 export interface ExecResultSessionState extends ExecOutputSessionState {
 	id: number;
@@ -18,15 +18,8 @@ function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot:
 	return result;
 }
 
-export function makeExecResult<TSession extends ExecResultSessionState>(session: TSession, waitMs: number, maxOutputTokens: number | undefined, exposeSession: (session: TSession) => void, deleteSessionIfDrained: (sessionId: number) => void): UnifiedExecResult {
-	const consumed = consumeOutput(session, maxOutputTokens);
-	const result = fromSnapshot(session, waitMs, consumed);
-	if (session.exitCode === undefined || session.exitCode === null) {
-		exposeSession(session);
-	} else if (session.emittedOffset === session.bufferStartOffset + session.buffer.length) {
-		deleteSessionIfDrained(session.id);
-	}
-	return result;
+export function makeExecResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens: number | undefined): UnifiedExecResult {
+	return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens));
 }
 
 export function snapshotSession(session: ExecResultSessionState, maxOutputChars = 8_000): ExecSessionSnapshot {
@@ -43,7 +36,7 @@ export function snapshotSession(session: ExecResultSessionState, maxOutputChars 
 }
 
 export function makeSnapshotResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens?: number, unconsumedOnly = false): UnifiedExecResult {
-	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : truncateOutput(session.buffer, maxOutputTokens);
+	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : peekOutputSince(session, session.buffer.startOffset, maxOutputTokens);
 	return fromSnapshot(session, waitMs, snapshot);
 }
 

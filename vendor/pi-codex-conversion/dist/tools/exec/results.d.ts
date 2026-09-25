@@ -8,7 +8,7 @@ export interface ExecResultSessionState extends ExecOutputSessionState {
     updatedAt: number;
     terminating: boolean;
 }
-export declare function makeExecResult<TSession extends ExecResultSessionState>(session: TSession, waitMs: number, maxOutputTokens: number | undefined, exposeSession: (session: TSession) => void, deleteSessionIfDrained: (sessionId: number) => void): UnifiedExecResult;
+export declare function makeExecResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens: number | undefined): UnifiedExecResult;
 export declare function snapshotSession(session: ExecResultSessionState, maxOutputChars?: number): ExecSessionSnapshot;
 export declare function makeSnapshotResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens?: number, unconsumedOnly?: boolean): UnifiedExecResult;
 export declare function makeSnapshotSince(session: ExecResultSessionState, waitMs: number, baselineOffset: number, maxOutputTokens?: number): UnifiedExecResult;

@@ -40,7 +40,8 @@
 - `composer.metadata` 控制模型、推理深度、provider 和上下文信息；不依赖编辑区背景色或 `belowEditor` widget。
 - **额度**：右侧 footer 不读取或显示 Codex 额度；左侧 `Codex adapter` 状态行由 vendor 扩展提供，仍通过宿主 extension statuses 显示。
 - **未知值显示 `—`**，从不伪造为 0。
-- 刷新节奏：**2 秒轮询**（`GIT_CHANGES_INTERVAL_MS`）+ agent/tool 活动触发的 **250ms 去抖**（`GIT_CHANGES_DEBOUNCE_MS`）。
+- Git 刷新节奏：**2 秒轮询**（`GIT_CHANGES_INTERVAL_MS`）+ agent/tool 活动触发的 **250ms 去抖**（`GIT_CHANGES_DEBOUNCE_MS`）。仅在 TUI footer 安装成功、`footer.showChanges` 开启且有工作目录时启动；隐藏、重载或关闭后停止，不在不可见时后台采样。
+- 上下文用量由 `HostData` 缓存归一化结果；消息、模型、压缩及会话生命周期事件使缓存失效，同时校验宿主实时 session/leaf/model。Working 动画帧可复用结果，不逐帧重建历史投影；未知值仍为未知，临时读取失败不缓存成空成功。
 
 ## 统计口径（三个范围不混淆）
 

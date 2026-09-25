@@ -236,6 +236,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	let statusCtx: ExtensionContext | null = null;
 
 	function stopStatusTimer(): void {
+		statusCtx = null;
 		if (statusTimer === undefined) return;
 		clearInterval(statusTimer);
 		statusTimer = undefined;
@@ -323,12 +324,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 	}
 
 	function reconstructState(ctx: ExtensionContext): void {
+		stopStatusTimer();
 		state.restore(ctx.sessionManager.getBranch());
 		updateStatus(ctx);
 	}
 
 	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	pi.on("session_shutdown", async () => stopStatusTimer());
 
 	pi.on("before_agent_start", async (event) => {
 		const snapshot = state.snapshot();

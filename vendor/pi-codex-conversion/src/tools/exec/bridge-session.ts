@@ -1,6 +1,7 @@
 import { StringDecoder } from "node:string_decoder";
 import { getCodexShellArgs } from "../../adapter/prompt/runtime-shell.ts";
 import { chunkToBytes, createExecBridgeClient, type BridgeReadResponse } from "./bridge-client.ts";
+import type { ExecOutputBuffer } from "./output-buffer.ts";
 
 const EXIT_OUTPUT_GRACE_MS = 100;
 
@@ -19,8 +20,7 @@ export interface BridgeExecSession {
 	started: boolean;
 	tty: boolean;
 	command: string;
-	buffer: string;
-	bufferStartOffset: number;
+	buffer: ExecOutputBuffer;
 	emittedOffset: number;
 	outputVersion: number;
 	exitCode: number | null | undefined;
@@ -48,6 +48,7 @@ export interface BridgeSessionHooks {
 export interface BridgeSessionRuntime {
 	create(args: {
 		id: number;
+		buffer: ExecOutputBuffer;
 		input: BridgeExecInput;
 		workdir: string;
 		shell: string;
@@ -140,8 +141,7 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
 			started: false,
 			tty: Boolean(input.tty),
 			command: input.command,
-			buffer: "",
-			bufferStartOffset: 0,
+			buffer: args.buffer,
 			emittedOffset: 0,
 			outputVersion: 0,
 			exitCode: undefined,

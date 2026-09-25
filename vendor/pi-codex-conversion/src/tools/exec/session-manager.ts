@@ -3,6 +3,7 @@ import { createBridgeSessionRuntime, type BridgeExecSession, type BridgeSessionH
 import { DEFAULT_EXEC_YIELD_TIME_MS, DEFAULT_MAX_EMPTY_WRITE_YIELD_TIME_MS, DEFAULT_WRITE_YIELD_TIME_MS, clampExecYieldTime, clampWriteYieldTime, normalizeMinEmptyWriteYieldTime, normalizeMinNonInteractiveExecYieldTime, resolveExecution, resolveShell, resolveWorkdir } from "./shell.ts";
 import { registerAbortHandler, waitForExitOrInactivity } from "./wait.ts";
 import { makeExecResult, makeSnapshotResult, makeSnapshotSince, snapshotSession } from "./results.ts";
+import { ExecOutputBuffer } from "./output-buffer.ts";
 
 export interface UnifiedExecResult {
 	chunk_id: string;
@@ -136,10 +137,20 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 	function finishResult(session: ExecSession, waitMs: number, maxOutputTokens?: number): UnifiedExecResult {
 		const completed = session.exitCode !== undefined && session.exitCode !== null;
 		const replaySnapshot = completed ? makeSnapshotResult(session, waitMs, MAX_COMPLETED_SESSION_OUTPUT_TOKENS, true) : undefined;
-		const result = makeExecResult(session, waitMs, maxOutputTokens, exposeSession, (sessionId) => sessions.delete(sessionId));
-		if (!replaySnapshot || sessions.has(session.id)) return result;
-		rememberCompletedResult(session.id, { ...replaySnapshot, chunk_id: result.chunk_id, wall_time_seconds: result.wall_time_seconds });
+		const result = makeExecResult(session, waitMs, maxOutputTokens);
+		if (!replaySnapshot) {
+			exposeSession(session);
+		} else if (session.emittedOffset === session.buffer.endOffset) {
+			// Release only after successful consumption; publish replay last.
+			deleteSession(session);
+			rememberCompletedResult(session.id, { ...replaySnapshot, chunk_id: result.chunk_id, wall_time_seconds: result.wall_time_seconds });
+		}
 		return result;
+	}
+
+	function deleteSession(session: ExecSession): void {
+		sessions.delete(session.id);
+		session.buffer.dispose();
 	}
 
 	function notify(session: ExecSession, reason: ExecSessionChangeReason = "output"): void {
@@ -174,14 +185,8 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 	function appendOutput(session: ExecSession, text: string): void {
 		if (text.length === 0) return;
 		const output = session.tty ? text : normalizePipeOutput(text);
-		session.buffer += output;
+		session.buffer.append(output);
 		session.outputVersion += 1;
-		const maxSessionBufferChars = configuredMaxSessionBufferChars ?? (session.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS);
-		if (session.buffer.length > maxSessionBufferChars) {
-			const bounded = truncateToTail(session.buffer, maxSessionBufferChars);
-			session.buffer = bounded.output;
-			session.bufferStartOffset += bounded.removed;
-		}
 		notify(session);
 	}
 
@@ -205,6 +210,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 			const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
 			const session = bridgeSessions.create({
 				id: nextSessionId++,
+				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS)),
 				input: {
 					command: input.cmd,
 					executionCommand: execution.command,
@@ -247,12 +253,12 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 					idleTimeMs = Math.min(maxExecWaitMs, idleTimeMs * 2);
 				}
 				await bridgeSessions.waitForStartup(session, signal);
-				if (session.started) await bridgeSessions.poll(session, bridgeHooks, 0);
+				if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
 				if (session.exitCode === undefined || session.exitCode === null)
 					session.nextEmptyPollYieldMs = growEmptyPollYield(Math.max(execYieldMs, waitedMs), maxEmptyWriteYieldTimeMs);
 				return finishResult(session, waitedMs, input.max_output_tokens);
 			} catch (error) {
-				if (signal?.aborted) sessions.delete(session.id);
+				if (signal?.aborted) deleteSession(session);
 				throw error;
 			} finally {
 				abortCleanup();
@@ -274,7 +280,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 				}
 				throw new Error(`Unknown process id ${input.session_id}`);
 			}
-			const updateBaseline = session.bufferStartOffset + session.buffer.length;
+			const updateBaseline = session.buffer.endOffset;
 			const chars = input.chars ?? "";
 			const isEmptyPoll = chars.length === 0;
 			if (!isEmptyPoll) {
@@ -306,7 +312,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 						)
 					: 0;
 			await bridgeSessions.waitForStartup(session, signal);
-			if (session.started) await bridgeSessions.poll(session, bridgeHooks, 0);
+			if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
 			if (isEmptyPoll && (session.exitCode === undefined || session.exitCode === null))
 				session.nextEmptyPollYieldMs = growEmptyPollYield(effectiveYieldMs, maxEmptyWriteYieldTimeMs);
 			return finishResult(session, waitedMs, input.max_output_tokens);
@@ -344,13 +350,23 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 		},
 		shutdown: () => shutdownPromise ??= (async () => {
 			shuttingDown = true;
+			const failures: unknown[] = [];
 			try {
 				await bridgeSessions.shutdown();
-			} finally {
-				sessions.clear();
-				commandHistory.clear();
-				completedResults.clear();
+			} catch (error) {
+				failures.push(error);
 			}
+			// A single failed spool removal must not retain other sessions' fds,
+			// callbacks or output. Report cleanup failures after releasing all owners.
+			for (const session of sessions.values()) {
+				try { session.buffer.dispose(); } catch (error) { failures.push(error); }
+			}
+			sessions.clear();
+			commandHistory.clear();
+			completedResults.clear();
+			changeListeners.clear();
+			exitListeners.clear();
+			if (failures.length > 0) throw new AggregateError(failures, "Exec session shutdown failed");
 		})(),
 	};
 }

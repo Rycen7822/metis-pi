@@ -1,6 +1,6 @@
+import type { ExecOutputBuffer } from "./output-buffer.ts";
 export interface ExecOutputSessionState {
-    buffer: string;
-    bufferStartOffset: number;
+    buffer: ExecOutputBuffer;
     emittedOffset: number;
 }
 export declare function normalizePipeOutput(text: string): string;

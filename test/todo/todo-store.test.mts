@@ -1,6 +1,7 @@
 // codex-todo store tests — tmpdir only, never a real HOME.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,4 +143,121 @@ test("state file round-trips exact content", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("display snapshots parse once per file fingerprint; mutations keep fresh independent reads", async (t) => {
+  const dir = makeDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, TODO_STATE_FILE);
+  let reads = 0;
+  const store = openTodoStore(dir, { fs: {
+    ...fs,
+    readFileSync: ((...args: Parameters<typeof fs.readFileSync>) => {
+      if (args[0] === path) reads += 1;
+      return fs.readFileSync(...args);
+    }) as typeof fs.readFileSync,
+  } });
+  await store.mutate((state) => addTasks(state, [{ title: "one" }], 1));
+  reads = 0;
+  const snapshot = store.snapshot();
+  for (let i = 0; i < 100; i += 1) assert.equal(store.snapshot(), snapshot);
+  assert.equal(reads, 1, "one read/parse across unchanged frames");
+  await store.mutate((state) => {
+    assert.notEqual(state, snapshot, "mutators cannot change the shared display snapshot");
+    return addTasks(state, [{ title: "two" }], 2);
+  });
+  assert.equal(reads, 2, "the mutation re-read the file under its lock");
+  assert.equal(store.snapshot().tasks.length, 2);
+  assert.equal(reads, 3, "successful writes invalidate the display cache");
+  assert.equal(snapshot.tasks.length, 1);
+  store.dispose();
+  store.snapshot();
+  assert.equal(reads, 4, "dispose releases the cached state");
+});
+
+test("display snapshots see same-size external edits, atomic replacement, deletion and recreation", async (t) => {
+  const dir = makeDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = openTodoStore(dir);
+  const path = join(dir, TODO_STATE_FILE);
+  await store.mutate((state) => addTasks(state, [{ title: "aaa" }], 1));
+  const fixedTime = new Date("2020-01-01T00:00:00Z");
+  fs.utimesSync(path, fixedTime, fixedTime);
+  const first = store.snapshot();
+  const original = fs.statSync(path, { bigint: true });
+  const edit = readFileSync(path, "utf8").replace("aaa", "bbb");
+  writeFileSync(path, edit);
+  fs.utimesSync(path, fixedTime, fixedTime);
+  assert.equal(fs.statSync(path, { bigint: true }).mtimeNs, original.mtimeNs);
+  assert.equal(fs.statSync(path).size, Number(original.size));
+  assert.equal(store.snapshot().tasks[0].title, "bbb", "ctime detects rewrites with restored mtime");
+
+  const replacement = `${path}.new`;
+  writeFileSync(replacement, edit.replace("bbb", "ccc"));
+  fs.utimesSync(replacement, fixedTime, fixedTime);
+  fs.renameSync(replacement, path);
+  assert.equal(store.snapshot().tasks[0].title, "ccc", "inode detects atomic replacement");
+  fs.unlinkSync(path);
+  const missing = store.snapshot();
+  assert.equal(missing.tasks.length, 0);
+  assert.equal(store.snapshot(), missing, "absence also has a stable snapshot");
+  writeFileSync(path, JSON.stringify(first));
+  assert.equal(store.snapshot().tasks[0].title, "aaa");
+  writeFileSync(path, "{broken json");
+  assert.equal(store.snapshot().tasks.length, 0);
+  assert.equal(store.status().backups.length, 1, "corruption still follows the archival recovery contract");
+});
+
+test("stat/read failures never become cached empty lists or corrupt-file backups", async (t) => {
+  const dir = makeDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, TODO_STATE_FILE);
+  const writer = openTodoStore(dir);
+  await writer.mutate((state) => addTasks(state, [{ title: "keep me" }], 1));
+  let failure: "stat" | "read" | undefined;
+  const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+  const store = openTodoStore(dir, { fs: {
+    ...fs,
+    statSync: ((...args: Parameters<typeof fs.statSync>) => {
+      if (failure === "stat") throw denied;
+      return fs.statSync(...args);
+    }) as typeof fs.statSync,
+    readFileSync: ((...args: Parameters<typeof fs.readFileSync>) => {
+      if (failure === "read") throw denied;
+      return fs.readFileSync(...args);
+    }) as typeof fs.readFileSync,
+  } });
+  failure = "read";
+  assert.throws(() => store.snapshot(), denied);
+  await assert.rejects(store.mutate((state) => addTasks(state, [{ title: "must not overwrite" }], 2)), denied);
+  assert.ok(existsSync(path));
+  assert.equal(readdirSync(dir).filter((name) => name.includes(".bak-")).length, 0);
+  failure = undefined;
+  assert.equal(store.snapshot().tasks[0].title, "keep me", "retry succeeds without a cached failure");
+  failure = "stat";
+  assert.throws(() => store.snapshot(), denied, "even a warm cache must not hide stat failures");
+  failure = undefined;
+  assert.equal(store.snapshot().tasks.length, 1);
+});
+
+test("a file changed during a snapshot read is not cached with the newer fingerprint", async (t) => {
+  const dir = makeDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, TODO_STATE_FILE);
+  const writer = openTodoStore(dir);
+  await writer.mutate((state) => addTasks(state, [{ title: "before" }], 1));
+  let replace = true;
+  const store = openTodoStore(dir, { fs: {
+    ...fs,
+    readFileSync: ((...args: Parameters<typeof fs.readFileSync>) => {
+      const data = fs.readFileSync(...args);
+      if (args[0] === path && replace) {
+        replace = false;
+        writeFileSync(path, String(data).replace("before", "after!"));
+      }
+      return data;
+    }) as typeof fs.readFileSync,
+  } });
+  assert.equal(store.snapshot().tasks[0].title, "before");
+  assert.equal(store.snapshot().tasks[0].title, "after!");
 });

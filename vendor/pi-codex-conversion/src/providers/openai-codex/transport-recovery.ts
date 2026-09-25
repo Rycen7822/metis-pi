@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import {
 	appendAssistantMessageDiagnostic,
 	createAssistantMessageDiagnostic,
@@ -51,6 +52,14 @@ function diagnosticsLane(body: ResponsesBody): Exclude<CodexDiagnosticsLane, "pr
 	return body.input.some((item) =>
 		item && typeof item === "object" && (item as { type?: unknown }).type === "compaction_trigger"
 	) ? "compaction" : "response";
+}
+
+function encodeSseRequest(body: ResponsesBody, headers: Headers): { data: string | Uint8Array; bytes: number } {
+	const json = JSON.stringify(body);
+	const compressed = compressRequestBodyZstd(json);
+	if (compressed) headers.set("content-encoding", "zstd");
+	// Do not retain the uncompressed JSON alongside the compressed retry body.
+	return { data: compressed ?? json, bytes: Buffer.byteLength(json) };
 }
 
 function recordUsage(
@@ -225,11 +234,7 @@ export function createCodexTransportStream<TApi extends Api>(
 			});
 			const baseSseHeaders = buildSSEHeaders(model.headers, effectiveOptions?.headers, accountId, apiKey, effectiveOptions?.sessionId, responsesLite, routing.originator, routing.routingHint);
 			const websocketHeaders = buildWebSocketHeaders(model.headers, effectiveOptions?.headers, accountId, apiKey, websocketRequestId, routing.originator, routing.routingHint);
-			const bodyJson = JSON.stringify(body);
 			const websocketBody = responsesLite ? applyResponsesLiteWebSocketMetadata(body) : body;
-			const compressedBody = compressRequestBodyZstd(bodyJson);
-			if (compressedBody) baseSseHeaders.set("content-encoding", "zstd");
-			const sseBody = compressedBody ?? bodyJson;
 			const transport = effectiveOptions.transport ?? "auto";
 			const streamMaxRetries = codexStreamMaxRetries(effectiveOptions);
 			let overloadRetryCount = 0;
@@ -318,7 +323,7 @@ export function createCodexTransportStream<TApi extends Api>(
 								...(fallbackArmed ? { fallbackTransport: "sse" } : {}),
 								eventsEmitted: websocketStarted,
 								phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
-								requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+								requestBytes: Buffer.byteLength(JSON.stringify(body)),
 							}),
 						);
 						if (!immediateFallback && retryableWebSocketError && attempt < streamMaxRetries && !overloadBudgetExhausted && !rateLimitBudgetExhausted) {
@@ -365,6 +370,9 @@ export function createCodexTransportStream<TApi extends Api>(
 				}
 			}
 
+			// A successful WebSocket request never needs an SSE serialization or buffer.
+			// Encode only on the SSE lane (including fallback), once for all its retries.
+			const { data: sseBody, bytes: requestBytes } = encodeSseRequest(body, baseSseHeaders);
 			const sseIdleTimeoutMs = normalizeTimeoutMs(effectiveOptions?.timeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS, "timeoutMs");
 			for (let attempt = 0; attempt <= streamMaxRetries; attempt++) {
 				if (attempt > 0) output = createInitialAssistantMessage(model);
@@ -432,7 +440,7 @@ export function createCodexTransportStream<TApi extends Api>(
 							configuredTransport: preferredTransport,
 							eventsEmitted: output.content.length > 0,
 							phase: output.content.length > 0 ? "after_message_stream_start" : "before_message_stream_start",
-							requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+							requestBytes,
 						}),
 					);
 					if (retryable && attempt < streamMaxRetries && !overloadBudgetExhausted && !rateLimitBudgetExhausted) {

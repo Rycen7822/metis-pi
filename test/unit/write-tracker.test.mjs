@@ -185,3 +185,47 @@ test("diffRows: two distant changes produce a separator between windows", () => 
   assert.equal(separators.length, 1);
 });
 
+test("diffRows: complete large rewrites keep exact rows without a quadratic trace", () => {
+  const before = Array.from({ length: 4_000 }, (_, i) => `before-${i}`);
+  const after = Array.from({ length: 4_000 }, (_, i) => `after-${i}`);
+  const built = buildDiffRows(["prefix", ...before, "suffix"].join("\n"), ["prefix", ...after, "suffix"].join("\n"));
+  assert.equal(built.added, 4_000);
+  assert.equal(built.removed, 4_000);
+  assert.deepEqual(built.rows.filter(row => row.kind === "remove").map(row => row.content), before);
+  assert.deepEqual(built.rows.filter(row => row.kind === "add").map(row => row.content), after);
+  assert.equal(built.rows.at(-1).content, "suffix");
+  assert.equal(built.rows.at(-1).lineNumber, 4_002);
+});
+
+test("diffRows: excessive edit distance fails closed rather than returning a partial diff", () => {
+  const before = Array.from({ length: 2_000 }, (_, i) => `before-${i}`);
+  const after = Array.from({ length: 2_000 }, (_, i) => `after-${i}`);
+  before[1_000] = after[1_000] = "shared middle";
+  const oldText = ["prefix", ...before, "suffix"].join("\n");
+  const newText = ["prefix", ...after, "suffix"].join("\n");
+  assert.equal(buildDiffRows(oldText, newText), undefined);
+  const snapshot = (content) => ({ existed: true, content, binary: false, truncated: false });
+  const diff = computeWriteDiff(snapshot(oldText), snapshot(newText), newText);
+  assert.deepEqual(diff, { kind: "unavailable", added: 0, removed: 0, reason: "diff budget exceeded" });
+});
+
+test("diffRows: compact traces retain minimal edits and line numbering across repeated lines", () => {
+  // Deterministic small inputs compared with an independent LCS oracle.
+  const variants = [[], ["a"], ["b", "a"], ["a", "b", "a"], ["b", "a", "b", "a"], ["a", "a", "b", "b", "a"]];
+  for (const before of variants) for (const after of variants) {
+    const lcs = Array.from({ length: before.length + 1 }, () => Array(after.length + 1).fill(0));
+    for (let i = 1; i <= before.length; i++) for (let j = 1; j <= after.length; j++) {
+      lcs[i][j] = before[i - 1] === after[j - 1]
+        ? lcs[i - 1][j - 1] + 1 : Math.max(lcs[i - 1][j], lcs[i][j - 1]);
+    }
+    const built = buildDiffRows(before.join("\n"), after.join("\n"));
+    const common = lcs[before.length][after.length];
+    assert.equal(built.added, after.length - common);
+    assert.equal(built.removed, before.length - common);
+    for (const row of built.rows) {
+      if (row.kind === "remove") assert.equal(row.content, before[row.oldNumber - 1]);
+      if (row.kind === "add" || row.kind === "context") assert.equal(row.content, after[row.newNumber - 1]);
+    }
+  }
+});
+

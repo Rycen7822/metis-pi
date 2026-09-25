@@ -112,4 +112,24 @@ narrow widths, headless contexts, cleanup and real host widget hit routing.
 
 Run project/vendor checks and real built-provider tests. Rebuild twice to check deterministic output; regenerate the patch twice to check idempotence. Apply it to an isolated pristine 3.0.34 source copy using the documented payload exclusions and compare file contents and modes. New-file diff headers must use `a/src/` and `b/src/` on both sides. Do not remove unified-diff context prefixes to silence patch-file whitespace diagnostics.
 
+## Bounded resident output and request preparation
+
+`tools/exec/output-buffer.ts` owns the existing UTF-16 retention window: ordinary
+output stays in memory; larger buffers use a private, capacity-bounded disk ring.
+Delivery reads only the requested tail and keeps the original unread character
+count. Exit-observing calls retain their requested output before disposal; replay
+remains separately capped. Cancellation, shutdown and waiter failure release the
+appropriate resources without treating unread or cancelled work as completed.
+Unavailable spool writes retain the previous in-memory budget; unrecoverable
+reads fail explicitly. Cleanup attempts all sessions even if one removal fails.
+The session manager alone owns result delivery, disposal and replay publication;
+result formatters no longer delete sessions through callbacks.
+
+`providers/openai-codex/session-continuity.ts` separates validation from owned
+replay cloning. Request and reconstructed views use one graph snapshot, preserving
+shared immutable input without copying it twice; responses remain independently
+owned. `transport-recovery.ts` prepares the compressed SSE body only
+after selecting SSE, including WebSocket fallback; successful WebSocket requests
+do not allocate that unused copy. The actual SSE body is reused across retries.
+
 Current results and unverified runtime boundaries live only in the root [VALIDATION.md](../../VALIDATION.md). This work retains the 3.0.34 baseline; review and replay every applicable patch when syncing.

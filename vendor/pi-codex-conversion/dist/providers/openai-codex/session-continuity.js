@@ -14,7 +14,7 @@ function responsesLiteRequestPrefixLength(input) {
     const second = input[1];
     return second && typeof second === "object" && second.role === "developer" ? 2 : 1;
 }
-function replayCanonicalInput(state, preparedInput, requestPrefixLength = 0) {
+function validateCanonicalInput(state, preparedInput, requestPrefixLength = 0) {
     const reconstructedRequestInput = state.reconstructedRequestInput.slice(requestPrefixLength);
     const minimumInputLength = reconstructedRequestInput.length + state.responseItems.length;
     if (preparedInput.length < minimumInputLength) {
@@ -27,12 +27,18 @@ function replayCanonicalInput(state, preparedInput, requestPrefixLength = 0) {
     if (!responseInputsEqual(preparedInput.slice(reconstructedRequestInput.length, reconstructedResponseEnd), state.responseItems)) {
         return { decision: "response_prefix_mismatch" };
     }
+    return { responseEnd: reconstructedResponseEnd, decision: "validated" };
+}
+function replayCanonicalInput(state, preparedInput, requestPrefixLength = 0) {
+    const validation = validateCanonicalInput(state, preparedInput, requestPrefixLength);
+    if (validation.responseEnd === undefined)
+        return { decision: validation.decision };
     return {
         input: [
             ...structuredClone(materializedInput(state)),
-            ...structuredClone(preparedInput.slice(reconstructedResponseEnd)),
+            ...structuredClone(preparedInput.slice(validation.responseEnd)),
         ],
-        decision: "validated",
+        decision: validation.decision,
     };
 }
 export function recordCanonicalSessionResponse(args) {
@@ -43,8 +49,12 @@ export function recordCanonicalSessionResponse(args) {
     canonicalSessions.set(args.sessionId, {
         accountId: args.accountId,
         url: args.url,
-        requestBody: structuredClone(args.requestBody),
-        reconstructedRequestInput: structuredClone((args.reconstructedRequestBody ?? args.requestBody).input),
+        // These read-only views share a baseline when preparation kept the input.
+        // One graph clone preserves that sharing without borrowing caller objects.
+        ...structuredClone({
+            requestBody: args.requestBody,
+            reconstructedRequestInput: (args.reconstructedRequestBody ?? args.requestBody).input,
+        }),
         responseItems: structuredClone(args.responseItems),
     });
 }
@@ -76,8 +86,7 @@ export function validateCanonicalSessionRequest(sessionId, url, accountId, prepa
     if (!matchesLane(state, url, accountId, preparedBody.model)) {
         return "identity_mismatch";
     }
-    const replay = replayCanonicalInput(state, preparedBody.input);
-    return replay.decision;
+    return validateCanonicalInput(state, preparedBody.input).decision;
 }
 export function canonicalCompactionPromptInput(sessionId, model, identity, reconstructedInput) {
     return resolveCanonicalCompactionPromptInput(sessionId, model, identity, reconstructedInput).input;

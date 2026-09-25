@@ -35,7 +35,11 @@ export interface HostContextLike {
   model?: unknown;
   thinkingLevel?: unknown;
   getContextUsage?: () => unknown;
-  sessionManager?: { getEntries?: () => unknown[] };
+  sessionManager?: {
+    getEntries?: () => unknown[];
+    getSessionId?: () => string;
+    getLeafId?: () => string | null;
+  };
   ui?: Record<string, unknown>;
 }
 
@@ -104,17 +108,25 @@ const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhi
 export class HostData {
   #ctx: HostContextLike | undefined;
   #revision = 0;
+  #contextUsage: {
+    model: ModelSnapshot | undefined;
+    sessionId: string | undefined;
+    leafId: string | null | undefined;
+    read: () => unknown;
+    value: ContextUsageSnapshot | undefined;
+  } | undefined;
 
   /** Bind the live context (session_start) or clear it (shutdown). */
   bind(ctx: HostContextLike | undefined): void {
     this.#ctx = ctx;
-    this.#revision += 1;
+    this.bump();
   }
 
   /** Model/effort/context-impacting events bump the revision so a single
    * refresh never mixes a new model's window with an old model's percent. */
   bump(): void {
     this.#revision += 1;
+    this.#contextUsage = undefined;
   }
 
   get revision(): number {
@@ -166,8 +178,25 @@ export class HostData {
     const read = this.#ctx?.getContextUsage;
     if (typeof read !== "function") return undefined;
     try {
-      return toContextUsageSnapshot(read.call(this.#ctx));
+      const model = this.getModel();
+      const manager = this.#ctx?.sessionManager;
+      const sessionId = manager?.getSessionId?.();
+      const leafId = manager?.getLeafId?.();
+      const cached = this.#contextUsage;
+      // The host rebuilds the entire session projection here. Animation frames
+      // can reuse it until an event bumps the revision or the live branch/model
+      // changes. The leaf check also covers entries appended AFTER our handler
+      // (message_end, context edits and other extensions' custom entries).
+      if (cached && cached.read === read && cached.sessionId === sessionId && cached.leafId === leafId
+        && cached.model?.id === model?.id && cached.model?.provider === model?.provider
+        && cached.model?.contextWindow === model?.contextWindow) return cached.value;
+      const value = toContextUsageSnapshot(read.call(this.#ctx));
+      this.#contextUsage = { model, sessionId, leafId, read, value };
+      return value;
     } catch {
+      // Keep the existing unavailable-on-failure contract, but do not cache a
+      // transient failure as a successful empty/unknown sample.
+      this.#contextUsage = undefined;
       return undefined;
     }
   }

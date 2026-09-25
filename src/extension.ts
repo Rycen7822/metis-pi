@@ -175,7 +175,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
   // Working-tree change counts for the footer: display-only git reads on a 2s
   // poll plus activity-driven refreshes (agent ticks, tool work), armed only
-  // while a TUI session is live (see git-changes.ts).
+  // while a TUI footer actually displays them (see git-changes.ts).
   const gitChanges = createGitChangesTracker({
     getCwd: () => hostData.getCwd(),
     onUpdate: requestRender,
@@ -278,9 +278,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     chromeEnabled = hostData.isTui && config.enabled !== false;
     startupWarningFilter?.dispose();
     startupWarningFilter = chromeEnabled ? installStartupWarningFilter() : undefined;
+    gitChanges.dispose();
     if (chromeEnabled) {
-      void chrome.install(available, chrome.state.generation);
-      gitChanges.start();
+      const generation = chrome.state.generation;
+      void chrome.install(available, generation).then(() => {
+        // Wait for a successful footer install; neither a hidden changes
+        // segment nor a late install from a disposed session needs a poller.
+        if (generation === chrome.state.generation && chromeEnabled
+          && config.footer.showChanges && chrome.state.footerInstalled && hostData.getCwd()) gitChanges.start();
+      });
     }
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
@@ -363,6 +369,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // Write tracking observes lifecycle events only (never tool_call/tool_result
   // content); all state is ephemeral presentation data dropped at shutdown.
   pi.on("agent_start", () => {
+    hostData.bump();
     if (!chromeEnabled) return;
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
     if (fullscreenMargin && serializerHost) fullscreenMargin.installOnTui(serializerHost);
@@ -379,10 +386,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     chrome.setWidgetVisible(true);
   });
   pi.on("agent_end", () => {
+    hostData.bump();
     if (!chromeEnabled) return;
     metrics.agentEnd();
   });
   pi.on("agent_settled", () => {
+    hostData.bump();
     if (!chromeEnabled) return;
     metrics.agentSettled();
     outcome.reset();
@@ -441,6 +450,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
 
   // Keep the original message object as the state machine's identity anchor.
   pi.on("message_start", (event) => {
+    hostData.bump();
     if (!enabled) return;
     const message = event.message as object | undefined;
     transcript.apply({ type: "message_start", message: toStateMessage(message) }, message);
@@ -452,6 +462,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (role === "assistant") outputSpeed.requestStart();
   });
   pi.on("message_update", (event) => {
+    hostData.bump();
     if (!enabled) return;
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);
@@ -512,6 +523,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
   });
   pi.on("message_end", (event) => {
+    hostData.bump();
     if (!enabled) return;
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);

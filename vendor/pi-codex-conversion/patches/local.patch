@@ -1716,11 +1716,84 @@ index 236093c..2e0a25a 100644
  	}
  
  	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+diff --git a/src/providers/openai-codex/session-continuity.ts b/src/providers/openai-codex/session-continuity.ts
+index b274ec7..4c1100b 100644
+--- a/src/providers/openai-codex/session-continuity.ts
++++ b/src/providers/openai-codex/session-continuity.ts
+@@ -38,11 +38,11 @@ function responsesLiteRequestPrefixLength(input: readonly unknown[]): number {
+ 	return second && typeof second === "object" && (second as { role?: unknown }).role === "developer" ? 2 : 1;
+ }
+ 
+-function replayCanonicalInput(
++function validateCanonicalInput(
+ 	state: CanonicalSessionState,
+ 	preparedInput: readonly unknown[],
+ 	requestPrefixLength = 0,
+-): { input?: unknown[] | undefined; decision: CanonicalHistoryDecision } {
++): { responseEnd?: number | undefined; decision: CanonicalHistoryDecision } {
+ 	const reconstructedRequestInput = state.reconstructedRequestInput.slice(requestPrefixLength);
+ 	const minimumInputLength = reconstructedRequestInput.length + state.responseItems.length;
+ 	if (preparedInput.length < minimumInputLength) {
+@@ -55,12 +55,22 @@ function replayCanonicalInput(
+ 	if (!responseInputsEqual(preparedInput.slice(reconstructedRequestInput.length, reconstructedResponseEnd), state.responseItems)) {
+ 		return { decision: "response_prefix_mismatch" };
+ 	}
++	return { responseEnd: reconstructedResponseEnd, decision: "validated" };
++}
++
++function replayCanonicalInput(
++	state: CanonicalSessionState,
++	preparedInput: readonly unknown[],
++	requestPrefixLength = 0,
++): { input?: unknown[] | undefined; decision: CanonicalHistoryDecision } {
++	const validation = validateCanonicalInput(state, preparedInput, requestPrefixLength);
++	if (validation.responseEnd === undefined) return { decision: validation.decision };
+ 	return {
+ 		input: [
+ 			...structuredClone(materializedInput(state)),
+-			...structuredClone(preparedInput.slice(reconstructedResponseEnd)),
++			...structuredClone(preparedInput.slice(validation.responseEnd)),
+ 		],
+-		decision: "validated",
++		decision: validation.decision,
+ 	};
+ }
+ 
+@@ -78,8 +88,12 @@ export function recordCanonicalSessionResponse(args: {
+ 	canonicalSessions.set(args.sessionId, {
+ 		accountId: args.accountId,
+ 		url: args.url,
+-		requestBody: structuredClone(args.requestBody),
+-		reconstructedRequestInput: structuredClone((args.reconstructedRequestBody ?? args.requestBody).input),
++		// These read-only views share a baseline when preparation kept the input.
++		// One graph clone preserves that sharing without borrowing caller objects.
++		...structuredClone({
++			requestBody: args.requestBody,
++			reconstructedRequestInput: (args.reconstructedRequestBody ?? args.requestBody).input,
++		}),
+ 		responseItems: structuredClone(args.responseItems),
+ 	});
+ }
+@@ -117,8 +131,7 @@ export function validateCanonicalSessionRequest(
+ 		return "identity_mismatch";
+ 	}
+ 
+-	const replay = replayCanonicalInput(state, preparedBody.input);
+-	return replay.decision;
++	return validateCanonicalInput(state, preparedBody.input).decision;
+ }
+ 
+ export function canonicalCompactionPromptInput(
 diff --git a/src/providers/openai-codex/transport-recovery.ts b/src/providers/openai-codex/transport-recovery.ts
-index 0aa6db7..618cda4 100644
+index 0aa6db7..7592e2c 100644
 --- a/src/providers/openai-codex/transport-recovery.ts
 +++ b/src/providers/openai-codex/transport-recovery.ts
-@@ -11,6 +11,7 @@ import {
+@@ -1,3 +1,4 @@
++import { Buffer } from "node:buffer";
+ import {
+ 	appendAssistantMessageDiagnostic,
+ 	createAssistantMessageDiagnostic,
+@@ -11,6 +12,7 @@ import {
  } from "@earendil-works/pi-ai";
  import type { CodexConversionConfig } from "../../adapter/activation/config.ts";
  import { createGrammarToolInputProperties } from "../constrained-sampling.ts";
@@ -1728,7 +1801,22 @@ index 0aa6db7..618cda4 100644
  import { DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_SSE_HEADER_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_RETRIES, INITIAL_STREAM_RETRY_DELAY_MS, MAX_SSE_REQUEST_RETRIES, MAX_STREAM_MAX_RETRIES } from "./constants.ts";
  import { createErrorMessage, isRetryableRequestStatus, isRetryableStreamStatus, NonRetryableProviderError, parseErrorResponse } from "./errors.ts";
  import { buildSSEHeaders, buildWebSocketHeaders, createCodexRequestId, extractAccountId, headersToRecord, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexUrl, resolveCodexWebSocketUrl } from "./headers.ts";
-@@ -172,7 +173,7 @@ export function createCodexTransportStream<TApi extends Api>(
+@@ -52,6 +54,14 @@ function diagnosticsLane(body: ResponsesBody): Exclude<CodexDiagnosticsLane, "pr
+ 	) ? "compaction" : "response";
+ }
+ 
++function encodeSseRequest(body: ResponsesBody, headers: Headers): { data: string | Uint8Array; bytes: number } {
++	const json = JSON.stringify(body);
++	const compressed = compressRequestBodyZstd(json);
++	if (compressed) headers.set("content-encoding", "zstd");
++	// Do not retain the uncompressed JSON alongside the compressed retry body.
++	return { data: compressed ?? json, bytes: Buffer.byteLength(json) };
++}
++
+ function recordUsage(
+ 	record: CodexDiagnosticsSink | undefined,
+ 	lane: Exclude<CodexDiagnosticsLane, "prewarm">,
+@@ -172,7 +182,7 @@ export function createCodexTransportStream<TApi extends Api>(
  	const responsesLite = deps.useResponsesLite?.(model)
  		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
  			&& supportsResponsesLiteModel(model.id));
@@ -1737,7 +1825,19 @@ index 0aa6db7..618cda4 100644
  	const preferredTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai);
  	const effectiveTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai, options?.sessionId);
  	const effectiveOptions: OpenAICodexStreamOptions | undefined = options
-@@ -314,7 +315,7 @@ export function createCodexTransportStream<TApi extends Api>(
+@@ -224,11 +234,7 @@ export function createCodexTransportStream<TApi extends Api>(
+ 			});
+ 			const baseSseHeaders = buildSSEHeaders(model.headers, effectiveOptions?.headers, accountId, apiKey, effectiveOptions?.sessionId, responsesLite, routing.originator, routing.routingHint);
+ 			const websocketHeaders = buildWebSocketHeaders(model.headers, effectiveOptions?.headers, accountId, apiKey, websocketRequestId, routing.originator, routing.routingHint);
+-			const bodyJson = JSON.stringify(body);
+ 			const websocketBody = responsesLite ? applyResponsesLiteWebSocketMetadata(body) : body;
+-			const compressedBody = compressRequestBodyZstd(bodyJson);
+-			if (compressedBody) baseSseHeaders.set("content-encoding", "zstd");
+-			const sseBody = compressedBody ?? bodyJson;
+ 			const transport = effectiveOptions.transport ?? "auto";
+ 			const streamMaxRetries = codexStreamMaxRetries(effectiveOptions);
+ 			let overloadRetryCount = 0;
+@@ -314,10 +320,10 @@ export function createCodexTransportStream<TApi extends Api>(
  							output,
  							createAssistantMessageDiagnostic(retryableWebSocketError ? "provider_transport_failure" : "provider_stream_failure", error, {
  								configuredTransport: preferredTransport,
@@ -1745,7 +1845,30 @@ index 0aa6db7..618cda4 100644
 +								...(fallbackArmed ? { fallbackTransport: "sse" } : {}),
  								eventsEmitted: websocketStarted,
  								phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
- 								requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+-								requestBytes: new TextEncoder().encode(bodyJson).byteLength,
++								requestBytes: Buffer.byteLength(JSON.stringify(body)),
+ 							}),
+ 						);
+ 						if (!immediateFallback && retryableWebSocketError && attempt < streamMaxRetries && !overloadBudgetExhausted && !rateLimitBudgetExhausted) {
+@@ -364,6 +370,9 @@ export function createCodexTransportStream<TApi extends Api>(
+ 				}
+ 			}
+ 
++			// A successful WebSocket request never needs an SSE serialization or buffer.
++			// Encode only on the SSE lane (including fallback), once for all its retries.
++			const { data: sseBody, bytes: requestBytes } = encodeSseRequest(body, baseSseHeaders);
+ 			const sseIdleTimeoutMs = normalizeTimeoutMs(effectiveOptions?.timeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS, "timeoutMs");
+ 			for (let attempt = 0; attempt <= streamMaxRetries; attempt++) {
+ 				if (attempt > 0) output = createInitialAssistantMessage(model);
+@@ -431,7 +440,7 @@ export function createCodexTransportStream<TApi extends Api>(
+ 							configuredTransport: preferredTransport,
+ 							eventsEmitted: output.content.length > 0,
+ 							phase: output.content.length > 0 ? "after_message_stream_start" : "before_message_stream_start",
+-							requestBytes: new TextEncoder().encode(bodyJson).byteLength,
++							requestBytes,
+ 						}),
+ 					);
+ 					if (retryable && attempt < streamMaxRetries && !overloadBudgetExhausted && !rateLimitBudgetExhausted) {
 diff --git a/src/providers/openai-codex-custom-provider.ts b/src/providers/openai-codex-custom-provider.ts
 index eaa1e6e..ca3359f 100644
 --- a/src/providers/openai-codex-custom-provider.ts
@@ -2794,6 +2917,46 @@ index 19a57e1..1e17b2d 100644
  
  const NOTEBOOK_DESCRIPTION = "Control persistent notebook state: status inspects memory/bindings by query glob; checkpoint; pin/unpin/release names; prune unpinned matches; list/save/load profiles; restart; diagnostics; reset";
  
+diff --git a/src/tools/exec/bridge-session.ts b/src/tools/exec/bridge-session.ts
+index 9813208..21e824f 100644
+--- a/src/tools/exec/bridge-session.ts
++++ b/src/tools/exec/bridge-session.ts
+@@ -1,6 +1,7 @@
+ import { StringDecoder } from "node:string_decoder";
+ import { getCodexShellArgs } from "../../adapter/prompt/runtime-shell.ts";
+ import { chunkToBytes, createExecBridgeClient, type BridgeReadResponse } from "./bridge-client.ts";
++import type { ExecOutputBuffer } from "./output-buffer.ts";
+ 
+ const EXIT_OUTPUT_GRACE_MS = 100;
+ 
+@@ -19,8 +20,7 @@ export interface BridgeExecSession {
+ 	started: boolean;
+ 	tty: boolean;
+ 	command: string;
+-	buffer: string;
+-	bufferStartOffset: number;
++	buffer: ExecOutputBuffer;
+ 	emittedOffset: number;
+ 	outputVersion: number;
+ 	exitCode: number | null | undefined;
+@@ -48,6 +48,7 @@ export interface BridgeSessionHooks {
+ export interface BridgeSessionRuntime {
+ 	create(args: {
+ 		id: number;
++		buffer: ExecOutputBuffer;
+ 		input: BridgeExecInput;
+ 		workdir: string;
+ 		shell: string;
+@@ -140,8 +141,7 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
+ 			started: false,
+ 			tty: Boolean(input.tty),
+ 			command: input.command,
+-			buffer: "",
+-			bufferStartOffset: 0,
++			buffer: args.buffer,
+ 			emittedOffset: 0,
+ 			outputVersion: 0,
+ 			exitCode: undefined,
 diff --git a/src/tools/exec/command-tool.ts b/src/tools/exec/command-tool.ts
 index 0204ebd..774564e 100644
 --- a/src/tools/exec/command-tool.ts
@@ -2807,6 +2970,417 @@ index 0204ebd..774564e 100644
  }
  
  function renderResult(
+diff --git a/src/tools/exec/output-buffer.ts b/src/tools/exec/output-buffer.ts
+new file mode 100644
+index 0000000..10593c1
+--- /dev/null
++++ b/src/tools/exec/output-buffer.ts
+@@ -0,0 +1,155 @@
++import fs from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++
++const MAX_RESIDENT_CHARS = 1024 * 1024;
++const IO_CHUNK_CHARS = 64 * 1024;
++
++/** A UTF-16 ring: retain the configured character budget without keeping it all on the heap. */
++export class ExecOutputBuffer {
++	startOffset = 0;
++	endOffset = 0;
++	private memory = "";
++	private spool: { directory: string; fd: number } | undefined;
++	private spoolDisabled = false;
++	private failure: Error | undefined;
++	private disposed = false;
++	private readonly maxChars: number;
++
++	constructor(maxChars: number) {
++		this.maxChars = Math.max(1, Math.floor(maxChars));
++	}
++
++	get length(): number {
++		return this.endOffset - this.startOffset;
++	}
++
++	append(text: string): void {
++		if (this.disposed || this.failure || text.length === 0) return;
++		if (!this.spool && !this.spoolDisabled && Math.min(this.maxChars, this.length + text.length) > MAX_RESIDENT_CHARS) {
++			this.openSpool();
++		}
++		const end = this.endOffset + text.length;
++		const start = Math.max(this.startOffset, end - this.maxChars);
++		const suffix = text.slice(Math.max(0, start - this.endOffset));
++		if (this.spool) {
++			try {
++				this.writeRing(suffix, Math.max(start, this.endOffset));
++			} catch {
++				// Ring writes can only overwrite the prefix that this append evicts. The
++				// retained old range is still recoverable, even after a partial write.
++				try {
++					this.memory = this.readRange(Math.min(start, this.endOffset), this.endOffset) + suffix;
++				} catch (error) {
++					this.fail(error);
++				}
++				this.closeSpool();
++				this.spoolDisabled = true;
++			}
++		} else {
++			this.memory = this.memory.slice(Math.min(start - this.startOffset, this.memory.length)) + suffix;
++			if (start > this.startOffset) this.memory = Buffer.from(this.memory, "utf16le").toString("utf16le");
++		}
++		this.startOffset = start;
++		this.endOffset = end;
++		if (start > 0 && this.length > 0 && !this.failure) {
++			try {
++				if (/[\uDC00-\uDFFF]/.test(this.readRange(start, start + 1))) {
++					this.startOffset++;
++					if (!this.spool) this.memory = this.memory.slice(1);
++				}
++			} catch (error) {
++				this.fail(error);
++			}
++		}
++	}
++
++	/** String.slice semantics, but only the requested range is materialized. */
++	slice(start = 0, end = this.length): string {
++		if (this.failure) throw this.failure;
++		const relative = (offset: number) => {
++			const integer = Math.trunc(offset) || 0;
++			return integer < 0 ? Math.max(0, this.length + integer) : Math.min(this.length, integer);
++		};
++		const from = relative(start);
++		const to = Math.max(from, relative(end));
++		try {
++			return this.readRange(this.startOffset + from, this.startOffset + to);
++		} catch (error) {
++			this.fail(error);
++			throw this.failure;
++		}
++	}
++
++	dispose(): void {
++		this.disposed = true;
++		this.memory = "";
++		this.closeSpool();
++	}
++
++	private openSpool(): void {
++		let directory: string | undefined;
++		try {
++			directory = fs.mkdtempSync(join(tmpdir(), "pi-exec-output-"));
++			this.spool = { directory, fd: fs.openSync(join(directory, "output"), "wx+", 0o600) };
++			this.writeRing(this.memory, this.startOffset);
++			this.memory = "";
++		} catch {
++			// A full/unwritable temp volume must not truncate output or stop a tool.
++			// Fall back to the pre-existing in-memory retention budget for this session.
++			this.closeSpool();
++			if (directory) fs.rmSync(directory, { recursive: true, force: true });
++			this.spoolDisabled = true;
++		}
++	}
++
++	private writeRing(text: string, offset: number): void {
++		const fd = this.spool!.fd;
++		for (let written = 0; written < text.length;) {
++			const position = (offset + written) % this.maxChars;
++			const count = Math.min(text.length - written, this.maxChars - position, IO_CHUNK_CHARS);
++			const bytes = Buffer.from(text.slice(written, written + count), "utf16le");
++			for (let done = 0; done < bytes.length;) {
++				const size = fs.writeSync(fd, bytes, done, bytes.length - done, position * 2 + done);
++				if (size === 0) throw new Error("exec output spool write made no progress");
++				done += size;
++			}
++			written += count;
++		}
++	}
++
++	private readRange(start: number, end: number): string {
++		if (!this.spool) {
++			const text = this.memory.slice(start - this.startOffset, end - this.startOffset);
++			// Detach small results/replay tails from a potentially large backing string.
++			return Buffer.from(text, "utf16le").toString("utf16le");
++		}
++		const bytes = Buffer.allocUnsafe((end - start) * 2);
++		for (let read = 0; read < bytes.length;) {
++			const position = (start * 2 + read) % (this.maxChars * 2);
++			const count = Math.min(bytes.length - read, this.maxChars * 2 - position);
++			const size = fs.readSync(this.spool.fd, bytes, read, count, position);
++			if (size === 0) throw new Error("exec output spool ended unexpectedly");
++			read += size;
++		}
++		return bytes.toString("utf16le");
++	}
++
++	private fail(error: unknown): void {
++		this.failure ??= new Error("Cannot recover exec output from its temporary spool", { cause: error });
++		this.closeSpool();
++		this.spoolDisabled = true;
++		this.memory = "";
++	}
++
++	private closeSpool(): void {
++		const spool = this.spool;
++		if (!spool) return;
++		this.spool = undefined;
++		try {
++			fs.closeSync(spool.fd);
++		} finally {
++			fs.rmSync(spool.directory, { recursive: true, force: true });
++		}
++	}
++}
+diff --git a/src/tools/exec/output.ts b/src/tools/exec/output.ts
+index a5dbbd2..f9bec1b 100644
+--- a/src/tools/exec/output.ts
++++ b/src/tools/exec/output.ts
+@@ -1,10 +1,10 @@
+ import { randomBytes } from "node:crypto";
++import type { ExecOutputBuffer } from "./output-buffer.ts";
+ 
+ const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
+ 
+ export interface ExecOutputSessionState {
+-	buffer: string;
+-	bufferStartOffset: number;
++	buffer: ExecOutputBuffer;
+ 	emittedOffset: number;
+ }
+ 
+@@ -87,28 +87,25 @@ export function truncateOutput(text: string, maxOutputTokens?: number, originalC
+ 	return { output: truncateToTail(text, maxChars).output, original_token_count: originalTokenCount };
+ }
+ 
+-function outputSince(session: ExecOutputSessionState, offset: number): { text: string; originalCharCount: number; endOffset: number } {
+-	const endOffset = session.bufferStartOffset + session.buffer.length;
+-	const startOffset = Math.max(offset, session.bufferStartOffset);
+-	return {
+-		text: session.buffer.slice(startOffset - session.bufferStartOffset),
+-		originalCharCount: Math.max(0, endOffset - offset),
+-		endOffset,
+-	};
++function outputSince(session: ExecOutputSessionState, offset: number, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
++	const endOffset = session.buffer.endOffset;
++	const retainedStart = Math.max(offset, session.buffer.startOffset);
++	// Include one extra code unit so truncateOutput preserves its surrogate boundary rule.
++	const startOffset = Math.max(retainedStart, endOffset - maxCharsForTokens(maxOutputTokens) - 1);
++	const text = session.buffer.slice(startOffset - session.buffer.startOffset);
++	return truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
+ }
+ 
+ export function consumeOutput(session: ExecOutputSessionState, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
+-	const output = outputSince(session, session.emittedOffset);
+-	session.emittedOffset = output.endOffset;
+-	return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
++	const output = outputSince(session, session.emittedOffset, maxOutputTokens);
++	session.emittedOffset = session.buffer.endOffset;
++	return output;
+ }
+ 
+ export function peekUnconsumedOutput(session: ExecOutputSessionState, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
+-	const output = outputSince(session, session.emittedOffset);
+-	return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
++	return outputSince(session, session.emittedOffset, maxOutputTokens);
+ }
+ 
+ export function peekOutputSince(session: ExecOutputSessionState, baselineOffset: number, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
+-	const output = outputSince(session, baselineOffset);
+-	return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
++	return outputSince(session, baselineOffset, maxOutputTokens);
+ }
+diff --git a/src/tools/exec/results.ts b/src/tools/exec/results.ts
+index 875fb71..9c8f8cd 100644
+--- a/src/tools/exec/results.ts
++++ b/src/tools/exec/results.ts
+@@ -1,5 +1,5 @@
+ import type { ExecSessionSnapshot, UnifiedExecResult } from "./session-manager.ts";
+-import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, truncateOutput, type ExecOutputSessionState } from "./output.ts";
++import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, type ExecOutputSessionState } from "./output.ts";
+ 
+ export interface ExecResultSessionState extends ExecOutputSessionState {
+ 	id: number;
+@@ -18,15 +18,8 @@ function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot:
+ 	return result;
+ }
+ 
+-export function makeExecResult<TSession extends ExecResultSessionState>(session: TSession, waitMs: number, maxOutputTokens: number | undefined, exposeSession: (session: TSession) => void, deleteSessionIfDrained: (sessionId: number) => void): UnifiedExecResult {
+-	const consumed = consumeOutput(session, maxOutputTokens);
+-	const result = fromSnapshot(session, waitMs, consumed);
+-	if (session.exitCode === undefined || session.exitCode === null) {
+-		exposeSession(session);
+-	} else if (session.emittedOffset === session.bufferStartOffset + session.buffer.length) {
+-		deleteSessionIfDrained(session.id);
+-	}
+-	return result;
++export function makeExecResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens: number | undefined): UnifiedExecResult {
++	return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens));
+ }
+ 
+ export function snapshotSession(session: ExecResultSessionState, maxOutputChars = 8_000): ExecSessionSnapshot {
+@@ -43,7 +36,7 @@ export function snapshotSession(session: ExecResultSessionState, maxOutputChars
+ }
+ 
+ export function makeSnapshotResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens?: number, unconsumedOnly = false): UnifiedExecResult {
+-	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : truncateOutput(session.buffer, maxOutputTokens);
++	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : peekOutputSince(session, session.buffer.startOffset, maxOutputTokens);
+ 	return fromSnapshot(session, waitMs, snapshot);
+ }
+ 
+diff --git a/src/tools/exec/session-manager.ts b/src/tools/exec/session-manager.ts
+index 46755fc..75a01c8 100644
+--- a/src/tools/exec/session-manager.ts
++++ b/src/tools/exec/session-manager.ts
+@@ -3,6 +3,7 @@ import { createBridgeSessionRuntime, type BridgeExecSession, type BridgeSessionH
+ import { DEFAULT_EXEC_YIELD_TIME_MS, DEFAULT_MAX_EMPTY_WRITE_YIELD_TIME_MS, DEFAULT_WRITE_YIELD_TIME_MS, clampExecYieldTime, clampWriteYieldTime, normalizeMinEmptyWriteYieldTime, normalizeMinNonInteractiveExecYieldTime, resolveExecution, resolveShell, resolveWorkdir } from "./shell.ts";
+ import { registerAbortHandler, waitForExitOrInactivity } from "./wait.ts";
+ import { makeExecResult, makeSnapshotResult, makeSnapshotSince, snapshotSession } from "./results.ts";
++import { ExecOutputBuffer } from "./output-buffer.ts";
+ 
+ export interface UnifiedExecResult {
+ 	chunk_id: string;
+@@ -136,12 +137,22 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 	function finishResult(session: ExecSession, waitMs: number, maxOutputTokens?: number): UnifiedExecResult {
+ 		const completed = session.exitCode !== undefined && session.exitCode !== null;
+ 		const replaySnapshot = completed ? makeSnapshotResult(session, waitMs, MAX_COMPLETED_SESSION_OUTPUT_TOKENS, true) : undefined;
+-		const result = makeExecResult(session, waitMs, maxOutputTokens, exposeSession, (sessionId) => sessions.delete(sessionId));
+-		if (!replaySnapshot || sessions.has(session.id)) return result;
+-		rememberCompletedResult(session.id, { ...replaySnapshot, chunk_id: result.chunk_id, wall_time_seconds: result.wall_time_seconds });
++		const result = makeExecResult(session, waitMs, maxOutputTokens);
++		if (!replaySnapshot) {
++			exposeSession(session);
++		} else if (session.emittedOffset === session.buffer.endOffset) {
++			// Release only after successful consumption; publish replay last.
++			deleteSession(session);
++			rememberCompletedResult(session.id, { ...replaySnapshot, chunk_id: result.chunk_id, wall_time_seconds: result.wall_time_seconds });
++		}
+ 		return result;
+ 	}
+ 
++	function deleteSession(session: ExecSession): void {
++		sessions.delete(session.id);
++		session.buffer.dispose();
++	}
++
+ 	function notify(session: ExecSession, reason: ExecSessionChangeReason = "output"): void {
+ 		session.updatedAt = Date.now();
+ 		for (const listener of session.listeners) {
+@@ -174,14 +185,8 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 	function appendOutput(session: ExecSession, text: string): void {
+ 		if (text.length === 0) return;
+ 		const output = session.tty ? text : normalizePipeOutput(text);
+-		session.buffer += output;
++		session.buffer.append(output);
+ 		session.outputVersion += 1;
+-		const maxSessionBufferChars = configuredMaxSessionBufferChars ?? (session.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS);
+-		if (session.buffer.length > maxSessionBufferChars) {
+-			const bounded = truncateToTail(session.buffer, maxSessionBufferChars);
+-			session.buffer = bounded.output;
+-			session.bufferStartOffset += bounded.removed;
+-		}
+ 		notify(session);
+ 	}
+ 
+@@ -205,6 +210,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 			const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
+ 			const session = bridgeSessions.create({
+ 				id: nextSessionId++,
++				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS)),
+ 				input: {
+ 					command: input.cmd,
+ 					executionCommand: execution.command,
+@@ -247,12 +253,12 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 					idleTimeMs = Math.min(maxExecWaitMs, idleTimeMs * 2);
+ 				}
+ 				await bridgeSessions.waitForStartup(session, signal);
+-				if (session.started) await bridgeSessions.poll(session, bridgeHooks, 0);
++				if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
+ 				if (session.exitCode === undefined || session.exitCode === null)
+ 					session.nextEmptyPollYieldMs = growEmptyPollYield(Math.max(execYieldMs, waitedMs), maxEmptyWriteYieldTimeMs);
+ 				return finishResult(session, waitedMs, input.max_output_tokens);
+ 			} catch (error) {
+-				if (signal?.aborted) sessions.delete(session.id);
++				if (signal?.aborted) deleteSession(session);
+ 				throw error;
+ 			} finally {
+ 				abortCleanup();
+@@ -274,7 +280,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 				}
+ 				throw new Error(`Unknown process id ${input.session_id}`);
+ 			}
+-			const updateBaseline = session.bufferStartOffset + session.buffer.length;
++			const updateBaseline = session.buffer.endOffset;
+ 			const chars = input.chars ?? "";
+ 			const isEmptyPoll = chars.length === 0;
+ 			if (!isEmptyPoll) {
+@@ -306,7 +312,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 						)
+ 					: 0;
+ 			await bridgeSessions.waitForStartup(session, signal);
+-			if (session.started) await bridgeSessions.poll(session, bridgeHooks, 0);
++			if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
+ 			if (isEmptyPoll && (session.exitCode === undefined || session.exitCode === null))
+ 				session.nextEmptyPollYieldMs = growEmptyPollYield(effectiveYieldMs, maxEmptyWriteYieldTimeMs);
+ 			return finishResult(session, waitedMs, input.max_output_tokens);
+@@ -344,13 +350,23 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 		},
+ 		shutdown: () => shutdownPromise ??= (async () => {
+ 			shuttingDown = true;
++			const failures: unknown[] = [];
+ 			try {
+ 				await bridgeSessions.shutdown();
+-			} finally {
+-				sessions.clear();
+-				commandHistory.clear();
+-				completedResults.clear();
++			} catch (error) {
++				failures.push(error);
++			}
++			// A single failed spool removal must not retain other sessions' fds,
++			// callbacks or output. Report cleanup failures after releasing all owners.
++			for (const session of sessions.values()) {
++				try { session.buffer.dispose(); } catch (error) { failures.push(error); }
+ 			}
++			sessions.clear();
++			commandHistory.clear();
++			completedResults.clear();
++			changeListeners.clear();
++			exitListeners.clear();
++			if (failures.length > 0) throw new AggregateError(failures, "Exec session shutdown failed");
+ 		})(),
+ 	};
+ }
+diff --git a/src/tools/exec/wait.ts b/src/tools/exec/wait.ts
+index 341673a..b3160e6 100644
+--- a/src/tools/exec/wait.ts
++++ b/src/tools/exec/wait.ts
+@@ -26,7 +26,7 @@ export function waitForExitOrInactivity(session: WaitableSession, idleTimeMs: nu
+ 	let hardTimer: ReturnType<typeof setTimeout> | undefined;
+ 	let lastUpdateAt = 0;
+ 	let outputVersion = session.outputVersion;
+-	return new Promise((resolvePromise) => {
++	return new Promise((resolvePromise, rejectPromise) => {
+ 		let abortCleanup: (() => void) | undefined;
+ 		let done = false;
+ 		const cleanup = () => {
+@@ -46,7 +46,16 @@ export function waitForExitOrInactivity(session: WaitableSession, idleTimeMs: nu
+ 			const now = Date.now();
+ 			if (!force && now - lastUpdateAt < 250) return;
+ 			lastUpdateAt = now;
+-			onUpdate?.(now - startedAt);
++			try {
++				onUpdate?.(now - startedAt);
++			} catch (error) {
++				// Reading a spooled snapshot can fail. Reject the waiter, not the
++				// background process poller, and release its callback/timers.
++				if (done) return;
++				done = true;
++				cleanup();
++				rejectPromise(error);
++			}
+ 		};
+ 		const onWake = () => {
+ 			if (session.exitCode === undefined || session.exitCode === null) {
 diff --git a/src/tools/notebook-mode/capture-bindings-source.ts b/src/tools/notebook-mode/capture-bindings-source.ts
 new file mode 100644
 index 0000000..ed3fbd9

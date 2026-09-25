@@ -76,25 +76,22 @@ export function truncateOutput(text, maxOutputTokens, originalCharCount = text.l
         return { output: text, original_token_count: originalTokenCount };
     return { output: truncateToTail(text, maxChars).output, original_token_count: originalTokenCount };
 }
-function outputSince(session, offset) {
-    const endOffset = session.bufferStartOffset + session.buffer.length;
-    const startOffset = Math.max(offset, session.bufferStartOffset);
-    return {
-        text: session.buffer.slice(startOffset - session.bufferStartOffset),
-        originalCharCount: Math.max(0, endOffset - offset),
-        endOffset,
-    };
+function outputSince(session, offset, maxOutputTokens) {
+    const endOffset = session.buffer.endOffset;
+    const retainedStart = Math.max(offset, session.buffer.startOffset);
+    // Include one extra code unit so truncateOutput preserves its surrogate boundary rule.
+    const startOffset = Math.max(retainedStart, endOffset - maxCharsForTokens(maxOutputTokens) - 1);
+    const text = session.buffer.slice(startOffset - session.buffer.startOffset);
+    return truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
 }
 export function consumeOutput(session, maxOutputTokens) {
-    const output = outputSince(session, session.emittedOffset);
-    session.emittedOffset = output.endOffset;
-    return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
+    const output = outputSince(session, session.emittedOffset, maxOutputTokens);
+    session.emittedOffset = session.buffer.endOffset;
+    return output;
 }
 export function peekUnconsumedOutput(session, maxOutputTokens) {
-    const output = outputSince(session, session.emittedOffset);
-    return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
+    return outputSince(session, session.emittedOffset, maxOutputTokens);
 }
 export function peekOutputSince(session, baselineOffset, maxOutputTokens) {
-    const output = outputSince(session, baselineOffset);
-    return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
+    return outputSince(session, baselineOffset, maxOutputTokens);
 }

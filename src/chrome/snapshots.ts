@@ -71,7 +71,7 @@ export function createSnapshotSource(deps: SnapshotSourceDeps): SnapshotSource {
     return {
       model: hostData.getModel(),
       thinkingLevel: hostData.getThinkingLevel(),
-      contextUsage: hostData.getContextUsage(),
+      contextUsage: getConfig().composer.metadata ? hostData.getContextUsage() : undefined,
       cwd: hostData.getCwd(),
       session: hostData.hasSessionManager ? ledger.totals() : undefined,
       cacheLastPct: ledger.cacheRateLast(),

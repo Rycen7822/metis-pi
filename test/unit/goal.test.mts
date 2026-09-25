@@ -86,6 +86,29 @@ test("footer elapsed refreshes once per second while the goal is active", async 
   ]);
 });
 
+test("shutdown stops the active refresh and reload only refreshes the new context", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
+  const previous = makeHost();
+  await previous.command("survive a reload without retaining its UI");
+  tick(t, 1);
+  const saved = structuredClone(previous.entries.at(-1)!.data);
+  await previous.fire("session_shutdown", {}, previous.ctx);
+  await previous.fire("session_shutdown", {}, previous.ctx);
+  const stopped = previous.statusCalls.length;
+
+  const reloaded = makeHost();
+  reloaded.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+  await reloaded.fire("session_start", {}, reloaded.ctx);
+  const started = reloaded.statusCalls.length;
+  tick(t, 3);
+  assert.equal(previous.statusCalls.length, stopped, "the disposed extension must not refresh its old UI");
+  assert.equal(reloaded.statusCalls.length, started + 3, "exactly one timer refreshes the replacement UI");
+  await reloaded.fire("session_shutdown", {}, reloaded.ctx);
+  const finished = reloaded.statusCalls.length;
+  tick(t, 2);
+  assert.equal(reloaded.statusCalls.length, finished);
+});
+
 test("pause, resume and completion control the refresh", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
   const h = makeHost();

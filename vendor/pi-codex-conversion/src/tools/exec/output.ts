@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
+import type { ExecOutputBuffer } from "./output-buffer.ts";
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 
 export interface ExecOutputSessionState {
-	buffer: string;
-	bufferStartOffset: number;
+	buffer: ExecOutputBuffer;
 	emittedOffset: number;
 }
 
@@ -87,28 +87,25 @@ export function truncateOutput(text: string, maxOutputTokens?: number, originalC
 	return { output: truncateToTail(text, maxChars).output, original_token_count: originalTokenCount };
 }
 
-function outputSince(session: ExecOutputSessionState, offset: number): { text: string; originalCharCount: number; endOffset: number } {
-	const endOffset = session.bufferStartOffset + session.buffer.length;
-	const startOffset = Math.max(offset, session.bufferStartOffset);
-	return {
-		text: session.buffer.slice(startOffset - session.bufferStartOffset),
-		originalCharCount: Math.max(0, endOffset - offset),
-		endOffset,
-	};
+function outputSince(session: ExecOutputSessionState, offset: number, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
+	const endOffset = session.buffer.endOffset;
+	const retainedStart = Math.max(offset, session.buffer.startOffset);
+	// Include one extra code unit so truncateOutput preserves its surrogate boundary rule.
+	const startOffset = Math.max(retainedStart, endOffset - maxCharsForTokens(maxOutputTokens) - 1);
+	const text = session.buffer.slice(startOffset - session.buffer.startOffset);
+	return truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
 }
 
 export function consumeOutput(session: ExecOutputSessionState, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	const output = outputSince(session, session.emittedOffset);
-	session.emittedOffset = output.endOffset;
-	return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
+	const output = outputSince(session, session.emittedOffset, maxOutputTokens);
+	session.emittedOffset = session.buffer.endOffset;
+	return output;
 }
 
 export function peekUnconsumedOutput(session: ExecOutputSessionState, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	const output = outputSince(session, session.emittedOffset);
-	return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
+	return outputSince(session, session.emittedOffset, maxOutputTokens);
 }
 
 export function peekOutputSince(session: ExecOutputSessionState, baselineOffset: number, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	const output = outputSince(session, baselineOffset);
-	return truncateOutput(output.text, maxOutputTokens, output.originalCharCount);
+	return outputSince(session, baselineOffset, maxOutputTokens);
 }

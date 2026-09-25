@@ -93,6 +93,9 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   // the turn-only rule. See visibleRows() for why the boundary exists.
   let attachedAt = 0;
   let latchedHeight: number | null = null;
+  // Shared across factory invocations: the host may recreate the component
+  // each frame. Cache raw rows, not theme-painted strings.
+  let cachedRows: { state: TodoState; width: number; turn: number; session: string; expanded: boolean; rows: Row[] } | undefined;
 
   /** Visible rows for the current snapshot (pure; also what tests assert). */
   function buildRows(state: TodoState, width: number, turn: number): Row[] {
@@ -224,7 +227,22 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     tuiRef = tui as { requestRender?: () => void } | undefined;
     return {
       render(width: number): string[] {
-        return paint(buildRows(system.store.read(), width, system.turn()), theme);
+        let state: TodoState;
+        try {
+          state = system.store.snapshot();
+        } catch {
+          cachedRows = undefined;
+          // Keep display failures distinct from empty/stale tasks. Retry the
+          // snapshot on the next render rather than caching the error row.
+          return paint([{ text: truncate("Todos unavailable", width), tone: "warning" }], theme);
+        }
+        const turn = system.turn();
+        const session = deps.sessionId();
+        if (!cachedRows || cachedRows.state !== state || cachedRows.width !== width
+          || cachedRows.turn !== turn || cachedRows.session !== session || cachedRows.expanded !== expanded) {
+          cachedRows = { state, width, turn, session, expanded, rows: buildRows(state, width, turn) };
+        }
+        return paint(cachedRows.rows, theme);
       },
       // Host contract (pi-tui handleMouseEvent): claiming a press makes the host
       // remember this component as the press target and expect its release —
@@ -248,6 +266,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   };
 
   const unregister = (): void => {
+    cachedRows = undefined;
     if (!widgetRegistered) return;
     try {
       ui?.setWidget(TODO_WIDGET_KEY, undefined);
@@ -259,14 +278,14 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
 
   const refresh = (): void => {
     if (!ui) return;
-    let state: TodoState;
-    try {
-      state = system.store.read();
-    } catch {
-      return;
-    }
     if (hidden) {
       unregister();
+      return;
+    }
+    let state: TodoState;
+    try {
+      state = system.store.snapshot();
+    } catch {
       return;
     }
     if (!visibleRows(state, system.turn())) {
@@ -292,6 +311,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   return {
     attach(widgetUi: TodoWidgetUi): void {
       attachedAt = Date.now();
+      cachedRows = undefined;
       ui = widgetUi;
     },
     detach(): void {

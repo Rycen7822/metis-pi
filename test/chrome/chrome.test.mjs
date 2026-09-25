@@ -11,6 +11,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activate } from "../../src/extension.ts";
+import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
 
 /** Real host data shapes (Pi 0.85.1). `ui` deliberately has NO
  * getContextUsage/requestRender — those are not ui-surface methods. */
@@ -110,6 +111,112 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/<\/?S>/g, "").replace(/<\/?(accent|dim|warning|normal)>/g, "");
 const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
+
+test("footer animation frames reuse context usage while host events and late appends stay fresh", async (t) => {
+  const { handlers, slots, wrapUi } = activateHarness();
+  t.after(() => handlers.get("session_shutdown")());
+  let reads = 0;
+  let tokens = 10;
+  let leaf = "first";
+  const ctx = wrapUi(realShapeCtx({
+    sessionManager: { getEntries: () => [], getLeafId: () => leaf },
+    getContextUsage() {
+      reads += 1;
+      return { tokens, contextWindow: 100, percent: tokens };
+    },
+  }).ctx);
+  handlers.get("session_start")({}, ctx);
+  await tick();
+  const footer = slots.footerFactories.at(-1)(
+    { requestRender() {} }, { fg: (_kind, text) => text }, {},
+  );
+  const frame = () => plain(footer.render(140).join("\n"));
+  assert.match(frame(), /ctx 10\/100 · 10%/);
+  for (let i = 0; i < 64; i += 1) frame();
+  assert.equal(reads, 1);
+  for (const event of ["message_start", "message_update", "message_end", "agent_end", "agent_settled",
+    "model_select", "thinking_level_select", "session_tree", "session_compact", "session_compact_failed"]) {
+    tokens += 1;
+    handlers.get(event)({ type: event });
+    assert.match(frame(), new RegExp(`ctx ${tokens}/100 · ${tokens}%`), event);
+    const refreshed = reads;
+    frame();
+    assert.equal(reads, refreshed, `${event}: unchanged renders reuse its sample`);
+  }
+  // Pi persists message_end after extension callbacks. Even if a callback
+  // renders early, the next frame must see that later append without a timer.
+  tokens = 30;
+  leaf = "appended-after-message-end";
+  assert.match(frame(), /ctx 30\/100 · 30%/);
+  tokens = null;
+  handlers.get("session_compact")({ type: "session_compact" });
+  assert.match(frame(), /ctx —\/100/);
+  tokens = 40;
+  handlers.get("session_start")({ reason: "resume" }, ctx);
+  assert.match(frame(), /ctx 40\/100 · 40%/, "session replacement clears the cache");
+});
+
+test("hidden footer metadata never requests a context projection", async (t) => {
+  const { handlers, slots, wrapUi } = activateHarness({
+    getAgentDir: () => "/unused",
+    readFile: () => JSON.stringify({ composer: { metadata: false } }),
+  });
+  t.after(() => handlers.get("session_shutdown")());
+  let reads = 0;
+  handlers.get("session_start")({}, wrapUi(realShapeCtx({ getContextUsage() { reads += 1; } }).ctx));
+  await tick();
+  const footer = slots.footerFactories.at(-1)({ requestRender() {} }, { fg: (_kind, text) => text }, {});
+  footer.render(140);
+  assert.equal(reads, 0);
+});
+
+test("git polling follows the installed footer's changes toggle, including reload and failed installs", async (t) => {
+  const schedule = globalThis.setInterval;
+  const cancel = globalThis.clearInterval;
+  const active = new Set();
+  let starts = 0;
+  t.mock.method(globalThis, "setInterval", (callback, ms, ...args) => {
+    const timer = schedule(callback, ms, ...args);
+    if (ms === GIT_CHANGES_INTERVAL_MS) { active.add(timer); starts += 1; }
+    return timer;
+  });
+  t.mock.method(globalThis, "clearInterval", (timer) => {
+    active.delete(timer);
+    return cancel(timer);
+  });
+  const cases = [
+    { name: "changes hidden", config: { footer: { showChanges: false } } },
+    { name: "changes restored on reload", config: { footer: { showChanges: true } }, polling: true },
+    { name: "changes hidden again", config: { footer: { showChanges: false } } },
+    { name: "footer disabled", config: { footer: { enabled: false } } },
+    { name: "extension disabled", config: { enabled: false } },
+    { name: "no footer capability", ui: { setFooter: undefined } },
+    { name: "footer install failed", ui: { setFooter() { throw new Error("unsupported"); } } },
+    { name: "non-TUI", mode: "rpc" },
+    { name: "no displayed cwd", cwd: "" },
+    { name: "shutdown before async install", earlyShutdown: true },
+  ];
+  for (const scenario of cases) {
+    const { handlers, wrapUi } = activateHarness({
+      getAgentDir: () => "/unused",
+      readFile: () => JSON.stringify(scenario.config ?? {}),
+    });
+    const shutdown = () => handlers.get("session_shutdown")();
+    try {
+      const before = starts;
+      handlers.get("session_start")({}, wrapUi(realShapeCtx({
+        mode: scenario.mode ?? "tui", cwd: scenario.cwd ?? "/tmp/workspace", ui: scenario.ui ?? {},
+      }).ctx));
+      if (scenario.earlyShutdown) shutdown();
+      await tick();
+      assert.equal(starts - before, scenario.polling ? 1 : 0, scenario.name);
+      assert.equal(active.size, scenario.polling ? 1 : 0, scenario.name);
+    } finally {
+      shutdown();
+    }
+    assert.equal(active.size, 0, `${scenario.name}: shutdown cancels the poller`);
+  }
+});
 
 test("chrome modules have no direct host imports (src/ rule)", () => {
   // Read the directory instead of a hardcoded list: every chrome module is covered,

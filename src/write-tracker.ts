@@ -28,6 +28,7 @@ export interface WriteDiff {
 const MAX_SNAPSHOT_BYTES = 512 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
 const MAX_DIFF_LINES = 10_000;
+const MAX_DIFF_TRACE_BYTES = 4 * 1024 * 1024;
 const DIFF_CONTEXT = 3;
 
 function looksBinary(buffer: Buffer): boolean {
@@ -125,11 +126,12 @@ interface HunkOp {
 /**
  * Zero-dependency Myers diff (the "diff" npm package is NOT installable in
  * Pi's git-clone extension layout — a bare import there breaks extension
- * loading entirely). Bounded by withinDiffBudget, so the O((N+M)·D) search
- * stays small; anything bigger never reaches this function.
+ * loading entirely). Input size alone does not bound the O((N+M)·D)
+ * search's trace memory: retain only reachable diagonals and enforce a
+ * separate byte budget. An exhausted search is unavailable, never a partial diff.
  * Returns operations in document order: " ", "-", "+".
  */
-function diffLineOps(before: readonly string[], after: readonly string[]): HunkOp[] {
+function diffLineOps(before: readonly string[], after: readonly string[]): HunkOp[] | undefined {
   const n = before.length;
   const m = after.length;
   let start = 0;
@@ -145,8 +147,10 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
   const midBefore = before.slice(start, endBefore);
   const midAfter = after.slice(start, endAfter);
 
-  if (midBefore.length === 0 || midAfter.length === 0) {
-    // One-sided middle: number directly with the same old/new cursors the Myers path uses.
+  // With no common lines, every line must be deleted/inserted. Avoid quadratic
+  // search for a complete rewrite while retaining exact counts and line numbers.
+  const oldLines = new Set(midBefore);
+  if (!midAfter.some((line) => oldLines.has(line))) {
     let oldCursor = start;
     let newCursor = start;
     for (const text of midBefore) {
@@ -163,9 +167,12 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
     const offset = max;
     const v = new Int32Array(2 * max + 1);
     const trace: Int32Array[] = [];
+    let traceBytes = v.byteLength;
     let foundD = -1;
     search: for (let d = 0; d <= max; d++) {
-      trace.push(v.slice());
+      traceBytes += (2 * d + 1) * Int32Array.BYTES_PER_ELEMENT;
+      if (traceBytes > MAX_DIFF_TRACE_BYTES) return undefined;
+      trace.push(v.slice(offset - d, offset + d + 1));
       for (let k = -d; k <= d; k += 2) {
         let x: number;
         if (k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!)) {
@@ -186,60 +193,42 @@ function diffLineOps(before: readonly string[], after: readonly string[]): HunkO
       }
     }
     if (foundD < 0) {
-      // Budget guard made this unreachable; fail safe to "unavailable".
-      return ops;
+      return undefined;
     }
-    const middle: Array<{ sign: "-" | "+" | " "; index: number; text: string }> = [];
+    const middle: HunkOp[] = [];
     let x = midBefore.length;
     let y = midAfter.length;
     for (let d = foundD; d > 0; d--) {
       const vPrev = trace[d]!;
       const k = x - y;
       let prevK: number;
-      if (k === -d || (k !== d && vPrev[offset + k - 1]! < vPrev[offset + k + 1]!)) {
+      if (k === -d || (k !== d && vPrev[d + k - 1]! < vPrev[d + k + 1]!)) {
         prevK = k + 1;
       } else {
         prevK = k - 1;
       }
-      const prevX = vPrev[offset + prevK]!;
+      const prevX = vPrev[d + prevK]!;
       const prevY = prevX - prevK;
       while (x > prevX && y > prevY) {
-        middle.push({ sign: " ", index: x - 1, text: midBefore[x - 1]! });
+        middle.push({ sign: " ", oldLine: start + x, newLine: start + y, text: midBefore[x - 1]! });
         x -= 1;
         y -= 1;
       }
       if (prevK === k - 1) {
-        middle.push({ sign: "-", index: x - 1, text: midBefore[x - 1]! });
+        middle.push({ sign: "-", oldLine: start + x, text: midBefore[x - 1]! });
         x -= 1;
       } else {
-        middle.push({ sign: "+", index: y - 1, text: midAfter[y - 1]! });
+        middle.push({ sign: "+", newLine: start + y, text: midAfter[y - 1]! });
         y -= 1;
       }
     }
     while (x > 0 && y > 0) {
-      middle.push({ sign: " ", index: x - 1, text: midBefore[x - 1]! });
+      middle.push({ sign: " ", oldLine: start + x, newLine: start + y, text: midBefore[x - 1]! });
       x -= 1;
       y -= 1;
     }
-    middle.reverse();
-    // Renumber in document order; removals precede insertions at the same position (matches jsdiff output shape).
-    let oldCursor = start;
-    let newCursor = start;
-    const withNumbers: HunkOp[] = [];
-    for (const op of middle) {
-      if (op.sign === "-") {
-        withNumbers.push({ sign: "-", oldLine: oldCursor + 1, text: op.text });
-        oldCursor += 1;
-      } else if (op.sign === "+") {
-        withNumbers.push({ sign: "+", newLine: newCursor + 1, text: op.text });
-        newCursor += 1;
-      } else {
-        withNumbers.push({ sign: " ", oldLine: oldCursor + 1, newLine: newCursor + 1, text: op.text });
-        oldCursor += 1;
-        newCursor += 1;
-      }
-    }
-    ops.push(...withNumbers);
+    // Backtracking already knows both original coordinates; only restore order.
+    ops.push(...middle.reverse());
   }
   let oldLine = endBefore;
   let newLine = endAfter;
@@ -261,6 +250,7 @@ export function buildDiffRows(beforeText: string, afterText: string): { rows: Di
   if (!withinDiffBudget(before, after)) return undefined;
 
   const ops = diffLineOps(before, after);
+  if (!ops) return undefined;
   const changeIndexes = ops.map((op, index) => op.sign !== " " ? index : -1).filter((index) => index >= 0);
   const intervals: Array<[number, number]> = [];
   for (const index of changeIndexes) {

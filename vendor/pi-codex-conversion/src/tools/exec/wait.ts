@@ -26,7 +26,7 @@ export function waitForExitOrInactivity(session: WaitableSession, idleTimeMs: nu
 	let hardTimer: ReturnType<typeof setTimeout> | undefined;
 	let lastUpdateAt = 0;
 	let outputVersion = session.outputVersion;
-	return new Promise((resolvePromise) => {
+	return new Promise((resolvePromise, rejectPromise) => {
 		let abortCleanup: (() => void) | undefined;
 		let done = false;
 		const cleanup = () => {
@@ -46,7 +46,16 @@ export function waitForExitOrInactivity(session: WaitableSession, idleTimeMs: nu
 			const now = Date.now();
 			if (!force && now - lastUpdateAt < 250) return;
 			lastUpdateAt = now;
-			onUpdate?.(now - startedAt);
+			try {
+				onUpdate?.(now - startedAt);
+			} catch (error) {
+				// Reading a spooled snapshot can fail. Reject the waiter, not the
+				// background process poller, and release its callback/timers.
+				if (done) return;
+				done = true;
+				cleanup();
+				rejectPromise(error);
+			}
 		};
 		const onWake = () => {
 			if (session.exitCode === undefined || session.exitCode === null) {

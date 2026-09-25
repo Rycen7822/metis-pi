@@ -14,7 +14,7 @@
 //   records themselves (pi-agent-extensions: claim ≠ lock).
 // - Tests must use a tmpdir; nothing here ever touches a real HOME.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, unlinkSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   createState,
@@ -61,6 +61,9 @@ export interface StoreStatus {
 export interface TodoStore {
   readonly dir: string;
   read(): TodoState;
+  /** Shared display snapshot; treat as read-only. Checks the file fingerprint
+   * on each call, parsing only after a change. Mutations still read under lock. */
+  snapshot(): TodoState;
   settings(): TodoSettings;
   /** Apply a pure model function atomically; the state file is re-read under
    *  the lock so concurrent writers never clobber each other. */
@@ -107,8 +110,8 @@ const normalizeState = (raw: unknown): TodoState | undefined => {
   return { version: TODO_SCHEMA_VERSION, nextId, tasks: x.tasks as Task[] };
 };
 
-export function openTodoStore(dir: string, deps: { now?: () => number; session?: string; fs?: Pick<typeof import("node:fs"), "mkdirSync" | "readFileSync" | "writeFileSync" | "renameSync" | "existsSync" | "readdirSync" | "unlinkSync"> } = {}): TodoStore {
-  const fs = deps.fs ?? { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, unlinkSync };
+export function openTodoStore(dir: string, deps: { now?: () => number; session?: string; fs?: Pick<typeof import("node:fs"), "mkdirSync" | "readFileSync" | "writeFileSync" | "renameSync" | "existsSync" | "readdirSync" | "unlinkSync" | "statSync"> } = {}): TodoStore {
+  const fs = deps.fs ?? { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, unlinkSync, statSync };
   const now = deps.now ?? Date.now;
   const session = deps.session ?? `pid-${process.pid}`;
   const statePath = join(dir, TODO_STATE_FILE);
@@ -119,6 +122,7 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
 
   let queue: Promise<unknown> = Promise.resolve();
   let recoveredBackup: string | null = null;
+  let cachedSnapshot: { fingerprint: string | undefined; state: TodoState } | undefined;
 
   const loadSettings = (): TodoSettings => {
     const raw = readJson(settingsPath) as Record<string, unknown> | undefined;
@@ -142,10 +146,15 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
   };
 
   const readState = (): TodoState => {
-    const raw = readJson(statePath);
-    if (raw === undefined) {
-      // A file that exists but does not parse is corrupt; a missing one is not.
-      if (fs.existsSync(statePath)) archiveCorruptState();
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return createState();
+      // Unreadable is not missing or corrupt: never archive a permission/I/O
+      // failure or memoize it as a successfully read empty task list.
+      if (!(error instanceof SyntaxError)) throw error;
+      archiveCorruptState();
       return createState();
     }
     const state = normalizeState(raw);
@@ -156,10 +165,33 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     return state;
   };
 
+  const stateFingerprint = (): string | undefined => {
+    try {
+      const info = fs.statSync(statePath, { bigint: true });
+      return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
+
+  const snapshot = (): TodoState => {
+    const fingerprint = stateFingerprint();
+    if (cachedSnapshot && cachedSnapshot.fingerprint === fingerprint) return cachedSnapshot.state;
+    cachedSnapshot = undefined;
+    const state = readState();
+    // An external writer can replace the file between stat and read. Return
+    // this read, but only cache it when both fingerprints agree. No TTL/watch
+    // timer: the next frame also detects deletion, replacement and recreation.
+    if (stateFingerprint() === fingerprint) cachedSnapshot = { fingerprint, state };
+    return state;
+  };
+
   const writeState = (state: TodoState): void => {
     const tmp = `${statePath}.tmp-${process.pid}-${now()}`;
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
     fs.renameSync(tmp, statePath);
+    cachedSnapshot = undefined;
   };
 
   const acquireLock = (): void => {
@@ -222,6 +254,7 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
   const store: TodoStore = {
     dir,
     read: readState,
+    snapshot,
     settings: loadSettings,
     mutate: <T>(fn: (state: TodoState) => ModelResult<T>) => {
       const run = queue.then((): { ok: true; value: T; state: TodoState } | { ok: false; error: string } => {
@@ -269,6 +302,7 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     },
     dispose: () => {
       queue = Promise.resolve();
+      cachedSnapshot = undefined;
     },
   };
   return store;

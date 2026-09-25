@@ -1,4 +1,5 @@
 import { StringDecoder } from "node:string_decoder";
+import type { ExecOutputBuffer } from "./output-buffer.ts";
 export interface BridgeExecInput {
     command: string;
     executionCommand: string;
@@ -13,8 +14,7 @@ export interface BridgeExecSession {
     started: boolean;
     tty: boolean;
     command: string;
-    buffer: string;
-    bufferStartOffset: number;
+    buffer: ExecOutputBuffer;
     emittedOffset: number;
     outputVersion: number;
     exitCode: number | null | undefined;
@@ -40,6 +40,7 @@ export interface BridgeSessionHooks {
 export interface BridgeSessionRuntime {
     create(args: {
         id: number;
+        buffer: ExecOutputBuffer;
         input: BridgeExecInput;
         workdir: string;
         shell: string;
