@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
-import { Text, MouseRegion, hyperlink, visibleWidth } from "@earendil-works/pi-tui";
+import { Text, MouseRegion, hyperlink, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import extension from "../extensions/appearance.ts";
 
 const handlers = new Map();
@@ -108,6 +108,43 @@ for (const expanded of [false, true, false]) {
 }
 assert.equal(execRow.toolDefinition, execTool);
 assert.equal(execRow.getRenderShell(), "default");
+
+// Long one-line chains and multiline scripts use the SAME physical-row layout as bash.
+const { renderShellCall } = await import("../src/shell.ts");
+const { productFor } = await import("../src/selection-copy/model.ts");
+const chain = Array.from({ length: 8 }, (_, i) => `printf '%s' command_${i}_中文`).join(" && ");
+for (const command of [chain, "node <<'JS'\n  const text = '中文';\n\n  console.log(text);\nJS\nprintf done"]) {
+  const args = { cmd: command };
+  const row = new Core.ToolExecutionComponent("exec_command", "exec-width", args, { showImages: false }, execTool, ui, process.cwd());
+  row.setArgsComplete();
+  row.updateResult({ content: [{ type: "text", text: "output unchanged" }], details: { output: "output unchanged", exit_code: 0 }, isError: false });
+  for (const expanded of [false, true, false]) for (const width of [20, 40, 80, 160]) {
+    row.setExpanded(expanded);
+    const themed = { fg: (_role, text) => text, bold: text => text };
+    const component = row.getCallRenderer()(args, themed, { expanded, toolCallId: "exec-width" });
+    const actual = component.render(width);
+    const expected = renderShellCall({
+      row: { title: "Ran", command, language: "bash", isError: false, isPartial: false, output: "", expanded, expandHint: "" },
+      width, layout: { wrap: wrapTextWithAnsi, visibleWidth }, colorLevel: { kind: "truecolor" }, bullet: "•", titlePainter: title => title,
+    });
+    assert.deepEqual(actual, expected, "owned exec and builtin bash share wrapping and physical-row budget");
+    assert.equal(productFor(actual)?.rows.length, actual.length, "copy provenance stays aligned");
+    assert.ok(actual.length > 1, "long input must not be cut to one 100-character line");
+    assert.ok(actual.every(line => visibleWidth(line) <= width));
+    if (!expanded) assert.ok(actual.length <= 4, "same builtin command budget, including omission notice");
+    const rendered = row.render(width);
+    assert.ok(rendered.every(line => visibleWidth(line) <= width));
+    if (width === 80) assert.match(stripVTControlCharacters(rendered.join("\n")), /output unchanged/);
+  }
+  if (command === chain) {
+    const full = row.getCallRenderer()(args, { fg: (_role, text) => text, bold: text => text }, { expanded: true, toolCallId: "exec-width" }).render(80);
+    const content = productFor(full).rows.flatMap(row => row.spans.filter(span => span.kind === "content").map(span => span.text ?? "")).join("");
+    // Pi's soft wrapper consumes separator whitespace at wrap boundaries, as it
+    // does for builtin bash. Check that no command text was truncated, not that
+    // its existing copy behavior preserves every whitespace character.
+    assert.equal(content.replace(/\s/g, ""), command.replace(/\s/g, ""), "expanded view includes every command token beyond character 100");
+  }
+}
 
 // ---- 3. Mouse: title click expands, second click folds -----------------------
 const beforeClick = bashRow.expanded;

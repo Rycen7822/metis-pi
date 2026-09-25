@@ -38,3 +38,28 @@ test("exploration grouping stays native; only expanded commands get syntax color
   // Without metis-pi the vendor's original theme-based fallback still works.
   assert.match(renderExecCommandCall("npm test", "done", { ...theme, fg: (role, text) => `<${role}>${text}</${role}>` }), /<accent>npm test<\/accent>/);
 });
+
+test("ordinary commands reach the width-aware component intact, exploration bypasses it", () => {
+  const commands = [
+    Array.from({ length: 8 }, (_, i) => `printf '%s' step_${i}_中文`).join(" && "),
+    "node <<'JS'\n  const x = '中文';\n\n  console.log(x);\nJS",
+  ];
+  for (const command of commands) for (const expanded of [false, true]) for (const state of ["running", "done"]) {
+    const component = { render: width => [`width:${width}`] };
+    const rendered = renderExecCommandCall(command, state, { ...colored,
+      renderCommandCall(actual, status, open) {
+        assert.equal(actual, command);
+        assert.equal(status, state);
+        assert.equal(open, expanded);
+        return component;
+      },
+    }, expanded);
+    assert.equal(rendered, component);
+  }
+  const delegated = { ...colored, renderCommandCall() { assert.fail("exploration must keep its native grouping"); } };
+  for (const expanded of [false, true]) {
+    assert.equal(renderExecCommandCall("cat example.ts", "done", delegated, expanded), renderExecCommandCall("cat example.ts", "done", colored, expanded));
+    const groups = [[{ kind: "read", path: "example.ts", command: "cat example.ts" }]];
+    assert.equal(renderGroupedExecCommandCall(groups, "done", delegated, expanded, ["cat example.ts"]), renderGroupedExecCommandCall(groups, "done", colored, expanded, ["cat example.ts"]));
+  }
+});

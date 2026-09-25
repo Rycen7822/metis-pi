@@ -1,4 +1,4 @@
-import { asRecord, TOOL_NAMES, type Renderers, type ToolName } from "./tool-names.ts";
+import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext } from "./tool-names.ts";
 import { publishRows } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,7 @@ export interface AdapterOptions {
   };
   /** Paint only command text; the owned tool retains grouping and execution state. */
   highlightOwnedCommand?: (lines: readonly string[]) => string[];
+  renderOwnedCommand?: (command: string, state: "running" | "done", expanded: boolean, theme: Palette, context: ViewContext) => Component;
 }
 export interface AdapterHandle {
   readonly installed: boolean;
@@ -90,6 +91,9 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
           fg: (role: string, text: string) => theme.fg(role, text),
           bold: (text: string) => theme.bold(text),
           highlightCommandLines: options.highlightOwnedCommand,
+          renderCommandCall: options.renderOwnedCommand
+            ? (command: string, state: "running" | "done", expanded: boolean) => options.renderOwnedCommand!(command, state, expanded, theme, context)
+            : undefined,
         }, context),
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
       };
@@ -128,7 +132,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       if (renderers) {
         if (key === "getCallRenderer") return renderers.renderCall;
         if (key === "getResultRenderer") return renderers.renderResult;
-        // Command coloring is a call-only decoration, not a shell/layout replacement.
+        // Only the command call is decorated; preserve the vendor's result shell.
         if (asRecord(this).toolName === "exec_command") return original.call(this);
         // IMPORTANT: leave the constructor's child tree in its STOCK default-shell
         // form. Activate self-shell only at first render, then populate it below.

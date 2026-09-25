@@ -99,7 +99,7 @@ test("only the packaged apply_patch entry can use the owned diff renderer", () =
   } finally { handle.dispose(); }
 });
 
-test("command coloring is owned, call-only, reversible and leaves the theme untouched", () => {
+test("command presentation is owned, call-only, reversible and leaves the theme untouched", () => {
   const Host = fakeHost();
   const painter = (lines) => lines.map(line => `colored:${line}`);
   let sourceInfo = { source: "git:metis", path: OWNED_CONVERSION_ENTRY };
@@ -112,6 +112,10 @@ test("command coloring is owned, call-only, reversible and leaves the theme unto
   const handle = installAdapter(Host.prototype, {
     getTools: () => [{ name: "exec_command", sourceInfo }], enabled: () => enabled,
     renderers: {}, highlightOwnedCommand: painter,
+    renderOwnedCommand: (command, state, expanded, originalTheme) => {
+      assert.equal(originalTheme, theme);
+      return bindings.makeText(`${state}:${expanded}:${command}`);
+    },
   });
   const row = new Host("exec_command", definition);
   try {
@@ -119,6 +123,8 @@ test("command coloring is owned, call-only, reversible and leaves the theme unto
     assert.equal(row.getRenderShell(), "default");
     assert.equal(receivedTheme.fg("accent", "x"), theme.fg("accent", "x"));
     assert.equal(theme.highlightCommandLines, undefined);
+    assert.equal(theme.renderCommandCall, undefined);
+    assert.deepEqual(receivedTheme.renderCommandCall("raw command", "done", true).render(80), ["done:true:raw command"]);
     assert.equal(row.toolDefinition, definition);
     row.updateResult({ content: [] });
     assert.match(row.render(80).join("\n"), /native result/);

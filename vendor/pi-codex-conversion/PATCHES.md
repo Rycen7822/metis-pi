@@ -79,17 +79,23 @@ Existing clear/shutdown paths still own cleanup, and separate installs stay isol
 `test/transcript/apply-patch-module-context.test.mjs` checks isolated contexts,
 failure updates, compact policy and cleanup.
 
-## 11. Shared command syntax colors
+## 11. Shared command layout and syntax colors
 
 `ui/tool-rendering/codex-rendering.ts` accepts an optional `highlightCommandLines`
 theme callback for raw command rows (including expanded exploration commands).
 metis-pi supplies its existing bash script highlighter through a call-local theme
 only for the exact packaged `exec_command` source. No tracker, tool execution,
-output, grouping, truncation or session behavior is replaced. Missing callbacks
+output, grouping or session behavior is replaced. An optional `renderCommandCall`
+factory delegates ordinary command calls to metis-pi's existing builtin bash
+component, passing the original untruncated command and tracker status. That
+component owns width-dependent wrapping, physical-row budgets, highlighting and
+copy metadata; the tool returns it directly rather than wrapping it in `Text`.
+Exploration summaries still use the vendor renderer. Missing callbacks
 retain the original accent/muted fallback, and there is no module-global painter
 to diverge across Pi's isolated extension contexts. Root adapter/renderer tests
 and the real host smoke cover ownership, color capability, multiline previews,
-background-session status and failure output.
+background-session status, failure output, terminal resizing and folded/expanded
+single-line chains without the legacy 100-character cutoff.
 
 ## Maintenance verification
 

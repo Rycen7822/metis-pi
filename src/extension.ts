@@ -327,6 +327,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps),
       ownedApplyPatch: bindings.makeDiff ? createOwnedApplyPatchView(bindings.makeText, bindings.makeDiff, bindings.expandHint) : undefined,
       highlightOwnedCommand: (lines) => highlightBashScript(lines, session.colorLevel),
+      renderOwnedCommand: bindings.makeShell?.makeShellCall
+        ? (command, state, expanded, theme, context) => bindings.makeShell!.makeShellCall!({
+          name: "bash", args: { command }, options: { expanded }, theme, context,
+          bullet: theme.fg("dim", "•"), title: state === "running" ? "Running" : "Ran",
+          expandHint: bindings.expandHint(), colorLevel: session.colorLevel,
+        })
+        : undefined,
     });
     if (!handle.installed) ctx.ui.notify(`metis-pi: ${handle.reason}. Compact transcript was not installed.`, "warning");
     // Scoped transcript decorations (member spacing + assistant separator +

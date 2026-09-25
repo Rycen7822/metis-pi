@@ -3,7 +3,7 @@ export function renderExecCommandCall(command, state, theme, expanded = false) {
     const summary = summarizeShellCommand(command);
     return summary.maskAsExplored
         ? renderExplorationText([summary.actions], state, theme, expanded ? [command] : undefined)
-        : renderCommandText(command, state, theme, expanded);
+        : theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded);
 }
 export function renderGroupedExecCommandCall(actionGroups, state, theme, expanded = false, commands = []) {
     return renderExplorationText(actionGroups, state, theme, expanded ? commands : undefined);

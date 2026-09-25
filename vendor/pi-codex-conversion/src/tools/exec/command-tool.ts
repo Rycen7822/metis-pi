@@ -142,7 +142,7 @@ function renderCall(
 	const text = info.actionGroups
 		? renderGroupedExecCommandCall(info.actionGroups, info.status, theme, expanded, info.commands ?? [command])
 		: renderExecCommandCall(command, info.status, theme, expanded);
-	return new Text(text, 0, 0);
+	return typeof text === "string" ? new Text(text, 0, 0) : text;
 }
 
 function renderResult(

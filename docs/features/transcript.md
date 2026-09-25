@@ -36,7 +36,7 @@
 - **文件修改（edit/diff）**：Codex 式 `行号 + 空格 + +/- + 内容`。删除行整行底色 `#4A221D`（256 色 `52`），新增行 `#213A2B`（256 色 `22`），ANSI-16 只保留前景色；diff 正文按文件扩展名做语法高亮，且前景 `reset` **不会**清掉 diff 底色；换行后内容悬挂对齐到正文列；context 行无底色；宿主自带的 compact context window 不再二次截断。整条路径只有**一个** diff 渲染实现（`src/diff.ts` → `src/diff-component.ts`）。
 - **写入（write）**：`tool_execution_start` 抓 pre-image、`tool_execution_end` 校验 post-image，只在可靠时呈现：新文件 `Added path (+N -0)` 全绿；覆盖写 `Edited path (+A -D)` 真实 diff；二进制 / 超大 / 不可读 / post 不匹配 / 任何不确定 → 回退成原始内容预览。**绝不伪造 diff**（`src/write-tracker.ts`，状态仅存进程内存，不写盘、不进会话记录）。
 - **内置 apply_patch**：单文件/多文件的默认 diff 预览和展开视图均复用与 `edit` 相同的 Codex 整行背景、行号与换行布局（`src/apply-patch-view.ts`），包括新增、删除和移动。折叠预览在换行后跨文件合计保留 11 个屏幕行，随后显示展开提示；展开后显示完整 diff。转换层仍决定是否只显示摘要，预览来自其唯一的执行前结构化快照，不在执行后重读文件。失败/部分失败及无快照的历史记录保留原生诊断，不伪造成功 diff。
-- **内置 exec_command**：折叠/展开的命令文本以及展开探索分组后的原始命令复用 `src/bash-lexer.ts`，与 `bash` 一样区分命令、参数、字符串和运算符颜色，并识别 heredoc 正文。转换层仍负责预览截断、探索分组、后台会话及结果显示；只通过本次渲染的主题参数传递着色函数，不增加跨扩展共享状态，不改动输出、执行参数或终端无色模式。
+- **内置 exec_command**：普通命令直接复用 `bash` 的 call 组件，按当前终端宽度换行后计算屏幕行预算，移除本路径的“每行 100 字符、最多 5 个输入行”截断。标题行、续行栏、展开/折叠和复制元数据均来自同一组件（沿用 bash 的安全长度上限）。命令与展开探索分组中的原始命令仍共用 `src/bash-lexer.ts` 的颜色及 heredoc 高亮。转换层继续负责探索分组、执行状态、后台会话和结果显示；组件工厂与着色函数仅通过调用时主题传递，不增加共享状态，也不改动输出或执行参数。
 - **写入实时预览**：模型还在生成 `write` 参数时实时显示标题 + 阶段行 + 物理行尾部预算内的正文。`writePreview.rows` 是**整块**屏幕行预算（标题行 + 阶段行 + 正文 + 省略行），且至少保留 1 行正文；`0` 表示只留标题与阶段行。
 - **图像结果**：保留宿主原生图片路径，服从 `terminal.showImages`；关闭图片预览时只显示轻量数量提示，不输出 Base64。
 - **启动头**：1–2 行极简身份行，运行时读取**真实**版本号（`src/chrome/header.ts`）。
@@ -62,7 +62,7 @@
 - **安装前逐字校验**：三个 selector 的**函数源码**必须与预期字符串一致，`render` 的方法体必须含 `this.selfRenderContainer.render(`、`this.selfRenderHeight=`、`this.imageComponents` 三个标记；任何一个不符 → 直接退避（`skipped(reason)`），启动时给出警告而不是默默声称已启用。
 - **自己的占位标记**：`Symbol.for("Rycen7822.metis-pi.tool-view.v2")` 作为原型自有属性，第二份副本会退避。
 - **来源核对**：原生工具要求 `sourceInfo.source === "builtin"` 且 `path === "<builtin:name>"`；内置 `apply_patch` 和 `exec_command` 只允许本包 `vendor/pi-codex-conversion/dist/index.js` 的精确来源路径。FFF / LSP 或其他来源的同名工具不受影响。
-- **只在首次实际绘制时切 self-shell**：默认构造的子组件树保持原样，因此卸载/禁用可以还原原生卡片，不需要剪切 children、不改写鼠标命中、不动图片协议。`exec_command` 仅装饰着色，保留原来的 shell 布局。
+- **只在首次实际绘制时切 self-shell**：默认构造的子组件树保持原样，因此卸载/禁用可以还原原生卡片，不需要剪切 children、不改写鼠标命中、不动图片协议。`exec_command` 只接管 command call，保留原来的外层 shell 和结果布局。
 - **每帧核对归属**：`ownsMethods()` 用身份比较确认原型上仍是自己的包装；后来者替换了就立即停止接管，卸载时也不会覆盖后来者。
 - **呈现失败降级**：单行渲染抛错时把该行退回默认视图，绝不让渲染路径把宿主进程带崩。
 - 不持有转录行的强引用（`WeakRef` 集合 + 定期清扫）。

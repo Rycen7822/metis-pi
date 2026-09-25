@@ -6,13 +6,15 @@ export interface RenderTheme {
 	bold(text: string): string;
 	/** Optional metis-pi call-only painter; no shared state across extension loaders. */
 	highlightCommandLines?(lines: readonly string[]): string[];
+	/** Host-owned width-aware command component; exploration stays in this module. */
+	renderCommandCall?(command: string, state: ExecCommandStatus, expanded: boolean): { render(width: number): string[] };
 }
 
-export function renderExecCommandCall(command: string, state: ExecCommandStatus, theme: RenderTheme, expanded = false): string {
+export function renderExecCommandCall(command: string, state: ExecCommandStatus, theme: RenderTheme, expanded = false): string | { render(width: number): string[] } {
 	const summary = summarizeShellCommand(command);
 	return summary.maskAsExplored
 		? renderExplorationText([summary.actions], state, theme, expanded ? [command] : undefined)
-		: renderCommandText(command, state, theme, expanded);
+		: theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded);
 }
 
 export function renderGroupedExecCommandCall(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme, expanded = false, commands: string[] = []): string {
