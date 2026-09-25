@@ -51,8 +51,16 @@ Preserve partial writes, close/commit order, function metadata, byte limits, sco
 
 `ui/settings/config-items-shared.ts` owns simple boolean controls used by display/tools/voice/OpenAI tabs: read the displayed config, update the latest draft without mutating it. Custom controls, action markers and coupled compaction updates remain explicit. `test/vendor-config.test.mjs` covers alias/dependency/optional-field semantics and all 15 converted controls.
 
+## 9. metis-pi-owned update lifecycle
+
+`extension/events.ts` no longer checks the upstream npm version at session startup.
+`adapter/local-version-warning.ts` is deleted, including its registry request, version
+comparison and checkout-path detection. metis-pi owns releases and updates; the vendored
+manifest retains upstream provenance only. Do not restore this check during manual sync.
+`test/package.test.mjs` guards both source and shipped output against its return.
+
 ## Maintenance verification
 
 Run project/vendor checks and real built-provider tests. Rebuild twice to check deterministic output; regenerate the patch twice to check idempotence. Apply it to an isolated pristine 3.0.34 source copy using the documented payload exclusions and compare file contents and modes. New-file diff headers must use `a/src/` and `b/src/` on both sides. Do not remove unified-diff context prefixes to silence patch-file whitespace diagnostics.
 
-Current results and unverified runtime boundaries live only in the root [VALIDATION.md](../../VALIDATION.md). Upstream 3.0.35 exists, but this work retains the 3.0.34 baseline; review and replay every applicable patch when syncing.
+Current results and unverified runtime boundaries live only in the root [VALIDATION.md](../../VALIDATION.md). This work retains the 3.0.34 baseline; review and replay every applicable patch when syncing.

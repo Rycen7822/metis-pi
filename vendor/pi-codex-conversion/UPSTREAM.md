@@ -13,13 +13,14 @@ owns it: patches live in this repo's git history instead of being wiped by `pi u
 | License | MIT — see `LICENSE` (upstream copyright, unchanged) |
 | Pristine checkout | `references/howaboua-pi-stuff/` (local-only, gitignored) |
 
-npm now also publishes **3.0.35**. This copy deliberately stays on 3.0.34 + the patches in `PATCHES.md`: the
-0.86 transcript migration is local-only for now, and the vendored "behind npm" notice is expected until the next
-`vendor:sync` (run it with the 0.86 sources and re-apply patches 2-6).
+This copy deliberately stays on the 3.0.34 baseline + the patches in `PATCHES.md`.
+metis-pi owns its release and update lifecycle: the upstream npm version query and
+local-checkout warning are removed, not muted. Upstream synchronization is an explicit
+maintainer action and must preserve all applicable local patches.
 
 ## What is here
 
-- `src/**` — the 321 upstream TypeScript sources. **This is where patches are made.**
+- `src/**` — the locally maintained upstream-derived TypeScript sources. **This is where patches are made.**
 - `dist/**` — build output (`tsc -p tsconfig.build.json`), **committed** so pi can load the
   extension with no build step at install time.
 - `changelog.ts` / `changelog.js` — the "what's new" payload the entry imports dynamically;
@@ -37,8 +38,8 @@ npm now also publishes **3.0.35**. This copy deliberately stays on 3.0.34 + the 
 - `tsconfig.base.json` — upstream's monorepo base config minus `stableTypeOrdering`, which is a
   bun-only option TypeScript 5.9.3 does not accept. These two config edits are the only ones.
 - `package.json` — trimmed from upstream: identity, version, license, engines, dependencies and
-  peer dependencies. `private: true` (we are not republishing it); the runtime reads
-  `name` + `version` out of this file for its "npm is ahead of this checkout" notice.
+  peer dependencies. `private: true` (we are not republishing it); its upstream identity
+  and version record provenance, not an independently updated runtime package.
 
 ## Deliberate omissions (payload scope)
 
@@ -73,9 +74,6 @@ Runtime asset lookups are relative to the package root (the code computes it as 
   module renders that version's `CHANGELOG.md` entries into the transcript. Its state lives in
   `<agentDir>/howaboua-pi-stuff-changelog.json` (`{"suppress": true}` silences it — the pty harness does
   that, since the block shifts the layout its coordinate-based stages assert on).
-- **"Behind npm" notice.** Because this copy is not under `node_modules`, upstream's local-checkout
-  logic compares its `package.json` version against the published npm version and warns when npm is
-  ahead. Treat that warning as an upstream-moved signal: run the upgrade procedure below.
 - **Shortcuts.** The default `backgroundShellPrevShortcut` is `alt+q`, which collides with pi's built-in
   `app.message.dequeue`; pi then shows an "Extension issues" banner. Real installs set their own key in
   `pi-codex-conversion.json` (this machine uses `ui.backgroundShellPrevShortcut = "alt+u"`). The vendored

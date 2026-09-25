@@ -58,6 +58,22 @@ test("package exposes the display, goal, todo and vendored codex-conversion entr
   assert.equal(pkg.pi.prompts, undefined);
 });
 
+test("metis-pi owns vendored updates without an upstream npm check", () => {
+  const root = new URL("../vendor/pi-codex-conversion/", import.meta.url);
+  for (const path of ["src/adapter/local-version-warning.ts", "dist/adapter/local-version-warning.js", "dist/adapter/local-version-warning.d.ts"]) {
+    assert.equal(existsSync(new URL(path, root)), false, `${path} must not ship`);
+  }
+  for (const dir of ["src", "dist"]) {
+    for (const path of readdirSync(new URL(`${dir}/`, root), { recursive: true })) {
+      if (!/\.(ts|js)$/.test(path)) continue;
+      const text = readFileSync(new URL(`${dir}/${path}`, root), "utf8");
+      assert.doesNotMatch(text, /maybeWarnLocalCheckoutVersion|local-version-warning|registry\.npmjs\.org|local checkout is behind npm/, path);
+    }
+    const events = readFileSync(new URL(`${dir}/extension/events.${dir === "src" ? "ts" : "js"}`, root), "utf8");
+    assert.match(events, /pi\.on\("session_start"/, "normal session initialization remains registered");
+  }
+});
+
 test("display runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
   const rootUrl = new URL("../src/", import.meta.url);
   const files = [];

@@ -10,7 +10,6 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
 import { onCodeModeExtensionToolsRefresh } from "../code-mode-extension-tools.ts";
 import { extractPiPromptSkills, resolvePromptSkills } from "../prompt/build-system-prompt.ts";
 import type { CodeModeProxyProviderRegistration } from "../providers/code-mode-proxy-provider.ts";
-import { maybeWarnLocalCheckoutVersion } from "../adapter/local-version-warning.ts";
 import { clearApplyPatchRenderState } from "../tools/apply-patch/tool.ts";
 import type { CodeModeRegistration } from "../tools/code-mode/tools.ts";
 import { parseRealtimeVoicePrompt, REALTIME_VOICE_PROMPT_CHANNEL } from "../realtime-voice.ts";
@@ -98,7 +97,7 @@ export function registerCodexEvents(
 	runtime.voice.setDelegationPreflight((ctx, signal) => prepareVoiceDelegation(runtime, codeMode, ctx, signal));
 	sessions.onSessionExit((sessionId) => tracker.recordSessionFinished(sessionId));
 
-	pi.on("session_start", async (event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		updateCodexPreparedIdleKickoff(pi, "session_reset");
 		turnPrewarm = undefined;
 		activeContext = ctx;
@@ -147,7 +146,6 @@ export function registerCodexEvents(
 		prepareCodeModeHost(codeMode, ctx);
 		if (!state.config.prompt.heavySystemPromptOverwrite)
 			void runtime.startPrewarm(ctx, codeMode.refreshPromptTools(ctx.getSystemPrompt(), ctx));
-		if (event.reason === "startup") await maybeWarnLocalCheckoutVersion(ctx);
 	});
 
 	pi.on("thinking_level_select", (event, ctx) => {

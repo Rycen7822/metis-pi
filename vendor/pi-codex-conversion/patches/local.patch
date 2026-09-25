@@ -1010,6 +1010,80 @@ index 4cccc05..d15b4df 100644
  }
  
  export function createResponsesInputParitySignature(input: readonly unknown[]): string[] {
+diff --git a/src/adapter/local-version-warning.ts b/src/adapter/local-version-warning.ts
+deleted file mode 100644
+index 565efd2..0000000
+--- a/src/adapter/local-version-warning.ts
++++ /dev/null
+@@ -1,68 +0,0 @@
+-import { readFileSync } from "node:fs";
+-import { dirname } from "node:path";
+-import { fileURLToPath } from "node:url";
+-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+-
+-const PACKAGE_NAME = "@howaboua/pi-codex-conversion";
+-const NPM_REGISTRY_URL = "https://registry.npmjs.org/@howaboua%2Fpi-codex-conversion";
+-const PACKAGE_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+-
+-interface PackageJsonLike {
+-	name?: string | undefined;
+-	version?: string | undefined;
+-}
+-
+-interface NpmRegistryPackageLike {
+-	"dist-tags"?: { latest?: string | undefined } | undefined;
+-}
+-
+-export function isLocalCheckoutPath(path: string): boolean {
+-	return !path.split(/[\\/]/).includes("node_modules");
+-}
+-
+-export function compareSemverLike(left: string, right: string): number {
+-	const leftParts = parseSemverLike(left);
+-	const rightParts = parseSemverLike(right);
+-	for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index++) {
+-		const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+-		if (delta !== 0) return delta;
+-	}
+-	return 0;
+-}
+-
+-export function formatLocalCheckoutUpdateWarning(currentVersion: string, latestVersion: string): string {
+-	return `${PACKAGE_NAME} local checkout is behind npm (${currentVersion} < ${latestVersion}). Update the checkout to the latest release or switch back to the npm package.`;
+-}
+-
+-function parseSemverLike(value: string): number[] {
+-	return value.split(/[.-]/).map((part) => Number.parseInt(part, 10)).filter(Number.isFinite);
+-}
+-
+-function readPackageJson(packageRoot: string): PackageJsonLike | undefined {
+-	try {
+-		return JSON.parse(readFileSync(`${packageRoot}/package.json`, "utf8")) as PackageJsonLike;
+-	} catch {
+-		return undefined;
+-	}
+-}
+-
+-async function fetchLatestNpmVersion(fetchImpl: typeof fetch = fetch): Promise<string | undefined> {
+-	const response = await fetchImpl(NPM_REGISTRY_URL, { signal: AbortSignal.timeout(2_000) });
+-	if (!response.ok) return undefined;
+-	const json = await response.json() as NpmRegistryPackageLike;
+-	return json["dist-tags"]?.latest;
+-}
+-
+-export async function maybeWarnLocalCheckoutVersion(ctx: ExtensionContext, options: { packageRoot?: string | undefined; fetchImpl?: typeof fetch | undefined } = {}): Promise<void> {
+-	const packageRoot = options.packageRoot ?? PACKAGE_ROOT;
+-	if (!isLocalCheckoutPath(packageRoot)) return;
+-	const packageJson = readPackageJson(packageRoot);
+-	if (packageJson?.name !== PACKAGE_NAME || !packageJson.version) return;
+-	try {
+-		const latestVersion = await fetchLatestNpmVersion(options.fetchImpl);
+-		if (!latestVersion || compareSemverLike(packageJson.version, latestVersion) >= 0) return;
+-		ctx.ui.notify(formatLocalCheckoutUpdateWarning(packageJson.version, latestVersion), "warning");
+-	} catch {
+-		return;
+-	}
+-}
 diff --git a/src/adapter/provider-request.ts b/src/adapter/provider-request.ts
 index f4d861d..1518b0e 100644
 --- a/src/adapter/provider-request.ts
@@ -1435,6 +1509,35 @@ index 23a4ee4..fbef4e1 100644
  	return names.has("history") && names.has("notes");
  }
  
+diff --git a/src/extension/events.ts b/src/extension/events.ts
+index 0401a67..8bac8bc 100644
+--- a/src/extension/events.ts
++++ b/src/extension/events.ts
+@@ -10,7 +10,6 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
+ import { onCodeModeExtensionToolsRefresh } from "../code-mode-extension-tools.ts";
+ import { extractPiPromptSkills, resolvePromptSkills } from "../prompt/build-system-prompt.ts";
+ import type { CodeModeProxyProviderRegistration } from "../providers/code-mode-proxy-provider.ts";
+-import { maybeWarnLocalCheckoutVersion } from "../adapter/local-version-warning.ts";
+ import { clearApplyPatchRenderState } from "../tools/apply-patch/tool.ts";
+ import type { CodeModeRegistration } from "../tools/code-mode/tools.ts";
+ import { parseRealtimeVoicePrompt, REALTIME_VOICE_PROMPT_CHANNEL } from "../realtime-voice.ts";
+@@ -98,7 +97,7 @@ export function registerCodexEvents(
+ 	runtime.voice.setDelegationPreflight((ctx, signal) => prepareVoiceDelegation(runtime, codeMode, ctx, signal));
+ 	sessions.onSessionExit((sessionId) => tracker.recordSessionFinished(sessionId));
+ 
+-	pi.on("session_start", async (event, ctx) => {
++	pi.on("session_start", async (_event, ctx) => {
+ 		updateCodexPreparedIdleKickoff(pi, "session_reset");
+ 		turnPrewarm = undefined;
+ 		activeContext = ctx;
+@@ -147,7 +146,6 @@ export function registerCodexEvents(
+ 		prepareCodeModeHost(codeMode, ctx);
+ 		if (!state.config.prompt.heavySystemPromptOverwrite)
+ 			void runtime.startPrewarm(ctx, codeMode.refreshPromptTools(ctx.getSystemPrompt(), ctx));
+-		if (event.reason === "startup") await maybeWarnLocalCheckoutVersion(ctx);
+ 	});
+ 
+ 	pi.on("thinking_level_select", (event, ctx) => {
 diff --git a/src/providers/code-mode-proxy-provider.ts b/src/providers/code-mode-proxy-provider.ts
 index b1e1cb2..762a3dd 100644
 --- a/src/providers/code-mode-proxy-provider.ts

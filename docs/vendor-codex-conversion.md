@@ -26,4 +26,4 @@
 
 当前只保留 **linux-x64** 原生工具；语音 helper 被裁剪，依赖这些 helper 的语音功能不可用。其它平台需补齐载荷并验证。后台 shell 默认快捷键 `alt+q` 可能与 Pi 冲突，可在 vendor 配置中改 `ui.backgroundShellPrevShortcut`。
 
-上游发布新版本时可能出现本地 checkout 落后提示，这不代表本地补丁可以丢弃。正常请求、prewarm、压缩、回放和代理必须共同验证；公开 facade、原生 ABI 和惰性加载不能仅靠静态不可达分析删除。真实服务端与可选运行时的验证范围见 [VALIDATION](../VALIDATION.md)。
+转换层的发布与更新由 metis-pi 管理：已移除上游 npm 版本查询、比较和本地 checkout 落后提示，不会在启动时检查上游更新。保留上游版本号仅用于记录来源，手动同步上游时必须保留本地补丁。正常请求、prewarm、压缩、回放和代理必须共同验证；公开 facade、原生 ABI 和惰性加载不能仅靠静态不可达分析删除。真实服务端与可选运行时的验证范围见 [VALIDATION](../VALIDATION.md)。
