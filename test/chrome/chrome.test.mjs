@@ -338,7 +338,7 @@ test("editor factory: surface mode replaces borders; legacy mode keeps accent bo
   assert.match(legacy.render(40).join("\n"), /─{10}/, "legacy border mode intact");
 });
 
-test("focused editor paints a thin caret without moving the host cursor marker or text", async () => {
+test("hardware cursor keeps the exact character under the IME marker", async () => {
   const { makeCodexEditorFactory } = await import("../../src/chrome/editor.ts");
   const { CURSOR_MARKER } = await import("../../src/surface.ts");
   const { visibleWidth } = await import("@earendil-works/pi-tui");
@@ -364,8 +364,11 @@ test("focused editor paints a thin caret without moving the host cursor marker o
     }
   }
   const surface = { paintRow: (row) => row, paintGlyph: (text) => text };
-  const host = { CustomEditor: HostEditor, visibleWidth };
-  const makeEditor = (withSurface) => makeCodexEditorFactory({ host, surface: withSurface ? surface : undefined, accent: (s) => s })({}, {}, {});
+  const host = { CustomEditor: HostEditor };
+  const makeEditor = (withSurface, enabled = true) => makeCodexEditorFactory({
+    host, surface: withSurface ? surface : undefined, accent: (s) => s,
+    hardwareCursor: enabled ? () => () => true : undefined,
+  })({}, {}, {});
   const strip = (line) => line.replaceAll(CURSOR_MARKER, "").replace(/\x1b\[[\d;]*m/g, "");
 
   for (const withSurface of [true, false]) {
@@ -374,16 +377,20 @@ test("focused editor paints a thin caret without moving the host cursor marker o
       editor.text = text;
       editor.cursor = offset;
       const rows = editor.render(45);
-      assert.ok(rows[1].includes(`${CURSOR_MARKER}▏`), "caret drawn exactly at the native IME marker");
+      const glyph = [...graphemes.segment(text.slice(offset))][0]?.segment ?? " ";
+      assert.ok(rows[1].includes(`${CURSOR_MARKER}${glyph}\x1b[0m`), "original glyph remains at native IME marker");
       assert.doesNotMatch(rows[1], /\x1b\[7m/, "no inverse-video block remains while focused");
-      assert.match(rows[1], /▏ *\x1b\[0m/, "host styling reset still follows the caret");
       assert.equal(visibleWidth(strip(rows[1])), 45, "same physical row width even for wide/combined graphemes");
       assert.equal(editor.getText(), text, "draft content unchanged");
-      if (text === "" && withSurface) assert.match(rows[1], /▏\x1b\[0mAsk anything\.\.\./, "placeholder follows thin caret");
+      if (text === "" && withSurface) assert.match(rows[1], / \x1b\[0mAsk anything\.\.\./, "placeholder follows cursor cell");
     }
     editor.focused = false;
     assert.doesNotMatch(editor.render(45)[1], /▏/, "inactive editor does not paint a fake caret");
   }
+  const fallback = makeEditor(true, false);
+  fallback.text = "world";
+  fallback.cursor = 3;
+  assert.ok(fallback.render(45)[1].includes(`${CURSOR_MARKER}\x1b[7ml\x1b[0m`), "without hardware support the native character and block remain");
 });
 
 test("editor factory: the composer forces the completion query for a second skill trigger", async () => {

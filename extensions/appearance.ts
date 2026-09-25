@@ -261,7 +261,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       const maxRows = bootWritePreview.enabled ? bootWritePreview.rows : 0;
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
-    editorHost: { CustomEditor: Pi.CustomEditor as unknown, visibleWidth: Tui.visibleWidth },
+    editorHost: { CustomEditor: Pi.CustomEditor as unknown },
     marginHost: {
       HStack: typeof Tui.HStack === "function" ? Tui.HStack : undefined,
       Spacer: typeof Tui.Spacer === "function" ? Tui.Spacer : undefined,

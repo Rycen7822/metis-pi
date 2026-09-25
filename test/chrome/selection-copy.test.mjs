@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem, detectExternalSerializerPatch } from "../../src/selection-copy/index.ts";
 import { makeCodexEditorFactory } from "../../src/chrome/editor.ts";
+import { createHardwareCursor } from "../../src/chrome/hardware-cursor.ts";
 import { CURSOR_MARKER, makeSurfaceOps } from "../../src/surface.ts";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { fakeTerminal, sgr } from "../helpers.mjs";
@@ -116,22 +117,44 @@ function buildAltScreen(text, width = 80) {
   return { tui, md, terminal };
 }
 
-test("real CustomEditor draws a bar instead of a block while keeping IME cursor position", () => {
-  const { tui } = buildAltScreen("", 80);
+test("real TUI draws the hardware bar over the unmodified word and restores terminal state", () => {
+  const { tui, terminal } = buildAltScreen("", 80);
+  terminal.hideCursor = () => terminal.write("\x1b[?25l");
+  terminal.showCursor = () => terminal.write("\x1b[?25h");
+  const cursor = createHardwareCursor();
   const keybindings = new Tui.KeybindingsManager(Tui.TUI_KEYBINDINGS);
   const editor = makeCodexEditorFactory({
-    host: { CustomEditor, visibleWidth: Tui.visibleWidth },
+    host: { CustomEditor },
     surface: makeSurfaceOps({ kind: "truecolor" }, (text) => `\x1b[36m${text}\x1b[39m`, (text) => text),
+    hardwareCursor: cursor.acquire,
   })(tui, { fg: (_role, text) => text }, keybindings);
   editor.focused = true;
-  for (const draft of ["", "hello", "你们 👩‍👩‍👦"]) {
+  for (const draft of ["", "hello", "你们 👩‍👩‍👦", "hello world"]) {
     editor.setText(draft);
     const row = editor.render(80).find((line) => line.includes(CURSOR_MARKER));
-    assert.ok(row?.includes(`${CURSOR_MARKER}\x1b[36m▏`), "host's IME marker remains immediately before the bar");
+    assert.ok(row?.includes(CURSOR_MARKER), "native IME marker retained");
     assert.doesNotMatch(row, /\x1b\[7m/, "host inverse-video block removed");
     assert.equal(Tui.visibleWidth(row), 80, "real surface row stays within terminal width");
     assert.equal(editor.getText(), draft, "display does not change draft");
   }
+  editor.setText("hello world");
+  editor.handleInput("\x1b[D");
+  editor.handleInput("\x1b[D"); // the 'l' before 'd'
+  assert.equal(editor.getCursor().col, 9);
+  const row = editor.render(80).find((line) => line.includes(CURSOR_MARKER));
+  assert.ok(row?.includes(`wor${CURSOR_MARKER}l\x1b[0m`), "the cursor does not replace the 'l'");
+  assert.match(Tui.stripTerminalSequences(row), /hello world/, "word stays legible on the surface");
+  const root = new Tui.Container();
+  root.addChild(editor);
+  tui.setLayoutRoot(root);
+  tui.setFocus(editor);
+  tui.doRender();
+  const output = terminal.writes.join("");
+  assert.ok(output.includes("\x1b[6 q"), "request steady hardware bar shape");
+  assert.match(output, /\x1b\[\?25h/, "real renderer shows the positioned hardware cursor");
+  cursor.release();
+  assert.equal(tui.getShowHardwareCursor(), false, "Pi cursor setting restored");
+  assert.equal(terminal.writes.at(-1), "\x1b[0 q", "terminal default cursor shape restored");
 });
 
 test("real TUI: mouse drag selects soft-wrapped CJK paragraph; copy is one logical line", () => {

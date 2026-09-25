@@ -12,6 +12,7 @@ import type { ColorLevel } from "../palette.ts";
 import type { AppearanceConfig } from "../config.ts";
 import type { HostData, UiAvailable } from "../host-data.ts";
 import type { CodexSurfaceOps } from "./editor.ts";
+import { createHardwareCursor } from "./hardware-cursor.ts";
 import { WORKING_WIDGET_KEY, type WorkingComponent } from "./working.ts";
 import type { SnapshotSource } from "./snapshots.ts";
 
@@ -47,7 +48,7 @@ export interface ChromeDeps {
   hostData: HostData;
   /** Terminal color capability, resolved once at boot. */
   colorLevel: ColorLevel;
-  editorHost: { CustomEditor: unknown; visibleWidth?: (text: string) => number } | undefined;
+  editorHost: { CustomEditor: unknown } | undefined;
   surface: CodexSurfaceOps | undefined;
   /** Real versions for the header identity line. */
   appearanceVersion: string | undefined;
@@ -98,6 +99,7 @@ function makeTonePainter(theme: { fg?: (key: string, text: string) => string } |
 
 export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
   const { config, hostData } = deps;
+  const hardwareCursor = createHardwareCursor();
   const state: ChromeState = {
     generation: 0,
     editorFactory: undefined,
@@ -180,13 +182,17 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
           // The host auto-triggers "/" only at line start; without this the
           // second skill trigger (`/skill:a /`) never queries the provider.
           skillTrigger: true,
+          hardwareCursor: hardwareCursor.acquire,
         });
         state.editorFactory = factory;
         state.surfaceApplied = surface !== undefined;
         state.prefixApplied = surface !== undefined && config.composer.promptPrefix;
         ui.setEditorComponent?.(factory as never);
         state.editorInstalled = true;
-      } catch { /* editor stays native */ }
+      } catch {
+        hardwareCursor.release(); // factory may have acquired before host install failed
+        /* editor stays native */
+      }
     }
 
     // Footer: model/effort/provider · cwd/branch · context · I/O · cache · speed.
@@ -273,6 +279,7 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
         ui.setEditorComponent?.(undefined);
       }
     } catch { /* keep current editor */ }
+    hardwareCursor.release();
     state.editorFactory = undefined;
     state.editorInstalled = false;
     state.surfaceApplied = false;

@@ -56,7 +56,7 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
 
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
-  editorHost?: { CustomEditor: unknown; visibleWidth?: (text: string) => number };
+  editorHost?: { CustomEditor: unknown };
   /** Gray composer surface painters (index.ts, from real Tui helpers). */
   surface?: CodexSurfaceOps;
   /** The full ExtensionAPI object (for appendEntry / registerEntryRenderer / registerCommand). */
