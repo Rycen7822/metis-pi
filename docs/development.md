@@ -28,7 +28,7 @@ npm run vendor:patch
 npm run verify
 ```
 
-`dist/` 和 `changelog.js` 随包分发，必须由源码生成。`vendor:patch` 需要 `references/howaboua-pi-stuff/` 的 pristine 基线。升级上游及载荷范围只在 [UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md)维护；本地差异只在 [PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md)维护。
+`dist/` 和 `changelog.js` 随包分发，必须由源码生成。`vendor:patch` 需要 `references/howaboua-pi-stuff/` 的 pristine 基线；只接受 git diff 的正常退出或差异退出码，启动失败、信号、输出超限及其它错误必须失败并保留旧补丁，不能发布截断输出。升级上游及载荷范围只在 [UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md)维护；本地差异只在 [PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md)维护。
 
 `vendor:fresh` 检查产物与 Git 基线是否一致；未提交的合法源码/产物修改也会导致它失败，因此工作区修改期间需比较重复构建结果，并在隔离上游副本验证补丁重放，不能把该退出码直接当作构建漂移。
 

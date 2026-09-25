@@ -2,7 +2,6 @@ import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyPr
 
 export const HISTORY_ROW_BUDGET = 5000;
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
-const OWNER = Symbol.for("Rycen7822.metis-pi.history-window");
 
 interface Component {
   render(width: number): string[];
@@ -22,10 +21,7 @@ interface Scroll extends Component {
   scrollBy(lines: number): number;
   scrollTo(row: number, options?: { disableFollow?: boolean }): void;
 }
-interface Tui {
-  mode?: string;
-  layoutRoot?: Component;
-  setLayoutRoot(root: unknown): void;
+export interface HistoryWindowTui {
   hasActiveSelection?(): boolean;
   getSelectionBounds?(): unknown;
   clearTextSelection?(): void;
@@ -299,7 +295,6 @@ export class HistoryWindow {
 
 export function createHistoryWindowSystem(host: HistoryWindowHost) {
   let installed: { scroll: Scroll; source: Component; window: HistoryWindow; wheel: Scroll["scrollBy"]; wrapper: Scroll["scrollBy"]; restoreNavigation: () => void; removeInput?: () => void } | undefined;
-  let proto: any, setter: any, wrappedSetter: any;
   let reason = "not installed";
   function unmount() {
     if (!installed) return;
@@ -307,9 +302,9 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     removeInput?.(); restoreNavigation();
     if (scroll.child === window as unknown) { scroll.child = source; scroll.children = [source]; }
     if (scroll.scrollBy === wrapper) scroll.scrollBy = wheel;
-    window.dispose(); installed = undefined;
+    window.dispose(); installed = undefined; reason = "not installed";
   }
-  function mount(tui: Tui, root: any) {
+  function mount(tui: HistoryWindowTui, root: any) {
     if (!root || !host.Container || !host.ScrollView) { unmount(); return; }
     const find = (node: any): Scroll | undefined => {
       if (!node) return;
@@ -344,20 +339,8 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => { restoreStart(); restoreEnd(); }, removeInput }; reason = "installed";
   }
   return {
-    installOnTui(tui: unknown): boolean {
-      const target = tui as Tui;
-      if (!target || target.mode !== "fullscreen") return false;
-      const candidate = Object.getPrototypeOf(target);
-      if (!proto) {
-        if (typeof candidate.setLayoutRoot !== "function" || candidate.setLayoutRoot[OWNER]) return false;
-        setter = candidate.setLayoutRoot;
-        wrappedSetter = function (this: Tui, root: unknown) { mount(this, root); return setter.call(this, root); };
-        wrappedSetter[OWNER] = true;
-        candidate.setLayoutRoot = wrappedSetter; proto = candidate;
-      }
-      mount(target, target.layoutRoot); return !!installed;
-    },
+    mount,
     status() { return { installed: !!installed, reason, ...installed?.window.status() }; },
-    dispose() { unmount(); if (proto && proto.setLayoutRoot === wrappedSetter) proto.setLayoutRoot = setter; proto = undefined; },
+    dispose: unmount,
   };
 }

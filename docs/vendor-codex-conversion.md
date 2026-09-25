@@ -24,6 +24,11 @@
 - 临时存储不可创建或写入时退回原有内存额度，以保持工具执行和输出语义；不可恢复的读取错误显式失败。很大的显式结果请求仍可能产生与结果大小成比例的瞬时内存。临时目录在 tmpfs 上时仍占系统 RAM，降低进程堆不等于消除存储成本；正常清理以外的强制杀进程可能留下私有临时文件。
 - 成功的 WebSocket 请求不再提前序列化/压缩一份不会使用的 SSE 请求；只有实际使用 SSE（含回退）时才准备重试请求体。canonical history 的请求及重建视图以一次图快照保存，同源输入不重复复制，响应仍独立持有；校验只比较内容，不复制整份重放载荷，真正重放仍返回独立副本。
 
+## 工具契约与请求准备
+
+- `context-management/tool-contract.ts` 统一 history/notes 九种操作的字段、必填项、加密字段与空文本规则；扁平 action 工具、namespace 声明和执行校验消费同一份契约。Remote 省略 `additionalProperties` 与数值范围，`read_item.window_id` 不可空等差异仍显式保留；每个请求持有自己的 schema 副本。
+- `adapter/provider-request.ts` 统一 live/prewarm 的公共准备顺序；普通 prewarm 不消费待处理的上下文窗口、不触发最终回放注入或 prompt 捕获。压缩保持独立的触发条件。
+
 ## 维护边界
 
 - [UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md)：精确来源/commit、载荷裁剪与升级步骤。

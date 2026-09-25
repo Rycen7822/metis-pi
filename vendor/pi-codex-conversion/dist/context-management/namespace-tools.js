@@ -1,152 +1,40 @@
 import { createAssistantMessageEventStream, } from "@earendil-works/pi-ai";
-import { HISTORY_ACTIONS, HISTORY_DESCRIPTION, NOTES_ACTIONS, NOTES_DESCRIPTION, } from "./tool-contract.js";
+import { CONTEXT_OPERATIONS, HISTORY_ACTIONS, HISTORY_DESCRIPTION, NOTES_ACTIONS, NOTES_DESCRIPTION, } from "./tool-contract.js";
 import { currentToolNamesOf } from "../providers/transcript.js";
 const ACTIONS = {
     history: new Set(HISTORY_ACTIONS),
     notes: new Set(NOTES_ACTIONS),
 };
-function nullable(type, description) {
-    return {
-        ...(description ? { description } : {}),
-        anyOf: [{ type }, { type: "null" }],
-    };
-}
-function nullableRole() {
-    return {
-        anyOf: [
-            {
-                type: "string",
-                enum: ["user", "assistant", "tool", "system", "developer"],
-            },
-            { type: "null" },
-        ],
-    };
-}
-function string(description, encrypted = false) {
-    return {
-        type: "string",
-        ...(description ? { description } : {}),
-        ...(encrypted ? { encrypted: true } : {}),
-    };
-}
-function integer(minimum) {
-    return {
-        type: "integer",
-        ...(minimum === undefined ? {} : { minimum }),
-    };
-}
-function object(properties, required) {
-    return {
-        type: "object",
-        properties,
-        ...(required ? { required } : {}),
-        additionalProperties: false,
-    };
-}
-function operation(name, description, parameters) {
-    return { type: "function", name, description, strict: false, parameters };
-}
-function historyNamespace(encrypted) {
-    return {
-        type: "namespace",
-        name: "history",
-        description: HISTORY_DESCRIPTION,
-        tools: [
-            operation("list_windows", "List context windows", object({
-                agent_name: nullable("string"),
-                limit: integer(1),
-                recent_first: { type: "boolean" },
-            })),
-            operation("list_items", "List history items", object({
-                agent_name: nullable("string"),
-                limit: integer(1),
-                max_chars_per_item: integer(1),
-                recent_first: { type: "boolean" },
-                role: nullableRole(),
-                tool_name: nullable("string"),
-                tool_namespace: nullable("string"),
-                window_id: nullable("string"),
-            })),
-            operation("read_item", "Read history item range", object({
-                agent_name: nullable("string"),
-                item_id: {
-                    type: "string",
-                    description: "Suffix from the item's [id: …] marker.",
-                },
-                limit_chars: integer(1),
-                offset_chars: integer(0),
-                window_id: { type: "string" },
-            }, ["item_id", "window_id"])),
-            operation("search_contents", "Search history", object({
-                agent_name: nullable("string"),
-                limit: integer(1),
-                query: string("Case-sensitive", encrypted),
-                recent_first: { type: "boolean" },
-                role: nullableRole(),
-                tool_name: nullable("string"),
-                tool_namespace: nullable("string"),
-                window_id: nullable("string"),
-            }, ["query"])),
-        ],
-    };
-}
-function notesNamespace(encrypted) {
-    return {
-        type: "namespace",
-        name: "notes",
-        description: NOTES_DESCRIPTION,
-        tools: [
-            operation("list_files_by_prefix", "List note files", object({
-                file_order: {
-                    type: "string",
-                    enum: ["ascending", "descending"],
-                },
-                file_order_by: {
-                    type: "string",
-                    enum: ["name", "created_at", "updated_at"],
-                },
-                max_results: integer(1),
-                prefix: nullable("string"),
-            })),
-            operation("read_file", "Read note file; line bounds inclusive, 1-based, negative from end", object({
-                path: { type: "string" },
-                start_line: nullable("integer"),
-                stop_line: nullable("integer"),
-            }, ["path"])),
-            operation("search_contents", "Search note lines by literal substring", object({
-                max_files: integer(1),
-                max_matches_per_file: integer(1),
-                path_prefix: nullable("string"),
-                query: string("Case-sensitive", encrypted),
-                recent_file_first: { type: "boolean" },
-            }, ["query"])),
-            operation("append_to_file", "Append text exactly", object({
-                path: { type: "string" },
-                text: string(undefined, encrypted),
-            }, ["text", "path"])),
-            operation("write_file", "Create or replace a note file", object({
-                path: { type: "string" },
-                text: string(undefined, encrypted),
-            }, ["text", "path"])),
-        ],
-    };
-}
 function contextNamespace(name, encrypted) {
-    const namespace = name === "history"
-        ? historyNamespace(encrypted)
-        : notesNamespace(encrypted);
-    // Codex validates reserved schemas against its serialized contract: open
-    // objects, with numeric bounds omitted by its JsonSchema serializer.
-    if (!encrypted)
-        return namespace;
+    const operations = CONTEXT_OPERATIONS[name];
     return {
-        ...namespace,
-        tools: namespace.tools.map((tool) => {
-            const { additionalProperties: _additionalProperties, ...parameters } = tool.parameters;
-            for (const property of Object.values(parameters.properties)) {
-                delete property["minimum"];
+        type: "namespace",
+        name,
+        description: name === "history" ? HISTORY_DESCRIPTION : NOTES_DESCRIPTION,
+        tools: Object.entries(operations).map(([action, operation]) => {
+            // Each request owns its schemas, including nested enums and required
+            // arrays; transport transforms must not mutate the shared contract.
+            const parameters = structuredClone(operation.parameters);
+            if (encrypted) {
+                for (const [field, schema] of Object.entries(parameters.properties)) {
+                    const property = schema;
+                    // Codex's reserved Remote schemas omit numeric bounds.
+                    delete property.minimum;
+                    if (operation.encryptedField === field)
+                        property.encrypted = true;
+                }
             }
-            return { ...tool, parameters };
+            return {
+                type: "function",
+                name: action,
+                description: operation.description,
+                strict: false,
+                parameters: {
+                    ...parameters,
+                    // Remote also omits this keyword; false and absent differ.
+                    ...(!encrypted ? { additionalProperties: false } : {}),
+                },
+            };
         }),
     };
 }

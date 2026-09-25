@@ -46,9 +46,9 @@ Todos 2/5 done
 
 ## 子任务树与完成门禁
 
-- 模型提交**扁平** `[{title, parentId}]`，扩展端建树。
-- 父任务状态由**子树推导**，不落库。
-- `complete` 默认**门禁**：未完成子任务 + 非空证据都会被拒绝；若证据里出现文件路径，会检查文件**真实存在**（`src/todo/tools.ts` 用 `existsSync`，相对路径按 cwd 解析）。
+- 模型提交**扁平** `[{title, parentId}]`；显示层直接读取模型生成的深度优先任务行，移动任务后按实际父子关系计算缩进，不依赖创建顺序。
+- 每行显示任务自身的持久化状态；子任务结束不会自动完成父任务，父任务仍需显式 `complete`。不再维护无人消费的另一套派生状态树。
+- `complete` 默认**门禁**：存在未完成子任务，或缺少非空证据时会被拒绝；若证据里出现文件路径，会检查文件**真实存在**（`src/todo/tools.ts` 用 `existsSync`，相对路径按 cwd 解析）。
 - 证据记为 **UNTRUSTED claim**（记录文本，不代表已核实语义）。
 - `blockedBy` 支持增量增删（`addBlockedBy` / `removeBlockedBy`），**waits-for 环检测**拒绝成环；`skip` 级联留痕。
 - 移动/改父时会检测环（`move: #1.2 is a descendant of #1.1 (cycle)`）。
@@ -84,7 +84,7 @@ Todos 2/5 done
 
 | 关注点 | 位置 |
 | --- | --- |
-| 任务模型（纯函数，无 fs / 无 pi / 无时间源） | `src/todo/model.ts`（`TASK_GLYPHS`、`taskGlyph`、`MAX_TASKS`、`MAX_DEPTH`、`completionBlock`、`startNewList`、`pathOf`、`flattenTree`） |
+| 任务模型（纯函数，无 fs / 无 pi / 无时间源） | `src/todo/model.ts`（`TASK_GLYPHS`、`taskGlyph`、`MAX_TASKS`、`MAX_DEPTH`、`completionBlock`、`startNewList`、`pathOf`、`taskRows`） |
 | 磁盘 store | `src/todo/store.ts`（`TODO_DIR_NAME`、`TODO_STATE_FILE`、`TODO_LOCK_FILE`、`LOCK_TTL_MS`、`DEFAULT_GC_DAYS`） |
 | 工具 | `src/todo/tools.ts` |
 | 面板 widget | `src/todo/widget.ts` |

@@ -160,7 +160,6 @@ function setup(state: TranscriptState) {
   const rails: unknown[] = [];
   const handle = installTranscriptDecorations({
     state,
-    toolPrototype: undefined,
     assistantPrototype: FakeAssistantComponent.prototype as unknown as object,
     makeSeparator: () => {
       const sep = new FakeMarkdown("─".repeat(80));
@@ -424,7 +423,6 @@ function setupWithPolicy(state: TranscriptState, policy: Policy) {
   const summaries: FakeText[] = [];
   const handle = installTranscriptDecorations({
     state,
-    toolPrototype: undefined,
     assistantPrototype: FakeAssistantComponent.prototype as unknown as object,
     makeSeparator: () => new FakeMarkdown("─".repeat(80)),
     makeSpacer: () => new FakeSpacer(),
@@ -558,7 +556,6 @@ function setupWithPeek(state: TranscriptState, policy: { streaming: "peek" | "fu
   const clickables: TestClickable[] = [];
   const handle = installTranscriptDecorations({
     state,
-    toolPrototype: undefined,
     assistantPrototype: FakeAssistantComponent.prototype as unknown as object,
     makeSeparator: () => new FakeMarkdown("─".repeat(80)),
     makeSpacer: () => new FakeSpacer(),

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
-import { createHistoryWindowSystem, HISTORY_ROW_BUDGET } from "../../src/chrome/history-window.ts";
+import { HISTORY_ROW_BUDGET } from "../../src/chrome/history-window.ts";
+import { createFullscreenLayout } from "../../src/chrome/fullscreen-layout.ts";
 import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { SelectionSerializer } from "../../src/selection-copy/serialize.ts";
@@ -33,7 +34,7 @@ function setup(t, blocks = longHistory(), width = 80) {
   tui.requestRender = () => {};
   tui.beforeTerminalStart();
   tui.setLayoutRoot(scroll);
-  const system = createHistoryWindowSystem({ Container: Tui.Container, ScrollView: Tui.ScrollView, matchesKey: Tui.matchesKey });
+  const system = createFullscreenLayout(Tui, { margin: 0, minWidth: 0 });
   assert.equal(system.installOnTui(tui), true);
   t.after(() => system.dispose());
   const lines = () => tui.currentLayout.root.scrollContentLines;
@@ -70,19 +71,19 @@ test("wheel paging reaches both ends, evicts old caches and maps clicks through 
   const latest = view.lines().at(-1);
   view.page("older");
   assert.notEqual(view.lines().at(-1), latest);
-  assert.equal(view.system.status().newer, true);
-  assert.ok(view.system.status().evictedBlocks > 0);
-  for (let i = 0; i < 4 && view.system.status().older; i++) {
+  assert.equal(view.system.status().history.newer, true);
+  assert.ok(view.system.status().history.evictedBlocks > 0);
+  for (let i = 0; i < 4 && view.system.status().history.older; i++) {
     view.page("older");
   }
   assert.equal(view.lines()[0], "0:0");
   view.scroll.child.handleMouse({ y: 5, x: 0, width: 80, height: 20, type: "click", button: "left" });
   assert.equal(blocks[0].clicked, 5);
-  for (let i = 0; i < 4 && view.system.status().newer; i++) {
+  for (let i = 0; i < 4 && view.system.status().history.newer; i++) {
     view.page("newer");
   }
   assert.equal(view.lines().at(-1), latest);
-  assert.equal(view.system.status().newer, false);
+  assert.equal(view.system.status().history.newer, false);
   view.scroll.scrollTo(Number.MAX_SAFE_INTEGER); view.render();
   view.source.addChild(new Block("appended", 200)); view.render();
   assert.equal(view.lines().at(-1), "appended:199", "paging back to latest resumes following new output");
@@ -104,7 +105,7 @@ test("source updates, append, replacement and disposal preserve ownership", (t) 
   view.system.dispose();
   assert.equal(view.scroll.child, view.source);
   assert.equal(Object.hasOwn(block, "setText"), false, "observed methods restored");
-  const unopened = createHistoryWindowSystem({});
+  const unopened = createFullscreenLayout({}, { margin: 0, minWidth: 0 });
   assert.doesNotThrow(() => { unopened.dispose(); unopened.dispose(); });
 });
 
@@ -113,7 +114,7 @@ test("giant boundary block is sliced with collectible native/mirror caches and e
   const block = new Tui.Text(text, 0, 0);
   const view = setup(t, [block]);
   assert.equal(view.lines().at(-1).trim(), "line 5999");
-  assert.equal(view.system.status().cachedBlocks, 0, "an oversized full native block is not retained");
+  assert.equal(view.system.status().history.cachedBlocks, 0, "an oversized full native block is not retained");
   assert.ok(!block.cachedLines, "native rows evicted");
   const rows = view.lines();
   assert.ok(productFor(rows));

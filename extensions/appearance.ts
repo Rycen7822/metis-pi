@@ -262,11 +262,11 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
-    marginHost: {
+    fullscreenHost: {
       HStack: typeof Tui.HStack === "function" ? Tui.HStack : undefined,
       Spacer: typeof Tui.Spacer === "function" ? Tui.Spacer : undefined,
+      Container: Tui.Container, ScrollView: Tui.ScrollView, matchesKey: Tui.matchesKey,
     },
-    historyWindowHost: { Container: Tui.Container, ScrollView: Tui.ScrollView, matchesKey: Tui.matchesKey },
     selectionCopyHost: {
       prototypes: {
         Text: Tui.Text.prototype,

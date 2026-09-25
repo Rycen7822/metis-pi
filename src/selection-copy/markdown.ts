@@ -79,8 +79,6 @@ interface LogicalLine {
 interface MirrorContext {
   instance: MarkdownInstance | TextInstance;
   fns: AdapterHostFns;
-  plainParts: string[];
-  plainOffset: number;
 }
 
 function painter(instance: MarkdownInstance, name: string): (text: string) => string {
@@ -88,16 +86,6 @@ function painter(instance: MarkdownInstance, name: string): (text: string) => st
   const fn = theme?.[name];
   if (typeof fn !== "function") return (text) => text;
   return fn.bind(theme);
-}
-
-/** Record a segment's visible text and return its char offset in the plain
- * string (spans index into the product-global plain text). */
-function plainLength(ctx: MirrorContext, styled: string): number {
-  const visible = ctx.fns.stripAnsi(styled);
-  const offset = ctx.plainOffset;
-  ctx.plainParts.push(visible);
-  ctx.plainOffset += visible.length;
-  return offset;
 }
 
 function defaultStyleContext(instance: MarkdownInstance): unknown {
@@ -393,17 +381,7 @@ function renderQuoteMirror(ctx: MirrorContext, token: MarkdownToken, width: numb
 
 interface MirrorOutput {
   styledRows: string[];
-  pendingRows: PendingRow[];
-  plain: string;
-}
-
-type PendingSpanKind = "content" | "decoration" | "semantic" | "gap" | "unknown";
-
-interface PendingRow {
-  styled: string;
-  spans: { colStart: number; colEnd: number; kind: PendingSpanKind; plainStart?: number; plainEnd?: number; text?: string }[];
-  breakBefore: BreakBefore;
-  bridge?: string;
+  copyRows: CopyRow[];
 }
 
 function assembleRows(
@@ -413,7 +391,7 @@ function assembleRows(
   hostWrap: (text: string, width: number) => string[],
 ): MirrorOutput {
   const styledRows: string[] = [];
-  const pendingRows: PendingRow[] = [];
+  const copyRows: CopyRow[] = [];
   for (const line of logicalLines) {
     if (line.unknownStyledRows) {
       // Exact host rows, unknown spans; list/quote prefixes still apply so
@@ -426,10 +404,10 @@ function assembleRows(
             : undefined;
           const styled = prefix ? prefix.styled + wrapped : wrapped;
           styledRows.push(styled);
-          pendingRows.push({
-            styled,
-            spans: [{ colStart: 0, colEnd: Math.max(1, contentWidth), kind: "unknown" as const }],
+          copyRows.push({
+            spans: [{ colStart: 0, colEnd: Math.max(1, contentWidth), kind: "unknown", text: "" }],
             breakBefore: "hard",
+            bridge: undefined,
           });
           rowIndex += 1;
         }
@@ -437,12 +415,7 @@ function assembleRows(
       continue;
     }
     const wrapWidth = line.inner ? line.inner.width : contentWidth;
-    const segments = line.segments.map((segment) => ({
-      styled: segment.styled,
-      kind: segment.kind,
-      plainStart: plainLength(ctx, segment.styled),
-    }));
-    const rows = wrapWithProvenance(segments, wrapWidth, ctx.fns.visibleWidth);
+    const rows = wrapWithProvenance(line.segments, wrapWidth, ctx.fns.visibleWidth);
     for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
       const row = rows[rowIndex]!;
       const prefix = line.inner
@@ -450,41 +423,20 @@ function assembleRows(
         : undefined;
       const styled = prefix ? prefix.styled + row.styled : row.styled;
       styledRows.push(styled);
-      const spans: PendingRow["spans"] = row.spans.map((span) => ({
+      const spans = row.spans.map((span) => ({
         colStart: span.colStart + (prefix?.cells ?? 0),
         colEnd: span.colEnd + (prefix?.cells ?? 0),
         kind: span.kind,
-        plainStart: span.plainStart,
-        plainEnd: span.plainEnd,
+        text: span.text,
       }));
       if (prefix && prefix.cells > 0) {
-        spans.unshift({ colStart: 0, colEnd: prefix.cells, kind: prefix.kind, text: prefix.text.length > 0 ? prefix.text : undefined });
+        spans.unshift({ colStart: 0, colEnd: prefix.cells, kind: prefix.kind, text: prefix.text });
       }
       const breakBefore: BreakBefore = rowIndex === 0 ? "hard" : row.hard ? "hard" : "soft";
-      const pending: PendingRow = { styled, spans, breakBefore };
-      if (breakBefore === "soft") pending.bridge = row.bridge;
-      pendingRows.push(pending);
+      copyRows.push({ spans, breakBefore, bridge: breakBefore === "soft" ? row.bridge : undefined });
     }
   }
-  return { styledRows, pendingRows, plain: ctx.plainParts.join("") };
-}
-
-/** Slice span texts from the completed plain string. */
-function finalizeRows(pending: PendingRow[], plain: string): CopyRow[] {
-  return pending.map((row) => ({
-    spans: row.spans.map((span) => ({
-      colStart: span.colStart,
-      colEnd: span.colEnd,
-      kind: span.kind,
-      text: span.text !== undefined
-        ? span.text
-        : span.plainStart !== undefined && span.plainEnd !== undefined && span.plainEnd > span.plainStart
-          ? plain.slice(span.plainStart, span.plainEnd)
-          : "",
-    })),
-    breakBefore: row.breakBefore,
-    bridge: row.bridge,
-  }));
+  return { styledRows, copyRows };
 }
 
 // ---------------------------------------------------------------------------
@@ -586,9 +538,6 @@ export function wrapMarkdownPrototype(prototype: object, deps: WrapDeps): boolea
     buildMarkdownProduct, { built: "markdownBuilt", degraded: "markdownDegraded", throttled: "markdownThrottled", fallback: "mirror failed" });
 }
 
-/** The plain string must be assembled BEFORE slicing span texts; rebuild the
- * mirror output in two passes: rows first (assigning plain offsets), then
- * slice texts. */
 function buildMarkdownProduct(
   instance: MarkdownInstance,
   width: number,
@@ -609,7 +558,7 @@ function buildMarkdownProduct(
     return undefined;
   }
   const normalized = text.replace(/\t/g, "   ");
-  const ctx: MirrorContext = { instance, fns, plainParts: [], plainOffset: 0 };
+  const ctx: MirrorContext = { instance, fns };
   const tokens = deps.lexer.lexer(normalized);
   const logicalLines: LogicalLine[] = [];
   const styleContext = defaultStyleContext(instance);
@@ -617,8 +566,6 @@ function buildMarkdownProduct(
     logicalLines.push(...renderTokenMirror(ctx, tokens[i]!, contentWidth, tokens[i + 1]?.type, styleContext));
   }
   const output = assembleRows(ctx, logicalLines, contentWidth, deps.hostWrap);
-  // Second pass: slice span texts now that the plain string is complete.
-  const copyRows = finalizeRows(output.pendingRows, output.plain);
   // Verify positionally against the host's real rows.
   const padY = instance.paddingY;
   const padX = instance.paddingX;
@@ -635,7 +582,7 @@ function buildMarkdownProduct(
   }
   const rows: CopyRow[] = [];
   for (let i = 0; i < padY; i++) rows.push(decorationRow(width));
-  for (const row of copyRows) rows.push(marginRow(row, padX, width, contentWidth));
+  for (const row of output.copyRows) rows.push(marginRow(row, padX, width, contentWidth));
   for (let i = 0; i < padY; i++) rows.push(decorationRow(width));
   return { componentId: "markdown", width, rows };
 }
@@ -699,14 +646,13 @@ function buildTextProduct(
   const paddingX = Math.min(instance.paddingX, Math.max(0, Math.floor((width - 1) / 2)));
   const contentWidth = Math.max(1, width - paddingX * 2);
   const normalized = instance.text.replace(/\t/g, "   ");
-  const ctx: MirrorContext = { instance, fns, plainParts: [], plainOffset: 0 };
+  const ctx: MirrorContext = { instance, fns };
   const output = assembleRows(
     ctx,
     [{ segments: [{ styled: normalized, kind: "content" }] }],
     contentWidth,
     deps.hostWrap,
   );
-  const copyRows = finalizeRows(output.pendingRows, output.plain);
   if (hostRows.length !== instance.paddingY * 2 + output.styledRows.length) {
     deps.diagnostics.lastDegradedReason = "text row count mismatch";
     return undefined;
@@ -720,7 +666,7 @@ function buildTextProduct(
   }
   const rows: CopyRow[] = [];
   for (let i = 0; i < instance.paddingY; i++) rows.push(decorationRow(width));
-  for (const row of copyRows) rows.push(marginRow(row, paddingX, width, contentWidth));
+  for (const row of output.copyRows) rows.push(marginRow(row, paddingX, width, contentWidth));
   for (let i = 0; i < instance.paddingY; i++) rows.push(decorationRow(width));
   return { componentId: "text", width, rows };
 }

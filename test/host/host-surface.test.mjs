@@ -60,7 +60,6 @@ test("real AssistantMessageComponent: auto-collapse fires once through the HOST 
   const labels = [];
   const handle = installTranscriptDecorations({
     state,
-    toolPrototype: undefined,
     assistantPrototype: Core.AssistantMessageComponent.prototype,
     makeSeparator: () => new Tui.Text("─".repeat(40), 0, 0),
     makeSpacer: () => new Tui.Spacer(1),
@@ -131,7 +130,6 @@ test("real AssistantMessageComponent: history rebuild collapses without timing (
   const labels = [];
   const handle = installTranscriptDecorations({
     state,
-    toolPrototype: undefined,
     assistantPrototype: Core.AssistantMessageComponent.prototype,
     makeSeparator: () => new Tui.Text("─".repeat(40), 0, 0),
     makeSpacer: () => new Tui.Spacer(1),

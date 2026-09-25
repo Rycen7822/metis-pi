@@ -1,117 +1,13 @@
-import { StringEnum } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
 import { historyNotesRenderers } from "./rendering.js";
 import { codexToolProviderHeaders, resolveCodexToolProvider, } from "../adapter/codex-tool-provider.js";
 import { getPiSessionHistoryRecoveryHint, readPiSessionHistory, } from "./local-history.js";
 import { renderPiSessionNotesThreadHint, usePiSessionNotes, } from "./local-notes.js";
-import { HISTORY_ACTIONS, HISTORY_DESCRIPTION, NOTES_ACTIONS, NOTES_DESCRIPTION, } from "./tool-contract.js";
+import { CONTEXT_OPERATIONS, HISTORY_ACTIONS, HISTORY_DESCRIPTION, HISTORY_PARAMETERS, NOTES_ACTIONS, NOTES_DESCRIPTION, NOTES_PARAMETERS, } from "./tool-contract.js";
 const BACKEND_TIMEOUT_MS = 35_000;
 const THREAD_HINT_MAX_BYTES = 4_000;
 const TOOL_OUTPUT_TOKEN_LIMIT = 10_000;
-const HISTORY_ENDPOINTS = {
-    list_windows: "alpha/history/v2/list_windows",
-    list_items: "alpha/history/v2/list_items",
-    read_item: "alpha/history/v2/read_item",
-    search_contents: "alpha/history/v2/search_contents",
-};
-const NOTES_ENDPOINTS = {
-    list_files_by_prefix: "alpha/notes/v2/list_files_by_prefix",
-    read_file: "alpha/notes/v2/read_file",
-    search_contents: "alpha/notes/v2/search_contents",
-    append_to_file: "alpha/notes/v2/append_to_file",
-    write_file: "alpha/notes/v2/write_file",
-};
-const ENCRYPTED_ARGUMENT_ENDPOINTS = new Set([
-    HISTORY_ENDPOINTS.search_contents,
-    NOTES_ENDPOINTS.search_contents,
-    NOTES_ENDPOINTS.append_to_file,
-    NOTES_ENDPOINTS.write_file,
-]);
 const HISTORY_ACTION_SET = new Set(HISTORY_ACTIONS);
 const NOTES_ACTION_SET = new Set(NOTES_ACTIONS);
-const HISTORY_ACTION_FIELDS = {
-    list_windows: ["agent_name", "limit", "recent_first"],
-    list_items: [
-        "agent_name",
-        "limit",
-        "max_chars_per_item",
-        "recent_first",
-        "role",
-        "tool_name",
-        "tool_namespace",
-        "window_id",
-    ],
-    read_item: [
-        "agent_name",
-        "item_id",
-        "limit_chars",
-        "offset_chars",
-        "window_id",
-    ],
-    search_contents: [
-        "agent_name",
-        "limit",
-        "query",
-        "recent_first",
-        "role",
-        "tool_name",
-        "tool_namespace",
-        "window_id",
-    ],
-};
-const NOTES_ACTION_FIELDS = {
-    list_files_by_prefix: ["file_order", "file_order_by", "max_results", "prefix"],
-    read_file: ["path", "start_line", "stop_line"],
-    search_contents: [
-        "max_files",
-        "max_matches_per_file",
-        "path_prefix",
-        "query",
-        "recent_file_first",
-    ],
-    append_to_file: ["path", "text"],
-    write_file: ["path", "text"],
-};
-const HISTORY_PARAMETERS = Type.Object({
-    action: StringEnum(HISTORY_ACTIONS),
-    agent_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    item_id: Type.Optional(Type.String()),
-    limit: Type.Optional(Type.Integer({ minimum: 1 })),
-    limit_chars: Type.Optional(Type.Integer({ minimum: 1 })),
-    max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1 })),
-    offset_chars: Type.Optional(Type.Integer({ minimum: 0 })),
-    query: Type.Optional(Type.String()),
-    recent_first: Type.Optional(Type.Boolean()),
-    role: Type.Optional(Type.Union([
-        StringEnum([
-            "user",
-            "assistant",
-            "tool",
-            "system",
-            "developer",
-        ]),
-        Type.Null(),
-    ])),
-    tool_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    tool_namespace: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    window_id: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-}, { additionalProperties: false });
-const NOTES_PARAMETERS = Type.Object({
-    action: StringEnum(NOTES_ACTIONS),
-    file_order: Type.Optional(StringEnum(["ascending", "descending"])),
-    file_order_by: Type.Optional(StringEnum(["name", "created_at", "updated_at"])),
-    max_files: Type.Optional(Type.Integer({ minimum: 1 })),
-    max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1 })),
-    max_results: Type.Optional(Type.Integer({ minimum: 1 })),
-    path: Type.Optional(Type.String()),
-    path_prefix: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    prefix: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    query: Type.Optional(Type.String()),
-    recent_file_first: Type.Optional(Type.Boolean()),
-    start_line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
-    stop_line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
-    text: Type.Optional(Type.String()),
-}, { additionalProperties: false });
 export function createHistoryNotesTools(pi, resolveMode = () => "local", prepareNoteWrite) {
     return [
         {
@@ -122,8 +18,9 @@ export function createHistoryNotesTools(pi, resolveMode = () => "local", prepare
             ...historyNotesRenderers("history"),
             async execute(_id, params, signal, _update, ctx) {
                 const action = historyAction(params.action);
-                validateHistoryArguments(action, params);
-                return callHistoryNotesTool("history", action, HISTORY_ENDPOINTS[action], params, ctx, signal, resolveMode(ctx), pi);
+                const operation = CONTEXT_OPERATIONS.history[action];
+                validateArguments("history", action, params, operation);
+                return callHistoryNotesTool("history", action, operation, params, ctx, signal, resolveMode(ctx), pi);
             },
         },
         {
@@ -135,11 +32,12 @@ export function createHistoryNotesTools(pi, resolveMode = () => "local", prepare
             executionMode: "sequential",
             async execute(_id, params, signal, _update, ctx) {
                 const action = notesAction(params.action);
-                validateNotesArguments(action, params);
+                const operation = CONTEXT_OPERATIONS.notes[action];
+                validateArguments("notes", action, params, operation);
                 const finishNoteWrite = action === "write_file" || action === "append_to_file"
                     ? prepareNoteWrite?.(action, params.path, ctx)
                     : undefined;
-                const result = await callHistoryNotesTool("notes", action, NOTES_ENDPOINTS[action], params, ctx, signal, resolveMode(ctx), pi);
+                const result = await callHistoryNotesTool("notes", action, operation, params, ctx, signal, resolveMode(ctx), pi);
                 return finishNoteWrite?.()
                     ? { ...result, terminate: true }
                     : result;
@@ -179,12 +77,12 @@ function piSessionThreadHint(ctx, mode) {
         ? hint
         : undefined;
 }
-async function callHistoryNotesTool(namespace, action, endpoint, params, ctx, signal, mode, pi) {
+async function callHistoryNotesTool(namespace, action, operation, params, ctx, signal, mode, pi) {
     let result;
     if (mode === "remote") {
         if (!usesRemoteHistoryNotes(ctx, mode))
             throw new Error("Remote history and notes require Codex transport");
-        result = await callHistoryNotesBackend(endpoint, stripAction(params), ctx, signal, { mode: "tokens", limit: TOOL_OUTPUT_TOKEN_LIMIT });
+        result = await callHistoryNotesBackend(`alpha/${namespace}/v2/${action}`, stripAction(params), ctx, signal, { mode: "tokens", limit: TOOL_OUTPUT_TOKEN_LIMIT }, operation.encryptedField !== undefined);
     }
     else
         result = callLocalHistoryNotes(namespace, action, params, ctx, pi, mode);
@@ -205,13 +103,13 @@ async function callHistoryNotesTool(namespace, action, endpoint, params, ctx, si
         details: { codexHistoryNotes: modelResult },
     };
 }
-async function callHistoryNotesBackend(endpoint, arguments_, ctx, signal, truncationPolicy) {
+async function callHistoryNotesBackend(endpoint, arguments_, ctx, signal, truncationPolicy, encryptedArguments = false) {
     const provider = await resolveCodexToolProvider(ctx);
     if (provider.route !== "openai-codex")
         throw new Error("History and notes require the OpenAI Codex backend");
     const headers = codexToolProviderHeaders(provider);
     headers.set("x-openai-tool-output-truncation-policy", JSON.stringify(truncationPolicy));
-    if (ENCRYPTED_ARGUMENT_ENDPOINTS.has(endpoint))
+    if (encryptedArguments)
         headers.set("x-openai-encrypted-tool-arguments", "true");
     const timeoutSignal = AbortSignal.timeout(BACKEND_TIMEOUT_MS);
     const response = await fetch(`${provider.baseUrl.replace(/\/+$/, "")}/${endpoint}`, {
@@ -263,35 +161,19 @@ function notesAction(value) {
         return value;
     throw new Error("notes requires a supported action");
 }
-function validateActionFields(namespace, action, params, allowed) {
+function validateArguments(namespace, action, params, operation) {
+    const allowed = Object.keys(operation.parameters.properties);
     const unexpected = Object.keys(params).find((field) => field !== "action" && !allowed.includes(field));
     if (unexpected)
         throw new Error(`${namespace} ${action} does not accept ${unexpected}`);
-}
-function validateHistoryArguments(action, params) {
-    validateActionFields("history", action, params, HISTORY_ACTION_FIELDS[action]);
-    if (action === "read_item") {
-        if (typeof params["item_id"] !== "string" || !params["item_id"])
-            throw new Error("history read_item requires item_id");
-        if (typeof params["window_id"] !== "string" || !params["window_id"])
-            throw new Error("history read_item requires window_id");
+    // Validate in field order, not wire required-array order: notes reports a
+    // missing path before missing text, while its namespace requires text first.
+    for (const field of allowed) {
+        if (!operation.parameters.required?.includes(field))
+            continue;
+        if (typeof params[field] !== "string" || (!params[field] && !operation.allowEmpty?.includes(field)))
+            throw new Error(`${namespace} ${action} requires ${field}`);
     }
-    if (action === "search_contents" &&
-        (typeof params["query"] !== "string" || !params["query"]))
-        throw new Error("history search_contents requires query");
-}
-function validateNotesArguments(action, params) {
-    validateActionFields("notes", action, params, NOTES_ACTION_FIELDS[action]);
-    if ((action === "read_file" ||
-        action === "append_to_file" ||
-        action === "write_file") &&
-        (typeof params["path"] !== "string" || !params["path"]))
-        throw new Error(`notes ${action} requires path`);
-    if ((action === "search_contents" &&
-        (typeof params["query"] !== "string" || !params["query"])) ||
-        ((action === "append_to_file" || action === "write_file") &&
-            typeof params["text"] !== "string"))
-        throw new Error(`notes ${action} requires ${action === "search_contents" ? "query" : "text"}`);
 }
 function parseBackendImages(value) {
     if (value === undefined)

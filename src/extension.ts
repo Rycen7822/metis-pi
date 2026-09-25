@@ -21,8 +21,7 @@ import { createChromeLifecycle, SUMMARY_STATUS_KEY } from "./chrome/install.ts";
 import { registerDiagnosticsCommand } from "./diagnostics.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
-import { createFullscreenMargin, type FullscreenMarginHost, type FullscreenMarginSystem } from "./chrome/fullscreen-margin.ts";
-import { createHistoryWindowSystem, type HistoryWindowHost } from "./chrome/history-window.ts";
+import { createFullscreenLayout, type FullscreenLayoutHost } from "./chrome/fullscreen-layout.ts";
 
 export interface AppearanceAPI {
   on(event: "session_start" | "session_shutdown", handler: (event: unknown, context: {
@@ -71,9 +70,8 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   readFile?: (path: string) => string | undefined;
   /** Host TUI classes/primitives for the selection-copy system (index.ts). */
   selectionCopyHost?: SelectionCopyHost;
-  /** Host TUI HStack/Spacer constructors for the fullscreen margin (index.ts). */
-  marginHost?: FullscreenMarginHost;
-  historyWindowHost?: HistoryWindowHost;
+  /** Native layout primitives for fullscreen gutters and bounded history. */
+  fullscreenHost?: FullscreenLayoutHost;
 }
 
 /** Bounded store for completed write diffs (entry + total budget). */
@@ -156,12 +154,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       process.stderr.write(`metis-pi: selection-copy prototypes unavailable (${wrap.details})\n`);
     }
   }
-  // Fullscreen gutters: install retries ride captureTui / agent_start — the
-  // captured renderer may still be the main screen at first.
-  const fullscreenMargin: FullscreenMarginSystem | undefined = bindings.marginHost && config.enabled && config.fullscreen.marginX > 0
-    ? createFullscreenMargin(bindings.marginHost, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
+  // One owner retries both layout features when capture moves to fullscreen.
+  const fullscreenLayout = bindings.fullscreenHost && config.enabled
+    ? createFullscreenLayout(bindings.fullscreenHost, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
     : undefined;
-  const historyWindow = bindings.historyWindowHost && config.enabled ? createHistoryWindowSystem(bindings.historyWindowHost) : undefined;
   // Glyph presentation: the last mile of the frame (terminal writes only), so
   // emoji-presentation marks like ✔/✖ are drawn by the monospace font instead
   // of an emoji font that paints over the next character (see
@@ -193,9 +189,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     }
     serializerHost ??= tui;
     if (selectionCopy) selectionCopy.installOnTui(serializerHost);
-    fullscreenMargin?.installOnTui(tui);
+    fullscreenLayout?.installOnTui(tui);
     glyphPresentation?.installOnTui(tui);
-    historyWindow?.installOnTui(tui);
   }
 
   const metrics = new UiMetrics(
@@ -314,7 +309,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
       });
       decorations = installTranscriptDecorations({
         state: transcript,
-        toolPrototype: bindings.prototype,
         assistantPrototype: bindings.assistantPrototype,
         makeSeparator: bindings.makeSeparator,
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
@@ -347,8 +341,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     outputSpeed,
     gitChanges,
     selectionCopy,
-    fullscreenMargin,
-    historyWindow,
+    fullscreenLayout,
     glyphPresentation,
     getHandle: () => handle,
     getDecorations: () => decorations,
@@ -372,7 +365,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     hostData.bump();
     if (!chromeEnabled) return;
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
-    if (fullscreenMargin && serializerHost) fullscreenMargin.installOnTui(serializerHost);
+    if (serializerHost) fullscreenLayout?.installOnTui(serializerHost);
     if (!metrics.active) {
       // First start of a chain: a genuinely new interaction — no outcome or
       // tool-error state may leak across interactions.
@@ -561,8 +554,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     handle = undefined;
     decorations?.dispose();
     decorations = undefined;
-    historyWindow?.dispose();
-    fullscreenMargin?.dispose();
+    fullscreenLayout?.dispose();
     // Chrome restore: only OUR factories are removed (identity comparison);
     // a successor extension's editor/footer/header is left untouched.
     chrome.restore();

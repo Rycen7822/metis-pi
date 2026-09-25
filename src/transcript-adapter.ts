@@ -27,14 +27,13 @@ import { asRecord } from "./tool-names.ts";
 import { TranscriptState, normalizeMessageBlocks, semanticRuns, type SemanticRun, type MessageViewKey } from "./transcript-state.ts";
 import { createThinkingViewControl, type ThinkingView, type ThinkingViewControl } from "./thinking-view.ts";
 
-const TOOL_SLOT = Symbol.for("Rycen7822.metis-pi.tool-row.v4");
 const ASSISTANT_SLOT = Symbol.for("Rycen7822.metis-pi.assistant-deco.v2");
 const THOUGHT_LABEL = Symbol.for("Rycen7822.metis-pi.thought-label.v1");
 const CLICK_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-click.v1");
 
 /** Per-feature install diagnostics (never aggregate with .some()). */
 export interface DecorationFeature {
-  readonly name: "separator" | "thinking-rail" | "group-spacing" | "thinking-policy";
+  readonly name: "separator" | "thinking-rail" | "thinking-policy";
   readonly installed: boolean;
   readonly reason: string;
 }
@@ -54,18 +53,12 @@ export interface ThinkingPolicy {
   peekLines: number;
 }
 
-function methodBody(fn: Function): string {
-  const text = Function.prototype.toString.call(fn);
-  return text.slice(text.indexOf("{") + 1, text.lastIndexOf("}")).replace(/\s+/g, "");
-}
-
 export interface TranscriptAdapterInput {
   state: TranscriptState;
-  toolPrototype: object | undefined;
   assistantPrototype: object | undefined;
   /** Build the separator line component (width-aware at render time). */
   makeSeparator: () => unknown;
-  /** Build a 1-row spacer (restore path for de-grouped rows). */
+  /** Build a native spacer so assistant subtree matching can identify its class. */
   makeSpacer: () => unknown;
   /**
    * Wrap a thinking display node with our rail. Returns undefined when the
@@ -116,10 +109,6 @@ export interface TranscriptAdapterInput {
   enabled(): boolean;
 }
 
-/** Structural prefix of the stock updateDisplay (bg function head only —
- * resilient to trailing code changes, strict about its identity). */
-const UPDATE_DISPLAY_HEAD = "letbgFn=this.isPartial?";
-const UPDATE_DISPLAY_HEAD_ALT = "constbgFn=this.isPartial?(";
 const RAIL_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-rail");
 const SEP_SYMBOL = Symbol.for("Rycen7822.metis-pi.separator");
 
@@ -127,11 +116,6 @@ export function installTranscriptDecorations(input: TranscriptAdapterInput): Dec
   const features: DecorationFeature[] = [];
   const disposers: Array<() => void> = [];
   const autoApplied = { count: 0 };
-  if (input.toolPrototype) {
-    const result = decorateToolRows(input);
-    features.push({ name: "group-spacing", installed: result.installed, reason: result.reason });
-    if (result.installed) disposers.push(result.dispose);
-  }
   if (input.assistantPrototype) {
     const result = decorateAssistant(input, autoApplied);
     features.push(
@@ -153,72 +137,6 @@ export function installTranscriptDecorations(input: TranscriptAdapterInput): Dec
   }
   const installed = features.some((f) => f.installed);
   return { installed, features, thinkingAutoApplied: () => autoApplied.count, dispose() { for (const d of disposers) d(); } };
-}
-
-/** Suppress the leading spacer of non-first exploration group members. */
-function decorateToolRows(input: TranscriptAdapterInput): { installed: boolean; reason: string; dispose: () => void } {
-  const prototype = input.toolPrototype!;
-  if (Object.prototype.hasOwnProperty.call(prototype, TOOL_SLOT)) {
-    return { installed: false, reason: "another copy owns tool-row decoration", dispose() {} };
-  }
-  const key = "updateDisplay";
-  const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
-  if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
-    return { installed: false, reason: "Pi tool-row updateDisplay missing or read-only", dispose() {} };
-  }
-  const body = methodBody(descriptor.value);
-  // Pi's TS loader strips type annotations AND the const declaration can be
-  // emitted as let; accept both stock shapes.
-  if (!body.startsWith(UPDATE_DISPLAY_HEAD) && !body.startsWith(UPDATE_DISPLAY_HEAD_ALT)) {
-    return { installed: false, reason: "unrecognized Pi tool-row updateDisplay shape (host changed or patched)", dispose() {} };
-  }
-  const original = descriptor.value as (this: unknown) => void;
-  const owner = {};
-  const spacerRemoved = new WeakSet<object>();
-
-  const wrapper = function (this: unknown): void {
-    const row = this as object;
-    let suppress = false;
-    if (input.enabled() && typeof this === "object" && this !== null) {
-      const id = asRecord(row).toolCallId;
-      const plan = typeof id === "string" ? input.state.explorationPlan(id) : undefined;
-      suppress = plan?.suppressLeadingSpacer === true;
-    }
-    const record = asRecord(row);
-    const children = record.children;
-    const wasRemoved = spacerRemoved.has(row);
-    if (suppress && !wasRemoved && Array.isArray(children) && children.length > 1
-        && (children[0] as { constructor?: { name?: string } })?.constructor?.name === "Spacer") {
-      children.shift();
-      spacerRemoved.add(row);
-    } else if (!suppress && wasRemoved && Array.isArray(children)) {
-      const spacer = input.makeSpacer();
-      if (spacer) children.unshift(spacer);
-      spacerRemoved.delete(row);
-    }
-    return original.call(this);
-  };
-
-  try {
-    Object.defineProperty(prototype, TOOL_SLOT, { value: owner, configurable: true });
-    Object.defineProperty(prototype, key, { ...descriptor, value: wrapper });
-  } catch {
-    return { installed: false, reason: "Pi tool-row prototype cannot be decorated", dispose() {} };
-  }
-  return {
-    installed: true,
-    reason: "group spacing enabled",
-    dispose() {
-      try {
-        if (Object.getOwnPropertyDescriptor(prototype, key)?.value === wrapper) {
-          Object.defineProperty(prototype, key, descriptor);
-        }
-        if (Object.getOwnPropertyDescriptor(prototype, TOOL_SLOT)?.value === owner) {
-          Reflect.deleteProperty(prototype, TOOL_SLOT);
-        }
-      } catch { /* frozen prototype keeps an inert wrapper */ }
-    },
-  };
 }
 
 // Assistant subtree: separator before the first text run, rail on expanded

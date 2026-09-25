@@ -18,6 +18,22 @@ const makeSystem = (dir: string) => {
   return { system, turns: { bump: () => { turn += 1; } }, changed: () => changedCount };
 };
 
+test("reparented task depths follow the hierarchy rather than creation order", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "codex-todo-depth-"));
+  try {
+    const { system } = makeSystem(dir);
+    const exec = createTodoToolHandlers(system, () => dir);
+    await exec({ action: "add", tasks: [{ title: "early child" }, { title: "later parent" }, { title: "root" }] }, "s");
+    await exec({ action: "update", id: "2", parentId: "3" }, "s");
+    await exec({ action: "update", id: "1", parentId: "2.1" }, "s");
+    const list = (await exec({ action: "list" }, "s")).content[0].text;
+    assert.match(list, /\n○ root\n  ○ later parent\n    ○ early child\nnext: #1\.1$/);
+    assert.deepEqual(system.store.read().tasks.map((task) => task.id), [1, 2, 3], "rendering must not reorder stored tasks");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("compound updates preserve write notifications and a saved title when the move fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "codex-todo-update-"));
   try {

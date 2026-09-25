@@ -5,6 +5,8 @@ import { injectNativeWindowIntoPiCompactionRequest, rewriteCodexCompactedProvide
 import { applyResponsesLiteRequest, RESPONSES_LITE_HEADER } from "../providers/openai-codex/responses-lite.js";
 import { usesRemoteHistoryNotes } from "../context-management/history-notes.js";
 import { rewriteContextNamespaceTools } from "../context-management/namespace-tools.js";
+// Shared wire preparation only: ordinary prewarm must not consume pending
+// compaction windows or capture the active prompt from a speculative request.
 function prepareCodexProviderRequest(payload, ctx, state) {
     if (state.config.voiceFeaturesOnly)
         return undefined;
@@ -12,13 +14,18 @@ function prepareCodexProviderRequest(payload, ctx, state) {
     if (!isAdapterRuntime(plan) || (!plan.effectiveOpenAICodex && !isResponsesContext(ctx))) {
         return undefined;
     }
-    return {
-        plan,
-        configuredPayload: applyCodexRequestOptions(applyVoiceSystemPrompt(payload, state.voiceSystemPromptOverride), state.config, {
-            serviceTier: plan.effectiveOpenAICodex,
-            verbosity: true,
-        }),
-    };
+    let preparedPayload = applyCodexRequestOptions(applyVoiceSystemPrompt(payload, state.voiceSystemPromptOverride), state.config, {
+        serviceTier: plan.effectiveOpenAICodex,
+        verbosity: true,
+    });
+    preparedPayload = state.developerMessages.rewritePayload(preparedPayload, ctx.model);
+    if (plan.contextManagement) {
+        const remote = plan.contextManagementRemote && usesRemoteHistoryNotes(ctx, plan.contextManagementMode);
+        preparedPayload = rewriteContextTools(preparedPayload, ctx, remote);
+        if (remote)
+            preparedPayload = state.contextWindows.rewritePayload(preparedPayload, ctx);
+    }
+    return { plan, preparedPayload };
 }
 export function supportsCodexDeveloperMessages(ctx, state) {
     if (state.config.voiceFeaturesOnly)
@@ -58,14 +65,8 @@ export async function rewriteCodexProviderRequest(payload, ctx, state) {
     const prepared = prepareCodexProviderRequest(payload, ctx, state);
     if (!prepared)
         return undefined;
-    const { plan, configuredPayload } = prepared;
-    let rewrittenPayload = state.developerMessages.rewritePayload(configuredPayload, ctx.model);
-    if (plan.contextManagement) {
-        const remoteHistoryNotes = usesRemoteHistoryNotes(ctx, plan.contextManagementMode);
-        rewrittenPayload = rewriteContextTools(rewrittenPayload, ctx, plan.contextManagementRemote && remoteHistoryNotes);
-        if (plan.contextManagementRemote && remoteHistoryNotes)
-            rewrittenPayload = state.contextWindows.rewritePayload(rewrittenPayload, ctx);
-    }
+    const { plan } = prepared;
+    let rewrittenPayload = prepared.preparedPayload;
     if (plan.nativeCompaction || state.pendingPiCompactionNativeWindow) {
         // The pending window is the caller's state: hand the snapshot to the injection and decide its
         // fate from the returned status, not from whether the field happens to be empty afterwards.
@@ -90,14 +91,7 @@ export function rewriteCodexPrewarmProviderRequest(payload, ctx, state) {
     const prepared = prepareCodexProviderRequest(payload, ctx, state);
     if (!prepared)
         return undefined;
-    let rewritten = state.developerMessages.rewritePayload(prepared.configuredPayload, ctx.model);
-    if (prepared.plan.contextManagement) {
-        const remoteHistoryNotes = usesRemoteHistoryNotes(ctx, prepared.plan.contextManagementMode);
-        rewritten = rewriteContextTools(rewritten, ctx, prepared.plan.contextManagementRemote && remoteHistoryNotes);
-        if (prepared.plan.contextManagementRemote && remoteHistoryNotes)
-            rewritten = state.contextWindows.rewritePayload(rewritten, ctx);
-    }
-    return applyCodexRuntimePayload(rewritten, prepared.plan.transport === "responses-lite");
+    return applyCodexRuntimePayload(prepared.preparedPayload, prepared.plan.transport === "responses-lite");
 }
 function isCodeModeCompatibleBody(value) {
     return typeof value === "object" && value !== null
@@ -105,6 +99,7 @@ function isCodeModeCompatibleBody(value) {
         && Array.isArray(value.input);
 }
 function rewriteContextTools(payload, ctx, remote) {
+    // Deliberately API-only, unlike the compaction plan's provider-or-API predicate.
     const codexTransport = (ctx.model?.api ?? "").trim().toLowerCase() ===
         "openai-codex-responses";
     return !codexTransport || remote

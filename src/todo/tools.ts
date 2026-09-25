@@ -18,7 +18,7 @@ import { Type, type Static } from "typebox";
 import { existsSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import {
-  addBlockedBy, addTasks, buildTree, claimTask, completeTask, flattenTree,
+  addBlockedBy, addTasks, claimTask, completeTask, taskRows,
   isBlocked, isListFinished, moveTask, nextTaskId, pathOf, releaseTask, resolveTaskRef, taskGlyph, taskPaths, type AddItem,
   removeBlockedBy, skipTask, startNewList, transitionTask, updateTitle,
   type ModelResult, type Task, type TodoState,
@@ -83,7 +83,7 @@ const text = (s: string): TodoToolResult => ({ content: [{ type: "text", text: s
 
 export function renderListText(state: TodoState, sessionId: string): string {
   const lines: string[] = [];
-  const flat = flattenTree(buildTree(state));
+  const flat = taskRows(state);
   const paths = taskPaths(state);
   const anyBlockedBy = state.tasks.some((t) => t.blockedBy.length > 0);
   for (const node of flat) {

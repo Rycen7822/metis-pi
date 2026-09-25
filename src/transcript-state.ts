@@ -35,7 +35,6 @@ export interface ExplorationPlan {
   readonly isFirstMember: boolean;
   readonly isLastMember: boolean;
   readonly memberIndex: number;
-  readonly suppressLeadingSpacer: boolean;
   readonly running: boolean;
   readonly groupImages: number;
   /** Group total for THIS member as of the plan snapshot (per-member rows). */
@@ -501,7 +500,6 @@ export class TranscriptState {
       isFirstMember: index === 0,
       isLastMember: index === group.members.length - 1,
       memberIndex: index,
-      suppressLeadingSpacer: index > 0,
       running: anyRunning,
       groupImages: group.members.reduce((sum, m) => sum + m.images, 0),
       memberImages: member.images,

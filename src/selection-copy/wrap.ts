@@ -1,6 +1,6 @@
 // Provenance-tracking replica of pi-tui's wrapTextWithAnsi (host 0.85.1,
 // utils.js). Produces the same visual rows plus, per row, the visible-text
-// char ranges and span kinds needed to reconstruct logical text on copy.
+// spans and kinds needed to reconstruct logical text on copy.
 //
 // Fidelity contract: callers diff our styled rows against the host's own
 // wrapTextWithAnsi output for the same input; any mismatch drops that line's
@@ -12,20 +12,17 @@
 
 export type SpanKind = "content" | "decoration" | "semantic";
 
-/** One kind-homogeneous piece of a logical line. `plainStart` is the char
- * offset of the segment's visible text inside the line's plain text. */
+/** One kind-homogeneous styled piece of a logical line. */
 export interface ProvenanceSegment {
   styled: string;
   kind: SpanKind;
-  plainStart: number;
 }
 
 export interface ProvenanceSpan {
   colStart: number;
   colEnd: number;
   kind: SpanKind;
-  plainStart: number;
-  plainEnd: number;
+  text: string;
 }
 
 export interface ProvenanceRow {
@@ -71,18 +68,17 @@ function extractAnsiCode(str: string, pos: number): ExtractedAnsi | null {
 }
 
 export function stripAnsi(text: string): string {
-  let out = "";
-  let i = 0;
-  while (i < text.length) {
-    const ansi = extractAnsiCode(text, i);
-    if (ansi) {
-      i += ansi.length;
-      continue;
-    }
-    out += text[i]!;
-    i++;
+  const parts: string[] = [];
+  let start = 0;
+  for (let pos = text.indexOf("\x1b"); pos >= 0; pos = text.indexOf("\x1b", pos)) {
+    const ansi = extractAnsiCode(text, pos);
+    if (!ansi) { pos++; continue; }
+    parts.push(text.slice(start, pos));
+    pos += ansi.length;
+    start = pos;
   }
-  return out;
+  parts.push(text.slice(start));
+  return parts.join("");
 }
 
 interface Osc8Link {
@@ -210,7 +206,6 @@ interface TaggedGrapheme {
   text: string;
   cells: number;
   kind: SpanKind;
-  plainIndex: number;
 }
 
 /** Word/space grouping follows the host (wrap decisions depend on it);
@@ -249,7 +244,6 @@ function tokenize(
   };
   for (const segment of segments) {
     let i = 0;
-    let plainIndex = segment.plainStart;
     while (i < segment.styled.length) {
       const ansi = extractAnsiCode(segment.styled, i);
       if (ansi) {
@@ -272,8 +266,7 @@ function tokenize(
           group = nextGroup;
           kind = segment.kind;
           styled += ch;
-          graphemes.push({ text: ch, cells: 1, kind: segment.kind, plainIndex });
-          plainIndex += 1;
+          graphemes.push({ text: ch, cells: 1, kind: segment.kind });
         }
         i = end;
         continue;
@@ -284,12 +277,11 @@ function tokenize(
           flush();
           tokens.push({
             styled: pendingAnsi + grapheme,
-            graphemes: [{ text: grapheme, cells: visibleWidth(grapheme), kind: segment.kind, plainIndex }],
+            graphemes: [{ text: grapheme, cells: visibleWidth(grapheme), kind: segment.kind }],
             width: visibleWidth(grapheme),
             whitespace: false,
           });
           pendingAnsi = "";
-          plainIndex += grapheme.length;
           continue;
         }
         const nextGroup: TokenGroup = isSpace ? "space" : "word";
@@ -301,8 +293,7 @@ function tokenize(
         group = nextGroup;
         kind = segment.kind;
         styled += grapheme;
-        graphemes.push({ text: grapheme, cells: visibleWidth(grapheme), kind: segment.kind, plainIndex });
-        plainIndex += grapheme.length;
+        graphemes.push({ text: grapheme, cells: visibleWidth(grapheme), kind: segment.kind });
       }
       i = end;
     }
@@ -322,6 +313,8 @@ function tokenize(
   return tokens;
 }
 
+/** Only graphemes retained on this row contribute text/cells. Whitespace
+ * consumed at a soft break lives in the next row's bridge, not its spans. */
 function spansFromGraphemes(graphemes: TaggedGrapheme[]): ProvenanceSpan[] {
   const spans: ProvenanceSpan[] = [];
   let col = 0;
@@ -329,15 +322,15 @@ function spansFromGraphemes(graphemes: TaggedGrapheme[]): ProvenanceSpan[] {
   while (index < graphemes.length) {
     const kind = graphemes[index]!.kind;
     const colStart = col;
-    const plainStart = graphemes[index]!.plainIndex;
-    let plainEnd = plainStart;
+    const text: string[] = [];
     while (index < graphemes.length && graphemes[index]!.kind === kind) {
       const g = graphemes[index]!;
       col += g.cells;
-      plainEnd = g.plainIndex + g.text.length;
+      text.push(g.text);
       index++;
     }
-    spans.push({ colStart, colEnd: col, kind, plainStart, plainEnd });
+    // Join once: a retained += rope costs far more than the span's characters.
+    spans.push({ colStart, colEnd: col, kind, text: text.join("") });
   }
   return spans;
 }
@@ -509,32 +502,21 @@ function ansiCodesOf(styled: string): string[] {
   return codes;
 }
 
-/** Split segments on host newline forms into physical sub-lines, carrying
- * plain-text offsets across the split. Newline separators stay accounted for
- * in the offsets (they occupy plain-string positions but belong to no span). */
+/** Split segments on host newline forms into physical sub-lines. Separators
+ * become hard row boundaries and belong to no span. */
 function splitSubLines(segments: ProvenanceSegment[]): ProvenanceSegment[][] {
   const lines: ProvenanceSegment[][] = [];
   let current: ProvenanceSegment[] = [];
   for (const segment of segments) {
-    const pieces = segment.styled.split(/(\r\n|\r|\n)/);
-    let plainOffset = segment.plainStart;
-    let sawSeparator = false;
+    const pieces = segment.styled.split(/\r\n|\r|\n/);
     for (let index = 0; index < pieces.length; index++) {
       const piece = pieces[index]!;
-      if (index % 2 === 1) {
-        // Separator: occupies plain-string positions, belongs to no sub-line.
-        plainOffset += piece.length;
-        sawSeparator = true;
-        continue;
-      }
-      if (sawSeparator) {
+      if (index > 0) {
         lines.push(current);
         current = [];
-        sawSeparator = false;
       }
       if (piece) {
-        current.push({ styled: piece, kind: segment.kind, plainStart: plainOffset });
-        plainOffset += stripAnsi(piece).length;
+        current.push({ styled: piece, kind: segment.kind });
       }
     }
   }
@@ -544,8 +526,7 @@ function splitSubLines(segments: ProvenanceSegment[]): ProvenanceSegment[][] {
 
 /** Provenance-aware equivalent of wrapTextWithAnsi for ONE logical line that
  * may contain newlines (hard boundaries). `segments` partition the line into
- * kind-homogeneous styled pieces whose visible chars map into the line's
- * plain text. */
+ * kind-homogeneous styled pieces. */
 export function wrapWithProvenance(
   segments: ProvenanceSegment[],
   width: number,
@@ -558,7 +539,7 @@ export function wrapWithProvenance(
     const segmentsOfLine = subLines[lineIndex]!;
     const prefix = lineIndex > 0 ? tracker.getActiveCodes() : "";
     const prefixed: ProvenanceSegment[] = segmentsOfLine.length > 0
-      ? [{ styled: prefix + segmentsOfLine[0]!.styled, kind: segmentsOfLine[0]!.kind, plainStart: segmentsOfLine[0]!.plainStart },
+      ? [{ styled: prefix + segmentsOfLine[0]!.styled, kind: segmentsOfLine[0]!.kind },
          ...segmentsOfLine.slice(1)]
       : segmentsOfLine;
     const rawRows = wrapSubLine(tokenize(prefixed, visibleWidth), width, visibleWidth);

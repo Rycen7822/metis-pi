@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openTodoStore, TODO_STATE_FILE } from "../../src/todo/store.ts";
-import { addTasks, claimTask, completeTask } from "../../src/todo/model.ts";
+import { addTasks, claimTask, completeTask, moveTask } from "../../src/todo/model.ts";
 import { createTodoWidget, TODO_WIDGET_KEY, TODO_WIDGET_PLACEMENT } from "../../src/todo/widget.ts";
 import type { CodexTodoSystem } from "../../src/todo/tools.ts";
 
@@ -85,6 +85,20 @@ test("a list finished in an earlier session never pops the panel up (restart)", 
     widget.refresh();
     assert.equal(calls.length, 1, "a new task brings the panel back");
     assert.equal(widget.visibleRows(store.read(), 0), true, "an unfinished task always shows");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rows indent descendants correctly after reparenting to a newer task", async () => {
+  const { dir, store, widget } = setup();
+  try {
+    await stateWith(store, [{ title: "early child" }, { title: "later parent" }, { title: "root" }]);
+    assert.ok((await store.mutate((s) => moveTask(s, 2, 3, 2))).ok);
+    assert.ok((await store.mutate((s) => moveTask(s, 1, 2, 3))).ok);
+    assert.deepEqual(widget.buildRows(store.read(), 80, 5).map((r) => r.text).slice(1), [
+      "○ root", "  ○ later parent", "    ○ early child", "",
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

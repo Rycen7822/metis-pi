@@ -1,5 +1,5 @@
 import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext } from "./tool-names.ts";
-import { publishRows } from "./selection-copy/model.ts";
+import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 
 export const OWNED_CONVERSION_ENTRY = fileURLToPath(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url));
@@ -164,7 +164,24 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // The host's self-shell path bypasses Container.render. Publish its actual
     // rows so a parent copy-alignment pass need not render the tool a second time.
     if (typeof this === "object" && this !== null && Array.isArray(lines)) {
-      try { publishRows(this, lines); } catch { /* Copy metadata must not break rendering. */ }
+      try {
+        publishRows(this, lines);
+        const row = asRecord(this);
+        if (displayed.get(this) && typeof row.getRenderShell === "function" && row.getRenderShell() === "self") {
+          const content = publishedRowsOf(row.selfRenderContainer);
+          const product = content && productFor(content);
+          // The native self-shell composes a blank prefix, its text subtree,
+          // then image rows. Bind only the verified text region; never re-render
+          // it or pretend that unknown/image rows have text provenance.
+          if (content?.length && product?.width === width && row.selfRenderHeight === content.length
+              && lines[0] === "" && content.every((line, index) => lines[index + 1] === line)) {
+            registerProduct(lines, {
+              componentId: "tool-self-shell", width, rows: [decorationRow(width)],
+              children: [undefined, ...content.map((_, rowIndex) => ({ product, rowIndex, colShift: 0 }))],
+            });
+          }
+        }
+      } catch { /* Copy metadata must not break rendering. */ }
     }
     return lines;
   });

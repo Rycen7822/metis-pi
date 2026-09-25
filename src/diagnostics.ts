@@ -11,8 +11,7 @@
 
 import type { AdapterHandle } from "./adapter.ts";
 import type { AppearanceConfig } from "./config.ts";
-import type { FullscreenMarginSystem } from "./chrome/fullscreen-margin.ts";
-import type { createHistoryWindowSystem } from "./chrome/history-window.ts";
+import type { FullscreenLayoutSystem } from "./chrome/fullscreen-layout.ts";
 import type { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import type { GitChangesTracker } from "./git-changes.ts";
 import { GIT_CHANGES_DEBOUNCE_MS, GIT_CHANGES_INTERVAL_MS } from "./git-changes.ts";
@@ -43,8 +42,7 @@ export interface DiagnosticsDeps {
   outputSpeed: OutputSpeedTracker;
   gitChanges: GitChangesTracker;
   selectionCopy: SelectionCopySystem | undefined;
-  fullscreenMargin: FullscreenMarginSystem | undefined;
-  historyWindow: Pick<ReturnType<typeof createHistoryWindowSystem>, "status"> | undefined;
+  fullscreenLayout: FullscreenLayoutSystem | undefined;
   glyphPresentation: GlyphPresentationSystem | undefined;
   getHandle: () => AdapterHandle | undefined;
   getDecorations: () => DecorationHandle | undefined;
@@ -153,10 +151,10 @@ const thinkingLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string =
 };
 
 const fullscreenMarginLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
-  if (!deps.fullscreenMargin) {
+  if (!deps.fullscreenLayout) {
     return `  fullscreen-margin: ${config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`;
   }
-  const status = deps.fullscreenMargin.status();
+  const status = deps.fullscreenLayout.status().margin;
   return `  fullscreen-margin: ${status.installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : status.reason}`;
 };
 
@@ -232,7 +230,7 @@ const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {
 };
 
 const historyLine = (deps: DiagnosticsDeps): string =>
-  `  history-window: ${JSON.stringify(deps.historyWindow?.status() ?? { installed: false })}`;
+  `  history-window: ${JSON.stringify(deps.fullscreenLayout?.status().history ?? { installed: false })}`;
 
 const FOOTER_SOURCES_LINE =
   "  footer: model source=live ctx (composer surface) context source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd source=ctx.cwd";

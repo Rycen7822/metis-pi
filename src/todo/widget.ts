@@ -22,7 +22,7 @@
 // The widget takes no pi-tui dependency: the host hands (tui, theme) to the
 // factory, and the component contract is just { render(width): string[] }.
 
-import { buildTree, flattenTree, isBlocked, taskGlyph, taskPaths, type Task, type TodoState } from "./model.ts";
+import { taskRows, isBlocked, taskGlyph, taskPaths, type Task, type TodoState } from "./model.ts";
 import type { CodexTodoSystem } from "./tools.ts";
 
 export const TODO_WIDGET_KEY = "codex-todo";
@@ -103,7 +103,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     const done = count("complete") + count("skipped");
 
     // Delayed completed-fold: completions stay visible until the next turn.
-    const visible = flattenTree(buildTree(state)).filter((n) => {
+    const visible = taskRows(state).filter((n) => {
       const t = n.task;
       if (t.completedAtTurn != null && t.completedAtTurn < turn) return false;
       return true;

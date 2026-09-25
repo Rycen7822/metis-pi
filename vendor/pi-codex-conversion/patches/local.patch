@@ -1085,10 +1085,10 @@ index 565efd2..0000000
 -	}
 -}
 diff --git a/src/adapter/provider-request.ts b/src/adapter/provider-request.ts
-index f4d861d..1518b0e 100644
+index f4d861d..60311c8 100644
 --- a/src/adapter/provider-request.ts
 +++ b/src/adapter/provider-request.ts
-@@ -4,7 +4,7 @@ import { isResponsesContext } from "./prompt/codex-model.ts";
+@@ -4,24 +4,30 @@ import { isResponsesContext } from "./prompt/codex-model.ts";
  import { applyCodexRequestOptions } from "./request-options.ts";
  import type { AdapterState } from "./activation/state.ts";
  import { isAdapterRuntime, resolveCodexRuntimePlanForState } from "./activation/runtime-plan.ts";
@@ -1097,9 +1097,57 @@ index f4d861d..1518b0e 100644
  import { applyResponsesLiteRequest, RESPONSES_LITE_HEADER, type ResponsesLiteCompatibleBody } from "../providers/openai-codex/responses-lite.ts";
  import { usesRemoteHistoryNotes } from "../context-management/history-notes.ts";
  import { rewriteContextNamespaceTools } from "../context-management/namespace-tools.ts";
-@@ -86,8 +86,14 @@ export async function rewriteCodexProviderRequest(payload: unknown, ctx: Extensi
- 			rewrittenPayload = state.contextWindows.rewritePayload(rewrittenPayload, ctx);
+ 
++// Shared wire preparation only: ordinary prewarm must not consume pending
++// compaction windows or capture the active prompt from a speculative request.
+ function prepareCodexProviderRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState) {
+ 	if (state.config.voiceFeaturesOnly) return undefined;
+ 	const plan = resolveCodexRuntimePlanForState(ctx, state);
+ 	if (!isAdapterRuntime(plan) || (!plan.effectiveOpenAICodex && !isResponsesContext(ctx))) {
+ 		return undefined;
  	}
+-	return {
+-		plan,
+-		configuredPayload: applyCodexRequestOptions(applyVoiceSystemPrompt(payload, state.voiceSystemPromptOverride), state.config, {
+-			serviceTier: plan.effectiveOpenAICodex,
+-			verbosity: true,
+-		}),
+-	};
++	let preparedPayload = applyCodexRequestOptions(applyVoiceSystemPrompt(payload, state.voiceSystemPromptOverride), state.config, {
++		serviceTier: plan.effectiveOpenAICodex,
++		verbosity: true,
++	});
++	preparedPayload = state.developerMessages.rewritePayload(preparedPayload, ctx.model);
++	if (plan.contextManagement) {
++		const remote = plan.contextManagementRemote && usesRemoteHistoryNotes(ctx, plan.contextManagementMode);
++		preparedPayload = rewriteContextTools(preparedPayload, ctx, remote);
++		if (remote) preparedPayload = state.contextWindows.rewritePayload(preparedPayload, ctx);
++	}
++	return { plan, preparedPayload };
+ }
+ 
+ export function supportsCodexDeveloperMessages(
+@@ -70,24 +76,17 @@ export function captureActiveProviderSystemPrompt(payload: unknown, state: Adapt
+ export async function rewriteCodexProviderRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState): Promise<unknown | undefined> {
+ 	const prepared = prepareCodexProviderRequest(payload, ctx, state);
+ 	if (!prepared) return undefined;
+-	const { plan, configuredPayload } = prepared;
+-	let rewrittenPayload = state.developerMessages.rewritePayload(configuredPayload, ctx.model);
+-	if (plan.contextManagement) {
+-		const remoteHistoryNotes = usesRemoteHistoryNotes(
+-			ctx,
+-			plan.contextManagementMode,
+-		);
+-		rewrittenPayload = rewriteContextTools(
+-			rewrittenPayload,
+-			ctx,
+-			plan.contextManagementRemote && remoteHistoryNotes,
+-		);
+-		if (plan.contextManagementRemote && remoteHistoryNotes)
+-			rewrittenPayload = state.contextWindows.rewritePayload(rewrittenPayload, ctx);
+-	}
++	const { plan } = prepared;
++	let rewrittenPayload = prepared.preparedPayload;
  	if (plan.nativeCompaction || state.pendingPiCompactionNativeWindow) {
 -		const piCompactionPayload = await injectPendingNativeWindowIntoPiCompactionRequest(rewrittenPayload, ctx, state);
 -		rewrittenPayload = piCompactionPayload ?? (await rewriteCodexCompactedProviderRequest(rewrittenPayload, ctx, state)) ?? rewrittenPayload;
@@ -1114,6 +1162,41 @@ index f4d861d..1518b0e 100644
  	}
  	const finalPayload = applyCodexRuntimePayload(
  		rewrittenPayload,
+@@ -108,25 +107,8 @@ export function rewriteCodexPrewarmProviderRequest(
+ ): unknown | undefined {
+ 	const prepared = prepareCodexProviderRequest(payload, ctx, state);
+ 	if (!prepared) return undefined;
+-	let rewritten = state.developerMessages.rewritePayload(
+-		prepared.configuredPayload,
+-		ctx.model,
+-	);
+-	if (prepared.plan.contextManagement) {
+-		const remoteHistoryNotes = usesRemoteHistoryNotes(
+-			ctx,
+-			prepared.plan.contextManagementMode,
+-		);
+-		rewritten = rewriteContextTools(
+-			rewritten,
+-			ctx,
+-			prepared.plan.contextManagementRemote && remoteHistoryNotes,
+-		);
+-		if (prepared.plan.contextManagementRemote && remoteHistoryNotes)
+-			rewritten = state.contextWindows.rewritePayload(rewritten, ctx);
+-	}
+ 	return applyCodexRuntimePayload(
+-		rewritten,
++		prepared.preparedPayload,
+ 		prepared.plan.transport === "responses-lite",
+ 	);
+ }
+@@ -142,6 +124,7 @@ function rewriteContextTools(
+ 	ctx: Pick<ExtensionContext, "model">,
+ 	remote: boolean,
+ ): unknown {
++	// Deliberately API-only, unlike the compaction plan's provider-or-API predicate.
+ 	const codexTransport = (ctx.model?.api ?? "").trim().toLowerCase() ===
+ 		"openai-codex-responses";
+ 	return !codexTransport || remote
 diff --git a/src/adapter/replay/context-edits.ts b/src/adapter/replay/context-edits.ts
 new file mode 100644
 index 0000000..36e7c25
@@ -1485,19 +1568,577 @@ index 40c7ec8..aea4c3d 100644
  	rewriteResponsesPayloadWithNativeReplay,
  	serializeLiveTailToResponsesInput,
  } from "./native-replay-segments.ts";
+diff --git a/src/context-management/history-notes.ts b/src/context-management/history-notes.ts
+index a2fb086..207e780 100644
+--- a/src/context-management/history-notes.ts
++++ b/src/context-management/history-notes.ts
+@@ -4,8 +4,6 @@ import type {
+ 	ExtensionContext,
+ 	ToolDefinition,
+ } from "@earendil-works/pi-coding-agent";
+-import { StringEnum } from "@earendil-works/pi-ai";
+-import { Type } from "typebox";
+ import type { ContextManagementMode } from "../adapter/activation/config.ts";
+ import { historyNotesRenderers } from "./rendering.ts";
+ import {
+@@ -21,11 +19,15 @@ import {
+ 	usePiSessionNotes,
+ } from "./local-notes.ts";
+ import {
++	CONTEXT_OPERATIONS,
++	type ContextOperation,
+ 	HISTORY_ACTIONS,
+ 	HISTORY_DESCRIPTION,
++	HISTORY_PARAMETERS,
+ 	type HistoryAction,
+ 	NOTES_ACTIONS,
+ 	NOTES_DESCRIPTION,
++	NOTES_PARAMETERS,
+ 	type NotesAction,
+ } from "./tool-contract.ts";
+ 
+@@ -33,132 +35,9 @@ const BACKEND_TIMEOUT_MS = 35_000;
+ const THREAD_HINT_MAX_BYTES = 4_000;
+ const TOOL_OUTPUT_TOKEN_LIMIT = 10_000;
+ 
+-const HISTORY_ENDPOINTS = {
+-	list_windows: "alpha/history/v2/list_windows",
+-	list_items: "alpha/history/v2/list_items",
+-	read_item: "alpha/history/v2/read_item",
+-	search_contents: "alpha/history/v2/search_contents",
+-} as const satisfies Record<HistoryAction, string>;
+-
+-const NOTES_ENDPOINTS = {
+-	list_files_by_prefix: "alpha/notes/v2/list_files_by_prefix",
+-	read_file: "alpha/notes/v2/read_file",
+-	search_contents: "alpha/notes/v2/search_contents",
+-	append_to_file: "alpha/notes/v2/append_to_file",
+-	write_file: "alpha/notes/v2/write_file",
+-} as const satisfies Record<NotesAction, string>;
+-
+-const ENCRYPTED_ARGUMENT_ENDPOINTS = new Set<string>([
+-	HISTORY_ENDPOINTS.search_contents,
+-	NOTES_ENDPOINTS.search_contents,
+-	NOTES_ENDPOINTS.append_to_file,
+-	NOTES_ENDPOINTS.write_file,
+-]);
+-
+ const HISTORY_ACTION_SET = new Set<string>(HISTORY_ACTIONS);
+ const NOTES_ACTION_SET = new Set<string>(NOTES_ACTIONS);
+ 
+-const HISTORY_ACTION_FIELDS = {
+-	list_windows: ["agent_name", "limit", "recent_first"],
+-	list_items: [
+-		"agent_name",
+-		"limit",
+-		"max_chars_per_item",
+-		"recent_first",
+-		"role",
+-		"tool_name",
+-		"tool_namespace",
+-		"window_id",
+-	],
+-	read_item: [
+-		"agent_name",
+-		"item_id",
+-		"limit_chars",
+-		"offset_chars",
+-		"window_id",
+-	],
+-	search_contents: [
+-		"agent_name",
+-		"limit",
+-		"query",
+-		"recent_first",
+-		"role",
+-		"tool_name",
+-		"tool_namespace",
+-		"window_id",
+-	],
+-} satisfies Record<HistoryAction, readonly string[]>;
+-
+-const NOTES_ACTION_FIELDS = {
+-	list_files_by_prefix: ["file_order", "file_order_by", "max_results", "prefix"],
+-	read_file: ["path", "start_line", "stop_line"],
+-	search_contents: [
+-		"max_files",
+-		"max_matches_per_file",
+-		"path_prefix",
+-		"query",
+-		"recent_file_first",
+-	],
+-	append_to_file: ["path", "text"],
+-	write_file: ["path", "text"],
+-} satisfies Record<NotesAction, readonly string[]>;
+-
+-const HISTORY_PARAMETERS = Type.Object(
+-	{
+-		action: StringEnum(HISTORY_ACTIONS),
+-		agent_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+-		item_id: Type.Optional(Type.String()),
+-		limit: Type.Optional(Type.Integer({ minimum: 1 })),
+-		limit_chars: Type.Optional(Type.Integer({ minimum: 1 })),
+-		max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1 })),
+-		offset_chars: Type.Optional(Type.Integer({ minimum: 0 })),
+-		query: Type.Optional(Type.String()),
+-		recent_first: Type.Optional(Type.Boolean()),
+-		role: Type.Optional(
+-			Type.Union([
+-				StringEnum([
+-					"user",
+-					"assistant",
+-					"tool",
+-					"system",
+-					"developer",
+-				] as const),
+-				Type.Null(),
+-			]),
+-		),
+-		tool_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+-		tool_namespace: Type.Optional(
+-			Type.Union([Type.String(), Type.Null()]),
+-		),
+-		window_id: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+-	},
+-	{ additionalProperties: false },
+-);
+-
+-const NOTES_PARAMETERS = Type.Object(
+-	{
+-		action: StringEnum(NOTES_ACTIONS),
+-		file_order: Type.Optional(
+-			StringEnum(["ascending", "descending"] as const),
+-		),
+-		file_order_by: Type.Optional(
+-			StringEnum(["name", "created_at", "updated_at"] as const),
+-		),
+-		max_files: Type.Optional(Type.Integer({ minimum: 1 })),
+-		max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1 })),
+-		max_results: Type.Optional(Type.Integer({ minimum: 1 })),
+-		path: Type.Optional(Type.String()),
+-		path_prefix: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+-		prefix: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+-		query: Type.Optional(Type.String()),
+-		recent_file_first: Type.Optional(Type.Boolean()),
+-		start_line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+-		stop_line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+-		text: Type.Optional(Type.String()),
+-	},
+-	{ additionalProperties: false },
+-);
+-
+ export interface CodexHistoryNotesDetails {
+ 	codexHistoryNotes: Record<string, unknown>;
+ }
+@@ -181,11 +60,12 @@ export function createHistoryNotesTools(
+ 			...historyNotesRenderers("history"),
+ 			async execute(_id, params, signal, _update, ctx) {
+ 				const action = historyAction(params.action);
+-				validateHistoryArguments(action, params);
++				const operation = CONTEXT_OPERATIONS.history[action];
++				validateArguments("history", action, params, operation);
+ 				return callHistoryNotesTool(
+ 					"history",
+ 					action,
+-					HISTORY_ENDPOINTS[action],
++					operation,
+ 					params,
+ 					ctx,
+ 					signal,
+@@ -203,14 +83,15 @@ export function createHistoryNotesTools(
+ 			executionMode: "sequential",
+ 			async execute(_id, params, signal, _update, ctx) {
+ 				const action = notesAction(params.action);
+-				validateNotesArguments(action, params);
++				const operation = CONTEXT_OPERATIONS.notes[action];
++				validateArguments("notes", action, params, operation);
+ 				const finishNoteWrite = action === "write_file" || action === "append_to_file"
+ 					? prepareNoteWrite?.(action, params.path, ctx)
+ 					: undefined;
+ 				const result = await callHistoryNotesTool(
+ 					"notes",
+ 					action,
+-					NOTES_ENDPOINTS[action],
++					operation,
+ 					params,
+ 					ctx,
+ 					signal,
+@@ -277,7 +158,7 @@ function piSessionThreadHint(
+ async function callHistoryNotesTool(
+ 	namespace: "history" | "notes",
+ 	action: HistoryAction | NotesAction,
+-	endpoint: string,
++	operation: ContextOperation,
+ 	params: Record<string, unknown>,
+ 	ctx: ExtensionContext,
+ 	signal: AbortSignal | undefined,
+@@ -289,11 +170,12 @@ async function callHistoryNotesTool(
+ 		if (!usesRemoteHistoryNotes(ctx, mode))
+ 			throw new Error("Remote history and notes require Codex transport");
+ 		result = await callHistoryNotesBackend(
+-			endpoint,
++			`alpha/${namespace}/v2/${action}`,
+ 			stripAction(params),
+ 			ctx,
+ 			signal,
+ 			{ mode: "tokens", limit: TOOL_OUTPUT_TOKEN_LIMIT },
++			operation.encryptedField !== undefined,
+ 		);
+ 	} else result = callLocalHistoryNotes(namespace, action, params, ctx, pi, mode);
+ 	const modelResult = { ...result };
+@@ -320,6 +202,7 @@ async function callHistoryNotesBackend(
+ 	ctx: ExtensionContext,
+ 	signal: AbortSignal | undefined,
+ 	truncationPolicy: { mode: "bytes" | "tokens"; limit: number },
++	encryptedArguments = false,
+ ): Promise<Record<string, unknown>> {
+ 	const provider = await resolveCodexToolProvider(ctx);
+ 	if (provider.route !== "openai-codex")
+@@ -329,7 +212,7 @@ async function callHistoryNotesBackend(
+ 		"x-openai-tool-output-truncation-policy",
+ 		JSON.stringify(truncationPolicy),
+ 	);
+-	if (ENCRYPTED_ARGUMENT_ENDPOINTS.has(endpoint))
++	if (encryptedArguments)
+ 		headers.set("x-openai-encrypted-tool-arguments", "true");
+ 	const timeoutSignal = AbortSignal.timeout(BACKEND_TIMEOUT_MS);
+ 	const response = await fetch(
+@@ -399,58 +282,25 @@ function notesAction(value: unknown): NotesAction {
+ 	throw new Error("notes requires a supported action");
+ }
+ 
+-function validateActionFields(
++function validateArguments(
+ 	namespace: "history" | "notes",
+ 	action: HistoryAction | NotesAction,
+ 	params: Record<string, unknown>,
+-	allowed: readonly string[],
++	operation: ContextOperation,
+ ): void {
++	const allowed = Object.keys(operation.parameters.properties);
+ 	const unexpected = Object.keys(params).find(
+ 		(field) => field !== "action" && !allowed.includes(field),
+ 	);
+ 	if (unexpected)
+ 		throw new Error(`${namespace} ${action} does not accept ${unexpected}`);
+-}
+-
+-function validateHistoryArguments(
+-	action: HistoryAction,
+-	params: Record<string, unknown>,
+-): void {
+-	validateActionFields("history", action, params, HISTORY_ACTION_FIELDS[action]);
+-	if (action === "read_item") {
+-		if (typeof params["item_id"] !== "string" || !params["item_id"])
+-			throw new Error("history read_item requires item_id");
+-		if (typeof params["window_id"] !== "string" || !params["window_id"])
+-			throw new Error("history read_item requires window_id");
++	// Validate in field order, not wire required-array order: notes reports a
++	// missing path before missing text, while its namespace requires text first.
++	for (const field of allowed) {
++		if (!operation.parameters.required?.includes(field)) continue;
++		if (typeof params[field] !== "string" || (!params[field] && !operation.allowEmpty?.includes(field)))
++			throw new Error(`${namespace} ${action} requires ${field}`);
+ 	}
+-	if (
+-		action === "search_contents" &&
+-		(typeof params["query"] !== "string" || !params["query"])
+-	)
+-		throw new Error("history search_contents requires query");
+-}
+-
+-function validateNotesArguments(
+-	action: NotesAction,
+-	params: Record<string, unknown>,
+-): void {
+-	validateActionFields("notes", action, params, NOTES_ACTION_FIELDS[action]);
+-	if (
+-		(action === "read_file" ||
+-			action === "append_to_file" ||
+-			action === "write_file") &&
+-		(typeof params["path"] !== "string" || !params["path"])
+-	)
+-		throw new Error(`notes ${action} requires path`);
+-	if (
+-		(action === "search_contents" &&
+-			(typeof params["query"] !== "string" || !params["query"])) ||
+-		((action === "append_to_file" || action === "write_file") &&
+-			typeof params["text"] !== "string")
+-	)
+-		throw new Error(
+-			`notes ${action} requires ${action === "search_contents" ? "query" : "text"}`,
+-		);
+ }
+ 
+ function parseBackendImages(
 diff --git a/src/context-management/namespace-tools.ts b/src/context-management/namespace-tools.ts
-index 23a4ee4..fbef4e1 100644
+index 23a4ee4..7bbaa53 100644
 --- a/src/context-management/namespace-tools.ts
 +++ b/src/context-management/namespace-tools.ts
-@@ -12,6 +12,7 @@ import {
+@@ -7,13 +7,15 @@ import {
+ 	type ToolCall,
+ } from "@earendil-works/pi-ai";
+ import {
++	CONTEXT_OPERATIONS,
++	type ContextOperation,
+ 	HISTORY_ACTIONS,
+ 	HISTORY_DESCRIPTION,
  	NOTES_ACTIONS,
  	NOTES_DESCRIPTION,
  } from "./tool-contract.ts";
 +import { currentToolNamesOf } from "../providers/transcript.ts";
  
- type JsonSchema = Record<string, unknown>;
+-type JsonSchema = Record<string, unknown>;
  type ContextNamespace = "history" | "notes";
-@@ -292,9 +293,9 @@ export function rewriteContextNamespaceTools(
+ 
+ const ACTIONS = {
+@@ -21,219 +23,38 @@ const ACTIONS = {
+ 	notes: new Set<string>(NOTES_ACTIONS),
+ } satisfies Record<ContextNamespace, ReadonlySet<string>>;
+ 
+-function nullable(type: string, description?: string): JsonSchema {
+-	return {
+-		...(description ? { description } : {}),
+-		anyOf: [{ type }, { type: "null" }],
+-	};
+-}
+-
+-function nullableRole(): JsonSchema {
+-	return {
+-		anyOf: [
+-			{
+-				type: "string",
+-				enum: ["user", "assistant", "tool", "system", "developer"],
+-			},
+-			{ type: "null" },
+-		],
+-	};
+-}
+-
+-function string(description?: string, encrypted = false): JsonSchema {
+-	return {
+-		type: "string",
+-		...(description ? { description } : {}),
+-		...(encrypted ? { encrypted: true } : {}),
+-	};
+-}
+-
+-function integer(minimum?: number): JsonSchema {
+-	return {
+-		type: "integer",
+-		...(minimum === undefined ? {} : { minimum }),
+-	};
+-}
+-
+-function object(
+-	properties: Record<string, JsonSchema>,
+-	required?: string[],
+-) {
+-	return {
+-		type: "object",
+-		properties,
+-		...(required ? { required } : {}),
+-		additionalProperties: false,
+-	};
+-}
+-
+-function operation(
+-	name: string,
+-	description: string,
+-	parameters: ReturnType<typeof object>,
+-) {
+-	return { type: "function", name, description, strict: false, parameters };
+-}
+-
+-function historyNamespace(encrypted: boolean) {
+-	return {
+-		type: "namespace",
+-		name: "history",
+-		description: HISTORY_DESCRIPTION,
+-		tools: [
+-			operation(
+-				"list_windows",
+-				"List context windows",
+-				object({
+-					agent_name: nullable("string"),
+-					limit: integer(1),
+-					recent_first: { type: "boolean" },
+-				}),
+-			),
+-			operation(
+-				"list_items",
+-				"List history items",
+-				object({
+-					agent_name: nullable("string"),
+-					limit: integer(1),
+-					max_chars_per_item: integer(1),
+-					recent_first: { type: "boolean" },
+-					role: nullableRole(),
+-					tool_name: nullable("string"),
+-					tool_namespace: nullable("string"),
+-					window_id: nullable("string"),
+-				}),
+-			),
+-			operation(
+-				"read_item",
+-				"Read history item range",
+-				object(
+-					{
+-						agent_name: nullable("string"),
+-						item_id: {
+-							type: "string",
+-							description: "Suffix from the item's [id: …] marker.",
+-						},
+-						limit_chars: integer(1),
+-						offset_chars: integer(0),
+-						window_id: { type: "string" },
+-					},
+-					["item_id", "window_id"],
+-				),
+-			),
+-			operation(
+-				"search_contents",
+-				"Search history",
+-				object(
+-					{
+-						agent_name: nullable("string"),
+-						limit: integer(1),
+-						query: string("Case-sensitive", encrypted),
+-						recent_first: { type: "boolean" },
+-						role: nullableRole(),
+-						tool_name: nullable("string"),
+-						tool_namespace: nullable("string"),
+-						window_id: nullable("string"),
+-					},
+-					["query"],
+-				),
+-			),
+-		],
+-	};
+-}
+-
+-function notesNamespace(encrypted: boolean) {
+-	return {
+-		type: "namespace",
+-		name: "notes",
+-		description: NOTES_DESCRIPTION,
+-		tools: [
+-			operation(
+-				"list_files_by_prefix",
+-				"List note files",
+-				object({
+-					file_order: {
+-						type: "string",
+-						enum: ["ascending", "descending"],
+-					},
+-					file_order_by: {
+-						type: "string",
+-						enum: ["name", "created_at", "updated_at"],
+-					},
+-					max_results: integer(1),
+-					prefix: nullable("string"),
+-				}),
+-			),
+-			operation(
+-				"read_file",
+-				"Read note file; line bounds inclusive, 1-based, negative from end",
+-				object(
+-					{
+-						path: { type: "string" },
+-						start_line: nullable("integer"),
+-						stop_line: nullable("integer"),
+-					},
+-					["path"],
+-				),
+-			),
+-			operation(
+-				"search_contents",
+-				"Search note lines by literal substring",
+-				object(
+-					{
+-						max_files: integer(1),
+-						max_matches_per_file: integer(1),
+-						path_prefix: nullable("string"),
+-						query: string("Case-sensitive", encrypted),
+-						recent_file_first: { type: "boolean" },
+-					},
+-					["query"],
+-				),
+-			),
+-			operation(
+-				"append_to_file",
+-				"Append text exactly",
+-				object(
+-					{
+-						path: { type: "string" },
+-						text: string(undefined, encrypted),
+-					},
+-					["text", "path"],
+-				),
+-			),
+-			operation(
+-				"write_file",
+-				"Create or replace a note file",
+-				object(
+-					{
+-						path: { type: "string" },
+-						text: string(undefined, encrypted),
+-					},
+-					["text", "path"],
+-				),
+-			),
+-		],
+-	};
+-}
+-
+ function contextNamespace(
+ 	name: ContextNamespace,
+ 	encrypted: boolean,
+ ): Record<string, unknown> {
+-	const namespace = name === "history"
+-		? historyNamespace(encrypted)
+-		: notesNamespace(encrypted);
+-	// Codex validates reserved schemas against its serialized contract: open
+-	// objects, with numeric bounds omitted by its JsonSchema serializer.
+-	if (!encrypted) return namespace;
++	const operations: Readonly<Record<string, ContextOperation>> = CONTEXT_OPERATIONS[name];
+ 	return {
+-		...namespace,
+-		tools: namespace.tools.map((tool) => {
+-			const { additionalProperties: _additionalProperties, ...parameters } = tool.parameters;
+-			for (const property of Object.values(parameters.properties)) {
+-				delete property["minimum"];
++		type: "namespace",
++		name,
++		description: name === "history" ? HISTORY_DESCRIPTION : NOTES_DESCRIPTION,
++		tools: Object.entries(operations).map(([action, operation]) => {
++			// Each request owns its schemas, including nested enums and required
++			// arrays; transport transforms must not mutate the shared contract.
++			const parameters = structuredClone(operation.parameters);
++			if (encrypted) {
++				for (const [field, schema] of Object.entries(parameters.properties)) {
++					const property: { minimum?: number; encrypted?: true } = schema;
++					// Codex's reserved Remote schemas omit numeric bounds.
++					delete property.minimum;
++					if (operation.encryptedField === field) property.encrypted = true;
++				}
+ 			}
+-			return { ...tool, parameters };
++			return {
++				type: "function",
++				name: action,
++				description: operation.description,
++				strict: false,
++				parameters: {
++					...parameters,
++					// Remote also omits this keyword; false and absent differ.
++					...(!encrypted ? { additionalProperties: false } : {}),
++				},
++			};
+ 		}),
+ 	};
+ }
+@@ -292,9 +113,9 @@ export function rewriteContextNamespaceTools(
  }
  
  export function hasContextNamespaceRouters(
@@ -1509,6 +2150,163 @@ index 23a4ee4..fbef4e1 100644
  	return names.has("history") && names.has("notes");
  }
  
+diff --git a/src/context-management/tool-contract.ts b/src/context-management/tool-contract.ts
+index ad6a7b6..3055fc6 100644
+--- a/src/context-management/tool-contract.ts
++++ b/src/context-management/tool-contract.ts
+@@ -1,23 +1,135 @@
+-export const HISTORY_ACTIONS = [
+-	"list_windows",
+-	"list_items",
+-	"read_item",
+-	"search_contents",
+-] as const;
+-
+-export const NOTES_ACTIONS = [
+-	"list_files_by_prefix",
+-	"read_file",
+-	"search_contents",
+-	"append_to_file",
+-	"write_file",
+-] as const;
+-
+-export type HistoryAction = (typeof HISTORY_ACTIONS)[number];
+-export type NotesAction = (typeof NOTES_ACTIONS)[number];
++import { StringEnum } from "@earendil-works/pi-ai";
++import { Type, type TObject } from "typebox";
+ 
+ export const HISTORY_DESCRIPTION =
+ 	"Prior-window detail. Pass IDs unchanged. Search, never browse.";
+ 
+ export const NOTES_DESCRIPTION =
+ 	"Cross-window checkpoints on virtual paths. Relative uses current agent; cross-agent uses <agent>/notes[/path].";
++
++// Flat routers expose optional fields because requirements depend on action.
++// Operations below select from these same typed fields, then narrow required
++// arguments for namespace declarations and execution-time validation.
++const HISTORY_FIELDS = Type.Object({
++	agent_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
++	item_id: Type.Optional(Type.String()),
++	limit: Type.Optional(Type.Integer({ minimum: 1 })),
++	limit_chars: Type.Optional(Type.Integer({ minimum: 1 })),
++	max_chars_per_item: Type.Optional(Type.Integer({ minimum: 1 })),
++	offset_chars: Type.Optional(Type.Integer({ minimum: 0 })),
++	query: Type.Optional(Type.String()),
++	recent_first: Type.Optional(Type.Boolean()),
++	role: Type.Optional(Type.Union([
++		StringEnum(["user", "assistant", "tool", "system", "developer"] as const),
++		Type.Null(),
++	])),
++	tool_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
++	tool_namespace: Type.Optional(Type.Union([Type.String(), Type.Null()])),
++	window_id: Type.Optional(Type.Union([Type.String(), Type.Null()])),
++});
++
++const NOTES_FIELDS = Type.Object({
++	file_order: Type.Optional(StringEnum(["ascending", "descending"] as const)),
++	file_order_by: Type.Optional(StringEnum(["name", "created_at", "updated_at"] as const)),
++	max_files: Type.Optional(Type.Integer({ minimum: 1 })),
++	max_matches_per_file: Type.Optional(Type.Integer({ minimum: 1 })),
++	max_results: Type.Optional(Type.Integer({ minimum: 1 })),
++	path: Type.Optional(Type.String()),
++	path_prefix: Type.Optional(Type.Union([Type.String(), Type.Null()])),
++	prefix: Type.Optional(Type.Union([Type.String(), Type.Null()])),
++	query: Type.Optional(Type.String()),
++	recent_file_first: Type.Optional(Type.Boolean()),
++	start_line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
++	stop_line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
++	text: Type.Optional(Type.String()),
++});
++
++export interface ContextOperation {
++	description: string;
++	parameters: TObject;
++	encryptedField?: "query" | "text";
++	/** Required IDs, paths and queries must be nonempty; note text need not be. */
++	allowEmpty?: readonly string[];
++}
++
++const NOTE_WRITE_ARGUMENTS = {
++	parameters: Type.Required(Type.Pick(NOTES_FIELDS, ["path", "text"]), {
++		required: ["text", "path"],
++	}),
++	encryptedField: "text",
++	allowEmpty: ["text"],
++} as const;
++
++export const CONTEXT_OPERATIONS = {
++	history: {
++		list_windows: {
++			description: "List context windows",
++			parameters: Type.Pick(HISTORY_FIELDS, ["agent_name", "limit", "recent_first"]),
++		},
++		list_items: {
++			description: "List history items",
++			parameters: Type.Pick(HISTORY_FIELDS, [
++				"agent_name", "limit", "max_chars_per_item", "recent_first",
++				"role", "tool_name", "tool_namespace", "window_id",
++			]),
++		},
++		read_item: {
++			description: "Read history item range",
++			parameters: Type.Object({
++				...Type.Pick(HISTORY_FIELDS, ["agent_name", "item_id", "limit_chars", "offset_chars", "window_id"]).properties,
++				item_id: Type.String({ description: "Suffix from the item's [id: …] marker." }),
++				// Unlike the other history operations, read_item needs a concrete window.
++				window_id: Type.String(),
++			}),
++		},
++		search_contents: {
++			description: "Search history",
++			parameters: Type.Object({
++				...Type.Pick(HISTORY_FIELDS, [
++					"agent_name", "limit", "query", "recent_first",
++					"role", "tool_name", "tool_namespace", "window_id",
++				]).properties,
++				query: Type.String({ description: "Case-sensitive" }),
++			}),
++			encryptedField: "query",
++		},
++	},
++	notes: {
++		list_files_by_prefix: {
++			description: "List note files",
++			parameters: Type.Pick(NOTES_FIELDS, ["file_order", "file_order_by", "max_results", "prefix"]),
++		},
++		read_file: {
++			description: "Read note file; line bounds inclusive, 1-based, negative from end",
++			parameters: Type.Object({
++				...Type.Pick(NOTES_FIELDS, ["path", "start_line", "stop_line"]).properties,
++				path: Type.String(),
++			}),
++		},
++		search_contents: {
++			description: "Search note lines by literal substring",
++			parameters: Type.Object({
++				...Type.Pick(NOTES_FIELDS, ["max_files", "max_matches_per_file", "path_prefix", "query", "recent_file_first"]).properties,
++				query: Type.String({ description: "Case-sensitive" }),
++			}),
++			encryptedField: "query",
++		},
++		append_to_file: { description: "Append text exactly", ...NOTE_WRITE_ARGUMENTS },
++		write_file: { description: "Create or replace a note file", ...NOTE_WRITE_ARGUMENTS },
++	},
++} satisfies Record<"history" | "notes", Record<string, ContextOperation>>;
++
++export type HistoryAction = keyof typeof CONTEXT_OPERATIONS.history;
++export type NotesAction = keyof typeof CONTEXT_OPERATIONS.notes;
++export const HISTORY_ACTIONS = Object.keys(CONTEXT_OPERATIONS.history) as HistoryAction[];
++export const NOTES_ACTIONS = Object.keys(CONTEXT_OPERATIONS.notes) as NotesAction[];
++
++export const HISTORY_PARAMETERS = Type.Object(
++	{ action: StringEnum(HISTORY_ACTIONS), ...HISTORY_FIELDS.properties },
++	{ additionalProperties: false },
++);
++
++export const NOTES_PARAMETERS = Type.Object(
++	{ action: StringEnum(NOTES_ACTIONS), ...NOTES_FIELDS.properties },
++	{ additionalProperties: false },
++);
 diff --git a/src/extension/events.ts b/src/extension/events.ts
 index 0401a67..8bac8bc 100644
 --- a/src/extension/events.ts

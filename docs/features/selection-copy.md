@@ -30,8 +30,8 @@
 
 ## 机制：为什么能"精确"
 
-1. **渲染时生成 sidecar**：每个组件渲染时产出一份 copy product（`CopyRow`：列区间 + 语义种类 + `breakBefore`），并按**渲染数组身份**存进 `WeakMap`——天然绑定"当前已提交的那一帧"，不需要复制坐标。
-2. **布局级溯源**：`Box` / `Container` 在 pi-tui 里是布局**叶子**（`src/selection-copy/structure.ts`），所以能从已提交帧的盒子解析出选区落在哪些 product 上。
+1. **渲染时生成 sidecar**：每个组件渲染时产出一份 copy product（`CopyRow`：列区间 + 语义种类 + `breakBefore`），并按**渲染数组身份**存进 `WeakMap`——天然绑定"当前已提交的那一帧"。span 直接携带文本，不再先记录全文偏移、拼接全文再切回文本；每个 span 一次合并字符，避免保留逐字符拼接的字符串链。
+2. **布局级溯源**：`Box` / `Container` 在 pi-tui 里是布局**叶子**（`src/selection-copy/structure.ts`）。宿主工具的 self-shell 绕过 `Container.render`，由 `src/adapter.ts` 将实际外层行绑定到已渲染的文本子树，不进行第二次渲染；图片等未验证区域继续原生回退。
 3. **与宿主真实输出逐行 diff**：任何漂移（行数、列映射、未知 token）都**只降级为原生提取**，绝不猜。
 4. **词法与宿主一致**：`src/selection-copy/parser.ts` 按宿主 0.85.1 的 markdown.js 配置词法器；`wrap.ts` 是宿主 `wrapTextWithAnsi` 的溯源复刻。
 5. **镜像节流与计数**：Markdown/Text 适配器包装 `prototype.render`，镜像重建有节流（`MIRROR_REBUILD_INTERVAL_MS`），并统计 `markdownBuilt/markdownDegraded/markdownThrottled`（文本版同）——`/codex-ui` 逐项展示，便于定位"为什么这次退了"。
@@ -89,4 +89,4 @@ pi remove pi-copy-soft-wrap
 
 ## 验证
 
-`test/chrome/selection-copy.test.mjs`（481 行）、`test/shell/copy-provenance.test.mjs`、`test/host/host-surface.test.mjs`（真实宿主组件）、`scripts/copy-perf.mjs`（性能与覆盖表）；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"）。
+`test/chrome/selection-copy.test.mjs`、`test/chrome/copy-provenance-text.test.mjs`（精确空白、列选区和保留堆上限）、`test/shell/copy-provenance.test.mjs`、`test/host/shell-scroll.test.mjs`（完整原生工具边界、旧帧和图片回退）、`test/host/host-surface.test.mjs`、`scripts/copy-perf.mjs`；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"），实际运行范围见 `VALIDATION.md`。

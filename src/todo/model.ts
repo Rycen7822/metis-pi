@@ -10,8 +10,8 @@
 // - Explicit VALID_TRANSITIONS table + "illegal transition X → Y" errors that
 //   name states, so the model can self-correct (rpiv-todo invariants.ts).
 // - Flat [{title, parentId?}] input, extension builds the tree (pi-goal-x).
-// - Parent display state DERIVED from children at render time, never stored
-//   (pi-goal-x derive) — one fact, one place.
+// - Rows display each task's stored status; parents still require explicit
+//   completion after their children close.
 // - complete is one-way except reopen (rpiv), and completion is GATED on the
 //   subtree + evidence (pi-goal-x policy, default block).
 
@@ -68,8 +68,7 @@ export interface TaskRefError {
   error: string;
 }
 
-/** Map of internal id → display path (`#1`, `#1.2`, …) for the current list. */
-export function taskPaths(state: TodoState): Map<number, string> {
+function childrenByParent(state: TodoState): Map<number | null, Task[]> {
   const children = new Map<number | null, Task[]>();
   for (const task of state.tasks) {
     const key = task.parentId ?? null;
@@ -77,6 +76,12 @@ export function taskPaths(state: TodoState): Map<number, string> {
     if (siblings) siblings.push(task);
     else children.set(key, [task]);
   }
+  return children;
+}
+
+/** Map of internal id → display path (`#1`, `#1.2`, …) for the current list. */
+export function taskPaths(state: TodoState): Map<number, string> {
+  const children = childrenByParent(state);
   const paths = new Map<number, string>();
   const walk = (parent: number | null, prefix: string): void => {
     const siblings = children.get(parent) ?? [];
@@ -500,64 +505,34 @@ export function isBlocked(state: TodoState, id: number): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Derived tree state (never stored — render-time only, pi-goal-x derive)
+// Ordered rows. Consumers need hierarchy order, not a second tree/status model.
 
-export interface DerivedNode {
+export interface TaskRow {
   task: Task;
   depth: number;
-  children: DerivedNode[];
-  /** Status shown for a parent: derived from its children. */
-  displayStatus: TaskStatus | "blocked";
+  hasChildren: boolean;
 }
 
-export function buildTree(state: TodoState): DerivedNode[] {
-  const nodes = new Map<number, DerivedNode>();
+export function taskRows(state: TodoState): TaskRow[] {
+  const children = childrenByParent(state);
+  const ids = new Set(state.tasks.map((task) => task.id));
+  const rows: TaskRow[] = [];
+  const visit = (task: Task, depth: number): void => {
+    const nested = children.get(task.id) ?? [];
+    rows.push({ task, depth, hasChildren: nested.length > 0 });
+    for (const child of nested) visit(child, depth + 1);
+  };
+  // Missing parents still render as roots; path labels retain their separate
+  // #? corruption fallback. Compute depth while walking, never from input order.
   for (const task of state.tasks) {
-    nodes.set(task.id, { task, depth: 1, children: [], displayStatus: task.status });
+    if (task.parentId == null || !ids.has(task.parentId)) visit(task, 1);
   }
-  const roots: DerivedNode[] = [];
-  for (const node of nodes.values()) {
-    const parent = node.task.parentId == null ? undefined : nodes.get(node.task.parentId);
-    if (parent) {
-      parent.children.push(node);
-      node.depth = parent.depth + 1;
-    } else {
-      roots.push(node);
-    }
-  }
-  const derive = (node: DerivedNode): void => {
-    for (const child of node.children) derive(child);
-    if (node.children.length > 0) {
-      const list = node.children;
-      const allComplete = list.every((c) => c.task.status === "complete" || c.task.status === "skipped");
-      const allSkipped = list.every((c) => c.task.status === "skipped");
-      const anyLive = list.some((c) => c.task.status === "in_progress");
-      node.displayStatus = allSkipped ? "skipped" : allComplete ? "complete" : anyLive ? "in_progress" : "pending";
-    } else if (isBlocked(state, node.task.id)) {
-      node.displayStatus = "blocked";
-    } else if (node.displayStatus === "in_progress") {
-      node.displayStatus = "in_progress";
-    }
-  };
-  for (const root of roots) derive(root);
-  return roots;
+  return rows;
 }
 
-/** Depth-first flattened view for the widget rendering. */
-export function flattenTree(roots: DerivedNode[]): DerivedNode[] {
-  const out: DerivedNode[] = [];
-  const visit = (node: DerivedNode): void => {
-    out.push(node);
-    for (const child of node.children) visit(child);
-  };
-  for (const root of roots) visit(root);
-  return out;
-}
-
-/** First unclaimed, unblocked, pending leaf — the "next" suggestion. */
+/** First available pending task, excluding top-level containers. */
 export function nextTaskId(state: TodoState): number | null {
-  const flat = flattenTree(buildTree(state));
-  const node = flat.find((n) => n.task.parentId !== null || n.children.length === 0
+  const node = taskRows(state).find((n) => n.task.parentId !== null || !n.hasChildren
     ? n.task.status === "pending" && !n.task.claim && !isBlocked(state, n.task.id)
     : false);
   return node ? node.task.id : null;

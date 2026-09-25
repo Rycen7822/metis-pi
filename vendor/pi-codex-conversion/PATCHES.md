@@ -27,9 +27,23 @@ Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{se
 
 `providers/openai-codex-custom-provider.ts`, `providers/openai-responses/stream.ts`, `providers/openai-codex/transport-recovery.ts`, `providers/code-mode-proxy-provider.ts` and `context-management/namespace-tools.ts` resolve tools from the transcript. Grammar mapping and namespace routing retain their distinct responsibilities; blindly replacing every `context.tools` read is insufficient.
 
+`context-management/tool-contract.ts` owns the nine history/notes operation schemas,
+required fields and encryption/empty-text policy. Flat action tools, runtime field
+validation and namespace declarations derive from it. Keep per-action required
+fields distinct from optional flat-router fields, nonnullable `read_item.window_id`,
+empty note writes, and Remote's omitted bounds/additionalProperties. Namespace
+requests clone their schemas rather than mutating the shared contract.
+
 ## 4. Direct provider calls
 
 `extension/runtime.ts`, `adapter/compaction/portable-summary.ts`, `voice/context.ts` and `voice/native-context.ts` normalize legacy Context at direct-call boundaries. Preserve prewarm/keepalive and summary semantics; do not add a second system/tool injection to an already normalized transcript.
+
+`adapter/provider-request.ts` shares common live/prewarm preparation while leaving
+native-window injection, replay and prompt capture at the final-request boundary.
+Ordinary prewarm cannot consume pending compaction state. The compaction callback
+retains its transport predicate; it is not the API predicate used for live context
+tool rewriting. Offline contracts and failure boundaries are covered in
+`test/vendor-context-contracts.test.mjs` and `test/vendor-provider-preparation.test.mjs`.
 
 ## 5. Pi 0.86 JSON types
 

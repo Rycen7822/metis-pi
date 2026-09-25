@@ -3,12 +3,46 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   addTasks, addBlockedBy, canTransition, claimTask, completeTask,
-  completionBlock, createState, pathOf, taskPaths,
+  completionBlock, createState, pathOf, taskPaths, taskRows,
   isListFinished, MAX_DEPTH, MAX_TASKS, moveTask,
   releaseTask, removeBlockedBy, sanitizeText, skipTask, startNewList, transitionTask,
   VALID_TRANSITIONS, type TodoState } from "../../src/todo/model.ts";
 
 const T0 = 1_000;
+test("task rows preserve path order and depth across all creation orders", () => {
+  const added = addTasks(createState(), [
+    { title: "root" }, { title: "child", parentId: 1 }, { title: "grandchild", parentId: 2 },
+    { title: "other root" }, { title: "other child", parentId: 4 },
+  ], T0);
+  assert.ok(added.ok);
+  const permutations = <T,>(items: T[]): T[][] => items.length === 0 ? [[]]
+    : items.flatMap((item, index) => permutations(items.filter((_, i) => i !== index)).map((tail) => [item, ...tail]));
+  const depths = new Map([[1, 1], [2, 2], [3, 3], [4, 1], [5, 2]]);
+  for (const tasks of permutations(added.state.tasks)) {
+    const state = { ...added.state, tasks };
+    const before = structuredClone(state);
+    const rows = taskRows(state);
+    assert.deepEqual(rows.map((row) => row.task.id), [...taskPaths(state).keys()]);
+    for (const row of rows) {
+      assert.equal(row.depth, depths.get(row.task.id));
+      assert.equal(row.hasChildren, row.task.id === 1 || row.task.id === 2 || row.task.id === 4);
+      assert.equal(row.task, tasks.find((task) => task.id === row.task.id));
+    }
+    assert.deepEqual(state, before, "projection cannot mutate the persisted model");
+  }
+});
+
+test("orphan rows retain fallback paths and parents retain their own status", () => {
+  const added = addTasks(createState(), [{ title: "root" }, { title: "child", parentId: 1 }], T0);
+  assert.ok(added.ok);
+  const done = completeTask(added.state, 2, "done", T0, 1);
+  assert.ok(done.ok);
+  assert.deepEqual(taskRows(done.state).map((row) => row.task.status), ["pending", "complete"]);
+  const orphan = { ...done.state, tasks: done.state.tasks.filter((task) => task.id !== 1) };
+  assert.equal(pathOf(orphan, 2), "#?1");
+  assert.deepEqual(taskRows(orphan).map((row) => [row.task.id, row.depth, row.hasChildren]), [[2, 1, false]]);
+});
+
 const seed = (): { state: TodoState } => {
   const r = addTasks(createState(T0), [{ title: "root A" }, { title: "root B" }], T0);
   assert.ok(r.ok);

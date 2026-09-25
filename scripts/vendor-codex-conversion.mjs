@@ -129,7 +129,10 @@ function patch() {
     try {
       diff = run("git", ["diff", "--no-index", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--", baselineSrc, join(VENDOR, "src")]);
     } catch (error) {
-      diff = error.stdout ?? "";
+      // --no-index uses exit 1 for a complete diff, not for arbitrary failures.
+      // Never publish missing/truncated stdout after launch, signal or buffer errors.
+      if (error.status !== 1 || error.signal || error.code || typeof error.stdout !== "string") throw error;
+      diff = error.stdout;
     }
     // Re-root at `src/` so the patch applies with `git apply -p1` from the vendored directory.
     // Both trees appear on both sides: `git diff --no-index` reuses the only available path for

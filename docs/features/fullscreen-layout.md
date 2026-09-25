@@ -5,8 +5,8 @@
 | | |
 | --- | --- |
 | 入口 | `extensions/appearance.ts` |
-| 实现 | `src/chrome/fullscreen-margin.ts`、`src/chrome/history-window.ts` |
-| 安装 | `src/chrome/install.ts`（`captureTui` → `installOnTui`） |
+| 实现 | `src/chrome/fullscreen-layout.ts`、`src/chrome/history-window.ts` |
+| 安装 | `src/chrome/install.ts` 捕获 TUI，`src/extension.ts` 调用唯一的布局 `installOnTui` |
 | 配置 | `fullscreen.marginX`（默认 2）、`fullscreen.minWidth`（默认 72） |
 
 ## 侧边留白（gutters）
@@ -14,6 +14,7 @@
 - 布局根被包进一层 pi-tui 的 `HStack`，左右各留 `marginX` 列（默认 2，可 0..8）。
 - `marginX: 0` 即关闭；终端宽度窄于 `minWidth`（默认 72）时留白**整体消失**（不做半截留白）。
 - **纯插件实现**：不 patch TUI 根渲染器，因此不干扰宿主的鼠标命中与图片协议。
+- 留白与历史窗口共用一个 `setLayoutRoot` 安装点。重复捕获不叠加拦截器；卸载先使旧拦截器失效，再释放历史监听、滚轮与根布局，即使其它插件随后包装了同一方法，也不会在清理时重新挂载窗口。`marginX: 0` 不关闭历史窗口。
 - 留白带来过一个真实缺陷（0.9.4 记录在 `VALIDATION.md`）：左右留白改变了列坐标，暴露了选区复制 serializer 的映射问题，随后在 `src/selection-copy/**` 修正。
 
 ## 有界历史窗口
@@ -35,9 +36,9 @@
 
 | 关注点 | 位置 |
 | --- | --- |
-| 留白安装与降级 | `src/chrome/fullscreen-margin.ts`（`installOnTui`、最小宽度判定） |
+| 布局安装、卸载与留白降级 | `src/chrome/fullscreen-layout.ts`（布局租约、`installOnTui`、最小宽度判定） |
 | 行预算与换页 | `src/chrome/history-window.ts`（`HISTORY_ROW_BUDGET`、`evictedBlocks`、`older`/`newer` 状态） |
-| 安装/卸载 | `src/chrome/install.ts` |
+| TUI 捕获与接线 | `src/chrome/install.ts`、`src/extension.ts` |
 
 ## 不变量与已知限制
 

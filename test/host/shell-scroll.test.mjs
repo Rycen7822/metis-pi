@@ -143,6 +143,45 @@ test("MouseRegion preserves logical copy through warm cached shell frames", () =
   }
 });
 
+test("whole native self-shell rows preserve copy provenance, old frames and image fallback", () => {
+  const text = "甲乙丙丁".repeat(30);
+  const row = shell(text);
+  row.setExpanded(true);
+  const content = new Tui.Container();
+  content.addChild(row); // Keep the actual host ToolExecutionComponent boundary.
+  const tui = new Tui.TuiAltScreen({ columns: 40, rows: 8, write() {} });
+  tui.requestRender = () => {};
+  tui.beforeTerminalStart();
+  tui.setLayoutRoot(new Tui.ScrollView(content, { primary: true, follow: "end" }));
+  const serializer = new SelectionSerializer({ visibleWidth: Tui.visibleWidth, sliceByColumn: Tui.sliceByColumn,
+    stripTerminalSequences: Tui.stripTerminalSequences });
+  const copy = (frame, startText, endRow = frame.root.scrollContentLines.length - 1) => {
+    const box = frame.root;
+    const lines = box.scrollContentLines;
+    const startRow = lines.findIndex((line) => line.includes(startText));
+    assert.ok(startRow >= 0);
+    return serializer.serialize(frame, {
+      scrollView: box.scrollView, startRow, endRow, sourceLines: lines,
+      columnsFor: (r) => ({ start: 0, end: Tui.visibleWidth(lines[r]) }),
+    });
+  };
+  for (let i = 0; i < 2; i++) {
+    tui.doRender();
+    const copied = copy(tui.currentLayout, "甲");
+    assert.equal(copied.text, text, "copy through the whole tool drops gutters and joins soft wraps");
+    assert.equal(copied.nativeRows, 0);
+    assert.ok(productFor(publishedRowsOf(row)), "host-composed rows keep their child product");
+  }
+  const committed = tui.currentLayout;
+  row.updateResult(payload("changed after selection"));
+  row.imageComponents = [new Tui.Text("NATIVE IMAGE ROW", 0, 0)];
+  tui.doRender();
+  assert.equal(copy(committed, "甲").text, text, "new output cannot rewrite a committed frame's metadata");
+  const mixed = copy(tui.currentLayout, "changed");
+  assert.equal(mixed.text, "changed after selection\nNATIVE IMAGE ROW");
+  assert.equal(mixed.nativeRows, 1, "images outside the known text subtree retain native extraction");
+});
+
 test("repeated selection-copy setup does not stack render wrappers", () => {
   const prototypes = Object.fromEntries(["Text", "Markdown", "Container", "Box", "MouseRegion"].map((key) => [key, Tui[key].prototype]));
   const before = Object.values(prototypes).map((p) => p.render);
