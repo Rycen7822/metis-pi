@@ -1,5 +1,5 @@
-// Codex chrome lifecycle: the install state machine for the editor, composer
-// metadata, footer, header and Working widgets, plus the shutdown restore.
+// Codex chrome lifecycle: the install state machine for the editor, footer,
+// header and Working widgets, plus the shutdown restore.
 //
 // Install goes through PUBLIC host APIs only. Every step degrades to the
 // native host surface on failure, and the whole path is best-effort: a chrome
@@ -13,14 +13,13 @@ import type { AppearanceConfig } from "../config.ts";
 import type { HostData, UiAvailable } from "../host-data.ts";
 import type { CodexSurfaceOps } from "./editor.ts";
 import { WORKING_WIDGET_KEY, type WorkingComponent } from "./working.ts";
-import { COMPOSER_META_WIDGET_KEY } from "./composer-metadata.ts";
 import type { SnapshotSource } from "./snapshots.ts";
 
 /** Agent-dir status slot used by the transient settled-summary line. */
 export const SUMMARY_STATUS_KEY = "metis-pi:summary";
 
 type ChromeMods = typeof import("./editor.ts") & typeof import("./footer.ts") & typeof import("./header.ts")
-  & typeof import("./working.ts") & typeof import("./composer-metadata.ts");
+  & typeof import("./working.ts");
 
 /** Which chrome widgets are installed on the live UI right now. */
 export interface ChromeState {
@@ -33,7 +32,6 @@ export interface ChromeState {
   prefixApplied: boolean;
   footerInstalled: boolean;
   headerInstalled: boolean;
-  metaInstalled: boolean;
   widgetInstalled: boolean;
   widgetFactory: unknown;
   workingComponent: WorkingComponent | undefined;
@@ -79,7 +77,7 @@ export interface ChromeLifecycle {
   setWidgetVisible(visible: boolean): void;
 }
 
-/** Tone painter for footer/metadata text (the theme may be an unbound proxy
+/** Tone painter for footer text (the theme may be an unbound proxy
  * early on — degrade to plain text instead of crashing). */
 function makeTonePainter(theme: { fg?: (key: string, text: string) => string } | undefined, colorLevel: ColorLevel) {
   return (text: string, tone: SegmentTone): string => {
@@ -108,7 +106,6 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
     prefixApplied: false,
     footerInstalled: false,
     headerInstalled: false,
-    metaInstalled: false,
     widgetInstalled: false,
     widgetFactory: undefined,
     workingComponent: undefined,
@@ -137,8 +134,7 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       import("./footer.ts"),
       import("./header.ts"),
       import("./working.ts"),
-      import("./composer-metadata.ts"),
-    ]).then(([editor, footer, header, working, meta]) => ({ ...editor, ...footer, ...header, ...working, ...meta }))
+    ]).then(([editor, footer, header, working]) => ({ ...editor, ...footer, ...header, ...working }))
       .catch(() => undefined);
     return chromeMods;
   };
@@ -193,25 +189,7 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       } catch { /* editor stays native */ }
     }
 
-    // Composer metadata: same-surface belowEditor widget (model/effort/
-    // provider + context). Only when the editor surface is active, so the
-    // metadata never floats on a bare background.
-    if (available.setWidget && config.composer.metadata && config.composer.surface && deps.surface) {
-      try {
-        ui.setWidget?.(COMPOSER_META_WIDGET_KEY, (tui: unknown) => {
-          deps.captureTui(tui);
-          const surface = deps.surface!;
-          return mods.createComposerMetaComponent({
-            getSnapshot: snapshots.getComposerMetaSnapshot,
-            surface,
-            paint: (text, tone) => (tone === "normal" ? text : surface.paintGlyph(text, tone === "accent" ? "accent" : "dim")),
-          });
-        }, { placement: "belowEditor" });
-        state.metaInstalled = true;
-      } catch { /* metadata stays off; the footer still renders */ }
-    }
-
-    // Footer: compact product status (cwd/branch · session I/O · cache · speed).
+    // Footer: model/effort/provider · cwd/branch · context · I/O · cache · speed.
     if (available.setFooter && config.footer.enabled) {
       try {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
@@ -307,10 +285,6 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       if (state.headerInstalled) ui.setHeader?.(undefined);
     } catch { /* keep current header */ }
     state.headerInstalled = false;
-    try {
-      if (state.metaInstalled) ui.setWidget?.(COMPOSER_META_WIDGET_KEY, undefined);
-    } catch { /* keep widget slot */ }
-    state.metaInstalled = false;
     try {
       if (state.widgetInstalled) ui.setWidget?.(WORKING_WIDGET_KEY, undefined);
     } catch { /* keep widget slot */ }

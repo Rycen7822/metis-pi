@@ -11,7 +11,6 @@ import type { HostData } from "../host-data.ts";
 import type { OutputSpeedTracker } from "../output-speed.ts";
 import type { UiMetrics } from "../ui-metrics.ts";
 import type { UsageLedger } from "../usage-ledger.ts";
-import type { ComposerMetaSnapshot } from "./composer-metadata.ts";
 import type { FooterShow, FooterSnapshot } from "./footer.ts";
 import type { WorkingAnimation, WorkingShow, WorkingSnapshotWithUsage } from "./working.ts";
 
@@ -33,15 +32,14 @@ export interface SnapshotSource {
   workingAnimation(): WorkingAnimation;
   /** Interaction-scoped working snapshot (active phase, tools, uncached I/O). */
   getWorkingSnapshot(): WorkingSnapshotWithUsage;
-  /** Composer metadata surface (model/thinking/context, one revision). */
-  getComposerMetaSnapshot(): ComposerMetaSnapshot;
-  /** Footer snapshot: cwd/branch, session totals, cache rate, speed, changes. */
+  /** Footer snapshot: identity, cwd, context, session totals, cache, speed, changes. */
   getFooterSnapshot(): FooterSnapshot;
 }
 
 export function createSnapshotSource(deps: SnapshotSourceDeps): SnapshotSource {
   const { getConfig, hostData, ledger, metrics, outputSpeed, gitChanges } = deps;
   const footerShow = (): FooterShow => ({
+    metadata: getConfig().composer.metadata,
     details: getConfig().footer.details,
     showCache: getConfig().footer.showCache,
     showChanges: getConfig().footer.showChanges,
@@ -69,14 +67,11 @@ export function createSnapshotSource(deps: SnapshotSourceDeps): SnapshotSource {
       usage: { input: s.usage.input, output: s.usage.output },
     };
   };
-  const getComposerMetaSnapshot = (): ComposerMetaSnapshot => ({
-    model: hostData.getModel(),
-    thinkingLevel: hostData.getThinkingLevel(),
-    contextUsage: hostData.getContextUsage(),
-    revision: hostData.revision,
-  });
   const getFooterSnapshot = (): FooterSnapshot => {
     return {
+      model: hostData.getModel(),
+      thinkingLevel: hostData.getThinkingLevel(),
+      contextUsage: hostData.getContextUsage(),
       cwd: hostData.getCwd(),
       session: hostData.hasSessionManager ? ledger.totals() : undefined,
       cacheLastPct: ledger.cacheRateLast(),
@@ -85,5 +80,5 @@ export function createSnapshotSource(deps: SnapshotSourceDeps): SnapshotSource {
       revision: hostData.revision,
     };
   };
-  return { footerShow, workingShow, workingAnimation, getWorkingSnapshot, getComposerMetaSnapshot, getFooterSnapshot };
+  return { footerShow, workingShow, workingAnimation, getWorkingSnapshot, getFooterSnapshot };
 }

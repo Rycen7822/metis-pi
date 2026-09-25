@@ -122,64 +122,59 @@ test("chrome modules have no direct host imports (src/ rule)", () => {
   }
 });
 
-test("REAL shape → activation → composer metadata + footer, all fields from real host", async (t) => {
+test("REAL shape → activation → one ordered footer below the editor", async (t) => {
   const { handlers, slots, wrapUi } = activateHarness();
   const { ctx } = realShapeCtx();
   const wrapped = wrapUi(ctx);
   handlers.get("session_start")({}, wrapped);
   await tick();
 
-  await t.test("composer metadata widget: model/effort/provider/context", () => {
-    const call = widgetByKey(slots, "metis-pi:composer-meta");
-    assert.ok(call, "metadata widget installed below the editor");
-    assert.deepEqual(call.options, { placement: "belowEditor" });
-    const component = call.content({ requestRender() {} }, { fg: (_k, text) => text });
-    const frame = plain(component.render(120).join("\n"));
-    assert.ok(frame.includes("test-model"), "real model id");
-    assert.ok(frame.includes("high"), "real thinking level");
-    assert.ok(frame.includes("test-provider"), "real provider");
-    assert.ok(frame.includes("ctx 172k/1.0M"), "context tokens/capacity");
-    assert.ok(frame.includes("17.2%"), "context percent");
-  });
+  assert.equal(widgetByKey(slots, "metis-pi:composer-meta"), undefined, "no metadata widget inside the input surface");
+  const footer = slots.footerFactories[0](
+    { requestRender() {} },
+    { fg: (_k, text) => text },
+    { getGitBranch: () => "main", getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
+  );
 
-  await t.test("footer: cwd/branch + session Σ + cache (NO duplicate model/context or quota)", () => {
-    const footer = slots.footerFactories[0](
-      { requestRender() {} },
-      { fg: (_k, text) => text },
-      { getGitBranch: () => "main", getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
-    );
+  await t.test("footer: model → effort → provider → path → context → I/O → cache", () => {
     const frame = plain(footer.render(140).join("\n"));
-    assert.ok(frame.includes("/tmp/workspace (main)"), "cwd + branch");
-    assert.ok(frame.includes("↑5.0k"), "session Σ input (5000)");
-    assert.ok(frame.includes("↓300"), "session Σ output (300)");
-    assert.ok(frame.includes("cache 20%"), "last-request cache rate = 20.0%");
+    const fields = ["test-model", "high", "test-provider", "/tmp/workspace (main)", "ctx 172k/1.0M · 17.2%", "↑5.0k ↓300", "cache 20%"];
+    let previous = -1;
+    for (const field of fields) {
+      const index = frame.indexOf(field);
+      assert.ok(index > previous, `${field} appears once in the requested order`);
+      assert.equal(frame.indexOf(field, index + 1), -1, `${field} is not duplicated`);
+      previous = index;
+    }
     assert.doesNotMatch(frame, /Codex (?:5h|week)|week \d+%/, "no Codex quota in the footer");
     assert.doesNotMatch(frame, /R\d|W\d/, "session cache read/write counters are gone");
-    assert.doesNotMatch(frame, /test-model|17\.2%/, "model/context belong to the composer surface, not the footer");
   });
 
-  await t.test("live model switch updates the metadata widget without restart", () => {
+  await t.test("live model switch updates the footer without restart", () => {
     wrapped.model = { id: "switched-model", provider: "other-provider", contextWindow: 2_000_000 };
     wrapped.getContextUsage = () => ({ tokens: 172_000, contextWindow: 2_000_000, percent: 8.6 });
     handlers.get("model_select")({ type: "model_select" });
-    const call = widgetByKey(slots, "metis-pi:composer-meta");
-    const after = plain(call.content({ requestRender() {} }, { fg: (_k, text) => text }).render(120).join("\n"));
+    const after = plain(footer.render(140).join("\n"));
     assert.ok(after.includes("switched-model"), "new model id visible");
     assert.ok(after.includes("other-provider"), "new provider visible");
     assert.ok(after.includes("2.0M"), "new capacity visible");
     assert.ok(after.includes("8.6%"), "new percent — same revision, no old-window mixing");
+    assert.doesNotMatch(after, /test-model|17\.2%/, "old model and context absent");
   });
 });
 
 test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", async () => {
   const { layoutFooter } = await import("../../src/chrome/footer.ts");
   const snapshot = {
+    model: { id: "gpt-6-sol", provider: "openai-codex", contextWindow: 272_000 },
+    thinkingLevel: "xhigh",
+    contextUsage: { tokens: 49_600, contextWindow: 272_000, percent: 18.2 },
     cwd: "/home/xu/wiki/codex_workspace",
     session: { input: 106_000, output: 8_900, cacheRead: 851_000, cacheWrite: 0, costTotal: 0 },
     cacheLastPct: 99.9,
     revision: 1,
   };
-  const show = { details: true, showCache: true, showChanges: true, showSpeed: true };
+  const show = { metadata: true, details: true, showCache: true, showChanges: true, showSpeed: true };
   const widthOf = (text) => {
     let w = 0;
     for (const ch of text.replace(/\x1b\[[0-9;]*m/g, "")) {
@@ -197,12 +192,31 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
     const flat = rows.map((r) => r.map((s) => s.text).join("")).join("\n");
     assert.ok(flat.includes("↑106k") && flat.includes("↓8.9k"), `width ${width}: P0 session I/O kept`);
     assert.ok(flat.includes("codex_workspace"), `width ${width}: cwd kept`);
+    const ordered = ["gpt-6-sol", "xhigh", "openai-codex", "codex_workspace", "ctx 49.6k/272k", "↑106k", "cache 99.9%"];
+    assert.ok(ordered.every((field) => flat.includes(field)), `width ${width}: no field lost`);
+    assert.deepEqual(ordered.map((field) => flat.indexOf(field)), ordered.map((field) => flat.indexOf(field)).toSorted((a, b) => a - b), `width ${width}: fields keep order`);
     assert.doesNotMatch(flat, /Codex (?:5h|week)|week \d+%/, `width ${width}: no quota`);
     assert.doesNotMatch(flat, /R\d|W\d/, `width ${width}: session cache read/write counters not rendered`);
   }
   assert.deepEqual(layoutFooter(snapshot, show, 0, "main"), [], "0 columns: hidden, no crash");
   assert.deepEqual(layoutFooter(snapshot, show, 1, "main"), []);
   assert.deepEqual(layoutFooter(snapshot, show, 2, "main"), []);
+  const hidden = layoutFooter(snapshot, { ...show, metadata: false }, 140, "main").flat().map((s) => s.text).join("");
+  assert.doesNotMatch(hidden, /gpt-6-sol|openai-codex|ctx 49\.6k/);
+});
+
+test("footer keeps unknown context distinct from zero usage", async () => {
+  const { layoutFooter } = await import("../../src/chrome/footer.ts");
+  const snapshot = {
+    model: { id: "m", provider: "p", contextWindow: 272_000 },
+    thinkingLevel: undefined, contextUsage: { tokens: null, contextWindow: 272_000, percent: null },
+    cwd: "/tmp/work", session: undefined, cacheLastPct: null, speed: undefined, changes: undefined, revision: 1,
+  };
+  const show = { metadata: true, details: true, showCache: true, showChanges: true, showSpeed: true };
+  const text = (s) => layoutFooter(s, show, 100, undefined).flat().map((seg) => seg.text).join("");
+  assert.match(text(snapshot), /ctx —\/272k/);
+  assert.doesNotMatch(text(snapshot), /0%|↑0|cache/);
+  assert.match(text({ ...snapshot, contextUsage: { tokens: 0, contextWindow: 272_000, percent: 0 } }), /ctx 0\/272k · 0%/);
 });
 
 test("footer preserves vendor status but never adds Codex quota with either provider", async () => {
@@ -249,7 +263,7 @@ test("output speed reaches the footer from real events (confirmed usage ÷ obser
   const match = frame.match(/([\d.]+) tok\/s/);
   assert.ok(match, `footer shows a measured rate: ${JSON.stringify(frame)}`);
   assert.ok(Number(match[1]) > 20 && Number(match[1]) < 2000, `80 tokens over ~0.4s is plausible (got ${match[1]})`);
-  assert.ok(frame.indexOf("tok/s") < frame.indexOf("↑"), "rate renders left of ↑input");
+  assert.ok(frame.indexOf("tok/s") > frame.indexOf("↑"), "rate follows the requested context → I/O → cache order");
   // Live path: a provider that streams cumulative usage updates the same formula.
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   handlers.get("message_update")(delta({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "x"));

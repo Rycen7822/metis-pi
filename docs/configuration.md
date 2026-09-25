@@ -72,7 +72,7 @@
 | --- | --- | --- | --- |
 | `composer.surface` | bool | `true` | 灰色底色面（关闭后回到宿主原生编辑区外观） |
 | `composer.promptPrefix` | bool | `true` | 首行两个 padding 格借用为 `> ` 提示符 |
-| `composer.metadata` | bool | `true` | 编辑区下方 metadata 行（模型 · 推理等级 · provider · ctx 占用） |
+| `composer.metadata` | bool | `true` | footer 中的模型、推理等级、provider、上下文信息（不再在输入框显示） |
 
 ### working —— Working 行
 
@@ -90,7 +90,7 @@
 | 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `footer.enabled` | bool | `true` | 整条 footer |
-| `footer.details` | bool | `true` | 右侧细节块（tok/s、↑↓、cache） |
+| `footer.details` | bool | `true` | 会话 ↑↓ 与 cache；`tok/s` 由 `footer.showSpeed` 控制 |
 | `footer.showCache` | bool | `true` | cache 命中率 |
 | `footer.showChanges` | bool | `true` | 分支后的 `+A -D` 变更量 |
 | `footer.showSpeed` | bool | `true` | `N tok/s` |

@@ -32,12 +32,12 @@
 ## Footer
 
 ```
-目录 (分支) +A -D          N tok/s · ↑input ↓output · cache 命中率
+模型id · 推理深度 · provider · 目录 (分支) +A -D · ctx 已用/容量 · 占用% · ↑input ↓output · cache 命中率
 ```
 
-- **布局**：左侧 = 目录 + 分支 + 变更量；右侧 = 速度、会话 I/O、cache，按**优先级**排序。
-- **优先级**：**P0** = cwd/分支、变更量、输出速度、会话 I/O；**P1** = cache。窄屏降级顺序是"先缩短目录 → 再拆成两行"，**P0/P1 永不整块消失**（右侧按优先级头保留）。
-- **不重复**：metadata 行已显示 model/context 时，footer 不再重复。
+- **布局**：编辑区结束后只有一组 footer 信息；按模型 id → 推理深度 → provider → 当前路径（分支、变更量）→ 上下文窗口占用 → 会话 I/O → cache 排列。启用时 `tok/s` 放在 cache 之后。
+- **窄屏**：路径先缩短，字段按同一顺序整组换行，不因为输入框宽度缩小而挤掉后续的 I/O/cache。
+- `composer.metadata` 控制模型、推理深度、provider 和上下文信息；不依赖编辑区背景色或 `belowEditor` widget。
 - **额度**：右侧 footer 不读取或显示 Codex 额度；左侧 `Codex adapter` 状态行由 vendor 扩展提供，仍通过宿主 extension statuses 显示。
 - **未知值显示 `—`**，从不伪造为 0。
 - 刷新节奏：**2 秒轮询**（`GIT_CHANGES_INTERVAL_MS`）+ agent/tool 活动触发的 **250ms 去抖**（`GIT_CHANGES_DEBOUNCE_MS`）。
@@ -74,7 +74,7 @@
 | --- | --- |
 | Working 组件与相位 | `src/chrome/working.ts`（`INTERRUPT_HINT`、`SHIMMER_CELLS_PER_FRAME`、`createWorkingComponent`） |
 | Header | `src/chrome/header.ts` 的 `createHeaderComponent` |
-| Footer 布局与优先级 | `src/chrome/footer.ts`（左/右分组、`formatExactCount`） |
+| Footer 字段顺序与换行 | `src/chrome/footer.ts`（`wrapFields`、`formatExactCount`） |
 | 通用分段排版 | `src/segments.ts`（`Segment`、`formatCount`、`clipLine`、窄屏降级） |
 | 快照装配 | `src/chrome/snapshots.ts` |
 | 交互时钟 | `src/ui-metrics.ts` |
@@ -88,8 +88,7 @@
 - footer 数字**只读**：不写 git 状态、不读额度凭据（见 [commands.md](../commands.md) §只读保证）。
 - 三个 usage 范围（ctx / Σ / last）**永不混用**，`/codex-ui` 逐一标注来源。
 - 未跟踪文件与 git 的 diff 不同：超过 200 个或单文件超过 256 KiB 的未跟踪文件、以及未跟踪的二进制文件不计入（跟踪文件的 diff 不设此上限）。
-- 额度失败绝不影响 agent 交互与终止判定；失败只显示 `—` 或在有上次好值时继续用上次值。
-- 窄屏只降级不整块消失；`footer.details: false` 会关掉右侧细节块（P0 的会话 I/O 与速度也在其中）。
+- 窄屏按字段换行；`footer.details: false` 隐藏会话 I/O 与 cache，`footer.showSpeed` 单独控制输出速度。
 
 ## 验证
 

@@ -1,36 +1,32 @@
-// Compact product status footer (below the composer surface). 0.8.5: the
-// model/effort/provider/context details moved INTO the composer surface
-// (composer-metadata.ts) — the footer carries cwd/branch (+ working-tree change
-// counts) + session usage + cache, never a duplicate
-// model/context line.
+// Product status footer below (not inside) the editor surface. Model, effort,
+// provider, cwd/branch, context, session I/O and cache appear in that order.
 //
 // Data contract: a single FooterSnapshot (host-data bridge + usage ledger +
 // output-speed tracker + git-changes tracker). Scopes stay
 // explicit: Σ = session cumulative, cache = latest confirmed request,
 // speed = current/last assistant response, changes = work tree vs HEAD.
 //
-// Priority ladder as width shrinks: shorter dir → wrap to two rows —
-// P0 (cwd/branch, change counts, output speed, session I/O) and P1 (cache)
-// always survive. Speed sits at the HEAD of the right block, in the
-// slot left of ↑input (where a rate is read next to the totals it came from).
-// Layout runs on PLAIN segment text; painters apply afterwards.
+// Narrow widths wrap whole fields in order; painters apply after layout.
 
 import type { UsageRecord } from "../usage-ledger.ts";
 import type { GitChangeStat } from "../git-changes.ts";
+import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
 import { formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
 import {
   cellWidth,
   formatCount,
   formatExactCount,
   formatPct,
-  realizeRow,
+  rowWidth,
   SEG_SEP,
   truncateSegments,
-  type RowPlan,
   type Segment,
 } from "../segments.ts";
 
 export interface FooterSnapshot {
+  model: ModelSnapshot | undefined;
+  thinkingLevel: string | undefined;
+  contextUsage: ContextUsageSnapshot | undefined;
   cwd: string;
   /** Session-scope totals (UsageLedger); undefined = no entries source. */
   session: UsageRecord | undefined;
@@ -46,6 +42,8 @@ export interface FooterSnapshot {
 }
 
 export interface FooterShow {
+  /** Model, thinking level, provider and context usage. */
+  metadata: boolean;
   /** Session tokens + cache line. */
   details: boolean;
   /** Latest-request cache hit rate. */
@@ -81,48 +79,78 @@ function shortDir(cwd: string, max: number): string {
   return out;
 }
 
-/** Pure layout: cwd/branch left; right groups in priority order with
- * narrow-width reductions. Returns 1..2 rows. */
+/** Wrap whole fields in display order, rather than clipping later fields. */
+function wrapFields(fields: Segment[][], width: number): Segment[][] {
+  const rows: Segment[][] = [];
+  let row: Segment[] = [];
+  for (const field of fields) {
+    if (!field.length) continue;
+    const next = row.length ? [...row, SEG_SEP, ...field] : field;
+    if (row.length && rowWidth(next) > width) {
+      rows.push(row);
+      row = [];
+    }
+    row = row.length ? [...row, SEG_SEP, ...field] : truncateSegments(field, width);
+  }
+  if (row.length) rows.push(row);
+  return rows;
+}
+
+/** Pure layout: model → effort → provider → cwd → context → I/O → cache. */
 export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: number, branch: string | undefined): Segment[][] {
   if (!Number.isFinite(width) || width <= 2) return [];
 
+  const fields: Segment[][] = [];
+  if (show.metadata) {
+    if (snapshot.model?.id) fields.push([{ text: snapshot.model.id, tone: "normal" }]);
+    if (snapshot.thinkingLevel) fields.push([{ text: snapshot.thinkingLevel, tone: "accent" }]);
+    if (snapshot.model?.provider) fields.push([{ text: snapshot.model.provider, tone: "dim" }]);
+  }
   const dir = shortDir(snapshot.cwd, 28);
-  const left: Segment[] = [];
+  const path: Segment[] = [];
   if (dir) {
-    left.push({ text: dir, tone: "dim" });
-    if (branch) left.push({ text: ` (${branch})`, tone: "normal" });
+    path.push({ text: dir, tone: "dim" });
+    if (branch) path.push({ text: ` (${branch})`, tone: "normal" });
     // Working-tree change counts ride with the branch, in the diff's own
     // green/red; a clean tree shows nothing at all.
     const changes = snapshot.changes;
     if (show.showChanges && changes && (changes.additions > 0 || changes.deletions > 0)) {
       // Exact integers: the segment is a line count, not a magnitude.
-      left.push({ text: ` +${formatExactCount(changes.additions)}`, tone: "add" });
-      left.push({ text: ` -${formatExactCount(changes.deletions)}`, tone: "del" });
+      path.push({ text: ` +${formatExactCount(changes.additions)}`, tone: "add" });
+      path.push({ text: ` -${formatExactCount(changes.deletions)}`, tone: "del" });
+    }
+    fields.push(path);
+  }
+
+  if (show.metadata) {
+    const usage = snapshot.contextUsage;
+    const capacity = usage?.contextWindow ?? snapshot.model?.contextWindow;
+    if (capacity !== undefined) {
+      const tokens = usage?.tokens == null ? "—" : formatCount(usage.tokens);
+      const pct = formatPct(usage?.percent);
+      fields.push([
+        { text: `ctx ${tokens}/${formatCount(capacity)}`, tone: "dim" },
+        ...(pct ? [{ text: ` · ${pct}`, tone: (usage?.percent ?? 0) >= 80 ? "warning" as const : "dim" as const }] : []),
+      ]);
     }
   }
 
-  // Right groups by priority: P0 output speed + session I/O, P1 cache.
   const session = snapshot.session;
-  const right: Segment[] = [];
-  // Output speed leads the right block: the rate of the response these totals
-  // just grew by, read immediately left of ↑input.
-  if (show.showSpeed) {
-    const value = formatSpeedValue(snapshot.speed?.tokensPerSecond);
-    if (value) right.push({ text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" });
-  }
   if (show.details && session) {
-    if (right.length > 0) right.push(SEG_SEP);
-    right.push({ text: `↑${formatCount(session.input)}`, tone: "normal" });
-    if (session.output > 0) right.push({ text: ` ↓${formatCount(session.output)}`, tone: "normal" });
+    const io: Segment[] = [{ text: `↑${formatCount(session.input)}`, tone: "normal" }];
+    if (session.output > 0) io.push({ text: ` ↓${formatCount(session.output)}`, tone: "normal" });
+    fields.push(io);
     if (show.showCache) {
       const hit = formatPct(snapshot.cacheLastPct);
-      if (hit) right.push(SEG_SEP, { text: "cache ", tone: "dim" }, { text: hit, tone: "normal" });
+      if (hit) fields.push([{ text: "cache ", tone: "dim" }, { text: hit, tone: "normal" }]);
     }
   }
-  if (left.length === 0 && right.length === 0) return [];
+  if (show.showSpeed) {
+    const value = formatSpeedValue(snapshot.speed?.tokensPerSecond);
+    if (value) fields.push([{ text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" }]);
+  }
 
-  const plan: RowPlan = { left, right: right.length ? right : undefined };
-  return realizeRow(plan, width).filter((r) => r.length > 0);
+  return wrapFields(fields, width);
 }
 
 // ---------- component ----------

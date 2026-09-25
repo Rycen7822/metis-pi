@@ -426,23 +426,22 @@ bootPi();
 const frames = {};
 try {
   // Stage 1: idle footer with REAL model/effort/provider/capacity visible.
-  // Wait for the composer METADATA row (ctx segment lives there in 0.8.5).
-  frames.idle = await waitFor(/ctx [0-9—]/, 30_000, "idle composer metadata");
+  // Wait for the footer's context field below the editor.
+  frames.idle = await waitFor(/ctx [0-9—]/, 30_000, "idle footer metadata");
   // The vendored codex-conversion entry is part of this package's manifest, so a broken
   // vendored build, a missing asset or a shortcut collision with a pi built-in shows up
   // here as an "[Extension issues]" block in the transcript.
   assert.ok(!frames.idle.includes("[Extension issues]"), "extensions load without issues (see the frame above)");
   assert.ok(!/Could not read the @howaboua\/pi-codex-conversion changelog/.test(frames.idle), "vendored CHANGELOG.md is present");
-  // 0.8.5 split: metadata (surface) owns model/effort/provider/context;
-  // the footer owns cwd/branch/session — no duplication.
-  assert.match(frames.idle, /pcx-mock-model · high · pcx-mock/, "metadata: model/effort/provider");
-  assert.match(frames.idle, /ctx 0\/1\.0M · 0%/, "metadata: context usage");
+  assert.match(frames.idle, /pcx-mock-model · high · pcx-mock/, "footer: model/effort/provider");
+  assert.match(frames.idle, /ctx 0\/1\.0M · 0%/, "footer: context usage");
   assert.match(frames.idle, /Ask anything\.\.\./, "composer placeholder on the gray surface");
   assert.match(frames.idle, /(^|\n)\s*> /, "`> ` prompt prefix on the first input row");
-  const metaLine = frames.idle.split("\n").find((l) => l.includes("pcx-mock-model")) ?? "";
-  const footerLines = frames.idle.split("\n").filter((l) => l.trim() && !l.includes("pcx-mock-model") && !l.includes("Ask anything"));
-  assert.ok(footerLines.some((l) => l.includes("pcx-mock-pty") || (l.includes("/") && !l.includes("ctx "))), "footer carries cwd/branch rows");
-  assert.ok(!footerLines.some((l) => l.includes("pcx-mock-model ·")), "footer does NOT duplicate the model line");
+  const orderedFooter = frames.idle.slice(frames.idle.indexOf("pcx-mock-model"));
+  assert.ok(orderedFooter.indexOf("(main)") > orderedFooter.indexOf("pcx-mock-model"), "path/branch follows model/provider below editor");
+  assert.ok(orderedFooter.indexOf("ctx 0/1.0M") > orderedFooter.indexOf("(main)"), "context follows path");
+  assert.ok(frames.idle.indexOf("Ask anything...") < frames.idle.lastIndexOf("pcx-mock-model"),
+    `footer lives below the editor: ${JSON.stringify(frames.idle.slice(-550))}`);
   // 0.13.0: working-tree change counts ride with the branch, straight from git.
   if (hasGit) {
     // The counts are the work tree vs HEAD right now (staged + unstaged once,
@@ -509,7 +508,8 @@ try {
   const speedRow = frames.summary.split("\n").find((l) => l.includes("tok/s"));
   assert.ok(speedRow, `footer shows the measured output speed:\n${frames.summary.slice(-800)}`);
   assert.match(speedRow, /\d+(\.\d+)? tok\/s/, "rate carries its unit");
-  assert.ok(speedRow.indexOf("tok/s") < speedRow.indexOf("↑"), "rate sits left of ↑input in the same row");
+  assert.ok(frames.summary.includes("↑") && frames.summary.lastIndexOf("tok/s") > frames.summary.lastIndexOf("↑"),
+    "rate follows input/output in the footer");
 
   // Stage 2b: thinking run — both timers visible at once (elapsed + thinking).
   type("please PCX_THINK now");
@@ -1035,7 +1035,7 @@ try {
   );
   console.log("  thinking:     6-row peek + hint while streaming; 1 click folds/opens, 2 clicks expand");
   if (!SKIP_WHEEL) console.log("  thinking:     wheel scrolls the peek window in place and refollows its tail (full run)");
-  console.log("  output speed: measured tok/s rendered left of ↑input (real stream window)");
+  console.log("  output speed: measured tok/s rendered after ↑input (real stream window)");
   console.log("  live Working: Working… + elapsed + live tokens mid-stream");
   console.log("  thinking:     elapsed + thinking timers grow together; summary 'thought for'");
   console.log("  auto-collapse: 'Thought for Ns' label; 1 click = 6-row peek window, 2 clicks = full body");

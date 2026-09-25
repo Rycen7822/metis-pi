@@ -1,12 +1,12 @@
 # 输入区（composer）
 
-> 三块组成：灰色 surface、借 padding 格实现的 `> ` 提示符、编辑区下方 metadata 行。全部只改显示，宿主编辑状态机零改动。
+> 两块组成：灰色 surface、借 padding 格实现的 `> ` 提示符。模型和上下文信息现位于输入框下方的 footer，不再贴在编辑区内。全部只改显示，宿主编辑状态机零改动。
 
 | | |
 | --- | --- |
 | 入口 | `extensions/appearance.ts` |
-| 实现 | `src/chrome/editor.ts`（工厂）`src/surface.ts`（配色）`src/chrome/composer-metadata.ts`（metadata 行） |
-| 安装 | `src/chrome/install.ts` 的 `install`（经公开 `ui.setEditorComponent` / `ui.setWidget`） |
+| 实现 | `src/chrome/editor.ts`（工厂）`src/surface.ts`（配色）；底部信息见 [Footer](working-footer.md) |
+| 安装 | `src/chrome/install.ts` 的 `install`（经公开 `ui.setEditorComponent`） |
 | 配置 | `composer.surface`、`composer.promptPrefix`、`composer.metadata` |
 
 ## 行为
@@ -26,26 +26,18 @@
 - `getText()` **不含**该字符（纯粹是显示借用，不影响提交内容）；
 - 空输入时显示暗色占位符 `Ask anything...`（display only，同样不进 `getText()`）。
 
-### 3. metadata 行（`composer.metadata`）
+### 3. 输入框下方信息
 
-公开的 `belowEditor` widget，与编辑区同一底色，视觉上属于同一个 surface：
-
-```
-模型 · 推理等级 · provider    ctx 已用/容量 · 占用%
-```
-
-- 数据全部来自宿主公开接口：`ctx.model`、`ctx.thinkingLevel`、`ctx.getContextUsage()`（`src/chrome/snapshots.ts` 的 `getComposerMetaSnapshot`）。
-- 切换模型 / 推理等级即时更新（snapshot 带 revision，model/effort/context 一起刷新）。
-- 上下文容量优先用**实时 usage 窗口**，取不到才退回模型声明的 `contextWindow`；未知值显示 `—`，不伪造 0。
+`composer.metadata` 控制 footer 中的模型、推理等级、provider、上下文信息；与编辑区 surface 是否启用无关。切换模型或推理等级时由宿主快照刷新；上下文容量优先采用实时 usage 窗口，取不到才使用模型声明的 `contextWindow`。详见 [Footer](working-footer.md)。
 
 ## 安装条件与退避
 
 | 块 | 条件 | 不满足时 |
 | --- | --- | --- |
 | surface | `ui.setEditorComponent` 存在 且 宿主当前没有自定义 editor 且 拿到宿主 `CustomEditor` 类 | 保留宿主原生编辑区 |
-| metadata | 上面的 surface **已生效**（`composer.surface` 且拿到 surface 绘制 ops） | 不安装（metadata 不会浮在裸背景上） |
+| footer 信息 | `ui.setFooter` 可用且 `footer.enabled` | 保留宿主原生 footer |
 
-关闭 `composer.surface` 时不安装 surface，但 `promptPrefix` 无法单独存在（它借用 surface 的 padding 格），metadata 也随之不安装。
+关闭 `composer.surface` 时不安装 surface，`promptPrefix` 无法单独存在（它借用 surface 的 padding 格）；footer 信息仍独立显示。
 
 ## 多 skill 输入（`skillTrigger`）
 
@@ -58,16 +50,15 @@
 | surface 颜色与降级 | `src/surface.ts` 的 `COMPOSER_BG`、`surfacePaint` |
 | editor 工厂与选项 | `src/chrome/editor.ts` 的 `makeCodexEditorFactory`（`paddingX` / `placeholder` / `promptPrefix` / `skillTrigger` / `selectionCopy`） |
 | `> ` 与占位符 | 同文件（padding 行替换逻辑） |
-| metadata 行内容 | `src/chrome/composer-metadata.ts` 的 `createComposerMetaComponent` / `composerMetaSegments` |
+| 模型和上下文信息 | `src/chrome/footer.ts` 的 `layoutFooter` |
 | 数据快照 | `src/chrome/snapshots.ts` |
 | 安装/卸载 | `src/chrome/install.ts` |
 
 ## 不变量与已知限制
 
-- 不改宿主输入框的状态机、键位、补全实现；只提供自定义 editor 实现与一个 widget。
+- 不改宿主输入框的状态机、键位、补全实现；只提供自定义 editor 实现，信息单独显示在 footer。
 - `> ` 与占位符**永不**进入提交文本；pty 用例逐字验证 `getText()`。
 - 无背景的降级等级下，只剩 `> ` 与布局：这是刻意的（不把 16 色终端画花）。
-- metadata 行依赖 surface 生效；这是有意的耦合，避免出现"浮在半空"的一行字。
 
 ## 验证
 

@@ -32,7 +32,7 @@ export interface DiagnosticsDeps {
   piVersion: string | undefined;
   getConfig: () => AppearanceConfig;
   chrome: {
-    surfaceApplied: boolean; prefixApplied: boolean; metaInstalled: boolean;
+    surfaceApplied: boolean; prefixApplied: boolean;
     editorInstalled: boolean; footerInstalled: boolean; headerInstalled: boolean;
     widgetInstalled: boolean; fallbackMessage: boolean;
   };
@@ -69,9 +69,9 @@ const composerLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string =
       ? `fallback (${deps.hasSurfaceBinding ? "color level" : "no surface binding"})`
       : "disabled(config)";
   const prefix = deps.chrome.prefixApplied ? "applied" : "off";
-  const metadata = deps.chrome.metaInstalled
+  const metadata = config.composer.metadata && deps.chrome.footerInstalled
     ? "applied"
-    : config.composer.metadata ? "fallback" : "disabled(config)";
+    : config.composer.metadata ? "fallback (footer unavailable)" : "disabled(config)";
   return `  composer: surface=${surface} prefix=${prefix} metadata=${metadata}`;
 };
 

@@ -370,17 +370,8 @@ handlers.get("session_start")({}, {
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
 assert.equal(chromeSlots.workingVisible.at(-1), false, "native loader hidden after widget install");
-assert.ok(chromeSlots.widgets.some((c) => c.key === "metis-pi:composer-meta" && c.content !== undefined),
-  "composer metadata widget installed below the editor");
-const metaComponent = chromeSlots.widgets.find((c) => c.key === "metis-pi:composer-meta" && c.content !== undefined)
-  .content({ requestRender() {} }, { fg: (_k, t) => t });
-const metaFrame = metaComponent.render(120).join("\n");
-const metaPlain = metaFrame.replace(/\x1b\[[0-9;]*m/g, "");
-assert.match(metaPlain, /smoke-model/, "metadata model from live host fields");
-assert.match(metaPlain, /high/, "metadata thinking level");
-assert.match(metaPlain, /smoke-provider/, "metadata provider");
-assert.match(metaPlain, /12k\/1\.0M/, "metadata context usage");
-assert.match(metaPlain, /1\.2%/, "metadata context percent");
+assert.ok(!chromeSlots.widgets.some((c) => c.key === "metis-pi:composer-meta" && c.content !== undefined),
+  "model and context no longer attach to the input surface");
 // While idle the widget row is hidden (setWidget(undefined)); agent_start
 // shows it for the active interaction.
 handlers.get("agent_start")({ type: "agent_start" }, {});
@@ -396,8 +387,8 @@ const footerComponent = chromeSlots.footers[0]({ requestRender() {} }, { fg: (_k
   onBranchChange: () => () => {},
 });
 const footerFrame = footerComponent.render(120).join("\n");
-assert.doesNotMatch(footerFrame, /smoke-model/, "model/context live in the composer surface, not the footer (0.8.5 split)");
-assert.doesNotMatch(footerFrame, /12k\/1\.0M/);
+for (const field of ["smoke-model", "high", "smoke-provider", "smoke-branch", "ctx 12k/1.0M · 1.2%"])
+  assert.ok(footerFrame.includes(field), `${field} lives below the editor in the footer`);
 // Working line through the real component path.
 const widgetComponent = showCall.content({ requestRender() {} }, { fg: (_k, t) => t });
 const workingFrame = widgetComponent.render(100).join("\n");
@@ -547,4 +538,4 @@ assert.ok(parsed.content.includes('<skill name="beta"'), "the second skill body 
 assert.equal(parsed.userMessage, "tail text", "only the real user text stays outside the folded block");
 fs.rmSync(muxRoot, { recursive: true, force: true });
 
-console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; multi-skill expansion folds into one parsed skill block; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm) OK");
+console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; multi-skill expansion folds into one parsed skill block; chrome (composer surface + ordered footer, Codex Working rhythm) OK");
