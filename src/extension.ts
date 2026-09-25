@@ -1,5 +1,6 @@
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
 import { createOwnedApplyPatchView } from "./apply-patch-view.ts";
+import { installStartupWarningFilter } from "./startup-warning-filter.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
@@ -109,6 +110,7 @@ function toStateMessage(message: unknown): TranscriptEvent["message"] {
 export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   let enabled = false;
   let chromeEnabled = false;
+  let startupWarningFilter: ReturnType<typeof installStartupWarningFilter> | undefined;
   let handle: AdapterHandle | undefined;
   let decorations: DecorationHandle | undefined;
   const transcript = new TranscriptState();
@@ -310,6 +312,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && config.enabled !== false;
+    startupWarningFilter?.dispose();
+    startupWarningFilter = chromeEnabled ? installStartupWarningFilter() : undefined;
     if (chromeEnabled) {
       void chrome.install(available, chrome.state.generation);
       startQuotaTimer();
@@ -574,6 +578,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   pi.on("session_shutdown", () => {
     enabled = false;
     chromeEnabled = false;
+    startupWarningFilter?.dispose();
+    startupWarningFilter = undefined;
     chrome.invalidate();
     handle?.dispose();
     handle = undefined;

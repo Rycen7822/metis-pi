@@ -44,6 +44,16 @@
 
 每个工具调用保留**独立**的显示与展开状态，不跨调用合并结果。
 
+## 子代理启动提示
+
+交互界面启用期间，metis-pi 精确过滤 `pi-web-access` 的
+`Dynamic tool activation requires Pi 0.86.1 or newer; web tools remain eagerly available.`
+这条 `console.warn` 兼容性回退提示，避免子代理重新加载扩展时将它写进输入框。
+这不是对子代理运行期间全局静音：其他警告、附带额外诊断的输出、`console.error`、
+工具结果和 `ctx.ui.notify` 均不拦截；不改变 Web 工具启用方式。
+过滤仅绑定到启用 metis-pi 的 TUI 生命周期（不区分提示来自主会话还是子代理）；
+界面启动前、退出后和独立非交互进程保持原行为。
+
 ## 安装机制（为什么能安全卸载）
 
 `src/adapter.ts` 不注册工具、不替换执行、不加 context 中间件、不 patch TUI 根渲染器。它只装饰宿主 `ToolExecutionComponent` 原型的四个方法：三个 renderer/shell selector（`getCallRenderer`、`getResultRenderer`、`getRenderShell`）与该组件自身的 `render`。
