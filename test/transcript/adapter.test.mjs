@@ -6,10 +6,11 @@ import { activate } from "../../src/extension.ts";
 import { fakeHost, toolInfo, bindings, deepFreeze, theme, sessionStub } from "../helpers.mjs";
 
 const ownRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
-function setup(tools = TOOL_NAMES.map((name) => toolInfo(name)), options = {}, Host = fakeHost()) {
+function setup(t, tools = TOOL_NAMES.map((name) => toolInfo(name)), options = {}, Host = fakeHost()) {
   const renderers = ownRenderers();
   const original = Object.getOwnPropertyDescriptors(Host.prototype);
   const handle = installAdapter(Host.prototype, { getTools: () => tools, enabled: () => true, renderers, ...options });
+  t.after(() => handle.dispose());
   return { Host, renderers, original, handle };
 }
 
@@ -18,8 +19,8 @@ function assertNative(row) {
   assert.equal(row.getResultRenderer(), row.toolDefinition.renderResult, row.toolName);
 }
 
-test("decorates builtin UI selectors, leaving definition and executor identical", () => {
-  const { Host, handle, renderers, original } = setup();
+test("decorates builtin UI selectors, leaving definition and executor identical", (t) => {
+  const { Host, handle, renderers, original } = setup(t);
   const execute = () => { throw new Error("An appearance plugin must not execute tools"); };
   const oldCall = () => "old call";
   const definition = deepFreeze({ name: "read", execute, renderCall: oldCall, renderResult: () => "old result" });
@@ -45,20 +46,19 @@ for (const [owner, names, builtin] of [
   ["outside takeover list", ["web_search", "get_search_content", "fetch_content", "mcp", "mcp_search", "session_search", "fffind", "ffgrep", "exec_command", "apply_patch", "subagent", "lsp", "ask_user_question"], true],
 ]) {
   test(`${owner}: both native renderers remain unchanged`, (t) => {
-    const { Host, handle } = setup(names.map((name) => toolInfo(name, builtin)));
-    t.after(() => handle.dispose());
+    const { Host, handle } = setup(t, names.map((name) => toolInfo(name, builtin)));
     for (const name of names) {
       assertNative(new Host(name, deepFreeze({ renderCall: () => "custom", renderResult: () => "custom result" })));
     }
   });
 }
 
-test("only the packaged apply_patch entry can use the owned diff renderer", () => {
+test("only the packaged apply_patch entry can use the owned diff renderer", (t) => {
   const definition = { renderCall: () => bindings.makeText("native patch"), renderResult: () => bindings.makeText("native result") };
   const sourcePath = "/metis/vendor/pi-codex-conversion/dist/index.js";
   let sourceInfo = { source: "../../project/metis", path: sourcePath };
   let ready = true;
-  const { Host, handle } = setup([], {
+  const { Host, handle } = setup(t, [], {
     getTools: () => [{ name: "apply_patch", sourceInfo }],
     ownedApplyPatch: { sourcePath, renderCall: () => ready ? bindings.makeText("owned diff") : undefined },
   });
@@ -82,7 +82,7 @@ test("only the packaged apply_patch entry can use the owned diff renderer", () =
   } finally { handle.dispose(); }
 });
 
-test("command presentation is owned, call-only, reversible and leaves the theme untouched", () => {
+test("command presentation is owned, call-only, reversible and leaves the theme untouched", (t) => {
   const painter = (lines) => lines.map(line => `colored:${line}`);
   let sourceInfo = { source: "git:metis", path: OWNED_CONVERSION_ENTRY };
   let enabled = true;
@@ -91,7 +91,7 @@ test("command presentation is owned, call-only, reversible and leaves the theme 
     renderCall(_args, theme) { receivedTheme = theme; return bindings.makeText(theme.highlightCommandLines?.(["printf hi"])[0] ?? "native"); },
     renderResult: () => bindings.makeText("native result"),
   };
-  const { Host, handle } = setup([], {
+  const { Host, handle } = setup(t, [], {
     getTools: () => [{ name: "exec_command", sourceInfo }], enabled: () => enabled,
     renderers: {}, highlightOwnedCommand: painter,
     renderOwnedCommand: (command, state, expanded, originalTheme) => {
@@ -125,27 +125,27 @@ test("command presentation is owned, call-only, reversible and leaves the theme 
   assert.equal(row.getCallRenderer(), definition.renderCall);
 });
 
-test("an earlier patch on ANY intercepted method prevents installation, atomically", () => {
+test("an earlier patch on ANY intercepted method prevents installation, atomically", (t) => {
   for (const key of ["getResultRenderer", "getRenderShell", "render"]) {
     const Host = fakeHost();
     Host.prototype[key] = function () { return "another extension"; };
     const before = Object.getOwnPropertyDescriptors(Host.prototype);
-    const { handle } = setup([], { renderers: {} }, Host);
+    const { handle } = setup(t, [], { renderers: {} }, Host);
     assert.equal(handle.installed, false, key);
     assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), before, key);
   }
 });
 
-test("sealed prototypes and unrecognized host versions fail closed", () => {
+test("sealed prototypes and unrecognized host versions fail closed", (t) => {
   for (const Host of [fakeHost(), class Unknown {}]) {
     Object.preventExtensions(Host.prototype);
-    const { handle } = setup([], { renderers: {} }, Host);
+    const { handle } = setup(t, [], { renderers: {} }, Host);
     assert.equal(handle.installed, false);
   }
 });
 
-test("later plugin patches are neither overridden nor undone", () => {
-  const { Host, handle } = setup();
+test("later plugin patches are neither overridden nor undone", (t) => {
+  const { Host, handle } = setup(t);
   const retainedWrapper = Host.prototype.getCallRenderer;
   const later = function () { return retainedWrapper.call(this); };
   Host.prototype.getCallRenderer = later;
@@ -157,10 +157,10 @@ test("later plugin patches are neither overridden nor undone", () => {
   assert.equal(row.getCallRenderer(), definition.renderCall);
 });
 
-test("duplicate installations do not stack or steal ownership", () => {
-  const { Host, handle, original } = setup();
+test("duplicate installations do not stack or steal ownership", (t) => {
+  const { Host, handle, original } = setup(t);
   const after = Host.prototype.getCallRenderer;
-  const { handle: duplicate } = setup([], { renderers: {} }, Host);
+  const { handle: duplicate } = setup(t, [], { renderers: {} }, Host);
   assert.equal(duplicate.installed, false);
   duplicate.dispose();
   assert.equal(Host.prototype.getCallRenderer, after);
@@ -168,7 +168,7 @@ test("duplicate installations do not stack or steal ownership", () => {
   assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), original);
 });
 
-test("lifecycle uses no tool registration, context middleware, editor, footer or hotkey API", () => {
+test("lifecycle uses no tool registration, context middleware, editor, footer or hotkey API", (t) => {
   const handlers = new Map();
   const allowed = {
     on: (event, handler) => handlers.set(event, handler),
@@ -210,7 +210,7 @@ test("lifecycle uses no tool registration, context middleware, editor, footer or
   }
 });
 
-test("noninteractive sessions do not modify prototypes", () => {
+test("noninteractive sessions do not modify prototypes", (t) => {
   const handlers = new Map();
   const Host = fakeHost();
   const before = Object.getOwnPropertyDescriptors(Host.prototype);
@@ -219,8 +219,8 @@ test("noninteractive sessions do not modify prototypes", () => {
   assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), before);
 });
 
-test("rendering keeps search JSON, images, signatures, usage and args byte-for-byte intact", () => {
-  const { Host, handle } = setup();
+test("rendering keeps search JSON, images, signatures, usage and args byte-for-byte intact", (t) => {
+  const { Host, handle } = setup(t);
   const args = deepFreeze({ path: "report.json" });
   const payload = deepFreeze({
     content: [
@@ -243,8 +243,8 @@ test("rendering keeps search JSON, images, signatures, usage and args byte-for-b
   handle.dispose();
 });
 
-test("default compact view removes the whole padded Box, not merely its background", () => {
-  const { Host, handle } = setup();
+test("default compact view removes the whole padded Box, not merely its background", (t) => {
+  const { Host, handle } = setup(t);
   const row = new Host("bash", { renderCall: () => "stock" }, { command: "npm test" });
   const children = [...row.children];
   assert.equal(row.children[1], row.contentBox); // stock constructor tree stays intact
@@ -260,8 +260,8 @@ test("default compact view removes the whole padded Box, not merely its backgrou
   assert.deepEqual(row.children, children);
 });
 
-test("each completed read is a two-line Explored entry, and expansion recovers all output", () => {
-  const { Host, handle } = setup();
+test("each completed read is a two-line Explored entry, and expansion recovers all output", (t) => {
+  const { Host, handle } = setup(t);
   const row = new Host("read", { renderCall: () => "stock" }, { path: "README.md" });
   row.updateResult({ content: [{ type: "text", text: "FULL FILE CONTENT" }], isError: false });
   const output = row.render(80).filter(Boolean);
@@ -276,11 +276,11 @@ test("each completed read is a two-line Explored entry, and expansion recovers a
   handle.dispose();
 });
 
-test("historical rows created before installation are populated before their first compact render", () => {
+test("historical rows created before installation are populated before their first compact render", (t) => {
   const Host = fakeHost();
   const row = new Host("bash", { renderCall: () => "stock" }, { command: "pwd" });
   assert.match(row.render(80).join("\n"), /BOX TOP/);
-  const { handle } = setup([toolInfo("bash")], {}, Host);
+  const { handle } = setup(t, [toolInfo("bash")], {}, Host);
   const output = row.render(80).join("\n");
   assert.match(output, /• Running pwd/);
   assert.doesNotMatch(output, /BOX/);
@@ -288,8 +288,8 @@ test("historical rows created before installation are populated before their fir
   assert.match(row.render(80).join("\n"), /stock/);
 });
 
-test("self-shell delegates image ordering and height to the native row renderer", () => {
-  const { Host, handle } = setup();
+test("self-shell delegates image ordering and height to the native row renderer", (t) => {
+  const { Host, handle } = setup(t);
   const row = new Host("read", { renderCall: () => "stock" }, { path: "figure.png" });
   row.updateResult({ content: [{ type: "image", data: "UNCHANGED", mimeType: "image/png" }], isError: false });
   row.imageComponents = [bindings.makeText("[IMAGE PROTOCOL OUTPUT]")];

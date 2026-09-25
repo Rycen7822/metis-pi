@@ -51,7 +51,7 @@ test("live reads: model switch visible WITHOUT re-bind (no frozen copies)", () =
   data.bind(ctx);
   assert.equal(data.getModel()?.id, "test-model");
   // The host swaps the model object on ctx — a session_start copy would miss it.
-  ctx.model = { id: "switched", provider: "other", contextWindow: 2_000_000 };
+  ctx.model = { id: "switched", name: "Switched", provider: "other", contextWindow: 2_000_000 };
   assert.equal(data.getModel()?.id, "switched");
   assert.equal(data.getContextUsage()?.tokens, 172_000);
 });
@@ -79,7 +79,7 @@ test("context usage reuses one projection until an event, live branch or model c
   let session = "session-1";
   const ctx = realCtx({
     sessionManager: { getLeafId: () => leaf, getSessionId: () => session },
-    getContextUsage() {
+    getContextUsage(this: { model: { contextWindow: number } }) {
       reads += 1;
       return { tokens: reads, contextWindow: this.model.contextWindow, percent: reads };
     },
@@ -124,4 +124,3 @@ test("unknown context usage is cached, but failed reads are retried rather than 
   assert.equal(data.getContextUsage()?.tokens, null);
   assert.equal(reads, 3, "transient failures do not poison the cache");
 });
-

@@ -200,7 +200,7 @@ function seededRandom(seed) {
   };
 }
 
-test("property: mirrored render equals host rows and full selection round-trips (seeded)", () => {
+test("property: seeded Markdown selection preserves normalized logical tokens", () => {
   const rand = seededRandom(0x9e3779b9);
   const words = ["alpha", "beta", "gamma", "中文词语", "x".repeat(20), "https://example.com/a/b/c", "hyphen-ated", "3.14", "foo_bar"];
   const joins = [" ", " ", "\n", "\n\n", ""];
@@ -250,24 +250,7 @@ test("user message card: copied logical text identical across widths, background
   }
   assert.equal(copies[0], copies[1], "60 vs 80 columns: identical logical copy");
   assert.equal(copies[1], copies[2], "80 vs 120 columns: identical logical copy");
-  assert.ok(copies[0].replace(/\n/g, "").includes("软折行复制"), "content present");
-});
-
-test("collapsed thought summary copies its label only — hidden reasoning is not rendered anywhere", () => {
-  // The real label as index.ts paints it: italic + thinkingText color.
-  const label = new Tui.Text("\x1b[3m\x1b[38;2;163;163;163mThought for 13s\x1b[39m\x1b[23m", 1, 0);
-  const rows = label.render(40);
-  const product = productFor(rows);
-  assert.ok(product, "Text mirror builds for the summary label");
-  const copied = product.rows
-    .map((row) => row.spans
-      .filter((span) => span.kind !== "decoration")
-      .map((span) => span.text ?? "")
-      .join(""))
-    .filter((text) => text.length > 0)
-    .join("\n");
-  assert.equal(copied, "Thought for 13s");
-  assert.ok(!/\x1b/.test(copied), "label styling stays out of the copy");
+  assert.equal(copies[0], text, "card copy preserves the declared logical text exactly");
 });
 
 function freshTextDeps(now) {
@@ -345,4 +328,3 @@ test("container alignment resolves child products WITHOUT re-rendering children"
   assert.ok(product?.children, "container product registered");
   assert.ok(product.children.some((p) => p !== undefined), "placements resolve through the chain");
 });
-

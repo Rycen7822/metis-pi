@@ -4,13 +4,17 @@
 // - the thinking visibility policy on the REAL AssistantMessageComponent
 //   prototype: auto-collapse once through the host's own override map,
 //   duration labels only on ended runs, native click toggle untouched.
+const previousEnv = Object.fromEntries(
+  ["FORCE_COLOR", "COLORTERM", "PI_CODING_AGENT_DIR"].map((key) => [key, process.env[key]]),
+);
 process.env.FORCE_COLOR ??= "3";
 process.env.COLORTERM ??= "truecolor";
-const { default: test } = await import("node:test");
+const { default: test, after } = await import("node:test");
 const { default: assert } = await import("node:assert/strict");
 const fs = await import("node:fs");
 const os = await import("node:os");
 const path = await import("node:path");
+const { fileURLToPath } = await import("node:url");
 const Core = await import("@earendil-works/pi-coding-agent");
 const Tui = await import("@earendil-works/pi-tui");
 const { TranscriptState } = await import("../../src/transcript-state.ts");
@@ -23,9 +27,16 @@ const strip = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 // host components render the real palette. Deep theme imports are
 // exports-blocked, and the theme singleton cannot be swapped from the API.
 const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pcx-theme-"));
+after(() => {
+  for (const [key, value] of Object.entries(previousEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(agentDir, { recursive: true, force: true });
+});
 fs.mkdirSync(path.join(agentDir, "themes"), { recursive: true });
 fs.copyFileSync(
-  new URL("../../themes/metis-pi.json", import.meta.url).pathname,
+  fileURLToPath(new URL("../../themes/metis-pi.json", import.meta.url)),
   path.join(agentDir, "themes", "metis-pi.json"),
 );
 process.env.PI_CODING_AGENT_DIR = agentDir;

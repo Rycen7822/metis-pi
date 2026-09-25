@@ -38,10 +38,9 @@ const renderOpts = (command, width, output = "", extra = {}) => ({
   bullet: "•", titlePainter: (t) => t,
 });
 function stripAnsi(value) { return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""); }
-function assertNoHalfAnsi(lines) {
+function assertOnlyCompleteSgr(lines) {
   for (const line of lines) {
-    // After stripping, no dangling ESC may survive (mid-sequence cut).
-    assert.ok(!/\x1b$/.test(stripAnsi(line)), `dangling ESC in ${JSON.stringify(line)}`);
+    assert.doesNotMatch(line.replace(/\x1b\[[0-9;]*m/g, ""), /\x1b/, `incomplete or unexpected escape in ${JSON.stringify(line)}`);
   }
 }
 
@@ -49,20 +48,22 @@ test("golden: every task command renders within physical-row budgets at all widt
   for (const command of GOLDEN_COMMANDS) {
     for (const width of WIDTHS) {
       const call = renderShellCall(renderOpts(command, width, MULTILINE_OUTPUT.join("\n")));
-      const result = renderShellResult(renderOpts(command, width, MULTILINE_OUTPUT.join("\n")));
-      assertNoHalfAnsi(call);
-      assertNoHalfAnsi(result);
+      assertOnlyCompleteSgr(call);
       // Header exactly once, first call row (prefix may shorten below ~10 cols).
       if (width >= 10) assert.equal(stripAnsi(call[0]).startsWith("• Ran "), true, `${command} @${width}`);
       // Command continuation rows are capped (plus at most one hint row).
       const continuation = call.slice(1);
       assert.ok(continuation.length <= COMMAND_CONTINUATION_MAX_ROWS + 1, `${command} @${width} continuation=${continuation.length}`);
-      // Output block: at most 5 physical rows including the ellipsis.
-      assert.ok(result.length <= OUTPUT_MAX_ROWS, `${command} @${width} output=${result.length}`);
-      for (const line of [...call, ...result]) {
+      for (const line of call) {
         assert.ok(layout.visibleWidth(line) <= width, `${command} @${width} too wide: ${JSON.stringify(stripAnsi(line))}`);
       }
     }
+  }
+  for (const width of WIDTHS) {
+    const result = renderShellResult(renderOpts(GOLDEN_COMMANDS[0], width, MULTILINE_OUTPUT.join("\n")));
+    assertOnlyCompleteSgr(result);
+    assert.ok(result.length <= OUTPUT_MAX_ROWS, `output @${width}: ${result.length} rows`);
+    for (const line of result) assert.ok(layout.visibleWidth(line) <= width, `output @${width} too wide`);
   }
 });
 
@@ -70,10 +71,17 @@ test("golden: expanded mode wraps to width and preserves full output", () => {
   const output = MULTILINE_OUTPUT.join("\n");
   const result = renderShellResult(renderOpts(GOLDEN_COMMANDS[0], 60, output, { expanded: true }));
   assert.ok(result.length >= 100, "expanded shows every logical line");
+  const flat = stripAnsi(result.join("\n"));
+  let previous = -1;
+  for (const id of [0, 25, 50, 75, 99]) {
+    const next = flat.indexOf(`line-${id} some output`);
+    assert.ok(next > previous, `line-${id} survives in order`);
+    previous = next;
+  }
   for (const line of result) {
     assert.ok(layout.visibleWidth(line) <= 60, `expanded too wide: ${JSON.stringify(stripAnsi(line))}`);
   }
-  assertNoHalfAnsi(result);
+  assertOnlyCompleteSgr(result);
 });
 
 test("golden: middle truncation keeps head and tail with a bounded ellipsis", () => {
@@ -99,14 +107,14 @@ test("golden: CJK and emoji outputs respect cell width", () => {
   }
   const emoji = renderShellResult(renderOpts("cat emoji.txt", 40, "🚀🌟💡 done\n".repeat(8)));
   for (const line of emoji) {
-    assert.ok(layout.visibleWidth(line) <= 42, `emoji too wide: ${JSON.stringify(line)}`);
+    assert.ok(layout.visibleWidth(line) <= 40, `emoji too wide: ${JSON.stringify(line)}`);
   }
 });
 
 test("golden: ANSI-styled output keeps styles per row and never splits sequences", () => {
   const dirty = "\x1b[31mERROR:\x1b[0m failed to compile\n\x1b[32mOK:\x1b[0m built\nplain tail\n".repeat(6);
   const lines = renderShellResult(renderOpts("make all", 60, dirty));
-  assertNoHalfAnsi(lines);
+  assertOnlyCompleteSgr(lines);
   // Colors survive into the visible text.
   assert.match(lines[0], /\x1b\[31m/);
 });

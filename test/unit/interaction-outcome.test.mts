@@ -66,19 +66,14 @@ test("settled with no assistant evidence → unknown, never guessed success", ()
   assert.equal(t2.freeze().outcome, "unknown");
 });
 
-test("a late error from an OLD attempt cannot override a newer clean stop", () => {
+test("a later attempt's error replaces an earlier clean stop", () => {
   const t = new InteractionOutcomeTracker();
   t.messageStart("assistant");
   t.terminalStop("stop");   // attempt 1 finished clean
   t.messageStart("assistant"); // attempt 2 opens
-  // A stale error event for attempt 1 arrives late (seq bookkeeping: the
-  // reducer only accepts terminals for the CURRENT attempt, so this models
-  // the real constraint: attempt-1 evidence is already closed).
   t.terminalStop("error");  // recorded for attempt 2 — attempt 2 now errored
   const v = t.freeze();
-  // attempt 2 has the only terminal for the highest attempt → failed wins on
-  // evidence order, proving old-stop did NOT lock success either.
+  // The terminal event has no attempt ID; it belongs to the current attempt.
   assert.equal(v.attempt, 2);
   assert.equal(v.outcome, "failed");
 });
-

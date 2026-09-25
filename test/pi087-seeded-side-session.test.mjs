@@ -11,16 +11,12 @@
  * created reaches every request exactly once, including on hosts that rebuild context per request.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { temporaryDirectory } from "./helpers/temp-dir.mjs";
 import { DefaultResourceLoader, SessionManager, SettingsManager, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-
-globalThis.fetch = async () => {
-	throw new Error("NETWORK_DISABLED");
-};
 
 const hostEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const { AuthStorage } = await import(new URL("./core/auth-storage.js", hostEntry));
@@ -28,8 +24,11 @@ const { ModelRuntime } = await import(new URL("./core/model-runtime.js", hostEnt
 
 const countOf = (value, needle) => JSON.stringify(value).split(needle).length - 1;
 
-test("a session seeded before creation sends that history on every request exactly once", async () => {
-	const temp = mkdtempSync(join(tmpdir(), "pi-seeded-session-"));
+test("a session seeded before creation sends that history on every request exactly once", async (t) => {
+	t.mock.method(globalThis, "fetch", async () => {
+		throw new Error("NETWORK_DISABLED");
+	});
+	const temp = temporaryDirectory(t, "pi-seeded-session-");
 	const agentDir = join(temp, "agent");
 	mkdirSync(agentDir);
 	const model = getBuiltinModels("openai")[0];
@@ -65,6 +64,7 @@ test("a session seeded before creation sends that history on every request exact
 		resourceLoader,
 		tools: [],
 	});
+	t.after(() => session.dispose());
 	const captured = [];
 	session.agent.streamFunction = (_model, context) => {
 		captured.push(structuredClone(context));
@@ -80,5 +80,4 @@ test("a session seeded before creation sends that history on every request exact
 	assert.equal(captured.length, 2, "the second prompt must reach the model");
 	assert.equal(countOf(captured[1], "SEED_HISTORY_SENTINEL"), 1, "later requests keep the seed exactly once");
 	assert.equal(countOf(captured[1], "QUESTION_TWO"), 1, "the second question appears exactly once");
-	session.dispose();
 });

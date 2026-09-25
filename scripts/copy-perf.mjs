@@ -1,8 +1,8 @@
-// Performance measurements for the selection-copy system (VALIDATION §18):
-//  1. Frame cost with provenance wrappers ON vs native (frame delta).
-//  2. Copy latency over 1k/10k-row selections (must scale with selection).
-//  3. Warm-frame cost (all caches hot — the steady-state animation frame).
-// Run: node --experimental-strip-types scripts/copy-perf.mjs
+// Paired, fresh-process frame measurements for native and provenance-wrapped TUI.
+// Copy timings use committed frames with wrappers ON; they exclude OS clipboard I/O.
+// Run: node --experimental-strip-types scripts/copy-perf.mjs [sample pairs]
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem } from "../src/selection-copy/index.ts";
 import { SelectionSerializer } from "../src/selection-copy/serialize.ts";
@@ -26,7 +26,35 @@ const system = createSelectionCopySystem({
     renderLatex: (t, o) => Tui.renderLatex(t, o) ?? null,
   },
 }, undefined);
-system.wrapPrototypes();
+const mode = process.argv[2];
+if (mode !== "--on" && mode !== "--off") {
+  const pairs = Number(mode ?? 3);
+  if (!Number.isInteger(pairs) || pairs < 1 || pairs > 10) throw new Error("sample pairs must be 1..10");
+  const samples = [];
+  for (let i = 0; i < pairs; i++) {
+    const pair = {};
+    for (const variant of i % 2 ? ["on", "off"] : ["off", "on"]) {
+      pair[variant] = JSON.parse(execFileSync(process.execPath, [
+        "--experimental-strip-types", fileURLToPath(import.meta.url), `--${variant}`,
+      ], { encoding: "utf8", maxBuffer: 2_000_000 }));
+    }
+    samples.push(pair);
+  }
+  const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  console.log(`Node ${process.version}; ${pairs} fresh-process paired sample(s); ms/frame`);
+  for (const key of ["smallWarm", "smallChanged", "largeWarm", "largeChanged"]) {
+    const off = samples.map((s) => s.off[key]);
+    const on = samples.map((s) => s.on[key]);
+    const deltas = samples.map((s) => s.on[key] - s.off[key]);
+    console.log(`${key}: native=${off.map((n) => n.toFixed(2))} wrapped=${on.map((n) => n.toFixed(2))} paired median delta=${median(deltas).toFixed(2)}`);
+  }
+  for (const [key, value] of Object.entries(samples.at(-1).on.copy)) {
+    const times = samples.map((s) => s.on.copy[key].ms);
+    console.log(`${key}: ${times.map((n) => n.toFixed(2))} ms / ${value.rows} rows / ${value.chars} chars / ${value.mode}`);
+  }
+  process.exit(0);
+}
+if (mode === "--on") system.wrapPrototypes();
 
 function buildTranscript(messageCount) {
   const chat = new Tui.Container();
@@ -41,20 +69,30 @@ function buildTranscript(messageCount) {
   return new Tui.ScrollView(documentContainer, { primary: true, follow: "end" });
 }
 
-function measureFrame(build, width, height, label) {
+function measureFrame(build, width, height) {
   const terminal = { columns: width, rows: height, write: () => {} };
   const tui = new Tui.TuiAltScreen(terminal);
   tui.beforeTerminalStart();
-  tui.setLayoutRoot(build());
-  // warm-up render (builds all products)
+  const root = build();
+  tui.setLayoutRoot(root);
+  // Build products, then measure a cache-hot frame and a real scrolled frame.
   tui.doRender();
-  const frames = 20;
+  const frames = 10;
   const start = performance.now();
   for (let i = 0; i < frames; i++) tui.doRender();
-  const coldMs = (performance.now() - start) / frames;
-  // scroll a little so each render commits (mirrors live usage)
-  console.log(`${label}: ${coldMs.toFixed(2)} ms/frame (avg of ${frames})`);
-  return { tui, msPerFrame: coldMs };
+  const warmMs = (performance.now() - start) / frames;
+  root.scrollToStart();
+  tui.doRender();
+  const first = root.scrollTop;
+  root.scrollBy(1);
+  if (root.scrollTop === first) throw new Error("scroll did not move the viewport");
+  root.scrollBy(-1);
+  const changedAt = performance.now();
+  for (let i = 0; i < frames; i++) {
+    root.scrollBy(i % 2 ? -1 : 1);
+    tui.doRender();
+  }
+  return { tui, warmMs, changedMs: (performance.now() - changedAt) / frames };
 }
 
 function measureCopy(tui, fromRow, toRow, label) {
@@ -75,26 +113,21 @@ function measureCopy(tui, fromRow, toRow, label) {
   const result = serializer.serialize(frame, selection);
   const ms = performance.now() - start;
   const rowCount = toRow - fromRow + 1;
-  console.log(`${label}: ${ms.toFixed(2)} ms for ${rowCount} rows (${(ms / rowCount * 1000).toFixed(1)} µs/row), ${result.text.length} chars, mode=${result.nativeRows === 0 ? "exact" : "mixed"}`);
+  return { ms, rows: rowCount, chars: result.text.length, mode: result.nativeRows === 0 ? "exact" : "mixed" };
 }
 
-const SMALL = 34;  // ≈1k visual rows (each message ≈ 30 rows incl. code)
-const LARGE = 340; // ≈10k visual rows
+const SMALL = 34;
+const LARGE = 340;
 
-console.log("--- frame cost (provenance ON, steady state) ---");
-measureFrame(() => buildTranscript(SMALL), 100, 40, `1k-row transcript frame`);
-measureFrame(() => buildTranscript(LARGE), 100, 40, `10k-row transcript frame`);
-
-console.log("--- copy latency (from committed frames) ---");
-{
-  const { tui } = measureFrame(() => buildTranscript(SMALL), 100, 40, "1k-row frame (for copy)");
-  const total = tui.currentLayout.root.scrollContentLines.length;
-  measureCopy(tui, 0, total - 1, "copy 1k rows (full transcript)");
-  measureCopy(tui, 40, 59, "copy 20 rows (screen-sized)");
+const output = { copy: {} };
+for (const [label, count] of [["small", SMALL], ["large", LARGE]]) {
+  const { tui, warmMs, changedMs } = measureFrame(() => buildTranscript(count), 100, 40);
+  output[`${label}Warm`] = warmMs;
+  output[`${label}Changed`] = changedMs;
+  if (mode === "--on") {
+    const total = tui.currentLayout.root.scrollContentLines.length;
+    output.copy[`${label}Full`] = measureCopy(tui, 0, total - 1);
+    output.copy[`${label}Screen`] = measureCopy(tui, label === "small" ? 40 : total - 40, label === "small" ? 59 : total - 1);
+  }
 }
-{
-  const { tui } = measureFrame(() => buildTranscript(LARGE), 100, 40, "10k-row frame (for copy)");
-  const total = tui.currentLayout.root.scrollContentLines.length;
-  measureCopy(tui, 0, total - 1, "copy 10k rows (full transcript)");
-  measureCopy(tui, total - 40, total - 1, "copy 40 rows (screen-sized)");
-}
+console.log(JSON.stringify(output));

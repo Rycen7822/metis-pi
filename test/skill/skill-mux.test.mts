@@ -46,7 +46,7 @@ test("non-skill and single-skill inputs remain the host's job", (t) => {
   for (const input of ["hello world", "/skill:alpha hello", " /skill:alpha /skill:beta", "$alpha rest", "plain"]) {
     assert.equal(mux.expand(input), null, input);
   }
-  assert.equal(mux.onInput({ text: "plain" }).action, "continue");
+  assert.equal(mux.onInput({ type: "input", source: "interactive", text: "plain" }).action, "continue");
 });
 
 test("two skills expand to nested host-format blocks with trailing text", (t) => {
@@ -87,8 +87,8 @@ test("extension skills resolve on miss-rebuild; repeated misses are cached", (t)
 
 test("onInput transforms and passes images through by identity", (t) => {
   const { mux } = fixture(t);
-  for (const images of [[{ type: "image", url: "file:///x.png" }], undefined]) {
-    const result = mux.onInput({ text: "/skill:alpha /skill:beta go", images });
+  for (const images of [[{ type: "image" as const, data: "offline-image", mimeType: "image/png" }], undefined]) {
+    const result = mux.onInput({ type: "input", source: "interactive", text: "/skill:alpha /skill:beta go", images });
     assert.ok(result.action === "transform");
     assert.equal(result.images, images);
     assert.ok(result.text.includes("go"));
@@ -106,6 +106,8 @@ const skills = [
   { name: "alphabet", description: "longer" },
 ];
 const baseResult = { items: [{ value: "builtin", label: "builtin" }], prefix: "/skill:a" };
+const query = (force = false) => ({ signal: new AbortController().signal, force });
+const unusedCompletion = (): never => { throw new Error("completion is not exercised by this fixture"); };
 
 test("autocomplete preserves native precedence, matches partial skills and replaces only that token", async () => {
   const wrapped = createSkillAutocompleteWrapper(() => skills)({
@@ -117,24 +119,24 @@ test("autocomplete preserves native precedence, matches partial skills and repla
       return { lines: next, cursorLine, cursorCol: start + item.value.length };
     },
   });
-  const yen = await wrapped.getSuggestions(["￥al"], 0, 3, {});
+  const yen = await wrapped.getSuggestions(["￥al"], 0, 3, query());
   assert.ok(yen && "items" in yen);
   assert.equal(yen.prefix, "￥al");
   assert.deepEqual(yen.items.map((item) => item.value), ["￥alpha ", "￥alphabet "]);
   assert.equal(yen.items[0].label, "skill:alpha");
   assert.equal(yen.items[0].description, "the alpha skill");
-  const second = await wrapped.getSuggestions(["/skill:alpha /ta"], 0, 16, {});
+  const second = await wrapped.getSuggestions(["/skill:alpha /ta"], 0, 16, query());
   assert.ok(second && "items" in second);
   assert.deepEqual(second.items.map((item) => item.value), ["/skill:beta "]);
   assert.equal(second.prefix, "/ta");
   for (const [text, column] of [["/skill:alpha /zzz", 17], ["hello /", 7]] as const) {
-    assert.equal(await wrapped.getSuggestions([text], 0, column, {}), null);
+    assert.equal(await wrapped.getSuggestions([text], 0, column, query()), null);
   }
-  const applied = wrapped.applyCompletion(["/skill:alpha /b tail"], 0, 15, { value: "/skill:beta " }, "/b");
+  const applied = wrapped.applyCompletion(["/skill:alpha /b tail"], 0, 15, { value: "/skill:beta ", label: "skill:beta" }, "/b");
   assert.equal(applied.lines[0], "/skill:alpha /skill:beta  tail");
   assert.equal(applied.cursorCol, 25);
-  const native = createSkillAutocompleteWrapper(() => skills)({ async getSuggestions() { return baseResult; } });
-  assert.equal(await native.getSuggestions(["/skill:a"], 0, 8, {}), baseResult);
+  const native = createSkillAutocompleteWrapper(() => skills)({ async getSuggestions() { return baseResult; }, applyCompletion: unusedCompletion });
+  assert.equal(await native.getSuggestions(["/skill:a"], 0, 8, query()), baseResult);
 });
 
 test("Tab-force reaches skills at a bare second token, otherwise preserves the native file menu", async () => {
@@ -148,13 +150,13 @@ test("Tab-force reaches skills at a bare second token, otherwise preserves the n
   for (const [text, column, trigger] of [
     ["/skill:alpha /", 14, true], ["/skill:alpha ￥", 15, true], ["￥alpha /", 9, true], ["plain text", 10, false],
   ] as const) assert.equal(wrapped.shouldTriggerFileCompletion?.([text], 0, column), trigger);
-  const forced = await wrapped.getSuggestions(["/skill:alpha /"], 0, 14, { force: true });
+  const forced = await wrapped.getSuggestions(["/skill:alpha /"], 0, 14, query(true));
   assert.ok(forced && "items" in forced);
   assert.deepEqual(forced.items.map((item) => item.value), ["/skill:alpha ", "/skill:beta "]);
   assert.equal(forced.prefix, "/");
   for (const [text, column] of [["/skill:alpha /zzz", 17], ["/etc/", 5]] as const) {
-    assert.equal(await wrapped.getSuggestions([text], 0, column, { force: true }), fileResult);
+    assert.equal(await wrapped.getSuggestions([text], 0, column, query(true)), fileResult);
   }
-  const native = createSkillAutocompleteWrapper(getSkills)({ async getSuggestions() { return baseResult; } });
-  assert.equal(await native.getSuggestions(["/skill:alpha /a"], 0, 15, {}), baseResult);
+  const native = createSkillAutocompleteWrapper(getSkills)({ async getSuggestions() { return baseResult; }, applyCompletion: unusedCompletion });
+  assert.equal(await native.getSuggestions(["/skill:alpha /a"], 0, 15, query()), baseResult);
 });

@@ -20,18 +20,20 @@
   "scripts": {
     "test": "node --experimental-strip-types --test \"test/**/*.test.mjs\" \"test/**/*.test.mts\"",
     "test:host": "node --experimental-strip-types scripts/host-smoke.mjs",
-    "test:chrome": "node --experimental-strip-types --test \"test/chrome/chrome.test.mjs\"",
+    "test:chrome": "node --experimental-strip-types --test \"test/chrome/*.test.mjs\" \"test/chrome/*.test.mts\"",
     "check": "tsc -p tsconfig.json",
     "check:core": "tsc -p tsconfig.core.json",
-    "verify": "npm test && npm run check && npm run vendor:check && npm run vendor:smoke && npm run test:host && npm pack --dry-run --ignore-scripts",
+    "check:test": "tsc -p tsconfig.test.json",
+    "verify": "npm run vendor:fresh && npm run check && npm run check:test && npm run vendor:check && npm test && npm run vendor:smoke && npm run test:host && npm pack --dry-run --ignore-scripts",
     "preview": "node --experimental-strip-types scripts/preview.mjs",
     "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs",
+    "test:pty:strict": "node --experimental-strip-types scripts/pty-verify.mjs --strict",
     "vendor:build": "node scripts/vendor-codex-conversion.mjs build",
     "vendor:check": "node scripts/vendor-codex-conversion.mjs check",
     "vendor:patch": "node scripts/vendor-codex-conversion.mjs patch",
     "vendor:sync": "node scripts/vendor-codex-conversion.mjs sync",
     "vendor:smoke": "node --experimental-strip-types scripts/vendor-smoke.mjs",
-    "vendor:fresh": "node scripts/vendor-codex-conversion.mjs build && git diff --exit-code --stat -- vendor/pi-codex-conversion/dist vendor/pi-codex-conversion/changelog.js"
+    "vendor:fresh": "node scripts/vendor-codex-conversion.mjs build && node scripts/check-vendor-fresh.mjs"
   },
   "dependencies": {
     "marked": "18.0.11",

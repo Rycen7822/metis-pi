@@ -46,7 +46,7 @@ function reconstruct(copyOut) {
 
 for (const [name, command, expanded] of [
   ["heredoc", "python3 - <<'EOF'\nprint(1)\nEOF", false],
-  ["long wrapped command", `bash deploy.sh ${"--flag value ".repeat(30)}`.trimEnd(), true],
+  ["long wrapped command tokens", `bash deploy.sh ${"--flag value ".repeat(30)}`.trimEnd(), true],
 ]) {
   test(`shell ${name}: highlighted call copy spans stay plain`, () => {
     const copyOut = [];

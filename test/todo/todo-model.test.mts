@@ -19,7 +19,7 @@ test("task rows preserve path order and depth across all creation orders", () =>
     : items.flatMap((item, index) => permutations(items.filter((_, i) => i !== index)).map((tail) => [item, ...tail]));
   const depths = new Map([[1, 1], [2, 2], [3, 3], [4, 1], [5, 2]]);
   for (const tasks of permutations(added.state.tasks)) {
-    const state = { ...added.state, tasks };
+    const state: TodoState = { ...added.state, tasks };
     const before = structuredClone(state);
     const rows = taskRows(state);
     assert.deepEqual(rows.map((row) => row.task.id), [...taskPaths(state).keys()]);
@@ -44,7 +44,7 @@ test("orphan rows retain fallback paths and parents retain their own status", ()
 });
 
 const seed = (): { state: TodoState } => {
-  const r = addTasks(createState(T0), [{ title: "root A" }, { title: "root B" }], T0);
+  const r = addTasks(createState(), [{ title: "root A" }, { title: "root B" }], T0);
   assert.ok(r.ok);
   const r2 = addTasks(r.state, [{ title: "A.1", parentId: 1 }, { title: "A.2", parentId: 1 }], T0);
   assert.ok(r2.ok);
@@ -95,7 +95,7 @@ test("add validates caps, duplicates, parents and depth", () => {
   }
   const tooDeep = addTasks(s, [{ title: "deeper", parentId: last }], T0);
   assert.ok(!tooDeep.ok && /MAX_DEPTH/.test(tooDeep.error));
-  const over = addTasks(createState(T0), Array.from({ length: MAX_TASKS + 1 }, (_, i) => ({ title: `t${i}` })), T0);
+  const over = addTasks(createState(), Array.from({ length: MAX_TASKS + 1 }, (_, i) => ({ title: `t${i}` })), T0);
   assert.ok(!over.ok && /MAX_TASKS/.test(over.error));
 });
 
@@ -175,7 +175,7 @@ test("move rejects cycles and re-parents", () => {
 });
 
 test("taskPaths numbers subtasks hierarchically (1, 1.1, 1.1.1, 2, 2.1)", () => {
-  const r1 = addTasks(createState(T0), [{ title: "root" }], T0);
+  const r1 = addTasks(createState(), [{ title: "root" }], T0);
   assert.ok(r1.ok);
   const r2 = addTasks(r1.state, [{ title: "child a", parentId: 1 }, { title: "second root" }], T0);
   assert.ok(r2.ok);

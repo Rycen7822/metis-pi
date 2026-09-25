@@ -3,7 +3,7 @@
 // provider: zero paid requests, real screen frames via `tmux capture-pane`.
 // Frames asserted per stage: idle footer details, live Working line with dual
 // timers, tool run + Worked summary, provider error + Failed summary.
-// Requires: pi on PATH (or PI_BIN), tmux. Skips (exit 0) when tmux is absent.
+// Requires: pi on PATH (or PI_BIN), tmux. Pass --strict for a required gate.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -18,12 +18,21 @@ const hasTmux = (() => {
   try { execFileSync("tmux", ["-V"], { encoding: "utf8" }); return true; } catch { return false; }
 })();
 
+const STRICT = process.argv.includes("--strict") || process.env.PCX_PTY_STRICT === "1";
 if (!PI_BIN || !hasTmux) {
-  console.log(`SKIP: pty-verify needs pi (${PI_BIN ?? "not found"}) and tmux (${hasTmux})`);
+  const reason = `pty-verify needs pi (${PI_BIN ?? "not found"}) and tmux (${hasTmux})`;
+  if (STRICT) throw new Error(reason);
+  console.log(`SKIP: ${reason}`);
   process.exit(0);
+}
+if (STRICT && process.env.PCX_PTY_SKIP_WHEEL === "1") {
+  throw new Error("Strict PTY verification cannot skip wheel scenarios");
 }
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pcx-pty-"));
+// Setup below opens files and a server before the main scenario's try/finally.
+// Keep the isolated directory owned even if bootstrap fails early.
+process.once("exit", () => fs.rmSync(ROOT, { recursive: true, force: true }));
 const HOME_DIR = path.join(ROOT, "home");
 // pi reads models.json/settings.json from $HOME/.pi/agent (PI_AGENT_DIR does
 // NOT relocate them — verified against pi 0.85.1).
@@ -47,6 +56,7 @@ for (const probe of ["pcx-pty-mux-a", "pcx-pty-mux-b"]) {
 const hasGit = (() => {
   try { execFileSync("git", ["--version"], { stdio: "ignore" }); return true; } catch { return false; }
 })();
+if (STRICT && !hasGit) throw new Error("Strict PTY verification requires git scenarios");
 if (hasGit) {
   execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: WORKSPACE, stdio: "ignore" });
   fs.writeFileSync(path.join(WORKSPACE, "tracked.txt"), "one\ntwo\nthree\n");
@@ -58,6 +68,19 @@ if (hasGit) {
 // HOME isolation: the real ~/.pi/agent user extensions (including the
 // published copy of THIS extension) must not shadow the code under test.
 const ISOLATED_ENV = { ...process.env, HOME: HOME_DIR };
+
+const toolCall = (id, name, args, index = 0) => ({
+  index, id, type: "function", function: { name, arguments: JSON.stringify(args) },
+});
+const TOOL_SCENARIOS = [
+  { marker: "PCX_TOOL", calls: [toolCall("call_pcx1", "bash", { command: "echo PCX_TOOL_MARK" })] },
+  { marker: "PCX_GLYPH", calls: [toolCall("call_pcx2", "bash", { command: "printf '✔ done\\n✖ fail\\n'" })] },
+  { marker: "PCX_TODO_DONE", calls: [1, 2, 3, 4, 5].map((id, index) =>
+    toolCall(`call_pcxd${id}`, "todo", { action: "complete", id, evidence: `pty completion ${id}` }, index)) },
+  { marker: "PCX_TODO_AGAIN", calls: [toolCall("call_pcx5", "todo", { action: "add", tasks: [{ title: "pty fresh task" }] })] },
+  { marker: "PCX_TODO_MANY", calls: [toolCall("call_pcx4", "todo", { action: "add", tasks: [2, 3, 4, 5].map((id) => ({ title: `pty task ${id}` })) })] },
+  { marker: "PCX_TODO", calls: [toolCall("call_pcx3", "todo", { action: "add", tasks: [{ title: "pty task" }] })] },
+];
 
 // ---------- mock provider ----------
 const requests = [];
@@ -103,82 +126,17 @@ const server = http.createServer((req, res) => {
           }
         }, 250);
       };
-      if (/PCX_TOOL/.test(text)) {
-        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx1", type: "function", function: { name: "bash", arguments: "{\"command\":\"echo PCX_TOOL_MARK\"}" } }] }, finish_reason: null }] });
-        setTimeout(() => {
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
-          send({ ...base, choices: [], usage });
-          res.write("data: [DONE]\n\n");
-          res.end();
-        }, 400);
-        return;
-      }
-      if (/PCX_GLYPH/.test(text)) {
-        const cmd = "printf '\u2714 done\\n\u2716 fail\\n'";
-        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx2", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: cmd }) } }] }, finish_reason: null }] });
-        setTimeout(() => {
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
-          send({ ...base, choices: [], usage });
-          res.write("data: [DONE]\n\n");
-          res.end();
-        }, 400);
-        return;
-      }
-      if (/PCX_TODO_DONE/.test(text)) {
-        // One assistant message carrying five `todo complete` calls. After the
-        // tool results, pi asks the model again with the same user text, so the
-        // guard answers with plain text instead of re-issuing the calls. It keys
-        // on THIS call id: earlier stages already put tool results in the
-        // transcript, so a plain `role === "tool"` test would match immediately.
-        const issued = (parsed.messages ?? []).some((m) =>
-          m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.some((c) => c.id === "call_pcxd1"),
-        );
+      const toolScenario = TOOL_SCENARIOS.find(({ marker }) => text.includes(marker));
+      if (toolScenario) {
+        // Match this scenario's call ID, not any earlier tool result in the transcript.
+        const issued = (parsed.messages ?? []).some((m) => m.role === "assistant"
+          && Array.isArray(m.tool_calls)
+          && m.tool_calls.some((call) => call.id === toolScenario.calls[0].id));
         if (issued) {
-          finishText("PCX_TODO_DONE_ACK");
+          finishText(`${toolScenario.marker}_ACK`);
           return;
         }
-        const calls = [1, 2, 3, 4, 5].map((id, i) => ({
-          index: i, id: `call_pcxd${id}`, type: "function",
-          function: { name: "todo", arguments: JSON.stringify({ action: "complete", id, evidence: `pty completion ${id}` }) },
-        }));
-        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls }, finish_reason: null }] });
-        setTimeout(() => {
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
-          send({ ...base, choices: [], usage });
-          res.write("data: [DONE]\n\n");
-          res.end();
-        }, 400);
-        return;
-      }
-      if (/PCX_TODO_AGAIN/.test(text)) {
-        const issuedAgain = (parsed.messages ?? []).some((m) =>
-          m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.some((c) => c.id === "call_pcx5"),
-        );
-        if (issuedAgain) {
-          finishText("PCX_TODO_AGAIN_ACK");
-          return;
-        }
-        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx5", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty fresh task" }] }) } }] }, finish_reason: null }] });
-        setTimeout(() => {
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
-          send({ ...base, choices: [], usage });
-          res.write("data: [DONE]\n\n");
-          res.end();
-        }, 400);
-        return;
-      }
-      if (/PCX_TODO_MANY/.test(text)) {
-        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx4", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty task 2" }, { title: "pty task 3" }, { title: "pty task 4" }, { title: "pty task 5" }] }) } }] }, finish_reason: null }] });
-        setTimeout(() => {
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
-          send({ ...base, choices: [], usage });
-          res.write("data: [DONE]\n\n");
-          res.end();
-        }, 400);
-        return;
-      }
-      if (/PCX_TODO/.test(text)) {
-        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_pcx3", type: "function", function: { name: "todo", arguments: JSON.stringify({ action: "add", tasks: [{ title: "pty task" }] }) } }] }, finish_reason: null }] });
+        send({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: toolScenario.calls }, finish_reason: null }] });
         setTimeout(() => {
           send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
           send({ ...base, choices: [], usage });
@@ -210,23 +168,10 @@ const server = http.createServer((req, res) => {
           // 0.17.6 skill-mux E2E: the model must receive BOTH skill blocks
           // (JSON-escaped quote form — raw `/skill:` tokens never produce it)
           // and the trailing text, with no leftover raw `/skill:` token.
-          ? `MUX_REPLY A=${text.includes('<skill name=\\"pcx-pty-mux-a')} B=${text.includes('<skill name=\\"pcx-pty-mux-b')} TAIL=${text.includes("MUX_TAIL_MARKER")} RAW=${text.includes("/skill:pcx-pty-mux") || text.includes("￥pcx-pty-mux")}`
+          ? `MUX_REPLY A=${text.includes('<skill name=\\"pcx-pty-mux-a')} B=${text.includes('<skill name=\\"pcx-pty-mux-b')} TAIL=${text.includes("MUX_TAIL_MARKER")} RAW=${text.includes("/skill:pcx-pty-mux") || text.includes("￥pcx-pty-mux")} CASE=${text.match(/MUX_CASE_(\d+)/)?.[1] ?? "missing"}`
           : "PCX_OK";
       send({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
-      let i = 0;
-      const timer = setInterval(() => {
-        send({ ...base, choices: [{ index: 0, delta: { content: reply.slice(i, i + 2) }, finish_reason: null }] });
-        i += 2;
-        if (i >= reply.length) {
-          clearInterval(timer);
-          setTimeout(() => {
-            send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
-            send({ ...base, choices: [], usage });
-            res.write("data: [DONE]\n\n");
-            res.end();
-          }, 200);
-        }
-      }, 250);
+      finishText(reply);
     });
     return;
   }
@@ -326,6 +271,22 @@ const waitFor = async (pattern, timeoutMs, label) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 };
+/** A settled line must follow this request's marker, not an older scrollback hit. */
+const waitForAfter = async (pattern, marker, timeoutMs, label) => {
+  const start = Date.now();
+  for (;;) {
+    const frame = capture();
+    const markerAt = frame.lastIndexOf(marker);
+    if (markerAt >= 0) {
+      const fresh = frame.slice(markerAt + marker.length);
+      if (pattern.test(fresh)) return fresh;
+    }
+    if (Date.now() - start > timeoutMs) {
+      assert.fail(`timeout waiting for ${label} after ${marker}:\n${frame.slice(-2200)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+};
 
 // Shared viewport/mouse helpers: capture-pane includes scrollback, so mouse
 // rows are SCREEN rows — always index through the last pane_height lines.
@@ -334,7 +295,8 @@ const paneSize = () => {
   const [w, h] = out.trim().split(" ").map(Number);
   return { w, h };
 };
-const visibleRows = (frame) => frame.split("\n").slice(-paneSize().h);
+const visibleRows = (frame) =>
+  (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n").slice(-paneSize().h);
 /** Wait until `pattern` is no longer on screen (inverse of waitFor). */
 const waitGone = async (pattern, timeoutMs, label) => {
   const start = Date.now();
@@ -357,29 +319,25 @@ const waitStableFrame = async (timeoutMs = 15_000) => {
     const current = capture();
     if (current === previous) return;
     previous = current;
-    if (Date.now() - start > timeoutMs) return;
+    if (Date.now() - start > timeoutMs) {
+      assert.fail(`timeout waiting for a stable frame:\n${current.slice(-2200)}`);
+    }
   }
 };
-/**
- * Click the row that matches `rowPattern` until `done()` holds. The transcript
- * re-flows while output streams, so the row must be re-found per attempt (the
- * panel stages use the same discipline).
- */
-const clickRowUntilState = async (rowPattern, hover, done, timeoutMs, label) => {
+/** Verify one click changes the visible skill state. */
+const clickRowOnce = async (rowPattern, hover, done, timeoutMs, label) => {
+  assert.equal(done(), false, `${label}: target state already present`);
+  const rows = visibleRows(capture());
+  const index = rows.findIndex((line) => rowPattern.test(line));
+  assert.ok(index >= 0, `${label}: click target is visible`);
+  clickRow(index, cellOf(rows[index], hover));
   const start = Date.now();
   for (;;) {
     if (done()) return;
-    const rows = visibleRows(capture());
-    const index = rows.findIndex((line) => rowPattern.test(line));
-    if (index >= 0) {
-      clickRow(index, cellOf(rows[index], hover));
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      if (done()) return;
-    }
     if (Date.now() - start > timeoutMs) {
-      assert.fail(`timeout: ${label}\n${capture().slice(-1500)}`);
+      assert.fail(`${label}: one click did not reach the target state\n${capture().slice(-1500)}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
 };
 /** 0-based screen row of the first visible line matching `pattern` (-1 when absent). */
@@ -496,7 +454,7 @@ try {
   assert.match(frames.working, /• Working \(\d+s · esc to interrupt\)/, "Codex status rhythm with elapsed");
   assert.match(frames.working, /\d+s/, "elapsed seconds ticking");
   frames.worked = await waitFor(/PCX_OK/, 30_000, "assistant reply");
-  frames.summary = await waitFor(/Worked for/, 30_000, "Worked summary");
+  frames.summary = await waitForAfter(/Worked for/, "PCX_OK", 30_000, "Worked summary");
   assert.match(frames.summary, /Worked for/);
   // Pi normalizes usage: input = uncached prompt tokens (1200 - 1000 cached
   // = 200), cacheRead = 1000. Arrows follow Pi's ↑=input ↓=output grammar.
@@ -526,7 +484,8 @@ try {
   const waitForVisible = async (pattern, timeoutMs, label) => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (pattern.test(visibleText())) return capture();
+      const frame = capture();
+      if (pattern.test(visibleRows(frame).join("\n"))) return frame;
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
     assert.fail(`timeout waiting for ${label} (visible rows only):\n${capture().slice(-2200)}`);
@@ -538,24 +497,18 @@ try {
   // running the block shifts a row or two between reading a row and sending the
   // event, so a wheel aimed at a captured row can land beside the window.)
   await waitFor(/PCX_THINK_DONE/, 30_000, "post-thinking reply");
-  frames.thinkSummary = await waitFor(/thought for \d+s/, 30_000, "closed thinking in summary");
+  frames.thinkSummary = await waitForAfter(/thought for \d+s/, "PCX_THINK_DONE", 30_000, "closed thinking in summary");
   assert.match(frames.thinkSummary, /thought for \d+s/, "summary carries the accumulated thinking time");
 
   // 0.12.0: the completed run auto-collapses (label with its duration), a
   // SINGLE click opens the 6-row peek window (not the whole body), a DOUBLE
   // click toggles between the peek window and the fully expanded body, and a
-  // single click folds it again. The chat shifts as the Working widget retires
-  // at settle AND the TUI's region hit rows sit ±1 against the capture rows, so
-  // every attempt re-locates the row from a FRESH capture and sweeps small row
-  // offsets until the expected frame appears (each miss is a no-op, so sweeping
-  // never double-toggles).
+  // single click folds it again. Locate each target in a fresh visible frame;
+  // one gesture must produce the expected transition.
   frames.collapsed = await waitFor(/Thought for \d+s/, 30_000, "auto-collapsed thinking label");
   assert.ok(!visibleRows(frames.collapsed).some((l) => l.includes("PCX_THINK_TAIL")), "reasoning body hidden while collapsed");
 
-  // Everything below clicks the MIDDLE of the block, never its first row: the
-  // TUI's region hit rows sit a row or two off the captured rows in this pane,
-  // so a 7-row block is only reliably hit near its centre. Every helper re-reads
-  // the screen and sweeps small offsets; a missed row is a no-op.
+  // Click the body of the visible reasoning block so the MouseRegion owns it.
   const clickAt = async (rowIndex0, col) => {
     clickRow(rowIndex0, col);
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -573,33 +526,24 @@ try {
     if (/Thought for \d+s/.test(text)) return "collapsed";
     return "unknown";
   };
-  /** Drive the block to `target` with real gestures: a single click moves
-   * collapsed ↔ peek, a double click moves peek ↔ full. Each step is verified
-   * from a fresh screen, so a gesture the host reads differently is corrected on
-   * the next pass instead of failing the stage. */
-  const gotoState = async (target, timeoutMs) => {
+  /** One gesture is the evidence; retrying could hide a missed or duplicate click. */
+  const actOnce = async (from, target, gesture, timeoutMs) => {
+    assert.equal(screenState(), from, `expected ${from} before ${gesture}`);
+    const rows = visibleRows(capture());
+    const index = rows.findIndex((line) => from === "collapsed"
+      ? line.includes("Thought for") : line.includes("transcript window"));
+    assert.ok(index >= 0, `thinking ${from} target is visible before ${gesture}`);
+    if (gesture === "click") await clickAt(index, 8);
+    else await doubleClickAt(index, 8);
     const start = Date.now();
-    let attempt = 0;
     while (Date.now() - start < timeoutMs) {
-      const state = screenState();
-      if (state === target) return capture();
-      const rows = visibleRows(capture());
-      const offset = [0, 1, -1][attempt % 3];
-      if (state === "collapsed") {
-        const index = rows.findIndex((l) => l.includes("Thought for"));
-        if (index >= 0) await clickAt(index + offset, 8);
-      } else if (state === "peek" || state === "full") {
-        const index = rows.findIndex((l) => l.includes("transcript window"));
-        if (index >= 0) await doubleClickAt(index + offset, 8);
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-      attempt += 1;
+      if (screenState() === target) return capture();
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    assert.fail(`timeout reaching thinking state "${target}" (still "${screenState()}"):\n${capture().slice(-2200)}`);
+    assert.fail(`${gesture} did not change thinking ${from} to ${target}:\n${capture().slice(-2200)}`);
   };
 
-  frames.peeked = await gotoState("peek", 25_000);
+  frames.peeked = await actOnce("collapsed", "peek", "click", 25_000);
   assert.ok(!visibleRows(frames.peeked).some((l) => l.includes("PCX_THINK_HEAD")), "peek window clips the head of the reasoning");
   assert.ok(visibleRows(frames.peeked).some((l) => l.includes("PCX_THINK_TAIL")), "peek window shows the newest rows");
 
@@ -643,11 +587,11 @@ try {
     assert.ok(visibleRows(frames.refollowed).some((l) => l.includes("PCX_THINK_TAIL")), "newest rows back in view");
   }
 
-  frames.fullBody = await gotoState("full", 30_000);
+  frames.fullBody = await actOnce("peek", "full", "double-click", 30_000);
   assert.ok(!/scroll · double-click for all/.test(visibleText()), "fully expanded body carries no peek hint");
-  frames.peekAgain = await gotoState("peek", 30_000);
+  frames.peekAgain = await actOnce("full", "peek", "double-click", 30_000);
   assert.ok(!visibleRows(frames.peekAgain).some((l) => l.includes("PCX_THINK_HEAD")), "reasoning clipped again");
-  frames.recollapsed = await gotoState("collapsed", 20_000);
+  frames.recollapsed = await actOnce("peek", "collapsed", "click", 20_000);
   assert.ok(!visibleRows(frames.recollapsed).some((l) => l.includes("PCX_THINK_TAIL")), "reasoning hidden again");
 
   // Stage 3: tool run — real bash execution through the mock's tool call,
@@ -656,7 +600,7 @@ try {
   sendKeys(["Enter"]);
   frames.tool = await waitFor(/PCX_TOOL_MARK/, 60_000, "tool output");
   assert.match(frames.tool, /PCX_TOOL_MARK/, "bash tool executed for real");
-  frames.toolSummary = await waitFor(/Worked for/, 60_000, "post-tool Worked summary");
+  frames.toolSummary = await waitForAfter(/Worked for/, "PCX_TOOL_MARK", 60_000, "post-tool Worked summary");
   assert.match(frames.toolSummary, /Worked for/);
 
   // Stage 3b: glyph presentation — a tool whose COMMAND and OUTPUT carry ✔/✖
@@ -680,7 +624,7 @@ try {
   // workspace (.pi/codex-todos/tasks.json).
   type("please PCX_TODO now");
   sendKeys(["Enter"]);
-  const todoFrame = await waitFor(/Todos 0\/1 done/, 60_000, "codex-todo widget above the editor");
+  const todoFrame = await waitForVisible(/Todos 0\/1 done/, 60_000, "codex-todo widget above the editor");
   assert.ok(todoFrame.includes("○ pty task"), "widget shows the task row");
   assert.ok(fs.existsSync(path.join(WORKSPACE, ".pi", "codex-todos", "tasks.json")), "store persisted in the workspace");
 
@@ -702,31 +646,28 @@ try {
   assert.equal((collapsedPanel.match(/○ pty task/g) ?? []).length, 3, "exactly three task rows while collapsed");
   assert.ok(!collapsedPanel.includes("pty task 5"), "the tail is hidden while collapsed");
 
-  // The pane's hit rows drift a row or two from the captured rows (the same
-  // caveat as the reasoning stages), so sweep down from the header: every row
-  // of the panel toggles the same thing, and each attempt re-checks the target
-  // state before clicking again, so a sweep can never double-toggle.
-  const togglePanelUntil = async (pattern, label) => {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const before = visibleText();
-      if (pattern.test(before)) return before;
-      const header = visibleRows(capture()).findIndex((l) => l.includes("Todos 0/5 done"));
-      assert.ok(header >= 0, `${label}: the panel must be on screen`);
-      await clickAt(header + [2, 1, 3, 4, 5, 0][attempt % 6], 12);
+  const togglePanelOnce = async (pattern, label) => {
+    assert.doesNotMatch(visibleText(), pattern, `${label}: target state already present`);
+    const header = visibleRows(capture()).findIndex((line) => line.includes("Todos 0/5 done"));
+    assert.ok(header >= 0, `${label}: the panel must be on screen`);
+    await clickAt(header + 2, 12);
+    const start = Date.now();
+    while (Date.now() - start < 15_000) {
       const after = visibleText();
       if (pattern.test(after)) return after;
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    throw new Error(`timeout waiting for ${label}:\n${visibleText()}`);
+    assert.fail(`${label}: one click did not reach the target state:\n${visibleText()}`);
   };
 
-  const expandedPanel = await togglePanelUntil(/click to collapse/, "a left click expands the todo panel");
+  const expandedPanel = await togglePanelOnce(/click to collapse/, "a left click expands the todo panel");
   assert.match(expandedPanel, /Todos 0\/5 done ▴ · click to collapse/);
   const expandedRows = panelRowsOf(expandedPanel, 7).join("\n");
   assert.equal((expandedRows.match(/○ pty task/g) ?? []).length, 5, "all five task rows while expanded");
   assert.ok(!expandedRows.includes("+2 more"), "no summary row while expanded");
   assert.ok(expandedRows.includes("pty task 5"), "the whole list is visible when expanded");
 
-  const recollapsed = await togglePanelUntil(/\+2 more/, "a second click collapses the todo panel");
+  const recollapsed = await togglePanelOnce(/\+2 more/, "a second click collapses the todo panel");
   assert.match(recollapsed, /Todos 0\/5 done ▾ · click to expand/);
   const recollapsedRows = panelRowsOf(recollapsed, 6).join("\n");
   assert.equal((recollapsedRows.match(/○ pty task/g) ?? []).length, 3, "clicking again returns to three rows");
@@ -737,20 +678,21 @@ try {
   // menu, so the widget hides ON the press and deliberately does not claim
   // it. The harness therefore sends the release as a SEPARATE step to prove
   // the press alone is sufficient (and the release harmless).
-  const rightClickUntil = async (pattern, present, label) => {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+  const rightPressOnce = async (pattern, label) => {
+    assert.match(visibleText(), pattern, `${label}: panel starts visible`);
+    const header = visibleRows(capture()).findIndex((line) => line.includes("Todos 0/5 done"));
+    assert.ok(header >= 0, `${label}: the panel must be on screen`);
+    sendKeys(["-H", ...sgrSeq(2, 12, header + 3)]); // SGR rows are 1-based.
+    const start = Date.now();
+    while (Date.now() - start < 15_000) {
       const frame = visibleText();
-      if (present ? pattern.test(frame) : !pattern.test(frame)) return frame;
-      const header = visibleRows(capture()).findIndex((l) => l.includes("Todos 0/5 done"));
-      assert.ok(header >= 0, `${label}: the panel must be on screen`);
-      const target = header + 1 + [2, 1, 3, 4, 5, 0][attempt % 6]; // SGR rows are 1-based
-      sendKeys(["-H", ...sgrSeq(2, 12, target)]);
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      if (!pattern.test(frame)) return frame;
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    throw new Error(`timeout waiting for ${label}:\n${visibleText()}`);
+    assert.fail(`${label}: one right press did not hide the panel:\n${visibleText()}`);
   };
 
-  await rightClickUntil(/Todos 0\/5 done/, false, "a right press hides the todo panel");
+  await rightPressOnce(/Todos 0\/5 done/, "a right press hides the todo panel");
   assert.ok(!visibleText().includes("Todos 0/5 done"), "panel gone on the press alone");
   // The release — which Warp eats — must change nothing.
   sendKeys(["-H", ...sgrSeq(2, 12, 10, true)]);
@@ -761,15 +703,15 @@ try {
   // simply reappear (the command also prints the list as a text notify).
   type("/todos");
   sendKeys(["Enter"]);
-  await waitFor(/Todos 0\/5 done ▾/, 30_000, "/todos restores the hidden panel");
+  await waitForVisible(/Todos 0\/5 done ▾/, 30_000, "/todos restores the hidden panel");
   assert.ok(!/── todos \(5 tasks\)/.test(visibleText()), "no overlay since 0.17.5");
 
   // Mouse health after the UNCLAIMED right press: a stale host press target
   // would swallow these clicks, so the restored panel must still expand and
   // collapse on left clicks.
-  const reexpanded = await togglePanelUntil(/click to collapse/, "left clicks still reach the panel after the right press");
+  const reexpanded = await togglePanelOnce(/click to collapse/, "left clicks still reach the panel after the right press");
   assert.ok(reexpanded.includes("pty task 5"), "panel expands again");
-  await togglePanelUntil(/\+2 more/, "and collapses again");
+  await togglePanelOnce(/\+2 more/, "and collapses again");
 
   // Stage 3e (0.19.4): the completed-fold needs a real INPUT signal. pi's
   // `ui_prompt_start` is its blocking-dialog event, so the widget's turn ordinal
@@ -781,7 +723,7 @@ try {
   // finished one.
   type("please PCX_TODO_DONE now");
   sendKeys(["Enter"]);
-  const allDone = await waitFor(/Todos 5\/5 done/, 60_000, "the panel reports every task complete");
+  const allDone = await waitForVisible(/Todos 5\/5 done/, 60_000, "the panel reports every task complete");
   assert.ok(allDone.includes("pty task 5"), "the ✓ rows are still listed on the turn that completed them");
 
   type("PCX_FOLD_NOW");
@@ -791,7 +733,7 @@ try {
 
   type("please PCX_TODO_AGAIN now");
   sendKeys(["Enter"]);
-  const freshList = await waitFor(/Todos 0\/1 done/, 60_000, "new work re-registers the panel");
+  const freshList = await waitForVisible(/Todos 0\/1 done/, 60_000, "new work re-registers the panel");
   const freshRows = visibleRows(freshList);
   const freshHeader = freshRows.findIndex((line) => line.includes("Todos 0/1 done"));
   const freshPanel = freshRows.slice(freshHeader, freshHeader + 3).join("\n");
@@ -802,7 +744,7 @@ try {
   // Stage 4: provider error — the run must end Failed (real terminal error).
   type("please PCX_FAIL now");
   sendKeys(["Enter"]);
-  frames.failed = await waitFor(/Failed after/, 60_000, "Failed summary");
+  frames.failed = await waitForAfter(/Failed after/, "PCX_FAIL", 60_000, "Failed summary");
   assert.match(frames.failed, /Failed after/);
 
   // Stage 5: selection copy — REAL SGR mouse sequences through the PTY, then
@@ -851,7 +793,8 @@ try {
   const copyStats = flat.match(/copy-stats:calls=(\d+)exact=(\d+)mixed=(\d+)native=(\d+)empty=(\d+)failed=(\d+)last=(\S+?)chars=(\d+)/);
   assert.ok(copyStats, "copy telemetry present");
   assert.ok(Number(copyStats[2]) >= 1, `at least one exact copy (got ${copyStats[2]})`);
-  assert.equal(Number(copyStats[6]), 0, "no failed or empty copy");
+  assert.equal(Number(copyStats[5]), 0, "no empty copy");
+  assert.equal(Number(copyStats[6]), 0, "no failed copy");
   assert.equal(copyStats[7], "exact", "the last copy used the exact serializer mode");
   assert.equal(Number(copyStats[8]), expectedChars, `copied char count matches the reply length (${expectedChars})`);
 
@@ -909,15 +852,15 @@ try {
   // the skill menu, with the state alive (this stage) or dead (next stage).
   type("/skill:pcx-pty-mux-a ");
   type("/");
-  await waitFor(/pty probe/, 15_000, "the bare second / pops the skill menu by itself");
+  await waitForVisible(/pty probe/, 15_000, "the bare second / pops the skill menu by itself");
   assert.ok(!/继续添加 skill/.test(visibleText()), "no state-keeping row is shown");
   type("mux-b");
-  await waitFor(/pty probe/, 15_000, "the menu filters as letters arrive");
+  await waitForVisible(/pty probe/, 15_000, "the menu filters as letters arrive");
   sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b (proven accept key)
   await new Promise((resolve) => setTimeout(resolve, 300));
-  type("MUX_TAIL_MARKER");
+  type("MUX_TAIL_MARKER MUX_CASE_1");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "second-/ completion expands");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false CASE=1/, 30_000, "second-/ completion expands");
 
   // 0.18.1 (THE user repro): the host editor auto-triggers "/" only at line
   // start, so once its menu state is dead (any accept/escape cancels it; the
@@ -926,35 +869,35 @@ try {
   // the slash. The composer now forces that one query itself. Here the state
   // is killed with Escape, then " " + "/" must pop the menu on its own.
   type("/skill:pcx-pty-mux-a");
-  await waitFor(/pty probe/, 15_000, "first-token menu before Escape");
+  await waitForVisible(/pty probe/, 15_000, "first-token menu before Escape");
   sendKeys(["Escape"]);
   for (let i = 0; i < 40 && /pty probe/.test(visibleText()); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   } // the menu is really gone — no stale frame can satisfy the next wait
   type(" ");
   type("/");
-  await waitFor(/pty probe/, 15_000, "the bare second / pops the menu with a DEAD editor state");
+  await waitForVisible(/pty probe/, 15_000, "the bare second / pops the menu with a DEAD editor state");
   type("mux-b");
-  await waitFor(/pty probe/, 15_000, "dead-state menu filters as letters arrive");
+  await waitForVisible(/pty probe/, 15_000, "dead-state menu filters as letters arrive");
   sendKeys(["Tab"]); // accept the selected pcx-pty-mux-b
   await new Promise((resolve) => setTimeout(resolve, 300));
-  type("MUX_TAIL_MARKER");
+  type("MUX_TAIL_MARKER MUX_CASE_2");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "dead-state / completion expands");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false CASE=2/, 30_000, "dead-state / completion expands");
 
   // 0.17.6 baseline still holds without the menu: full tokens typed out.
-  type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER");
+  type("/skill:pcx-pty-mux-a /skill:pcx-pty-mux-b MUX_TAIL_MARKER MUX_CASE_3");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "both skills expanded from one input");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false CASE=3/, 30_000, "both skills expanded from one input");
   // Transcript folding: the host parses exactly ONE leading skill block, so the
   // expansion nests every later skill inside the first — the entry stays a
   // single collapsed `[skill] …` line (bodies hidden) instead of dumping the
   // second block as raw user text.
-  await waitFor(/\[skill\] pcx-pty-mux-a/, 15_000, "multi-skill prompt folds into one [skill] entry");
+  await waitForVisible(/\[skill\] pcx-pty-mux-a/, 15_000, "multi-skill prompt folds into one [skill] entry");
   assert.ok(!/probe body\./.test(visibleText()), "skill bodies stay collapsed inside the folded entry");
   // skill-label extension: the folded line names every invoked skill, not just
   // the first one (the host's own render lists `skillBlock.name` only).
-  await waitFor(
+  await waitForVisible(
     /\[skill\] pcx-pty-mux-a \+ pcx-pty-mux-b \(ctrl\+o to expand\)/,
     15_000,
     "the folded entry lists both skill names",
@@ -965,7 +908,7 @@ try {
   // column is the label's own cell (counted with CJK widths).
   await waitStableFrame();
   assert.ok(rowOf(/\[skill\] pcx-pty-mux-a/) >= 0, "the folded [skill] entry is on screen");
-  await clickRowUntilState(
+  await clickRowOnce(
     /\[skill\] pcx-pty-mux-a \+ pcx-pty-mux-b \(ctrl\+o to expand\)/,
     "[skill]",
     () => /probe body\./.test(visibleText()),
@@ -975,26 +918,26 @@ try {
   // Expanded, the entry renders a bare `[skill]` label plus the bodies (the
   // markdown header is joined by the same extension), so the
   // second click targets a body row — same component, same toggle.
-  await clickRowUntilState(
+  await clickRowOnce(
     /probe body\./,
     "probe body.",
     () => !/probe body\./.test(visibleText()),
     20_000,
     "a second click collapses the skill entry again",
   );
-  await waitFor(/\[skill\] pcx-pty-mux-a/, 15_000, "the entry stays collapsed after collapsing it");
+  await waitForVisible(/\[skill\] pcx-pty-mux-a/, 15_000, "the entry stays collapsed after collapsing it");
 
   // 0.17.9: ￥ is a registered trigger character — after a complete skill
   // token + space, typing ￥ ALONE must pop the menu (no letter needed).
   type("￥");
-  await waitFor(/pty probe/, 15_000, "￥ alone pops the menu at a token boundary");
+  await waitForVisible(/pty probe/, 15_000, "￥ alone pops the menu at a token boundary");
   type("pcx-pty-mux-a /mux-b");
-  await waitFor(/pty probe/, 15_000, "￥ flow filters down to mux-b");
+  await waitForVisible(/pty probe/, 15_000, "￥ flow filters down to mux-b");
   sendKeys(["Tab"]);
   await new Promise((resolve) => setTimeout(resolve, 300));
-  type("MUX_TAIL_MARKER");
+  type("MUX_TAIL_MARKER MUX_CASE_4");
   sendKeys(["Enter"]);
-  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false/, 30_000, "￥ + accepted / token both expand");
+  await waitFor(/MUX_REPLY A=true B=true TAIL=true RAW=false CASE=4/, 30_000, "￥ + accepted / token both expand");
 
   // Restart with a finished list (0.19.1). The store is per workspace and
   // outlives the session, while the widget's turn counter restarts at 0 — the

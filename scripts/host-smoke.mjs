@@ -3,8 +3,10 @@
 // ToolExecutionComponent + real pi-tui width tools, zero model calls.
 // The diff-surface assertions expect the Codex RGB palette; without a TTY
 // the auto-detection resolves to 256-color, so force truecolor deterministically.
-process.env.FORCE_COLOR ??= "3";
-process.env.COLORTERM ??= "truecolor";
+// This smoke runs in its own process; an inherited NO_COLOR must not weaken it.
+delete process.env.NO_COLOR;
+process.env.FORCE_COLOR = "3";
+process.env.COLORTERM = "truecolor";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -80,6 +82,7 @@ assert.doesNotMatch(bashDone, /• Ran[\s\S]*• Ran/);
 const { createExecCommandTool } = await import("../vendor/pi-codex-conversion/dist/tools/exec/command-tool.js");
 const { createExecCommandTracker } = await import("../vendor/pi-codex-conversion/dist/tools/exec/command-state.js");
 const { highlightBashScript } = await import("../src/bash-lexer.ts");
+const { detectColorLevel } = await import("../src/palette.ts");
 const execTracker = createExecCommandTracker();
 const execTool = createExecCommandTool(execTracker, {}, { showOutputWhenCollapsed: true });
 definitions.push({ name: "exec_command", sourceInfo: {
@@ -101,7 +104,8 @@ for (const expanded of [false, true, false]) {
   execRow.setExpanded(expanded);
   const lines = execRow.render(80);
   const rendered = lines.join("\n");
-  assert.ok(rendered.includes(highlightBashScript([execArgs.cmd], { kind: "truecolor" })[0]));
+  const expectedCommand = highlightBashScript([execArgs.cmd], detectColorLevel())[0];
+  assert.ok(rendered.includes(expectedCommand), `owned exec command does not use the active color level: ${JSON.stringify(rendered)}`);
   assert.match(stripVTControlCharacters(rendered), /Ran/);
   assert.match(stripVTControlCharacters(rendered), /Exit code: 1/);
   assert.ok(lines.every(line => visibleWidth(line) <= 80));
@@ -109,23 +113,24 @@ for (const expanded of [false, true, false]) {
 assert.equal(execRow.toolDefinition, execTool);
 assert.equal(execRow.getRenderShell(), "default");
 
-// Long one-line chains and multiline scripts use the SAME physical-row layout as bash.
+// One real owned-exec case proves delegation; command and width matrices live in shell/layout.test.mjs.
 const { renderShellCall } = await import("../src/shell.ts");
 const { productFor } = await import("../src/selection-copy/model.ts");
-const chain = Array.from({ length: 8 }, (_, i) => `printf '%s' command_${i}_中文`).join(" && ");
-for (const command of [chain, "node <<'JS'\n  const text = '中文';\n\n  console.log(text);\nJS\nprintf done"]) {
+{
+  const command = Array.from({ length: 8 }, (_, i) => `printf '%s' command_${i}_中文`).join(" && ");
   const args = { cmd: command };
   const row = new Core.ToolExecutionComponent("exec_command", "exec-width", args, { showImages: false }, execTool, ui, process.cwd());
   row.setArgsComplete();
   row.updateResult({ content: [{ type: "text", text: "output unchanged" }], details: { output: "output unchanged", exit_code: 0 }, isError: false });
-  for (const expanded of [false, true, false]) for (const width of [20, 40, 80, 160]) {
+  const width = 80;
+  for (const expanded of [false, true]) {
     row.setExpanded(expanded);
     const themed = { fg: (_role, text) => text, bold: text => text };
     const component = row.getCallRenderer()(args, themed, { expanded, toolCallId: "exec-width" });
     const actual = component.render(width);
     const expected = renderShellCall({
       row: { title: "Ran", command, language: "bash", isError: false, isPartial: false, output: "", expanded, expandHint: "" },
-      width, layout: { wrap: wrapTextWithAnsi, visibleWidth }, colorLevel: { kind: "truecolor" }, bullet: "•", titlePainter: title => title,
+      width, layout: { wrap: wrapTextWithAnsi, visibleWidth }, colorLevel: detectColorLevel(), bullet: "•", titlePainter: title => title,
     });
     assert.deepEqual(actual, expected, "owned exec and builtin bash share wrapping and physical-row budget");
     assert.equal(productFor(actual)?.rows.length, actual.length, "copy provenance stays aligned");
@@ -134,16 +139,12 @@ for (const command of [chain, "node <<'JS'\n  const text = '中文';\n\n  consol
     if (!expanded) assert.ok(actual.length <= 4, "same builtin command budget, including omission notice");
     const rendered = row.render(width);
     assert.ok(rendered.every(line => visibleWidth(line) <= width));
-    if (width === 80) assert.match(stripVTControlCharacters(rendered.join("\n")), /output unchanged/);
+    assert.match(stripVTControlCharacters(rendered.join("\n")), /output unchanged/);
   }
-  if (command === chain) {
-    const full = row.getCallRenderer()(args, { fg: (_role, text) => text, bold: text => text }, { expanded: true, toolCallId: "exec-width" }).render(80);
-    const content = productFor(full).rows.flatMap(row => row.spans.filter(span => span.kind === "content").map(span => span.text ?? "")).join("");
-    // Pi's soft wrapper consumes separator whitespace at wrap boundaries, as it
-    // does for builtin bash. Check that no command text was truncated, not that
-    // its existing copy behavior preserves every whitespace character.
-    assert.equal(content.replace(/\s/g, ""), command.replace(/\s/g, ""), "expanded view includes every command token beyond character 100");
-  }
+  const full = row.getCallRenderer()(args, { fg: (_role, text) => text, bold: text => text }, { expanded: true, toolCallId: "exec-width" }).render(width);
+  const content = productFor(full).rows.flatMap(row => row.spans.filter(span => span.kind === "content").map(span => span.text ?? "")).join("");
+  // The native soft wrapper consumes separator spaces, but no command token may disappear.
+  assert.equal(content.replace(/\s/g, ""), command.replace(/\s/g, ""), "expanded view includes command tokens beyond character 100");
 }
 
 // ---- 3. Mouse: title click expands, second click folds -----------------------
@@ -467,10 +468,12 @@ assert.ok(
   assert.equal(visibleWidth("\u2716\uFE0E"), visibleWidth("\u2716"), "VS15 is zero-width: layout does not move");
   assert.equal(visibleWidth("\u2714\uFE0E done"), visibleWidth("\u2714 done"));
   const written = [];
+  const terminal = { write: (data) => written.push(data) };
   const glyphSystem = createGlyphPresentation({ enabled: true });
-  assert.equal(glyphSystem.installOnTui({ terminal: { write: (data) => written.push(data) } }), true);
+  assert.equal(glyphSystem.installOnTui({ terminal }), true);
   const styled = `\x1b[1m${hyperlink("\u2714 link", "https://x.test/\u2716")}\x1b[0m plain \u2716 tail`;
-  written.push(glyphSystem.present(styled)); // same transform the write hook applies
+  terminal.write(styled);
+  assert.equal(written.length, 1, "one write passed through the installed hook");
   const out = written[0];
   assert.ok(out.includes("\u2714\uFE0E link"), "styled mark gained the text-presentation selector");
   assert.ok(out.includes("https://x.test/\u2716"), "OSC 8 URL stayed byte-identical");

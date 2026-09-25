@@ -15,6 +15,8 @@ import { thoughtSummaryText } from "../../src/thinking-summary.ts";
 import { makeRenderers } from "../../src/renderers.ts";
 import { renderWritePreview } from "../../src/write-preview.ts";
 import { styleToolOutputLine } from "../../src/output-style.ts";
+import { productFor } from "../../src/selection-copy/model.ts";
+import { copyFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
 import { theme, FakeText, sessionStub } from "../helpers.mjs";
 
 initTheme("dark", false);
@@ -202,7 +204,7 @@ test("8 serial reads: one group, ordered members, totals refresh on append", () 
   const state = new TranscriptState();
   driveSerialReads(state, "t");
   const ids = state.groupMemberIds(1);
-  assert.equal(ids.length, 8);
+  assert.deepEqual(ids, IMAGE_NAMES.map((_, i) => `t${i}`));
   // Group total from the CURRENT plan is stable regardless of member age:
   const headPlan = state.explorationPlan("t0");
   assert.equal(headPlan?.groupImages, 8);
@@ -227,15 +229,44 @@ test("renderers: only the CURRENT last member carries the aggregated notice", ()
   }
 });
 
-test("boundaries: bash/foreign/failed/visible-thinking split the group", () => {
+test("adjacent successful reads remain in one exploration group", () => {
   const state = new TranscriptState();
-  state.apply({ type: "tool_execution_start", toolCallId: "a", toolName: "read" });
-  state.apply({ type: "tool_execution_start", toolCallId: "sh", toolName: "bash" });
-  assert.equal(state.explorationPlan("sh"), undefined);
-  assert.notEqual(state.explorationPlan("t2")?.groupId, state.explorationPlan("a")?.groupId);
-  state.apply({ type: "tool_execution_end", toolCallId: "a", toolName: "read", isError: true });
-  assert.equal(state.groupOpen("a"), false);
+  for (const id of ["before", "after"]) {
+    state.apply({ type: "tool_execution_start", toolCallId: id, toolName: "read" });
+    state.apply({ type: "tool_execution_end", toolCallId: id, toolName: "read", isError: false });
+  }
+  const before = state.explorationPlan("before");
+  const after = state.explorationPlan("after");
+  assert.ok(before);
+  assert.ok(after);
+  assert.equal(before.groupId, after.groupId);
 });
+
+for (const [name, boundary] of [
+  ["bash", (state) => state.apply({ type: "tool_execution_start", toolCallId: "boundary", toolName: "bash" })],
+  ["foreign tool", (state) => state.apply({ type: "tool_execution_start", toolCallId: "boundary", toolName: "unrecognized_tool" })],
+  ["failed read", (state) => {
+    state.apply({ type: "tool_execution_start", toolCallId: "boundary", toolName: "read" });
+    state.apply({ type: "tool_execution_end", toolCallId: "boundary", toolName: "read", isError: true });
+  }],
+  ["visible thinking", (state) => state.apply({ type: "message_update", message: {
+    role: "assistant", content: [{ type: "thinking", thinking: "working" }],
+  } })],
+]) {
+  test(`${name} separates two real read groups`, () => {
+    const state = new TranscriptState();
+    state.apply({ type: "tool_execution_start", toolCallId: "before", toolName: "read" });
+    state.apply({ type: "tool_execution_end", toolCallId: "before", toolName: "read", isError: false });
+    boundary(state);
+    state.apply({ type: "tool_execution_start", toolCallId: "after", toolName: "read" });
+    state.apply({ type: "tool_execution_end", toolCallId: "after", toolName: "read", isError: false });
+    const before = state.explorationPlan("before");
+    const after = state.explorationPlan("after");
+    assert.ok(before);
+    assert.ok(after);
+    assert.notEqual(before.groupId, after.groupId);
+  });
+}
 
 test("renderWritePreview: bounded rows, dim stage label, no success green", () => {
   const content = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
@@ -346,6 +377,29 @@ test("policy: streaming stays expanded, auto-collapse fires ONCE with the run du
   click(regionsOf(component)[0]);
   assert.equal(summaryLabels(component, summaries).length, 1, "summary restored after second click");
   assert.equal(handle.thinkingAutoApplied(), 1);
+});
+
+test("collapsed real thinking copies its label without hidden body; expansion restores the body", (t) => {
+  const copySystem = installCopyPrototypes();
+  t.after(() => copySystem.dispose());
+  let clock = 1_000;
+  const state = new TranscriptState(() => clock);
+  const { summaries } = setup(t, state, { streaming: "full", completed: "collapsed" });
+  const { component, update } = streamingAssistant(state);
+  const hidden = "SECRET_THINKING_SENTINEL";
+  update([{ type: "thinking", thinking: hidden }]);
+  clock = 4_000;
+  update([{ type: "thinking", thinking: hidden }, { type: "text", text: "Answer." }]);
+  const label = summaryLabels(component, summaries)[0];
+  assert.ok(label, "the real assistant rendered a collapsed summary");
+  assert.doesNotMatch(component.render(80).join("\n"), /SECRET_THINKING_SENTINEL/);
+  const rows = productFor(label.render(80))?.rows;
+  assert.ok(rows, "summary Text publishes copy spans");
+  const copied = rows.flatMap((row) => row.spans.filter((span) => span.kind !== "decoration").map((span) => span.text ?? "")).join("");
+  assert.equal(copied, "Thought for 3s");
+  click(regionsOf(component)[0]);
+  const body = innerOf(regionsOf(component)[0]);
+  assert.match(select(copyFrame(body, 80)).text, /SECRET_THINKING_SENTINEL/);
 });
 
 test("policy: two runs collapse independently with their own durations", (t) => {

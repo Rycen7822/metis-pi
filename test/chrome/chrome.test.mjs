@@ -63,6 +63,8 @@ function assistantMsg(responseId, input, output, cacheRead, cacheWrite, ts) {
 /** Drive the REAL activation with a fake pi, capturing every UI slot call. */
 function activateHarness(bindingsExtra = {}) {
   const handlers = new Map();
+  let resolveInstalled;
+  const installed = new Promise((resolve) => { resolveInstalled = resolve; });
   const pi = {
     on: (event, handler) => handlers.set(event, handler),
     getAllTools: () => [],
@@ -105,7 +107,10 @@ function activateHarness(bindingsExtra = {}) {
       setFooter: (factory) => slots.footerFactories.push(factory),
       setHeader: (factory) => slots.headerFactories.push(factory),
       setWidget: (key, content, options) => slots.widgetCalls.push({ key, content, options }),
-      setWorkingVisible: (v) => slots.workingVisible.push(v),
+      setWorkingVisible: (v) => {
+        slots.workingVisible.push(v);
+        if (v === false) resolveInstalled();
+      },
       setWorkingMessage: (m) => slots.workingMessages.push(m),
       setStatus: (key, text) => slots.statuses.set(key, text),
       ...ctx.ui,
@@ -115,7 +120,20 @@ function activateHarness(bindingsExtra = {}) {
     getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
     ...data,
   });
-  return { handlers, slots, wrapUi, footer };
+  const waitForInstall = async () => {
+    let timer;
+    try {
+      await Promise.race([
+        installed,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("chrome installation did not complete")), 2_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  return { handlers, slots, wrapUi, footer, waitForInstall };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -124,7 +142,7 @@ async function session(t, bindings = {}, overrides = {}) {
   t.after(() => h.handlers.get("session_shutdown")());
   const ctx = h.wrapUi(realShapeCtx(overrides).ctx);
   h.handlers.get("session_start")({}, ctx);
-  await tick(); // Chrome preloading installs the factories asynchronously.
+  await h.waitForInstall();
   return { ...h, ctx };
 }
 
@@ -347,6 +365,8 @@ for (const provider of ["openai-codex", "test-provider"]) {
 }
 
 test("output speed reaches the footer from real events (confirmed usage ÷ observed window)", async (t) => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
   const { handlers, footer: makeFooter } = await session(t);
   const footer = makeFooter();
   const msg = (usage) => ({ role: "assistant", content: [], stopReason: "stop", responseId: "req-speed", provider: "test-provider", timestamp: 1, usage });
@@ -357,22 +377,22 @@ test("output speed reaches the footer from real events (confirmed usage ÷ obser
   handlers.get("agent_start")({}, {});
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   assert.ok(!plain(footer.render(120).join("\n")).includes("tok/s"), "nothing is claimed before a response completes");
-  // One streamed delta, then a real generation window, then the confirmed usage.
+  // One streamed delta, then a controlled generation window and confirmed usage.
   handlers.get("message_update")(delta({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0 }, "PCX"));
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  now += 400;
   handlers.get("message_end")({ message: msg({ input: 100, output: 80, cacheRead: 0, cacheWrite: 0 }) });
   const frame = plain(footer.render(120).join("\n"));
   const match = frame.match(/([\d.]+) tok\/s/);
   assert.ok(match, `footer shows a measured rate: ${JSON.stringify(frame)}`);
-  assert.ok(Number(match[1]) > 20 && Number(match[1]) < 2000, `80 tokens over ~0.4s is plausible (got ${match[1]})`);
+  assert.equal(Number(match[1]), 200, "80 tokens over 400ms reaches the footer");
   assert.ok(frame.indexOf("tok/s") > frame.indexOf("↑"), "rate follows the requested context → I/O → cache order");
   // Live path: a provider that streams cumulative usage updates the same formula.
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   handlers.get("message_update")(delta({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "x"));
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  now += 400;
   handlers.get("message_update")(delta({ input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "y"));
   const live = plain(footer.render(120).join("\n")).match(/([\d.]+) tok\/s/);
-  assert.ok(live && Number(live[1]) > 20, `live rate mid-stream from cumulative usage (got ${live?.[1]})`);
+  assert.equal(Number(live?.[1]), 100, "40 streamed tokens over 400ms reach the live footer");
   handlers.get("message_end")({ message: msg({ input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }) });
   const settled = plain(footer.render(120).join("\n")).match(/([\d.]+) tok\/s/);
   assert.ok(settled, "the measured rate persists after the response settles");
@@ -562,10 +582,28 @@ test("usage dedup through real handlers: preview replaces, final confirms once",
   assert.ok(finalFrame.includes("cache 90%"), "cache(last) = 900/(100+900) per the spec formula");
 });
 
-test("config kill-switch: enabled=false disables chrome and summary", async () => {
-  const { loadConfig } = await import("../../src/config.ts");
-  const { config } = loadConfig("/agent", () => JSON.stringify({ enabled: false }));
-  assert.equal(config.enabled, false);
+test("enabled=false installs no chrome UI and writes no summary", async (t) => {
+  const appended = [];
+  const { handlers, slots, wrapUi } = activateHarness({
+    getAgentDir: () => "/unused",
+    readFile: () => JSON.stringify({ enabled: false }),
+    api: { appendEntry: (...args) => appended.push(args) },
+  });
+  t.after(() => handlers.get("session_shutdown")());
+  handlers.get("session_start")({}, wrapUi(realShapeCtx().ctx));
+  handlers.get("agent_start")({}, {});
+  handlers.get("message_start")({ message: { role: "assistant", content: [] } });
+  handlers.get("message_end")({ message: {
+    role: "assistant", content: [], stopReason: "stop",
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+  } });
+  handlers.get("agent_settled")({}, {});
+  await tick(); // Also reject a late asynchronous UI install.
+  for (const key of ["editorFactories", "footerFactories", "headerFactories", "widgetCalls", "workingVisible", "workingMessages"]) {
+    assert.deepEqual(slots[key], [], `${key} remains untouched`);
+  }
+  assert.equal(slots.statuses.has("metis-pi:summary"), false);
+  assert.deepEqual(appended, []);
 });
 
 test("header component: real identity, never impersonates OpenAI", async () => {
@@ -612,16 +650,9 @@ test("footer: real git changes reach the frame in the diff's green/red", async (
   const frame = () => footer({ getGitBranch: () => "main" }).render(140).join("\n");
 
   assert.ok(!plain(frame()).includes(" +"), "a clean session start shows no change segment");
-  // The sample read is async; this case only proves the frame plumbing
-  // (snapshot → segment → diff colors), so send edits in two waves: whichever
-  // wave the first published read sees, both signs (+ and −) must arrive
-  // painted. Exact counts are pinned by the git-changes unit tests.
-  dirtyRepo(repo); // wave 1: tracked rewrite (+2 −1) + untracked script (+2)
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  writeFileSync( // wave 2: swap a line and extend the file (+2 −1 over wave 1)
-    join(repo, "tracked.txt"),
-    readFileSync(join(repo, "tracked.txt"), "utf8").replace("nine", "ten") + "eleven\n",
-  );
+  // Real Git semantics live in git-changes.test.mts; this checks the footer's
+  // asynchronous snapshot → segment → color wiring for one concrete edit.
+  dirtyRepo(repo);
   const deadline = Date.now() + 6_000;
   let rendered = frame();
   while ((!rendered.includes("\x1b[32m") || !plain(rendered).match(/\(main\) \+\d+ -\d+/)) && Date.now() < deadline) {

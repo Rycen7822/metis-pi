@@ -60,7 +60,7 @@ test("completed/interrupted/failed/incomplete/unknown label grammar", () => {
 
 test("thought + tokens follow the duration in the Codex order", () => {
   const line = formatSummaryLine(
-    { elapsedMs: 939_000, thinkingMs: 100_000, usage: { input: 205_000, output: 19_200, cacheRead: 0, cacheWrite: 0 } },
+    { elapsedMs: 939_000, thinkingMs: 100_000, usage: { input: 205_000, output: 19_200 } },
     "completed",
   );
   assert.equal(line, "Worked for 15m 39s · thought for 1m 40s · ↓19.2k · ↑205k");

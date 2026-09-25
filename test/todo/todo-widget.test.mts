@@ -5,8 +5,26 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { openTodoStore, TODO_STATE_FILE } from "../../src/todo/store.ts";
-import { addTasks, claimTask, completeTask, moveTask } from "../../src/todo/model.ts";
-import { createTodoWidget, TODO_WIDGET_KEY, TODO_WIDGET_PLACEMENT } from "../../src/todo/widget.ts";
+import { addBlockedBy, addTasks, claimTask, completeTask, createState, moveTask, type ModelResult, type TodoState } from "../../src/todo/model.ts";
+import { createTodoWidget, TODO_WIDGET_KEY, TODO_WIDGET_PLACEMENT, type TodoWidgetDeps } from "../../src/todo/widget.ts";
+
+/** Row projection needs valid model state, not a filesystem or a second store implementation. */
+function rowFixture() {
+  let state = createState();
+  const system = {
+    store: { settings: () => ({ widgetExpanded: false, widgetHidden: false }) },
+    turn: () => 5, changed() {},
+  } as unknown as TodoWidgetDeps["system"];
+  const widget = createTodoWidget({ system, sessionId: () => "sess-A" });
+  return {
+    update<T>(operation: (current: TodoState) => ModelResult<T>) {
+      const result = operation(state);
+      assert.ok(result.ok, result.ok ? "" : result.error);
+      state = result.state;
+    },
+    rows: (width = 80) => widget.buildRows(state, width, 5).map((row) => row.text),
+  };
+}
 
 function setup(t: TestContext) {
   const dir = temporaryDirectory(t);
@@ -69,33 +87,31 @@ test("a list finished in an earlier session stays hidden, but new tasks reopen i
   assert.equal(widget.visibleRows(store.read(), 0), true);
 });
 
-test("rows indent descendants correctly after reparenting to a newer task", async (t) => {
-  const { store, add, rows } = setup(t);
-  await add("early child", "later parent", "root");
-  assert.ok((await store.mutate((state) => moveTask(state, 2, 3, 2))).ok);
-  assert.ok((await store.mutate((state) => moveTask(state, 1, 2, 3))).ok);
+test("rows indent descendants correctly after reparenting to a newer task", () => {
+  const { update, rows } = rowFixture();
+  update((state) => addTasks(state, ["early child", "later parent", "root"].map((title) => ({ title })), 1));
+  update((state) => moveTask(state, 2, 3, 2));
+  update((state) => moveTask(state, 1, 2, 3));
   assert.deepEqual(rows().slice(1), ["○ root", "  ○ later parent", "    ○ early child", ""]);
 });
 
-test("rows show hierarchy and claims, adding paths and blocked glyphs only with edges", async (t) => {
-  const { store, add, rows } = setup(t);
-  await add("root", { title: "child", parentId: 1 }, "solo");
-  await store.mutate((state) => claimTask(state, 2, "sess-A", 3));
+test("rows show hierarchy and claims, adding paths and blocked glyphs only with edges", () => {
+  const { update, rows } = rowFixture();
+  update((state) => addTasks(state, [{ title: "root" }, { title: "child", parentId: 1 }, { title: "solo" }], 1));
+  update((state) => claimTask(state, 2, "sess-A", 3));
   const plain = rows();
   for (const [index, expected] of [/Todos 0\/3 done/, /○ root/, /◐ child · mine/, /○ solo/].entries()) assert.match(plain[index], expected);
   assert.equal(plain.at(-1), "");
   assert.ok(!plain.slice(1, -1).some((line) => line.includes("#")));
-  await store.mutate((state) => ({ ok: true, value: undefined,
-    state: { ...state, tasks: state.tasks.map((task) => task.id === 3 ? { ...task, blockedBy: [1] } : task) },
-  }));
+  update((state) => addBlockedBy(state, 3, 1, 4));
   assert.match(rows()[2], /◐ #1\.1 child · mine/);
   assert.match(rows()[3], /⚠︎ #2 solo/);
 });
 
-test("overflow drops completed rows first and fits the line budget", async (t) => {
-  const { add, complete, rows } = setup(t);
-  await add("live1", "live2", "live3", "live4", "live5");
-  await complete(4, 5);
+test("overflow drops completed rows first and fits the line budget", () => {
+  const { update, rows } = rowFixture();
+  update((state) => addTasks(state, ["live1", "live2", "live3", "live4", "live5"].map((title) => ({ title })), 1));
+  for (const id of [4, 5]) update((state) => completeTask(state, id, "evidence", 2, 5));
   const frame = rows();
   assert.match(frame[0], /Todos 2\/5 done/);
   assert.equal(frame.findIndex((row) => row.startsWith("+")), 4);
@@ -169,9 +185,9 @@ test("the live latch pads completion, permits expansion, and resets on collapse"
   assert.equal(frame().length, 6);
 });
 
-test("width truncation keeps lines within budget", async (t) => {
-  const { add, rows } = setup(t);
-  await add("x".repeat(200));
+test("width truncation keeps lines within budget", () => {
+  const { update, rows } = rowFixture();
+  update((state) => addTasks(state, [{ title: "x".repeat(200) }], 1));
   assert.ok(rows(40).every((text) => [...text].length <= 40));
 });
 

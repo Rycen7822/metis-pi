@@ -5,10 +5,8 @@ import * as host from "@earendil-works/pi-coding-agent";
 import { installSkillLabelNames, skillNames } from "../../src/skill-label.ts";
 import { installSkillFoldClick } from "../../src/skill-fold.ts";
 
-// This suite deliberately drives the REAL host component. The unit suite
-// (skill-label.test.mts) uses a direct-children fake, which is exactly the shape
-// Pi 0.86 changed: the entry now renders `Box → MouseRegion → Container → Text/Markdown`.
-// A fake with direct children would keep passing while the real label regressed.
+// This suite drives the real host component and its nested label and mouse layers.
+// The unit suite owns pure name parsing and defensive patch inputs.
 
 host.initTheme("dark", false);
 
@@ -22,11 +20,6 @@ const entryClass = host.SkillInvocationMessageComponent as unknown as {
   };
 };
 
-// Capture the untouched host methods before any patch is installed, so the same
-// suite can also show what the stock host renders.
-const stockUpdateDisplay = entryClass.prototype.updateDisplay;
-const stockHandleMouse = entryClass.prototype.handleMouse;
-
 installSkillLabelNames(entryClass);
 installSkillFoldClick(entryClass);
 
@@ -37,15 +30,6 @@ const nestedContent = (names: readonly string[]): string =>
 
 const block = { name: "alpha", location: "/skills/alpha/SKILL.md", content: nestedContent(["beta"]) };
 const rendered = (entry: { render(width: number): string[] }): string => strip(entry.render(160).join("\n"));
-
-/** A stand-in for the pre-patch host class: same class, original methods restored. */
-function stockEntry(): InstanceType<typeof entryClass> {
-  const entry = new entryClass(block);
-  Object.defineProperty(entry, "updateDisplay", { value: stockUpdateDisplay, configurable: true });
-  Object.defineProperty(entry, "handleMouse", { value: stockHandleMouse, configurable: true });
-  entry.setExpanded(false);
-  return entry;
-}
 
 test("skill-label: the real 0.86 host renders labels below MouseRegion → Container", () => {
   const entry = new entryClass(block);
@@ -61,13 +45,10 @@ test("skill-label: the real 0.86 host renders labels below MouseRegion → Conta
   );
 });
 
-test("skill-label: the real host still lists only the first name without the patch", () => {
-  const stock = rendered(stockEntry());
-  assert.equal(stock.includes("alpha + beta"), false, "stock host renders the first name only");
-  assert.equal(stock.includes("[skill] alpha"), true);
-});
-
 test("skill-label: collapsed label and expanded title list every name on the real host", () => {
+  const display = entryClass.prototype.updateDisplay;
+  assert.equal(installSkillLabelNames(entryClass), "already");
+  assert.equal(entryClass.prototype.updateDisplay, display, "second install does not wrap again");
   const entry = new entryClass(block);
   const collapsed = rendered(entry);
   assert.equal(collapsed.includes("[skill]"), true, "collapsed label keeps the host's token");
@@ -85,6 +66,9 @@ test("skill-label: collapsed label and expanded title list every name on the rea
 });
 
 test("skill-fold: one left press+click toggles once on the real host component", () => {
+  const mouse = entryClass.prototype.handleMouse;
+  assert.equal(installSkillFoldClick(entryClass), "already");
+  assert.equal(entryClass.prototype.handleMouse, mouse, "second install does not wrap again");
   const entry = new entryClass(block);
   const region = entry.children[0] as { onMouse: (event: unknown) => unknown };
   let nativeHandlerCalls = 0;

@@ -2,7 +2,7 @@
 // gating, shimmer animation lifecycle (fake clock), width guard. Spec 9 + 18.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { workingFrame, shimmerPhase, shimmerCellColor, createWorkingComponent,  INTERRUPT_HINT } from "../../src/chrome/working.ts";
+import { workingFrame, shimmerPhase, shimmerCellColor, createWorkingComponent, INTERRUPT_HINT, type WorkingComponentInput, type WorkingSnapshotWithUsage } from "../../src/chrome/working.ts";
 
 const SHOW = { elapsed: true, thought: true, tool: true, tokens: false };
 
@@ -104,9 +104,9 @@ test("shimmer gradient: head brighter than trail end, unlit outside the trail", 
 });
 
 /** Component harness with a fake scheduler (no real timers). */
-function harness(overrides = {}) {
-  const scheduled = [];
-  let snapshot = {
+function harness(overrides: Partial<WorkingComponentInput> = {}) {
+  const scheduled: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+  let snapshot: WorkingSnapshotWithUsage = {
     active: true, phase: "working", elapsedMs: 1000, thinkingMs: 0, thinkingOpen: false,
     tools: undefined, usage: { input: 0, output: 0 },
   };
@@ -131,7 +131,7 @@ function harness(overrides = {}) {
   return {
     component,
     scheduled,
-    setSnapshot: (next) => { snapshot = { ...snapshot, ...next }; },
+    setSnapshot: (next: Partial<WorkingSnapshotWithUsage>) => { snapshot = { ...snapshot, ...next }; },
   };
 }
 
@@ -172,4 +172,3 @@ test("width guard: never overflows at 1/5/40/120 cells", () => {
   }
   assert.equal(h.component.render(0).length, 0);
 });
-

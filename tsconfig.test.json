@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.core.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["test/**/*.mts"]
+}

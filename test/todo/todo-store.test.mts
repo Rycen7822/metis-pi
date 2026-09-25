@@ -17,8 +17,8 @@ function fixture(t: TestContext) {
   return { dir, path: join(dir, TODO_STATE_FILE), open };
 }
 
-test("store persists across open and survives re-open", async (t) => {
-  const { open } = fixture(t);
+test("store persists the exact state and survives re-open", async (t) => {
+  const { path, open } = fixture(t);
   const first = open({ session: "a" });
   const added = await first.mutate((state) => addTasks(state, [{ title: "one" }, { title: "two" }], 100));
   assert.ok(added.ok && added.value.length === 2);
@@ -29,6 +29,7 @@ test("store persists across open and survives re-open", async (t) => {
   assert.equal(state.tasks[0].claim?.session, "agent-A");
   assert.equal(state.version, 1);
   assert.equal(typeof state.nextId, "number");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path, "utf8")), state, "disk shape matches the reopened state");
 });
 
 test("corrupt state is archived and store starts empty", (t) => {
@@ -86,15 +87,6 @@ test("GC removes old completed leaves and reparents survivors", async (t) => {
   assert.ok(done.ok);
   assert.equal(store.read().tasks.length, 2);
   assert.equal(store.read().tasks.find((task) => task.id === 2)?.parentId, null);
-});
-
-test("state file round-trips exact content", async (t) => {
-  const { path, open } = fixture(t);
-  await open().mutate((state) => addTasks(state, [{ title: "persist me" }], 42));
-  const onDisk = JSON.parse(fs.readFileSync(path, "utf8"));
-  assert.equal(onDisk.tasks[0].title, "persist me");
-  assert.equal(onDisk.version, 1);
-  assert.ok(fs.statSync(path).size > 0);
 });
 
 test("display snapshots parse once per fingerprint; mutations keep fresh independent reads", async (t) => {

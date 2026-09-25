@@ -4,6 +4,7 @@
 // running Pi installation — that role belongs to host-smoke (real components).
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
+import * as Tui from "@earendil-works/pi-tui";
 import { makeRenderers, safeText, languageForPath } from "../src/renderers.ts";
 import { renderDiffLines } from "../src/diff.ts";
 import { detectColorLevel } from "../src/palette.ts";
@@ -27,54 +28,8 @@ const theme = {
 };
 const result = (text, extra = {}) => ({ content: [{ type: "text", text }], ...extra });
 const ansiRE = /\x1b\[[0-9;]*m/g;
-function isWide(code) {
-  return code >= 0x1100 && (
-    code <= 0x115f || code === 0x2329 || code === 0x232a ||
-    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe19) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  );
-}
-function visibleWidth(text) {
-  let width = 0;
-  for (const char of stripVTControlCharacters(text)) {
-    const code = char.codePointAt(0);
-    if (code >= 0x300 && code <= 0x36f) continue;
-    width += isWide(code) ? 2 : 1;
-  }
-  return width;
-}
-function wrapCells(text, width) {
-  if (!text) return [];
-  // ANSI-aware wrap: escape sequences ride along without width and are never
-  // split (mirrors Tui.wrapTextWithAnsi behavior used by the live adapter).
-  const lines = [];
-  let current = "", cells = 0;
-  let index = 0;
-  const pushChar = (char, w) => {
-    if (current && cells + w > width) { lines.push(current); current = ""; cells = 0; }
-    current += char; cells += w;
-  };
-  while (index < text.length) {
-    const char = text[index];
-    if (char === "\x1b") {
-      const match = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(text.slice(index));
-      if (match) { current += match[0]; index += match[0].length; continue; }
-    }
-    const w = isWide(char.codePointAt(0)) ? 2 : 1;
-    pushChar(char, w);
-    index += 1;
-  }
-  if (current || !lines.length) lines.push(current);
-  return lines;
-}
-const layout = { visibleWidth, wrap: wrapCells };
+const wrapCells = (text, width) => text ? Tui.wrapTextWithAnsi(text, width) : [];
+const layout = { visibleWidth: Tui.visibleWidth, wrap: wrapCells };
 const colorLevel = detectColorLevel({ COLORTERM: "truecolor" });
 
 // The production renderers, driven through the same entry points Pi calls.
