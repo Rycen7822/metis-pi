@@ -6,7 +6,7 @@ import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR
 import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";
 import { buildRequestBody } from "./openai-codex/request-body.ts";
 import { normalizeCodexConfigurationUpdates } from "../adapter/reasoning-updates.ts";
-import { openAICodexProviderModels } from "./openai-codex/model-catalog.ts";
+import { withCodexReserveModel } from "./openai-codex/model-catalog.ts";
 import { CODEX_RESERVE_MODEL } from "../codex-usage/reserve-policy.ts";
 import { DEFAULT_CODEX_BASE_URL } from "./openai-codex/constants.ts";
 import { supportsResponsesLiteModel } from "./openai-codex/responses-lite-model.ts";
@@ -141,17 +141,27 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: {
 			? routeContextNamespaceToolStream(stream)
 			: stream;
 	};
-	const models = openAICodexProviderModels();
-	// Native registration puts the catalog below models.json, not above it.
-	const provider: Provider<"openai-codex-responses"> = {
-		id: "openai-codex",
-		name: "OpenAI Codex",
-		baseUrl: DEFAULT_CODEX_BASE_URL,
-		auth: { oauth: openaiCodexNativeOAuthProvider },
-		getModels: () => models,
-		filterModels: (available) => available.filter(({ id }) => id !== CODEX_RESERVE_MODEL),
-		stream: streamSimple,
-		streamSimple,
-	};
-	pi.registerProvider(provider);
+	// Keep Pi's live catalog and custom transport during startup and --list-models.
+	pi.registerProvider("openai-codex", { api: "openai-codex-responses", streamSimple });
+	let nativeProviderInstalled = false;
+	pi.on("session_start", function installNativeCodexProvider(_event, ctx) {
+		if (nativeProviderInstalled) return;
+		const baseProvider = ctx.modelRegistry.getProvider("openai-codex");
+		if (!baseProvider) return;
+		// Capture the Pi-backed provider before registering the native overlay. Its
+		// getModels follows Pi catalog refreshes; only Luna Reserve is added here.
+		const provider: Provider<"openai-codex-responses"> = {
+			id: "openai-codex",
+			name: "OpenAI Codex",
+			baseUrl: DEFAULT_CODEX_BASE_URL,
+			auth: { oauth: openaiCodexNativeOAuthProvider },
+			getModels: () => withCodexReserveModel(baseProvider.getModels() as Model<"openai-codex-responses">[]),
+			...(baseProvider.refreshModels ? { refreshModels: baseProvider.refreshModels } : {}),
+			filterModels: (available) => available.filter(({ id }) => id !== CODEX_RESERVE_MODEL),
+			stream: streamSimple,
+			streamSimple,
+		};
+		pi.registerProvider(provider);
+		nativeProviderInstalled = true;
+	});
 }

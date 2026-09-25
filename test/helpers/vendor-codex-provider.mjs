@@ -1,8 +1,8 @@
 // Shared offline capture harness for the vendored Codex transport tests.
 //
-// Loads the **built** entry, takes the provider it registers, and captures the request body
-// that provider would send. Nothing opens a transport: the capture hook throws first and
-// `globalThis.fetch` is disabled.
+// Loads the **built** entry, starts its provider registration against a fake Pi catalog,
+// and captures the request body it would send. Nothing opens a transport: the capture
+// hook throws first and `globalThis.fetch` is disabled.
 import assert from "node:assert/strict";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 
@@ -22,10 +22,12 @@ export async function loadRegistration() {
 	loaded ??= (async () => {
 		const extension = (await import(ENTRY)).default;
 		assert.equal(typeof extension, "function", "vendored entry must export an extension factory");
-		const calls = { providers: [], tools: [] };
+		const calls = { providers: [], tools: [], sessionStart: [] };
 		const recorded = {
 			events: { emit: () => {}, on: () => {}, off: () => {} },
-			on: () => {},
+			on: (name, handler) => {
+				if (name === "session_start") calls.sessionStart.push(handler);
+			},
 			registerTool: (options) => calls.tools.push(options),
 			registerProvider: (...args) => calls.providers.push(args),
 			getAllTools: () => [],
@@ -46,8 +48,27 @@ export async function loadRegistration() {
 			},
 		});
 		await extension(pi);
+		const initial = calls.providers.find(([name]) => name === "openai-codex");
+		assert.ok(initial, "vendored entry must overlay Pi's openai-codex provider");
+		assert.equal(initial[1].models, undefined, "transport overlay must inherit Pi's model catalog");
+		const hostModels = [...getBuiltinModels("openai-codex")];
+		let refreshCount = 0;
+		const hostProvider = { getModels: () => hostModels, refreshModels: async () => { refreshCount++; } };
+		const installProvider = calls.sessionStart.find((handler) => handler.name === "installNativeCodexProvider");
+		assert.ok(installProvider, "provider registration must run at session start");
+		await installProvider({}, { modelRegistry: { getProvider: () => hostProvider } });
 		const registration = calls.providers.find(([first]) => first?.id === "openai-codex");
 		assert.ok(registration, "vendored entry must register the openai-codex provider");
+		await installProvider({}, { modelRegistry: { getProvider: () => hostProvider } });
+		assert.equal(calls.providers.filter(([first]) => first?.id === "openai-codex").length, 1, "later sessions must reuse the native provider");
+		await registration[0].refreshModels({});
+		assert.equal(refreshCount, 1, "provider must delegate catalog refresh to Pi");
+		const futureModel = { ...hostModels[0], id: "future-codex-model" };
+		hostModels.push(futureModel);
+		assert.ok(registration[0].getModels().some(({ id }) => id === futureModel.id), "provider must follow Pi's live catalog");
+		const reserve = registration[0].getModels().find(({ id }) => id === "gpt-reserve");
+		assert.ok(reserve, "provider must keep Luna Reserve resolvable");
+		assert.ok(!registration[0].filterModels(registration[0].getModels(), {}).some(({ id }) => id === reserve.id), "Luna Reserve must remain hidden from the picker");
 		return registration[0];
 	})();
 	return loaded;

@@ -35,9 +35,9 @@ Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{se
 
 Provider and model-related patches use the tightened JSON object contract and omit undefined diagnostic properties. Preserve runtime values and error classification.
 
-## 6. Supplemental model capabilities
+## 6. Pi-owned Codex model catalog
 
-`model-catalog.ts` declares mid-conversation system support where appropriate. Capability differences remain intentional: folding models such as Spark must not be forced onto the anchored-update path.
+`openai-codex-custom-provider.ts` initially registers only its request stream, leaving Pi's current `openai-codex` models intact. At session start, its native provider delegates model lookup and refresh to that Pi-backed provider and adds only the hidden Luna Reserve model. Do not restore a vendored snapshot of ordinary Codex models: it masks models added by newer Pi releases.
 
 ## 7. Notebook capture and payload validation
 

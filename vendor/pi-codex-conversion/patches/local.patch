@@ -1457,27 +1457,88 @@ index b1e1cb2..762a3dd 100644
  			let headers = mergeHeaders(model.headers, options?.headers);
  			let body: ResponsesBody = buildRequestBody(model, context, effectiveOptions);
 diff --git a/src/providers/openai-codex/model-catalog.ts b/src/providers/openai-codex/model-catalog.ts
-index dff3dc5..c8c0446 100644
+index dff3dc5..01e79d8 100644
 --- a/src/providers/openai-codex/model-catalog.ts
 +++ b/src/providers/openai-codex/model-catalog.ts
-@@ -45,7 +45,7 @@ const SUPPLEMENTAL_MODELS: Model<"openai-codex-responses">[] = [
- 		contextWindow: 272_000,
- 		maxTokens: 128_000,
- 		thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
--		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
-+		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true, supportsMidConvoSystemMessages: true },
- 	},
- 	{
- 		id: "gpt-daybreak-red-latest",
-@@ -59,7 +59,7 @@ const SUPPLEMENTAL_MODELS: Model<"openai-codex-responses">[] = [
- 		contextWindow: 372_000,
- 		maxTokens: 128_000,
- 		thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
--		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
-+		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true, supportsMidConvoSystemMessages: true },
- 	},
- ];
+@@ -1,6 +1,4 @@
+-import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+ import type { Model } from "@earendil-works/pi-ai";
+-import { DEFAULT_CODEX_BASE_URL } from "./constants.ts";
+ import { CODEX_RESERVE_MODEL } from "../../codex-usage/reserve-policy.ts";
  
+ const GPT_56_PRODUCTION_CONTEXT_WINDOW = 272_000;
+@@ -12,67 +10,15 @@ const UNKNOWN_SUBSCRIPTION_COST = {
+ 	cacheWrite: 0,
+ };
+ 
+-const SUPPLEMENTAL_MODELS: Model<"openai-codex-responses">[] = [
+-	{
+-		id: "gpt-6-astra",
+-		name: "GPT-6 Astra",
+-		api: "openai-codex-responses",
+-		provider: "openai-codex",
+-		baseUrl: DEFAULT_CODEX_BASE_URL,
+-		reasoning: true,
+-		input: ["text", "image"],
+-		cost: {
+-			input: 10,
+-			output: 50,
+-			cacheRead: 1,
+-			cacheWrite: 12.5,
+-			tiers: [{ inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }],
+-		},
+-		contextWindow: 272_000,
+-		maxTokens: 128_000,
+-		thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" },
+-		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
+-	},
+-	{
+-		id: "gpt-daybreak-blue-latest",
+-		name: "Daybreak Blue",
+-		api: "openai-codex-responses",
+-		provider: "openai-codex",
+-		baseUrl: DEFAULT_CODEX_BASE_URL,
+-		reasoning: true,
+-		input: ["text", "image"],
+-		cost: UNKNOWN_SUBSCRIPTION_COST,
+-		contextWindow: 272_000,
+-		maxTokens: 128_000,
+-		thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+-		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
+-	},
+-	{
+-		id: "gpt-daybreak-red-latest",
+-		name: "Daybreak Red",
+-		api: "openai-codex-responses",
+-		provider: "openai-codex",
+-		baseUrl: DEFAULT_CODEX_BASE_URL,
+-		reasoning: true,
+-		input: ["text", "image"],
+-		cost: UNKNOWN_SUBSCRIPTION_COST,
+-		contextWindow: 372_000,
+-		maxTokens: 128_000,
+-		thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+-		compat: { supportsOpenAIGrammarTools: true, supportsAdditionalTools: true, supportsToolSearch: true },
+-	},
+-];
+-
+-export function openAICodexProviderModels(): Model<"openai-codex-responses">[] {
+-	const models = [...getBuiltinModels("openai-codex")];
++export function withCodexReserveModel(models: readonly Model<"openai-codex-responses">[]): Model<"openai-codex-responses">[] {
++	const result = [...models];
+ 	const luna = models.find(({ id }) => id === "gpt-5.6-luna");
+ 	// Reserve is the backend-authorized Luna route, not an ordinary selectable model.
+ 	// Keep it resolvable for session resume; provider availability hides it from the picker.
+ 	if (luna && !models.some(({ id }) => id === CODEX_RESERVE_MODEL)) {
+-		models.push({ ...luna, id: CODEX_RESERVE_MODEL, name: "Luna Reserve", cost: UNKNOWN_SUBSCRIPTION_COST, contextWindow: GPT_56_PRODUCTION_CONTEXT_WINDOW });
++		result.push({ ...luna, id: CODEX_RESERVE_MODEL, name: "Luna Reserve", cost: UNKNOWN_SUBSCRIPTION_COST, contextWindow: GPT_56_PRODUCTION_CONTEXT_WINDOW });
+ 	}
+-	const existing = new Set(models.map(({ id }) => id));
+-	return [...models, ...SUPPLEMENTAL_MODELS.filter(({ id }) => !existing.has(id))].map((model) =>
++	return result.map((model) =>
+ 		/^gpt-5\.6-(?:luna|terra|sol)$/i.test(model.id) && model.contextWindow > GPT_56_PRODUCTION_CONTEXT_WINDOW
+ 			? { ...model, contextWindow: GPT_56_PRODUCTION_CONTEXT_WINDOW }
+ 			: model,
 diff --git a/src/providers/openai-codex/request-body.ts b/src/providers/openai-codex/request-body.ts
 index 236093c..2e0a25a 100644
 --- a/src/providers/openai-codex/request-body.ts
@@ -1583,10 +1644,10 @@ index 0aa6db7..618cda4 100644
  								phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
  								requestBytes: new TextEncoder().encode(bodyJson).byteLength,
 diff --git a/src/providers/openai-codex-custom-provider.ts b/src/providers/openai-codex-custom-provider.ts
-index eaa1e6e..d84eba3 100644
+index eaa1e6e..ca3359f 100644
 --- a/src/providers/openai-codex-custom-provider.ts
 +++ b/src/providers/openai-codex-custom-provider.ts
-@@ -1,6 +1,7 @@
+@@ -1,11 +1,12 @@
  import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
  import { createGrammarToolInputProperties } from "./constrained-sampling.js";
@@ -1594,6 +1655,12 @@ index eaa1e6e..d84eba3 100644
  import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexWebSocketUrl } from "./openai-codex/headers.ts";
  import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";
  import { buildRequestBody } from "./openai-codex/request-body.ts";
+ import { normalizeCodexConfigurationUpdates } from "../adapter/reasoning-updates.ts";
+-import { openAICodexProviderModels } from "./openai-codex/model-catalog.ts";
++import { withCodexReserveModel } from "./openai-codex/model-catalog.ts";
+ import { CODEX_RESERVE_MODEL } from "../codex-usage/reserve-policy.ts";
+ import { DEFAULT_CODEX_BASE_URL } from "./openai-codex/constants.ts";
+ import { supportsResponsesLiteModel } from "./openai-codex/responses-lite-model.ts";
 @@ -81,7 +82,7 @@ export async function prewarmOpenAICodexWebSocket<TApi extends Api>(
  	const responsesLite = deps.useResponsesLite?.(model)
  		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
@@ -1603,6 +1670,47 @@ index eaa1e6e..d84eba3 100644
  	const effectiveOptions = runtimeConfig?.compaction?.responsesCompaction
  		? { ...options, grammarToolInputProperties, headers: withRemoteCompactionV2Feature(options.headers) }
  		: { ...options, grammarToolInputProperties };
+@@ -140,17 +141,27 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: {
+ 			? routeContextNamespaceToolStream(stream)
+ 			: stream;
+ 	};
+-	const models = openAICodexProviderModels();
+-	// Native registration puts the catalog below models.json, not above it.
+-	const provider: Provider<"openai-codex-responses"> = {
+-		id: "openai-codex",
+-		name: "OpenAI Codex",
+-		baseUrl: DEFAULT_CODEX_BASE_URL,
+-		auth: { oauth: openaiCodexNativeOAuthProvider },
+-		getModels: () => models,
+-		filterModels: (available) => available.filter(({ id }) => id !== CODEX_RESERVE_MODEL),
+-		stream: streamSimple,
+-		streamSimple,
+-	};
+-	pi.registerProvider(provider);
++	// Keep Pi's live catalog and custom transport during startup and --list-models.
++	pi.registerProvider("openai-codex", { api: "openai-codex-responses", streamSimple });
++	let nativeProviderInstalled = false;
++	pi.on("session_start", function installNativeCodexProvider(_event, ctx) {
++		if (nativeProviderInstalled) return;
++		const baseProvider = ctx.modelRegistry.getProvider("openai-codex");
++		if (!baseProvider) return;
++		// Capture the Pi-backed provider before registering the native overlay. Its
++		// getModels follows Pi catalog refreshes; only Luna Reserve is added here.
++		const provider: Provider<"openai-codex-responses"> = {
++			id: "openai-codex",
++			name: "OpenAI Codex",
++			baseUrl: DEFAULT_CODEX_BASE_URL,
++			auth: { oauth: openaiCodexNativeOAuthProvider },
++			getModels: () => withCodexReserveModel(baseProvider.getModels() as Model<"openai-codex-responses">[]),
++			...(baseProvider.refreshModels ? { refreshModels: baseProvider.refreshModels } : {}),
++			filterModels: (available) => available.filter(({ id }) => id !== CODEX_RESERVE_MODEL),
++			stream: streamSimple,
++			streamSimple,
++		};
++		pi.registerProvider(provider);
++		nativeProviderInstalled = true;
++	});
+ }
 diff --git a/src/providers/openai-responses/shared.ts b/src/providers/openai-responses/shared.ts
 index 4568455..03574a1 100644
 --- a/src/providers/openai-responses/shared.ts
