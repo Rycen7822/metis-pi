@@ -6,7 +6,6 @@
 | --- | --- |
 | `/codex-ui` | `src/diagnostics.ts` 的 `registerDiagnosticsCommand`（缺宿主 API 时静默 no-op） |
 | `/todos-doctor` | `src/todo/commands.ts` |
-| 参数 | `/codex-ui refresh-quota` 顺带手动刷一次额度 |
 
 ## `/codex-ui` 输出逐行含义
 
@@ -25,7 +24,6 @@
 | `speed:` | `tok/s` 的 token 数、观测窗口长度、`scope`（流式中实时值 vs `message_end` 确认值） |
 | `interaction:` | 当前交互时钟状态（是否进行中、已耗时、思考耗时） |
 | `outcome:` | 终止证据判定结果（`Worked`/`Failed`/`Interrupted`/`Ended …`）及其依据 |
-| `quota:` | 额度状态、上次成功时间、是否 stale、**错误类别**（不显示原始响应体） |
 | `chrome:` | editor / footer / header / working 四个 widget 的安装状态（对应 `ChromeState`） |
 | `transcript:` | 紧凑转录是否接管（未接管时给出退避原因） |
 | `decorations:` | 各装饰能力的 `applied` / `failed: <原因>` 明细 |
@@ -33,7 +31,7 @@
 | `fullscreen-margin:` | 留白是否生效 / `disabled(config)` / 退避原因（含实际 margin 与 minWidth） |
 | `glyphs:` | 是否应用、标记数量与字符集、已处理帧数、改写次数、`include` 追加项 |
 | `config:` | 生效配置全量（用于确认文件里的值真的进来了） |
-| `resources:` | 定时器与资源占用：ticker、working 定时器（仅 active）、quota 定时器、git 定时器、widget |
+| `resources:` | 定时器与资源占用：ticker、working 定时器（仅 active）、git 定时器、widget |
 | `git-changes:` | 工作树 vs HEAD（无 HEAD 时 vs 空树）的 `+A -D`、文件数、读取次数、基线引用、轮询/去抖参数（可直接用 `git diff --numstat HEAD` 对账） |
 | `selection-copy:` | serializer 状态、镜像 built/degraded/throttled 计数、`other-wrapper=`（是否有外来包装）、最近失败原因 |
 | `copy-stats:` | 复制调用次数、各模式计数（exact/mixed/native/empty-decoration/failed）、最近模式/字符数/耗时/缓存命中 |
@@ -54,15 +52,14 @@
 | 关注点 | 位置 |
 | --- | --- |
 | `/codex-ui` 注册与行拼装 | `src/diagnostics.ts`（`registerDiagnosticsCommand` 及各 `*Line` 构造器） |
-| 诊断依赖注入 | 同文件 `DiagnosticsDeps`（chrome 状态、metrics、quota、selection copy、history window 等） |
+| 诊断依赖注入 | 同文件 `DiagnosticsDeps`（chrome 状态、metrics、selection copy、history window 等） |
 | `/todos-doctor` | `src/todo/commands.ts`；存储侧实现在 `src/todo/store.ts` |
 
 ## 不变量与已知限制
 
-- 两个命令都**只读**：不改配置、不写用户仓库、不触发除"刷新额度"之外的任何副作用。
+- 两个命令都**只读**：不改配置、不写用户仓库。
 - `/codex-ui` 在**没有活动会话**时只回报 `no active session`；宿主缺少 `registerCommand` 时静默不注册（不报错）。
 - 诊断报告的是**当前进程内的真实状态**；它不会去验证外部工具（如另一个插件的存在）。
-- 错误类别是有界枚举；原始错误体不进界面（避免把凭据/大块响应贴到屏幕）。
 
 ## 验证
 

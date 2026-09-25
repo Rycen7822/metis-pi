@@ -335,7 +335,7 @@ assert.match(diagnostics, /thinking=peek\/collapsed/, "effective thinking policy
 assert.match(diagnostics, /thinking: policy=peek\/collapsed peekLines=6 autoVisibility=\d+/, "0.9.2 thinking policy + 0.12.0 peek height + applied-transition count");
 assert.match(diagnostics, /composer: surface=\S+.*prefix=\S+ metadata=\S+/);
 assert.match(diagnostics, /working: (idle|active) /);
-assert.match(diagnostics, /codex quota: mode=auto source=codex-app-server /);
+assert.doesNotMatch(diagnostics, /codex quota:|quota-timer=/);
 assert.match(diagnostics, /chrome: editor=\S+ footer=\S+ header=\S+ working=\S+/);
 assert.match(diagnostics, /transcript:/);
 assert.match(diagnostics, /decorations:/);
@@ -547,4 +547,4 @@ assert.ok(parsed.content.includes('<skill name="beta"'), "the second skill body 
 assert.equal(parsed.userMessage, "tail text", "only the real user text stays outside the folded block");
 fs.rmSync(muxRoot, { recursive: true, force: true });
 
-console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; multi-skill expansion folds into one parsed skill block; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm, codex-app-server quota) OK");
+console.log("PASS: real Pi two-slot assembly — one title per toolCallId, write five states, mouse expand/fold, third-party back-off, teardown restored; multi-skill expansion folds into one parsed skill block; 0.8.5 chrome (composer surface + metadata widget, compact footer, Codex Working rhythm) OK");

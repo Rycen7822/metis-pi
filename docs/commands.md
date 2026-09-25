@@ -6,8 +6,7 @@
 
 | 命令 | 参数 | 所属 | 作用 |
 | --- | --- | --- | --- |
-| `/codex-ui` | — | appearance | 能力与数据诊断：各数值来源、统计范围、终止证据、composer/working/footer/quota 组件真实状态、补丁与退避状态 |
-| `/codex-ui` | `refresh-quota` | appearance | 手动触发一次额度刷新 |
+| `/codex-ui` | — | appearance | 能力与数据诊断：各数值来源、统计范围、终止证据、composer/working/footer 组件真实状态、补丁与退避状态 |
 | `/goal` | — | goal | 查看当前目标状态 |
 | `/goal` | `<objective>` | goal | 设定/替换目标 |
 | `/goal` | `pause` \| `resume` \| `edit` \| `clear` | goal | 管理目标状态 |
@@ -72,7 +71,6 @@
 | 子系统 | 承诺 |
 | --- | --- |
 | git-changes | **不写**用户的 `.git` 索引 / 工作区 / 对象库，也不创建临时对象目录；只跑 `git rev-parse / diff / ls-files` 读路径，diff 带 `--no-ext-diff --no-textconv`、git 调用带 5 秒超时与 `--no-optional-locks`；读取失败保留上次正确数字而非清零 |
-| quota | **不读**任何凭据文件、不发私有 HTTP、不 scrape Codex TUI；只经本机已登录 Codex CLI 的 `codex app-server` stdio JSON-RPC |
 | 显示层 | 不改写工具参数、执行结果、会话记录、模型上下文、系统提示词；不注册内建同名工具 |
 | 配置 | 永不改写用户配置文件 |
 | write 追踪 | 只存在于进程内存（ephemeral），不写盘、不进会话记录 |

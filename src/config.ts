@@ -10,9 +10,7 @@ export interface AppearanceConfig {
    * duration — thought/tool keep updating. */
   working: { elapsed: boolean; thought: boolean; tool: boolean; tokens: boolean; animation: boolean; animationIntervalMs: number };
   /** Footer detail lines. */
-  footer: { enabled: boolean; details: boolean; showCache: boolean; showChanges: boolean; showCodexQuota: boolean; showSpeed: boolean };
-  /** Codex quota source (read-only app-server). */
-  quota: { codex: "auto" | "on" | "off"; refreshSeconds: number; timeoutMs: number };
+  footer: { enabled: boolean; details: boolean; showCache: boolean; showChanges: boolean; showSpeed: boolean };
   summary: { enabled: boolean; persist: boolean };
   /** Selection copy (fullscreen TUI). Ctrl+C copies the selection instead of
    * clearing the editor; no selection keeps stock behavior. */
@@ -33,8 +31,7 @@ export const DEFAULT_CONFIG: AppearanceConfig = {
   writePreview: { enabled: true, rows: 8 },
   composer: { surface: true, promptPrefix: true, metadata: true },
   working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 32 },
-  footer: { enabled: true, details: true, showCache: true, showChanges: true, showCodexQuota: true, showSpeed: true },
-  quota: { codex: "auto", refreshSeconds: 120, timeoutMs: 8000 },
+  footer: { enabled: true, details: true, showCache: true, showChanges: true, showSpeed: true },
   summary: { enabled: true, persist: true },
   selectionCopy: { enabled: true, ctrlC: true },
   fullscreen: { marginX: 2, minWidth: 72 },
@@ -131,12 +128,6 @@ function validateConfig(raw: unknown, problems: string[]): AppearanceConfig {
   const working = section("working");
   booleans(cfg.working, working, "working");
   cfg.working.animationIntervalMs = integer(working.animationIntervalMs, cfg.working.animationIntervalMs, "working.animationIntervalMs", 32, 1000, true);
-
-  const quota = section("quota");
-  if (quota.codex === "auto" || quota.codex === "on" || quota.codex === "off") cfg.quota.codex = quota.codex;
-  else if (quota.codex !== undefined) problems.push(`quota.codex: unknown value ${JSON.stringify(quota.codex)} — using "auto"`);
-  cfg.quota.refreshSeconds = integer(quota.refreshSeconds, cfg.quota.refreshSeconds, "quota.refreshSeconds", 30, 3600);
-  cfg.quota.timeoutMs = integer(quota.timeoutMs, cfg.quota.timeoutMs, "quota.timeoutMs", 1000, 60000);
 
   booleans(cfg.footer, section("footer"), "footer");
   booleans(cfg.summary, section("summary"), "summary");

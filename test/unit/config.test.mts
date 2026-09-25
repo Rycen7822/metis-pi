@@ -19,6 +19,15 @@ test("partial file merges over defaults; unknown keys are ignored", () => {
   assert.equal(problems.length, 0);
 });
 
+test("obsolete footer quota settings are ignored", () => {
+  const { config, problems } = loadConfig("/agent", () => JSON.stringify({
+    footer: { showCodexQuota: true }, quota: { codex: "on", refreshSeconds: 30 },
+  }));
+  assert.equal("showCodexQuota" in config.footer, false);
+  assert.equal("quota" in config, false);
+  assert.deepEqual(problems, []);
+});
+
 test("malformed JSON is reported and defaults are used", () => {
   const { config, problems } = loadConfig("/agent", () => "{ not json");
   assert.deepEqual(config, DEFAULT_CONFIG);
@@ -36,8 +45,6 @@ test("numeric options preserve clamp versus reject boundaries", () => {
     ["thinking", "peekLines", 1, 40, true],
     ["working", "animationIntervalMs", 32, 1000, true],
     ["writePreview", "rows", 0, 64, false],
-    ["quota", "refreshSeconds", 30, 3600, false],
-    ["quota", "timeoutMs", 1000, 60000, false],
     ["fullscreen", "marginX", 0, 8, false],
     ["fullscreen", "minWidth", 40, 400, false],
   ] as const) {

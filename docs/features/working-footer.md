@@ -32,12 +32,13 @@
 ## Footer
 
 ```
-目录 (分支) +A -D          N tok/s · ↑input ↓output · cache 命中率 · Codex 5h 82% · week 64%
+目录 (分支) +A -D          N tok/s · ↑input ↓output · cache 命中率
 ```
 
-- **布局**：左侧 = 目录 + 分支 + 变更量；右侧 = 速度、会话 I/O、cache、额度，按**优先级**排序。
-- **优先级**：**P0** = cwd/分支、变更量、输出速度、会话 I/O；**P1** = cache、额度。窄屏降级顺序是"先缩短目录 → 再拆成两行"，**P0/P1 永不整块消失**（右侧按优先级头保留）。
+- **布局**：左侧 = 目录 + 分支 + 变更量；右侧 = 速度、会话 I/O、cache，按**优先级**排序。
+- **优先级**：**P0** = cwd/分支、变更量、输出速度、会话 I/O；**P1** = cache。窄屏降级顺序是"先缩短目录 → 再拆成两行"，**P0/P1 永不整块消失**（右侧按优先级头保留）。
 - **不重复**：metadata 行已显示 model/context 时，footer 不再重复。
+- **额度**：右侧 footer 不读取或显示 Codex 额度；左侧 `Codex adapter` 状态行由 vendor 扩展提供，仍通过宿主 extension statuses 显示。
 - **未知值显示 `—`**，从不伪造为 0。
 - 刷新节奏：**2 秒轮询**（`GIT_CHANGES_INTERVAL_MS`）+ agent/tool 活动触发的 **250ms 去抖**（`GIT_CHANGES_DEBOUNCE_MS`）。
 

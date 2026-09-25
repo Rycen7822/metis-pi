@@ -20,11 +20,9 @@ import { createSnapshotSource } from "./chrome/snapshots.ts";
 import { createChromeLifecycle, SUMMARY_STATUS_KEY } from "./chrome/install.ts";
 import { registerDiagnosticsCommand } from "./diagnostics.ts";
 import type { CodexSurfaceOps } from "./chrome/editor.ts";
-import { QuotaStore } from "./quota/quota-store.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
 import { createFullscreenMargin, type FullscreenMarginHost, type FullscreenMarginSystem } from "./chrome/fullscreen-margin.ts";
 import { createHistoryWindowSystem, type HistoryWindowHost } from "./chrome/history-window.ts";
-import type { CodexQuotaSnapshot } from "./quota/types.ts";
 
 export interface AppearanceAPI {
   on(event: "session_start" | "session_shutdown", handler: (event: unknown, context: {
@@ -71,8 +69,6 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   getAgentDir?: () => string | undefined;
   /** Read a file (config loading; injected to keep tests filesystem-free). */
   readFile?: (path: string) => string | undefined;
-  /** Injectable Codex quota query (tests; default: real codex app-server). */
-  codexQuotaQuery?: (options: { timeoutMs: number; clientVersion?: string }) => Promise<CodexQuotaSnapshot>;
   /** Host TUI classes/primitives for the selection-copy system (index.ts). */
   selectionCopyHost?: SelectionCopyHost;
   /** Host TUI HStack/Spacer constructors for the fullscreen margin (index.ts). */
@@ -130,14 +126,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   // output-speed.ts for the exact scope of the number).
   const outputSpeed = new OutputSpeedTracker({ now: () => performance.now() });
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
-
-  // Quota store: read-only Codex subscription quota (auxiliary UI data — a
-  // failure here must never touch agent outcomes).
-  const quotaStore = config.quota.codex !== "off"
-    ? new QuotaStore({ timeoutMs: config.quota.timeoutMs, clientVersion: bindings.appearanceVersion, query: bindings.codexQuotaQuery })
-    : undefined;
-  let quotaTimer: ReturnType<typeof setInterval> | undefined;
-  let lastQuotaRefreshAt = 0;
 
   // Chrome install state + lifecycle (src/chrome/install.ts). `chrome.state`
   // is read by diagnostics and events; every chrome mutation goes through it.
@@ -263,7 +251,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     metrics,
     outputSpeed,
     gitChanges,
-    quotaStore,
   });
   const turnSummary = new TurnSummary({
     appendEntry: (type, data) => {
@@ -276,36 +263,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     wall: () => Date.now(),
   });
 
-  /** Quota refresh policy: session_start → once; agent_settled → when the
-   * last refresh is older than 30s; periodic ≤ refreshSeconds while TUI.
-   * `refresh` coalesces concurrent calls; failures keep the last-good state. */
-  const maybeRefreshQuota = (force = false): void => {
-    if (!quotaStore || !chromeEnabled) return;
-    const now = Date.now();
-    if (!force && now - lastQuotaRefreshAt < 5_000) return; // coalesce bursts
-    lastQuotaRefreshAt = now;
-    void quotaStore.refresh();
-  };
-  const startQuotaTimer = (): void => {
-    if (!quotaStore || quotaTimer) return;
-    quotaTimer = setInterval(() => maybeRefreshQuota(), Math.max(30, config.quota.refreshSeconds) * 1000);
-    (quotaTimer as unknown as { unref?: () => void }).unref?.();
-  };
-  const stopQuotaTimer = (): void => {
-    if (quotaTimer) {
-      clearInterval(quotaTimer);
-      quotaTimer = undefined;
-    }
-  };
-
   pi.on("session_start", (_event, ctx) => {
     const full = ctx as unknown as HostContextLike & { hasUI?: boolean; ui?: Record<string, unknown> };
     chrome.invalidate();
     hostData.bind(full);
     ledger.rebuild(hostData.getSessionEntries());
     outcome.reset();
-    quotaStore?.reset();
-    lastQuotaRefreshAt = 0;
     // One capability snapshot per session, from the same live ctx.ui that
     // chrome.install captures below.
     const available = hostData.available;
@@ -317,8 +280,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     startupWarningFilter = chromeEnabled ? installStartupWarningFilter() : undefined;
     if (chromeEnabled) {
       void chrome.install(available, chrome.state.generation);
-      startQuotaTimer();
-      maybeRefreshQuota(true);
       gitChanges.start();
     }
     if (!enabled || handle?.installed) return;
@@ -378,7 +339,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     outcome,
     ledger,
     outputSpeed,
-    quotaStore,
     gitChanges,
     selectionCopy,
     fullscreenMargin,
@@ -386,9 +346,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     glyphPresentation,
     getHandle: () => handle,
     getDecorations: () => decorations,
-    refreshQuota: () => maybeRefreshQuota(true),
     hasSurfaceBinding: bindings.surface !== undefined,
-    quotaTimerRunning: () => quotaTimer !== undefined,
   });
 
   /** Look up a tool entry's sourceInfo (exact builtin ownership checks). */
@@ -428,9 +386,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     if (!chromeEnabled) return;
     metrics.agentSettled();
     outcome.reset();
-    // Quota: the interaction just consumed request capacity — refresh when
-    // the last refresh is older than 30s (coalesced inside the store).
-    if (quotaStore && Date.now() - lastQuotaRefreshAt > 30_000) maybeRefreshQuota(true);
   });
 
   // Model/effort switches and session-structure events refresh the snapshot
@@ -599,9 +554,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     // Chrome restore: only OUR factories are removed (identity comparison);
     // a successor extension's editor/footer/header is left untouched.
     chrome.restore();
-    stopQuotaTimer();
-    quotaStore?.reset();
-    lastQuotaRefreshAt = 0;
     gitChanges.dispose();
     session.writeChanges.clear();
     transcript.resetSession();

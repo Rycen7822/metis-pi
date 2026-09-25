@@ -21,7 +21,6 @@
 | Working、摘要、footer 和统计口径 | [working-footer](features/working-footer.md) |
 | 全屏留白与历史窗口 | [fullscreen-layout](features/fullscreen-layout.md) |
 | 复制软折行、缩进、前缀和回退 | [selection-copy](features/selection-copy.md) |
-| Codex 额度读取失败或过期 | [quota](features/quota.md) |
 | 任务编号、依赖和面板 | [todo](features/todo.md) |
 | 长任务目标、暂停/恢复与预算 | [goal](features/goal.md) |
 | 多 skill 输入、补全与折叠 | [skills](features/skills.md) |

@@ -52,13 +52,6 @@ function assistantMsg(responseId, input, output, cacheRead, cacheWrite, ts) {
   };
 }
 
-const QUOTA_SNAPSHOT = {
-  capturedAt: 1,
-  planType: "pro",
-  primary: { usedPercent: 18, remainingPercent: 82, windowMinutes: 300 },
-  secondary: { usedPercent: 36, remainingPercent: 64, windowMinutes: 10080 },
-};
-
 /** Drive the REAL activation with a fake pi, capturing every UI slot call. */
 function activateHarness(bindingsExtra = {}) {
   const handlers = new Map();
@@ -92,7 +85,6 @@ function activateHarness(bindingsExtra = {}) {
       },
       paintGlyph: (text, tone) => `<${tone}>${text}</${tone}>`,
     },
-    codexQuotaQuery: async () => QUOTA_SNAPSHOT,
     ...bindingsExtra,
   };
   activate(pi, bindings);
@@ -150,7 +142,7 @@ test("REAL shape → activation → composer metadata + footer, all fields from 
     assert.ok(frame.includes("17.2%"), "context percent");
   });
 
-  await t.test("footer: cwd/branch + session Σ + cache + quota (NO duplicate model/context)", () => {
+  await t.test("footer: cwd/branch + session Σ + cache (NO duplicate model/context or quota)", () => {
     const footer = slots.footerFactories[0](
       { requestRender() {} },
       { fg: (_k, text) => text },
@@ -161,8 +153,7 @@ test("REAL shape → activation → composer metadata + footer, all fields from 
     assert.ok(frame.includes("↑5.0k"), "session Σ input (5000)");
     assert.ok(frame.includes("↓300"), "session Σ output (300)");
     assert.ok(frame.includes("cache 20%"), "last-request cache rate = 20.0%");
-    assert.ok(frame.includes("Codex 5h 82%"), "primary quota (300min → 5h, REMAINING not used)");
-    assert.ok(frame.includes("week 64%"), "secondary quota (10080min → week)");
+    assert.doesNotMatch(frame, /Codex (?:5h|week)|week \d+%/, "no Codex quota in the footer");
     assert.doesNotMatch(frame, /R\d|W\d/, "session cache read/write counters are gone");
     assert.doesNotMatch(frame, /test-model|17\.2%/, "model/context belong to the composer surface, not the footer");
   });
@@ -186,11 +177,9 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
     cwd: "/home/xu/wiki/codex_workspace",
     session: { input: 106_000, output: 8_900, cacheRead: 851_000, cacheWrite: 0, costTotal: 0 },
     cacheLastPct: 99.9,
-    quota: QUOTA_SNAPSHOT,
-    quotaStale: false,
     revision: 1,
   };
-  const show = { details: true, showCache: true, showChanges: true, showCodexQuota: true };
+  const show = { details: true, showCache: true, showChanges: true, showSpeed: true };
   const widthOf = (text) => {
     let w = 0;
     for (const ch of text.replace(/\x1b\[[0-9;]*m/g, "")) {
@@ -208,14 +197,30 @@ test("footer layout is width-responsive and never overflows (60..200 + 0/1/2)", 
     const flat = rows.map((r) => r.map((s) => s.text).join("")).join("\n");
     assert.ok(flat.includes("↑106k") && flat.includes("↓8.9k"), `width ${width}: P0 session I/O kept`);
     assert.ok(flat.includes("codex_workspace"), `width ${width}: cwd kept`);
-    if (width >= 100) {
-      assert.ok(flat.includes("Codex 5h 82%") && flat.includes("week 64%"), `width ${width}: P1 quota kept`);
-    }
+    assert.doesNotMatch(flat, /Codex (?:5h|week)|week \d+%/, `width ${width}: no quota`);
     assert.doesNotMatch(flat, /R\d|W\d/, `width ${width}: session cache read/write counters not rendered`);
   }
   assert.deepEqual(layoutFooter(snapshot, show, 0, "main"), [], "0 columns: hidden, no crash");
   assert.deepEqual(layoutFooter(snapshot, show, 1, "main"), []);
   assert.deepEqual(layoutFooter(snapshot, show, 2, "main"), []);
+});
+
+test("footer preserves vendor status but never adds Codex quota with either provider", async () => {
+  for (const provider of ["openai-codex", "test-provider"]) {
+    const { handlers, slots, wrapUi } = activateHarness();
+    const { ctx } = realShapeCtx({ model: { id: "test-model", provider, contextWindow: 1_000_000 } });
+    handlers.get("session_start")({}, wrapUi(ctx));
+    await tick();
+    const footer = slots.footerFactories[0](
+      { requestRender() {} },
+      { fg: (_k, text) => text },
+      { getGitBranch: () => "main", getExtensionStatuses: () => new Map([["codex-adapter", "Codex adapter V: low · weekly: 20% left"]]), onBranchChange: () => () => {} },
+    );
+    const frame = plain(footer.render(140).join("\n"));
+    assert.match(frame, /Codex adapter V: low · weekly: 20% left/, `${provider}: vendor status remains`);
+    assert.doesNotMatch(frame, /Codex (?:5h|week) \d+%/, `${provider}: no independent footer quota`);
+    handlers.get("session_shutdown")({}, wrapUi(ctx));
+  }
 });
 
 test("output speed reaches the footer from real events (confirmed usage ÷ observed window)", async () => {
@@ -497,26 +502,6 @@ test("usage dedup through real handlers: preview replaces, final confirms once",
   // confirmed record still has to dedup, and 90% only holds when the duplicate
   // message_end REPLACED the streaming previews' 200 instead of appending.
   assert.ok(finalFrame.includes("cache 90%"), "cache(last) = 900/(100+900) per the spec formula");
-});
-
-test("quota errors never break the interaction or the footer (auxiliary data)", async () => {
-  const { handlers, slots, wrapUi } = activateHarness({
-    codexQuotaQuery: async () => { throw Object.assign(new Error("boom"), { errorClass: "rpc-error" }); },
-  });
-  const { ctx } = realShapeCtx();
-  handlers.get("session_start")({}, wrapUi(ctx));
-  await tick();
-  const footer = slots.footerFactories[0](
-    { requestRender() {} },
-    { fg: (_k, text) => text },
-    { getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {} },
-  );
-  handlers.get("agent_start")({}, {});
-  handlers.get("message_end")({ message: { role: "assistant", content: [], stopReason: "stop", usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0 } } });
-  handlers.get("agent_settled")({}, {});
-  const frame = plain(footer.render(140).join("\n"));
-  assert.doesNotMatch(frame, /Codex/, "no fake quota line after failure");
-  assert.ok(frame.includes("↑5"), "session data unaffected by quota failure");
 });
 
 test("config kill-switch: enabled=false disables chrome and summary", async () => {

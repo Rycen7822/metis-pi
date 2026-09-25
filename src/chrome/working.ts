@@ -3,14 +3,14 @@
 // 0.8.5: Codex status rhythm (openai/codex status_indicator_widget.rs is the
 // layout/timing reference — no identity or brand copying):
 //   • Working (3m 36s · thinking 24s · esc to interrupt) · read
-// Token/cache/quota stay OUT of the Working line (metadata + footer own
+// Token/cache stay OUT of the Working line (metadata + footer own
 // them). The native loader row is hidden ONLY after this widget installed
 // successfully; any failure keeps the native row.
 //
 // Animation: a restrained shimmer over the message word + bullet pulse, on
 // its OWN timer (default 64ms, clamped 32..1000) — separate from the 1s
 // elapsed ticker. A frame only bumps a counter and requests a render; it
-// never re-reads session usage, disk, or quota. NO_COLOR / ansi16 /
+// never re-reads session usage or disk. NO_COLOR / ansi16 /
 // animation:false render static. The timer lives only while active; settle
 // and dispose stop it (idle must leave zero timers).
 

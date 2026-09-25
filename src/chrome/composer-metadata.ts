@@ -4,7 +4,7 @@
 // geometry) and painted with the SAME surface ops as the editor, so editor +
 // metadata read as one surface. Contains model · thinking level · provider on
 // the left and context usage on the right — nothing else lives here (session
-// tokens/cache/quota are the footer's job; no duplication).
+// tokens/cache are the footer's job; no duplication).
 
 import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
 import { formatCount, joined, realizeRow, type RowPlan, type Segment } from "../segments.ts";

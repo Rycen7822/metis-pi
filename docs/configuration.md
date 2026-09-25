@@ -40,7 +40,7 @@
 回退语义分两类，别混淆：
 
 - **静默钳制**（越界不报问题，直接夹到边界）：`thinking.peekLines`、`working.animationIntervalMs`
-- **越界即回退默认**（并记 problem）：`writePreview.rows`、`quota.refreshSeconds`、`quota.timeoutMs`、`fullscreen.marginX`、`fullscreen.minWidth`
+- **越界即回退默认**（并记 problem）：`writePreview.rows`、`fullscreen.marginX`、`fullscreen.minWidth`
 
 ## 键表
 
@@ -90,19 +90,12 @@
 | 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `footer.enabled` | bool | `true` | 整条 footer |
-| `footer.details` | bool | `true` | 右侧细节块（tok/s、↑↓、cache、额度…） |
+| `footer.details` | bool | `true` | 右侧细节块（tok/s、↑↓、cache） |
 | `footer.showCache` | bool | `true` | cache 命中率 |
 | `footer.showChanges` | bool | `true` | 分支后的 `+A -D` 变更量 |
-| `footer.showCodexQuota` | bool | `true` | Codex 5h / week 额度 |
 | `footer.showSpeed` | bool | `true` | `N tok/s` |
 
-### quota —— Codex 额度
-
-| 键 | 类型 | 默认 | 范围 | 说明 |
-| --- | --- | --- | --- | --- |
-| `quota.codex` | `"auto"` \| `"on"` \| `"off"` | `"auto"` | — | `auto` = 能读到才显示 |
-| `quota.refreshSeconds` | number | `120` | 30..3600 | 轮询间隔 |
-| `quota.timeoutMs` | number | `8000` | 1000..60000 | 单次 app-server 超时 |
+旧版 `footer.showCodexQuota` 和 `quota` 配置已移除；保留在配置文件中会作为未知字段忽略，不会查询或显示右侧 Codex 额度。
 
 ### summary —— 结束摘要
 
@@ -169,8 +162,7 @@
   "writePreview": { "enabled": true, "rows": 8 },
   "composer": { "surface": true, "promptPrefix": true, "metadata": true },
   "working": { "elapsed": true, "thought": true, "tool": true, "tokens": false, "animationIntervalMs": 32 },
-  "footer": { "enabled": true, "showSpeed": true, "showCache": true, "showChanges": true, "showCodexQuota": true },
-  "quota": { "codex": "auto", "refreshSeconds": 120, "timeoutMs": 8000 },
+  "footer": { "enabled": true, "showSpeed": true, "showCache": true, "showChanges": true },
   "selectionCopy": { "enabled": true, "ctrlC": true },
   "fullscreen": { "marginX": 2, "minWidth": 72 },
   "glyphs": { "textPresentation": true, "include": ["⏺"] }

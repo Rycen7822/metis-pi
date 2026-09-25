@@ -1,25 +1,23 @@
 // Compact product status footer (below the composer surface). 0.8.5: the
 // model/effort/provider/context details moved INTO the composer surface
 // (composer-metadata.ts) — the footer carries cwd/branch (+ working-tree change
-// counts) + session usage + cache + Codex quota, never a duplicate
+// counts) + session usage + cache, never a duplicate
 // model/context line.
 //
 // Data contract: a single FooterSnapshot (host-data bridge + usage ledger +
-// quota store + output-speed tracker + git-changes tracker). Scopes stay
+// output-speed tracker + git-changes tracker). Scopes stay
 // explicit: Σ = session cumulative, cache = latest confirmed request,
-// speed = current/last assistant response, quota = codex app-server
-// (unknown → omitted, never 0%), changes = work tree vs HEAD.
+// speed = current/last assistant response, changes = work tree vs HEAD.
 //
 // Priority ladder as width shrinks: shorter dir → wrap to two rows —
-// P0 (cwd/branch, change counts, output speed, session I/O) and P1 (cache,
-// quota) always survive. Speed sits at the HEAD of the right block, in the
+// P0 (cwd/branch, change counts, output speed, session I/O) and P1 (cache)
+// always survive. Speed sits at the HEAD of the right block, in the
 // slot left of ↑input (where a rate is read next to the totals it came from).
 // Layout runs on PLAIN segment text; painters apply afterwards.
 
 import type { UsageRecord } from "../usage-ledger.ts";
 import type { GitChangeStat } from "../git-changes.ts";
 import { formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
-import { formatQuotaLine, type CodexQuotaSnapshot } from "../quota/types.ts";
 import {
   cellWidth,
   formatCount,
@@ -38,10 +36,6 @@ export interface FooterSnapshot {
   session: UsageRecord | undefined;
   /** cache(last) hit rate %, null when unknown. */
   cacheLastPct: number | null;
-  /** Codex quota snapshot from the quota store (undefined = unavailable). */
-  quota: CodexQuotaSnapshot | undefined;
-  /** True when the quota snapshot is known-stale (refresh failed). */
-  quotaStale: boolean;
   /** Observed output rate of the in-flight (live) or last completed assistant
    * response; undefined = not measurable yet (segment omitted). */
   speed: OutputSpeedSample | undefined;
@@ -58,8 +52,6 @@ export interface FooterShow {
   showCache: boolean;
   /** Working-tree +A −D counts (diff colours). */
   showChanges: boolean;
-  /** Codex subscription quota. */
-  showCodexQuota: boolean;
   /** Observed model output speed (tok/s). */
   showSpeed: boolean;
 }
@@ -109,7 +101,7 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
     }
   }
 
-  // Right groups by priority: P0 output speed + session I/O, P1 cache + quota.
+  // Right groups by priority: P0 output speed + session I/O, P1 cache.
   const session = snapshot.session;
   const right: Segment[] = [];
   // Output speed leads the right block: the rate of the response these totals
@@ -125,10 +117,6 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
     if (show.showCache) {
       const hit = formatPct(snapshot.cacheLastPct);
       if (hit) right.push(SEG_SEP, { text: "cache ", tone: "dim" }, { text: hit, tone: "normal" });
-    }
-    if (show.showCodexQuota) {
-      const quotaLine = formatQuotaLine(snapshot.quota, snapshot.quotaStale);
-      if (quotaLine) right.push(SEG_SEP, { text: quotaLine, tone: "normal" });
     }
   }
   if (left.length === 0 && right.length === 0) return [];

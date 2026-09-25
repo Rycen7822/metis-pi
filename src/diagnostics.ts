@@ -23,7 +23,6 @@ import { formatSpeed } from "./output-speed.ts";
 import type { DecorationHandle } from "./transcript-adapter.ts";
 import type { UiMetrics } from "./ui-metrics.ts";
 import type { UsageLedger } from "./usage-ledger.ts";
-import type { QuotaStore } from "./quota/quota-store.ts";
 import type { SelectionCopySystem } from "./selection-copy/index.ts";
 
 /** Mutable things the diagnostics read but activate() owns/reassigns. */
@@ -42,7 +41,6 @@ export interface DiagnosticsDeps {
   outcome: InteractionOutcomeTracker;
   ledger: UsageLedger;
   outputSpeed: OutputSpeedTracker;
-  quotaStore: QuotaStore | undefined;
   gitChanges: GitChangesTracker;
   selectionCopy: SelectionCopySystem | undefined;
   fullscreenMargin: FullscreenMarginSystem | undefined;
@@ -50,11 +48,8 @@ export interface DiagnosticsDeps {
   glyphPresentation: GlyphPresentationSystem | undefined;
   getHandle: () => AdapterHandle | undefined;
   getDecorations: () => DecorationHandle | undefined;
-  refreshQuota: () => void;
   /** Whether the host injected surface ops (drives the composer fallback reason). */
   hasSurfaceBinding: boolean;
-  /** Periodic quota timer state (running only in a live TUI session). */
-  quotaTimerRunning: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,18 +124,6 @@ const outcomeLine = (deps: DiagnosticsDeps): string => {
   return `  outcome: ${detail}`;
 };
 
-const quotaLine = (deps: DiagnosticsDeps, config: AppearanceConfig, now: number): string => {
-  const state = deps.quotaStore?.state();
-  const age = deps.quotaStore?.lastSuccessAgeMs(now);
-  const primary = state?.quota?.primary
-    ? `${pct(state.quota.primary.remainingPercent)}%${state.quota.primary.windowMinutes ? `/${state.quota.primary.windowMinutes}min` : ""}`
-    : "—";
-  const secondary = state?.quota?.secondary ? `${pct(state.quota.secondary.remainingPercent)}%` : "—";
-  const available = state?.quota ? "yes" : state?.lastErrorClass ? "no" : "unknown";
-  const lastSuccess = age === undefined ? "never" : `${seconds(age)}s ago`;
-  return `  codex quota: mode=${config.quota.codex} source=codex-app-server available=${available} lastSuccess=${lastSuccess} primary=${primary} secondary=${secondary} stale=${state?.stale ? "yes" : "no"} lastError=${state?.lastErrorClass ?? "—"}`;
-};
-
 const chromeLine = (deps: DiagnosticsDeps): string => {
   const c = deps.chrome;
   const editor = c.editorInstalled ? "applied" : "native";
@@ -203,7 +186,6 @@ const configLine = (config: AppearanceConfig): string => {
     `details=${config.footer.details}`,
     `cache=${config.footer.showCache}`,
     `changes=${config.footer.showChanges}`,
-    `quota=${config.footer.showCodexQuota}`,
     `speed=${config.footer.showSpeed}`,
   ];
   const writePreview = config.writePreview.enabled ? `${config.writePreview.rows} rows` : "off";
@@ -212,18 +194,16 @@ const configLine = (config: AppearanceConfig): string => {
     + ` composer=${composer}`
     + ` working=${workingParts.join(",")}`
     + ` footer=${config.footer.enabled ? footerParts.join(",") : "off"}`
-    + ` quota=${config.quota.codex}/${config.quota.refreshSeconds}s`
     + ` thinking=${config.thinking.streaming}/${config.thinking.completed}`
     + ` writePreview=${writePreview}`
     + ` summary=${summary}`;
 };
 
-const resourcesLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
+const resourcesLine = (deps: DiagnosticsDeps): string => {
   const ticker = deps.metrics.tickerAlive ? "alive" : "stopped";
-  const quotaTimer = deps.quotaTimerRunning() ? `every ${config.quota.refreshSeconds}s` : "stopped";
   const gitTimer = deps.gitChanges.running ? `every ${GIT_CHANGES_INTERVAL_MS / 1000}s + activity` : "stopped";
   const widget = deps.chrome.widgetInstalled ? "installed" : "none";
-  return `  resources: ticker=${ticker} working-timer=active-only quota-timer=${quotaTimer} git-timer=${gitTimer} widget=${widget}`;
+  return `  resources: ticker=${ticker} working-timer=active-only git-timer=${gitTimer} widget=${widget}`;
 };
 
 const gitChangesLine = (deps: DiagnosticsDeps): string => {
@@ -263,13 +243,10 @@ const FOOTER_SOURCES_LINE =
 export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
   (deps.api as { registerCommand?: (name: string, options: unknown) => void } | undefined)?.registerCommand?.("codex-ui", {
     description: "metis-pi capability diagnostics",
-    handler: (args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
+    handler: (_args: string, commandCtx: { ui?: { notify?: (text: string) => void } }) => {
       if (!deps.hostData.bound) {
         commandCtx?.ui?.notify?.("metis-pi: no active session");
         return;
-      }
-      if (typeof args === "string" && args.trim().toLowerCase() === "refresh-quota") {
-        deps.refreshQuota();
       }
       const config = deps.getConfig();
       const snap = deps.metrics.snapshot();
@@ -287,7 +264,6 @@ export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
         speedLine(deps),
         interactionLine(snap),
         outcomeLine(deps),
-        quotaLine(deps, config, Date.now()),
         chromeLine(deps),
         transcriptLine(deps),
         decorationsLine(deps),
@@ -295,7 +271,7 @@ export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
         fullscreenMarginLine(deps, config),
         glyphsLine(deps),
         configLine(config),
-        resourcesLine(deps, config),
+        resourcesLine(deps),
         gitChangesLine(deps),
         ...selectionCopyLines(deps),
         historyLine(deps),

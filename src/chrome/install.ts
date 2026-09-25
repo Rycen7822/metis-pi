@@ -211,8 +211,7 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       } catch { /* metadata stays off; the footer still renders */ }
     }
 
-    // Footer: compact product status (cwd/branch · session I/O · cache ·
-    // quota · optional R/W + cost).
+    // Footer: compact product status (cwd/branch · session I/O · cache · speed).
     if (available.setFooter && config.footer.enabled) {
       try {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
