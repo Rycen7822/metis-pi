@@ -93,4 +93,4 @@
 
 ## 验证
 
-`test/unit/ui-metrics.test.mts`、`test/unit/usage-ledger.test.mts`、`test/unit/output-speed.test.mts`、`test/unit/git-changes.test.mts`、`test/chrome/working.test.mts`、`test/chrome/chrome.test.mjs`、`test/host/host-surface.test.mjs`、`scripts/pty-verify.mjs`（真实 TUI 的 Working 行/时序/摘要）。
+`test/core/ui-metrics.test.mts`、`test/core/usage-ledger.test.mts`、`test/core/output-speed.test.mts`、`test/core/git.test.mts`、`test/resource/git-tracker.test.mts`、`test/io/git-changes.test.mts`、`test/core/working.test.mts`、`test/core/chrome.test.mjs`、`test/contract/appearance.test.mjs`、`test/contract/host-surface.test.mjs`、`scripts/pty-verify.mjs`（真实 TUI 的 Working 行/时序/摘要）。

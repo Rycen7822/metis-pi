@@ -1,7 +1,7 @@
 // Render the ACTUAL assembly path (renderers.makeRenderers → renderCall +
 // renderResult → shell/diff/write modules) to ANSI/plain/HTML snapshots.
 // No model calls. The HTML is a renderer preview, not a screenshot of a
-// running Pi installation — that role belongs to host-smoke (real components).
+// running Pi installation — that role belongs to the host entry contract.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";

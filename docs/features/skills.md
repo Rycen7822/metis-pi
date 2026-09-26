@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | 入口 | `extensions/skill-mux.ts`（输入展开）、`extensions/skill-entry.ts`（两个显示补丁的入口） |
-| 实现 | `src/skill-mux.ts`、`src/skill-tokens.ts`（令牌解析 + 补丁守卫）、`src/skill-fold.ts`（点击折叠）、`src/skill-label.ts`（名字补全） |
+| 实现 | `src/skill-mux.ts`（发现与读取）、`src/skill-input.ts`（纯输入展开与补全）、`src/skill-tokens.ts`（令牌解析 + 补丁守卫）、`src/skill-fold.ts`（点击折叠）、`src/skill-label.ts`（名字补全） |
 | 配置 | 无（不受 `metis-pi.json` 控制） |
 
 ## 令牌语法
@@ -68,7 +68,7 @@
 | 关注点 | 位置 |
 | --- | --- |
 | 令牌解析与补丁守卫 | `src/skill-tokens.ts`（`SKILL_HEAD_TOKEN`、`SKILL_TOKEN_EOL`、`patchHostPrototype`、`splitLeadingSkillHeads`、`isSkillPrefixOnly`） |
-| 输入展开 | `src/skill-mux.ts` |
+| 输入展开 | `src/skill-input.ts`；`src/skill-mux.ts` 提供发现、正文读取和缓存 |
 | 点击折叠 | `src/skill-fold.ts`（`installSkillFoldClick`） |
 | 名字补全 | `src/skill-label.ts`（`installSkillLabelNames`） |
 | 组合补丁安装 | `extensions/skill-entry.ts` |
@@ -83,4 +83,4 @@
 
 ## 验证
 
-`test/skill/skill-mux.test.mts`（415 行：令牌解析、展开、补全触发）、`test/skill/skill-fold.test.mts`（点击、修饰键、缺失方法）、`test/skill/skill-label.test.mts`（多 skill 名字、退避）；`scripts/pty-verify.mjs` 端到端断言"多 skill 折叠成一条并列出两个名字 + 点击可展开/收起"。
+`test/core/skill-input.test.mts`（纯展开与补全）、`test/io/skill-discovery.test.mts`（磁盘发现、正文、miss 缓存及真实 parser）、`test/core/skill-fold.test.mts`（点击、修饰键、缺失方法）、`test/core/skill-label.test.mts`（多 skill 名字、退避）、`test/contract/skill-host-label.test.mts`（真实组件结构）；`scripts/pty-verify.mjs` 的 E6 检查真实输入、展开后 provider payload 与点击折叠。

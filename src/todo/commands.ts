@@ -3,10 +3,10 @@
 // removed in 0.17.5 — /todos prints the list as text and restores the panel.
 
 import type { TodoStore } from "./store.ts";
-import { renderListText, type CodexTodoSystem } from "./tools.ts";
+import { renderListText } from "./tools.ts";
 
 export interface CodexTodoCommandsDeps {
-  system: CodexTodoSystem;
+  system: { store: Pick<TodoStore, "read" | "status" | "collect"> };
   notify(text: string, type?: "info" | "warning" | "error"): void;
   /** Restore the persistent panel when the user hid it with a right click. */
   showPanel?: () => void;
@@ -39,7 +39,7 @@ export function registerCodexTodoCommands(pi: unknown, deps: CodexTodoCommandsDe
     description: "codex-todo: read-only diagnostics (corrupt archives, stale locks, GC)",
     handler: (args, ctx) => {
       const notify = ctx.ui?.notify ?? deps.notify;
-      const store: TodoStore = deps.system.store;
+      const store = deps.system.store;
       const status = store.status();
       const lines = [
         `codex-todo doctor (${status.dir})`,

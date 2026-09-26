@@ -15,14 +15,17 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("user messages regain the Codex gray surface through the native theme slot", () => {
-  const theme = load("themes/metis-pi.json");
-  // 0.9.2: userMessageBg resolves to a non-empty low-contrast surface via a
-  // vars entry (the host's UserMessageComponent paints it through a Box).
-  assert.equal(theme.colors.userMessageBg, "userMessageSurface");
-  assert.match(theme.vars.userMessageSurface, /^#[0-9a-f]{6}$/i);
-  assert.notEqual(theme.vars.userMessageSurface.toLowerCase(), "#000000");
+test("chrome modules have no direct host imports (src/ rule)", () => {
+  // Read the directory instead of a hardcoded list: every chrome module is covered,
+  // including new ones (the factory in editor.ts explains the rule's reason).
+  for (const entry of readdirSync(new URL("../src/chrome/", import.meta.url))) {
+    if (!entry.endsWith(".ts")) continue;
+    const text = readFileSync(new URL(`../src/chrome/${entry}`, import.meta.url), "utf8");
+    assert.ok(!text.includes("from \"@earendil-works"), `src/chrome/${entry} must not import host packages directly`);
+    assert.ok(!text.includes("from '@earendil-works"), `src/chrome/${entry} must not import host packages directly`);
+  }
 });
+
 
 test("package exposes the display, goal, todo and vendored codex-conversion entries", () => {
   const pkg = load("package.json");
@@ -59,49 +62,26 @@ test("package exposes the display, goal, todo and vendored codex-conversion entr
 });
 
 test("metis-pi owns vendored updates without an upstream npm check", () => {
-  const root = new URL("../vendor/pi-codex-conversion/", import.meta.url);
-  for (const path of ["src/adapter/local-version-warning.ts", "dist/adapter/local-version-warning.js", "dist/adapter/local-version-warning.d.ts"]) {
-    assert.equal(existsSync(new URL(path, root)), false, `${path} must not ship`);
-  }
-  for (const dir of ["src", "dist"]) {
-    for (const path of readdirSync(new URL(`${dir}/`, root), { recursive: true })) {
-      if (!/\.(ts|js)$/.test(path)) continue;
-      const text = readFileSync(new URL(`${dir}/${path}`, root), "utf8");
-      assert.doesNotMatch(text, /maybeWarnLocalCheckoutVersion|local-version-warning|registry\.npmjs\.org|local checkout is behind npm/, path);
-    }
-    const events = readFileSync(new URL(`${dir}/extension/events.${dir === "src" ? "ts" : "js"}`, root), "utf8");
-    assert.match(events, /pi\.on\("session_start"/, "normal session initialization remains registered");
+  // vendor:fresh owns generated output; the real AgentSession test owns initialization.
+  const root = new URL("../vendor/pi-codex-conversion/src/", import.meta.url);
+  for (const path of readdirSync(root, { recursive: true })) {
+    if (!/\.(ts|js)$/.test(path)) continue;
+    const text = readFileSync(new URL(path, root), "utf8");
+    assert.doesNotMatch(`${path}\n${text}`, /maybeWarnLocalCheckoutVersion|local-version-warning|registry\.npmjs\.org|local checkout is behind npm/, path);
   }
 });
 
 test("display runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
   const rootUrl = new URL("../src/", import.meta.url);
-  const files = [];
-  const walk = (url, prefix) => {
-    for (const entry of readdirSync(url, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name === "todo") continue; // codex-todo subsystem (non-display)
-      const path = `${prefix}${entry.name}`;
-      if (entry.isDirectory()) walk(new URL(`${entry.name}/`, url), `${path}/`);
-      else if (/\.(ts|mjs)$/.test(entry.name)) files.push(path);
-    }
-  };
-  walk(rootUrl, "src/");
-  // Scope: the metis-pi display runtime only (src/** minus src/todo/).
-  // goal.ts (extensions/goal.ts) is the one deliberate non-display entry — it
-  // registers /goal, the goal tools and the session/context hooks those
-  // features need — and is covered by goal.test.mts. src/todo/ is the
-  // codex-todo subsystem (extensions/todo.ts entry): it OWNS tool/command/
-  // shortcut registration and is covered by test/todo-*.test.mts. Every other
-  // file stays display-only.
-  //
-  // appendEntry is allowed ONLY in turn-summary.ts (the audited persistence
-  // exception). Everything else stays forbidden everywhere.
+  // Node owns recursion; todo owns non-display tools and commands. Only the
+  // interaction summary may append entries to the session from display code.
   const forbidden = /\b(?:registerTool|setActiveTools|sendMessage|sendUserMessage|setSystemPrompt|registerShortcut|setTheme)\s*\(/;
   const appendEntryRe = /\bappendEntry\s*\(/;
-  for (const file of files) {
-    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+  for (const file of readdirSync(rootUrl, { recursive: true })) {
+    if (!/\.(ts|mjs)$/.test(file) || /^todo[\\/]/.test(file)) continue;
+    const text = readFileSync(new URL(file, rootUrl), "utf8");
     assert.doesNotMatch(text, forbidden, file);
-    if (file !== "src/turn-summary.ts") assert.doesNotMatch(text, appendEntryRe, file);
+    if (file !== "turn-summary.ts") assert.doesNotMatch(text, appendEntryRe, file);
     assert.doesNotMatch(text, /\.on\(\s*["'](?:tool_result|tool_call|context|before_agent_start)["']/);
   }
 });

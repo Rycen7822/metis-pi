@@ -23,7 +23,7 @@
 // factory, and the component contract is just { render(width): string[] }.
 
 import { taskRows, isBlocked, taskGlyph, taskPaths, type Task, type TodoState } from "./model.ts";
-import type { CodexTodoSystem } from "./tools.ts";
+import type { TodoStore } from "./store.ts";
 
 export const TODO_WIDGET_KEY = "codex-todo";
 export const TODO_WIDGET_PLACEMENT = "aboveEditor";
@@ -39,8 +39,13 @@ export interface TodoWidgetUi {
 }
 
 export interface TodoWidgetDeps {
-  system: CodexTodoSystem;
+  system: {
+    store: Pick<TodoStore, "snapshot" | "settings" | "saveSettings">;
+    turn(): number;
+  };
   sessionId: () => string;
+  /** Native terminal-column truncation supplied by the Pi entry. */
+  truncateToWidth: (text: string, width: number, ellipsis?: string) => string;
   maxLines?: number;
 }
 
@@ -48,13 +53,6 @@ interface Row {
   text: string;
   tone: "accent" | "success" | "warning" | "dim" | "normal";
 }
-
-const truncate = (text: string, width: number): string => {
-  if (width <= 0) return "";
-  const chars = [...text];
-  if (chars.length <= width) return text;
-  return chars.slice(0, Math.max(0, width - 1)).join("") + "…";
-};
 
 const toneFor = (task: Task, blocked: boolean): Row["tone"] => {
   if (blocked) return "warning";
@@ -64,8 +62,85 @@ const toneFor = (task: Task, blocked: boolean): Row["tone"] => {
   return "normal";
 };
 
+export interface TodoRowOptions {
+  width: number;
+  turn: number;
+  sessionId: string;
+  expanded: boolean;
+  maxLines: number;
+}
+
+/** Visible rows for the current snapshot (pure; also what tests assert). */
+export function buildTodoRows(
+  state: TodoState,
+  options: TodoRowOptions,
+  truncateToWidth: (text: string, width: number, ellipsis?: string) => string,
+): Row[] {
+  const { width, turn, sessionId, expanded, maxLines } = options;
+  const truncate = (text: string, width: number) => truncateToWidth(text, width, "…");
+  const count = (s: Task["status"]) => state.tasks.filter((t) => t.status === s).length;
+  const done = count("complete") + count("skipped");
+
+  // Delayed completed-fold: completions stay visible until the next turn.
+  const visible = taskRows(state).filter((n) => {
+    const t = n.task;
+    if (t.completedAtTurn != null && t.completedAtTurn < turn) return false;
+    return true;
+  });
+
+  const anyBlockedBy = state.tasks.some((t) => t.blockedBy.length > 0);
+  const paths = anyBlockedBy ? taskPaths(state) : null;
+  const body: Row[] = [];
+  for (const node of visible) {
+    const t = node.task;
+    const blocked = isBlocked(state, t.id);
+    const glyph = taskGlyph(t, blocked);
+    const indent = "  ".repeat(node.depth - 1);
+    const claim = t.claim ? (t.claim.session === sessionId ? " · mine" : ` · ${t.claim.session}`) : "";
+    const idPrefix = paths ? `${paths.get(t.id)} ` : "";
+    body.push({ text: truncate(`${indent}${glyph} ${idPrefix}${t.title}${claim}`, width), tone: toneFor(t, blocked) });
+  }
+  // Overflow policy: completed first, then the pending tail; one summary row
+  // that shares the budget with the rows it summarizes. Expanded shows
+  // everything, so nothing is dropped there.
+  const room = expanded ? body.length : maxLines - 1; // header always shows
+  let overflowDone = 0;
+  let overflowPending = 0;
+  let shown = body;
+  if (body.length > room) {
+    const capacity = Math.max(0, room - 1); // one slot belongs to the summary
+    const doneIdx: number[] = [];
+    const liveIdx: number[] = [];
+    body.forEach((r, i) => (r.tone === "success" || r.tone === "dim" ? doneIdx : liveIdx).push(i));
+    // Keep every pending row that fits, then the newest completed ones; the
+    // surviving rows keep their tree order.
+    const keepLive = new Set(liveIdx.slice(0, capacity));
+    const keepDone = new Set(doneIdx.slice(Math.max(0, doneIdx.length - Math.max(0, capacity - keepLive.size))));
+    const keep = new Set([...keepLive, ...keepDone]);
+    overflowDone = doneIdx.filter((i) => !keep.has(i)).length;
+    overflowPending = liveIdx.filter((i) => !keep.has(i)).length;
+    shown = body.filter((_, i) => keep.has(i));
+  }
+  const overflow = overflowDone + overflowPending;
+  const hint = expanded ? " ▴ · click to collapse" : overflow > 0 ? " ▾ · click to expand" : "";
+  const rows: Row[] = [
+    { text: truncate(`Todos ${done}/${state.tasks.length} done${hint}`, width), tone: "accent" },
+    ...shown,
+  ];
+  if (overflow > 0) {
+    rows.push({
+      text: truncate(`+${overflow} more (${overflowDone} completed, ${overflowPending} pending)`, width),
+      tone: "dim",
+    });
+  }
+  // Trailing spacer keeps the panel off the editor (rpiv's rule).
+  rows.push({ text: "", tone: "normal" });
+  return rows;
+}
+
 export function createTodoWidget(deps: TodoWidgetDeps) {
   const { system } = deps;
+  const truncate = (text: string, width: number) => deps.truncateToWidth(text, width, "…");
   const maxLines = Math.max(3, deps.maxLines ?? TODO_DEFAULT_MAX_LINES);
   let ui: TodoWidgetUi | undefined;
   let tuiRef: { requestRender?: () => void } | undefined;
@@ -97,69 +172,6 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   // each frame. Cache raw rows, not theme-painted strings.
   let cachedRows: { state: TodoState; width: number; turn: number; session: string; expanded: boolean; rows: Row[] } | undefined;
 
-  /** Visible rows for the current snapshot (pure; also what tests assert). */
-  function buildRows(state: TodoState, width: number, turn: number): Row[] {
-    const count = (s: Task["status"]) => state.tasks.filter((t) => t.status === s).length;
-    const done = count("complete") + count("skipped");
-
-    // Delayed completed-fold: completions stay visible until the next turn.
-    const visible = taskRows(state).filter((n) => {
-      const t = n.task;
-      if (t.completedAtTurn != null && t.completedAtTurn < turn) return false;
-      return true;
-    });
-
-    const anyBlockedBy = state.tasks.some((t) => t.blockedBy.length > 0);
-    const paths = anyBlockedBy ? taskPaths(state) : null;
-    const session = deps.sessionId();
-    const body: Row[] = [];
-    for (const node of visible) {
-      const t = node.task;
-      const blocked = isBlocked(state, t.id);
-      const glyph = taskGlyph(t, blocked);
-      const indent = "  ".repeat(node.depth - 1);
-      const claim = t.claim ? (t.claim.session === session ? " · mine" : ` · ${t.claim.session}`) : "";
-      const idPrefix = paths ? `${paths.get(t.id)} ` : "";
-      body.push({ text: truncate(`${indent}${glyph} ${idPrefix}${t.title}${claim}`, width), tone: toneFor(t, blocked) });
-    }
-    // Overflow policy: completed first, then the pending tail; one summary row
-    // that shares the budget with the rows it summarizes. Expanded shows
-    // everything, so nothing is dropped there.
-    const room = expanded ? body.length : maxLines - 1; // header always shows
-    let overflowDone = 0;
-    let overflowPending = 0;
-    let shown = body;
-    if (body.length > room) {
-      const capacity = Math.max(0, room - 1); // one slot belongs to the summary
-      const doneIdx: number[] = [];
-      const liveIdx: number[] = [];
-      body.forEach((r, i) => (r.tone === "success" || r.tone === "dim" ? doneIdx : liveIdx).push(i));
-      // Keep every pending row that fits, then the newest completed ones; the
-      // surviving rows keep their tree order.
-      const keepLive = new Set(liveIdx.slice(0, capacity));
-      const keepDone = new Set(doneIdx.slice(Math.max(0, doneIdx.length - Math.max(0, capacity - keepLive.size))));
-      const keep = new Set([...keepLive, ...keepDone]);
-      overflowDone = doneIdx.filter((i) => !keep.has(i)).length;
-      overflowPending = liveIdx.filter((i) => !keep.has(i)).length;
-      shown = body.filter((_, i) => keep.has(i));
-    }
-    const overflow = overflowDone + overflowPending;
-    const hint = expanded ? " ▴ · click to collapse" : overflow > 0 ? " ▾ · click to expand" : "";
-    const rows: Row[] = [
-      { text: truncate(`Todos ${done}/${state.tasks.length} done${hint}`, width), tone: "accent" },
-      ...shown,
-    ];
-    if (overflow > 0) {
-      rows.push({
-        text: truncate(`+${overflow} more (${overflowDone} completed, ${overflowPending} pending)`, width),
-        tone: "dim",
-      });
-    }
-    // Trailing spacer keeps the panel off the editor (rpiv's rule).
-    rows.push({ text: "", tone: "normal" });
-    return rows;
-  }
-
   /** Should the widget exist at all right now? */
   function visibleRows(state: TodoState, turn: number): boolean {
     if (state.tasks.length === 0) return false;
@@ -180,7 +192,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     let lines = rows.map((r) => r.text);
     // Stable-height latch: fix the count at first sight and pad later, so live
     // updates never shrink the panel under the user. Growth is allowed (new
-    // tasks, an explicit expand) because buildRows already bounds the height.
+    // tasks, an explicit expand) because buildTodoRows already bounds the height.
     if (latchedHeight == null) latchedHeight = lines.length;
     else if (lines.length > latchedHeight) latchedHeight = lines.length;
     while (lines.length < latchedHeight) lines.push("");
@@ -240,7 +252,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
         const session = deps.sessionId();
         if (!cachedRows || cachedRows.state !== state || cachedRows.width !== width
           || cachedRows.turn !== turn || cachedRows.session !== session || cachedRows.expanded !== expanded) {
-          cachedRows = { state, width, turn, session, expanded, rows: buildRows(state, width, turn) };
+          cachedRows = { state, width, turn, session, expanded, rows: buildTodoRows(state, { width, turn, sessionId: session, expanded, maxLines }, deps.truncateToWidth) };
         }
         return paint(cachedRows.rows, theme);
       },
@@ -333,8 +345,6 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     },
     /** changed-hook entry point — re-evaluate visibility, render if shown. */
     refresh,
-    /** Test seam: raw rows without colors or latching. */
-    buildRows,
     visibleRows,
   };
 }

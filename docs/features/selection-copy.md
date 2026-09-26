@@ -99,6 +99,6 @@ pi remove pi-copy-soft-wrap
 
 ## 验证
 
-`test/chrome/selection-copy.test.mjs`、`test/chrome/copy-provenance-text.test.mjs`（精确空白、列选区和保留堆上限）、`test/shell/copy-provenance.test.mjs`、`test/host/shell-scroll.test.mjs`（完整原生工具边界、旧帧和图片回退）、`test/host/host-surface.test.mjs`、`scripts/copy-perf.mjs`；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"），实际运行范围见 `VALIDATION.md`。
+`test/contract/copy-mirror.test.mjs`、`test/contract/copy-text.test.mjs`（精确空白、列选区）、`test/resource/copy-cache.test.mjs`（重建和对齐预算）、`test/resource/copy-heap.test.mjs`（独立进程保留堆上限）、`test/core/shell-copy.test.mjs`、`test/contract/shell-scroll.test.mjs`（完整原生工具边界、旧帧和图片回退）、`test/contract/host-surface.test.mjs`、`scripts/copy-perf.mjs`；`scripts/pty-verify.mjs` 逐字验证复制结果（含"中文不补空格"与"tab=3 空格"），实际运行范围见 `VALIDATION.md`。
 
-`test/chrome/selection-clipboard.test.mjs` 覆盖当前界面身份、代理切换、失败回退、卸载与第三方包装；`test/chrome/windows-clipboard.test.mjs` 覆盖传输字节、就绪确认、并发顺序、超时、断管及进程关闭边界。`scripts/copy-perf.mjs` 只测文本提取和渲染，不能代替实际系统剪贴板的写入/回读延迟测量。
+`test/contract/clipboard-facade.test.mjs` 覆盖当前界面身份、代理切换、失败回退、卸载与第三方包装；`test/resource/windows-clipboard.test.mjs` 覆盖传输字节、就绪确认、并发顺序、超时、断管及进程关闭边界。`scripts/copy-perf.mjs` 只测文本提取和渲染，不能代替实际系统剪贴板的写入/回读延迟测量。

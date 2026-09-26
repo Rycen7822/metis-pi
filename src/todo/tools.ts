@@ -27,7 +27,7 @@ import type { TodoStore } from "./store.ts";
 
 /** Everything the tool needs from its host extension. */
 export interface CodexTodoSystem {
-  store: TodoStore;
+  store: Pick<TodoStore, "read" | "mutate">;
   turn(): number;
   /** Called after every successful mutation so the widget can refresh. */
   changed(): void;

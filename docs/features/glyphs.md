@@ -22,7 +22,7 @@ grep -n "✖\|# fail"     →   ✖# fail        # 反斜杠被笔画盖住
 - **默认字符集**：`DEFAULT_TEXT_PRESENTATION_GLYPHS` = `✔ ✖ ✓ ✗ ⚠`（U+2714 / U+2716 / U+2713 / U+2717 / U+26A0）。
 - 只对**没有显式选择子**的字符追加 U+FE0E（VS15）；内容里已经写了 U+FE0F（要求 emoji 形态）的不动。
 - **只动显示**：组件渲染、会话记录、选区复制全部保持原样——多出来的只是一个零宽选择子。
-- **宽度中立**：选择子在 pi-tui 宽度表里是 0 宽，且插在布局**完成之后**，所以 rail / 背景 / 选区的列映射不会移动（host-smoke 用真实 `visibleWidth` 断言）。
+- **宽度中立**：选择子在 pi-tui 宽度表里是 0 宽，且插在布局**完成之后**，所以 rail / 背景 / 选区的列映射不会移动（glyph 测试用真实 `visibleWidth` 断言）。
 - **转义序列逐字保留**：SGR、OSC 8 超链接（URL 里含 `✔` 也不改写）、OSC 52 剪贴板载荷都原样通过。
 - **不做的事**：`✅`/`❌`/`🔴` 这类没有文字形态的符号不处理——强制转换会变成豆腐块。
 
@@ -50,4 +50,4 @@ grep -n "✖\|# fail"     →   ✖# fail        # 反斜杠被笔画盖住
 
 ## 验证
 
-`test/unit/glyph-presentation.test.mts`；host-smoke 的宽度断言；`scripts/pty-verify.mjs` 的"复制逐字精确"用例（确认选择子没有污染复制文本）。
+`test/core/glyph-presentation.test.mts` 的宽度与 terminal.write 断言；`scripts/pty-verify.mjs` 的"复制逐字精确"用例（确认选择子没有污染复制文本）。

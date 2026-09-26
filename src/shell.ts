@@ -350,15 +350,21 @@ function gutterCopyRow(
 export function renderShellResult(input: ShellLayoutInput): string[] {
   const { row, width, layout } = input;
   const usable = Math.max(1, Math.floor(width));
-  const outputWidth = Math.max(1, usable - layout.visibleWidth(OUTPUT_SUBSEQUENT_PREFIX));
+  // When the gutter consumes the whole terminal, give the output its column.
+  const initialPrefix = usable <= layout.visibleWidth(OUTPUT_INITIAL_PREFIX) ? "" : OUTPUT_INITIAL_PREFIX;
+  const subsequentPrefix = usable <= layout.visibleWidth(OUTPUT_SUBSEQUENT_PREFIX) ? "" : OUTPUT_SUBSEQUENT_PREFIX;
+  const outputWidth = Math.max(1, usable - layout.visibleWidth(subsequentPrefix));
   const copy = input.copyOut;
-  const initialPrefixWidth = layout.visibleWidth(OUTPUT_INITIAL_PREFIX);
-  const subsequentPrefixWidth = layout.visibleWidth(OUTPUT_SUBSEQUENT_PREFIX);
+  const initialPrefixWidth = layout.visibleWidth(initialPrefix);
+  const subsequentPrefixWidth = layout.visibleWidth(subsequentPrefix);
 
   const raw = row.output ? sanitizeShellLine(row.output).split("\n") : [];
   while (raw.length && raw.at(-1) === "") raw.pop();
   if (!raw.length) {
-    const noOutput = styleToolOutputLine(`${OUTPUT_INITIAL_PREFIX}(no output)`, { dim: true, colorLevel: input.colorLevel });
+    const noOutput = styleToolOutputLine(
+      truncateToWidth(usable <= 4 ? "∅" : `${initialPrefix}(no output)`, usable),
+      { dim: true, colorLevel: input.colorLevel },
+    );
     copy?.push({ spans: [{ colStart: 0, colEnd: usable, kind: "decoration" }], breakBefore: "hard" });
     return [noOutput];
   }
@@ -374,7 +380,7 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
     const segments = wrapStyled(logical, outputWidth, layout);
     segments.forEach((segment, segmentIndex) => {
       const isFirst = lineIndex === 0 && segmentIndex === 0;
-      const prefix = isFirst ? OUTPUT_INITIAL_PREFIX : OUTPUT_SUBSEQUENT_PREFIX;
+      const prefix = isFirst ? initialPrefix : subsequentPrefix;
       const prefixWidth = isFirst ? initialPrefixWidth : subsequentPrefixWidth;
       wrapped.push({
         text: styleToolOutputLine(`${prefix}${segment}`, dimPolicy),
@@ -404,7 +410,7 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
     keptCopy = copyRows.slice(from).map((copyRow, index) => (index === 0 ? { ...copyRow, breakBefore: "hard" as const } : copyRow));
   } else {
     // Budget includes the ellipsis row's own cost.
-    const truncated = truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, OUTPUT_SUBSEQUENT_PREFIX, usable);
+    const truncated = truncateMiddleRows(wrapped, OUTPUT_MAX_ROWS, row.expandHint, subsequentPrefix, usable);
     kept = truncated.rows;
     keptCopy = [];
     let afterGap = false;

@@ -1,10 +1,7 @@
-// Offline session/entry fixtures shared by the vendored Codex compaction tests.
-//
-// These build the Pi 0.86 entry shapes the adapter replays: a session head that declares the
-// initial tools, later system messages that carry tool/prompt deltas, and a native compaction
-// checkpoint whose stored `systemMessage` is the replayed prompt/tool state. The checkpoint
-// window below is a handmade offline stand-in, never a real server-side encrypted window.
+// Offline transcripts use Pi's in-memory session: Pi owns ids, branches and checkpoint snapshots.
+// The sealed window is handmade test data, never real encrypted conversation content.
 import assert from "node:assert/strict";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 export const SEALED_WINDOW_ITEM = { type: "compaction_summary", encrypted_content: "offline-sealed-fixture" };
 
@@ -33,55 +30,25 @@ export const checkpointDetails = (model, compactedWindow = [SEALED_WINDOW_ITEM])
 	createdAt: new Date(4).toISOString(), compactedWindow,
 });
 
-const messageEntry = (id, parentId, message) => ({
-	type: "message",
-	id,
-	parentId,
-	timestamp: new Date(message.timestamp).toISOString(),
-	message,
-});
-
-/** Link messages with deterministic, branch-local ids. */
-function linkFrom(parentId, messages) {
-	let previous = parentId;
-	return messages.map((message, index) => {
-		const entry = messageEntry(`${parentId}-${index}`, previous, message);
-		previous = entry.id;
-		return entry;
-	});
+/** Construct a transcript; tests append edits through the returned real session manager. */
+export function session({ headTools = [tool("tool_alpha")], messages = [] } = {}) {
+	const sm = SessionManager.inMemory("/tmp/offline-codex-session");
+	sm.appendMessage(systemMessage("BASE_PROMPT", 0, { toolsAdded: headTools }));
+	for (const message of messages) sm.appendMessage(message);
+	return { sm };
 }
 
-/**
- * Session with a native checkpoint: `head` declares the initial tools, `kept` stands in for
- * entries before the checkpoint, `tail` follows it. `checkpointSystemMessage` is what Pi stores
- * as the replayed prompt/tool state at compaction time.
- */
-export function checkpointSession({ model, kept = [], tail, checkpointSystemMessage }) {
-	const head = messageEntry("head", null, systemMessage("BASE_PROMPT", 0, { toolsAdded: [tool("tool_alpha")] }));
-	const pre = messageEntry("pre", "head", userMessage("pre-kept", 1));
-	const keptEntries = linkFrom("pre", kept);
-	const lastKept = keptEntries.length > 0 ? keptEntries[keptEntries.length - 1].id : "pre";
-	const compaction = {
-		type: "compaction",
-		id: "compact",
-		parentId: lastKept,
-		timestamp: new Date(4).toISOString(),
-		summary: "[OpenAI native compaction checkpoint]",
-		firstKeptEntryId: "pre",
-		tokensBefore: 100,
-		systemMessage: checkpointSystemMessage ?? systemMessage("BASE_PROMPT", 4, { toolsAdded: [tool("tool_alpha")] }),
-		details: checkpointDetails(model),
-	};
-	const tailEntries = linkFrom("compact", tail);
-	const entries = [head, pre, ...keptEntries, compaction, ...tailEntries];
-	return { entries, compaction, tailEntries, leafId: entries[entries.length - 1].id };
-}
-
-/** A checkpoint-free session: `head` plus messages linked in order. */
-export function session({ headTools = [tool("tool_alpha")], messages }) {
-	const head = messageEntry("head", null, systemMessage("BASE_PROMPT", 0, { toolsAdded: headTools }));
-	const entries = [head, ...linkFrom("head", messages)];
-	return { entries, leafId: entries[entries.length - 1].id };
+/** Explicit pre-checkpoint and live-tail data, with ids for tests that edit either region. */
+export function checkpointSession({ model, kept = [], tail = [], retainNone = false, checkpointSystemMessage }) {
+	const { sm } = session();
+	const preId = sm.appendMessage(userMessage("pre-kept", 1));
+	const keptIds = kept.map((message) => sm.appendMessage(message));
+	const compactionId = sm.appendCompaction("[OpenAI native compaction checkpoint]",
+		retainNone ? null : preId, 100, checkpointDetails(model));
+	// Historical stored snapshots are deliberate compatibility inputs, not a second projection engine.
+	if (checkpointSystemMessage) sm.getEntry(compactionId).systemMessage = checkpointSystemMessage;
+	const tailIds = tail.map((message) => sm.appendMessage(message));
+	return { sm, preId, keptIds, compactionId, tailIds };
 }
 
 /** `latestNativeCompaction` argument for `buildNativeCompactionInput`. */

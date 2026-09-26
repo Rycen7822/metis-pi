@@ -28,4 +28,4 @@ UI 的暂停/恢复与工具契约不同。错误会停止续跑，额度类错�
 
 按包入口过滤 `"extensions": ["-goal.ts"]` 可禁用该功能，不影响其它入口。
 
-源自 mitsuhiko/agent-stuff `extensions/goal.ts` @ `122e299`，本地增加逐秒刷新并重构状态所有权；Apache-2.0 归属见根目录 NOTICE 和 LICENSE-APACHE-2.0。行为由 `test/unit/goal.test.mts` 驱动真实扩展入口验证；当前覆盖与限制见 [VALIDATION](../../VALIDATION.md)。
+源自 mitsuhiko/agent-stuff `extensions/goal.ts` @ `122e299`，本地增加逐秒刷新并重构状态所有权；Apache-2.0 归属见根目录 NOTICE 和 LICENSE-APACHE-2.0。行为由 `test/contract/goal-entry.test.mts` 驱动真实扩展入口验证；当前覆盖与限制见 [VALIDATION](../../VALIDATION.md)。

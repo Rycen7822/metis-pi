@@ -1,92 +1,40 @@
-// Shared offline capture harness for the vendored Codex transport tests.
-//
-// Loads the **built** entry, starts its provider registration against a fake Pi catalog,
-// and captures the request body it would send. Nothing opens a transport: the capture
-// hook throws first and `globalThis.fetch` is disabled.
+// Offline request capture through the built provider; the full extension is owned by its entry contract.
+// Payload capture stops before transport. Suites explicitly install their network guard.
 import assert from "node:assert/strict";
-import { after, before } from "node:test";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 
-const ENTRY = new URL("../../vendor/pi-codex-conversion/dist/index.js", import.meta.url).href;
+import { registerOpenAICodexCustomProvider } from "../../vendor/pi-codex-conversion/dist/providers/openai-codex-custom-provider.js";
 
 export const FAKE_API_KEY = "x." + Buffer.from(
 	JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "offline-test" } }),
 ).toString("base64url") + ".x";
 
-// The guard belongs to this test file's lifetime, not module import.
-let originalFetch;
-before(() => {
-	originalFetch = globalThis.fetch;
-	globalThis.fetch = async () => { throw new Error("NETWORK_DISABLED"); };
-});
-after(() => { globalThis.fetch = originalFetch; });
-
-let loaded;
-export async function registrationHarness() {
-	loaded ??= (async () => {
-		const extension = (await import(ENTRY)).default;
-		assert.equal(typeof extension, "function", "vendored entry must export an extension factory");
-		const calls = { providers: [], tools: [], sessionStart: [] };
-		const recorded = {
-			events: { emit: () => {}, on: () => {}, off: () => {} },
-			on: (name, handler) => {
-				if (name === "session_start") calls.sessionStart.push(handler);
-			},
-			registerTool: (options) => calls.tools.push(options),
-			registerProvider: (...args) => calls.providers.push(args),
-			getAllTools: () => [],
-			getActiveTools: () => [],
-			getSettings: () => ({}),
-			getFlag: () => undefined,
-			setFlag: () => {},
-		};
-		const pi = new Proxy(recorded, {
-			get(target, property) {
-				if (property in target) return target[property];
-				if (typeof property !== "string") return undefined;
-				return (...args) => {
-					calls[property] = calls[property] ?? [];
-					calls[property].push(args.length === 1 ? args[0] : args);
-					return undefined;
-				};
-			},
-		});
-		await extension(pi);
-		const hostModels = [...getBuiltinModels("openai-codex")];
-		let refreshCount = 0;
-		const hostProvider = { getModels: () => hostModels, refreshModels: async () => { refreshCount++; } };
-		const installProvider = calls.sessionStart.find((handler) => handler.name === "installNativeCodexProvider");
-		assert.ok(installProvider, "missing native provider session hook");
-		await installProvider({}, { modelRegistry: { getProvider: () => hostProvider } });
-		const registration = calls.providers.find(([first]) => first?.id === "openai-codex");
-		assert.ok(registration, "missing native provider registration");
-		return { registration: registration[0], calls, hostModels, hostProvider, installProvider, get refreshCount() { return refreshCount; } };
-	})();
-	return loaded;
+// Explicit per-test resource ownership; importing model/auth data installs no hooks.
+export function disableNetwork(t) {
+	t.mock.method(globalThis, "fetch", async () => { throw new Error("NETWORK_DISABLED"); });
 }
 
-export async function loadRegistration() {
-	return (await registrationHarness()).registration;
+// Request/replay suites need only the provider's stream boundary, not the extension entry.
+function protocolProvider() {
+	let provider;
+	registerOpenAICodexCustomProvider({
+		registerProvider: (_id, registered) => { provider = registered; },
+		on() {},
+	}, {});
+	return provider;
 }
 
 /** Capture the request body the registered `openai-codex` provider builds for `context`. */
 export async function captureBody(model, context, options = {}) {
-	let payload;
-	const provider = await loadRegistration();
-	const stream = provider.streamSimple(model, context, {
+	const capture = await captureRegistration();
+	const result = await capture.registration.streamSimple(model, context, {
 		apiKey: FAKE_API_KEY,
-		transport: "sse",
 		...options,
-		onPayload(body) {
-			payload = body;
-			throw new Error("OFFLINE_CAPTURE_COMPLETE");
-		},
-	});
-	const result = await stream.result();
-	assert.ok(payload, `onPayload must capture a body (stream ended with: ${result?.errorMessage ?? "no error"})`);
-	return payload;
+	}).result();
+	assert.equal(capture.bodies.length, 1, `expected one final payload (stream ended with: ${result?.errorMessage ?? "no error"})`);
+	return capture.bodies[0];
 }
 
 export function modelNamed(id) {
@@ -96,8 +44,8 @@ export function modelNamed(id) {
 	return model;
 }
 
-export function captureSession(model, entries, leafId) {
-	const context = buildSessionContext(entries, leafId);
+export function captureSession(model, sm) {
+	const context = buildSessionContext(sm.getEntries(), sm.getLeafId());
 	return captureBody(model, normalizeContext({ messages: convertToLlm(context.messages) }));
 }
 
@@ -108,8 +56,7 @@ export const kindsOf = (input) => input.map((item) =>
 	item.role && (!item.type || item.type === "message") ? `message:${item.role}` : item.type);
 
 /** Capture after the adapter's payload hook, before any transport; count even uncaptured attempts. */
-export async function captureRegistration() {
-	const registered = await loadRegistration();
+export async function captureRegistration(registered = protocolProvider()) {
 	const bodies = [];
 	let calls = 0;
 	const registration = {

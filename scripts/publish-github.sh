@@ -33,7 +33,7 @@ git add -- \
   index.ts src/adapter.ts src/extension.ts src/renderers.ts \
   themes/metis-pi.json \
   test/adapter.test.mjs test/helpers.mjs test/package.test.mjs test/renderers.test.mjs \
-  scripts/host-smoke.mjs scripts/publish-github.sh scripts/preview.mjs \
+  test/contract/host-entry.test.mjs scripts/publish-github.sh scripts/preview.mjs \
   package.json tsconfig.json tsconfig.core.json \
   README.md LICENSE NOTICE VALIDATION.md CHANGELOG.md .gitignore .github/workflows/ci.yml \
   docs/compatibility.md docs/preview.html docs/preview.png docs/transcript.ansi docs/transcript.txt

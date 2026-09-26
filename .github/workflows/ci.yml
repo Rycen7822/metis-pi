@@ -5,7 +5,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -13,3 +13,6 @@ jobs:
           node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund --no-save @earendil-works/pi-coding-agent@0.87.0 @earendil-works/pi-tui@0.87.0
       - run: npm run verify
+      - run: sudo apt-get update -qq
+      - run: sudo apt-get install -y -qq tmux
+      - run: npm run test:pty:strict

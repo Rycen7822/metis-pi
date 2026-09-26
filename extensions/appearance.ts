@@ -2,76 +2,22 @@ import { readFileSync } from "node:fs";
 import * as Pi from "@earendil-works/pi-coding-agent";
 import * as Tui from "@earendil-works/pi-tui";
 import { activate, type AppearanceAPI } from "../src/extension.ts";
-import { renderCodexDiffComponent, type DiffComponentInput } from "../src/diff-component.ts";
-import { renderShellCall, renderShellResult, type LayoutOps } from "../src/shell.ts";
+import { createDiffComponent, createShellFactories } from "../src/chrome/tool-components.ts";
+import type { LayoutOps } from "../src/shell.ts";
 import { CODEX_CYAN_RGB, resolveColorContext } from "../src/palette.ts";
 import { makeSurfaceOps } from "../src/surface.ts";
 import { loadConfig } from "../src/config.ts";
 import { thoughtSummaryText } from "../src/thinking-summary.ts";
-import { registerProduct, publishRows, releaseCopyCache } from "../src/selection-copy/model.ts";
 import {
   CodexSeparatorComponent, CodexWriteCallComponent, CodexThinkingRailComponent,
   CodexThinkingPeekComponent, CodexThinkingClickableComponent,
 } from "../src/chrome/transcript-components.ts";
-import type { CopyRow } from "../src/selection-copy/model.ts";
-import type { ToolName } from "../src/tool-names.ts";
 
 function layoutOps(): LayoutOps {
   return {
     wrap: (text: string, columns: number) => Tui.wrapTextWithAnsi(text, columns),
     visibleWidth: (text: string) => Tui.visibleWidth(text),
   };
-}
-
-/** Host updates create new tool regions. One cache owns both displayed rows
- * and copy provenance; invalidation releases them together. */
-function cachedRowsComponent(componentId: string, renderRows: (width: number, copyOut: CopyRow[]) => string[]): Tui.Component {
-  let cache: { width: number; rows: string[] } | undefined;
-  return {
-    render(width) {
-      if (!cache || cache.width !== width) {
-        const copyOut: CopyRow[] = [];
-        const rows = renderRows(width, copyOut);
-        if (copyOut.length === rows.length) registerProduct(rows, { componentId, width, rows: copyOut });
-        cache = { width, rows };
-      }
-      publishRows(this, cache.rows);
-      return cache.rows;
-    },
-    invalidate() { cache = undefined; releaseCopyCache(this); },
-  };
-}
-
-function createDiffComponent(input: DiffComponentInput): Tui.Component {
-  return cachedRowsComponent("diff", (width, copyOut) => renderCodexDiffComponent(input, width, layoutOps(), copyOut));
-}
-
-/** Call region: bullet + bold title + highlighted command with "  │ "
- * continuation. Never renders output — the result region owns that. */
-interface ShellCallInput {
-  name: ToolName; bullet: string; title: string; args: Record<string, unknown>;
-  options: { expanded?: boolean; isPartial?: boolean };
-  colorLevel: import("../src/palette.ts").ColorLevel;
-}
-function createShellCallComponent(input: ShellCallInput): Tui.Component {
-  return cachedRowsComponent("shell-call", (width, copyOut) => renderShellCall({
-    row: {
-      title: input.title,
-      isError: false,
-      isPartial: input.options.isPartial === true,
-      command: String(input.args.command ?? ""),
-      language: input.name === "powershell" ? "powershell" : "bash",
-      output: "",
-      expanded: input.options.expanded === true,
-      expandHint: "",
-    },
-    width,
-    layout: layoutOps(),
-    colorLevel: input.colorLevel,
-    bullet: input.bullet,
-    titlePainter: (title) => title,
-    copyOut,
-  }));
 }
 
 /**
@@ -83,45 +29,6 @@ function createShellCallComponent(input: ShellCallInput): Tui.Component {
 let cachedColorLevel: ReturnType<typeof resolveColorContext> | undefined;
 function colorLevelOnce(): ReturnType<typeof resolveColorContext> {
   return (cachedColorLevel ??= resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true }));
-}
-
-/**
- * Result region: output block with "  └ "/"    " prefixes and the 5-screen-row
- * budget. Never renders a command head.
- */
-interface ShellResultInput {
-  name: ToolName; result: unknown;
-  options: { expanded?: boolean; isPartial?: boolean }; isError: boolean;
-  bullet: string;
-  expandHint: string;
-  colorLevel: import("../src/palette.ts").ColorLevel;
-}
-
-function createShellResultComponent(input: ShellResultInput): Tui.Component {
-  return cachedRowsComponent("shell-result", (width, copyOut) => {
-    const result = input.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
-    const output = Array.isArray(result?.content)
-      ? result.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
-      : "";
-    return renderShellResult({
-      row: {
-        title: "",
-        isError: input.isError,
-        isPartial: input.options.isPartial === true,
-        command: "",
-        language: input.name === "powershell" ? "powershell" : "bash",
-        output,
-        expanded: input.options.expanded === true,
-        expandHint: input.expandHint,
-      },
-      width,
-      layout: layoutOps(),
-      colorLevel: input.colorLevel,
-      bullet: input.bullet,
-      titlePainter: (title) => title,
-      copyOut,
-    });
-  });
 }
 
 /** Real package version, read once from the repo-root package.json —
@@ -210,19 +117,8 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       rows: input.rows, filePath: input.filePath, paint: highlight,
       colorLevel, expanded: input.options.expanded === true,
       expandHint: input.expandHint ?? "",
-    }),
-    makeShell: {
-      makeShellCall: (input) => createShellCallComponent({
-        name: input.name, bullet: input.bullet, title: input.title, args: input.args,
-        options: input.options, colorLevel: input.colorLevel,
-      }),
-      makeShellResult: (input) => createShellResultComponent({
-        name: input.name, result: input.result,
-        options: input.options, isError: input.context.isError === true,
-        bullet: input.theme.fg(input.context.isError ? "error" : input.options.isPartial ? "dim" : "success", "•"),
-        expandHint: input.expandHint, colorLevel: input.colorLevel,
-      }),
-    },
+    }, layoutOps()),
+    makeShell: createShellFactories(layoutOps()),
     expandHint: () => Pi.keyHint("app.tools.expand", "to expand"),
     highlight,
     colorLevel,

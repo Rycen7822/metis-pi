@@ -14,8 +14,6 @@ export const markdownTheme = {
   ].map((name) => [name, (text) => text])),
   codeBlockIndent: "  ",
 };
-export const layout = { wrap: Tui.wrapTextWithAnsi, visibleWidth: Tui.visibleWidth };
-
 export function container(...children) {
   const root = new Tui.Container();
   children.forEach((child) => root.addChild(child));
@@ -42,12 +40,13 @@ export function drag(tui, startX, startY, endX, endY) {
   tui.handleTerminalInput(sgr(0, endX, endY, true));
 }
 
-/** Call once per test process: prototype and serializer ownership are shared. */
-export function installCopyPrototypes(names = ["Text", "Markdown", "Box", "Container"], fns = {}) {
+/** Each test owns session resources; render wrappers remain installed for the process. */
+export function installCopyPrototypes(t, names = ["Text", "Markdown", "Box", "Container"], fns = {}) {
   const system = createSelectionCopySystem({
     prototypes: Object.fromEntries(names.map((name) => [name, Tui[name].prototype])),
     fns: { ...Tui, renderLatex: (text, options) => Tui.renderLatex(text, options) ?? null, ...fns },
   });
+  t.after(() => system.dispose());
   system.wrapPrototypes();
   return system;
 }

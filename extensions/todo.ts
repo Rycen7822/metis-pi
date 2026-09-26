@@ -3,6 +3,7 @@
 // widget registers itself as the changed hook (see src/todo/widget.ts).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { openTodoStore, TODO_DIR_NAME, type TodoStore } from "../src/todo/store.ts";
 import { createTodoToolHandlers, TodoToolParams, type TodoToolCall } from "../src/todo/tools.ts";
@@ -62,10 +63,19 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
     },
   };
 
-  const widget = createTodoWidget({ system, sessionId: () => lastSessionId });
+  const widget = createTodoWidget({ system, sessionId: () => lastSessionId, truncateToWidth });
   changedHooks.push(() => widget.refresh());
 
+  const releaseSession = (): void => {
+    widget.detach();
+    store?.dispose();
+    store = undefined;
+    storeDir = undefined;
+    ui = undefined;
+  };
+  pi.on("session_shutdown", releaseSession);
   pi.on("session_start", (_event, ctx) => {
+    releaseSession();
     ui = ctx.ui;
     sessionCwd = ctx.cwd;
     lastSessionId = ctx.sessionManager.getSessionId();

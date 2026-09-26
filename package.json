@@ -18,13 +18,17 @@
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test \"test/**/*.test.mjs\" \"test/**/*.test.mts\"",
-    "test:host": "node --experimental-strip-types scripts/host-smoke.mjs",
-    "test:chrome": "node --experimental-strip-types --test \"test/chrome/*.test.mjs\" \"test/chrome/*.test.mts\"",
+    "test": "node scripts/test.mjs all",
+    "test:fast": "node scripts/test.mjs core",
+    "test:host": "node scripts/test.mjs host",
+    "test:protocol": "node scripts/test.mjs protocol",
+    "test:io": "node scripts/test.mjs io",
+    "test:resource": "node scripts/test.mjs resource",
+    "test:chrome": "node scripts/test.mjs chrome",
     "check": "tsc -p tsconfig.json",
     "check:core": "tsc -p tsconfig.core.json",
     "check:test": "tsc -p tsconfig.test.json",
-    "verify": "npm run vendor:fresh && npm run check && npm run check:test && npm run vendor:check && npm test && npm run vendor:smoke && npm run test:host && npm pack --dry-run --ignore-scripts",
+    "verify": "npm run vendor:fresh && npm run check && npm run check:test && npm run vendor:check && npm test && npm pack --dry-run --ignore-scripts",
     "preview": "node --experimental-strip-types scripts/preview.mjs",
     "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs",
     "test:pty:strict": "node --experimental-strip-types scripts/pty-verify.mjs --strict",
@@ -32,7 +36,7 @@
     "vendor:check": "node scripts/vendor-codex-conversion.mjs check",
     "vendor:patch": "node scripts/vendor-codex-conversion.mjs patch",
     "vendor:sync": "node scripts/vendor-codex-conversion.mjs sync",
-    "vendor:smoke": "node --experimental-strip-types scripts/vendor-smoke.mjs",
+    "vendor:smoke": "node --experimental-strip-types --test test/contract/vendor-codex-registration.test.mjs",
     "vendor:fresh": "node scripts/vendor-codex-conversion.mjs build && node scripts/check-vendor-fresh.mjs"
   },
   "dependencies": {

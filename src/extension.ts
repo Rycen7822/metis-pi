@@ -102,7 +102,10 @@ function toStateMessage(message: unknown): TranscriptEvent["message"] {
   };
 }
 
-export function activate(pi: AppearanceAPI, bindings: Bindings): void {
+export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): Promise<void> } {
+  // Capture the current session's install, including disabled/failed/cancelled
+  // installs. Observers need not infer completion from a particular UI slot.
+  let installation = Promise.resolve();
   let enabled = false;
   let chromeEnabled = false;
   let startupWarningFilter: ReturnType<typeof installStartupWarningFilter> | undefined;
@@ -261,22 +264,24 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
   pi.on("session_start", (_event, ctx) => {
     const full = ctx as unknown as HostContextLike & { hasUI?: boolean; ui?: Record<string, unknown> };
     chrome.invalidate();
+    chrome.restore();
     hostData.bind(full);
     ledger.rebuild(hostData.getSessionEntries());
     outcome.reset();
     // One capability snapshot per session, from the same live ctx.ui that
     // chrome.install captures below.
     const available = hostData.available;
-    enabled = hostData.isTui || hostData.hasUI;
+    enabled = (hostData.isTui || hostData.hasUI) && config.enabled !== false;
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
-    chromeEnabled = hostData.isTui && config.enabled !== false;
+    chromeEnabled = hostData.isTui && enabled;
     startupWarningFilter?.dispose();
     startupWarningFilter = chromeEnabled ? installStartupWarningFilter() : undefined;
     gitChanges.dispose();
+    installation = Promise.resolve();
     if (chromeEnabled) {
       const generation = chrome.state.generation;
-      void chrome.install(available, generation).then(() => {
+      installation = chrome.install(available, generation).then(() => {
         // Wait for a successful footer install; neither a hidden changes
         // segment nor a late install from a disposed session needs a poller.
         if (generation === chrome.state.generation && chromeEnabled
@@ -314,7 +319,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
         makeRail: bindings.makeRail,
         makePeek: bindings.makePeek,
-        makeClickable: bindings.makeClickable,
+        makeClickable: bindings.makeClickable && ((input) => bindings.makeClickable!({
+          ...input,
+          // A single click resolves after the mouse event. The host has already
+          // rendered that event, so the delayed view change needs its own frame.
+          apply: (next) => { input.apply(next); requestRender(); },
+        })),
         thinkingPolicy,
         makeThoughtSummary: bindings.makeThoughtSummary,
         isCollapsedLabel: bindings.isCollapsedLabel,
@@ -569,6 +579,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): void {
     turnSummary.forgetSession();
     hostData.bind(undefined);
   });
+  return { whenReady: () => installation };
 }
 
 function isUserMessage(message: unknown): boolean {
