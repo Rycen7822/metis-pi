@@ -1,56 +1,58 @@
 # metis-pi
 
-为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、todo、skill 输入、condense 和 Codex 转换扩展。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 0.87.0**。
+**English** | [简体中文](README.zh-CN.md)
 
-## 安装
+A compact, Codex-style transcript UI for Pi, with separate extensions for goals, todos, skill input, condense, and Codex conversion. Current version: **0.19.6**. Development and host checks target **Pi 0.87.0**.
 
-需要 Node.js >=22.19.0。在本地检出目录运行：
+## Installation
+
+Requires Node.js >=22.19.0. From a local checkout, run:
 
 ```bash
 pi install .
 ```
 
-重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包已经包含 codex-conversion，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
+Restart Pi to load the changes, then select `metis-pi` in the theme picker. To install from Git, use `pi install git:git@github.com:Rycen7822/metis-pi.git`. This package includes codex-conversion; remove or disable the standalone `@howaboua/pi-codex-conversion` before installing to avoid duplicate tool registrations.
 
-可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-goal.ts"]`。详细用法见[功能手册](docs/README.md)。
+Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
 
-## 功能
+## Features
 
-| 功能 | 行为与说明 |
+| Feature | Behavior |
 | --- | --- |
-| [工具转录](docs/features/transcript.md) | 内建工具的紧凑标题、探索分组、流式 write 预览与 edit/write diff；第三方工具保留自己的 renderer。 |
-| [思考显示](docs/features/thinking.md) | 流式显示最新 6 行，结束后折叠；单击折叠/窥视，双击窥视/全展开，Ctrl+T 保留宿主行为。 |
-| [输入与状态](docs/features/composer.md) | 灰色输入面、模型/上下文信息；[Working/footer](docs/features/working-footer.md) 显示运行阶段、实测输出速度、用量和未提交改动量。 |
-| [选区复制](docs/features/selection-copy.md) | fullscreen 下将所选显示内容按来源映射还原为逻辑文本；无法验证的行回退原生提取。 |
-| [长历史](docs/features/fullscreen-layout.md) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
-| [todo](docs/features/todo.md) | 工作区持久任务列表、层级编号、依赖和可折叠面板；`/todos` 查看或恢复面板。 |
-| [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
-| [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
-| [Codex 转换层](docs/vendor-codex-conversion.md) | 内置 provider、原生工具与 code/notebook 模式，源码补丁随本仓库维护。 |
-| [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 与 apply_patch 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，覆盖 Code/Notebook 嵌套入口。 |
-| [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，沿用配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
+| [Tool transcripts](docs/features/transcript.md) | Compact headers for built-in tools, grouped exploration, streaming write previews, and edit/write diffs. Third-party tools retain their own renderers. |
+| [Thinking display](docs/features/thinking.md) | Shows the latest 6 lines while streaming, then collapses. Single-click toggles collapsed/peek; double-click toggles peek/expanded. Ctrl+T retains the host behavior. |
+| [Composer and status](docs/features/composer.md) | Gray input area with model and context information. The [Working indicator and footer](docs/features/working-footer.md) show the execution phase, measured output speed, usage, and the amount of uncommitted changes. |
+| [Selection copy](docs/features/selection-copy.md) | In fullscreen mode, maps selected display content back to logical source text. Falls back to native extraction for lines that cannot be verified. |
+| [Long histories](docs/features/fullscreen-layout.md) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
+| [Todos](docs/features/todo.md) | Persistent workspace task lists with hierarchical numbering, dependencies, and a collapsible panel. Use `/todos` to view or restore the panel. |
+| [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
+| [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
+| [Codex conversion](docs/vendor-codex-conversion.md) | Bundled provider, native tools, and code/notebook modes, with source patches maintained in this repository. |
+| [Action Fusion](docs/features/action-fusion.md) | Native edit/write and apply_patch support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also covers nested Code/Notebook entry points. |
+| [Condense](docs/features/condense.md) | Bundles pi-condense 2.11.0 and uses its existing configuration. After each final reply, simplifies history before applying threshold-based summarization. Persists large outputs and supports paginated retrieval and summary usage display. |
 
-显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/condense/vendor 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。
+Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid fields fall back according to the configuration rules; the display layer does not rewrite user files. Set `enabled: false` to disable the display layer; filter the separate goal/todo/condense/vendor entries individually. Display options and defaults are maintained in the [configuration reference](docs/configuration.md). Condense uses `contextPrune` in Pi's `settings.json`.
 
-## 兼容边界
+## Compatibility boundaries
 
-- 显示层只接管来源明确的 Pi 内建工具；未知宿主形状、第三方补丁或不可修改原型会退避，原因见 `/codex-ui`。
-- 精确复制依赖 fullscreen 应用选区；Markdown 表格、未知 token、图片等保留原生回退。终端原生选区不受此插件控制。
-- 5,000 行是保留窗口上限；单个超大组件仍可能完整排版一次，原生搜索仅覆盖已加载窗口。
-- 本包的主界面外观与其它替换 editor/footer/Working 的插件可能冲突。`pi-copy-soft-wrap` 的启发式复制由本包精确路径接管，建议只保留一套。
-- vendored 原生工具仅包含 linux-x64 载荷，语音 helper 已裁剪。跨平台与语音限制见[转换层说明](docs/vendor-codex-conversion.md)。
+- The display layer only takes over Pi built-in tools with a verified origin. It backs off for unknown host structures, third-party patches, or non-modifiable prototypes; see `/codex-ui` for the reason.
+- Exact copying depends on application-managed selections in fullscreen mode. Markdown tables, unknown tokens, images, and similar content retain native fallbacks. Native terminal selections are outside this plugin's control.
+- The 5,000-line limit applies to the retained display window. A single oversized component may still be fully laid out once, and native search only covers the loaded window.
+- The main UI may conflict with other plugins that replace the editor, footer, or Working indicator. This package's exact copy path takes over the heuristic copying provided by `pi-copy-soft-wrap`; use only one implementation.
+- Vendored native tools include only linux-x64 binaries, and the voice helper has been removed. See the [conversion guide](docs/vendor-codex-conversion.md) for platform and voice limitations.
 
-[兼容性说明](docs/compatibility.md)记录宿主契约；[VALIDATION.md](VALIDATION.md)记录当前验证与未覆盖边界，不能据此保证任意插件组合完全兼容。
+The [compatibility guide](docs/compatibility.md) documents host contracts. [VALIDATION.md](VALIDATION.md) records current checks and coverage gaps; it does not guarantee compatibility with every plugin combination.
 
-## 开发
+## Development
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
 npm run verify
 ```
 
-运行可见交互检查用 `npm run test:pty`，静态预览用 `npm run preview`。具体测试范围、vendor 构建与文档维护见[开发说明](docs/development.md)；模块职责见[架构](docs/architecture.md)，版本差异见[CHANGELOG.md](CHANGELOG.md)。
+Run `npm run test:pty` for visible interaction checks, or `npm run preview` for a static preview. See the [development guide](docs/development.md) for test scope, vendor builds, and documentation maintenance; [architecture](docs/architecture.md) for module responsibilities; and [CHANGELOG.md](CHANGELOG.md) for version changes.
 
-## 来源与许可
+## Attribution and licenses
 
-基于 `pi-codex-style-tools` 修改，保留 MIT 许可。goal 衍生代码使用 Apache-2.0 上游，codex-conversion 使用 MIT 上游；归属及修改说明见 [NOTICE](NOTICE)、[LICENSE](LICENSE)、[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0)。本项目与 OpenAI、Pi 上游无官方关联。
+Based on `pi-codex-style-tools`, retaining its MIT license. Goal-derived code comes from an Apache-2.0 upstream, and codex-conversion comes from an MIT upstream. See [NOTICE](NOTICE), [LICENSE](LICENSE), and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for attribution and modification notices. This project is not officially affiliated with OpenAI or the Pi upstream project.

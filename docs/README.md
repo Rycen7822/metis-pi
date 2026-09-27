@@ -1,6 +1,6 @@
 # 功能手册
 
-本目录记录当前用法与契约。安装入口见 [README](../README.md)，当前检查结果见 [VALIDATION](../VALIDATION.md)，版本摘要见 [CHANGELOG](../CHANGELOG.md)。
+本目录记录当前用法与契约。安装入口见 [中文 README](../README.zh-CN.md) / [English README](../README.md)，当前检查结果见 [VALIDATION](../VALIDATION.md)，版本摘要见 [CHANGELOG](../CHANGELOG.md)。
 
 | 查询内容 | 页面 |
 | --- | --- |
