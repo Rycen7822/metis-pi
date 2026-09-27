@@ -45,7 +45,7 @@ pi install .
 ## 开发
 
 ```bash
-npm install --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --no-audit --no-fund
 npm run verify
 ```
 

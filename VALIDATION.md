@@ -1,5 +1,11 @@
 # Validation
 
+## CI dependency lock repair (2026-09-27)
+
+The previous CI installation resolved floating peers against Pi 0.87.0, causing incompatible Pi/typebox declarations before tests could run. Pinning versions alone also exposed duplicate TUI instances retained by npm 10 from Pi's published shrinkwrap. The committed lockfile is generated with npm 12.0.2 and consumed successfully by npm 10.9.8; Pi and extension code share the same dependency instances. Public peer ranges and runtime code are unchanged.
+
+In a fresh clone outside the repository (`/tmp/metis-ci-fix-bmwh_fj1`), the same Node 22.23.2 / npm 10.9.8 toolchain as the failed CI run completes `npm ci --ignore-scripts --no-audit --no-fund` and `npm run verify`: vendor freshness, production/test/vendor types, **359/359 tests**, zero failures/skips, and a **1,372-file** package dry-run. Existing host component assertions remain intact. Evidence: `.work/action-fusion/ci-fixed-verify.log`. This records local clean-install verification; the post-push GitHub workflow result is checked separately.
+
 ## Action Fusion isolated installation and real kernels (2026-09-27)
 
 - At the user's subsequent request, the current tarball was installed with Pi/pi-ai/pi-tui **0.87.0** in `.work/action-fusion/installed-proof/installation`. HOME, Pi profile, npm/XDG caches and temporary files were isolated. The installed Pi CLI registered the package in that profile; a fresh loader consumed its settings and discovered all **8 extensions**, without extra extension paths or load errors. All **1372 packaged files** match the installed tree byte-for-byte.

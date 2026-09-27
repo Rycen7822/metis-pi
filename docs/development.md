@@ -1,6 +1,8 @@
 # 开发与验证
 
-需要 Node.js >=22.19.0；完整开发检查需要 `npm install --ignore-scripts --no-audit --no-fund` 安装 devDependencies。Pi 的生产安装不提供所有测试所需的宿主依赖。
+需要 Node.js >=22.19.0；完整开发检查使用 `npm ci --ignore-scripts --no-audit --no-fund` 按提交的锁文件安装 devDependencies。开发/CI 固定配套的 Pi 类型依赖；升级时同步更新这些版本与锁文件。Pi 的生产安装不提供所有测试所需的宿主依赖。
+
+当前锁文件使用 npm 12.0.2（需要 Node.js >=22.22.2）生成，并用 CI 的 npm 10.9.8 验证 `npm ci`。重新生成锁文件时需保留 Pi 与扩展共享的依赖布局；npm 10 直接重新求解上游 shrinkwrap 会保留重复的 TUI 实例，影响组件身份和原型补丁。
 
 ## 检查入口
 

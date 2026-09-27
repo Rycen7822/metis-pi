@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 固定完整的 Pi 开发类型依赖并提交去重后的 npm 锁文件；CI 与开发验证改用 `npm ci`，避免浮动 peer 版本及重复 TUI 实例导致构建和宿主检查失败。
+
 - 增加 Action Fusion：Pi 原生 edit/write、普通 apply_patch 的可选 `then_run`，以及 Code/Notebook 的 `apply_patch_then_run`。保留修改与命令独立状态、命令前 diff、取消/超时及完整日志；嵌套回执独立于显示 trace 持久化，可由 condense 索引和分页恢复。
 
 - condense 在最终回复边界先精简成功 build/test 输出，再按现有 `minBatchChars` 判断模型调用；程序保留恢复引用，停止自动二次链摘要。Codex 大输出在显示截断前写入会话归档，导入原生 bash 完整日志；预热共用压缩投影，goal 动态计数移出系统前缀。
