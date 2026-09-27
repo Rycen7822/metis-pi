@@ -265,6 +265,65 @@ index 4f9da84..7c22b8b 100644
 +	config.voice.refreshRealtimeAfterCompaction &&= contextModel !== undefined;
 +	return config;
  }
+diff --git a/src/adapter/code-mode.ts b/src/adapter/code-mode.ts
+index 2d28acd..ebc400b 100644
+--- a/src/adapter/code-mode.ts
++++ b/src/adapter/code-mode.ts
+@@ -1,3 +1,5 @@
++import { fusionFailed } from "../tools/action-fusion.ts";
++import { runExecFusionCommand } from "../tools/action-fusion-command.ts";
+ import { getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+ import type { CodexExtensionRuntime } from "../extension/runtime.ts";
+ import { getCodeModeExtensionTools } from "../code-mode-extension-tools.ts";
+@@ -62,7 +64,7 @@ export async function registerCodexCodeMode(
+ 	};
+ }
+ 
+-function createNestedTools(
++export function createNestedTools(
+ 	pi: ExtensionAPI,
+ 	runtime: CodexExtensionRuntime,
+ 	ctx?: ExtensionContext,
+@@ -80,13 +82,15 @@ function createNestedTools(
+ 	const textOutput = runtime.state.config.notebook.plainCommandOutput
+ 		? { textOutput: "plain-command" as const }
+ 		: {};
++	const patchTool = createApplyPatchTool({
++		customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
++		promptSnippet: false,
++		showDiffWhenCollapsed: runtime.state.config.ui.compactTools === "off",
++		runThenRun: (context) => (input, signal, update) => runExecFusionCommand(runtime.sessions, input, context, signal, update),
++	});
+ 	const tools: ProgrammaticCodeModeToolDefinition[] = [
+ 		toNestedTool(
+-			createApplyPatchTool({
+-				customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
+-				promptSnippet: false,
+-				showDiffWhenCollapsed: runtime.state.config.ui.compactTools === "off",
+-			}),
++			patchTool,
+ 			"await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk (use one unchanged context line for a pure move); Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range; reread a file before patching if it changed since your last read",
+ 			{},
+ 			{
+@@ -111,6 +115,18 @@ function createNestedTools(
+ 				},
+ 			},
+ 		),
++		toNestedTool(
++			{ ...patchTool, name: "apply_patch_then_run", label: "apply_patch_then_run" },
++			"await tools.apply_patch_then_run({ input: string, then_run: { command: string, timeout?: number } }) // apply the entire patch, then run one already-chosen command; failure keeps applied changes",
++			{},
++			{
++				yieldTimeMs: LONG_RUNNING_TOOL_OUTER_YIELD_MS,
++				modelVisibleResult: true,
++				resultError(result) {
++					return fusionFailed(result.details) ? result.content.filter(item => item.type === "text").map(item => item.text).join("\n") : undefined;
++				},
++			},
++		),
+ 		toNestedTool(
+ 			createExecCommandTool(runtime.tracker, runtime.sessions, execOptions),
+ 			"await tools.exec_command({ cmd: string, workdir?: string, shell?: string, tty?: boolean, yield_time_ms?: number, max_output_tokens?: number, login?: boolean }) // returns { output: string, session_id?: number, exit_code?: number }",
 diff --git a/src/adapter/compaction/compaction.ts b/src/adapter/compaction/compaction.ts
 index 8827152..767c106 100644
 --- a/src/adapter/compaction/compaction.ts
@@ -2336,6 +2395,86 @@ index 0401a67..8bac8bc 100644
  	});
  
  	pi.on("thinking_level_select", (event, ctx) => {
+diff --git a/src/extension/runtime.ts b/src/extension/runtime.ts
+index f35fc64..40045da 100644
+--- a/src/extension/runtime.ts
++++ b/src/extension/runtime.ts
+@@ -275,7 +275,7 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 		return promise;
+ 	};
+ 
+-	const projectContextMessages = (ctx: CodexContext, messages?: readonly AgentMessage[]) => {
++	const projectContext = (ctx: CodexContext, messages?: readonly AgentMessage[]) => {
+ 		const plan = resolveCodexRuntimePlanForState(ctx, state);
+ 		const branch = ctx.sessionManager.getBranch();
+ 		const allEntries = plan.contextManagementMode === "tree" ? ctx.sessionManager.getEntries() : branch;
+@@ -288,13 +288,22 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 			allEntries,
+ 			plan.contextManagementHybrid,
+ 		);
+-		return projected.filter((message) => !isProviderContextExcludedMessage(message));
++		const projection = {
++			sessionId: ctx.sessionManager.getSessionId(), api: ctx.model?.api,
++			messages: projected.filter((message) => !isProviderContextExcludedMessage(message)), busy: false,
++		};
++		pi.events.emit("metis:condense-project", projection);
++		return projection;
+ 	};
+ 
++	const projectContextMessages = (ctx: CodexContext, messages?: readonly AgentMessage[]) => projectContext(ctx, messages).messages;
++
+ 	const currentMessages = (ctx: CodexContext) => {
++		const projection = projectContext(ctx);
++		if (projection.busy) return undefined;
+ 		return convertToLlm(
+ 			state.developerMessages.prepare(
+-				projectContextMessages(ctx),
++				projection.messages,
+ 				supportsCodexDeveloperMessages(ctx, state),
+ 				ctx.model,
+ 			),
+@@ -308,11 +317,13 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 		if (kind === "keepalive" && !keepalivePlan) return undefined;
+ 		const preserveContinuation = kind === "keepalive";
+ 		const activeSystemPrompt = state.activeProviderSystemPrompt;
++		const messages = currentMessages(ctx);
++		if (!messages) return undefined;
+ 		return startPrewarm(
+ 			ctx,
+ 			activeSystemPrompt ?? ctx.getSystemPrompt(),
+ 			activeSystemPrompt !== undefined,
+-			currentMessages(ctx),
++			messages,
+ 			true,
+ 			kind === "keepalive",
+ 			kind,
+@@ -443,7 +454,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 			closeOpenAICodexWebSocketSessions(sessionId);
+ 		},
+ 		waitForPrewarm(ctx, systemPrompt) {
+-			return startPrewarm(ctx, systemPrompt, true, currentMessages(ctx), true);
++			const messages = currentMessages(ctx);
++			return messages ? startPrewarm(ctx, systemPrompt, true, messages, true) : undefined;
+ 		},
+ 		prewarmIdentity(ctx, systemPrompt) {
+ 			return buildPrewarmPlan(ctx, systemPrompt, true, [], false)?.identity;
+diff --git a/src/extension/tools.ts b/src/extension/tools.ts
+index 315ca24..9cdbe1b 100644
+--- a/src/extension/tools.ts
++++ b/src/extension/tools.ts
+@@ -1,3 +1,4 @@
++import { runExecFusionCommand } from "../tools/action-fusion-command.ts";
+ import type { Api, Model } from "@earendil-works/pi-ai";
+ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ import type { CodexConversionConfig } from "../adapter/activation/config.ts";
+@@ -61,6 +62,7 @@ export function registerCodexTools(
+ 	});
+ 	const registerCore = (config: CodexConversionConfig) => {
+ 		registerApplyPatchTool(pi, {
++			runThenRun: (ctx) => (input, signal, update) => runExecFusionCommand(runtime.sessions, input, ctx, signal, update),
+ 			customRustBinariesDir: config.tools.customRustBinariesDir,
+ 			showDiffWhenCollapsed: config.ui.compactTools === "off",
+ 		});
 diff --git a/src/providers/code-mode-proxy-provider.ts b/src/providers/code-mode-proxy-provider.ts
 index b1e1cb2..762a3dd 100644
 --- a/src/providers/code-mode-proxy-provider.ts
@@ -3401,6 +3540,237 @@ index 0000000..e5dae54
 +}
 +
 +export type { ToolReference };
+diff --git a/src/tools/action-fusion-command.ts b/src/tools/action-fusion-command.ts
+new file mode 100644
+index 0000000..5d5bc34
+--- /dev/null
++++ b/src/tools/action-fusion-command.ts
+@@ -0,0 +1,73 @@
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++import { StringDecoder } from "node:string_decoder";
++import { createBashToolDefinition, createLocalBashOperations, type ExtensionContext } from "@earendil-works/pi-coding-agent";
++import { getPiConfiguredShellPath } from "../adapter/prompt/runtime-shell.ts";
++import { ExecOutputArchive } from "./exec/output-archive.ts";
++import { validateThenRun, type ThenRunInput, type FusionCommandResult } from "./action-fusion.ts";
++import type { ExecSessionManager, UnifiedExecResult } from "./exec/session-manager.ts";
++
++export function fusionArchiveDirectory(ctx: ExtensionContext): string {
++	const directory = ctx.sessionManager.getSessionDir();
++	return directory ? join(directory, `${ctx.sessionManager.getSessionId()}-blobs`) : join(tmpdir(), `metis-pi-fusion-${process.pid}`);
++}
++
++/** Native shell owns spawning/env/process cleanup; this wrapper captures evidence before truncation. */
++export async function runNativeFusionCommand(input: ThenRunInput, ctx: ExtensionContext, signal?: AbortSignal, update?: (result: FusionCommandResult) => void): Promise<FusionCommandResult> {
++	validateThenRun(input);
++	const archive = new ExecOutputArchive(fusionArchiveDirectory(ctx), 0);
++	const decoder = new StringDecoder("utf8");
++	let output = "", exitCode: number | undefined, failure: unknown;
++	const append = (text: string) => { archive.append(text); output = (output + text).slice(-32_768); };
++	const shellPath = getPiConfiguredShellPath(ctx);
++	const local = createLocalBashOperations(shellPath ? { shellPath } : {});
++	const bash = createBashToolDefinition(ctx.cwd, {
++		operations: {
++			async exec(command, cwd, options) {
++				try {
++					const result = await local.exec(command, cwd, { ...options, onData(data) { append(decoder.write(data)); options.onData(data); } });
++					exitCode = result.exitCode ?? undefined;
++					return result;
++				} catch (error) { failure = error; throw error; }
++				finally { append(decoder.end()); }
++			},
++		},
++	});
++	try {
++		await bash.execute("then-run", input, signal, () => update?.({ status: "running", output, ...archive.info() }), ctx);
++	} catch (error) { failure ??= error; }
++	finally { archive.preserve(); archive.close(); }
++	const error = failure instanceof Error ? failure.message : failure === undefined ? undefined : String(failure);
++	const status = signal?.aborted ? "cancelled" : error?.startsWith("timeout:") ? "timed_out" : exitCode === 0 && !failure ? "succeeded" : "failed";
++	return { status, output, exitCode, ...(error ? { error: exitCode === undefined ? error.slice(-1500) : `Command exited with code ${exitCode}` } : {}), ...archive.info() };
++}
++
++/** Conversion retains its existing session/env/bridge ownership and output decoder. */
++export async function runExecFusionCommand(sessions: ExecSessionManager, input: ThenRunInput, ctx: ExtensionContext, signal?: AbortSignal, update?: (result: FusionCommandResult) => void): Promise<FusionCommandResult> {
++	validateThenRun(input);
++	if (signal?.aborted) return { status: "cancelled", output: "", error: "Cancelled before command start" };
++	const controller = new AbortController();
++	let timedOut = false;
++	const abort = () => controller.abort();
++	signal?.addEventListener("abort", abort, { once: true });
++	const timer = input.timeout === undefined ? undefined : setTimeout(() => { timedOut = true; controller.abort(); }, input.timeout * 1000);
++	const receipt = (result: UnifiedExecResult): FusionCommandResult => ({
++		status: signal?.aborted ? "cancelled" : timedOut ? "timed_out" : result.interrupted ? "cancelled" : result.exit_code === 0 ? "succeeded" : result.exit_code === undefined ? "running" : "failed",
++		output: result.output,
++		exitCode: result.exit_code,
++		fullOutputPath: result.fullOutputPath, fullOutputBytes: result.fullOutputBytes,
++		fullOutputComplete: result.fullOutputComplete, fullOutputAppendOnly: result.fullOutputAppendOnly,
++		fullOutputError: result.fullOutputError,
++	});
++	try {
++		const result = await sessions.exec({ cmd: input.command, defaultShell: getPiConfiguredShellPath(ctx), wait_until_exit: true,
++			archiveDirectory: fusionArchiveDirectory(ctx), archiveAllOutput: true, captureInterruptedResult: true,
++			max_output_tokens: 8192,
++		}, ctx.cwd, controller.signal, partial => update?.(receipt(partial)));
++		return receipt(result);
++	} catch (error) {
++		return { status: signal?.aborted ? "cancelled" : timedOut ? "timed_out" : "failed", output: "", error: error instanceof Error ? error.message : String(error) };
++	} finally {
++		clearTimeout(timer); signal?.removeEventListener("abort", abort);
++	}
++}
+diff --git a/src/tools/action-fusion.ts b/src/tools/action-fusion.ts
+new file mode 100644
+index 0000000..30e08c1
+--- /dev/null
++++ b/src/tools/action-fusion.ts
+@@ -0,0 +1,146 @@
++import { realpath } from "node:fs/promises";
++import { basename, dirname, resolve } from "node:path";
++import { Type } from "typebox";
++import type { AgentToolResult } from "@earendil-works/pi-agent-core";
++
++export interface ThenRunInput { command: string; timeout?: number }
++export const THEN_RUN_SCHEMA = Type.Optional(Type.Object({
++	command: Type.String({ description: "Already-chosen command to run after the entire mutation succeeds" }),
++	timeout: Type.Optional(Type.Number({ description: "Execution timeout in seconds; no default timeout" })),
++}, { additionalProperties: false, description: "Fuse a known follow-up command. Failure keeps the mutation. Omit when the next command requires inspecting the mutation result." }));
++
++export interface FusionCommandResult {
++	status: "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "skipped";
++	output: string;
++	exitCode?: number | undefined;
++	error?: string | undefined;
++	fullOutputPath?: string | undefined;
++	fullOutputBytes?: number | undefined;
++	fullOutputComplete?: boolean | undefined;
++	fullOutputAppendOnly?: boolean | undefined;
++	fullOutputError?: string | undefined;
++}
++export interface FusionReceipt {
++	version: 1;
++	mutationStatus: "success" | "failed" | "partial_failure";
++	command: Omit<FusionCommandResult, "output"> & { command: string; outputBlock: number };
++}
++export type FusionResult = AgentToolResult<Record<string, unknown> & { metisActionFusion?: FusionReceipt }>;
++export type FusionCommandRunner = (input: ThenRunInput, signal?: AbortSignal, update?: (result: FusionCommandResult) => void) => Promise<FusionCommandResult>;
++
++export function validateThenRun(input: unknown): ThenRunInput | undefined {
++	if (input === undefined) return undefined;
++	if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("then_run must be an object");
++	const value = input as Record<string, unknown>;
++	if (Object.keys(value).some(key => key !== "command" && key !== "timeout") || typeof value["command"] !== "string" || !value["command"].trim())
++		throw new Error("then_run requires a nonempty command and optional timeout");
++	if (value["timeout"] !== undefined && (typeof value["timeout"] !== "number" || !Number.isFinite(value["timeout"]) || value["timeout"] <= 0 || value["timeout"] * 1000 > 2_147_483_647))
++		throw new Error("then_run timeout must be a finite positive number of seconds within the timer limit");
++	return { command: value["command"], ...(value["timeout"] === undefined ? {} : { timeout: value["timeout"] as number }) };
++}
++
++export function fusionReceipt(details: unknown): FusionReceipt | undefined {
++	if (!details || typeof details !== "object") return undefined;
++	const receipt = (details as Record<string, unknown>)["metisActionFusion"] as FusionReceipt | undefined;
++	return receipt?.version === 1 && ["success", "failed", "partial_failure"].includes(receipt.mutationStatus)
++		&& receipt.command && typeof receipt.command.command === "string"
++		&& ["running", "succeeded", "failed", "timed_out", "cancelled", "skipped"].includes(receipt.command.status)
++		&& Number.isInteger(receipt.command.outputBlock) && receipt.command.outputBlock >= 0 ? receipt : undefined;
++}
++
++export function fusionFailed(details: unknown): boolean {
++	const receipt = fusionReceipt(details);
++	return !!receipt && (receipt.mutationStatus !== "success" || !["succeeded", "running"].includes(receipt.command.status));
++}
++
++// Same physical package shares queues across Pi's independent entry loaders.
++const queueKey = Symbol.for(`metis-pi.fusion-queues:${import.meta.url}`);
++const shared = globalThis as typeof globalThis & { [queueKey]?: Map<string, Promise<void>> };
++const queues = shared[queueKey] ??= new Map<string, Promise<void>>();
++
++async function canonicalPath(path: string): Promise<string> {
++	let current = resolve(path);
++	const suffix: string[] = [];
++	for (;;) {
++		try { return resolve(await realpath(current), ...suffix); }
++		catch (error) {
++			if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
++			const parent = dirname(current);
++			if (parent === current) return resolve(path);
++			suffix.unshift(basename(current)); current = parent;
++		}
++	}
++}
++
++function abortError(): Error { return new Error("Action Fusion aborted"); }
++async function waitForQueue(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
++	if (!signal) return previous;
++	if (signal.aborted) throw abortError();
++	let abort!: () => void;
++	try {
++		await Promise.race([previous, new Promise<never>((_, reject) => {
++			abort = () => reject(abortError()); signal.addEventListener("abort", abort, { once: true });
++		})]);
++	} finally { signal.removeEventListener("abort", abort); }
++}
++
++/** Separate from Pi's mutation locks: no recursive acquisition of those locks. */
++async function withFusionPaths<T>(paths: string[], signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
++	const keys = [...new Set(await Promise.all(paths.map(canonicalPath)))].sort();
++	const acquire = async (index: number): Promise<T> => {
++		if (signal?.aborted) throw abortError();
++		if (index === keys.length) return work();
++		const key = keys[index]!;
++		const previous = queues.get(key) ?? Promise.resolve();
++		let release!: () => void;
++		const owned = new Promise<void>(done => { release = done; });
++		const tail = previous.then(() => owned);
++		queues.set(key, tail);
++		try { await waitForQueue(previous, signal); return await acquire(index + 1); }
++		finally { release(); void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); }); }
++	};
++	return acquire(0);
++}
++
++function combined(mutation: AgentToolResult<unknown>, input: ThenRunInput, commandResult: FusionCommandResult): FusionResult {
++	const details = mutation.details && typeof mutation.details === "object" ? mutation.details as Record<string, unknown> : {};
++	const mutationStatus = details["status"] === "partial_failure" ? "partial_failure" : details["status"] === "failed" ? "failed" : "success";
++	const { output, ...command } = commandResult;
++	const status = [`[then_run:${command.status}] ${input.command}`, command.error,
++		command.fullOutputPath ? `Full output: ${command.fullOutputPath}` : undefined, command.fullOutputError].filter(Boolean).join("\n");
++	const content = [...mutation.content, { type: "text" as const, text: status }, { type: "text" as const, text: output }];
++	return { content, details: { ...details, metisActionFusion: { version: 1, mutationStatus, command: { ...command, command: input.command, outputBlock: content.length - 1 } } } };
++}
++
++export async function executeFusion(options: {
++	paths: string[];
++	thenRun?: unknown;
++	signal?: AbortSignal | undefined;
++	mutate(): Promise<AgentToolResult<unknown>>;
++	run: FusionCommandRunner;
++	onUpdate?: ((result: FusionResult) => void) | undefined;
++}): Promise<AgentToolResult<unknown>> {
++	const input = validateThenRun(options.thenRun); // Validate before any side effect.
++	return withFusionPaths(options.paths, options.signal, async () => {
++		let mutation: AgentToolResult<unknown>;
++		try { mutation = await options.mutate(); }
++		catch (error) {
++			if (!input) throw error;
++			mutation = { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: { status: "failed" } };
++		}
++		if (!input) return mutation;
++		const status = (mutation.details as { status?: string } | undefined)?.status;
++		if (status === "failed" || status === "partial_failure") return combined(mutation, input, { status: "skipped", output: "", error: "Mutation did not fully succeed; command not run." });
++		if (options.signal?.aborted) return combined(mutation, input, { status: "cancelled", output: "", error: "Cancelled after mutation; command not run." });
++		const update = (command: FusionCommandResult) => {
++			try { options.onUpdate?.(combined(mutation, input, command)); }
++			catch { /* Presentation failure must not erase completed mutation evidence. */ }
++		};
++		update({ status: "running", output: "" });
++		let command: FusionCommandResult;
++		try { command = await options.run(input, options.signal, update); }
++		catch (error) { command = { status: options.signal?.aborted ? "cancelled" : "failed", output: "", error: error instanceof Error ? error.message : String(error) }; }
++		if (command.status === "running" || (command.status === "succeeded" && command.exitCode !== 0)) command = { ...command, status: "failed", error: "Command completion was not confirmed." };
++		return combined(mutation, input, command);
++	});
++}
 diff --git a/src/tools/apply-patch/display-broker.ts b/src/tools/apply-patch/display-broker.ts
 index 62f8c68..a831ee7 100644
 --- a/src/tools/apply-patch/display-broker.ts
@@ -3659,10 +4029,65 @@ index 77911b3..72d98fa 100644
  		return "";
  	}
 diff --git a/src/tools/apply-patch/tool.ts b/src/tools/apply-patch/tool.ts
-index c32029f..a1afc86 100644
+index c32029f..51c1ac4 100644
 --- a/src/tools/apply-patch/tool.ts
 +++ b/src/tools/apply-patch/tool.ts
-@@ -198,7 +198,7 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): Apply
+@@ -1,9 +1,10 @@
+ import { Type } from "typebox";
+-import { type ExtensionAPI, type ToolDefinition, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
++import { type ExtensionAPI, type ExtensionContext, type ToolDefinition, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+ import { Container, Text } from "@earendil-works/pi-tui";
+ import { parsePatchActions } from "../../patch/parser.ts";
+ import { resolvePatchPath } from "../../patch/paths.ts";
+ import { ExecutePatchError, type ExecutePatchResult } from "../../patch/types.ts";
++import { executeFusion, fusionFailed, fusionReceipt, validateThenRun, THEN_RUN_SCHEMA, type FusionCommandRunner } from "../action-fusion.ts";
+ import { getExperimentalToolSampling } from "../tool-sampling.ts";
+ import {
+ 	recordApplyPatchDisplayInput,
+@@ -24,6 +25,7 @@ import {
+ } from "./render-state.ts";
+ 
+ const APPLY_PATCH_PARAMETERS = Type.Object({
++	then_run: THEN_RUN_SCHEMA,
+ 	input: Type.String({
+ 		description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk; use one unchanged context line for a pure move. Order each file's hunks top-to-bottom; indentation is literal",
+ 	}),
+@@ -43,6 +45,7 @@ export type ApplyPatchRenderCall = NonNullable<ApplyPatchToolDefinition["renderC
+ export type ApplyPatchRenderResult = NonNullable<ApplyPatchToolDefinition["renderResult"]>;
+ 
+ export interface ApplyPatchToolOptions {
++	runThenRun?: ((ctx: ExtensionContext) => FusionCommandRunner) | undefined;
+ 	customRustBinariesDir?: string | undefined;
+ 	promptSnippet?: boolean | undefined;
+ 	showDiffWhenCollapsed?: boolean | undefined;
+@@ -57,11 +60,13 @@ function parseApplyPatchParams(params: unknown): { patchText: string } {
+ 	return { patchText: params.input };
+ }
+ 
+-function prepareApplyPatchArguments(args: unknown): { input: string } {
++function prepareApplyPatchArguments(args: unknown): { input: string; then_run?: import("../action-fusion.ts").ThenRunInput } {
+ 	if (args && typeof args === "object") {
+-		if ("input" in args && typeof args.input === "string") return { input: args.input };
+-		if ("patchText" in args && typeof args.patchText === "string") return { input: args.patchText };
+-		if ("patch" in args && typeof args.patch === "string") return { input: args.patch };
++		const thenRun = "then_run" in args ? validateThenRun(args.then_run) : undefined;
++		const extra = thenRun === undefined ? {} : { then_run: thenRun };
++		if ("input" in args && typeof args.input === "string") return { input: args.input, ...extra };
++		if ("patchText" in args && typeof args.patchText === "string") return { input: args.patchText, ...extra };
++		if ("patch" in args && typeof args.patch === "string") return { input: args.patch, ...extra };
+ 	}
+ 	return args as { input: string };
+ }
+@@ -164,7 +169,7 @@ function renderCompactApplyPatchCall(theme: { fg(role: string, text: string): st
+ 	return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
+ }
+ 
+-export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ApplyPatchToolDefinition {
++function createPlainApplyPatchTool(options: ApplyPatchToolOptions): ApplyPatchToolDefinition {
+ 	const constrainedSampling = getExperimentalToolSampling("apply_patch");
+ 	const compactRendering = (context?: ApplyPatchRenderContextLike) => shouldCompactApplyPatchDisplay(context?.toolCallId, context?.executionStarted);
+ 	const defaultRenderCall: ApplyPatchRenderCall = (args, theme, context) =>
+@@ -198,7 +203,7 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): Apply
  
  			const typedParams = parseApplyPatchParams(params);
  			recordApplyPatchDisplayInput(toolCallId, typedParams.patchText);
@@ -3671,6 +4096,152 @@ index c32029f..a1afc86 100644
  			let result: ExecutePatchResult;
  			try {
  				result = await withTouchedFileMutationQueues(ctx.cwd, typedParams.patchText, () =>
+@@ -270,13 +275,33 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): Apply
+ 	} satisfies ApplyPatchToolDefinition;
+ }
+ 
++export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ToolDefinition<typeof APPLY_PATCH_PARAMETERS, unknown> {
++	const base = createPlainApplyPatchTool(options);
++	return {
++		...base,
++		async execute(id, params, signal, update, ctx) {
++			const input = validateThenRun(params.then_run);
++			if (input && !options.runThenRun) throw new Error("then_run executor unavailable");
++			return executeFusion({ paths: touchedPatchPaths(ctx.cwd, params.input), thenRun: input, signal,
++				mutate: () => base.execute(id, params, signal, undefined, ctx),
++				run: options.runThenRun?.(ctx) ?? (async () => { throw new Error("then_run executor unavailable"); }),
++				onUpdate: update,
++			});
++		},
++		renderResult(result, display, theme, context) {
++			if (fusionReceipt(result.details)) return new Text(result.content.filter(b => b.type === "text").map(b => b.text).join("\n"), 0, 0);
++			return base.renderResult!(result as Parameters<NonNullable<typeof base.renderResult>>[0], display, theme, context);
++		},
++	} satisfies ToolDefinition<typeof APPLY_PATCH_PARAMETERS, unknown>;
++}
++
+ export function registerApplyPatchTool(pi: ExtensionAPI, options: ApplyPatchToolOptions = {}): void {
+ 	pi.registerTool(createApplyPatchTool(options));
+ }
+ 
+ export function registerApplyPatchResultEvent(pi: ExtensionAPI): void {
+ 	pi.on("tool_result", (event) => {
+-		if (event.toolName === "apply_patch" && isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure") {
++		if (event.toolName === "apply_patch" && (fusionFailed(event.details) || (isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure"))) {
+ 			return { isError: true };
+ 		}
+ 		return undefined;
+diff --git a/src/tools/code-mode/delegate-runtime.ts b/src/tools/code-mode/delegate-runtime.ts
+index b114bde..73266aa 100644
+--- a/src/tools/code-mode/delegate-runtime.ts
++++ b/src/tools/code-mode/delegate-runtime.ts
+@@ -4,6 +4,7 @@ import { runCodeModeToolWithHooks } from "./nested-tool-completion.js";
+ import { codeModeNameForToolIdentity } from "./tool-identity.ts";
+ import { CodeModeNestedRenderStore } from "./trace-render-state.js";
+ import { CodeModeTraceStore } from "./trace-store.js";
++import { FusionEvidenceStore } from "./fusion-evidence.js";
+ import { toolResultFromValue, truncateTraceText } from "./trace-values.js";
+ import type {
+ 	CodeModeToolDefinition,
+@@ -39,6 +40,7 @@ export class CodeModeDelegateRuntime {
+ 	private readonly blockerChanges = new Map<string, Deferred>();
+ 	private readonly sequentialTails = new Map<string, Promise<void>>();
+ 	private readonly traces = new CodeModeTraceStore();
++	private readonly fusionEvidence = new FusionEvidenceStore();
+ 	private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+ 	private readonly send: SendMessage;
+ 	private readonly renderStore: CodeModeNestedRenderStore;
+@@ -78,6 +80,7 @@ export class CodeModeDelegateRuntime {
+ 			this.notifications.delete(cellId);
+ 			this.execSessions.delete(cellId);
+ 			this.traces.delete(cellId);
++			this.fusionEvidence.delete(cellId);
+ 		}, 1_000));
+ 	}
+ 
+@@ -87,6 +90,7 @@ export class CodeModeDelegateRuntime {
+ 		this.cellContexts.clear();
+ 		this.cellTools.clear();
+ 		this.traces.clear();
++		this.fusionEvidence.clear();
+ 		this.renderStore.clear();
+ 		this.notifications.clear();
+ 		this.execSessions.clear();
+@@ -179,8 +183,11 @@ export class CodeModeDelegateRuntime {
+ 		const execSessionIds = [...(this.execSessions.get(response.cellId) ?? [])];
+ 		if (response.kind !== "yielded") this.execSessions.delete(response.cellId);
+ 		const withTraces = this.traces.attach(response);
++		const evidence = this.fusionEvidence.take(response.cellId);
++		if (response.kind !== "yielded") this.fusionEvidence.delete(response.cellId);
+ 		return {
+ 			...withTraces,
++			...evidence,
+ 			...(execSessionIds.length > 0 ? { execSessionIds } : {}),
+ 			contentItems: [
+ 				...notifications.map((text) => ({ type: "input_text" as const, text })),
+@@ -262,6 +269,7 @@ export class CodeModeDelegateRuntime {
+ 			},
+ 			captureResult: (result) => {
+ 				finalResultCaptured = true;
++				this.fusionEvidence.capture(cellId, trace.id, trace.name, input, result, currentContext());
+ 				resultSessionId = numericSessionId(result.details);
+ 				if (captureRendererValues)
+ 					this.renderStore.captureResult(trace.id, result);
+diff --git a/src/tools/code-mode/fusion-evidence.ts b/src/tools/code-mode/fusion-evidence.ts
+new file mode 100644
+index 0000000..e0fac5c
+--- /dev/null
++++ b/src/tools/code-mode/fusion-evidence.ts
+@@ -0,0 +1,49 @@
++import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
++import { randomUUID } from "node:crypto";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++import { fusionReceipt } from "../action-fusion.ts";
++import type { RuntimeToolResult, ToolExecutionContext } from "./types.js";
++
++export interface FusionEvidenceRef { path: string; offsetBytes: number; bytes: number }
++interface Journal { path: string; bytes: number; published: number; error?: string }
++
++/** Durable receipts have a separate lifetime from the bounded display traces. */
++export class FusionEvidenceStore {
++	private readonly journals = new Map<string, Journal>();
++
++	capture(cellId: string, id: string, toolName: string, input: unknown, result: RuntimeToolResult, context: ToolExecutionContext): void {
++		if (!fusionReceipt(result.details)) return;
++		let journal = this.journals.get(cellId);
++		try {
++			if (!journal) {
++				const manager = context.extensionContext?.sessionManager;
++				const sessionDir = manager?.getSessionDir();
++				const directory = sessionDir ? join(sessionDir, `${manager!.getSessionId()}-blobs`) : join(tmpdir(), `metis-pi-fusion-${process.pid}`);
++				mkdirSync(directory, { recursive: true, mode: 0o700 });
++				journal = { path: join(directory, `fusion-${randomUUID()}.jsonl`), bytes: 0, published: 0 };
++				writeFileSync(journal.path, "", { flag: "wx", mode: 0o600 });
++				this.journals.set(cellId, journal);
++			}
++			if (journal.error) return;
++			const line = JSON.stringify({ version: 1, id, toolName, input, result, timestamp: Date.now() }) + "\n";
++			appendFileSync(journal.path, line, "utf8");
++			journal.bytes += Buffer.byteLength(line);
++		} catch {
++			journal ??= { path: "", bytes: 0, published: 0 };
++			journal.error = "Fused tool evidence could not be persisted; display traces are incomplete recovery data.";
++			this.journals.set(cellId, journal);
++		}
++	}
++
++	take(cellId: string): { fusionEvidence?: FusionEvidenceRef; fusionEvidenceError?: string } {
++		const journal = this.journals.get(cellId);
++		if (!journal) return {};
++		const ref = journal.bytes > journal.published ? { path: journal.path, offsetBytes: journal.published, bytes: journal.bytes - journal.published } : undefined;
++		journal.published = journal.bytes;
++		return { ...(ref ? { fusionEvidence: ref } : {}), ...(journal.error ? { fusionEvidenceError: journal.error } : {}) };
++	}
++
++	delete(cellId: string): void { this.journals.delete(cellId); }
++	clear(): void { this.journals.clear(); }
++}
 diff --git a/src/tools/code-mode/notebook-tool.ts b/src/tools/code-mode/notebook-tool.ts
 index 19a57e1..1e17b2d 100644
 --- a/src/tools/code-mode/notebook-tool.ts
@@ -3715,6 +4286,41 @@ index 19a57e1..1e17b2d 100644
  
  const NOTEBOOK_DESCRIPTION = "Control persistent notebook state: status inspects memory/bindings by query glob; checkpoint; pin/unpin/release names; prune unpinned matches; list/save/load profiles; restart; diagnostics; reset";
  
+diff --git a/src/tools/code-mode/tool-result.ts b/src/tools/code-mode/tool-result.ts
+index fcaa835..a162165 100644
+--- a/src/tools/code-mode/tool-result.ts
++++ b/src/tools/code-mode/tool-result.ts
+@@ -55,6 +55,8 @@ export function toCodeModeToolResult(
+ 	return {
+ 		content: [
+ 			{ type: "text" as const, text: status },
++			...(response.fusionEvidence ? [{ type: "text" as const, text: `Fused tool evidence: ${response.fusionEvidence.path} (bytes ${response.fusionEvidence.offsetBytes}..${response.fusionEvidence.offsetBytes + response.fusionEvidence.bytes}); contains mutation outcomes and exact command log paths.` }] : []),
++			...(response.fusionEvidenceError ? [{ type: "text" as const, text: response.fusionEvidenceError }] : []),
+ 			...(memoryWarning ? [{ type: "text" as const, text: memoryWarning }] : []),
+ 			...(response.execSessionIds ?? []).map((sessionId) => ({
+ 				type: "text" as const,
+@@ -66,6 +68,8 @@ export function toCodeModeToolResult(
+ 			codeMode: true,
+ 			cellId: response.cellId,
+ 			status: response.kind,
++			...(response.fusionEvidence ? { fusionEvidence: response.fusionEvidence } : {}),
++			...(response.fusionEvidenceError ? { fusionEvidenceError: response.fusionEvidenceError } : {}),
+ 			...(response.traces ? { traces: response.traces } : {}),
+ 			...(response.droppedTraceCount
+ 				? { droppedTraceCount: response.droppedTraceCount }
+diff --git a/src/tools/code-mode/types.ts b/src/tools/code-mode/types.ts
+index 4b8fdd7..798439e 100644
+--- a/src/tools/code-mode/types.ts
++++ b/src/tools/code-mode/types.ts
+@@ -165,6 +165,8 @@ export type RuntimeResponse = (
+ 			errorText?: string | undefined;
+ 	  }
+ ) & {
++	fusionEvidence?: import("./fusion-evidence.js").FusionEvidenceRef | undefined;
++	fusionEvidenceError?: string | undefined;
+ 	maxOutputTokens?: number | undefined;
+ 	missingCell?: true | undefined;
+ 	execSessionIds?: number[] | undefined;
 diff --git a/src/tools/exec/bridge-session.ts b/src/tools/exec/bridge-session.ts
 index 9813208..21e824f 100644
 --- a/src/tools/exec/bridge-session.ts
@@ -3756,10 +4362,15 @@ index 9813208..21e824f 100644
  			outputVersion: 0,
  			exitCode: undefined,
 diff --git a/src/tools/exec/command-tool.ts b/src/tools/exec/command-tool.ts
-index 0204ebd..774564e 100644
+index 0204ebd..399553c 100644
 --- a/src/tools/exec/command-tool.ts
 +++ b/src/tools/exec/command-tool.ts
-@@ -142,7 +142,7 @@ function renderCall(
+@@ -1,3 +1,4 @@
++import { join } from "node:path";
+ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
+ import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+@@ -142,7 +143,7 @@ function renderCall(
  	const text = info.actionGroups
  		? renderGroupedExecCommandCall(info.actionGroups, info.status, theme, expanded, info.commands ?? [command])
  		: renderExecCommandCall(command, info.status, theme, expanded);
@@ -3768,12 +4379,101 @@ index 0204ebd..774564e 100644
  }
  
  function renderResult(
+@@ -195,7 +196,9 @@ export function createExecCommandTool(tracker: ExecCommandTracker, sessions: Exe
+ 						max_yield_time_ms: MAX_EXEC_YIELD_TIME_MS,
+ 						...(options.waitForNonInteractiveExit ? { wait_until_exit: true } : {}),
+ 					};
+-			const result = await sessions.exec(execInput, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
++			const sessionDir = ctx.sessionManager?.getSessionDir?.();
++			const archiveDirectory = sessionDir ? join(sessionDir, `${ctx.sessionManager.getSessionId()}-blobs`) : undefined;
++			const result = await sessions.exec({ ...execInput, ...(archiveDirectory ? { archiveDirectory } : {}) }, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
+ 			if (result.session_id !== undefined) tracker.recordPersistentSession(toolCallId, result.session_id);
+ 			return toToolResult(result);
+ 		},
+diff --git a/src/tools/exec/format.ts b/src/tools/exec/format.ts
+index ab18565..d077244 100644
+--- a/src/tools/exec/format.ts
++++ b/src/tools/exec/format.ts
+@@ -21,6 +21,11 @@ export function formatUnifiedExecResult(result: UnifiedExecResult, command?: str
+ 		sections.push(`Original token count: ${result.original_token_count}`);
+ 	}
+ 
++	if (result.fullOutputPath) {
++		sections.push(`Captured output archive: ${result.fullOutputPath} (${result.fullOutputBytes ?? "?"} bytes${result.fullOutputComplete === false ? "; incomplete" : ""})`);
++	}
++
++	if (result.fullOutputError) sections.push(result.fullOutputError);
+ 	sections.push("Output:");
+ 	sections.push(result.output);
+ 
+diff --git a/src/tools/exec/output-archive.ts b/src/tools/exec/output-archive.ts
+new file mode 100644
+index 0000000..ea2b774
+--- /dev/null
++++ b/src/tools/exec/output-archive.ts
+@@ -0,0 +1,55 @@
++import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
++import { join } from "node:path";
++import { randomUUID } from "node:crypto";
++
++/** Durable decoded process output, independent of the bounded display ring. */
++export class ExecOutputArchive {
++	private pending = "";
++	private fd: number | undefined;
++	private path: string | undefined;
++	private bytes = 0;
++	private failed = false;
++	private closed = false;
++	private readonly directory: string;
++	private readonly threshold: number;
++	constructor(directory: string, threshold: number) { this.directory = directory; this.threshold = threshold; }
++	append(text: string): void {
++		if (this.closed || this.failed) return;
++		this.pending += text;
++		if (this.fd !== undefined || Buffer.byteLength(this.pending) > this.threshold) this.preserve();
++	}
++	/** Persist pending originals before any delivery/retention loss, even below the initial threshold. */
++	preserve(): void {
++		if (this.closed || this.failed || !this.pending) return;
++		try {
++			if (this.fd === undefined) {
++				mkdirSync(this.directory, { recursive: true, mode: 0o700 });
++				this.path = join(this.directory, `exec-${randomUUID()}.log`);
++				this.fd = openSync(this.path, "wx", 0o600);
++			}
++			const buffer = Buffer.from(this.pending, "utf8");
++			let offset = 0;
++			while (offset < buffer.length) {
++				const n = writeSync(this.fd, buffer, offset, buffer.length - offset);
++				if (!n) throw new Error("output archive write made no progress");
++				offset += n;
++				this.bytes += n;
++			}
++			this.pending = "";
++		} catch {
++			// A failed archive is explicitly incomplete; never fail the command.
++			this.failed = true;
++			this.close();
++		}
++	}
++	info() {
++		if (this.failed && !this.path) return { fullOutputComplete: false, fullOutputError: "Output archive unavailable" };
++		return this.path ? { fullOutputPath: this.path, fullOutputBytes: this.bytes, fullOutputComplete: !this.failed, fullOutputAppendOnly: true, ...(this.failed ? { fullOutputError: "Output archive is incomplete" } : {}) } : undefined;
++	}
++	close(): void {
++		if (this.fd !== undefined) { try { closeSync(this.fd); } catch { this.failed = true; } }
++		this.fd = undefined;
++		this.closed = true;
++		this.pending = "";
++	}
++}
 diff --git a/src/tools/exec/output-buffer.ts b/src/tools/exec/output-buffer.ts
 new file mode 100644
-index 0000000..10593c1
+index 0000000..2210209
 --- /dev/null
 +++ b/src/tools/exec/output-buffer.ts
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,159 @@
++import { ExecOutputArchive } from "./output-archive.ts";
 +import fs from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
@@ -3792,7 +4492,9 @@ index 0000000..10593c1
 +	private disposed = false;
 +	private readonly maxChars: number;
 +
-+	constructor(maxChars: number) {
++	readonly archive: ExecOutputArchive | undefined;
++	constructor(maxChars: number, archive?: ExecOutputArchive) {
++		this.archive = archive;
 +		this.maxChars = Math.max(1, Math.floor(maxChars));
 +	}
 +
@@ -3859,6 +4561,7 @@ index 0000000..10593c1
 +
 +	dispose(): void {
 +		this.disposed = true;
++		this.archive?.close();
 +		this.memory = "";
 +		this.closeSpool();
 +	}
@@ -3988,7 +4691,7 @@ index a5dbbd2..f9bec1b 100644
 +	return outputSince(session, baselineOffset, maxOutputTokens);
  }
 diff --git a/src/tools/exec/results.ts b/src/tools/exec/results.ts
-index 875fb71..9c8f8cd 100644
+index 875fb71..d1b67c1 100644
 --- a/src/tools/exec/results.ts
 +++ b/src/tools/exec/results.ts
 @@ -1,5 +1,5 @@
@@ -3998,7 +4701,18 @@ index 875fb71..9c8f8cd 100644
  
  export interface ExecResultSessionState extends ExecOutputSessionState {
  	id: number;
-@@ -18,15 +18,8 @@ function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot:
+@@ -10,23 +10,19 @@ export interface ExecResultSessionState extends ExecOutputSessionState {
+ 	terminating: boolean;
+ }
+ 
+-function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot: { output: string; original_token_count?: number | undefined }): UnifiedExecResult {
++function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot: { output: string; original_token_count?: number | undefined }, originalChars: number): UnifiedExecResult {
+ 	const result: UnifiedExecResult = { chunk_id: generateChunkId(), wall_time_seconds: waitMs / 1000, output: snapshot.output };
+ 	if (snapshot.original_token_count !== undefined) result.original_token_count = snapshot.original_token_count;
+ 	if (session.exitCode === undefined || session.exitCode === null) result.session_id = session.id;
+ 	else result.exit_code = session.exitCode;
++	if (snapshot.output.length < originalChars) session.buffer.archive?.preserve();
++	Object.assign(result, session.buffer.archive?.info());
  	return result;
  }
  
@@ -4012,32 +4726,62 @@ index 875fb71..9c8f8cd 100644
 -	}
 -	return result;
 +export function makeExecResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens: number | undefined): UnifiedExecResult {
-+	return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens));
++	const originalChars = session.buffer.endOffset - session.emittedOffset;
++	return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens), originalChars);
  }
  
  export function snapshotSession(session: ExecResultSessionState, maxOutputChars = 8_000): ExecSessionSnapshot {
-@@ -43,7 +36,7 @@ export function snapshotSession(session: ExecResultSessionState, maxOutputChars
+@@ -43,10 +39,11 @@ export function snapshotSession(session: ExecResultSessionState, maxOutputChars
  }
  
  export function makeSnapshotResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens?: number, unconsumedOnly = false): UnifiedExecResult {
 -	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : truncateOutput(session.buffer, maxOutputTokens);
+-	return fromSnapshot(session, waitMs, snapshot);
 +	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : peekOutputSince(session, session.buffer.startOffset, maxOutputTokens);
- 	return fromSnapshot(session, waitMs, snapshot);
++	const start = unconsumedOnly ? session.emittedOffset : session.buffer.startOffset;
++	return fromSnapshot(session, waitMs, snapshot, session.buffer.endOffset - start);
  }
  
+ export function makeSnapshotSince(session: ExecResultSessionState, waitMs: number, baselineOffset: number, maxOutputTokens?: number): UnifiedExecResult {
+-	return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens));
++	return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens), session.buffer.endOffset - baselineOffset);
+ }
 diff --git a/src/tools/exec/session-manager.ts b/src/tools/exec/session-manager.ts
-index 46755fc..75a01c8 100644
+index 46755fc..9cb02e6 100644
 --- a/src/tools/exec/session-manager.ts
 +++ b/src/tools/exec/session-manager.ts
-@@ -3,6 +3,7 @@ import { createBridgeSessionRuntime, type BridgeExecSession, type BridgeSessionH
+@@ -1,10 +1,18 @@
++import { ExecOutputArchive } from "./output-archive.ts";
+ import { normalizePipeOutput, truncateOutput, truncateToTail } from "./output.ts";
+ import { createBridgeSessionRuntime, type BridgeExecSession, type BridgeSessionHooks } from "./bridge-session.ts";
  import { DEFAULT_EXEC_YIELD_TIME_MS, DEFAULT_MAX_EMPTY_WRITE_YIELD_TIME_MS, DEFAULT_WRITE_YIELD_TIME_MS, clampExecYieldTime, clampWriteYieldTime, normalizeMinEmptyWriteYieldTime, normalizeMinNonInteractiveExecYieldTime, resolveExecution, resolveShell, resolveWorkdir } from "./shell.ts";
  import { registerAbortHandler, waitForExitOrInactivity } from "./wait.ts";
  import { makeExecResult, makeSnapshotResult, makeSnapshotSince, snapshotSession } from "./results.ts";
 +import { ExecOutputBuffer } from "./output-buffer.ts";
  
  export interface UnifiedExecResult {
++	interrupted?: boolean | undefined;
++	fullOutputPath?: string | undefined;
++	fullOutputError?: string | undefined;
++	fullOutputBytes?: number | undefined;
++	fullOutputComplete?: boolean | undefined;
++	fullOutputAppendOnly?: boolean | undefined;
  	chunk_id: string;
-@@ -136,12 +137,22 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 	wall_time_seconds: number;
+ 	output: string;
+@@ -27,6 +35,11 @@ export interface ExecSessionSnapshot {
+ export type ExecSessionChangeReason = "start" | "output" | "exit" | "terminate";
+ 
+ export interface ExecCommandInput {
++	/** Host-owned archive directory, never a model argument. */
++	archiveDirectory?: string | undefined;
++	/** Host-only evidence options for compound tools awaiting command completion. */
++	archiveAllOutput?: boolean | undefined;
++	captureInterruptedResult?: boolean | undefined;
+ 	cmd: string;
+ 	workdir?: string | undefined;
+ 	shell?: string | undefined;
+@@ -136,12 +149,26 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
  	function finishResult(session: ExecSession, waitMs: number, maxOutputTokens?: number): UnifiedExecResult {
  		const completed = session.exitCode !== undefined && session.exitCode !== null;
  		const replaySnapshot = completed ? makeSnapshotResult(session, waitMs, MAX_COMPLETED_SESSION_OUTPUT_TOKENS, true) : undefined;
@@ -4050,6 +4794,10 @@ index 46755fc..75a01c8 100644
 +		} else if (session.emittedOffset === session.buffer.endOffset) {
 +			// Release only after successful consumption; publish replay last.
 +			deleteSession(session);
++			// The narrower delivery may have created an archive after the replay snapshot.
++			const archive = session.buffer.archive?.info();
++			Object.assign(result, archive);
++			Object.assign(replaySnapshot, archive);
 +			rememberCompletedResult(session.id, { ...replaySnapshot, chunk_id: result.chunk_id, wall_time_seconds: result.wall_time_seconds });
 +		}
  		return result;
@@ -4063,9 +4811,11 @@ index 46755fc..75a01c8 100644
  	function notify(session: ExecSession, reason: ExecSessionChangeReason = "output"): void {
  		session.updatedAt = Date.now();
  		for (const listener of session.listeners) {
-@@ -174,14 +185,8 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+@@ -173,15 +200,10 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+ 
  	function appendOutput(session: ExecSession, text: string): void {
  		if (text.length === 0) return;
++		session.buffer.archive?.append(text);
  		const output = session.tty ? text : normalizePipeOutput(text);
 -		session.buffer += output;
 +		session.buffer.append(output);
@@ -4079,15 +4829,15 @@ index 46755fc..75a01c8 100644
  		notify(session);
  	}
  
-@@ -205,6 +210,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+@@ -205,6 +227,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
  			const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
  			const session = bridgeSessions.create({
  				id: nextSessionId++,
-+				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS)),
++				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS), input.archiveDirectory ? new ExecOutputArchive(input.archiveDirectory, input.archiveAllOutput ? 0 : Math.min(32768, Math.max(256, (input.max_output_tokens ?? 10000) * 4))) : undefined),
  				input: {
  					command: input.cmd,
  					executionCommand: execution.command,
-@@ -247,12 +253,12 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+@@ -247,12 +270,38 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
  					idleTimeMs = Math.min(maxExecWaitMs, idleTimeMs * 2);
  				}
  				await bridgeSessions.waitForStartup(session, signal);
@@ -4098,11 +4848,37 @@ index 46755fc..75a01c8 100644
  				return finishResult(session, waitedMs, input.max_output_tokens);
  			} catch (error) {
 -				if (signal?.aborted) sessions.delete(session.id);
++				if (signal?.aborted && input.captureInterruptedResult) {
++					// Collect the terminated process's final bytes before disposal. Ordinary
++					// exec cancellation keeps its existing throwing contract.
++					try {
++						await session.startup;
++						await bridgeSessions.terminate(session);
++						const deadline = Date.now() + 5_000;
++						while (!session.finalized && Date.now() < deadline) await bridgeSessions.poll(session, bridgeHooks, 100);
++						session.buffer.archive?.preserve();
++						const result = makeSnapshotResult(session, Date.now() - session.startedAt, input.max_output_tokens);
++						if (!session.finalized) {
++							result.fullOutputComplete = false;
++							result.fullOutputError = "Command termination was not confirmed; output may be incomplete";
++							exposeSession(session);
++						} else {
++							deleteSession(session);
++							Object.assign(result, session.buffer.archive?.info());
++						}
++						return { ...result, interrupted: true };
++					} catch {
++						session.buffer.archive?.preserve();
++						const result = makeSnapshotResult(session, Date.now() - session.startedAt, input.max_output_tokens);
++						deleteSession(session);
++						return { ...result, interrupted: true, fullOutputComplete: false, fullOutputError: "Interrupted command cleanup or output capture failed" };
++					}
++				}
 +				if (signal?.aborted) deleteSession(session);
  				throw error;
  			} finally {
  				abortCleanup();
-@@ -274,7 +280,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+@@ -274,7 +323,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
  				}
  				throw new Error(`Unknown process id ${input.session_id}`);
  			}
@@ -4111,7 +4887,7 @@ index 46755fc..75a01c8 100644
  			const chars = input.chars ?? "";
  			const isEmptyPoll = chars.length === 0;
  			if (!isEmptyPoll) {
-@@ -306,7 +312,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+@@ -306,7 +355,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
  						)
  					: 0;
  			await bridgeSessions.waitForStartup(session, signal);
@@ -4120,7 +4896,7 @@ index 46755fc..75a01c8 100644
  			if (isEmptyPoll && (session.exitCode === undefined || session.exitCode === null))
  				session.nextEmptyPollYieldMs = growEmptyPollYield(effectiveYieldMs, maxEmptyWriteYieldTimeMs);
  			return finishResult(session, waitedMs, input.max_output_tokens);
-@@ -344,13 +350,23 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
+@@ -344,13 +393,23 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
  		},
  		shutdown: () => shutdownPromise ??= (async () => {
  			shuttingDown = true;

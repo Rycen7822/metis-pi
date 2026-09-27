@@ -1,8 +1,10 @@
 import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, type ToolName, type ViewContext } from "./tool-names.ts";
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
+import { fusionRenderers } from "./fusion-view.ts";
 
 export const OWNED_CONVERSION_ENTRY = fileURLToPath(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url));
+export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fusion.ts", import.meta.url));
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.
 // No tool registration, execution replacement, context middleware or TUI root patch.
@@ -82,6 +84,9 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const source = asRecord(info.sourceInfo);
+    if ((name === "edit" || name === "write") && typeof source.source === "string" && source.path === OWNED_FUSION_ENTRY) {
+      return fusionRenderers(options.renderers[name], options.renderers.bash, () => current.result);
+    }
     if (name === "exec_command" && options.highlightOwnedCommand && typeof source.source === "string" && source.path === OWNED_CONVERSION_ENTRY) {
       const call = definition.renderCall;
       const result = definition.renderResult;
@@ -103,11 +108,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       const call = definition.renderCall;
       const result = definition.renderResult;
       if (typeof call !== "function" || typeof result !== "function") return;
-      return {
+      return fusionRenderers({
         renderCall: (args, theme, context) => patch.renderCall(args, theme, context) ?? call(args, theme, context),
         // Preserve the conversion layer's success/error/partial-failure protocol.
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
-      };
+      }, options.renderers.bash, () => current.result);
     }
     if (!TOOL_NAMES.includes(name as ToolName)) return;
     if (source.source !== "builtin" || source.path !== `<builtin:${name}>`) return;

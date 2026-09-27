@@ -111,11 +111,11 @@ export function pruneMessages(messages, indexer, chainCompression, errorPurge, p
         const ref = indexer.getShortRefForToolCallId(lookupKey) ?? msg.toolCallId;
         const text = record?.spillPath
             ? [
-                `[Oversized output spilled to file — ${record.spillBytes ?? "?"} bytes.]`,
+                `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
                 `Tool: ${record.toolName}`,
-                `Preview (head):`,
+                record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
                 record.resultPreview ?? "",
-                `Full output — read this file (offset/limit supported): ${record.spillPath}`,
+                `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
                 `Or use context_tree_query with ref \`${ref}\`.`,
             ].join("\n")
             : `[Summarized in pruner summary, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
@@ -124,7 +124,7 @@ export function pruneMessages(messages, indexer, chainCompression, errorPurge, p
             toolCallId: msg.toolCallId,
             toolName: msg.toolName,
             content: [{ type: "text", text }],
-            isError: false,
+            isError: record?.archiveSource === "fused-command-output" ? msg.isError : false,
             timestamp: msg.timestamp,
         };
     });

@@ -495,6 +495,26 @@ export interface ErrorPurgeConfig {
 export declare const DEFAULT_CONFIG: ContextPruneConfig;
 /** A single tool call + its result as captured from turn_end */
 export interface CapturedToolCall {
+    /** Immutable mutation/status prefix; command body may live in an external archive. */
+    resultPrefix?: string;
+    fusionCommand?: {
+        command: string;
+        output: string;
+    };
+    /** Undefined for running or legacy exec results; only a confirmed zero exit permits packing. */
+    exitCode?: number;
+    /** Provenance of an execution-layer archive, distinct from captured display text. */
+    archiveSource?: "command-output" | "fused-command-output" | "fusion-journal";
+    archiveComplete?: boolean;
+    archiveAppendOnly?: boolean;
+    outputArchive?: {
+        path: string;
+        bytes?: number;
+        offsetBytes?: number;
+        complete: boolean;
+        appendOnly?: boolean;
+        source?: "fused-command-output" | "fusion-journal";
+    };
     toolCallId: string;
     toolName: string;
     args: Record<string, unknown>;
@@ -537,6 +557,11 @@ export interface CapturedBatch {
  * Contains the full original tool output for context_tree_query recovery.
  */
 export interface ToolCallRecord {
+    resultPrefix?: string;
+    /** Provenance of an execution-layer archive, distinct from captured display text. */
+    archiveSource?: "command-output" | "fused-command-output" | "fusion-journal";
+    archiveComplete?: boolean;
+    archiveAppendOnly?: boolean;
     toolCallId: string;
     toolName: string;
     args: Record<string, unknown>;

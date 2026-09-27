@@ -1,9 +1,10 @@
 import { Type } from "typebox";
-import { type ExtensionAPI, type ToolDefinition, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type ToolDefinition, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { parsePatchActions } from "../../patch/parser.ts";
 import { resolvePatchPath } from "../../patch/paths.ts";
 import { ExecutePatchError, type ExecutePatchResult } from "../../patch/types.ts";
+import { executeFusion, fusionFailed, fusionReceipt, validateThenRun, THEN_RUN_SCHEMA, type FusionCommandRunner } from "../action-fusion.ts";
 import { getExperimentalToolSampling } from "../tool-sampling.ts";
 import {
 	recordApplyPatchDisplayInput,
@@ -24,6 +25,7 @@ import {
 } from "./render-state.ts";
 
 const APPLY_PATCH_PARAMETERS = Type.Object({
+	then_run: THEN_RUN_SCHEMA,
 	input: Type.String({
 		description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk; use one unchanged context line for a pure move. Order each file's hunks top-to-bottom; indentation is literal",
 	}),
@@ -43,6 +45,7 @@ export type ApplyPatchRenderCall = NonNullable<ApplyPatchToolDefinition["renderC
 export type ApplyPatchRenderResult = NonNullable<ApplyPatchToolDefinition["renderResult"]>;
 
 export interface ApplyPatchToolOptions {
+	runThenRun?: ((ctx: ExtensionContext) => FusionCommandRunner) | undefined;
 	customRustBinariesDir?: string | undefined;
 	promptSnippet?: boolean | undefined;
 	showDiffWhenCollapsed?: boolean | undefined;
@@ -57,11 +60,13 @@ function parseApplyPatchParams(params: unknown): { patchText: string } {
 	return { patchText: params.input };
 }
 
-function prepareApplyPatchArguments(args: unknown): { input: string } {
+function prepareApplyPatchArguments(args: unknown): { input: string; then_run?: import("../action-fusion.ts").ThenRunInput } {
 	if (args && typeof args === "object") {
-		if ("input" in args && typeof args.input === "string") return { input: args.input };
-		if ("patchText" in args && typeof args.patchText === "string") return { input: args.patchText };
-		if ("patch" in args && typeof args.patch === "string") return { input: args.patch };
+		const thenRun = "then_run" in args ? validateThenRun(args.then_run) : undefined;
+		const extra = thenRun === undefined ? {} : { then_run: thenRun };
+		if ("input" in args && typeof args.input === "string") return { input: args.input, ...extra };
+		if ("patchText" in args && typeof args.patchText === "string") return { input: args.patchText, ...extra };
+		if ("patch" in args && typeof args.patch === "string") return { input: args.patch, ...extra };
 	}
 	return args as { input: string };
 }
@@ -164,7 +169,7 @@ function renderCompactApplyPatchCall(theme: { fg(role: string, text: string): st
 	return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
 }
 
-export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ApplyPatchToolDefinition {
+function createPlainApplyPatchTool(options: ApplyPatchToolOptions): ApplyPatchToolDefinition {
 	const constrainedSampling = getExperimentalToolSampling("apply_patch");
 	const compactRendering = (context?: ApplyPatchRenderContextLike) => shouldCompactApplyPatchDisplay(context?.toolCallId, context?.executionStarted);
 	const defaultRenderCall: ApplyPatchRenderCall = (args, theme, context) =>
@@ -270,13 +275,33 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): Apply
 	} satisfies ApplyPatchToolDefinition;
 }
 
+export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ToolDefinition<typeof APPLY_PATCH_PARAMETERS, unknown> {
+	const base = createPlainApplyPatchTool(options);
+	return {
+		...base,
+		async execute(id, params, signal, update, ctx) {
+			const input = validateThenRun(params.then_run);
+			if (input && !options.runThenRun) throw new Error("then_run executor unavailable");
+			return executeFusion({ paths: touchedPatchPaths(ctx.cwd, params.input), thenRun: input, signal,
+				mutate: () => base.execute(id, params, signal, undefined, ctx),
+				run: options.runThenRun?.(ctx) ?? (async () => { throw new Error("then_run executor unavailable"); }),
+				onUpdate: update,
+			});
+		},
+		renderResult(result, display, theme, context) {
+			if (fusionReceipt(result.details)) return new Text(result.content.filter(b => b.type === "text").map(b => b.text).join("\n"), 0, 0);
+			return base.renderResult!(result as Parameters<NonNullable<typeof base.renderResult>>[0], display, theme, context);
+		},
+	} satisfies ToolDefinition<typeof APPLY_PATCH_PARAMETERS, unknown>;
+}
+
 export function registerApplyPatchTool(pi: ExtensionAPI, options: ApplyPatchToolOptions = {}): void {
 	pi.registerTool(createApplyPatchTool(options));
 }
 
 export function registerApplyPatchResultEvent(pi: ExtensionAPI): void {
 	pi.on("tool_result", (event) => {
-		if (event.toolName === "apply_patch" && isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure") {
+		if (event.toolName === "apply_patch" && (fusionFailed(event.details) || (isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure"))) {
 			return { isError: true };
 		}
 		return undefined;

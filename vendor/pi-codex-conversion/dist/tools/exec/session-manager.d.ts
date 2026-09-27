@@ -1,4 +1,10 @@
 export interface UnifiedExecResult {
+    interrupted?: boolean | undefined;
+    fullOutputPath?: string | undefined;
+    fullOutputError?: string | undefined;
+    fullOutputBytes?: number | undefined;
+    fullOutputComplete?: boolean | undefined;
+    fullOutputAppendOnly?: boolean | undefined;
     chunk_id: string;
     wall_time_seconds: number;
     output: string;
@@ -18,6 +24,11 @@ export interface ExecSessionSnapshot {
 }
 export type ExecSessionChangeReason = "start" | "output" | "exit" | "terminate";
 export interface ExecCommandInput {
+    /** Host-owned archive directory, never a model argument. */
+    archiveDirectory?: string | undefined;
+    /** Host-only evidence options for compound tools awaiting command completion. */
+    archiveAllOutput?: boolean | undefined;
+    captureInterruptedResult?: boolean | undefined;
     cmd: string;
     workdir?: string | undefined;
     shell?: string | undefined;

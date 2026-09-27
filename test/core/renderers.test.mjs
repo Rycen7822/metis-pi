@@ -3,8 +3,29 @@ import assert from "node:assert/strict";
 import { formatCall, formatResult, makeRenderers, parseDisplayDiff, renderDiffLines } from "../../src/renderers.ts";
 import { theme, FakeText, deepFreeze, sessionStub } from "../helpers.mjs";
 import { layout } from "../helpers/layout.mjs";
+import { fusionRenderers } from "../../src/fusion-view.ts";
 
 const result = (text) => ({ content: [{ type: "text", text }] });
+
+test("fusion display retains successful write diff while the following command fails", () => {
+  const renderers = makeRenderers(text => new FakeText(text), () => "expand");
+  const fused = {
+    isError: true,
+    content: [{ type: "text", text: "Written" }, { type: "text", text: "[then_run:failed] npm test" }, { type: "text", text: "TEST FAILED" }],
+    details: { metisWriteDiff: { kind: "add", added: 1, removed: 0, rows: [{ kind: "add", lineNumber: 1, content: "saved" }] },
+      metisActionFusion: { version: 1, mutationStatus: "success", command: { command: "npm test", status: "failed", exitCode: 1, outputBlock: 2 } } },
+  };
+  const view = fusionRenderers(renderers.write, renderers.bash, () => fused);
+  const ctx = { args: { path: "file", content: "saved" }, isError: true, isPartial: false };
+  const title = view.renderCall(ctx.args, theme, ctx).render(80).join("\n");
+  const body = view.renderResult(fused, { expanded: true }, theme, ctx).render(80).join("\n");
+  assert.match(title, /Added file/);
+  assert.match(body, /saved/);
+  assert.match(body, /TEST FAILED/);
+  assert.doesNotMatch(body, /write failed|not written/);
+  assert.equal(fused.isError, true, "rendering cannot mutate the tool's actual failure");
+  assert.equal(fused.details.metisActionFusion.command.exitCode, 1);
+});
 
 test("completion and error labels do not rely on mutating shared renderer state", () => {
   const args = deepFreeze({ command: "printf hello" });

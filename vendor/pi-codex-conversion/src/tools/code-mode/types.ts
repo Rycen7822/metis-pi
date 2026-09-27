@@ -165,6 +165,8 @@ export type RuntimeResponse = (
 			errorText?: string | undefined;
 	  }
 ) & {
+	fusionEvidence?: import("./fusion-evidence.js").FusionEvidenceRef | undefined;
+	fusionEvidenceError?: string | undefined;
 	maxOutputTokens?: number | undefined;
 	missingCell?: true | undefined;
 	execSessionIds?: number[] | undefined;

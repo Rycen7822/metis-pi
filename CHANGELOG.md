@@ -4,7 +4,11 @@
 
 ## Unreleased
 
-- 内置 pi-condense 2.11.0，沿用现有 `contextPrune`、`/pruner`、归档格式和压缩策略；已有外部恢复工具时跳过内置实例并提示迁移。`context_tree_query` 增加 UTF-8 分页、总返回预算和显式归档缺失错误；摘要用量单列展示，不重复计入 footer 的标准会话 usage。
+- 增加 Action Fusion：Pi 原生 edit/write、普通 apply_patch 的可选 `then_run`，以及 Code/Notebook 的 `apply_patch_then_run`。保留修改与命令独立状态、命令前 diff、取消/超时及完整日志；嵌套回执独立于显示 trace 持久化，可由 condense 索引和分页恢复。
+
+- condense 在最终回复边界先精简成功 build/test 输出，再按现有 `minBatchChars` 判断模型调用；程序保留恢复引用，停止自动二次链摘要。Codex 大输出在显示截断前写入会话归档，导入原生 bash 完整日志；预热共用压缩投影，goal 动态计数移出系统前缀。
+
+- 内置 pi-condense 2.11.0，沿用现有 `contextPrune`、`/pruner`、归档兼容性；已有外部恢复工具时跳过内置实例并提示迁移。`context_tree_query` 增加 UTF-8 分页、总返回预算和显式归档缺失错误；摘要用量单列展示，不重复计入 footer 的标准会话 usage。
 
 - 修复细竖线假光标遮住光标下方字符：改用终端真实竖线光标，去掉宿主字符上的反色但不替换字符；保留输入法定位、宽字符占位及草稿内容，卸载时恢复终端光标形状。
 - 将模型 id、推理深度、provider 与上下文占用从输入框下沿的 metadata widget 移至 footer，与路径、会话 I/O、cache 按顺序排布；窄屏按字段换行，不再使用同底色 widget。

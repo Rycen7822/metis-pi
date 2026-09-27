@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { copyFrame as renderFrame, installCopyPrototypes, select } from "../helpers/ui-fixtures.mjs";
+import { makeRenderers } from "../../src/renderers.ts";
+import { fusionRenderers } from "../../src/fusion-view.ts";
+import { theme as toolTheme } from "../helpers.mjs";
 
 test.beforeEach((t) => installCopyPrototypes(t, undefined, { renderLatex: () => null }));
 const theme = {
@@ -25,6 +28,23 @@ test("copy provenance: dropped spaces bridge selected rows, never shift partial 
     });
     assert.equal(select(frame, 1, 1, () => ({ start: 0, end: 2 })).text, "be", "no bridge without the preceding row");
     assert.equal(select(frame, 2, 2, () => ({ start: 5, end: 7 })).text, "  ", "selected trailing spaces are content");
+  }
+});
+
+test("fusion composition retains exact diff and command copy across narrow wraps", () => {
+  const renderers = makeRenderers(text => new Tui.Text(text, 0, 0), () => "expand");
+  const output = "command output with 中文 and several   spaces after wrapping";
+  const result = { content: [{ type: "text", text: "Written" }, { type: "text", text: "[then_run:failed] npm test" }, { type: "text", text: output }],
+    details: { metisWriteDiff: { kind: "add", added: 1, removed: 0, rows: [{ kind: "add", lineNumber: 1, content: "saved" }] },
+      metisActionFusion: { version: 1, mutationStatus: "success", command: { command: "npm test", status: "failed", exitCode: 1, outputBlock: 2 } } } };
+  const view = fusionRenderers(renderers.write, renderers.bash, () => result);
+  for (const width of [18, 80]) {
+    const component = view.renderResult(result, { expanded: true }, toolTheme, { args: { path: "file", content: "saved" }, isError: true, isPartial: false });
+    const copied = select(renderFrame(component, width));
+    assert.ok(copied.text.includes(output), "soft wraps must recover the original command spacing");
+    assert.match(copied.text, /saved/);
+    assert.match(copied.text, /then_run:failed/);
+    assert.equal(copied.nativeRows, 0, "all composed rows retain their child provenance");
   }
 });
 

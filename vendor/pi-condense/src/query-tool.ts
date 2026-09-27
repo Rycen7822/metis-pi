@@ -12,6 +12,8 @@ interface Page {
   ref: string;
   occurrence?: string;
   legacy?: boolean;
+  source?: string;
+  archiveComplete?: boolean;
   turnIndex?: number;
   tool?: string;
   status?: string;
@@ -51,9 +53,14 @@ async function readPage(record: ToolCallRecord, offset: number, budget: number) 
   const file = await open(record.spillPath, "r");
   try {
     const stat = await file.stat();
-    const bytes = Buffer.alloc(Math.min(budget + 4, Math.max(0, stat.size - offset)));
-    const { bytesRead } = await file.read(bytes, 0, bytes.length, offset);
-    return { bytes: bytes.subarray(0, bytesRead), total: stat.size, version: `${stat.size}:${stat.mtimeMs}:${stat.ino}` };
+    const bodyBytes = record.archiveAppendOnly ? record.spillBytes! : stat.size;
+    if (stat.size < bodyBytes) throw new Error("Archived snapshot is incomplete");
+    const prefix = Buffer.from(record.resultPrefix && (record.archiveSource === "fused-command-output" || record.archiveSource === "fusion-journal") ? `${record.resultPrefix}\n` : "", "utf8");
+    const total = prefix.length + bodyBytes;
+    const bytes = Buffer.alloc(Math.min(budget + 4, Math.max(0, total - offset)));
+    const prefixBytes = offset < prefix.length ? prefix.copy(bytes, 0, offset, Math.min(prefix.length, offset + bytes.length)) : 0;
+    const { bytesRead } = await file.read(bytes, prefixBytes, bytes.length - prefixBytes, Math.max(0, offset - prefix.length));
+    return { bytes: bytes.subarray(0, prefixBytes + bytesRead), total, version: record.archiveAppendOnly ? `${total}:${stat.ino}` : `${stat.size}:${stat.mtimeMs}:${stat.ino}` };
   } finally { await file.close(); }
 }
 
@@ -101,9 +108,11 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
           page = {
             ...page, occurrence: record.resultTimestamp === undefined ? record.toolCallId : `${record.toolCallId}@${record.resultTimestamp}`,
             legacy: record.resultTimestamp === undefined, turnIndex: record.turnIndex,
+            source: record.archiveSource ?? "tool-result", archiveComplete: record.archiveComplete,
             tool: record.toolName, status: record.isError ? "ERROR" : "OK",
             argsPreview: args.slice(0, 256), argsTruncated: args.length > 256,
           };
+          if (record.archiveComplete === false) page.error = "Execution archive is incomplete; only the captured prefix is available.";
           let source;
           try { source = await readPage(record, current.offset, budget); }
           catch (error) {

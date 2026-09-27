@@ -1,5 +1,5 @@
 import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput } from "./output.js";
-function fromSnapshot(session, waitMs, snapshot) {
+function fromSnapshot(session, waitMs, snapshot, originalChars) {
     const result = { chunk_id: generateChunkId(), wall_time_seconds: waitMs / 1000, output: snapshot.output };
     if (snapshot.original_token_count !== undefined)
         result.original_token_count = snapshot.original_token_count;
@@ -7,10 +7,14 @@ function fromSnapshot(session, waitMs, snapshot) {
         result.session_id = session.id;
     else
         result.exit_code = session.exitCode;
+    if (snapshot.output.length < originalChars)
+        session.buffer.archive?.preserve();
+    Object.assign(result, session.buffer.archive?.info());
     return result;
 }
 export function makeExecResult(session, waitMs, maxOutputTokens) {
-    return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens));
+    const originalChars = session.buffer.endOffset - session.emittedOffset;
+    return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens), originalChars);
 }
 export function snapshotSession(session, maxOutputChars = 8_000) {
     return {
@@ -26,8 +30,9 @@ export function snapshotSession(session, maxOutputChars = 8_000) {
 }
 export function makeSnapshotResult(session, waitMs, maxOutputTokens, unconsumedOnly = false) {
     const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : peekOutputSince(session, session.buffer.startOffset, maxOutputTokens);
-    return fromSnapshot(session, waitMs, snapshot);
+    const start = unconsumedOnly ? session.emittedOffset : session.buffer.startOffset;
+    return fromSnapshot(session, waitMs, snapshot, session.buffer.endOffset - start);
 }
 export function makeSnapshotSince(session, waitMs, baselineOffset, maxOutputTokens) {
-    return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens));
+    return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens), session.buffer.endOffset - baselineOffset);
 }

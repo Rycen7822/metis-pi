@@ -4,6 +4,7 @@ import { runCodeModeToolWithHooks } from "./nested-tool-completion.js";
 import { codeModeNameForToolIdentity } from "./tool-identity.js";
 import { CodeModeNestedRenderStore } from "./trace-render-state.js";
 import { CodeModeTraceStore } from "./trace-store.js";
+import { FusionEvidenceStore } from "./fusion-evidence.js";
 import { toolResultFromValue, truncateTraceText } from "./trace-values.js";
 const MAX_TRACE_ERROR_CHARS = 16_384;
 const MAX_NOTIFICATION_CHARS = 16_384;
@@ -20,6 +21,7 @@ export class CodeModeDelegateRuntime {
     blockerChanges = new Map();
     sequentialTails = new Map();
     traces = new CodeModeTraceStore();
+    fusionEvidence = new FusionEvidenceStore();
     cleanupTimers = new Map();
     send;
     renderStore;
@@ -50,6 +52,7 @@ export class CodeModeDelegateRuntime {
             this.notifications.delete(cellId);
             this.execSessions.delete(cellId);
             this.traces.delete(cellId);
+            this.fusionEvidence.delete(cellId);
         }, 1_000));
     }
     clear() {
@@ -59,6 +62,7 @@ export class CodeModeDelegateRuntime {
         this.cellContexts.clear();
         this.cellTools.clear();
         this.traces.clear();
+        this.fusionEvidence.clear();
         this.renderStore.clear();
         this.notifications.clear();
         this.execSessions.clear();
@@ -145,8 +149,12 @@ export class CodeModeDelegateRuntime {
         if (response.kind !== "yielded")
             this.execSessions.delete(response.cellId);
         const withTraces = this.traces.attach(response);
+        const evidence = this.fusionEvidence.take(response.cellId);
+        if (response.kind !== "yielded")
+            this.fusionEvidence.delete(response.cellId);
         return {
             ...withTraces,
+            ...evidence,
             ...(execSessionIds.length > 0 ? { execSessionIds } : {}),
             contentItems: [
                 ...notifications.map((text) => ({ type: "input_text", text })),
@@ -208,6 +216,7 @@ export class CodeModeDelegateRuntime {
             },
             captureResult: (result) => {
                 finalResultCaptured = true;
+                this.fusionEvidence.capture(cellId, trace.id, trace.name, input, result, currentContext());
                 resultSessionId = numericSessionId(result.details);
                 if (captureRendererValues)
                     this.renderStore.captureResult(trace.id, result);

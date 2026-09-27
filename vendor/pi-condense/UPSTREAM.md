@@ -7,6 +7,8 @@
 - Scope: upstream `index.ts` and production `src/` files. Upstream tests, development tooling and documentation are not included in the runtime payload.
 - The npm manifest retains upstream peer ownership, with `typebox` matching the host Pi API instead of the older `@sinclair/typebox` import.
 
+Automatic compression scheduling, deterministic packing and durable output import are local changes listed in `PATCHES.md`; this is not an unchanged upstream compression policy.
+
 `extensions/condense.ts` is the only metis-pi entry. It loads committed `dist/index.js`; neither installation nor startup depends on `references/`.
 
 Build with `node scripts/vendor-condense.mjs build`; type-check with `check`; compare a fresh temporary build with shipped files using `fresh`. The root vendor build/check/fresh commands include these checks. Build products are committed with source changes.

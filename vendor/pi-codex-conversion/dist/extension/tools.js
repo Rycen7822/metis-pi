@@ -1,3 +1,4 @@
+import { runExecFusionCommand } from "../tools/action-fusion-command.js";
 import { registerCodexToolProviderPolicy, registerCodexToolProviderResolver, resolveCodexToolProvider, } from "../adapter/codex-tool-provider.js";
 import { isResponsesModel } from "../adapter/prompt/codex-model.js";
 import { registerApplyPatchResultEvent, registerApplyPatchTool, } from "../tools/apply-patch/tool.js";
@@ -23,6 +24,7 @@ export function registerCodexTools(pi, runtime) {
     });
     const registerCore = (config) => {
         registerApplyPatchTool(pi, {
+            runThenRun: (ctx) => (input, signal, update) => runExecFusionCommand(runtime.sessions, input, ctx, signal, update),
             customRustBinariesDir: config.tools.customRustBinariesDir,
             showDiffWhenCollapsed: config.ui.compactTools === "off",
         });

@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
 import { createExecSessionManager } from "../../vendor/pi-codex-conversion/dist/tools/exec/session-manager.js";
+import { createExecCommandTool } from "../../vendor/pi-codex-conversion/dist/tools/exec/command-tool.js";
+import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/dist/tools/exec/command-state.js";
+import { captureBatch } from "../../vendor/pi-condense/dist/src/batch-capture.js";
+import { packToolResult } from "../../vendor/pi-condense/dist/src/packing.js";
 import { waitForExitOrInactivity } from "../../vendor/pi-codex-conversion/dist/tools/exec/wait.js";
 import { trackExecSpools } from "../helpers/exec.mjs";
 
@@ -39,6 +45,72 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		const quote = (text) => `'${text.replaceAll("'", `'"'"'`)}'`;
 		return { cmd: `${quote(process.execPath)} -e ${quote(script)}`, shell: "/bin/sh", login: false, ...options };
 	}
+
+	test("durable capture retains the entire decoded process stream before normalization and ring eviction", { timeout: 15000 }, async (t) => {
+		const directory = fs.mkdtempSync(join(tmpdir(), "metis-exec-archive-"));
+		t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+		const { manager, exec } = nativeExec(t, { maxSessionBufferChars: 1024 });
+		const expected = "FIRST\r\n" + "x".repeat(100000) + "\u001b[31mLAST\r\n";
+		const result = await exec(`process.stdout.write(${JSON.stringify(expected)})`, { archiveDirectory: directory, wait_until_exit: true, max_output_tokens: 64 });
+		assert.equal(result.exit_code, 0);
+		assert.ok(result.output.length <= 256);
+		assert.equal(result.fullOutputComplete, true);
+		assert.equal(result.fullOutputAppendOnly, true);
+		assert.equal(result.fullOutputBytes, Buffer.byteLength(expected));
+		assert.equal(fs.readFileSync(result.fullOutputPath, "utf8"), expected);
+		await manager.shutdown();
+		assert.equal(fs.readFileSync(result.fullOutputPath, "utf8"), expected, "session disposal does not remove durable output");
+	});
+
+	for (const smallerRing of [false, true]) test(`durable capture follows ${smallerRing ? "ring eviction" : "a smaller polling budget"} and completed replay`, { timeout: 15000 }, async (t) => {
+		const directory = fs.mkdtempSync(join(tmpdir(), "metis-exec-budget-"));
+		t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+		const { manager, exec } = nativeExec(t, smallerRing ? { maxSessionBufferChars: 1024 } : {});
+		const expected = "FIRST\r\n" + "x".repeat(8000) + "LAST";
+		let result, sessionId;
+		if (smallerRing) {
+			result = await exec(`process.stdout.write(${JSON.stringify(expected)})`, { archiveDirectory: directory, wait_until_exit: true });
+			sessionId = 1;
+		} else {
+			const release = join(directory, "release");
+			const first = await exec(`const fs=require('node:fs'); const timer=setInterval(()=>{ if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);process.stdout.write(${JSON.stringify(expected)});} },25)`, { archiveDirectory: directory, yield_time_ms: 250 });
+			sessionId = first.session_id;
+			assert.ok(sessionId);
+			fs.writeFileSync(release, "go");
+			result = await manager.write({ session_id: sessionId, yield_time_ms: 2000, max_output_tokens: 64 });
+		}
+		assert.equal(result.exit_code, 0);
+		assert.ok(result.output.length <= (smallerRing ? 1024 : 256));
+		assert.ok(result.fullOutputPath, "every omitted range must have a durable original");
+		assert.equal(fs.readFileSync(result.fullOutputPath, "utf8"), expected);
+		const replay = await manager.write({ session_id: sessionId, max_output_tokens: 64 });
+		assert.equal(replay.fullOutputPath, result.fullOutputPath, "completed replay must retain a late-created archive");
+		await manager.shutdown();
+		assert.equal(fs.readFileSync(result.fullOutputPath, "utf8"), expected);
+	});
+
+	test("deterministic exec packing requires an observed successful exit", { timeout: 15000 }, async (t) => {
+		const directory = fs.mkdtempSync(join(tmpdir(), "metis-exec-status-"));
+		t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+		const { manager } = nativeExec(t);
+		const log = Array.from({ length: 100 }, (_, i) => `artifact ${i}: ` + "x".repeat(55)).join("\n");
+		for (const status of [7, "running", 0]) {
+			fs.writeFileSync(join(directory, "build.cjs"), `process.stdout.write(${JSON.stringify(log)});` + (status === "running" ? "setInterval(()=>{},1000)" : `process.exitCode=${status}`));
+			fs.writeFileSync(join(directory, "package.json"), JSON.stringify({ scripts: { build: "node build.cjs" } }));
+			const tool = createExecCommandTool(createExecCommandTracker(), manager, { waitForNonInteractiveExit: status !== "running" });
+			const args = { cmd: "npm run build", workdir: directory, shell: "/bin/sh", login: false, yield_time_ms: 250 };
+			const returned = await tool.execute(`status-${status}`, args, undefined, undefined, { cwd: directory });
+			assert.equal(returned.details.exit_code, status === "running" ? undefined : status);
+			const batch = captureBatch({ content: [{ type: "toolCall", id: `status-${status}`, name: "exec_command", arguments: args }] }, [{ ...returned, toolCallId: `status-${status}`, timestamp: 1 }], 1, 1);
+			const packed = packToolResult(batch.toolCalls[0]);
+			if (status === 0) assert.ok(packed, "successful exec still takes the local packing path");
+			else assert.equal(packed, undefined, `${status} exec must preserve its diagnostics`);
+			if (returned.details.session_id) manager.terminateSession(returned.details.session_id);
+		}
+		const small = await manager.exec(command("process.stdout.write('small')", { archiveDirectory: directory, wait_until_exit: true }), directory);
+		assert.equal(small.output, "small");
+		assert.equal(small.fullOutputPath, undefined, "untruncated small results remain inline");
+	});
 
 	const text = "first\n" + "x".repeat(2 * Mi) + "🙂last\n";
 	for (const scenario of [

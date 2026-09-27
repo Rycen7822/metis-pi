@@ -55,6 +55,8 @@ export function toCodeModeToolResult(
 	return {
 		content: [
 			{ type: "text" as const, text: status },
+			...(response.fusionEvidence ? [{ type: "text" as const, text: `Fused tool evidence: ${response.fusionEvidence.path} (bytes ${response.fusionEvidence.offsetBytes}..${response.fusionEvidence.offsetBytes + response.fusionEvidence.bytes}); contains mutation outcomes and exact command log paths.` }] : []),
+			...(response.fusionEvidenceError ? [{ type: "text" as const, text: response.fusionEvidenceError }] : []),
 			...(memoryWarning ? [{ type: "text" as const, text: memoryWarning }] : []),
 			...(response.execSessionIds ?? []).map((sessionId) => ({
 				type: "text" as const,
@@ -66,6 +68,8 @@ export function toCodeModeToolResult(
 			codeMode: true,
 			cellId: response.cellId,
 			status: response.kind,
+			...(response.fusionEvidence ? { fusionEvidence: response.fusionEvidence } : {}),
+			...(response.fusionEvidenceError ? { fusionEvidenceError: response.fusionEvidenceError } : {}),
 			...(response.traces ? { traces: response.traces } : {}),
 			...(response.droppedTraceCount
 				? { droppedTraceCount: response.droppedTraceCount }

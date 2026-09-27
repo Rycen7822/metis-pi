@@ -10,7 +10,8 @@
 | `extensions/skill-mux.ts` / `skill-entry.ts` | skill 输入展开/补全、标签和点击折叠。 |
 | `extensions/todo.ts` → `src/todo/` | todo 工具、命令、持久化和面板。 |
 | `extensions/goal.ts` → `src/goal-state.ts` | 入口拥有宿主 I/O、命令、提示与工具；状态核心拥有目标、时钟、分支恢复和回合用量。 |
-| `extensions/condense.ts` → `vendor/pi-condense/dist/index.js` | 单一加载入口、重复安装检测和摘要用量展示；vendor 拥有归档、压缩与恢复。 |
+| `extensions/condense.ts` → `vendor/pi-condense/dist/index.js` | 单一加载入口、重复安装检测和摘要用量展示；vendor 拥有归档、最终回复精简/摘要决策与分页恢复。 |
+| `extensions/action-fusion.ts` | 只包装 Pi 内建 edit/write，扩展 `then_run`，冻结 write 修改快照并管理关闭时的取消。 |
 | vendor `src/extension/register.ts` | Codex 转换层组合根，通过构建后的 `dist/index.js` 加载。 |
 
 显示适配保留 Pi 原生执行与结果；工具注册和模型上下文处理由独立 goal/todo/vendor 功能承担。`test/package.test.mjs` 检查自有源码的注册、持久化与上下文边界。chrome 仅依赖结构类型和注入的宿主能力。
@@ -45,6 +46,10 @@
 | voice/LAN/diagnostics/settings | 保留世代与取消、peer 所有权、HTTP 读体前后状态检查、诊断停止顺序及显式设置写入。 |
 
 宿主 render fallback、第三方所有权守卫、锁/提交顺序和原生资源布局承担真实兼容职责；不为缩短文件而删除这些边界。上游差异及同步只在 [PATCHES](../vendor/pi-codex-conversion/PATCHES.md) / [UPSTREAM](../vendor/pi-codex-conversion/UPSTREAM.md) 维护。
+
+condense 将新工具结果的原文、确定性候选和发布后的表示分开管理。执行层负责截断前日志捕获，condense 负责索引、快照字节边界及回读；会话 blobs 不属于显示环形缓冲的清理范围。预热运行时通过同步事件请求同一份已完成投影，flush 期间不发起预热。goal 的动态预算作为追加消息，不再改变系统指令前缀。
+
+Action Fusion 的共享流程与按路径排队由 vendor `tools/action-fusion.ts` 拥有；`action-fusion-command.ts` 分别适配 Pi bash operations 和现有 exec session manager。原生入口与普通/嵌套 patch 消费同一版本回执。`src/fusion-view.ts` 组合既有修改和 shell renderer，分别判断两个阶段，不重新执行工具。Code/Notebook delegate 将完整回执写入独立 journal，condense 按固定字节范围导入子调用，显示 trace 淘汰不会影响证据。
 
 ## 数据流
 

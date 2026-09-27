@@ -492,6 +492,8 @@ export class ToolCallIndexer {
         turnIndex: batch.turnIndex,
         timestamp: batch.timestamp,
         ...(tc.resultTimestamp !== undefined ? { resultTimestamp: tc.resultTimestamp } : {}),
+        ...(tc.resultPrefix !== undefined ? { resultPrefix: tc.resultPrefix } : {}),
+        ...(tc.archiveSource ? { archiveSource: tc.archiveSource, archiveComplete: tc.archiveComplete, archiveAppendOnly: tc.archiveAppendOnly } : {}),
         ...(tc.spillPath !== undefined ? { spillPath: tc.spillPath } : {}),
         ...(tc.spillBytes !== undefined ? { spillBytes: tc.spillBytes } : {}),
         ...(tc.resultPreview !== undefined ? { resultPreview: tc.resultPreview } : {}),

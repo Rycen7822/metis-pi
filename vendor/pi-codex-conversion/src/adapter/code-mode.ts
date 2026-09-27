@@ -1,3 +1,5 @@
+import { fusionFailed } from "../tools/action-fusion.ts";
+import { runExecFusionCommand } from "../tools/action-fusion-command.ts";
 import { getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CodexExtensionRuntime } from "../extension/runtime.ts";
 import { getCodeModeExtensionTools } from "../code-mode-extension-tools.ts";
@@ -62,7 +64,7 @@ export async function registerCodexCodeMode(
 	};
 }
 
-function createNestedTools(
+export function createNestedTools(
 	pi: ExtensionAPI,
 	runtime: CodexExtensionRuntime,
 	ctx?: ExtensionContext,
@@ -80,13 +82,15 @@ function createNestedTools(
 	const textOutput = runtime.state.config.notebook.plainCommandOutput
 		? { textOutput: "plain-command" as const }
 		: {};
+	const patchTool = createApplyPatchTool({
+		customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
+		promptSnippet: false,
+		showDiffWhenCollapsed: runtime.state.config.ui.compactTools === "off",
+		runThenRun: (context) => (input, signal, update) => runExecFusionCommand(runtime.sessions, input, context, signal, update),
+	});
 	const tools: ProgrammaticCodeModeToolDefinition[] = [
 		toNestedTool(
-			createApplyPatchTool({
-				customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
-				promptSnippet: false,
-				showDiffWhenCollapsed: runtime.state.config.ui.compactTools === "off",
-			}),
+			patchTool,
 			"await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk (use one unchanged context line for a pure move); Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range; reread a file before patching if it changed since your last read",
 			{},
 			{
@@ -108,6 +112,18 @@ function createNestedTools(
 							.map((item) => item.text)
 							.join("\n") || "apply_patch partially failed";
 					return undefined;
+				},
+			},
+		),
+		toNestedTool(
+			{ ...patchTool, name: "apply_patch_then_run", label: "apply_patch_then_run" },
+			"await tools.apply_patch_then_run({ input: string, then_run: { command: string, timeout?: number } }) // apply the entire patch, then run one already-chosen command; failure keeps applied changes",
+			{},
+			{
+				yieldTimeMs: LONG_RUNNING_TOOL_OUTER_YIELD_MS,
+				modelVisibleResult: true,
+				resultError(result) {
+					return fusionFailed(result.details) ? result.content.filter(item => item.type === "text").map(item => item.text).join("\n") : undefined;
 				},
 			},
 		),

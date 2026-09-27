@@ -1,3 +1,4 @@
+import { ExecOutputArchive } from "./output-archive.ts";
 import { normalizePipeOutput, truncateOutput, truncateToTail } from "./output.ts";
 import { createBridgeSessionRuntime, type BridgeExecSession, type BridgeSessionHooks } from "./bridge-session.ts";
 import { DEFAULT_EXEC_YIELD_TIME_MS, DEFAULT_MAX_EMPTY_WRITE_YIELD_TIME_MS, DEFAULT_WRITE_YIELD_TIME_MS, clampExecYieldTime, clampWriteYieldTime, normalizeMinEmptyWriteYieldTime, normalizeMinNonInteractiveExecYieldTime, resolveExecution, resolveShell, resolveWorkdir } from "./shell.ts";
@@ -6,6 +7,12 @@ import { makeExecResult, makeSnapshotResult, makeSnapshotSince, snapshotSession 
 import { ExecOutputBuffer } from "./output-buffer.ts";
 
 export interface UnifiedExecResult {
+	interrupted?: boolean | undefined;
+	fullOutputPath?: string | undefined;
+	fullOutputError?: string | undefined;
+	fullOutputBytes?: number | undefined;
+	fullOutputComplete?: boolean | undefined;
+	fullOutputAppendOnly?: boolean | undefined;
 	chunk_id: string;
 	wall_time_seconds: number;
 	output: string;
@@ -28,6 +35,11 @@ export interface ExecSessionSnapshot {
 export type ExecSessionChangeReason = "start" | "output" | "exit" | "terminate";
 
 export interface ExecCommandInput {
+	/** Host-owned archive directory, never a model argument. */
+	archiveDirectory?: string | undefined;
+	/** Host-only evidence options for compound tools awaiting command completion. */
+	archiveAllOutput?: boolean | undefined;
+	captureInterruptedResult?: boolean | undefined;
 	cmd: string;
 	workdir?: string | undefined;
 	shell?: string | undefined;
@@ -143,6 +155,10 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 		} else if (session.emittedOffset === session.buffer.endOffset) {
 			// Release only after successful consumption; publish replay last.
 			deleteSession(session);
+			// The narrower delivery may have created an archive after the replay snapshot.
+			const archive = session.buffer.archive?.info();
+			Object.assign(result, archive);
+			Object.assign(replaySnapshot, archive);
 			rememberCompletedResult(session.id, { ...replaySnapshot, chunk_id: result.chunk_id, wall_time_seconds: result.wall_time_seconds });
 		}
 		return result;
@@ -184,6 +200,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 
 	function appendOutput(session: ExecSession, text: string): void {
 		if (text.length === 0) return;
+		session.buffer.archive?.append(text);
 		const output = session.tty ? text : normalizePipeOutput(text);
 		session.buffer.append(output);
 		session.outputVersion += 1;
@@ -210,7 +227,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 			const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
 			const session = bridgeSessions.create({
 				id: nextSessionId++,
-				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS)),
+				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS), input.archiveDirectory ? new ExecOutputArchive(input.archiveDirectory, input.archiveAllOutput ? 0 : Math.min(32768, Math.max(256, (input.max_output_tokens ?? 10000) * 4))) : undefined),
 				input: {
 					command: input.cmd,
 					executionCommand: execution.command,
@@ -258,6 +275,32 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 					session.nextEmptyPollYieldMs = growEmptyPollYield(Math.max(execYieldMs, waitedMs), maxEmptyWriteYieldTimeMs);
 				return finishResult(session, waitedMs, input.max_output_tokens);
 			} catch (error) {
+				if (signal?.aborted && input.captureInterruptedResult) {
+					// Collect the terminated process's final bytes before disposal. Ordinary
+					// exec cancellation keeps its existing throwing contract.
+					try {
+						await session.startup;
+						await bridgeSessions.terminate(session);
+						const deadline = Date.now() + 5_000;
+						while (!session.finalized && Date.now() < deadline) await bridgeSessions.poll(session, bridgeHooks, 100);
+						session.buffer.archive?.preserve();
+						const result = makeSnapshotResult(session, Date.now() - session.startedAt, input.max_output_tokens);
+						if (!session.finalized) {
+							result.fullOutputComplete = false;
+							result.fullOutputError = "Command termination was not confirmed; output may be incomplete";
+							exposeSession(session);
+						} else {
+							deleteSession(session);
+							Object.assign(result, session.buffer.archive?.info());
+						}
+						return { ...result, interrupted: true };
+					} catch {
+						session.buffer.archive?.preserve();
+						const result = makeSnapshotResult(session, Date.now() - session.startedAt, input.max_output_tokens);
+						deleteSession(session);
+						return { ...result, interrupted: true, fullOutputComplete: false, fullOutputError: "Interrupted command cleanup or output capture failed" };
+					}
+				}
 				if (signal?.aborted) deleteSession(session);
 				throw error;
 			} finally {

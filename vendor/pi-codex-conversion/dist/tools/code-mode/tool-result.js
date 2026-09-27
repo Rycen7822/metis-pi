@@ -38,6 +38,8 @@ export function toCodeModeToolResult(response, maxTokens) {
     return {
         content: [
             { type: "text", text: status },
+            ...(response.fusionEvidence ? [{ type: "text", text: `Fused tool evidence: ${response.fusionEvidence.path} (bytes ${response.fusionEvidence.offsetBytes}..${response.fusionEvidence.offsetBytes + response.fusionEvidence.bytes}); contains mutation outcomes and exact command log paths.` }] : []),
+            ...(response.fusionEvidenceError ? [{ type: "text", text: response.fusionEvidenceError }] : []),
             ...(memoryWarning ? [{ type: "text", text: memoryWarning }] : []),
             ...(response.execSessionIds ?? []).map((sessionId) => ({
                 type: "text",
@@ -49,6 +51,8 @@ export function toCodeModeToolResult(response, maxTokens) {
             codeMode: true,
             cellId: response.cellId,
             status: response.kind,
+            ...(response.fusionEvidence ? { fusionEvidence: response.fusionEvidence } : {}),
+            ...(response.fusionEvidenceError ? { fusionEvidenceError: response.fusionEvidenceError } : {}),
             ...(response.traces ? { traces: response.traces } : {}),
             ...(response.droppedTraceCount
                 ? { droppedTraceCount: response.droppedTraceCount }

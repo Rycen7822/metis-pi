@@ -4,12 +4,14 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { parsePatchActions } from "../../patch/parser.js";
 import { resolvePatchPath } from "../../patch/paths.js";
 import { ExecutePatchError } from "../../patch/types.js";
+import { executeFusion, fusionFailed, fusionReceipt, validateThenRun, THEN_RUN_SCHEMA } from "../action-fusion.js";
 import { getExperimentalToolSampling } from "../tool-sampling.js";
 import { recordApplyPatchDisplayInput, recordApplyPatchDisplayOutcome, shouldCompactApplyPatchDisplay, } from "./display-broker.js";
 import { formatPatchTarget } from "./rendering.js";
 import { executePatchWithRust } from "./executor.js";
 import { isApplyPatchToolDetails, markApplyPatchFailure, markApplyPatchPartialFailure, renderApplyPatchCallFromState, setApplyPatchRenderState, } from "./render-state.js";
 const APPLY_PATCH_PARAMETERS = Type.Object({
+    then_run: THEN_RUN_SCHEMA,
     input: Type.String({
         description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk; use one unchanged context line for a pure move. Order each file's hunks top-to-bottom; indentation is literal",
     }),
@@ -22,12 +24,14 @@ function parseApplyPatchParams(params) {
 }
 function prepareApplyPatchArguments(args) {
     if (args && typeof args === "object") {
+        const thenRun = "then_run" in args ? validateThenRun(args.then_run) : undefined;
+        const extra = thenRun === undefined ? {} : { then_run: thenRun };
         if ("input" in args && typeof args.input === "string")
-            return { input: args.input };
+            return { input: args.input, ...extra };
         if ("patchText" in args && typeof args.patchText === "string")
-            return { input: args.patchText };
+            return { input: args.patchText, ...extra };
         if ("patch" in args && typeof args.patch === "string")
-            return { input: args.patch };
+            return { input: args.patch, ...extra };
     }
     return args;
 }
@@ -108,7 +112,7 @@ const renderApplyPatchCallWithOptionalContext = (args, theme, context, options =
 function renderCompactApplyPatchCall(theme) {
     return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
 }
-export function createApplyPatchTool(options = {}) {
+function createPlainApplyPatchTool(options) {
     const constrainedSampling = getExperimentalToolSampling("apply_patch");
     const compactRendering = (context) => shouldCompactApplyPatchDisplay(context?.toolCallId, context?.executionStarted);
     const defaultRenderCall = (args, theme, context) => compactRendering(context) ? renderCompactApplyPatchCall(theme) : renderApplyPatchCallWithOptionalContext(args, theme, context, options);
@@ -216,12 +220,33 @@ export function createApplyPatchTool(options = {}) {
         renderResult: options.renderResult ?? defaultRenderResult,
     };
 }
+export function createApplyPatchTool(options = {}) {
+    const base = createPlainApplyPatchTool(options);
+    return {
+        ...base,
+        async execute(id, params, signal, update, ctx) {
+            const input = validateThenRun(params.then_run);
+            if (input && !options.runThenRun)
+                throw new Error("then_run executor unavailable");
+            return executeFusion({ paths: touchedPatchPaths(ctx.cwd, params.input), thenRun: input, signal,
+                mutate: () => base.execute(id, params, signal, undefined, ctx),
+                run: options.runThenRun?.(ctx) ?? (async () => { throw new Error("then_run executor unavailable"); }),
+                onUpdate: update,
+            });
+        },
+        renderResult(result, display, theme, context) {
+            if (fusionReceipt(result.details))
+                return new Text(result.content.filter(b => b.type === "text").map(b => b.text).join("\n"), 0, 0);
+            return base.renderResult(result, display, theme, context);
+        },
+    };
+}
 export function registerApplyPatchTool(pi, options = {}) {
     pi.registerTool(createApplyPatchTool(options));
 }
 export function registerApplyPatchResultEvent(pi) {
     pi.on("tool_result", (event) => {
-        if (event.toolName === "apply_patch" && isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure") {
+        if (event.toolName === "apply_patch" && (fusionFailed(event.details) || (isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure"))) {
             return { isError: true };
         }
         return undefined;

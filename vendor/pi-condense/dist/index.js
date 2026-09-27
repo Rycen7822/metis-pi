@@ -15,6 +15,7 @@
 import { loadConfig } from "./src/config.js";
 import { capImages, imageLimitFor } from "./src/image-cap.js";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.js";
+import { prepareBatch } from "./src/packing.js";
 import { summarizeBatch, summarizeBatches, summarizeRange } from "./src/summarizer.js";
 import { FallbackController } from "./src/summarizer-fallback.js";
 import { ToolCallIndexer } from "./src/indexer.js";
@@ -30,7 +31,7 @@ import { PruneFrontierTracker } from "./src/frontier.js";
 import { BlockRefIssuer } from "./src/block-refs.js";
 import { compressEligible } from "./src/chain-compressor.js";
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./src/supersede.js";
-import { detectChains, withClosingMessage } from "./src/chain-detector.js";
+import { detectChains } from "./src/chain-detector.js";
 import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.js";
 import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.js";
 import { spillOversizedBatch } from "./src/spill.js";
@@ -237,6 +238,11 @@ export default function (pi) {
             // Use pre-captured batches if provided (avoids double-capture when the
             // caller previewed the queue before opening the progress overlay).
             batches = options.previewedBatches ?? capturePendingBatches(ctx);
+            if (trigger === "message-end" && batches.length > 1) {
+                batches = [{ ...batches[batches.length - 1],
+                        assistantText: batches.map((batch) => batch.assistantText).filter(Boolean).join("\n"),
+                        toolCalls: batches.flatMap((batch) => batch.toolCalls), }];
+            }
             capturedBatches = batches.length;
             if (batches.length === 0) {
                 outcome = "empty";
@@ -259,6 +265,22 @@ export default function (pi) {
             const persistAlias = delivery === "runtime"
                 ? (type, data) => pi.appendEntry(type, data)
                 : appendEntry;
+            // Reload/rescan can reach the final boundary without a turn_end callback.
+            // Recover fused evidence before any summary can replace its visible tail.
+            for (const batch of batches) {
+                const toolCalls = batch.toolCalls.filter(call => call.outputArchive?.source);
+                if (toolCalls.length === 0)
+                    continue;
+                await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
+                    config: { spillThreshold: Infinity, spillPreviewBytes: currentConfig.value.spillPreviewBytes, dedupByContentHash: false },
+                    sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistAlias });
+            }
+            batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !indexer.isSummarized(occKey(call.toolCallId, call.resultTimestamp))) }))
+                .filter(batch => batch.toolCalls.length > 0);
+            if (batches.length === 0) {
+                outcome = "empty";
+                return { ok: false, reason: "empty" };
+            }
             // ── Pre-flush content-hash dedup pass ────────────────────────────
             // For each tool call, check the indexer's contentHashToOriginal map.
             // A hit means an identical (toolName, normalized resultText) pair has
@@ -275,6 +297,7 @@ export default function (pi) {
             //     existing result loop treats them the same way it treats trivial
             //     batches (advance the frontier without writing a summary).
             const dedupedPerBatch = batches.map(() => ({ toolCalls: [], rawChars: 0 }));
+            const pendingAliases = [];
             const dedupEnabled = currentConfig.value.dedupByContentHash;
             if (dedupEnabled) {
                 for (let i = 0; i < batches.length; i++) {
@@ -284,7 +307,7 @@ export default function (pi) {
                         const originalId = indexer.lookupByContent(tc.toolName, tc.resultText);
                         const key = occKey(tc.toolCallId, tc.resultTimestamp);
                         if (originalId && originalId !== key) {
-                            indexer.registerDuplicate(key, originalId, persistAlias);
+                            pendingAliases.push([key, originalId]);
                             dedupedPerBatch[i].toolCalls.push(tc);
                             dedupedPerBatch[i].rawChars += tc.resultText.length;
                         }
@@ -307,10 +330,11 @@ export default function (pi) {
             // A batch whose entire toolCalls array was just deduped is flagged
             // `isFullyDeduped` so the result loop slots it as "deduped" without
             // confusing it with the trivial path (different outcome + notification).
+            const prepared = batches.map(prepareBatch);
             const minChars = currentConfig.value.minBatchChars;
             const batchRawChars = batches.map((b) => b.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0));
             const isFullyDeduped = batches.map((b, i) => dedupedPerBatch[i].toolCalls.length > 0 && b.toolCalls.length === 0);
-            const isTrivial = batchRawChars.map((c, i) => !isFullyDeduped[i] && minChars > 0 && c < minChars && batches[i].toolCalls.length > 0);
+            const isTrivial = prepared.map((p) => p.candidateChars).map((c, i) => !isFullyDeduped[i] && minChars > 0 && c < minChars && batches[i].toolCalls.length > 0);
             const nonTrivialIndices = [];
             for (let i = 0; i < batches.length; i++) {
                 if (!isTrivial[i] && !isFullyDeduped[i])
@@ -324,6 +348,8 @@ export default function (pi) {
             const reportBatchTextProgress = (index, total, batch, receivedChars) => {
                 options.onBatchTextProgress?.(index, total, batch, receivedChars);
             };
+            const packedResult = (i) => prepared[i].packedBatch.toolCalls.length
+                ? { summaryText: prepared[i].packedText, deterministic: true } : "trivial";
             const results = new Array(batches.length).fill(null);
             if (options.onProgress) {
                 for (let i = 0; i < batches.length; i++) {
@@ -334,11 +360,11 @@ export default function (pi) {
                     }
                     if (isTrivial[i]) {
                         options.onProgress(i, batches.length, batches[i], "skipped");
-                        results[i] = "trivial";
+                        results[i] = packedResult(i);
                         continue;
                     }
                     options.onProgress(i, batches.length, batches[i], "start");
-                    const r = await summarizeBatch(batches[i], currentConfig.value, ctx, {
+                    const r = await summarizeBatch(prepared[i].candidate, currentConfig.value, ctx, {
                         signal: options.signal,
                         controller: fallbackController,
                         onTextProgress: (receivedChars) => {
@@ -357,10 +383,10 @@ export default function (pi) {
                     if (isFullyDeduped[i])
                         results[i] = "deduped";
                     else if (isTrivial[i])
-                        results[i] = "trivial";
+                        results[i] = packedResult(i);
                 }
                 if (nonTrivialIndices.length > 0) {
-                    const nonTrivialBatches = nonTrivialIndices.map((i) => batches[i]);
+                    const nonTrivialBatches = nonTrivialIndices.map((i) => prepared[i].candidate);
                     const ntResults = await summarizeBatches(nonTrivialBatches, currentConfig.value, ctx, {
                         onBatchTextProgress: (ntIndex, _ntTotal, batch, receivedChars) => {
                             const origIndex = nonTrivialIndices[ntIndex];
@@ -374,6 +400,20 @@ export default function (pi) {
                     }
                 }
             }
+            // A rejected/oversized model result must not discard a useful local pack.
+            // These decisions and alias publication happen after every awaited model call.
+            for (let i = 0; i < results.length; i++) {
+                const result = results[i];
+                if ((!result || (typeof result === "object" && !result.deterministic
+                    && result.summaryText.length >= prepared[i].candidateChars))
+                    && prepared[i].packedBatch.toolCalls.length) {
+                    if (result && typeof result === "object" && result.usage)
+                        statsAccum.add(result.usage);
+                    results[i] = packedResult(i);
+                }
+            }
+            for (const [key, originalId] of pendingAliases)
+                indexer.registerDuplicate(key, originalId, persistAlias);
             // Process results in order; stop at first null (individual call failure).
             // Batches before the first failure are persisted; remaining are restored to
             // pendingBatches so they are retried on the next flush.
@@ -430,39 +470,42 @@ export default function (pi) {
                     processedBatches.push(batch);
                     continue;
                 }
-                const summaryRefs = indexer.allocateSummaryRefs(batch);
-                const toolNames = batch.toolCalls.map((tc) => tc.toolName);
+                const archivedBatch = result.deterministic ? prepared[i].packedBatch : batch;
+                const summaryRefs = indexer.allocateSummaryRefs(archivedBatch);
+                const toolNames = archivedBatch.toolCalls.map((tc) => tc.toolName);
                 const decorated = substituteInlineRefs(result.summaryText, summaryRefs, toolNames);
                 const summaryText = decorated + formatSummaryToolCallRefs(summaryRefs);
-                const shouldSkipOversized = summaryText.length > batchRawCharCount;
-                statsAccum.add(result.usage);
+                const replacedChars = archivedBatch.toolCalls.reduce((n, call) => n + call.resultText.length, 0);
+                const shouldSkipOversized = summaryText.length + archivedBatch.toolCalls.length * 120 > replacedChars;
+                if (result.usage)
+                    statsAccum.add(result.usage);
                 totalRawCharCount += batchRawCharCount + dedupRawChars;
                 totalSummaryCharCount += summaryText.length;
                 totalToolCallCount += batch.toolCalls.length + dedupCount;
                 totalDedupedCount += dedupCount;
-                const batchDetails = makeSummaryDetails(batch, summaryRefs);
+                const batchDetails = { ...makeSummaryDetails(archivedBatch, summaryRefs), representation: result.deterministic ? "packed" : "summary" };
                 try {
                     if (!shouldSkipOversized) {
                         // Write one hidden summary message per turn and index its tool calls.
                         // `display: false` keeps the summary in future LLM context (convertToLlm
                         // ignores `display`) while suppressing the full markdown block from Pi's
                         // main window; rebuild keys on customType, not display.
-                        const batchOccurrenceKeys = batch.toolCalls.map((tc) => occKey(tc.toolCallId, tc.resultTimestamp));
+                        const batchOccurrenceKeys = archivedBatch.toolCalls.map((tc) => occKey(tc.toolCallId, tc.resultTimestamp));
                         if (delivery === "runtime") {
                             pi.sendMessage({ customType: CUSTOM_TYPE_SUMMARY, content: summaryText, display: false, details: batchDetails }, { deliverAs: "steer" });
                             indexer.registerSummaryRefs(summaryRefs);
-                            indexer.addBatch(batch, (type, data) => pi.appendEntry(type, data));
+                            indexer.addBatch(archivedBatch, (type, data) => pi.appendEntry(type, data));
                         }
                         else {
                             appendSummaryMessage(summaryText, batchDetails);
                             indexer.registerSummaryRefs(summaryRefs);
-                            indexer.addBatch(batch, appendEntry);
+                            indexer.addBatch(archivedBatch, appendEntry);
                         }
                         // Keep the in-memory summary-body registry current so chain compression
                         // can build synthetic chain messages without rescanning session entries.
                         indexer.registerSummaryBody(batchOccurrenceKeys, summaryText);
-                        stubCount += batch.toolCalls.length + dedupCount;
-                        floorSources.push(...batch.toolCalls);
+                        stubCount += archivedBatch.toolCalls.length + dedupCount;
+                        floorSources.push(...archivedBatch.toolCalls);
                     }
                     else {
                         stubCount += dedupCount;
@@ -516,12 +559,6 @@ export default function (pi) {
                     : dedupedBatches.length > 0
                         ? "skipped-deduped"
                         : "skipped-trivial";
-            // Projected session branch (message + custom_message entries) for the chain-compression block below.
-            // Only materialized when chain compression is enabled.
-            let branchMessages;
-            if (currentConfig.value.chainCompression.enabled) {
-                branchMessages = projectBranchMessages(ctx.sessionManager.getBranch());
-            }
             const frontierSnapshot = {
                 lastAttemptedToolCallId: lastTC.toolCallId,
                 lastAttemptedToolName: lastTC.toolName,
@@ -559,46 +596,9 @@ export default function (pi) {
             }
             setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
             emitExternalCost(pi, statsAccum);
-            // Chain compression — compress closed chains beyond the rolling window.
-            // Runs after the per-batch summarization so summaryBodies are up to date.
-            // Non-fatal: a failure here does not roll back the successful summarization.
-            if (currentConfig.value.chainCompression.enabled) {
-                try {
-                    // message_end fires before pi persists the closing assistant, so thread it
-                    // in here; otherwise the newest chain reads as open and K over-retains by 1.
-                    // branchMessages was unwrapped once above, gated on chainCompression.enabled.
-                    const detectionMessages = withClosingMessage(branchMessages, options.closingMessage);
-                    const chains = detectChains(detectionMessages, protectionPredicate);
-                    const inGrace = inGraceRecoveryToolCallIds(branchMessages, currentConfig.value.recoveryGraceTurns);
-                    const { compressedEntries } = await compressEligible(chains, currentConfig.value.chainCompression.rollingWindow, {
-                        indexer,
-                        blockRefs,
-                        appendEntry: persistAlias,
-                        now: () => Date.now(),
-                        fuseRange: makeFuseRange(ctx),
-                        messages: detectionMessages,
-                        diagnostics,
-                        backfill: {
-                            spillThreshold: currentConfig.value.spillThreshold,
-                            spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-                            sessionDir: ctx.sessionManager.getSessionDir(),
-                            sessionId: ctx.sessionManager.getSessionId(),
-                        },
-                    }, inGrace);
-                    if (compressedEntries.length > 0) {
-                        lowerFloor(supersede, earliestChainStart(compressedEntries));
-                        statsAccum.addChainsCompressed(compressedEntries.length);
-                        statsAccum.persist(pi);
-                        emitExternalCost(pi, statsAccum);
-                        safeNotify(ctx, `pruner: compressed ${compressedEntries.length} chain${compressedEntries.length === 1 ? "" : "s"} (${compressedEntries.map((e) => e.blockId).join(", ")})`, "info");
-                    }
-                }
-                catch (err) {
-                    if (!isStaleContextError(err)) {
-                        safeNotify(ctx, `pruner: chain compression failed: ${errorMessage(err)}`, "warning");
-                    }
-                }
-            }
+            // Automatic history has one owner: the settled per-batch projection.
+            // A second rolling chain pass would rewrite older cached prefixes. Explicit
+            // /pruner compact-chains remains available and preserves program-owned refs.
             // Notify about any batches that were skipped — either oversized or
             // trivial. Neither is an error: the pruner correctly chose not to grow
             // context (oversized) or to skip the LLM call entirely (trivial). Both
@@ -832,6 +832,10 @@ export default function (pi) {
         // the gate below must still run.
         if (!pushedBatch && !rearmedPending)
             return;
+        // Final-reply mode defers pressure hints to that same boundary. Pi's native
+        // capacity compaction remains the emergency guard during a long tool loop.
+        if (currentConfig.value.pruneOn === "agent-message")
+            return;
         // Token-budget auto-flush: an additional, mode-independent trigger. When context
         // usage crosses autoBudgetThreshold, compact the queued batches now instead of
         // waiting for this mode's flush boundary. The pendingBatches.length-or-rearmed
@@ -890,12 +894,12 @@ export default function (pi) {
         setPruneStatusWidget(ctx, currentConfig.value, pendingBatches.length > 0 ? `prune: ${pendingBatches.length} pending` : "prune: recovered pending (reload)");
     });
     // ── context: prune summarized tool results from next LLM call ─────────────
-    pi.on("context", async (event, ctx) => {
-        let messages = event.messages;
+    const projectContext = (input, api) => {
+        let messages = input;
         let changed = false;
         // Request-validity guard, independent of `enabled`: a transcript past the
         // provider's per-request image limit fails every request until trimmed.
-        const imageCap = imageLimitFor(currentConfig.value.maxImagesPerRequest, ctx.model?.api);
+        const imageCap = imageLimitFor(currentConfig.value.maxImagesPerRequest, api);
         if (imageCap !== null) {
             const capped = capImages(messages, imageCap);
             if (capped) {
@@ -904,7 +908,7 @@ export default function (pi) {
             }
         }
         if (!currentConfig.value.enabled)
-            return changed ? { messages } : undefined;
+            return { messages, changed };
         // pruneMessages is the single source of truth for "is there work to do".
         // It returns the original array reference (pruned: false) only when none of
         // the five phases changed anything; index/registry emptiness alone does not
@@ -914,12 +918,30 @@ export default function (pi) {
         if (result.pruned) {
             messages = result.messages;
             changed = true;
-            statsAccum.setLiveReclaim(result.beforeChars, result.afterChars);
         }
+        return { messages, changed, beforeChars: result.beforeChars, afterChars: result.afterChars };
+    };
+    let activeSessionId;
+    const unsubscribeProjection = pi.events.on("metis:condense-project", (data) => {
+        if (!data || typeof data !== "object" || !("messages" in data) || !Array.isArray(data.messages))
+            return;
+        const request = data;
+        if (request.sessionId !== activeSessionId)
+            return;
+        if (isFlushing) {
+            request.busy = true;
+            return;
+        }
+        request.messages = projectContext(request.messages, request.api).messages;
+    });
+    pi.on("session_start", (_event, ctx) => { activeSessionId = ctx.sessionManager.getSessionId(); });
+    pi.on("session_shutdown", () => { activeSessionId = undefined; unsubscribeProjection(); });
+    pi.on("context", async (event, ctx) => {
+        const result = projectContext(event.messages, ctx.model?.api);
+        if (result.beforeChars !== undefined)
+            statsAccum.setLiveReclaim(result.beforeChars, result.afterChars);
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
-        if (!changed)
-            return undefined;
-        return { messages };
+        return result.changed ? { messages: result.messages } : undefined;
     });
     // ── Register context_tree_query tool ──────────────────────────────────────
     registerQueryTool(pi, indexer);

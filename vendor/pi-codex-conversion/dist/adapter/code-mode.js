@@ -1,3 +1,5 @@
+import { fusionFailed } from "../tools/action-fusion.js";
+import { runExecFusionCommand } from "../tools/action-fusion-command.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getCodeModeExtensionTools } from "../code-mode-extension-tools.js";
 import { registerCodeModeTools, registerCustomTools, } from "../tools/code-mode/tools.js";
@@ -47,7 +49,7 @@ export async function registerCodexCodeMode(pi, runtime) {
         },
     };
 }
-function createNestedTools(pi, runtime, ctx) {
+export function createNestedTools(pi, runtime, ctx) {
     const options = {
         describeImagesForTextModels: runtime.state.config.tools.viewImageFallback,
         promptSnippet: false,
@@ -61,12 +63,14 @@ function createNestedTools(pi, runtime, ctx) {
     const textOutput = runtime.state.config.notebook.plainCommandOutput
         ? { textOutput: "plain-command" }
         : {};
+    const patchTool = createApplyPatchTool({
+        customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
+        promptSnippet: false,
+        showDiffWhenCollapsed: runtime.state.config.ui.compactTools === "off",
+        runThenRun: (context) => (input, signal, update) => runExecFusionCommand(runtime.sessions, input, context, signal, update),
+    });
     const tools = [
-        toNestedTool(createApplyPatchTool({
-            customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
-            promptSnippet: false,
-            showDiffWhenCollapsed: runtime.state.config.ui.compactTools === "off",
-        }), "await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk (use one unchanged context line for a pure move); Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range; reread a file before patching if it changed since your last read", {}, {
+        toNestedTool(patchTool, "await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk (use one unchanged context line for a pure move); Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range; reread a file before patching if it changed since your last read", {}, {
             kind: "freeform",
             prepareInput(input) {
                 if (typeof input !== "string")
@@ -83,6 +87,13 @@ function createNestedTools(pi, runtime, ctx) {
                         .map((item) => item.text)
                         .join("\n") || "apply_patch partially failed";
                 return undefined;
+            },
+        }),
+        toNestedTool({ ...patchTool, name: "apply_patch_then_run", label: "apply_patch_then_run" }, "await tools.apply_patch_then_run({ input: string, then_run: { command: string, timeout?: number } }) // apply the entire patch, then run one already-chosen command; failure keeps applied changes", {}, {
+            yieldTimeMs: LONG_RUNNING_TOOL_OUTER_YIELD_MS,
+            modelVisibleResult: true,
+            resultError(result) {
+                return fusionFailed(result.details) ? result.content.filter(item => item.type === "text").map(item => item.text).join("\n") : undefined;
             },
         }),
         toNestedTool(createExecCommandTool(runtime.tracker, runtime.sessions, execOptions), "await tools.exec_command({ cmd: string, workdir?: string, shell?: string, tty?: boolean, yield_time_ms?: number, max_output_tokens?: number, login?: boolean }) // returns { output: string, session_id?: number, exit_code?: number }", {

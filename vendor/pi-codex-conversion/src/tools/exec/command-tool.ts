@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
@@ -195,7 +196,9 @@ export function createExecCommandTool(tracker: ExecCommandTracker, sessions: Exe
 						max_yield_time_ms: MAX_EXEC_YIELD_TIME_MS,
 						...(options.waitForNonInteractiveExit ? { wait_until_exit: true } : {}),
 					};
-			const result = await sessions.exec(execInput, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
+			const sessionDir = ctx.sessionManager?.getSessionDir?.();
+			const archiveDirectory = sessionDir ? join(sessionDir, `${ctx.sessionManager.getSessionId()}-blobs`) : undefined;
+			const result = await sessions.exec({ ...execInput, ...(archiveDirectory ? { archiveDirectory } : {}) }, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
 			if (result.session_id !== undefined) tracker.recordPersistentSession(toolCallId, result.session_id);
 			return toToolResult(result);
 		},

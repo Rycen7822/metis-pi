@@ -1,3 +1,4 @@
+import { runExecFusionCommand } from "../tools/action-fusion-command.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CodexConversionConfig } from "../adapter/activation/config.ts";
@@ -61,6 +62,7 @@ export function registerCodexTools(
 	});
 	const registerCore = (config: CodexConversionConfig) => {
 		registerApplyPatchTool(pi, {
+			runThenRun: (ctx) => (input, signal, update) => runExecFusionCommand(runtime.sessions, input, ctx, signal, update),
 			customRustBinariesDir: config.tools.customRustBinariesDir,
 			showDiffWhenCollapsed: config.ui.compactTools === "off",
 		});

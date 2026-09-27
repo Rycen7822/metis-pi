@@ -11,8 +11,34 @@ import {
 } from "../../vendor/pi-codex-conversion/dist/adapter/provider-request.js";
 import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/dist/context-management/history-notes.js";
 import { rewriteWindowPayload } from "../../vendor/pi-codex-conversion/dist/context-management/window-request.js";
+import { createNativeFusionTool } from "../../extensions/action-fusion.ts";
+import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js";
 
 test.beforeEach(disableNetwork);
+
+test("fused native and patch schemas survive identical live/prewarm preparation across mode changes", async () => {
+  const definitions = [createNativeFusionTool("edit", "/tmp"), createNativeFusionTool("write", "/tmp"), createApplyPatchTool({})];
+  const tools = definitions.map(({ name, description, parameters }) => ({ type: "function", name, description, parameters }));
+  const original = JSON.stringify(tools);
+  for (const executionMode of ["normal", "code", "notebook", "normal"]) {
+    const { ctx, state, payload } = fixture({ executionMode });
+    payload.tools = tools; payload.input = [{ role: "user", content: "Apply and check" }];
+    const warm = rewriteCodexPrewarmProviderRequest(payload, ctx, state);
+    const live = await rewriteCodexProviderRequest(payload, ctx, state);
+    assert.deepEqual(live, warm);
+    assert.equal(JSON.stringify(tools), original);
+    const placed = live.tools ?? live.input.find(item => item.type === "additional_tools")?.tools;
+    const functions = placed.flatMap(tool => tool.type === "namespace" ? tool.tools : [tool]);
+    assert.deepEqual(functions.map(tool => tool.name), ["edit", "write", "apply_patch"]);
+    for (const tool of functions) {
+      const schema = tool.parameters.properties.then_run;
+      assert.equal(schema.type, "object");
+      assert.equal(schema.properties.command.type, "string");
+      assert.equal(schema.properties.timeout.type, "number");
+      assert.equal(tool.parameters.required.includes("then_run"), false);
+    }
+  }
+});
 
 // These cases were run on 312bc5d before merging the preparation paths. In
 // particular, provider-name transport detection is not the API-only predicate

@@ -147,3 +147,16 @@ after selecting SSE, including WebSocket fallback; successful WebSocket requests
 do not allocate that unused copy. The actual SSE body is reused across retries.
 
 Current results and unverified runtime boundaries live only in the root [VALIDATION.md](../../VALIDATION.md). This work retains the 3.0.34 baseline; review and replay every applicable patch when syncing.
+
+
+## Condense output preservation and shared projection
+
+`tools/exec/output-archive.ts` captures decoded command output before terminal normalization and display-ring eviction into session-owned append-only blobs. Results carry the durable path, snapshot byte count and completeness. Untruncated small outputs remain inline; actual delivery or retention loss forces pending originals to disk even below the launch threshold, and completed replay retains any late-created archive. Pending originals survive process exit until delivery/disposal. Archive failure is explicit and does not fail the command. Normal disposal closes these files without deleting them. This preserves the stream received by the bridge, not data already discarded inside an invoked command such as RTK.
+
+`extension/runtime.ts` emits the synchronous `metis:condense-project` hook when reconstructing history for compaction prewarm/keepalive. Condense applies its live projection; readiness travels with the projection result rather than a shared runtime flag, and pending final-reply flushes suppress speculative prewarm. No additional model or warmup request is introduced.
+
+## Action Fusion
+
+`tools/action-fusion.ts` validates optional `then_run`, coordinates canonical mutation paths and retains separate mutation/command status. `action-fusion-command.ts` reuses native bash operations or the existing exec manager. Compound-only interruption drains and preserves captured output; ordinary exec cancellation remains unchanged. `apply-patch/tool.ts` adds the parameter while preserving argument aliases and partial-patch semantics; `extension/tools.ts` supplies its existing executor.
+
+`adapter/code-mode.ts` exposes function-form `apply_patch_then_run` alongside the original freeform `apply_patch`. Delegate capture persists complete fusion receipts in private session JSONL journals before UI trace limits apply. Outer results carry incremental, fixed byte ranges independently of display output truncation. No Codex host/kernel sources are modified, no RTK routing or new top-level execution lifecycle is added.

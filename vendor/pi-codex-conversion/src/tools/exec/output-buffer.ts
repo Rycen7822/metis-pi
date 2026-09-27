@@ -1,3 +1,4 @@
+import { ExecOutputArchive } from "./output-archive.ts";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,9 @@ export class ExecOutputBuffer {
 	private disposed = false;
 	private readonly maxChars: number;
 
-	constructor(maxChars: number) {
+	readonly archive: ExecOutputArchive | undefined;
+	constructor(maxChars: number, archive?: ExecOutputArchive) {
+		this.archive = archive;
 		this.maxChars = Math.max(1, Math.floor(maxChars));
 	}
 
@@ -83,6 +86,7 @@ export class ExecOutputBuffer {
 
 	dispose(): void {
 		this.disposed = true;
+		this.archive?.close();
 		this.memory = "";
 		this.closeSpool();
 	}

@@ -1,3 +1,4 @@
+import { captureFusionResult, captureFusionJournal } from "./fusion.js";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.js";
 import { occKey, resultTimestampOf } from "./occurrence-key.js";
@@ -94,7 +95,17 @@ export function captureBatch(
         args: block.input ?? block.args ?? block.arguments ?? {},
         resultText,
         isError,
+        ...(block.name === "exec_command" && typeof match?.details?.exit_code === "number" ? { exitCode: match.details.exit_code } : {}),
+        ...(["bash", "exec_command", "write_stdin"].includes(block.name) && typeof match?.details?.fullOutputPath === "string"
+          ? { outputArchive: {
+              path: match.details.fullOutputPath,
+              ...(typeof match.details.fullOutputBytes === "number" ? { bytes: match.details.fullOutputBytes } : {}),
+              complete: match.details.fullOutputComplete !== false,
+              appendOnly: match.details.fullOutputAppendOnly === true,
+            } } : {}),
         ...(resultTimestamp !== undefined ? { resultTimestamp } : {}),
+        ...captureFusionResult(match),
+        ...captureFusionJournal(match),
       } satisfies CapturedToolCall;
     });
 

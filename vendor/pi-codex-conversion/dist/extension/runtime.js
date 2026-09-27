@@ -222,17 +222,26 @@ export function createCodexExtensionRuntime(pi) {
         prewarmPromise = promise;
         return promise;
     };
-    const projectContextMessages = (ctx, messages) => {
+    const projectContext = (ctx, messages) => {
         const plan = resolveCodexRuntimePlanForState(ctx, state);
         const branch = ctx.sessionManager.getBranch();
         const allEntries = plan.contextManagementMode === "tree" ? ctx.sessionManager.getEntries() : branch;
         const checkpointBranch = plan.contextManagementMode === "tree" && plan.contextManagementHybrid
             ? projectTreeCheckpointBranch(branch, allEntries) : branch;
         const projected = state.contextWindows.project(projectCodexReasoningHistory(checkpointBranch, projectTreeCheckpointMessages(branch, checkpointBranch, messages)), plan.contextManagementMode, branch, allEntries, plan.contextManagementHybrid);
-        return projected.filter((message) => !isProviderContextExcludedMessage(message));
+        const projection = {
+            sessionId: ctx.sessionManager.getSessionId(), api: ctx.model?.api,
+            messages: projected.filter((message) => !isProviderContextExcludedMessage(message)), busy: false,
+        };
+        pi.events.emit("metis:condense-project", projection);
+        return projection;
     };
+    const projectContextMessages = (ctx, messages) => projectContext(ctx, messages).messages;
     const currentMessages = (ctx) => {
-        return convertToLlm(state.developerMessages.prepare(projectContextMessages(ctx), supportsCodexDeveloperMessages(ctx, state), ctx.model));
+        const projection = projectContext(ctx);
+        if (projection.busy)
+            return undefined;
+        return convertToLlm(state.developerMessages.prepare(projection.messages, supportsCodexDeveloperMessages(ctx, state), ctx.model));
     };
     const currentContextPrewarm = (ctx, kind) => {
         const keepalivePlan = kind === "keepalive"
@@ -242,7 +251,10 @@ export function createCodexExtensionRuntime(pi) {
             return undefined;
         const preserveContinuation = kind === "keepalive";
         const activeSystemPrompt = state.activeProviderSystemPrompt;
-        return startPrewarm(ctx, activeSystemPrompt ?? ctx.getSystemPrompt(), activeSystemPrompt !== undefined, currentMessages(ctx), true, kind === "keepalive", kind, preserveContinuation, keepalivePlan?.strategy, kind === "keepalive" ? "reconstructed" : undefined, keepalivePlan?.strategy === "generated-current");
+        const messages = currentMessages(ctx);
+        if (!messages)
+            return undefined;
+        return startPrewarm(ctx, activeSystemPrompt ?? ctx.getSystemPrompt(), activeSystemPrompt !== undefined, messages, true, kind === "keepalive", kind, preserveContinuation, keepalivePlan?.strategy, kind === "keepalive" ? "reconstructed" : undefined, keepalivePlan?.strategy === "generated-current");
     };
     const cancelCacheKeepalive = () => {
         cacheKeepaliveEpoch++;
@@ -362,7 +374,8 @@ export function createCodexExtensionRuntime(pi) {
             closeOpenAICodexWebSocketSessions(sessionId);
         },
         waitForPrewarm(ctx, systemPrompt) {
-            return startPrewarm(ctx, systemPrompt, true, currentMessages(ctx), true);
+            const messages = currentMessages(ctx);
+            return messages ? startPrewarm(ctx, systemPrompt, true, messages, true) : undefined;
         },
         prewarmIdentity(ctx, systemPrompt) {
             return buildPrewarmPlan(ctx, systemPrompt, true, [], false)?.identity;

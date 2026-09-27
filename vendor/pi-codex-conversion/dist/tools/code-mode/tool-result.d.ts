@@ -13,6 +13,8 @@ export declare function toCodeModeToolResult(response: RuntimeResponse, maxToken
         notebookMemory?: NotebookMemoryUsage;
         droppedTraceCount?: number;
         traces?: import("./types.js").RuntimeToolTrace[];
+        fusionEvidenceError?: string;
+        fusionEvidence?: import("./fusion-evidence.ts").FusionEvidenceRef;
         codeMode: boolean;
         cellId: string;
         status: "result" | "yielded" | "terminated";

@@ -10,16 +10,19 @@ export interface ExecResultSessionState extends ExecOutputSessionState {
 	terminating: boolean;
 }
 
-function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot: { output: string; original_token_count?: number | undefined }): UnifiedExecResult {
+function fromSnapshot(session: ExecResultSessionState, waitMs: number, snapshot: { output: string; original_token_count?: number | undefined }, originalChars: number): UnifiedExecResult {
 	const result: UnifiedExecResult = { chunk_id: generateChunkId(), wall_time_seconds: waitMs / 1000, output: snapshot.output };
 	if (snapshot.original_token_count !== undefined) result.original_token_count = snapshot.original_token_count;
 	if (session.exitCode === undefined || session.exitCode === null) result.session_id = session.id;
 	else result.exit_code = session.exitCode;
+	if (snapshot.output.length < originalChars) session.buffer.archive?.preserve();
+	Object.assign(result, session.buffer.archive?.info());
 	return result;
 }
 
 export function makeExecResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens: number | undefined): UnifiedExecResult {
-	return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens));
+	const originalChars = session.buffer.endOffset - session.emittedOffset;
+	return fromSnapshot(session, waitMs, consumeOutput(session, maxOutputTokens), originalChars);
 }
 
 export function snapshotSession(session: ExecResultSessionState, maxOutputChars = 8_000): ExecSessionSnapshot {
@@ -37,9 +40,10 @@ export function snapshotSession(session: ExecResultSessionState, maxOutputChars 
 
 export function makeSnapshotResult(session: ExecResultSessionState, waitMs: number, maxOutputTokens?: number, unconsumedOnly = false): UnifiedExecResult {
 	const snapshot = unconsumedOnly ? peekUnconsumedOutput(session, maxOutputTokens) : peekOutputSince(session, session.buffer.startOffset, maxOutputTokens);
-	return fromSnapshot(session, waitMs, snapshot);
+	const start = unconsumedOnly ? session.emittedOffset : session.buffer.startOffset;
+	return fromSnapshot(session, waitMs, snapshot, session.buffer.endOffset - start);
 }
 
 export function makeSnapshotSince(session: ExecResultSessionState, waitMs: number, baselineOffset: number, maxOutputTokens?: number): UnifiedExecResult {
-	return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens));
+	return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens), session.buffer.endOffset - baselineOffset);
 }

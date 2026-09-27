@@ -275,7 +275,7 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 		return promise;
 	};
 
-	const projectContextMessages = (ctx: CodexContext, messages?: readonly AgentMessage[]) => {
+	const projectContext = (ctx: CodexContext, messages?: readonly AgentMessage[]) => {
 		const plan = resolveCodexRuntimePlanForState(ctx, state);
 		const branch = ctx.sessionManager.getBranch();
 		const allEntries = plan.contextManagementMode === "tree" ? ctx.sessionManager.getEntries() : branch;
@@ -288,13 +288,22 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 			allEntries,
 			plan.contextManagementHybrid,
 		);
-		return projected.filter((message) => !isProviderContextExcludedMessage(message));
+		const projection = {
+			sessionId: ctx.sessionManager.getSessionId(), api: ctx.model?.api,
+			messages: projected.filter((message) => !isProviderContextExcludedMessage(message)), busy: false,
+		};
+		pi.events.emit("metis:condense-project", projection);
+		return projection;
 	};
 
+	const projectContextMessages = (ctx: CodexContext, messages?: readonly AgentMessage[]) => projectContext(ctx, messages).messages;
+
 	const currentMessages = (ctx: CodexContext) => {
+		const projection = projectContext(ctx);
+		if (projection.busy) return undefined;
 		return convertToLlm(
 			state.developerMessages.prepare(
-				projectContextMessages(ctx),
+				projection.messages,
 				supportsCodexDeveloperMessages(ctx, state),
 				ctx.model,
 			),
@@ -308,11 +317,13 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 		if (kind === "keepalive" && !keepalivePlan) return undefined;
 		const preserveContinuation = kind === "keepalive";
 		const activeSystemPrompt = state.activeProviderSystemPrompt;
+		const messages = currentMessages(ctx);
+		if (!messages) return undefined;
 		return startPrewarm(
 			ctx,
 			activeSystemPrompt ?? ctx.getSystemPrompt(),
 			activeSystemPrompt !== undefined,
-			currentMessages(ctx),
+			messages,
 			true,
 			kind === "keepalive",
 			kind,
@@ -443,7 +454,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 			closeOpenAICodexWebSocketSessions(sessionId);
 		},
 		waitForPrewarm(ctx, systemPrompt) {
-			return startPrewarm(ctx, systemPrompt, true, currentMessages(ctx), true);
+			const messages = currentMessages(ctx);
+			return messages ? startPrewarm(ctx, systemPrompt, true, messages, true) : undefined;
 		},
 		prewarmIdentity(ctx, systemPrompt) {
 			return buildPrewarmPlan(ctx, systemPrompt, true, [], false)?.identity;

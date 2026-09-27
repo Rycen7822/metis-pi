@@ -16,6 +16,11 @@ export function formatUnifiedExecResult(result, command) {
     if (result.original_token_count !== undefined) {
         sections.push(`Original token count: ${result.original_token_count}`);
     }
+    if (result.fullOutputPath) {
+        sections.push(`Captured output archive: ${result.fullOutputPath} (${result.fullOutputBytes ?? "?"} bytes${result.fullOutputComplete === false ? "; incomplete" : ""})`);
+    }
+    if (result.fullOutputError)
+        sections.push(result.fullOutputError);
     sections.push("Output:");
     sections.push(result.output);
     return sections.join("\n");

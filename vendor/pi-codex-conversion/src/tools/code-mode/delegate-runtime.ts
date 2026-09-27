@@ -4,6 +4,7 @@ import { runCodeModeToolWithHooks } from "./nested-tool-completion.js";
 import { codeModeNameForToolIdentity } from "./tool-identity.ts";
 import { CodeModeNestedRenderStore } from "./trace-render-state.js";
 import { CodeModeTraceStore } from "./trace-store.js";
+import { FusionEvidenceStore } from "./fusion-evidence.js";
 import { toolResultFromValue, truncateTraceText } from "./trace-values.js";
 import type {
 	CodeModeToolDefinition,
@@ -39,6 +40,7 @@ export class CodeModeDelegateRuntime {
 	private readonly blockerChanges = new Map<string, Deferred>();
 	private readonly sequentialTails = new Map<string, Promise<void>>();
 	private readonly traces = new CodeModeTraceStore();
+	private readonly fusionEvidence = new FusionEvidenceStore();
 	private readonly cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly send: SendMessage;
 	private readonly renderStore: CodeModeNestedRenderStore;
@@ -78,6 +80,7 @@ export class CodeModeDelegateRuntime {
 			this.notifications.delete(cellId);
 			this.execSessions.delete(cellId);
 			this.traces.delete(cellId);
+			this.fusionEvidence.delete(cellId);
 		}, 1_000));
 	}
 
@@ -87,6 +90,7 @@ export class CodeModeDelegateRuntime {
 		this.cellContexts.clear();
 		this.cellTools.clear();
 		this.traces.clear();
+		this.fusionEvidence.clear();
 		this.renderStore.clear();
 		this.notifications.clear();
 		this.execSessions.clear();
@@ -179,8 +183,11 @@ export class CodeModeDelegateRuntime {
 		const execSessionIds = [...(this.execSessions.get(response.cellId) ?? [])];
 		if (response.kind !== "yielded") this.execSessions.delete(response.cellId);
 		const withTraces = this.traces.attach(response);
+		const evidence = this.fusionEvidence.take(response.cellId);
+		if (response.kind !== "yielded") this.fusionEvidence.delete(response.cellId);
 		return {
 			...withTraces,
+			...evidence,
 			...(execSessionIds.length > 0 ? { execSessionIds } : {}),
 			contentItems: [
 				...notifications.map((text) => ({ type: "input_text" as const, text })),
@@ -262,6 +269,7 @@ export class CodeModeDelegateRuntime {
 			},
 			captureResult: (result) => {
 				finalResultCaptured = true;
+				this.fusionEvidence.capture(cellId, trace.id, trace.name, input, result, currentContext());
 				resultSessionId = numericSessionId(result.details);
 				if (captureRendererValues)
 					this.renderStore.captureResult(trace.id, result);

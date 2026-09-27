@@ -13,6 +13,7 @@ export declare class CodeModeDelegateRuntime {
     private readonly blockerChanges;
     private readonly sequentialTails;
     private readonly traces;
+    private readonly fusionEvidence;
     private readonly cleanupTimers;
     private readonly send;
     private readonly renderStore;
