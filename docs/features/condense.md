@@ -71,6 +71,8 @@ Pi 原生容量兜底和 goal 继续分别负责容量与续跑。主动 OCC 是
 
 主动 OCC 首版不支持 opaque Responses compaction、tree/hybrid context management；这些模式继续走原有手动/容量流程，其实际压缩仍触发后置保持。普通 Pi 的手动/容量摘要也经过保护校验，无法安全缩减时会拒绝；不会循环压旧摘要强行腾空间。
 
+容量压缩的失败和取消也会清除当前 OCC 候选并进入保持，避免同一边界马上换压缩器重试；用户取消时撤销尚未执行的 goal 续跑，安全拒绝仍允许有效续跑。局部压缩后，若宿主按旧 usage 触发 threshold，扩展保留 usage 中的固定开销、只扣除一半本次局部发布的估计历史缩减，并要求额外容量余量，才跳过这次全局摘要。宿主因后续 `context_edit` 已重估容量时不再扣减。下一次实际请求清除该估计信用；真实 overflow 与手动压缩不走这一跳过规则。这是保守估计，不是精确 tokenizer 或缓存命中保证。
+
 Pi 会在 settled handler 执行期间暂存新输入，扩展只能验证已接受的输入版本。此时到达的纠正会在维护后原样处理，旧 goal 续跑凭证随之失效；不是输入一到达便保证中断摘要。
 
 来源、许可和更新边界见 [UPSTREAM](../../vendor/pi-condense/UPSTREAM.md)；本地修改见 [PATCHES](../../vendor/pi-condense/PATCHES.md)。

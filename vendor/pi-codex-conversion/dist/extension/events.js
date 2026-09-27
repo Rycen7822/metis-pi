@@ -386,6 +386,7 @@ export function registerCodexEvents(pi, runtime, tools, ui, codeMode, proxyProvi
         rewriteCodexProviderHeaders(event.headers, ctx, state);
     });
     pi.on("session_before_compact", async (event, ctx) => {
+        pi.events.emit("metis:occ-compaction-start", { signal: event.signal });
         if (state.contextTree.handoff.active)
             return { cancel: true };
         state.cwd = ctx.cwd;

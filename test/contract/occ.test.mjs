@@ -3,6 +3,7 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
@@ -10,7 +11,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 75000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 75010,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad } = {}) {
+async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy" } = {}) {
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work", "occ-host-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -23,7 +24,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
   } }));
   const sm = SessionManager.create(dir, dir);
-  const compaction = { enabled: false, reserveTokens: 500, keepRecentTokens: 1000 };
+  const compaction = { enabled: auto, reserveTokens: 500, keepRecentTokens: 1000 };
   if (installed) {
     const settings = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...settings, compaction }));
@@ -35,6 +36,19 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
     cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 } };
   const calls = [], errors = [], notices = [];
+  if (localSummary) {
+    const stream = (m, context) => {
+      calls.push({ summarizing: true, local: true, context });
+      const out = createAssistantMessageEventStream();
+      const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
+        content: [{ type: "text", text: "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
+        stopReason: "stop", timestamp: Date.now(), usage };
+      queueMicrotask(() => { out.push({ type: "done", reason: "stop", message }); out.end(message); });
+      return out;
+    };
+    registerApiProvider({ api: model.api, stream, streamSimple: stream }, "occ-test-local-summary");
+    t.after(() => unregisterApiProviders("occ-test-local-summary"));
+  }
   let actualWork = 0;
   writeFileSync(join(dir, "work.txt"), "NEW_WORK_EVIDENCE ".repeat(350));
   modelRuntime.registerProvider("occ-local", {
@@ -50,6 +64,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
           content: toolUse ? [{ type: "toolCall", id: `work-${actualWork}`, name: "read", arguments: { path: join(dir, "work.txt") } }]
             : [{ type: "text", text: summarizing ? summary : "Final response." }],
           stopReason: options?.signal?.aborted ? "aborted" : toolUse ? "toolUse" : "stop", timestamp: Date.now(), usage };
+        if (!summarizing) Object.assign(message, await onWork?.({ sm, toolUse, index: calls.filter(c => !c.summarizing).length }));
         out.push({ type: "done", reason: message.stopReason, message }); out.end(message);
       }).catch(error => out.end({ role: "assistant", api: m.api, provider: m.provider, model: m.id,
         content: [], stopReason: "error", errorMessage: String(error), timestamp: Date.now(), usage }));
@@ -58,7 +73,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   });
   // A large completed source range plus a separate kept turn creates a real
   // native compaction boundary, not a fabricated before_compact preparation.
-  sm.appendMessage({ role: "user", content: "ORIGINAL_GOAL: inspect only; do not deploy", timestamp: 1 });
+  sm.appendMessage({ role: "user", content: requirement, timestamp: 1 });
   sm.appendMessage({ role: "assistant", ...model, model: model.id, content: [
     { type: "toolCall", id: "evidence", name: "read", arguments: { path: "old.log" } },
   ], stopReason: "toolUse", timestamp: 2, usage });
@@ -93,7 +108,11 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     assert.ok(loaded.extensionsResult.extensions.every(extension => extension.path.startsWith(root)));
   }
   await loaded.session.bindExtensions({ onError: e => errors.push(e) });
-  return { ...loaded, sm, calls, errors, notices, eventBus };
+  const events = [];
+  loaded.session.subscribe(event => {
+    if (event.type === "compaction_start" || event.type === "compaction_end") events.push(event);
+  });
+  return { ...loaded, sm, calls, errors, notices, eventBus, events };
 }
 
 test("real AgentSession automatically commits OCC once, protects source requirements and recalls exact evidence", async t => {
@@ -322,4 +341,138 @@ test("edited archived evidence removes its stale derived summary and preserves t
   assert.doesNotMatch(payload, /STALE_DERIVED_CLAIM/);
   assert.equal(h.calls.filter(c => c.summarizing).length, 0);
   assert.deepEqual(h.errors, []);
+});
+
+
+const pressureUsage = input => ({ ...usage, input, totalTokens: input + usage.output });
+const compactionReasons = h => h.events.filter(e => e.type === "compaction_start").map(e => e.reason);
+const compactions = h => h.sm.getEntries().filter(e => e.type === "compaction");
+
+for (const goal of [false, true]) test(`cancelling native threshold before preparation does not restart OCC or goal; goal=${goal}`, async t => {
+  const h = await host(t, { auto: true, goal, onWork: () => ({ usage: pressureUsage(99900) }) });
+  h.session.subscribe(event => {
+    if (event.type === "compaction_start" && event.reason === "threshold") h.session.abortCompaction();
+  });
+  await h.session.prompt("Continue bounded work."); await h.session.waitForIdle();
+  assert.deepEqual(compactionReasons(h), ["threshold"]);
+  assert.equal(h.calls.length, 1, "neither a summary nor an owed goal continuation runs after cancellation");
+  assert.equal(compactions(h).length, 0);
+  assert.equal(h.events.at(-1).aborted, true);
+});
+
+test("native early safety rejection consumes the ready OCC boundary without another attempt", async t => {
+  const h = await host(t, { auto: true, requirement: "C".repeat(650000), onWork: () => ({ usage: pressureUsage(99900) }) });
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.deepEqual(compactionReasons(h), ["threshold"]);
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(compactions(h).length, 0);
+});
+
+for (const oversized of [false, true]) test(`native threshold completes its boundary without settled OCC; oversized=${oversized}`, async t => {
+  const h = await host(t, { auto: true, summary: oversized ? "too large ".repeat(25000) : "Bounded summary.",
+    onWork: () => ({ usage: pressureUsage(99900) }) });
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.deepEqual(compactionReasons(h), ["threshold"]);
+  assert.equal(h.calls.filter(c => c.summarizing).length, 1);
+  assert.equal(compactions(h).length, oversized ? 0 : 1);
+});
+
+test("local condense defers a stale threshold but fresh high usage still permits capacity compaction", async t => {
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+    beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(1000); },
+    onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
+  await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true]);
+  assert.equal(compactions(h).length, 0);
+  assert.deepEqual(compactionReasons(h), ["threshold"]);
+  // Pre-prompt checks still see the old usage, but a new actual request clears
+  // the publication credit. Its high provider usage must not be suppressed.
+  await h.session.prompt("Continue with a fresh response."); await h.session.waitForIdle();
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.equal(compactions(h).length, 1);
+});
+
+test("local condense does not suppress a threshold when fixed overhead still leaves pressure high", async t => {
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+    // Leave most history outside condense's eligible tool output. Less than
+    // the required headroom is recovered, despite publishing a local summary.
+    beforeLoad(sm) {
+      sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = "small evidence";
+      sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(1000);
+    },
+    onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
+  await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.equal(compactions(h).length, 1);
+});
+
+test("explicit overflow still attempts capacity rescue immediately after OCC", async t => {
+  const h = await host(t, { onWork: ({ index }) => index === 3
+    ? { stopReason: "error", errorMessage: "maximum context length exceeded", content: [] } : undefined });
+  await h.session.prompt("Continue bounded work."); await h.session.waitForIdle();
+  const held = h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data;
+  assert.equal(held.work - held.atWork, 0);
+  h.session.setAutoCompactionEnabled(true);
+  await h.session.sendCustomMessage({ customType: "new-evidence", content: "NEW_EVIDENCE ".repeat(12000), display: false }, { triggerTurn: false });
+  await h.session.prompt("Record new evidence."); await h.session.waitForIdle();
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.deepEqual(compactionReasons(h), ["manual", "overflow"]);
+});
+
+
+test("a later context edit already accounted for by Pi receives no duplicate local reduction credit", async t => {
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+    beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(25000); },
+    onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
+  const target = h.sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).id;
+  const emit = h.session.extensionRunner.emit.bind(h.session.extensionRunner);
+  h.session.extensionRunner.emit = async event => {
+    const result = await emit(event);
+    if (event.type === "agent_end") h.sm.appendContextEdit(target, {
+      content: [{ type: "text", text: "Revised reasoning. ".repeat(24000) }],
+    });
+    return result;
+  };
+  await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.equal(compactions(h).length, 1);
+});
+
+
+test("an idle manual cancellation does not cancel a later user request's goal continuation", async t => {
+  const h = await host(t, { auto: true, goal: true, workTurns: 5,
+    beforeLoad(sm) {
+      sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = "source-body ".repeat(10000);
+      sm.getBranch().find(e => e.type === "custom" && e.customType === "goal").data.goal.tokenBudget = 450000;
+    },
+    onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
+  const unsubscribe = h.session.subscribe(event => {
+    if (event.type === "compaction_start" && event.reason === "manual") h.session.abortCompaction();
+  });
+  await assert.rejects(h.session.compact());
+  unsubscribe();
+  await h.session.prompt("Start the new bounded task."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => !c.summarizing).length, 7, "five work calls, final answer and one owed continuation");
+  assert.equal(compactions(h).length, 1);
+});
+
+
+test("native safety rejection preserves an owed goal continuation", async t => {
+  const h = await host(t, { auto: true, goal: true, requirement: "C".repeat(650000),
+    onWork: () => ({ usage: pressureUsage(99900) }) });
+  await h.session.prompt("Continue the bounded goal."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => !c.summarizing).length, 2);
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(compactions(h).length, 0);
+  assert.ok(compactionReasons(h).every(reason => reason === "threshold"), "safe rejection must not start OCC");
+});
+
+test("real overflow after local condense bypasses stale-threshold deferral", async t => {
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+    beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(1000); },
+    onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 101000) }) });
+  await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
+  assert.deepEqual(compactionReasons(h), ["overflow"]);
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.equal(compactions(h).length, 1);
 });

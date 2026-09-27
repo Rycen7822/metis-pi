@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { compact } from "@earendil-works/pi-coding-agent";
+import { calculateContextTokens, compact, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { archiveToolOutput } from "./spill.js";
 import { isProtected } from "./protected.js";
 import { captureUnindexedBatchesFromSession } from "./batch-capture.js";
@@ -21,6 +21,8 @@ export function registerOcc(pi, indexer, config) {
     let sessionId;
     let boundaryTokens;
     let compactionSignal;
+    let requestTokens;
+    let localTokensSaved = 0;
     const enabled = () => config.value.enabled && config.value.opportunisticCompaction;
     const persist = () => pi.appendEntry(STATE, { ...state });
     const projection = (ctx) => ctx.sessionManager.buildSessionProjection();
@@ -36,6 +38,7 @@ export function registerOcc(pi, indexer, config) {
         ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "goal").at(-1),
     ]);
     const chars = (ctx) => JSON.stringify(visible(ctx).messages).length;
+    const estimatedTokens = (messages) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
     const capability = (ctx) => {
         const request = { ctx, supported: false };
         pi.events.emit("metis:occ-capability", request);
@@ -104,6 +107,28 @@ export function registerOcc(pi, indexer, config) {
         try {
             if (!capability(ctx) || !ctx.model)
                 return { cancel: true };
+            // A local publication can make the last provider usage stale. Keep its
+            // measured system/tool overhead, credit only half the estimated history
+            // reduction, and require headroom. Fresh requests discard this credit;
+            // manual compaction and actual overflow never use it.
+            if (event.reason === "threshold" && localTokensSaved > 0 && requestTokens !== undefined) {
+                let usageValid = false;
+                for (const entry of event.branchEntries) {
+                    if (entry.type === "context_edit" || entry.type === "compaction")
+                        usageValid = false;
+                    else if (entry.type === "message" && entry.message.role === "assistant"
+                        && entry.message.stopReason !== "error" && entry.message.stopReason !== "aborted"
+                        && entry.message.usage && calculateContextTokens(entry.message.usage) > 0)
+                        usageValid = true;
+                }
+                const saved = Math.min(localTokensSaved, Math.max(0, requestTokens - estimatedTokens(visible(ctx).messages)));
+                const threshold = ctx.model.contextWindow - event.preparation.settings.reserveTokens;
+                // Context edits may have already replaced usage with a fresh size
+                // estimate. Do not subtract the same reduction from that estimate.
+                if (usageValid && saved > 0 && event.preparation.tokensBefore - saved / 2
+                    < threshold - Math.max(1024, ctx.model.contextWindow * 0.05))
+                    return { cancel: true };
+            }
             const source = signature(ctx);
             if (state.attemptedSource === source)
                 return { cancel: true };
@@ -212,6 +237,9 @@ export function registerOcc(pi, indexer, config) {
         state = last?.type === "custom" ? { ...fresh(), ...last.data } : fresh();
         ready = running = cancelled = false;
         boundaryTokens = undefined;
+        compactionSignal = undefined;
+        requestTokens = undefined;
+        localTokensSaved = 0;
     }
     pi.on("turn_end", (event, ctx) => {
         if (!enabled() || event.message.role !== "assistant" || event.message.stopReason === "error" || event.message.stopReason === "aborted" || !event.toolResults.length)
@@ -224,7 +252,16 @@ export function registerOcc(pi, indexer, config) {
         persist();
     });
     pi.on("before_agent_start", () => { boundaryTokens = undefined; });
-    pi.on("model_select", (_event, ctx) => { boundaryTokens = undefined; ready = false; rewrite(ctx); });
+    // An idle manual cancellation has no settled event to consume it. A new
+    // accepted user input must not inherit that cancellation's goal decision.
+    pi.on("input", () => { cancelled = false; });
+    pi.on("model_select", (_event, ctx) => {
+        boundaryTokens = undefined;
+        requestTokens = undefined;
+        localTokensSaved = 0;
+        ready = false;
+        rewrite(ctx);
+    });
     pi.on("message_end", (event, ctx) => {
         if (!enabled() || event.message.role !== "assistant" || event.message.stopReason === "toolUse")
             return;
@@ -237,16 +274,34 @@ export function registerOcc(pi, indexer, config) {
         boundaryTokens = typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0 ? tokens : undefined;
         decide(ctx);
     });
-    pi.on("session_compact", (_event, ctx) => { boundaryTokens = undefined; rewrite(ctx); });
-    pi.on("session_compact_failed", (event) => {
-        if (running)
-            cancelled = compactionSignal ? compactionSignal.aborted : event.aborted;
+    pi.on("session_compact", (_event, ctx) => {
+        boundaryTokens = undefined;
+        compactionSignal = undefined;
+        requestTokens = undefined;
+        localTokensSaved = 0;
+        rewrite(ctx);
+    });
+    pi.on("session_compact_failed", (event, ctx) => {
+        if (enabled()) {
+            // Pi also reports extension safety rejections as aborted. Prefer the
+            // actual signal, observed before checkpoint/capability checks. Before the
+            // hook is reached, aborted means the host itself was cancelled.
+            cancelled ||= compactionSignal ? compactionSignal.aborted : event.aborted;
+            ready = false;
+            boundaryTokens = undefined;
+            state.spentRequest = externalRequest(ctx);
+            if (state.spentRequest)
+                spentRequests.add(state.spentRequest);
+            rewrite(ctx);
+        }
+        compactionSignal = undefined;
     });
     pi.on("agent_settled", async (_event, ctx) => {
         if (running)
             return;
         if (!enabled() || !ready || !ctx.isIdle() || ctx.hasPendingMessages()) {
-            pi.events.emit("metis:occ-finished", { cancelled: false });
+            pi.events.emit("metis:occ-finished", { cancelled });
+            cancelled = false;
             return;
         }
         running = true;
@@ -263,9 +318,11 @@ export function registerOcc(pi, indexer, config) {
             rewrite(ctx);
             running = false;
             pi.events.emit("metis:occ-finished", { cancelled });
+            cancelled = false;
         }
     });
     const off = [
+        pi.events.on("metis:occ-compaction-start", (data) => { compactionSignal = data.signal; }),
         pi.events.on("metis:occ-status", (data) => { data.deferGoal = ready || running; data.running = running; }),
         pi.events.on("metis:occ-prepare", (data) => {
             if (enabled())
@@ -273,5 +330,17 @@ export function registerOcc(pi, indexer, config) {
         }),
     ];
     pi.on("session_shutdown", () => { off.forEach(fn => fn()); sessionId = undefined; });
-    return { enabled, deferLocal: decide, rewrite, isRunning: () => running };
+    return {
+        enabled, deferLocal: decide, isRunning: () => running,
+        observeRequest(messages) {
+            requestTokens = enabled() ? estimatedTokens(messages) : undefined;
+            localTokensSaved = 0;
+        },
+        measure(ctx) { return enabled() ? estimatedTokens(visible(ctx).messages) : 0; },
+        rewrite(ctx, before = 0) {
+            if (enabled())
+                localTokensSaved += Math.max(0, before - estimatedTokens(visible(ctx).messages));
+            rewrite(ctx);
+        },
+    };
 }

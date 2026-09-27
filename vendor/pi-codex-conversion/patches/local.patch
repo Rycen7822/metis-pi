@@ -2371,7 +2371,7 @@ index ad6a7b6..3055fc6 100644
 +	{ additionalProperties: false },
 +);
 diff --git a/src/extension/events.ts b/src/extension/events.ts
-index 0401a67..8538a40 100644
+index 0401a67..737e58b 100644
 --- a/src/extension/events.ts
 +++ b/src/extension/events.ts
 @@ -10,7 +10,6 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
@@ -2412,7 +2412,15 @@ index 0401a67..8538a40 100644
  	});
  
  	pi.on("thinking_level_select", (event, ctx) => {
-@@ -429,9 +433,14 @@ export function registerCodexEvents(
+@@ -406,6 +410,7 @@ export function registerCodexEvents(
+ 		rewriteCodexProviderHeaders(event.headers, ctx, state);
+ 	});
+ 	pi.on("session_before_compact", async (event, ctx) => {
++		pi.events.emit("metis:occ-compaction-start", { signal: event.signal });
+ 		if (state.contextTree.handoff.active) return { cancel: true };
+ 		state.cwd = ctx.cwd;
+ 		const plan = resolveCodexRuntimePlanForState(
+@@ -429,9 +434,14 @@ export function registerCodexEvents(
  			await codeMode.checkpointNotebook();
  		} catch (error) {
  			ctx.ui.notify(`Notebook checkpoint before compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");

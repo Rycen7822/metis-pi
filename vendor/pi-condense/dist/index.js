@@ -193,6 +193,7 @@ export default function (pi) {
             return { ok: false, reason: "already-flushing" };
         if (options.trigger !== "manual" && occ.deferLocal(ctx))
             return { ok: false, reason: "empty" };
+        const beforeRewrite = occ.measure(ctx);
         // Clear on every non-concurrent invocation, regardless of outcome — the
         // rearm is a one-shot nudge for the very next eligible gate check.
         rearmedPending = false;
@@ -689,7 +690,7 @@ export default function (pi) {
         finally {
             isFlushing = false;
             if (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)
-                occ.rewrite(ctx);
+                occ.rewrite(ctx, beforeRewrite);
             emitFlushMetricsOnce();
         }
     };
@@ -818,6 +819,7 @@ export default function (pi) {
             // trimBatchToPendingRange drops them from the pending set below. Best-effort:
             // a spill failure leaves the result inline for the normal flush pipeline.
             try {
+                const beforeRewrite = occ.measure(ctx);
                 const handled = occ.deferLocal(ctx) ? new Set() : await spillOversizedBatch({
                     batch: filtered,
                     indexer,
@@ -831,7 +833,7 @@ export default function (pi) {
                     appendEntry: (type, data) => ctx.sessionManager.appendCustomEntry(type, data),
                 });
                 if (handled.size)
-                    occ.rewrite(ctx);
+                    occ.rewrite(ctx, beforeRewrite);
             }
             catch {
                 // best-effort; never block the turn
@@ -1003,6 +1005,7 @@ export default function (pi) {
     pi.on("session_shutdown", () => { activeSessionId = undefined; projectionContext = undefined; unsubscribeProjection(); });
     pi.on("context", async (event, ctx) => {
         const result = projectContext(event.messages, ctx.model?.api, ctx);
+        occ.observeRequest(result.messages);
         if (result.beforeChars !== undefined)
             statsAccum.setLiveReclaim(result.beforeChars, result.afterChars);
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
@@ -1012,6 +1015,7 @@ export default function (pi) {
     registerQueryTool(pi, indexer);
     // ── Register /pruner command + summary message renderer ────────────
     const compactChains = async (ctx) => {
+        const beforeRewrite = occ.measure(ctx);
         const branchMessages = projectBranchMessages(ctx.sessionManager.getBranch());
         const chains = detectChains(branchMessages, protectionPredicate);
         const inGrace = inGraceRecoveryToolCallIds(branchMessages, currentConfig.value.recoveryGraceTurns);
@@ -1032,7 +1036,7 @@ export default function (pi) {
             },
         }, inGrace);
         if (result.compressedEntries.length > 0) {
-            occ.rewrite(ctx);
+            occ.rewrite(ctx, beforeRewrite);
             lowerFloor(supersede, earliestChainStart(result.compressedEntries));
             statsAccum.addChainsCompressed(result.compressedEntries.length);
             statsAccum.persist(pi);

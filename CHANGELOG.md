@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 修复容量压缩取消/早期失败后 OCC 立即重启，以及 condense 发布后旧 usage 引发紧接的阈值摘要；保留新用量高占用与真实 overflow 的容量救援。
+
 - Action Fusion 使用统一扩展开关：排除 `extensions/action-fusion.ts` 同时关闭原生 edit/write、转换层 apply_patch 和 Code/Notebook 融合入口，保留普通工具；修正文档中的包内过滤路径。
 
 - 增加可选受控 OCC：共享局部/全局缓冲与保持、目标和证据原文保护、有效投影校验及 goal 安全续跑；增加证据目录。修复失败状态丢失、分页读取被替换和输出去重混淆执行元数据。
