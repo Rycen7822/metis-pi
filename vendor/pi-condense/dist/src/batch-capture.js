@@ -1,0 +1,247 @@
+import { occKey, resultTimestampOf } from "./occurrence-key.js";
+import { isChainAnchorCustom } from "./chain-detector.js";
+/**
+ * Unwraps a SessionEntry[] branch into AgentMessage-like objects, including
+ * persisted custom_message entries (extension steers) projected as
+ * role "custom". Shared by computeMetricsSnapshot, flushPending chain detection,
+ * compactChains, and the rescan below so chain anchor timestamps are identical
+ * at every site. Projected inline (rather than importing pi-coding-agent's
+ * createCustomMessage) because that helper isn't re-exported from the
+ * package's "." export map.
+ */
+export function projectBranchMessages(branch) {
+    return branch
+        .filter(isProjectableEntry)
+        .map((e) => (e.type === "custom_message" ? projectCustomMessageEntry(e) : e.message));
+}
+/**
+ * Session-wide index for the live turn at `turn_end`: the index the rescan
+ * below assigns to the branch's last assistant message. Shares the rescan's
+ * counting rule (every projected assistant message, text-only included) so
+ * live capture and the persisted flush frontier live in one numbering domain.
+ * Returns -1 when the branch has no projected assistant message (harness-only;
+ * a real `turn_end` always follows a persisted assistant message).
+ */
+export function deriveLiveTurnIndex(branch) {
+    let count = 0;
+    for (const msg of projectBranchMessages(branch)) {
+        if (msg.role === "assistant")
+            count++;
+    }
+    return count - 1;
+}
+/** True for SessionEntry shapes that project into an AgentMessage-like object (see projectBranchMessages). */
+function isProjectableEntry(e) {
+    return (e.type === "message" && e.message) || e.type === "custom_message";
+}
+/** Projects a single custom_message SessionEntry into its role "custom" message shape. */
+function projectCustomMessageEntry(e) {
+    return { role: "custom", customType: e.customType, content: e.content, display: e.display, details: e.details, timestamp: new Date(e.timestamp).getTime() };
+}
+/** Joins the text blocks of a ToolResultMessage into a single string. */
+export function extractToolResultText(msg) {
+    const content = Array.isArray(msg?.content) ? msg.content : [];
+    return content
+        .filter((c) => c.type === "text")
+        .map((c) => c.text)
+        .join("\n");
+}
+/**
+ * Converts turn_end event data into a CapturedBatch.
+ * @param message      AssistantMessage (content: Array of TextContent|ThinkingContent|ToolCall)
+ * @param toolResults  ToolResultMessage[]
+ */
+export function captureBatch(message, toolResults, turnIndex, timestamp) {
+    const content = Array.isArray(message?.content) ? message.content : [];
+    // Collect assistant prose text
+    const assistantText = content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+        .trim();
+    // Collect tool calls, matching each to its result
+    const toolCalls = content
+        .filter((block) => block.type === "toolCall")
+        .map((block) => {
+        const match = toolResults.find((result) => result.toolCallId === block.id);
+        let resultText = "(no result)";
+        let isError = false;
+        const resultTimestamp = match ? resultTimestampOf(match.timestamp) : undefined;
+        if (match) {
+            resultText = extractToolResultText(match);
+            isError = match.isError ?? false;
+        }
+        return {
+            toolCallId: block.id,
+            toolName: block.name,
+            args: block.input ?? block.args ?? block.arguments ?? {},
+            resultText,
+            isError,
+            ...(resultTimestamp !== undefined ? { resultTimestamp } : {}),
+        };
+    });
+    return { turnIndex, timestamp, assistantText, toolCalls };
+}
+/**
+ * Scans a session branch for unsummarized tool results and groups them into CapturedBatches.
+ * Useful for capturing results from the current in-progress turn when a prune is triggered.
+ *
+ * @param branch            The session message branch (from ctx.sessionManager.getBranch())
+ * @param indexer           The pruner indexer to check for already-summarized IDs
+ * @param exclude  Optional predicate; matching tool calls are skipped (user-protected tools/paths)
+ */
+export function captureUnindexedBatchesFromSession(branch, indexer, exclude = () => false) {
+    // Keep the SessionEntry wrapper alongside each projected message so the
+    // entry's own timestamp remains available as the preferred source below
+    // (projection alone loses that wrapper for "message" entries).
+    const projected = branch
+        .filter(isProjectableEntry)
+        .map((e) => ({ entry: e, msg: e.type === "custom_message" ? projectCustomMessageEntry(e) : e.message }));
+    const msgs = projected.map((p) => p.msg);
+    const batches = [];
+    // turnCounter increments for EVERY assistant message (not just prunable ones).
+    // This makes turnIndex stable across multiple prune cycles: pruning removes
+    // ToolResultMessages from the context event but leaves AssistantMessages in the
+    // session branch, so the count of all assistant messages never decreases. This
+    // session-wide count is the frontier's numbering domain; Pi's event.turnIndex
+    // matches it only inside one agent run (it resets on agent_start), so the live
+    // capture path derives the same index from the branch via deriveLiveTurnIndex.
+    let turnCounter = 0;
+    // userTurnGroup increments on every user message or eligible custom anchor seen
+    // while walking the branch. All assistant tool-call batches between two
+    // consecutive boundaries share the same userTurnGroup. This is used by
+    // groupBatchesByMode to merge turns within a single user → final-agent-message
+    // span when batchingMode === "agent-message".
+    let userTurnGroup = 0;
+    for (let i = 0; i < msgs.length; i++) {
+        const msg = msgs[i];
+        // Advance userTurnGroup on every user message or eligible custom anchor so
+        // all subsequent assistant batches get a new group number.
+        if (msg.role === "user" || isChainAnchorCustom(msg)) {
+            userTurnGroup++;
+            continue;
+        }
+        if (msg.role !== "assistant")
+            continue;
+        // Stable turn index: count every assistant message regardless of pruning state
+        const currentTurnIndex = turnCounter++;
+        // Per-turn result map: only the results between this assistant message and
+        // the next one. A branch-wide map is last-wins and mis-pairs repeated ids.
+        const turnResults = new Map();
+        for (let j = i + 1; j < msgs.length; j++) {
+            const m = msgs[j];
+            if (m.role === "assistant")
+                break;
+            if (m.role === "toolResult" && m.toolCallId && !turnResults.has(m.toolCallId)) {
+                turnResults.set(m.toolCallId, m);
+            }
+        }
+        const content = Array.isArray(msg.content) ? msg.content : [];
+        const toolCallBlocks = content.filter((c) => c.type === "toolCall");
+        // Find tool calls that have results in this branch and are not yet summarized
+        const readyToPrune = toolCallBlocks.filter((tc) => {
+            const id = tc.id;
+            if (!id)
+                return false;
+            const result = turnResults.get(id);
+            if (!result)
+                return false;
+            if (indexer.isSummarized(occKey(id, resultTimestampOf(result.timestamp))))
+                return false;
+            if (exclude(tc.name, tc.input ?? tc.arguments))
+                return false;
+            return true;
+        });
+        if (readyToPrune.length > 0) {
+            const results = readyToPrune.map((tc) => turnResults.get(tc.id));
+            const readyIds = new Set(readyToPrune.map((tc) => tc.id));
+            // We pass the full message but then trim back down to only the tool calls
+            // whose results already exist in the session. This lets a flush prune
+            // an intermediate completed subset in the middle of a longer tool chain
+            // without accidentally capturing later unresolved calls from the same
+            // assistant message as "(no result)" placeholders.
+            const entryTimestamp = projected[i].entry.timestamp;
+            const ts = entryTimestamp ? new Date(entryTimestamp).getTime() : (msg.timestamp ?? Date.now());
+            const batch = captureBatch(msg, results, currentTurnIndex, ts);
+            batches.push({
+                ...batch,
+                toolCalls: batch.toolCalls.filter((tc) => readyIds.has(tc.toolCallId)),
+                // Tag with the current group so flushPending can merge by mode
+                userTurnGroup,
+            });
+        }
+    }
+    return batches;
+}
+/** Serializes a single CapturedBatch into readable text for the summarizer LLM. */
+export function serializeBatchForSummarizer(batch) {
+    const parts = [];
+    if (batch.assistantText) {
+        parts.push(`Assistant said: ${batch.assistantText}\n`);
+    }
+    const toolParts = batch.toolCalls.map((tc, index) => {
+        const status = tc.isError ? "ERROR" : "OK";
+        const argsJson = JSON.stringify(tc.args, null, 2);
+        let resultText = tc.resultText;
+        const MAX_CHARS = 2000;
+        if (resultText.length > MAX_CHARS) {
+            const remaining = resultText.length - MAX_CHARS;
+            resultText = resultText.slice(0, MAX_CHARS) + ` ...[${remaining} chars truncated]`;
+        }
+        return `[[${index + 1}:${tc.toolName}]] Tool: ${tc.toolName}(${argsJson})\nResult (${status}): ${resultText}`;
+    });
+    parts.push(toolParts.join("\n---\n"));
+    return parts.join("\n");
+}
+/**
+ * Groups CapturedBatches according to the chosen batching mode.
+ *
+ * - "turn"          : returns the input array unchanged (one summary per assistant turn).
+ * - "agent-message" : merges all consecutive batches that share the same `userTurnGroup`
+ *                     into a single CapturedBatch, producing one summary per
+ *                     user → final-agent-message span.
+ *
+ * Batches without a `userTurnGroup` (e.g. from the live `turn_end` capture path) are
+ * always passed through one-per-batch regardless of mode — grouping only applies to
+ * batches captured from the session branch scan.
+ *
+ * Merge rules:
+ *   - `assistantText` = non-empty values joined with "\n\n"
+ *   - `toolCalls`     = concatenation in original order
+ *   - `turnIndex`     = last batch's turnIndex (latest turn in the group)
+ *   - `timestamp`     = last batch's timestamp
+ *   - `userTurnGroup` = shared group value of the merged batches
+ */
+export function groupBatchesByMode(batches, mode) {
+    if (mode !== "agent-message")
+        return batches;
+    const out = [];
+    // current tracks the mutable merged batch being built for the current group.
+    // We spread into a plain object so we can mutate it without affecting the source.
+    let current = null;
+    for (const batch of batches) {
+        // Batches without a group key are passed through individually; they break
+        // any open merge group too since we can't confidently assign them a span.
+        if (batch.userTurnGroup === undefined) {
+            current = null;
+            out.push(batch);
+            continue;
+        }
+        if (current !== null && current.userTurnGroup === batch.userTurnGroup) {
+            // Same span — merge into the current accumulated batch
+            const textParts = [current.assistantText, batch.assistantText].filter(Boolean);
+            current.assistantText = textParts.join("\n\n");
+            current.toolCalls = current.toolCalls.concat(batch.toolCalls);
+            // Advance to the latest turn metadata
+            current.turnIndex = batch.turnIndex;
+            current.timestamp = batch.timestamp;
+        }
+        else {
+            // New group — create a fresh accumulated batch (shallow copy so mutations
+            // to `current` do not bleed back into the original `batch` object)
+            current = { ...batch, userTurnGroup: batch.userTurnGroup };
+            out.push(current);
+        }
+    }
+    return out;
+}

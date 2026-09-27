@@ -10,6 +10,7 @@
 | `extensions/skill-mux.ts` / `skill-entry.ts` | skill 输入展开/补全、标签和点击折叠。 |
 | `extensions/todo.ts` → `src/todo/` | todo 工具、命令、持久化和面板。 |
 | `extensions/goal.ts` → `src/goal-state.ts` | 入口拥有宿主 I/O、命令、提示与工具；状态核心拥有目标、时钟、分支恢复和回合用量。 |
+| `extensions/condense.ts` → `vendor/pi-condense/dist/index.js` | 单一加载入口、重复安装检测和摘要用量展示；vendor 拥有归档、压缩与恢复。 |
 | vendor `src/extension/register.ts` | Codex 转换层组合根，通过构建后的 `dist/index.js` 加载。 |
 
 显示适配保留 Pi 原生执行与结果；工具注册和模型上下文处理由独立 goal/todo/vendor 功能承担。`test/package.test.mjs` 检查自有源码的注册、持久化与上下文边界。chrome 仅依赖结构类型和注入的宿主能力。

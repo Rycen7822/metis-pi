@@ -1,0 +1,54 @@
+/**
+ * Per-request image cap (`maxImagesPerRequest`).
+ *
+ * Providers reject a request carrying more images than their limit, and every
+ * image a model has seen stays in the transcript, so a long session can cross
+ * the limit and then fail on every request. Once a request carries more than
+ * `max` images, `capImages` replaces the oldest ones with a text note, in steps
+ * of half the cap so the prompt prefix changes rarely. It never mutates its
+ * input; it returns `undefined` when nothing changes.
+ */
+export const IMAGE_OMITTED_NOTE = "[earlier image omitted from this request: over maxImagesPerRequest; re-read the file or re-attach it to view it]";
+// Documented per-request limits of first-party wire APIs (Anthropic Messages:
+// 100 images per request). Keyed by `api`, not `provider`: the limit is enforced
+// by the protocol endpoint, whichever provider fronts it. Unlisted APIs
+// (OpenAI 1,500, Gemini 3,600) sit far above any realistic transcript.
+const BUILTIN_IMAGE_LIMITS = { "anthropic-messages": 100 };
+/** The effective cap: an explicit `maxImagesPerRequest` wins, else the built-in limit for the model's API. */
+export function imageLimitFor(configured, api) {
+    if (configured !== null)
+        return configured;
+    return api !== undefined ? (BUILTIN_IMAGE_LIMITS[api] ?? null) : null;
+}
+export function capImages(messages, max) {
+    const total = messages.reduce((n, m) => {
+        const content = m.content;
+        return n + (Array.isArray(content) ? content.filter((b) => b?.type === "image").length : 0);
+    }, 0);
+    if (total <= max)
+        return undefined;
+    // Omit the oldest images in steps of half the cap, not one per new image:
+    // the omitted set then changes once per `step` new images, so the prompt
+    // prefix (and the provider's prompt cache) stays stable in between.
+    const step = Math.max(1, Math.ceil(max / 2));
+    let toOmit = Math.min(total, Math.ceil((total - max) / step) * step);
+    let result;
+    for (let i = 0; i < messages.length && toOmit > 0; i++) {
+        const content = messages[i].content;
+        if (!Array.isArray(content))
+            continue;
+        let replaced;
+        for (let j = 0; j < content.length && toOmit > 0; j++) {
+            if (content[j]?.type !== "image")
+                continue;
+            replaced ??= content.slice();
+            replaced[j] = { type: "text", text: IMAGE_OMITTED_NOTE };
+            toOmit--;
+        }
+        if (replaced) {
+            result ??= messages.slice();
+            result[i] = { ...messages[i], content: replaced };
+        }
+    }
+    return result;
+}

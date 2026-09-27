@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 内置 pi-condense 2.11.0，沿用现有 `contextPrune`、`/pruner`、归档格式和压缩策略；已有外部恢复工具时跳过内置实例并提示迁移。`context_tree_query` 增加 UTF-8 分页、总返回预算和显式归档缺失错误；摘要用量单列展示，不重复计入 footer 的标准会话 usage。
+
 - 修复细竖线假光标遮住光标下方字符：改用终端真实竖线光标，去掉宿主字符上的反色但不替换字符；保留输入法定位、宽字符占位及草稿内容，卸载时恢复终端光标形状。
 - 将模型 id、推理深度、provider 与上下文占用从输入框下沿的 metadata widget 移至 footer，与路径、会话 I/O、cache 按顺序排布；窄屏按字段换行，不再使用同底色 widget。
 - 移除右侧 footer 的重复 Codex 额度及其独立 app-server 查询、轮询、配置和诊断入口；不再在非 Codex 模型下显示历史额度，左侧 Codex adapter 自带状态行不受影响。

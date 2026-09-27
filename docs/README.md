@@ -23,6 +23,7 @@
 | 复制软折行、缩进、前缀和回退 | [selection-copy](features/selection-copy.md) |
 | 任务编号、依赖和面板 | [todo](features/todo.md) |
 | 长任务目标、暂停/恢复与预算 | [goal](features/goal.md) |
+| 历史压缩、分页回读和独立 condense 迁移 | [condense](features/condense.md) |
 | 多 skill 输入、补全与折叠 | [skills](features/skills.md) |
 | 字形撑宽 | [glyphs](features/glyphs.md) |
 | `/codex-ui`、`/todos-doctor` 排查 | [diagnostics](features/diagnostics.md) |

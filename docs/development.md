@@ -4,6 +4,8 @@
 
 ## 检查入口
 
+`vendor:build` 和 `vendor:check` 覆盖 Codex conversion 与 condense。condense 单独入口为 `node scripts/vendor-condense.mjs build|check|fresh`（选择其中一个参数）；`fresh` 在临时目录重建并逐字节比较随包发布的 `dist/`，不要求工作区已经提交。更新来源与补丁范围见 [UPSTREAM](../vendor/pi-condense/UPSTREAM.md) 和 [PATCHES](../vendor/pi-condense/PATCHES.md)。
+
 | 命令 | 范围 |
 | --- | --- |
 | `npm run verify` | 先重建并核对 vendor 产物，再做源码/测试/vendor 类型检查、全部 Node 测试（含 vendor 激活与真实 Pi 宿主契约）和包内容 dry-run；PTY 单独运行。 |

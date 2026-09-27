@@ -12,6 +12,7 @@
 | `/goal` | `pause` \| `resume` \| `edit` \| `clear` | goal | 管理目标状态 |
 | `/todos` | — | todo | 恢复面板（若被右键隐藏过）+ 以 notify 打印文字任务列表 |
 | `/todos-doctor` | — | todo | 只读诊断：坏档归档、过期锁、GC |
+| `/pruner` | `status` / `settings` / `on` / `off` 等 | condense | 历史压缩、摘要模型与恢复设置，见 [features/condense.md](features/condense.md) |
 | `/skill:<name>` | 后接文字 | 宿主 + skill-mux | 调用 skill；**一次输入可带多个 token**，见 [features/skills.md](features/skills.md) |
 
 本仓库**不注册任何键盘快捷键**（原 `ctrl+shift+t` 已于 0.17.3 移除；todo 面板全部走鼠标）。`/settings`、`ctrl+o`、`ctrl+t`、`esc` 都是宿主行为，我们只读取宿主的当前键位，不改写、不覆盖。
@@ -22,6 +23,7 @@
 | --- | --- | --- |
 | `todo` | 单工具 + `action` 分发 | `list` / `add` / `update` / `complete` / `skip` / `reopen` / `claim` / `release` / `addBlockedBy` / `removeBlockedBy`；任务引用是**层级路径**（`"1"`、`"1.2"`，`#` 可省）；无变更返回 `No change:`，校验错误抛出并附纠正提示 |
 | `create_goal` / `get_goal` / `update_goal` | 各自独立 | 长任务目标；只在被明确要求时使用，状态走会话记录 |
+| `context_tree_query` | `toolCallIds` + 可选 `cursor` / `maxBytes` | 分页恢复归档结果；返回完整性与后续游标，缺失归档明确报错 |
 | Codex 工具层（`exec_command` / `write_stdin` / `apply_patch` / `view_image` / `notebook` 等） | 各自独立 | 由内置 vendor 层注册，见 [vendor-codex-conversion.md](vendor-codex-conversion.md) |
 
 **不接管**任何第三方工具：工具来源经宿主 `sourceInfo` 核对，只有明确来自 pi 内建实现的工具才使用本项目的 renderer。FFF / LSP / MCP / subagent / web 等插件即便覆盖同名工具，也保留它们自己的 renderer 与结果。

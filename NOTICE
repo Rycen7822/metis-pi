@@ -54,3 +54,10 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
   vendor/pi-codex-conversion/PATCHES.md.
 - Vendored for linux-x64 only: the per-platform voice helper binaries and the
   darwin/win32/linux-arm64 native tools are not redistributed here.
+
+pi-condense 2.11.0 is vendored with local recall and integration changes.
+Upstream: https://github.com/jjuraszek/pi-condense
+Commit: 1bdbba695305419e97be179b412b1fb267298d7f
+Copyright (c) 2025 championswimmer (original pi-context-prune).
+Copyright (c) 2026 Jacek Juraszek (pi-condense).
+MIT License (see vendor/pi-condense/LICENSE).

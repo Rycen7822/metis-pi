@@ -1,6 +1,6 @@
 # metis-pi
 
-为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、todo、skill 输入和 Codex 转换扩展。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 0.87.0**。
+为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、todo、skill 输入、condense 和 Codex 转换扩展。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 0.87.0**。
 
 ## 安装
 
@@ -27,8 +27,9 @@ pi install .
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
 | [Codex 转换层](docs/vendor-codex-conversion.md) | 内置 provider、原生工具与 code/notebook 模式，源码补丁随本仓库维护。 |
+| [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，保留现有压缩策略与配置，增加有界分页回读和摘要用量显示。 |
 
-配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，插件不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/vendor 入口另行过滤。配置范围和默认值只在[配置参考](docs/configuration.md)维护。
+显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/condense/vendor 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。
 
 ## 兼容边界
 
