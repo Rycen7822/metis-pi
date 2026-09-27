@@ -1211,5 +1211,7 @@ export default function (pi: ExtensionAPI) {
     () => diagnostics.counts(),
     (ctx: any) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT,
     () => rearmedPending,
+    undefined,
+    (ctx) => occ.refreshStatus(ctx),
   );
 }

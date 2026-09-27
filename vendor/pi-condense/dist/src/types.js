@@ -205,6 +205,7 @@ export const DEFAULT_CONFIG = {
     opportunisticCompaction: false,
     enabled: false,
     showPruneStatusLine: true,
+    showOccStatusLine: true,
     summarizerModel: "default",
     summarizerThinking: "default",
     pruneOn: "agent-message",

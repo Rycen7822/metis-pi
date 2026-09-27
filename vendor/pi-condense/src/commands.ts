@@ -478,6 +478,7 @@ export function registerCommands(
   getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot,
   getRearmed?: () => boolean,
   save: (config: ContextPruneConfig) => Promise<void> = saveConfig,
+  refreshOccStatus?: (ctx: ExtensionCommandContext) => void,
 ): void {
   // Register the /pruner command
   pi.registerCommand("pruner", {
@@ -520,6 +521,13 @@ export function registerCommands(
               values: ["true", "false"],
               currentValue: String(config.showPruneStatusLine),
               description: pruneStatusLineDescription(config),
+            },
+            {
+              id: "showOccStatusLine",
+              label: "OCC status line",
+              values: ["true", "false"],
+              currentValue: String(config.showOccStatusLine),
+              description: "Show OCC progress and retain its latest result in the footer. Does not affect compaction.",
             },
             {
               id: "pruneOn",
@@ -731,6 +739,8 @@ export function registerCommands(
               if (statusLineItem) {
                 statusLineItem.description = pruneStatusLineDescription(newConfig);
               }
+            } else if (id === "showOccStatusLine") {
+              newConfig.showOccStatusLine = newValue === "true";
             } else if (id === "pruneOn") {
               newConfig.pruneOn = newValue as ContextPruneConfig["pruneOn"];
               const pruneTriggerItem = items.find((item) => item.id === "pruneOn");
@@ -823,6 +833,7 @@ export function registerCommands(
               };
             }
             currentConfig.value = newConfig;
+            refreshOccStatus?.(ctx);
             void persistConfig((m, t) => ctx.ui.notify(m, t), newConfig, save);
             setPruneStatusWidget(ctx, newConfig, getLiveReclaim(), getDiagnosticCounts?.());
             settingsList?.invalidate();

@@ -371,7 +371,7 @@ function startPrunerWidget(ctx, batches) {
     };
 }
 // ── Command registration ────────────────────────────────────────────────────
-export function registerCommands(pi, currentConfig, flushPending, capturePendingBatches, getStats, getLiveReclaim, indexer, compactChains, getDiagnosticCounts, getContextMetrics, getRearmed, save = saveConfig) {
+export function registerCommands(pi, currentConfig, flushPending, capturePendingBatches, getStats, getLiveReclaim, indexer, compactChains, getDiagnosticCounts, getContextMetrics, getRearmed, save = saveConfig, refreshOccStatus) {
     // Register the /pruner command
     pi.registerCommand("pruner", {
         description: "Context-prune settings and commands",
@@ -411,6 +411,13 @@ export function registerCommands(pi, currentConfig, flushPending, capturePending
                             values: ["true", "false"],
                             currentValue: String(config.showPruneStatusLine),
                             description: pruneStatusLineDescription(config),
+                        },
+                        {
+                            id: "showOccStatusLine",
+                            label: "OCC status line",
+                            values: ["true", "false"],
+                            currentValue: String(config.showOccStatusLine),
+                            description: "Show OCC progress and retain its latest result in the footer. Does not affect compaction.",
                         },
                         {
                             id: "pruneOn",
@@ -617,6 +624,9 @@ export function registerCommands(pi, currentConfig, flushPending, capturePending
                                 statusLineItem.description = pruneStatusLineDescription(newConfig);
                             }
                         }
+                        else if (id === "showOccStatusLine") {
+                            newConfig.showOccStatusLine = newValue === "true";
+                        }
                         else if (id === "pruneOn") {
                             newConfig.pruneOn = newValue;
                             const pruneTriggerItem = items.find((item) => item.id === "pruneOn");
@@ -728,6 +738,7 @@ export function registerCommands(pi, currentConfig, flushPending, capturePending
                             };
                         }
                         currentConfig.value = newConfig;
+                        refreshOccStatus?.(ctx);
                         void persistConfig((m, t) => ctx.ui.notify(m, t), newConfig, save);
                         setPruneStatusWidget(ctx, newConfig, getLiveReclaim(), getDiagnosticCounts?.());
                         settingsList?.invalidate();

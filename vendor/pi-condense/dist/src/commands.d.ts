@@ -24,4 +24,4 @@ export declare function registerCommands(pi: ExtensionAPI, currentConfig: {
 }>, capturePendingBatches: (ctx: ExtensionCommandContext) => CapturedBatch[], getStats: () => SummarizerStats, getLiveReclaim: () => LiveReclaim | undefined, indexer: ToolCallIndexer, compactChains: (ctx: ExtensionCommandContext) => Promise<{
     compressedEntries: ChainCompressionEntry[];
     skipped: number;
-}>, getDiagnosticCounts?: () => Record<DiagnosticKind, number>, getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot, getRearmed?: () => boolean, save?: (config: ContextPruneConfig) => Promise<void>): void;
+}>, getDiagnosticCounts?: () => Record<DiagnosticKind, number>, getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot, getRearmed?: () => boolean, save?: (config: ContextPruneConfig) => Promise<void>, refreshOccStatus?: (ctx: ExtensionCommandContext) => void): void;

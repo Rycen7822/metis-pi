@@ -63,6 +63,10 @@ Pi 原生容量兜底和 goal 继续分别负责容量与续跑。主动 OCC 是
 
 在同一 `contextPrune` 配置中设置 `opportunisticCompaction: true`，并保持 `enabled: true`。默认关闭；启用后普通 Pi 摘要路径会在最终回复后的空闲边界评估一次全局压缩。它不创建新任务。goal 只有原本欠下的续跑才能恢复，执行时重新检查暂停、目标修改及用户输入；用户取消压缩不会恢复旧续跑。
 
+`contextPrune.showOccStatusLine` 控制 OCC 状态栏标识，默认 `true`；可在 `/pruner settings` 的 **OCC status line** 中切换，或在 `<agent-dir>/settings.json` 中设置为 `false` 后 reload。交互设置关闭时立即隐藏，重新打开恢复最近一次结果。此开关独立于 `showPruneStatusLine`，不影响 OCC 调度，也不隐藏 Pi 原生压缩进度、取消提示或错误告警。
+
+开启标识时，主动 OCC 执行期间，TUI 状态栏显示 `OCC: compacting…`，同时保留 Pi 原生压缩进度和取消提示。结束后保留最近一次结果：`OCC: compacted`、`OCC: cancelled` 或 `OCC: not compacted`（安全拒绝或失败）；reload 后也会恢复。缓冲等待和保持期不覆盖上次结果，手动压缩与原生 auto-compact 不更新 OCC 标识。
+
 局部 condense 与 OCC 共用缓冲和保持：接近全局候选时暂缓局部发布，已有原文仍可见；任何局部发布、摘要尝试或宿主压缩后，至少经过 4 次真实工具工作请求并新增足够历史才重新评估。等待使用进入/退出不同阈值，不能因门槛波动反复压缩。预热、摘要调用和纯文本计划不增加工作次数。保持期间不做额外的错误参数删除或保护文件重读替换；自动模式持续保留回读页面，避免宽限期到期改写旧前缀。首次从旧模式启用可能把旧回读 stub 恢复为原页，此后表示稳定。
 
 开启 Pi 的 auto-compact 时，主动 OCC 还有容量缓冲区：以当前模型有效窗口 `W` 和 Pi 的 `reserveTokens` 计算容量阈值 `T = W - reserveTokens`，缓冲宽度 `B = max(1024 tokens, 5% × W)`。距离阈值不超过 `B` 时，不再启动主动 OCC 或自动 condense 摘要；已有原文保持可见，外部命令日志仍导入归档。剩余空间超过 `1.5 × B` 才退出缓冲区，并继续遵守已有保持期。仅等待不会消耗 OCC 尝试额度；goal 在宿主完成本轮容量检查后正常继续，用户取消仍能撤销旧续跑。

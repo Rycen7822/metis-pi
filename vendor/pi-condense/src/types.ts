@@ -264,6 +264,8 @@ export interface ContextPruneConfig {
   enabled: boolean;
   /** Whether to show the prune footer status line and queued turn messages */
   showPruneStatusLine: boolean;
+  /** Whether to show the persistent OCC footer status line */
+  showOccStatusLine: boolean;
   /**
    * Which model to use for summarization.
    * "default" = current active Pi model (ctx.model)
@@ -565,6 +567,7 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
   opportunisticCompaction: false,
   enabled: false,
   showPruneStatusLine: true,
+  showOccStatusLine: true,
   summarizerModel: "default",
   summarizerThinking: "default",
   pruneOn: "agent-message",

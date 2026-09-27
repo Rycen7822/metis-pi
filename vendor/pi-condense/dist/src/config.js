@@ -38,6 +38,9 @@ function normalize(existing) {
         showPruneStatusLine: typeof merged.showPruneStatusLine === "boolean"
             ? merged.showPruneStatusLine
             : DEFAULT_CONFIG.showPruneStatusLine,
+        showOccStatusLine: typeof merged.showOccStatusLine === "boolean"
+            ? merged.showOccStatusLine
+            : DEFAULT_CONFIG.showOccStatusLine,
         pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : DEFAULT_CONFIG.pruneOn,
         summarizerThinking: isSummarizerThinking(merged.summarizerThinking)
             ? merged.summarizerThinking

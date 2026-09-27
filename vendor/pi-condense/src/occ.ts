@@ -23,6 +23,7 @@ interface MaintenanceState {
   attemptedSource?: string;
   waitExhaustedRequest?: string;
   capacityWaiting?: boolean;
+  lastOutcome?: "compacted" | "cancelled" | "not compacted";
 }
 const fresh = (): MaintenanceState => ({ phase: "normal", work: 0, atWork: 0, atChars: 0 });
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -41,6 +42,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   let requestTokens: number | undefined;
   let localTokensSaved = 0;
   const enabled = () => config.value.enabled && config.value.opportunisticCompaction;
+  const showStatus = (ctx: ExtensionContext, status?: string) => {
+    try { ctx.ui.setStatus("metis-occ", config.value.showOccStatusLine && status ? `OCC: ${status}` : undefined); }
+    catch { /* UI teardown must not affect compaction or goal continuation. */ }
+  };
   const persist = () => pi.appendEntry(STATE, { ...state });
   const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection();
   const visible = (ctx: ExtensionContext) => {
@@ -262,6 +267,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       }
     }
     state = last?.type === "custom" ? { ...fresh(), ...last.data as MaintenanceState } : fresh();
+    showStatus(ctx, state.lastOutcome);
     ready = running = cancelled = false;
     boundaryTokens = undefined;
     compactionSignal = undefined;
@@ -317,9 +323,13 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       return;
     }
     running = true; cancelled = false; ready = false; compactionSignal = undefined;
+    let completed = false;
     try {
-      await new Promise<void>(resolve => ctx.compact({ onComplete: () => resolve(), onError: () => resolve() }));
+      showStatus(ctx, "compacting…");
+      await new Promise<void>(resolve => ctx.compact({ onComplete: () => { completed = true; resolve(); }, onError: () => resolve() }));
     } finally {
+      state.lastOutcome = completed ? "compacted" : cancelled ? "cancelled" : "not compacted";
+      showStatus(ctx, state.lastOutcome);
       state.spentRequest = state.request;
       if (state.request) spentRequests.add(state.request);
       rewrite(ctx);
@@ -339,10 +349,11 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (enabled()) data.promise = prepare(data.event, data.ctx);
     }),
   ];
-  pi.on("session_shutdown", () => { off.forEach(fn => fn()); sessionId = undefined; });
+  pi.on("session_shutdown", (_event, ctx) => { showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined; });
   return {
     enabled, deferLocal: decide, isRunning: () => running,
     isCapacityWaiting: () => !!state.capacityWaiting,
+    refreshStatus(ctx: ExtensionContext) { showStatus(ctx, running ? "compacting…" : state.lastOutcome); },
     observeRequest(messages: any[]) {
       requestTokens = enabled() ? estimatedTokens(messages) : undefined;
       localTokensSaved = 0;

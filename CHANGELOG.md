@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 主动 OCC 执行时显示独立的 `OCC: compacting…` 状态栏标识，结束后保留最近一次结果，并在 reload 后恢复；新增默认开启的 `showOccStatusLine` 开关，可通过 `/pruner settings` 即时切换。
+
 - OCC 增加接近 auto-compact 阈值时的缓冲与滞回、压缩后整体容量余量检查；等待期间保留原文归档和 goal 正常续跑，关闭 auto-compact 时不让位。
 
 - 修复容量压缩取消/早期失败后 OCC 立即重启，以及 condense 发布后旧 usage 引发紧接的阈值摘要；保留新用量高占用与真实 overflow 的容量救援。

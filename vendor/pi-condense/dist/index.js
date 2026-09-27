@@ -1055,5 +1055,5 @@ export default function (pi) {
         }
         return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length };
     };
-    registerCommands(pi, currentConfig, flushPending, capturePendingBatches, () => statsAccum.getStats(), () => statsAccum.getLiveReclaim(), indexer, compactChains, () => diagnostics.counts(), (ctx) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT, () => rearmedPending);
+    registerCommands(pi, currentConfig, flushPending, capturePendingBatches, () => statsAccum.getStats(), () => statsAccum.getLiveReclaim(), indexer, compactChains, () => diagnostics.counts(), (ctx) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT, () => rearmedPending, undefined, (ctx) => occ.refreshStatus(ctx));
 }
