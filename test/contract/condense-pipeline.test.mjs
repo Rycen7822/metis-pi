@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
@@ -19,16 +19,19 @@ import goalExtension from "../../extensions/goal.ts";
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const buildLog = Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "condense-pipeline-"));
+async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false, occ = false } = {}) {
+  const workDir = fileURLToPath(new URL("../../.work/", import.meta.url));
+  mkdirSync(workDir, { recursive: true });
+  const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: {
-    enabled: true, showPruneStatusLine: false, minBatchChars: 5000, pruneOn: "agent-message", batchingMode: "agent-message",
+    enabled: true, opportunisticCompaction: occ, showPruneStatusLine: false, minBatchChars: 5000, pruneOn: "agent-message", batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
   } }));
-  const sm = SessionManager.inMemory(dir);
+  // Spill files use the session directory; inMemory() leaves it empty.
+  const sm = SessionManager.create(dir, dir);
   const hooks = new Map(), tools = new Map(), calls = [], events = createEventBus();
   const api = "condense-local-proof";
   const model = { id: "summary", name: "summary", api, provider: "local", baseUrl: "http://invalid", reasoning: false,
@@ -201,7 +204,7 @@ for (const eager of [true, false]) test(`fused evidence preserves mutation, pack
 test("goal continuation counters change only the appended message, preserving system instructions", async (t) => {
   const hooks = new Map(), tools = new Map();
   const sm = SessionManager.inMemory("/tmp/goal-prefix");
-  const pi = { on: (name, fn) => hooks.set(name, fn), registerCommand() {}, registerTool: t => tools.set(t.name, t),
+  const pi = { events: createEventBus(), on: (name, fn) => hooks.set(name, fn), registerCommand() {}, registerTool: t => tools.set(t.name, t),
     appendEntry: (type, data) => sm.appendCustomEntry(type, data), sendMessage() {} };
   goalExtension(pi);
   const ctx = { sessionManager: sm, hasUI: false, isIdle: () => true, hasPendingMessages: () => false };
@@ -243,4 +246,35 @@ test("archive failure is explicit and incomplete captured prefixes are not repor
   assert.equal(result.text, "captured prefix");
   assert.equal(result.archiveComplete, false);
   assert.match(result.error, /incomplete/i);
+});
+
+
+test("effective rescan preserves raw frontier ordinals after global compaction", async t => {
+  const f = await fixture(t, { occ: true });
+  for (let i = 0; i < 12; i++) f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: `old ${i}` }], timestamp: 100 + i });
+  f.sm.appendCustomEntry("context-prune-frontier", { lastAttemptedToolCallId: "old", lastAttemptedTurnIndex: 11 });
+  const kept = f.sm.appendMessage({ role: "user", content: "new effective task", timestamp: 200 });
+  f.sm.appendCompaction("old summary", kept, 1000);
+  f.sm.appendCustomEntry("metis-occ-state", { phase: "hold", work: 10, atWork: 0, atChars: 0 });
+  f.add("FRESH_BODY ".repeat(700), "custom inspection", "fresh");
+  await f.emit("session_start");
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  assert.match(JSON.stringify(f.calls[0]), /FRESH_BODY/);
+  const frontier = f.sm.getBranch().filter(e => e.type === "custom" && e.customType === "context-prune-frontier").at(-1).data;
+  assert.equal(frontier.lastAttemptedToolCallId, "fresh");
+  assert.equal(frontier.lastAttemptedTurnIndex, 12);
+});
+
+test("a local rewrite holds through two steps and only releases after real reuse plus new history", async t => {
+  const f = await fixture(t, { occ: true });
+  f.add("FIRST_EVIDENCE ".repeat(500), "custom inspection");
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  for (let i = 0; i < 4; i++) {
+    const next = f.add(`NEW_${i} ` + "observation ".repeat(200), "custom inspection");
+    await f.emit("turn_end", { message: next.assistant, toolResults: [next.result], turnIndex: i });
+    await f.finish();
+    assert.equal(f.calls.length, i < 3 ? 1 : 2);
+  }
 });

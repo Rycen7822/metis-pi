@@ -123,7 +123,8 @@ export function captureBatch(
 export function captureUnindexedBatchesFromSession(
   branch: any[],
   indexer: { isSummarized(id: string): boolean },
-  exclude: (toolName: string, args: unknown) => boolean = () => false
+  exclude: (toolName: string, args: unknown) => boolean = () => false,
+  sourceTurnIndices?: ReadonlyMap<string, number>,
 ): CapturedBatch[] {
   // Keep the SessionEntry wrapper alongside each projected message so the
   // entry's own timestamp remains available as the preferred source below
@@ -163,7 +164,8 @@ export function captureUnindexedBatchesFromSession(
     if (msg.role !== "assistant") continue;
 
     // Stable turn index: count every assistant message regardless of pruning state
-    const currentTurnIndex = turnCounter++;
+    const fallbackTurnIndex = turnCounter++;
+    const currentTurnIndex = sourceTurnIndices?.get(projected[i].entry.id) ?? fallbackTurnIndex;
 
     // Per-turn result map: only the results between this assistant message and
     // the next one. A branch-wide map is last-wins and mis-pairs repeated ids.

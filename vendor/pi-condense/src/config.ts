@@ -39,6 +39,7 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
   const merged = { ...DEFAULT_CONFIG, ...existing };
   return {
     ...merged,
+    opportunisticCompaction: merged.opportunisticCompaction === true,
     enabled: typeof merged.enabled === "boolean" ? merged.enabled : DEFAULT_CONFIG.enabled,
     showPruneStatusLine:
       typeof merged.showPruneStatusLine === "boolean"

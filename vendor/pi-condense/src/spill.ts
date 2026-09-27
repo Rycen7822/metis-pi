@@ -13,7 +13,7 @@ import { captureFusionResult } from "./fusion.js";
 import { packToolResult } from "./packing.js";
 
 /** Import the execution layer's full output, not its truncated display text. */
-async function importOutputArchive(call: CapturedToolCall, sessionDir: string, sessionId: string): Promise<boolean> {
+export async function importOutputArchive(call: CapturedToolCall, sessionDir: string, sessionId: string): Promise<boolean> {
   const source = call.outputArchive;
   if (!source || !isAbsolute(source.path)) return false;
   const info = await stat(source.path);
@@ -57,6 +57,7 @@ async function importOutputArchive(call: CapturedToolCall, sessionDir: string, s
 async function importFusionJournal(call: CapturedToolCall, batch: CapturedBatch, args: {
   indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
   appendEntry: (customType: string, data?: unknown) => void;
+  archiveOnly?: boolean;
 }): Promise<void> {
   const source = call.outputArchive;
   if (source?.source !== "fusion-journal" || !isAbsolute(source.path)) return;
@@ -78,9 +79,20 @@ async function importFusionJournal(call: CapturedToolCall, batch: CapturedBatch,
         resultTimestamp: entry.timestamp, isError: false, ...fusion,
       };
       if (child.outputArchive) await importOutputArchive(child, args.sessionDir, args.sessionId);
-      args.indexer.addBatch({ ...batch, toolCalls: [child] }, args.appendEntry);
+      args.indexer.addBatch({ ...batch, toolCalls: [child] }, args.appendEntry, args.archiveOnly);
     }
   } finally { lines.close(); stream.destroy(); }
+}
+
+/** OCC archive preparation retains nested fusion receipts without publishing pruning. */
+export async function archiveToolOutput(call: CapturedToolCall, batch: CapturedBatch, args: {
+  indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
+  appendEntry: (customType: string, data?: unknown) => void;
+}): Promise<void> {
+  if (call.outputArchive?.complete === false || call.archiveComplete === false) throw new Error("Incomplete execution archive");
+  if (!call.outputArchive) return;
+  await importFusionJournal(call, batch, { ...args, archiveOnly: true });
+  if (!await importOutputArchive(call, args.sessionDir, args.sessionId)) throw new Error("Execution archive unavailable");
 }
 
 /** Replace anything outside [A-Za-z0-9_-] so the id can't escape the blob dir. */
@@ -177,7 +189,7 @@ export async function spillOversizedBatch(args: {
     if (config.dedupByContentHash) {
       const original = indexer.lookupByContent(tc.toolName, tc.resultText);
       if (original && original !== key) {
-        indexer.registerDuplicate(key, original, appendEntry);
+        indexer.registerDuplicate(key, original, appendEntry, { ...tc, turnIndex: batch.turnIndex, timestamp: batch.timestamp });
         handled.add(tc.toolCallId);
         continue;
       }

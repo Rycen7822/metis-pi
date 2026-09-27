@@ -67,3 +67,6 @@ Context / transcript → 统一准备 + 工具放置 → Responses input
 ## 验证
 
 全仓检查通过模块/声明/静态及字面量动态导入索引定位重复，再沿各领域的消费者核对；原生 Rust 检查入口与集成边界，不声称逐行审计全部上游实现。实际检查结果与局限统一放在 [VALIDATION](../VALIDATION.md)，测试命令放在 [开发说明](development.md)。
+
+
+受控 OCC 由 condense 的单一维护状态管理，持久化等待、实际工作计数、改写保持与每请求尝试额度。conversion 继续独占 before_compact 钩子，以 promise broker 等待受保护候选，任何失败显式取消；goal 暂存既有续跑，维护后通过一次性命令在执行时复查。归档记录与发布的 pruning 记录分开；有效投影的内容采用宿主 context_edit，而 frontier 保持原始来源的 assistant 序号。主动 OCC 的后端范围与限制见 [condense](features/condense.md)。

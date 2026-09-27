@@ -4,13 +4,14 @@ import { occKey, resultTimestampOf } from "./occurrence-key.js";
 /**
  * Protected reads are never indexed, so nothing else in the pipeline ever
  * collapses a re-read of the same skill file. This module keeps only the
- * newest protected read per `args.path` verbatim (spec 2026-09-07).
+ * newest byte-identical successful protected read of the same range verbatim.
  */
 export interface SupersededCandidate {
   toolCallId: string;
   path: string;
   timestamp: number | undefined;
   resultIndex: number;
+  identity: string;
 }
 
 export interface SupersedeState {
@@ -67,7 +68,8 @@ export function findSuperseded(messages: any[], isProtected: IsProtectedFn): Sup
       if (!block) continue;
       open.delete(m.toolCallId);
       const args = block.input ?? block.args ?? block.arguments ?? {};
-      if (!isProtected(block.name, args)) continue;
+      if (block.name !== "read" || !isProtected(block.name, args) || m.isError
+        || !Array.isArray(m.content) || !m.content.every((part: any) => part.type === "text")) continue;
       const rawPath = (args as Record<string, unknown>)?.path;
       if (typeof rawPath !== "string") continue;
       const path = normalizePath(rawPath);
@@ -76,6 +78,7 @@ export function findSuperseded(messages: any[], isProtected: IsProtectedFn): Sup
         path,
         timestamp: resultTimestampOf(m.timestamp),
         resultIndex: i,
+        identity: JSON.stringify([args, m.content]),
       };
       const list = byPath.get(path);
       if (list) list.push(cand);
@@ -86,7 +89,11 @@ export function findSuperseded(messages: any[], isProtected: IsProtectedFn): Sup
   }
 
   const out: SupersededCandidate[] = [];
-  for (const list of byPath.values()) for (let i = 0; i < list.length - 1; i++) out.push(list[i]);
+  for (const list of byPath.values()) {
+    for (let i = 0; i < list.length - 1; i++) {
+      if (list.slice(i + 1).some((later) => later.identity === list[i]!.identity)) out.push(list[i]!);
+    }
+  }
   out.sort((a, b) => a.resultIndex - b.resultIndex);
   return out;
 }

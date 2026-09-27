@@ -16,17 +16,6 @@ export declare class ToolCallIndexer {
      */
     private contentHashToOriginal;
     /**
-     * Duplicate occurrence key (or legacy bare id) -> original occurrence key
-     * (or legacy bare id). Populated by `registerDuplicate` during the
-     * pre-flush dedup pass and rebuilt from CUSTOM_TYPE_DEDUP_ALIAS entries on
-     * reconstruction.
-     *
-     * Both `isSummarized` and `resolveToolCallId` consult this map so
-     * `pruneMessages` stub-replaces dup toolResults and `context_tree_query`
-     * resolves dup ids to the original record.
-     */
-    private dedupAliasToOriginal;
-    /**
      * Per-batch summary bodies for chain-compression summary text lookup.
      * Each entry maps a set of toolCallIds to the summary's markdown body.
      * Populated from CUSTOM_TYPE_SUMMARY entries at rebuild time and via
@@ -147,7 +136,7 @@ export declare class ToolCallIndexer {
     hasLegacyBareRecord(toolCallId: string): boolean;
     /**
      * Returns the toolCallId of an already-indexed record whose
-     * `(toolName, normalize(resultText))` matches the supplied input, or
+     * `(toolName, exact resultText)` matches the supplied input, or
      * `undefined` if there is no match. Driven by the in-memory
      * `contentHashToOriginal` map; only consults records that entered the
      * indexer via `addBatch` (i.e. previous successful prunes) or were
@@ -157,15 +146,9 @@ export declare class ToolCallIndexer {
      * "not a duplicate".
      */
     lookupByContent(toolName: string, resultText: string): string | undefined;
-    /**
-     * Registers `newKey` as a duplicate of `originalKey` (each an occurrence
-     * key, or a legacy bare id). The new id reuses the original's short alias
-     * (so `pruneMessages` emits the same `tN` ref for both) and is persisted
-     * via the supplied `appendEntry` so reconstruction can replay it later.
-     *
-     * No-op when `newKey === originalKey` (defensive).
-     */
-    registerDuplicate(newKey: string, originalKey: string, appendEntry: (customType: string, data?: unknown) => void): void;
+    /** Duplicate bodies still have independent execution identity and recall refs. */
+    registerDuplicate(newKey: string, originalKey: string, appendEntry: (customType: string, data?: unknown) => void, occurrence?: ToolCallRecord): void;
+    private unknownLegacyOccurrence;
     /**
      * Stores summary body text keyed by the toolCallIds it covers.
      * Called after a successful flush so `getPerBatchSummaryTextForToolCallIds`
@@ -205,7 +188,7 @@ export declare class ToolCallIndexer {
      * `ctx.sessionManager.appendCustomEntry` (session delivery), without the
      * indexer needing to know which one is active.
      */
-    addBatch(batch: CapturedBatch, appendEntry: (customType: string, data?: unknown) => void): void;
+    addBatch(batch: CapturedBatch, appendEntry: (customType: string, data?: unknown) => void, archiveOnly?: boolean): void;
     /**
      * Atomic recoverability backfill for an uncovered chain (spec
      * 2026-08-14-uncovered-chain-deterministic-backfill). Append-before-commit:

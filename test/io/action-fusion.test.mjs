@@ -27,7 +27,7 @@ async function assertProcessStopped(pid) {
     try {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       state = stat.slice(stat.lastIndexOf(")") + 2);
-    } catch (error) { if (error.code === "ENOENT") return; throw error; }
+    } catch (error) { if (error.code === "ENOENT" || error.code === "ESRCH") return; throw error; }
     if (/^[ZX] /.test(state)) return;
     if (Date.now() >= deadline) assert.fail(`child still executing after termination: ${state}`);
     await new Promise(resolve => setTimeout(resolve, 20));

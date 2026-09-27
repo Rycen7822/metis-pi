@@ -12,6 +12,7 @@
  *
  * Usage:  pi -e .
  */
+import { registerOcc } from "./src/occ.js";
 import { loadConfig } from "./src/config.js";
 import { capImages, imageLimitFor } from "./src/image-cap.js";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.js";
@@ -23,7 +24,7 @@ import { pruneMessages } from "./src/pruner.js";
 import { isProtected } from "./src/protected.js";
 import { registerQueryTool } from "./src/query-tool.js";
 import { registerCommands, setPruneStatusWidget } from "./src/commands.js";
-import { formatSummaryToolCallRefs, makeSummaryDetails, substituteInlineRefs } from "./src/summary-refs.js";
+import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./src/summary-refs.js";
 import { DEFAULT_CONFIG, CUSTOM_TYPE_SUMMARY, CUSTOM_TYPE_STATS, CUSTOM_TYPE_FRONTIER, CUSTOM_TYPE_FLUSH_METRICS, } from "./src/types.js";
 import { computeContextMetrics } from "./src/context-metrics.js";
 import { StatsAccumulator, emitExternalCost } from "./src/stats.js";
@@ -35,7 +36,7 @@ import { detectChains } from "./src/chain-detector.js";
 import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.js";
 import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.js";
 import { spillOversizedBatch } from "./src/spill.js";
-import { occKey } from "./src/occurrence-key.js";
+import { bareToolCallId, occKey } from "./src/occurrence-key.js";
 import { DiagnosticSink } from "./src/diagnostics.js";
 const EMPTY_METRICS_SNAPSHOT = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 export default function (pi) {
@@ -43,9 +44,13 @@ export default function (pi) {
     const currentConfig = {
         value: { ...DEFAULT_CONFIG },
     };
-    const protectionPredicate = (name, args) => isProtected(name, args, currentConfig.value);
+    const effectiveProtection = () => currentConfig.value.opportunisticCompaction
+        ? { ...currentConfig.value, protectedTools: [...currentConfig.value.protectedTools, "context_tree_query"] }
+        : currentConfig.value;
+    const protectionPredicate = (name, args) => isProtected(name, args, effectiveProtection());
     // Shared indexer — rebuilt from session on every session_start / session_tree
     const indexer = new ToolCallIndexer();
+    const occ = registerOcc(pi, indexer, currentConfig);
     // Shared stats accumulator — tracks cumulative token/cost stats for summarizer calls
     const statsAccum = new StatsAccumulator();
     // Session-scoped summarizer outage-fallback controller (in-memory; reset on session_start).
@@ -100,7 +105,8 @@ export default function (pi) {
     const assistantMessageHasToolCalls = (message) => message?.role === "assistant" &&
         Array.isArray(message.content) &&
         message.content.some((block) => block?.type === "toolCall");
-    const isFinalAssistantMessage = (message) => message?.role === "assistant" && !assistantMessageHasToolCalls(message);
+    const isFinalAssistantMessage = (message) => message?.role === "assistant"
+        && message.stopReason !== "error" && message.stopReason !== "aborted" && !assistantMessageHasToolCalls(message);
     const trimBatchToPendingRange = (batch) => {
         const currentFrontier = frontier.get();
         let toolCalls = batch.toolCalls;
@@ -140,8 +146,14 @@ export default function (pi) {
     const capturePendingBatches = (ctx, opts) => {
         let batches = [];
         try {
-            const branch = ctx.sessionManager.getBranch();
-            batches = captureUnindexedBatchesFromSession(branch, indexer, protectionPredicate);
+            const rawBranch = ctx.sessionManager.getBranch();
+            const sourceTurns = new Map();
+            let turnIndex = 0;
+            for (const entry of rawBranch)
+                if (entry.type === "message" && entry.message.role === "assistant")
+                    sourceTurns.set(entry.id, turnIndex++);
+            const branch = occ.enabled() ? ctx.sessionManager.buildSessionProjection().entries.flatMap((entry) => entry.messages.map((message) => ({ ...entry.sourceEntry, type: "message", message }))) : rawBranch;
+            batches = captureUnindexedBatchesFromSession(branch, indexer, protectionPredicate, sourceTurns);
         }
         catch (err) {
             if (opts?.rethrow)
@@ -179,6 +191,8 @@ export default function (pi) {
     const flushPending = async (ctx, options = {}) => {
         if (isFlushing)
             return { ok: false, reason: "already-flushing" };
+        if (options.trigger !== "manual" && occ.deferLocal(ctx))
+            return { ok: false, reason: "empty" };
         // Clear on every non-concurrent invocation, regardless of outcome — the
         // rearm is a one-shot nudge for the very next eligible gate check.
         rearmedPending = false;
@@ -195,6 +209,8 @@ export default function (pi) {
         let capturedBatches = 0;
         let processedCount = 0;
         let stubCount = 0;
+        let publishedAliasesOrArchives = false;
+        let modelAttempted = false;
         let outcome = "empty";
         let appendEntry;
         // Non-fatal by construction: observability must never affect the flush outcome.
@@ -271,9 +287,10 @@ export default function (pi) {
                 const toolCalls = batch.toolCalls.filter(call => call.outputArchive?.source);
                 if (toolCalls.length === 0)
                     continue;
-                await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
+                const handled = await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
                     config: { spillThreshold: Infinity, spillPreviewBytes: currentConfig.value.spillPreviewBytes, dedupByContentHash: false },
                     sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistAlias });
+                publishedAliasesOrArchives ||= handled.size > 0;
             }
             batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !indexer.isSummarized(occKey(call.toolCallId, call.resultTimestamp))) }))
                 .filter(batch => batch.toolCalls.length > 0);
@@ -304,10 +321,10 @@ export default function (pi) {
                     const batch = batches[i];
                     const remaining = [];
                     for (const tc of batch.toolCalls) {
-                        const originalId = indexer.lookupByContent(tc.toolName, tc.resultText);
+                        const originalId = tc.spillPath || tc.archiveSource ? undefined : indexer.lookupByContent(tc.toolName, tc.resultText);
                         const key = occKey(tc.toolCallId, tc.resultTimestamp);
                         if (originalId && originalId !== key) {
-                            pendingAliases.push([key, originalId]);
+                            pendingAliases.push([key, originalId, { ...tc, turnIndex: batch.turnIndex, timestamp: batch.timestamp }]);
                             dedupedPerBatch[i].toolCalls.push(tc);
                             dedupedPerBatch[i].rawChars += tc.resultText.length;
                         }
@@ -364,6 +381,7 @@ export default function (pi) {
                         continue;
                     }
                     options.onProgress(i, batches.length, batches[i], "start");
+                    modelAttempted = true;
                     const r = await summarizeBatch(prepared[i].candidate, currentConfig.value, ctx, {
                         signal: options.signal,
                         controller: fallbackController,
@@ -387,6 +405,7 @@ export default function (pi) {
                 }
                 if (nonTrivialIndices.length > 0) {
                     const nonTrivialBatches = nonTrivialIndices.map((i) => prepared[i].candidate);
+                    modelAttempted = true;
                     const ntResults = await summarizeBatches(nonTrivialBatches, currentConfig.value, ctx, {
                         onBatchTextProgress: (ntIndex, _ntTotal, batch, receivedChars) => {
                             const origIndex = nonTrivialIndices[ntIndex];
@@ -412,8 +431,10 @@ export default function (pi) {
                     results[i] = packedResult(i);
                 }
             }
-            for (const [key, originalId] of pendingAliases)
-                indexer.registerDuplicate(key, originalId, persistAlias);
+            for (const [key, originalId, occurrence] of pendingAliases) {
+                indexer.registerDuplicate(key, originalId, persistAlias, occurrence);
+                publishedAliasesOrArchives = true;
+            }
             // Process results in order; stop at first null (individual call failure).
             // Batches before the first failure are persisted; remaining are restored to
             // pendingBatches so they are retried on the next flush.
@@ -667,6 +688,8 @@ export default function (pi) {
         }
         finally {
             isFlushing = false;
+            if (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)
+                occ.rewrite(ctx);
             emitFlushMetricsOnce();
         }
     };
@@ -788,14 +811,14 @@ export default function (pi) {
             // CapturedBatch is pruned, which is exactly what we want.
             const filtered = {
                 ...capturedBatch,
-                toolCalls: capturedBatch.toolCalls.filter((tc) => !isProtected(tc.toolName, tc.args, currentConfig.value)),
+                toolCalls: capturedBatch.toolCalls.filter((tc) => !protectionPredicate(tc.toolName, tc.args)),
             };
             // Eager spill: offload oversized single results to sidecar files before they
             // ever reach a request. addBatch inside marks them isSummarized, so
             // trimBatchToPendingRange drops them from the pending set below. Best-effort:
             // a spill failure leaves the result inline for the normal flush pipeline.
             try {
-                await spillOversizedBatch({
+                const handled = occ.deferLocal(ctx) ? new Set() : await spillOversizedBatch({
                     batch: filtered,
                     indexer,
                     config: {
@@ -807,6 +830,8 @@ export default function (pi) {
                     sessionId: ctx.sessionManager.getSessionId(),
                     appendEntry: (type, data) => ctx.sessionManager.appendCustomEntry(type, data),
                 });
+                if (handled.size)
+                    occ.rewrite(ctx);
             }
             catch {
                 // best-effort; never block the turn
@@ -894,7 +919,7 @@ export default function (pi) {
         setPruneStatusWidget(ctx, currentConfig.value, pendingBatches.length > 0 ? `prune: ${pendingBatches.length} pending` : "prune: recovered pending (reload)");
     });
     // ── context: prune summarized tool results from next LLM call ─────────────
-    const projectContext = (input, api) => {
+    const projectContext = (input, api, ctx) => {
         let messages = input;
         let changed = false;
         // Request-validity guard, independent of `enabled`: a transcript past the
@@ -909,12 +934,51 @@ export default function (pi) {
         }
         if (!currentConfig.value.enabled)
             return { messages, changed };
+        // A context edit changes effective evidence, not the immutable archive. Keep
+        // edited sources visible and remove stale summaries of the same source group.
+        const editedToolIds = new Set();
+        if (occ.enabled() && ctx) {
+            for (const entry of ctx.sessionManager.buildSessionProjection().entries) {
+                if (entry.sourceEntry.type !== "message")
+                    continue;
+                const original = entry.sourceEntry.message;
+                if (original.role !== "toolResult" && original.role !== "assistant")
+                    continue;
+                const effective = entry.messages[0];
+                if (entry.messages.length === 1 && effective && "content" in effective && JSON.stringify(effective.content) === JSON.stringify(original.content))
+                    continue;
+                if (original.role === "toolResult")
+                    editedToolIds.add(original.toolCallId);
+                if (original.role === "assistant" && Array.isArray(original.content)) {
+                    for (const block of original.content)
+                        if (block.type === "toolCall")
+                            editedToolIds.add(block.id);
+                }
+            }
+            const summaryIds = (message) => message.customType === CUSTOM_TYPE_SUMMARY
+                ? normalizeSummaryToolCallRefs(message.details).map(ref => bareToolCallId(ref.toolCallId)) : [];
+            // One summary may cover multiple occurrences; preserve the whole group.
+            let previousSize = -1;
+            while (previousSize !== editedToolIds.size) {
+                previousSize = editedToolIds.size;
+                for (const message of ctx.sessionManager.buildSessionProjection().messages) {
+                    const ids = summaryIds(message);
+                    if (ids.some(id => editedToolIds.has(id)))
+                        ids.forEach(id => editedToolIds.add(id));
+                }
+            }
+            const filtered = messages.filter(message => !summaryIds(message).some(id => editedToolIds.has(id)));
+            if (filtered.length !== messages.length) {
+                messages = filtered;
+                changed = true;
+            }
+        }
         // pruneMessages is the single source of truth for "is there work to do".
         // It returns the original array reference (pruned: false) only when none of
         // the five phases changed anything; index/registry emptiness alone does not
         // imply a no-op, since error-purge (phase 2) prunes independently of them.
         // Calling it unconditionally is safe and avoids a split gate here.
-        const result = pruneMessages(messages, indexer, currentConfig.value.chainCompression, currentConfig.value.purgeErrors, currentConfig.value, currentConfig.value.recoveryGraceTurns, diagnostics, { state: supersede, isProtected: protectionPredicate });
+        const result = pruneMessages(messages, indexer, currentConfig.value.chainCompression, occ.enabled() ? { ...currentConfig.value.purgeErrors, enabled: false } : currentConfig.value.purgeErrors, effectiveProtection(), currentConfig.value.recoveryGraceTurns, diagnostics, occ.enabled() ? undefined : { state: supersede, isProtected: protectionPredicate }, editedToolIds);
         if (result.pruned) {
             messages = result.messages;
             changed = true;
@@ -922,22 +986,23 @@ export default function (pi) {
         return { messages, changed, beforeChars: result.beforeChars, afterChars: result.afterChars };
     };
     let activeSessionId;
+    let projectionContext;
     const unsubscribeProjection = pi.events.on("metis:condense-project", (data) => {
         if (!data || typeof data !== "object" || !("messages" in data) || !Array.isArray(data.messages))
             return;
         const request = data;
         if (request.sessionId !== activeSessionId)
             return;
-        if (isFlushing) {
+        if (isFlushing || (occ.isRunning() && !request.maintenance)) {
             request.busy = true;
             return;
         }
-        request.messages = projectContext(request.messages, request.api).messages;
+        request.messages = projectContext(request.messages, request.api, projectionContext).messages;
     });
-    pi.on("session_start", (_event, ctx) => { activeSessionId = ctx.sessionManager.getSessionId(); });
-    pi.on("session_shutdown", () => { activeSessionId = undefined; unsubscribeProjection(); });
+    pi.on("session_start", (_event, ctx) => { activeSessionId = ctx.sessionManager.getSessionId(); projectionContext = ctx; });
+    pi.on("session_shutdown", () => { activeSessionId = undefined; projectionContext = undefined; unsubscribeProjection(); });
     pi.on("context", async (event, ctx) => {
-        const result = projectContext(event.messages, ctx.model?.api);
+        const result = projectContext(event.messages, ctx.model?.api, ctx);
         if (result.beforeChars !== undefined)
             statsAccum.setLiveReclaim(result.beforeChars, result.afterChars);
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
@@ -967,6 +1032,7 @@ export default function (pi) {
             },
         }, inGrace);
         if (result.compressedEntries.length > 0) {
+            occ.rewrite(ctx);
             lowerFloor(supersede, earliestChainStart(result.compressedEntries));
             statsAccum.addChainsCompressed(result.compressedEntries.length);
             statsAccum.persist(pi);

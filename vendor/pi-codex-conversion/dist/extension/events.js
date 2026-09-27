@@ -51,6 +51,12 @@ export function prepareCodeModeHost(codeMode, ctx) {
 export function registerCodexEvents(pi, runtime, tools, ui, codeMode, proxyProvider) {
     const { state, tracker, sessions } = runtime;
     const reserve = createCodexReserveController(pi);
+    const occSupported = (ctx) => {
+        const plan = resolveCodexRuntimePlanForState(ctx, state);
+        return !plan.nativeCompaction && !plan.contextManagement && !state.contextTree.handoff.active
+            && !sessions.listSessions(0).some(session => session.running);
+    };
+    pi.events.on("metis:occ-capability", (request) => { request.supported = occSupported(request.ctx); });
     let activeContext;
     let pendingExtensionToolRefresh = false;
     let turnPrewarm;
@@ -399,11 +405,15 @@ export function registerCodexEvents(pi, runtime, tools, ui, codeMode, proxyProvi
         }
         catch (error) {
             ctx.ui.notify(`Notebook checkpoint before compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+            return { cancel: true };
         }
         if (contextManagementResult)
             return contextManagementResult;
-        if (!nativeCompaction)
-            return undefined;
+        if (!nativeCompaction) {
+            const request = { event, ctx };
+            pi.events.emit("metis:occ-prepare", request);
+            return request.promise ? await request.promise : undefined;
+        }
         try {
             const result = await handleCodexSessionBeforeCompact(event, ctx, state, pi);
             if (!result?.compaction)

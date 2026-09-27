@@ -12,6 +12,7 @@
  * State and accounting live in src/goal-state.ts; this entry owns host I/O.
  */
 
+import { randomUUID } from "node:crypto";
 import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -224,6 +225,19 @@ function goalStopStatusForAssistantError(message: { errorMessage?: string } | un
 
 export default function goalExtension(pi: ExtensionAPI) {
 	const state = new GoalState();
+	let revision = 0;
+	let inputGeneration = 0;
+	let owed: { token: string; goalId: string; revision: number; input: number; session: string } | undefined;
+	const clearOwed = () => { if (owed) state.continuationQueued = false; owed = undefined; };
+	pi.on("input", () => { inputGeneration++; clearOwed(); });
+	const stopGoalSnapshot = pi.events.on("metis:goal-snapshot", (request: any) => { request.snapshot = state.snapshot(); });
+	const stopOccFinished = pi.events.on("metis:occ-finished", (event: any) => {
+		if (!owed) return;
+		if (event.cancelled) { clearOwed(); return; }
+		// Pi defers this command until settled handlers return. At execution it
+		// can see user input that was invisibly queued during maintenance.
+		pi.sendUserMessage(`/goal __continue_${owed.token}`, { expandPromptTemplates: true });
+	});
 
 	// Local patch (not upstream): keep the footer status fresh once a second so the
 	// elapsed time ticks during a long single agent run, where no goal event fires.
@@ -255,6 +269,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	}
 
 	function persist(action: PersistedGoalState["action"]): void {
+		if (action !== "account") { revision++; clearOwed(); }
 		pi.appendEntry(STATE_TYPE, {
 			version: 2,
 			action,
@@ -320,13 +335,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	function reconstructState(ctx: ExtensionContext): void {
 		stopStatusTimer();
+		clearOwed();
 		state.restore(ctx.sessionManager.getBranch());
 		updateStatus(ctx);
 	}
 
 	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_shutdown", async () => stopStatusTimer());
+	pi.on("session_shutdown", async () => { stopStatusTimer(); clearOwed(); stopGoalSnapshot(); stopOccFinished(); });
 
 	pi.on("before_agent_start", async (event) => {
 		const snapshot = state.snapshot();
@@ -385,7 +401,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		queueContinuation(ctx);
+		const maintenance = { deferGoal: false };
+		pi.events.emit("metis:occ-status", maintenance);
+		if (maintenance.deferGoal && !ctx.hasPendingMessages() && !state.continuationQueued) {
+			owed = { token: randomUUID(), goalId: state.current.id, revision, input: inputGeneration, session: ctx.sessionManager.getSessionId() };
+			state.continuationQueued = true;
+		} else queueContinuation(ctx);
 	});
 
 	pi.on("context", async (event) => {
@@ -423,6 +444,17 @@ export default function goalExtension(pi: ExtensionAPI) {
 		},
 		handler: async (args, ctx) => {
 			const trimmed = args.trim();
+			if (trimmed.startsWith("__continue_")) {
+				const ticket = owed;
+				if (!ticket || trimmed !== `__continue_${ticket.token}`) return;
+				clearOwed();
+				if (ticket.session !== ctx.sessionManager.getSessionId() || ticket.goalId !== state.current?.id
+					|| ticket.revision !== revision || ticket.input !== inputGeneration || state.current.status !== "active"
+					|| !ctx.isIdle() || ctx.hasPendingMessages()) return;
+				queueContinuation(ctx);
+				await ctx.waitForIdle();
+				return;
+			}
 			if (!trimmed) {
 				const snapshot = state.snapshot();
 				showGoalMessage(snapshot ? goalSummary(snapshot) : "Usage: /goal <objective>\n\nNo goal is currently set.");

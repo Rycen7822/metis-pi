@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 增加可选受控 OCC：共享局部/全局缓冲与保持、目标和证据原文保护、有效投影校验及 goal 安全续跑；增加证据目录。修复失败状态丢失、分页读取被替换和输出去重混淆执行元数据。
+
 - 固定完整的 Pi 开发类型依赖并提交去重后的 npm 锁文件；CI 与开发验证改用 `npm ci`，避免浮动 peer 版本及重复 TUI 实例导致构建和宿主检查失败。
 
 - 增加 Action Fusion：Pi 原生 edit/write、普通 apply_patch 的可选 `then_run`，以及 Code/Notebook 的 `apply_patch_then_run`。保留修改与命令独立状态、命令前 diff、取消/超时及完整日志；嵌套回执独立于显示 trace 持久化，可由 condense 索引和分页恢复。

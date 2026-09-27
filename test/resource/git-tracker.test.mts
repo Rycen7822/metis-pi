@@ -3,7 +3,7 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { temporaryDirectory as tempDir } from "../helpers/temp-dir.mjs";
 import { trackedRepo } from "../helpers/git.mts";
 import { GIT_CHANGES_DEBOUNCE_MS, readChangeSample, type GitExec } from "../../src/git-changes.ts";
@@ -105,7 +105,8 @@ test("tracker: one sample owner survives read failures, HEAD changes and leaving
     assert.equal(updates(), step.updates, step.name);
   }
   const repoCalls = calls();
-  state.cwd = tempDir(t, "metis-pi-norepo-");
+  // TMPDIR may be inside the checkout; use a read-only filesystem root outside it.
+  state.cwd = parse(state.cwd).root;
   await tracker.refresh();
   assert.equal(tracker.snapshot(), undefined, "leaving the repo clears the segment");
   assert.equal(calls(), repoCalls, "a non-repo cwd spawns no git process");

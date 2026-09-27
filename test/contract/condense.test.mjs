@@ -8,6 +8,8 @@ import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime
 import { ToolCallIndexer } from "../../vendor/pi-condense/dist/src/indexer.js";
 import { registerQueryTool } from "../../vendor/pi-condense/dist/src/query-tool.js";
 import { pruneMessages } from "../../vendor/pi-condense/dist/src/pruner.js";
+import { findSuperseded } from "../../vendor/pi-condense/dist/src/supersede.js";
+import { hashToolResult } from "../../vendor/pi-condense/dist/src/content-hash.js";
 import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
 import { disableNetwork, captureRegistration, modelNamed, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
@@ -226,4 +228,70 @@ test("Codex's real context handlers and final provider payload retain recovery t
   assert.doesNotMatch(wireResult.output, /No result provided/);
   assert.ok(!JSON.stringify(body).includes(raw));
   assert.ok(JSON.stringify(body).includes("archived"));
+});
+
+
+test("pruning a failed execution retains ERROR and its independent evidence reference", () => {
+  const f = queryFixture([record("failed", "failure detail", 3, { isError: true })]);
+  const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "failed", "read"),
+    { ...toolResult("failed", "read", "failure detail"), isError: true }];
+  const projected = pruneMessages(messages, f.indexer).messages;
+  assert.equal(projected[1].isError, true);
+  assert.match(projected[1].content[0].text, /status ERROR/);
+  assert.match(projected[1].content[0].text, /ref `failed@3`/);
+});
+
+test("protected reads retain disjoint ranges, changed bytes and later failures", () => {
+  const model = modelNamed("gpt-6-astra");
+  const pair = (id, offset, text, isError = false) => [
+    assistantToolCall(model, id, "read", { path: "/skills/a/SKILL.md", offset, limit: 80 }),
+    { ...toolResult(id, "read", text), isError },
+  ];
+  const first = pair("first", 1, "instructions");
+  for (const later of [pair("next", 81, "next page"), pair("next", 1, "changed instructions"), pair("next", 1, "instructions", true)]) {
+    assert.deepEqual(findSuperseded([...first, ...later], () => true), []);
+  }
+  assert.deepEqual(findSuperseded([...first, ...pair("same", 1, "instructions")], () => true).map((c) => c.toolCallId), ["first"]);
+});
+
+test("duplicate body recall keeps each command, status, timestamp and short ref after reload", async () => {
+  const first = record("first", "same output", 3, { toolName: "bash", args: { command: "test-a" } });
+  const second = record("second", "same output", 8, { toolName: "bash", args: { command: "test-b" }, isError: true });
+  const f = queryFixture([first]);
+  f.indexer.registerDuplicate("second@8", "first@3", (type, data) => f.ctx.sessionManager.appendCustomEntry(type, data), second);
+  const ref = f.indexer.getShortRefForToolCallId("second@8");
+  f.indexer.reconstructFromSession(f.ctx);
+  assert.deepEqual(f.indexer.getRecord(ref), second);
+  const page = (await f.run({ toolCallIds: [ref] })).details.results[0];
+  assert.equal(page.status, "ERROR");
+  assert.deepEqual(JSON.parse(page.argsPreview), { command: "test-b" });
+  assert.equal(page.occurrence, "second@8");
+  assert.notEqual(hashToolResult("bash", "a  b"), hashToolResult("bash", "a b"));
+});
+
+test("legacy alias without its source reports unknown metadata and is not pruned", async () => {
+  const f = queryFixture([record("first", "shared historic body")]);
+  f.ctx.sessionManager.appendCustomEntry("context-prune-dedup-alias", { newToolCallId: "lost", newResultTimestamp: 8, originalToolCallId: "first", originalResultTimestamp: 3 });
+  f.indexer.reconstructFromSession(f.ctx);
+  const own = f.indexer.getRecord("lost@8");
+  assert.equal(own?.metadataUnavailable, true);
+  const page = (await f.run({ toolCallIds: ["lost@8"] })).details.results[0];
+  assert.equal(page.status, "UNKNOWN");
+  assert.match(page.error, /not verified output/);
+  const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "lost", "read"), toolResult("lost", "read", "live source", 8)];
+  assert.equal(pruneMessages(messages, f.indexer).messages[1], messages[1]);
+});
+
+
+test("legacy archive-only records never authorize pruning after rejected preparation or reload", () => {
+  const legacy = record("legacy-only", "EXACT_LEGACY_OUTPUT");
+  delete legacy.resultTimestamp;
+  legacy.archiveOnly = true;
+  const f = queryFixture([legacy]);
+  const message = toolResult("legacy-only", "read", "EXACT_LEGACY_OUTPUT");
+  delete message.timestamp;
+  const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "legacy-only", "read"), message];
+  assert.equal(f.indexer.isSummarized("legacy-only"), false);
+  assert.equal(f.indexer.hasLegacyBareRecord("legacy-only"), false);
+  assert.equal(pruneMessages(messages, f.indexer).messages[1], message);
 });

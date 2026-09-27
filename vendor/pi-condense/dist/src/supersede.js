@@ -46,7 +46,8 @@ export function findSuperseded(messages, isProtected) {
                 continue;
             open.delete(m.toolCallId);
             const args = block.input ?? block.args ?? block.arguments ?? {};
-            if (!isProtected(block.name, args))
+            if (block.name !== "read" || !isProtected(block.name, args) || m.isError
+                || !Array.isArray(m.content) || !m.content.every((part) => part.type === "text"))
                 continue;
             const rawPath = args?.path;
             if (typeof rawPath !== "string")
@@ -57,6 +58,7 @@ export function findSuperseded(messages, isProtected) {
                 path,
                 timestamp: resultTimestampOf(m.timestamp),
                 resultIndex: i,
+                identity: JSON.stringify([args, m.content]),
             };
             const list = byPath.get(path);
             if (list)
@@ -68,9 +70,12 @@ export function findSuperseded(messages, isProtected) {
         open = new Map();
     }
     const out = [];
-    for (const list of byPath.values())
-        for (let i = 0; i < list.length - 1; i++)
-            out.push(list[i]);
+    for (const list of byPath.values()) {
+        for (let i = 0; i < list.length - 1; i++) {
+            if (list.slice(i + 1).some((later) => later.identity === list[i].identity))
+                out.push(list[i]);
+        }
+    }
     out.sort((a, b) => a.resultIndex - b.resultIndex);
     return out;
 }

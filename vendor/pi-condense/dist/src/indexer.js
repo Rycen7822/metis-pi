@@ -1,7 +1,8 @@
 import { CUSTOM_TYPE_CHAIN, CUSTOM_TYPE_DEDUP_ALIAS, CUSTOM_TYPE_INDEX, CUSTOM_TYPE_SUMMARY, } from "./types.js";
 import { buildShortToolCallRefs, normalizeSummaryToolCallRefs, } from "./summary-refs.js";
+import { captureUnindexedBatchesFromSession } from "./batch-capture.js";
 import { hashToolResult } from "./content-hash.js";
-import { bareToolCallId, occKey, parseOccKey } from "./occurrence-key.js";
+import { occKey, parseOccKey } from "./occurrence-key.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { applySpill, blobDirFor, blobPathFor } from "./spill.js";
 export class ToolCallIndexer {
@@ -18,17 +19,6 @@ export class ToolCallIndexer {
      * Drives the pre-flush dedup pass via `lookupByContent`.
      */
     contentHashToOriginal = new Map();
-    /**
-     * Duplicate occurrence key (or legacy bare id) -> original occurrence key
-     * (or legacy bare id). Populated by `registerDuplicate` during the
-     * pre-flush dedup pass and rebuilt from CUSTOM_TYPE_DEDUP_ALIAS entries on
-     * reconstruction.
-     *
-     * Both `isSummarized` and `resolveToolCallId` consult this map so
-     * `pruneMessages` stub-replaces dup toolResults and `context_tree_query`
-     * resolves dup ids to the original record.
-     */
-    dedupAliasToOriginal = new Map();
     /**
      * Per-batch summary bodies for chain-compression summary text lookup.
      * Each entry maps a set of toolCallIds to the summary's markdown body.
@@ -48,7 +38,6 @@ export class ToolCallIndexer {
         this.aliasToToolCallId.clear();
         this.toolCallIdToAlias.clear();
         this.contentHashToOriginal.clear();
-        this.dedupAliasToOriginal.clear();
         this.nextShortAliasNumber = 1;
         this.summaryBodies = [];
         this.chainRegistry.clear();
@@ -109,16 +98,26 @@ export class ToolCallIndexer {
                 }
             }
         }
-        for (const data of dedupAliasEntries) {
-            const newKey = occKey(data.newToolCallId, data.newResultTimestamp);
-            const originalKey = occKey(data.originalToolCallId, data.originalResultTimestamp);
-            this.dedupAliasToOriginal.set(newKey, originalKey);
-            const originalShortRef = this.toolCallIdToAlias.get(originalKey);
-            if (originalShortRef) {
-                // Keep `getShortRefForToolCallId(dupId)` returning the SAME short ref
-                // as the original so pruneMessages emits a consistent `tN` for both.
-                this.toolCallIdToAlias.set(newKey, originalShortRef);
+        // Old aliases shared the original execution metadata. Recover the actual
+        // occurrence from immutable source messages before projecting or recalling it.
+        const sources = new Map();
+        if (dedupAliasEntries.length) {
+            for (const batch of captureUnindexedBatchesFromSession(branch, { isSummarized: () => false })) {
+                for (const call of batch.toolCalls) {
+                    sources.set(occKey(call.toolCallId, call.resultTimestamp), {
+                        ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp,
+                    });
+                }
             }
+        }
+        for (const data of dedupAliasEntries) {
+            const key = occKey(data.newToolCallId, data.newResultTimestamp);
+            if (this.index.has(key))
+                continue;
+            const original = this.getRecord(occKey(data.originalToolCallId, data.originalResultTimestamp));
+            const own = sources.get(key) ?? (original && this.unknownLegacyOccurrence(key, original));
+            if (own)
+                this.indexRecord(own);
         }
     }
     /**
@@ -154,7 +153,8 @@ export class ToolCallIndexer {
      * treatment.
      */
     isSummarized(occurrenceKey) {
-        return this.index.has(occurrenceKey) || this.dedupAliasToOriginal.has(occurrenceKey);
+        const record = this.index.get(occurrenceKey);
+        return !!record && !record.archiveOnly;
     }
     /**
      * Returns the full runtime index map.
@@ -211,9 +211,6 @@ export class ToolCallIndexer {
     resolveToolCallId(input) {
         if (this.index.has(input))
             return input;
-        const dedupTarget = this.dedupAliasToOriginal.get(input);
-        if (dedupTarget)
-            return dedupTarget;
         const aliased = this.aliasToToolCallId.get(input);
         if (aliased)
             return aliased;
@@ -272,21 +269,6 @@ export class ToolCallIndexer {
         const records = (keys ?? [])
             .map((k) => this.index.get(k))
             .filter((r) => r !== undefined);
-        // Dedup-alias occurrences aren't tracked in `bareIdToKeys` (it only
-        // covers indexed records), so a bare id whose collision was content-
-        // deduplicated would otherwise be silently omitted here. Resolve each
-        // matching alias to the record it aliases, but label it with the
-        // ALIAS's own occurrence timestamp (not the original's) so a reader can
-        // tell the two occurrences apart.
-        for (const [aliasKey, originalKey] of this.dedupAliasToOriginal) {
-            if (bareToolCallId(aliasKey) !== input)
-                continue;
-            const original = this.index.get(originalKey);
-            if (!original)
-                continue;
-            const { resultTimestamp } = parseOccKey(aliasKey);
-            records.push({ ...original, resultTimestamp });
-        }
         if (records.length > 0) {
             return records.sort((a, b) => (a.resultTimestamp ?? a.timestamp) - (b.resultTimestamp ?? b.timestamp));
         }
@@ -311,14 +293,15 @@ export class ToolCallIndexer {
      * bare-id path.
      */
     hasLegacyBareRecord(toolCallId) {
-        if (!this.index.has(toolCallId))
+        const record = this.index.get(toolCallId);
+        if (!record || record.archiveOnly)
             return false;
         const keys = this.bareIdToKeys.get(toolCallId);
         return keys !== undefined && keys.length === 1;
     }
     /**
      * Returns the toolCallId of an already-indexed record whose
-     * `(toolName, normalize(resultText))` matches the supplied input, or
+     * `(toolName, exact resultText)` matches the supplied input, or
      * `undefined` if there is no match. Driven by the in-memory
      * `contentHashToOriginal` map; only consults records that entered the
      * indexer via `addBatch` (i.e. previous successful prunes) or were
@@ -331,31 +314,26 @@ export class ToolCallIndexer {
         const hash = hashToolResult(toolName, resultText);
         return this.contentHashToOriginal.get(hash);
     }
-    /**
-     * Registers `newKey` as a duplicate of `originalKey` (each an occurrence
-     * key, or a legacy bare id). The new id reuses the original's short alias
-     * (so `pruneMessages` emits the same `tN` ref for both) and is persisted
-     * via the supplied `appendEntry` so reconstruction can replay it later.
-     *
-     * No-op when `newKey === originalKey` (defensive).
-     */
-    registerDuplicate(newKey, originalKey, appendEntry) {
+    /** Duplicate bodies still have independent execution identity and recall refs. */
+    registerDuplicate(newKey, originalKey, appendEntry, occurrence) {
         if (newKey === originalKey)
             return;
-        this.dedupAliasToOriginal.set(newKey, originalKey);
-        const originalShortRef = this.toolCallIdToAlias.get(originalKey);
-        if (originalShortRef) {
-            this.toolCallIdToAlias.set(newKey, originalShortRef);
-        }
-        const { toolCallId: newToolCallId, resultTimestamp: newResultTimestamp } = parseOccKey(newKey);
-        const { toolCallId: originalToolCallId, resultTimestamp: originalResultTimestamp } = parseOccKey(originalKey);
-        const payload = {
-            newToolCallId,
-            originalToolCallId,
-            ...(newResultTimestamp !== undefined ? { newResultTimestamp } : {}),
-            ...(originalResultTimestamp !== undefined ? { originalResultTimestamp } : {}),
+        const original = this.getRecord(originalKey);
+        const own = occurrence ?? (original && this.unknownLegacyOccurrence(newKey, original));
+        if (!own)
+            return;
+        this.indexRecord(own);
+        const { refs, nextIndex } = buildShortToolCallRefs([own], this.nextShortAliasNumber);
+        this.nextShortAliasNumber = nextIndex;
+        this.registerSummaryRefs(refs);
+        appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: [own], backfilled: true, refs });
+    }
+    unknownLegacyOccurrence(key, original) {
+        const { toolCallId, resultTimestamp } = parseOccKey(key);
+        return {
+            ...original, toolCallId, resultTimestamp, args: {}, turnIndex: -1,
+            timestamp: resultTimestamp ?? 0, metadataUnavailable: true, archiveComplete: false,
         };
-        appendEntry(CUSTOM_TYPE_DEDUP_ALIAS, payload);
     }
     /**
      * Stores summary body text keyed by the toolCallIds it covers.
@@ -438,10 +416,11 @@ export class ToolCallIndexer {
      * `ctx.sessionManager.appendCustomEntry` (session delivery), without the
      * indexer needing to know which one is active.
      */
-    addBatch(batch, appendEntry) {
+    addBatch(batch, appendEntry, archiveOnly = false) {
         const records = [];
         for (const tc of batch.toolCalls) {
             const record = {
+                ...(archiveOnly ? { archiveOnly: true } : {}),
                 toolCallId: tc.toolCallId,
                 toolName: tc.toolName,
                 args: tc.args,
@@ -463,11 +442,11 @@ export class ToolCallIndexer {
             // flush can dedup against this record. First-seen wins to keep the
             // canonical id stable across multiple identical entries.
             const hash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
-            if (!this.contentHashToOriginal.has(hash)) {
+            if (!archiveOnly && !this.contentHashToOriginal.has(hash)) {
                 this.contentHashToOriginal.set(hash, key);
             }
         }
-        appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: records });
+        appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: records, ...(archiveOnly ? { backfilled: true } : {}) });
     }
     /**
      * Atomic recoverability backfill for an uncovered chain (spec

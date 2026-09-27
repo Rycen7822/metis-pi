@@ -8,7 +8,7 @@ import { CodeModeDelegateRuntime } from "../../vendor/pi-codex-conversion/dist/t
 import { toCodeModeToolResult } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/tool-result.js";
 import { FusionEvidenceStore } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/fusion-evidence.js";
 import { captureBatch } from "../../vendor/pi-condense/dist/src/batch-capture.js";
-import { spillOversizedBatch } from "../../vendor/pi-condense/dist/src/spill.js";
+import { archiveToolOutput, spillOversizedBatch } from "../../vendor/pi-condense/dist/src/spill.js";
 import { ToolCallIndexer } from "../../vendor/pi-condense/dist/src/indexer.js";
 import { registerQueryTool } from "../../vendor/pi-condense/dist/src/query-tool.js";
 import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
@@ -69,6 +69,14 @@ test("nested receipts survive trace eviction, incremental publication, reload an
   assert.equal(second.fusionEvidence.offsetBytes, first.fusionEvidence.bytes);
   assert.equal(runtime.attach({ kind: "result", cellId: "cell", contentItems: [] }).fusionEvidence, undefined, "attach never republishes old records");
   runtime.clear();
+  // OCC preparation imports all nested receipts but does not prune them yet.
+  const occIndex = new ToolCallIndexer();
+  const occBatch = captureBatch({ content: [{ type: "toolCall", id: "outer-occ", name: "exec", arguments: {} }] },
+    [{ ...outer, toolCallId: "outer-occ", timestamp: 90 }], 0, 90);
+  await archiveToolOutput(occBatch.toolCalls[0], occBatch, { indexer: occIndex, sessionDir: f.dir, sessionId: f.sm.getSessionId(), appendEntry() {} });
+  assert.equal(occIndex.getIndex().size, 65);
+  assert.equal(occIndex.isSummarized(`${records[0].id}@${records[0].timestamp}`), false);
+  assert.equal(await recover(occIndex, f.ctx, records[0].id), `Updated file.ts\n+saved\nCommand succeeded; log ${path}\n${full}`);
   await f.ingest(outer, "first", 1);
   assert.equal(f.indexer.getIndex().size, 66, "all 65 children are indexed even though most were evicted");
   await f.ingest(outer, "first", 1);

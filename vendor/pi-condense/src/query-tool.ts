@@ -68,11 +68,11 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
   pi.registerTool({
     name: QUERY_TOOL_NAME,
     label: "Query Original Tool History",
-    description: "Recover archived tool outputs by short refs (t12) or raw tool call IDs. Returns JSON pages with exact text, byte offsets, completeness, and nextCursor. Repeat the same toolCallIds with nextCursor until eof. Reused IDs return every indexed occurrence. These are historical captured tool outputs, not current file contents or necessarily unfiltered process logs. Missing archives are explicit errors.",
+    description: "Omit toolCallIds to list the evidence directory, then recover archived tool outputs by short refs (t12) or raw tool call IDs. Returns JSON pages with exact text, byte offsets, completeness, and nextCursor. Repeat the same toolCallIds with nextCursor until eof. Reused IDs return every indexed occurrence. These are historical captured tool outputs, not current file contents or necessarily unfiltered process logs. Missing archives are explicit errors.",
     promptSnippet: "Retrieve archived tool outputs by ref, following nextCursor for subsequent pages",
     promptGuidelines: ["Use context_tree_query to recover evidence omitted from pruner summaries. Follow nextCursor until the needed range or eof; incomplete pages and archive errors are not complete original outputs."],
     parameters: Type.Object({
-      toolCallIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 }),
+      toolCallIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),
       cursor: Type.Optional(Type.String({ maxLength: 2048, description: "The previous response's nextCursor; keep toolCallIds unchanged." })),
       maxBytes: Type.Optional(Type.Integer({ minimum: 2048, maximum: MAX_BYTES, description: "Total JSON text budget, including metadata and the continuation cursor. Default 32768." })),
     }),
@@ -80,10 +80,18 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
       signal?.throwIfAborted();
       const budget = params.maxBytes ?? MAX_BYTES;
       if (!Number.isSafeInteger(budget) || budget < 2048 || budget > MAX_BYTES) throw new Error("maxBytes must be between 2048 and 32768.");
-      const selected: Selection[] = params.toolCallIds.flatMap((ref) => {
+      const selected: Selection[] = params.toolCallIds ? params.toolCallIds.flatMap((ref) => {
         const records = indexer.getRecordsForId(ref);
         return records.length ? records.map((record) => ({ ref, record })) : [{ ref }];
-      });
+      }) : [{ ref: "directory", record: {
+        toolCallId: "directory", toolName: "evidence-directory", args: {}, isError: false, turnIndex: -1, timestamp: 0,
+        resultText: [...indexer.getIndex()].map(([key, r]) => JSON.stringify({
+          ref: indexer.getShortRefForToolCallId(key) ?? key, occurrence: key, tool: r.toolName,
+          status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
+          argsPreview: JSON.stringify(r.args).slice(0, 256), archive: r.spillPath,
+          archiveComplete: r.archiveComplete, source: r.archiveSource ?? "tool-result",
+        })).join("\n"),
+      } }];
       // Stable across reloads and normal conversation growth; branch changes
       // invalidate the cursor if they change the selected occurrences.
       const selection = digest(JSON.stringify([ctx.sessionManager.getSessionId(), selected.map(({ ref, record: r }) => [
@@ -109,10 +117,11 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
             ...page, occurrence: record.resultTimestamp === undefined ? record.toolCallId : `${record.toolCallId}@${record.resultTimestamp}`,
             legacy: record.resultTimestamp === undefined, turnIndex: record.turnIndex,
             source: record.archiveSource ?? "tool-result", archiveComplete: record.archiveComplete,
-            tool: record.toolName, status: record.isError ? "ERROR" : "OK",
+            tool: record.toolName, status: record.metadataUnavailable ? "UNKNOWN" : record.isError ? "ERROR" : "OK",
             argsPreview: args.slice(0, 256), argsTruncated: args.length > 256,
           };
           if (record.archiveComplete === false) page.error = "Execution archive is incomplete; only the captured prefix is available.";
+          if (record.metadataUnavailable) page.error = "Legacy dedup source metadata is unavailable; this is the shared historical body, not verified output of this occurrence.";
           let source;
           try { source = await readPage(record, current.offset, budget); }
           catch (error) {

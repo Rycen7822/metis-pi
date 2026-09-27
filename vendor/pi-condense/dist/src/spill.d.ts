@@ -1,5 +1,14 @@
-import type { CapturedBatch } from "./types.js";
+import type { CapturedBatch, CapturedToolCall } from "./types.js";
 import type { ToolCallIndexer } from "./indexer.js";
+/** Import the execution layer's full output, not its truncated display text. */
+export declare function importOutputArchive(call: CapturedToolCall, sessionDir: string, sessionId: string): Promise<boolean>;
+/** OCC archive preparation retains nested fusion receipts without publishing pruning. */
+export declare function archiveToolOutput(call: CapturedToolCall, batch: CapturedBatch, args: {
+    indexer: ToolCallIndexer;
+    sessionDir: string;
+    sessionId: string;
+    appendEntry: (customType: string, data?: unknown) => void;
+}): Promise<void>;
 /** Replace anything outside [A-Za-z0-9_-] so the id can't escape the blob dir. */
 export declare function sanitizeId(toolCallId: string): string;
 export declare function blobDirFor(sessionDir: string, sessionId: string): string;

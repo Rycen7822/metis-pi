@@ -101,7 +101,7 @@ export function captureBatch(message, toolResults, turnIndex, timestamp) {
  * @param indexer           The pruner indexer to check for already-summarized IDs
  * @param exclude  Optional predicate; matching tool calls are skipped (user-protected tools/paths)
  */
-export function captureUnindexedBatchesFromSession(branch, indexer, exclude = () => false) {
+export function captureUnindexedBatchesFromSession(branch, indexer, exclude = () => false, sourceTurnIndices) {
     // Keep the SessionEntry wrapper alongside each projected message so the
     // entry's own timestamp remains available as the preferred source below
     // (projection alone loses that wrapper for "message" entries).
@@ -135,7 +135,8 @@ export function captureUnindexedBatchesFromSession(branch, indexer, exclude = ()
         if (msg.role !== "assistant")
             continue;
         // Stable turn index: count every assistant message regardless of pruning state
-        const currentTurnIndex = turnCounter++;
+        const fallbackTurnIndex = turnCounter++;
+        const currentTurnIndex = sourceTurnIndices?.get(projected[i].entry.id) ?? fallbackTurnIndex;
         // Per-turn result map: only the results between this assistant message and
         // the next one. A branch-wide map is last-wins and mis-pairs repeated ids.
         const turnResults = new Map();

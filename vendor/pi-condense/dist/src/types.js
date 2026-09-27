@@ -202,6 +202,7 @@ export const PRUNE_ON_MODES = [
     { value: "on-demand", label: "On demand" },
 ];
 export const DEFAULT_CONFIG = {
+    opportunisticCompaction: false,
     enabled: false,
     showPruneStatusLine: true,
     summarizerModel: "default",

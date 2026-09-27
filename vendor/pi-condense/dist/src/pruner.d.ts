@@ -71,7 +71,7 @@ export declare function sizeMessages(messages: any[]): number;
 export declare function pruneMessages(messages: any[], indexer: ToolCallIndexer, chainCompression?: ChainCompressionConfig, errorPurge?: ErrorPurgeConfig, protection?: ProtectionConfig, recoveryGraceTurns?: number, diagnostics?: DiagnosticSink, supersede?: {
     state: SupersedeState;
     isProtected: (toolName: string, args: unknown) => boolean;
-}): {
+}, editedToolIds?: ReadonlySet<string>): {
     messages: any[];
     pruned: boolean;
     beforeChars: number;

@@ -1,13 +1,14 @@
 /**
  * Protected reads are never indexed, so nothing else in the pipeline ever
  * collapses a re-read of the same skill file. This module keeps only the
- * newest protected read per `args.path` verbatim (spec 2026-09-07).
+ * newest byte-identical successful protected read of the same range verbatim.
  */
 export interface SupersededCandidate {
     toolCallId: string;
     path: string;
     timestamp: number | undefined;
     resultIndex: number;
+    identity: string;
 }
 export interface SupersedeState {
     /** Earliest result timestamp the next render will rewrite anyway; 0 = cold cache, activate everything. */

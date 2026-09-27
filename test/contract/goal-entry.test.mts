@@ -1,6 +1,7 @@
 // Goal entry: commands, tools, refresh ownership, accounting and continuation.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import goalExtension from "../../extensions/goal.ts";
 
 test.beforeEach((t) => {
@@ -16,6 +17,7 @@ function makeHost(t: TestContext) {
   const sent: unknown[] = [];
 
   const pi = {
+    events: createEventBus(),
     appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
     on: (event: string, handler: (...args: any[]) => any) => handlers.set(event, handler),
     registerCommand: (name: string, definition: unknown) => commands.set(name, definition),

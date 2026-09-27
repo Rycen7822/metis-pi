@@ -13,7 +13,8 @@
  * Usage:  pi -e .
  */
 
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { registerOcc } from "./src/occ.js";
 import { loadConfig } from "./src/config.js";
 import { capImages, imageLimitFor } from "./src/image-cap.js";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.js";
@@ -25,7 +26,7 @@ import { pruneMessages } from "./src/pruner.js";
 import { isProtected } from "./src/protected.js";
 import { registerQueryTool } from "./src/query-tool.js";
 import { registerCommands, setPruneStatusWidget } from "./src/commands.js";
-import { formatSummaryToolCallRefs, makeSummaryDetails, substituteInlineRefs } from "./src/summary-refs.js";
+import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./src/summary-refs.js";
 import type {
   ContextPruneConfig,
   CapturedBatch,
@@ -52,7 +53,7 @@ import { detectChains, withClosingMessage } from "./src/chain-detector.js";
 import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.js";
 import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.js";
 import { spillOversizedBatch } from "./src/spill.js";
-import { occKey } from "./src/occurrence-key.js";
+import { bareToolCallId, occKey } from "./src/occurrence-key.js";
 import { DiagnosticSink } from "./src/diagnostics.js";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
@@ -63,10 +64,14 @@ export default function (pi: ExtensionAPI) {
     value: { ...DEFAULT_CONFIG },
   };
 
-  const protectionPredicate = (name: string, args: unknown) => isProtected(name, args, currentConfig.value);
+  const effectiveProtection = () => currentConfig.value.opportunisticCompaction
+    ? { ...currentConfig.value, protectedTools: [...currentConfig.value.protectedTools, "context_tree_query"] }
+    : currentConfig.value;
+  const protectionPredicate = (name: string, args: unknown) => isProtected(name, args, effectiveProtection());
 
   // Shared indexer — rebuilt from session on every session_start / session_tree
   const indexer = new ToolCallIndexer();
+  const occ = registerOcc(pi, indexer, currentConfig);
 
   // Shared stats accumulator — tracks cumulative token/cost stats for summarizer calls
   const statsAccum = new StatsAccumulator();
@@ -147,7 +152,8 @@ export default function (pi: ExtensionAPI) {
     Array.isArray(message.content) &&
     message.content.some((block: any) => block?.type === "toolCall");
 
-  const isFinalAssistantMessage = (message: any) => message?.role === "assistant" && !assistantMessageHasToolCalls(message);
+  const isFinalAssistantMessage = (message: any) => message?.role === "assistant"
+    && message.stopReason !== "error" && message.stopReason !== "aborted" && !assistantMessageHasToolCalls(message);
 
   const trimBatchToPendingRange = (batch: CapturedBatch): CapturedBatch | null => {
     const currentFrontier = frontier.get();
@@ -188,8 +194,13 @@ export default function (pi: ExtensionAPI) {
   const capturePendingBatches = (ctx: any, opts?: { rethrow?: boolean }): CapturedBatch[] => {
     let batches: CapturedBatch[] = [];
     try {
-      const branch = ctx.sessionManager.getBranch();
-      batches = captureUnindexedBatchesFromSession(branch, indexer, protectionPredicate);
+      const rawBranch = ctx.sessionManager.getBranch();
+      const sourceTurns = new Map<string, number>();
+      let turnIndex = 0;
+      for (const entry of rawBranch) if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
+      const branch = occ.enabled() ? ctx.sessionManager.buildSessionProjection().entries.flatMap((entry: any) =>
+        entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message }))) : rawBranch;
+      batches = captureUnindexedBatchesFromSession(branch, indexer, protectionPredicate, sourceTurns);
     } catch (err) {
       if (opts?.rethrow) throw err;
       batches = pendingBatches.slice();
@@ -225,6 +236,7 @@ export default function (pi: ExtensionAPI) {
 
   const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
     if (isFlushing) return { ok: false, reason: "already-flushing" };
+    if (options.trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "empty" };
 
     // Clear on every non-concurrent invocation, regardless of outcome — the
     // rearm is a one-shot nudge for the very next eligible gate check.
@@ -244,6 +256,8 @@ export default function (pi: ExtensionAPI) {
     let capturedBatches = 0;
     let processedCount = 0;
     let stubCount = 0;
+    let publishedAliasesOrArchives = false;
+    let modelAttempted = false;
     let outcome: FlushMetricsEntry["outcome"] = "empty";
     let appendEntry: ((customType: string, data?: unknown) => void) | undefined;
 
@@ -330,9 +344,10 @@ export default function (pi: ExtensionAPI) {
       for (const batch of batches) {
         const toolCalls = batch.toolCalls.filter(call => call.outputArchive?.source);
         if (toolCalls.length === 0) continue;
-        await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
+        const handled = await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
           config: { spillThreshold: Infinity, spillPreviewBytes: currentConfig.value.spillPreviewBytes, dedupByContentHash: false },
           sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistAlias });
+        publishedAliasesOrArchives ||= handled.size > 0;
       }
       batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !indexer.isSummarized(occKey(call.toolCallId, call.resultTimestamp))) }))
         .filter(batch => batch.toolCalls.length > 0);
@@ -357,17 +372,17 @@ export default function (pi: ExtensionAPI) {
       //     existing result loop treats them the same way it treats trivial
       //     batches (advance the frontier without writing a summary).
       const dedupedPerBatch: { toolCalls: import("./src/types.js").CapturedToolCall[]; rawChars: number }[] = batches.map(() => ({ toolCalls: [], rawChars: 0 }));
-      const pendingAliases: Array<[string, string]> = [];
+      const pendingAliases: Array<[string, string, import("./src/types.js").ToolCallRecord]> = [];
       const dedupEnabled = currentConfig.value.dedupByContentHash;
       if (dedupEnabled) {
         for (let i = 0; i < batches.length; i++) {
           const batch = batches[i];
           const remaining: typeof batch.toolCalls = [];
           for (const tc of batch.toolCalls) {
-            const originalId = indexer.lookupByContent(tc.toolName, tc.resultText);
+            const originalId = tc.spillPath || tc.archiveSource ? undefined : indexer.lookupByContent(tc.toolName, tc.resultText);
             const key = occKey(tc.toolCallId, tc.resultTimestamp);
             if (originalId && originalId !== key) {
-              pendingAliases.push([key, originalId]);
+              pendingAliases.push([key, originalId, { ...tc, turnIndex: batch.turnIndex, timestamp: batch.timestamp }]);
               dedupedPerBatch[i].toolCalls.push(tc);
               dedupedPerBatch[i].rawChars += tc.resultText.length;
             } else {
@@ -442,6 +457,7 @@ export default function (pi: ExtensionAPI) {
             continue;
           }
           options.onProgress(i, batches.length, batches[i], "start");
+          modelAttempted = true;
           const r = await summarizeBatch(prepared[i]!.candidate, currentConfig.value, ctx, {
             signal: options.signal,
             controller: fallbackController,
@@ -462,6 +478,7 @@ export default function (pi: ExtensionAPI) {
         }
         if (nonTrivialIndices.length > 0) {
           const nonTrivialBatches = nonTrivialIndices.map((i) => prepared[i]!.candidate);
+          modelAttempted = true;
           const ntResults = await summarizeBatches(nonTrivialBatches, currentConfig.value, ctx, {
             onBatchTextProgress: (ntIndex, _ntTotal, batch, receivedChars) => {
               const origIndex = nonTrivialIndices[ntIndex];
@@ -487,7 +504,10 @@ export default function (pi: ExtensionAPI) {
           results[i] = packedResult(i);
         }
       }
-      for (const [key, originalId] of pendingAliases) indexer.registerDuplicate(key, originalId, persistAlias);
+      for (const [key, originalId, occurrence] of pendingAliases) {
+        indexer.registerDuplicate(key, originalId, persistAlias, occurrence);
+        publishedAliasesOrArchives = true;
+      }
 
       // Process results in order; stop at first null (individual call failure).
       // Batches before the first failure are persisted; remaining are restored to
@@ -778,6 +798,7 @@ export default function (pi: ExtensionAPI) {
       return { ok: false, reason: "failed", error: errorMessage(err) };
     } finally {
       isFlushing = false;
+      if (stubCount > 0 || publishedAliasesOrArchives || modelAttempted) occ.rewrite(ctx);
       emitFlushMetricsOnce();
     }
   };
@@ -916,7 +937,7 @@ export default function (pi: ExtensionAPI) {
       // CapturedBatch is pruned, which is exactly what we want.
       const filtered = {
         ...capturedBatch,
-        toolCalls: capturedBatch.toolCalls.filter((tc) => !isProtected(tc.toolName, tc.args, currentConfig.value)),
+        toolCalls: capturedBatch.toolCalls.filter((tc) => !protectionPredicate(tc.toolName, tc.args)),
       };
 
       // Eager spill: offload oversized single results to sidecar files before they
@@ -924,7 +945,7 @@ export default function (pi: ExtensionAPI) {
       // trimBatchToPendingRange drops them from the pending set below. Best-effort:
       // a spill failure leaves the result inline for the normal flush pipeline.
       try {
-        await spillOversizedBatch({
+        const handled = occ.deferLocal(ctx) ? new Set<string>() : await spillOversizedBatch({
           batch: filtered,
           indexer,
           config: {
@@ -936,6 +957,7 @@ export default function (pi: ExtensionAPI) {
           sessionId: ctx.sessionManager.getSessionId(),
           appendEntry: (type, data) => (ctx.sessionManager as unknown as SessionAppender).appendCustomEntry(type, data),
         });
+        if (handled.size) occ.rewrite(ctx);
       } catch {
         // best-effort; never block the turn
       }
@@ -1035,7 +1057,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── context: prune summarized tool results from next LLM call ─────────────
-  const projectContext = (input: any[], api?: string) => {
+  const projectContext = (input: any[], api?: string, ctx?: ExtensionContext) => {
     let messages = input;
     let changed = false;
 
@@ -1052,6 +1074,36 @@ export default function (pi: ExtensionAPI) {
 
     if (!currentConfig.value.enabled) return { messages, changed };
 
+    // A context edit changes effective evidence, not the immutable archive. Keep
+    // edited sources visible and remove stale summaries of the same source group.
+    const editedToolIds = new Set<string>();
+    if (occ.enabled() && ctx) {
+      for (const entry of ctx.sessionManager.buildSessionProjection().entries) {
+        if (entry.sourceEntry.type !== "message") continue;
+        const original = entry.sourceEntry.message;
+        if (original.role !== "toolResult" && original.role !== "assistant") continue;
+        const effective = entry.messages[0];
+        if (entry.messages.length === 1 && effective && "content" in effective && JSON.stringify(effective.content) === JSON.stringify(original.content)) continue;
+        if (original.role === "toolResult") editedToolIds.add(original.toolCallId);
+        if (original.role === "assistant" && Array.isArray(original.content)) {
+          for (const block of original.content) if (block.type === "toolCall") editedToolIds.add(block.id);
+        }
+      }
+      const summaryIds = (message: any): string[] => message.customType === CUSTOM_TYPE_SUMMARY
+        ? normalizeSummaryToolCallRefs(message.details).map(ref => bareToolCallId(ref.toolCallId)) : [];
+      // One summary may cover multiple occurrences; preserve the whole group.
+      let previousSize = -1;
+      while (previousSize !== editedToolIds.size) {
+        previousSize = editedToolIds.size;
+        for (const message of ctx.sessionManager.buildSessionProjection().messages) {
+          const ids = summaryIds(message);
+          if (ids.some(id => editedToolIds.has(id))) ids.forEach(id => editedToolIds.add(id));
+        }
+      }
+      const filtered = messages.filter(message => !summaryIds(message).some(id => editedToolIds.has(id)));
+      if (filtered.length !== messages.length) { messages = filtered; changed = true; }
+    }
+
     // pruneMessages is the single source of truth for "is there work to do".
     // It returns the original array reference (pruned: false) only when none of
     // the five phases changed anything; index/registry emptiness alone does not
@@ -1061,11 +1113,12 @@ export default function (pi: ExtensionAPI) {
       messages,
       indexer,
       currentConfig.value.chainCompression,
-      currentConfig.value.purgeErrors,
-      currentConfig.value,
+      occ.enabled() ? { ...currentConfig.value.purgeErrors, enabled: false } : currentConfig.value.purgeErrors,
+      effectiveProtection(),
       currentConfig.value.recoveryGraceTurns,
       diagnostics,
-      { state: supersede, isProtected: protectionPredicate },
+      occ.enabled() ? undefined : { state: supersede, isProtected: protectionPredicate },
+      editedToolIds,
     );
     if (result.pruned) {
       messages = result.messages;
@@ -1077,17 +1130,18 @@ export default function (pi: ExtensionAPI) {
   };
 
   let activeSessionId: string | undefined;
+  let projectionContext: ExtensionContext | undefined;
   const unsubscribeProjection = pi.events.on("metis:condense-project", (data: unknown) => {
     if (!data || typeof data !== "object" || !("messages" in data) || !Array.isArray(data.messages)) return;
-    const request = data as { sessionId: string; messages: any[]; api?: string; busy?: boolean };
+    const request = data as { sessionId: string; messages: any[]; api?: string; busy?: boolean; maintenance?: boolean };
     if (request.sessionId !== activeSessionId) return;
-    if (isFlushing) { request.busy = true; return; }
-    request.messages = projectContext(request.messages, request.api).messages;
+    if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
+    request.messages = projectContext(request.messages, request.api, projectionContext).messages;
   });
-  pi.on("session_start", (_event, ctx) => { activeSessionId = ctx.sessionManager.getSessionId(); });
-  pi.on("session_shutdown", () => { activeSessionId = undefined; unsubscribeProjection(); });
+  pi.on("session_start", (_event, ctx) => { activeSessionId = ctx.sessionManager.getSessionId(); projectionContext = ctx; });
+  pi.on("session_shutdown", () => { activeSessionId = undefined; projectionContext = undefined; unsubscribeProjection(); });
   pi.on("context", async (event, ctx) => {
-    const result = projectContext(event.messages, ctx.model?.api);
+    const result = projectContext(event.messages, ctx.model?.api, ctx);
     if (result.beforeChars !== undefined) statsAccum.setLiveReclaim(result.beforeChars, result.afterChars!);
     setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
     return result.changed ? { messages: result.messages } : undefined;
@@ -1122,6 +1176,7 @@ export default function (pi: ExtensionAPI) {
       inGrace,
     );
     if (result.compressedEntries.length > 0) {
+      occ.rewrite(ctx);
       lowerFloor(supersede, earliestChainStart(result.compressedEntries));
       statsAccum.addChainsCompressed(result.compressedEntries.length);
       statsAccum.persist(pi);

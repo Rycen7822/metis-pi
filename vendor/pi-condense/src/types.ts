@@ -258,6 +258,8 @@ export const PRUNE_ON_MODES: { value: PruneOn; label: string }[] = [
 
 /** Extension config stored under the `contextPrune` key in `<agent-dir>/settings.json` (agent-dir honors `PI_CODING_AGENT_DIR`). */
 export interface ContextPruneConfig {
+  /** Opt in to shared rewrite buffering and ordinary-Pi opportunistic compaction. */
+  opportunisticCompaction: boolean;
   /** Whether to prune raw tool outputs from future LLM context */
   enabled: boolean;
   /** Whether to show the prune footer status line and queued turn messages */
@@ -560,6 +562,7 @@ export interface ErrorPurgeConfig {
 }
 
 export const DEFAULT_CONFIG: ContextPruneConfig = {
+  opportunisticCompaction: false,
   enabled: false,
   showPruneStatusLine: true,
   summarizerModel: "default",
@@ -653,6 +656,10 @@ export interface CapturedBatch {
  * Contains the full original tool output for context_tree_query recovery.
  */
 export interface ToolCallRecord {
+  /** Durable recovery only; archiving alone must never change model-visible history. */
+  archiveOnly?: boolean;
+  /** Legacy dedup entry whose own execution metadata could not be recovered. */
+  metadataUnavailable?: boolean;
 	resultPrefix?: string;
   /** Provenance of an execution-layer archive, distinct from captured display text. */
   archiveSource?: "command-output" | "fused-command-output" | "fusion-journal";

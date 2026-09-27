@@ -5,7 +5,7 @@ import { isProtected, type ProtectionConfig } from "./protected.js";
 import { applyChainCompressions } from "./chain-range-prune.js";
 import { purgeErroredArgs } from "./error-purge.js";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.js";
-import { occKey } from "./occurrence-key.js";
+import { bareToolCallId, occKey } from "./occurrence-key.js";
 import { sweepOrphanToolResults } from "./orphan-sweep.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { applySupersede, type SupersedeState } from "./supersede.js";
@@ -87,12 +87,13 @@ export function pruneMessages(
   recoveryGraceTurns: number = 0,
   diagnostics?: DiagnosticSink,
   supersede?: { state: SupersedeState; isProtected: (toolName: string, args: unknown) => boolean },
+  editedToolIds: ReadonlySet<string> = new Set(),
 ): { messages: any[]; pruned: boolean; beforeChars: number; afterChars: number } {
   // Phase 1: stub-replace summarized tool results
   let pruned = false;
   const inGrace = inGraceRecoveryToolCallIds(messages, recoveryGraceTurns);
   const next = messages.map((msg) => {
-    if (msg.role !== "toolResult") return msg;
+    if (msg.role !== "toolResult" || editedToolIds.has(msg.toolCallId)) return msg;
 
     // Fail-closed: when the message carries a timestamp, the occurrence key
     // is tried first. The bare id is consulted only as a fallback, and only
@@ -113,16 +114,14 @@ export function pruneMessages(
     // Render-time re-check: a record summarized before protectedPaths
     // covered it is repaired here — the raw toolResult still lives in the
     // session JSONL, so skipping the stub restores it verbatim.
-    // Dedup aliases resolve to the original record, so an alias whose own
-    // path is protected but whose original isn't stays stubbed (edge case).
-    if (protection && record && isProtected(record.toolName, record.args, protection)) {
+    if (record?.metadataUnavailable || (protection && record && isProtected(record.toolName, record.args, protection))) {
       return msg;
     }
     if (inGrace.has(key)) {
       return msg;
     }
     pruned = true;
-    const ref = indexer.getShortRefForToolCallId(lookupKey) ?? msg.toolCallId;
+    const ref = indexer.getShortRefForToolCallId(lookupKey) ?? lookupKey;
     const text = record?.spillPath
       ? [
           `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
@@ -132,13 +131,13 @@ export function pruneMessages(
           `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
           `Or use context_tree_query with ref \`${ref}\`.`,
         ].join("\n")
-      : `[Summarized in pruner summary, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
+      : `[Captured ${msg.toolName} output retained, status ${msg.isError ? "ERROR" : "OK"}, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
     return {
       role: "toolResult",
       toolCallId: msg.toolCallId,
       toolName: msg.toolName,
       content: [{ type: "text", text }],
-      isError: record?.archiveSource === "fused-command-output" ? msg.isError : false,
+      isError: msg.isError,
       timestamp: msg.timestamp,
     };
   });
@@ -165,7 +164,8 @@ export function pruneMessages(
 
   // Phase 3: chain range prune — drop closed chains beyond the rolling window
   if (chainCompression?.enabled) {
-    const chainEntries = indexer.getChainEntries();
+    const chainEntries = indexer.getChainEntries().filter(entry =>
+      !(entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds).some(key => editedToolIds.has(bareToolCallId(key))));
     if (chainEntries.length > 0) {
       // Prefer the cohesive LLM range summary (B) when present; fall back to the
       // per-batch concatenation for spans compressed before fusion / on failure.

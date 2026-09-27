@@ -2367,7 +2367,7 @@ index ad6a7b6..3055fc6 100644
 +	{ additionalProperties: false },
 +);
 diff --git a/src/extension/events.ts b/src/extension/events.ts
-index 0401a67..8bac8bc 100644
+index 0401a67..8538a40 100644
 --- a/src/extension/events.ts
 +++ b/src/extension/events.ts
 @@ -10,7 +10,6 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
@@ -2378,7 +2378,20 @@ index 0401a67..8bac8bc 100644
  import { clearApplyPatchRenderState } from "../tools/apply-patch/tool.ts";
  import type { CodeModeRegistration } from "../tools/code-mode/tools.ts";
  import { parseRealtimeVoicePrompt, REALTIME_VOICE_PROMPT_CHANNEL } from "../realtime-voice.ts";
-@@ -98,7 +97,7 @@ export function registerCodexEvents(
+@@ -69,6 +68,12 @@ export function registerCodexEvents(
+ ): void {
+ 	const { state, tracker, sessions } = runtime;
+ 	const reserve = createCodexReserveController(pi);
++	const occSupported = (ctx: ExtensionContext) => {
++		const plan = resolveCodexRuntimePlanForState(ctx, state);
++		return !plan.nativeCompaction && !plan.contextManagement && !state.contextTree.handoff.active
++			&& !sessions.listSessions(0).some(session => session.running);
++	};
++	pi.events.on("metis:occ-capability", (request: any) => { request.supported = occSupported(request.ctx); });
+ 	let activeContext: ExtensionContext | undefined;
+ 	let pendingExtensionToolRefresh = false;
+ 	let turnPrewarm: ReturnType<CodexExtensionRuntime["waitForPrewarm"]>;
+@@ -98,7 +103,7 @@ export function registerCodexEvents(
  	runtime.voice.setDelegationPreflight((ctx, signal) => prepareVoiceDelegation(runtime, codeMode, ctx, signal));
  	sessions.onSessionExit((sessionId) => tracker.recordSessionFinished(sessionId));
  
@@ -2387,7 +2400,7 @@ index 0401a67..8bac8bc 100644
  		updateCodexPreparedIdleKickoff(pi, "session_reset");
  		turnPrewarm = undefined;
  		activeContext = ctx;
-@@ -147,7 +146,6 @@ export function registerCodexEvents(
+@@ -147,7 +152,6 @@ export function registerCodexEvents(
  		prepareCodeModeHost(codeMode, ctx);
  		if (!state.config.prompt.heavySystemPromptOverwrite)
  			void runtime.startPrewarm(ctx, codeMode.refreshPromptTools(ctx.getSystemPrompt(), ctx));
@@ -2395,6 +2408,22 @@ index 0401a67..8bac8bc 100644
  	});
  
  	pi.on("thinking_level_select", (event, ctx) => {
+@@ -429,9 +433,14 @@ export function registerCodexEvents(
+ 			await codeMode.checkpointNotebook();
+ 		} catch (error) {
+ 			ctx.ui.notify(`Notebook checkpoint before compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
++			return { cancel: true };
+ 		}
+ 		if (contextManagementResult) return contextManagementResult;
+-		if (!nativeCompaction) return undefined;
++		if (!nativeCompaction) {
++			const request: { event: typeof event; ctx: typeof ctx; promise?: Promise<any> } = { event, ctx };
++			pi.events.emit("metis:occ-prepare", request);
++			return request.promise ? await request.promise : undefined;
++		}
+ 		try {
+ 			const result = await handleCodexSessionBeforeCompact(
+ 				event,
 diff --git a/src/extension/runtime.ts b/src/extension/runtime.ts
 index f35fc64..40045da 100644
 --- a/src/extension/runtime.ts
