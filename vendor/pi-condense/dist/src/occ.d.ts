@@ -8,6 +8,7 @@ export declare function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, 
     enabled: () => boolean;
     deferLocal: (ctx: ExtensionContext) => boolean;
     isRunning: () => boolean;
+    isCapacityWaiting: () => boolean;
     observeRequest(messages: any[]): void;
     measure(ctx: ExtensionContext): any;
     rewrite(ctx: ExtensionContext, before?: number): void;

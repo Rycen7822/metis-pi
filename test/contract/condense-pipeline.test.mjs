@@ -19,13 +19,13 @@ import goalExtension from "../../extensions/goal.ts";
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const buildLog = Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false, occ = false } = {}) {
+async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false, occ = false, capacity = false } = {}) {
   const workDir = fileURLToPath(new URL("../../.work/", import.meta.url));
   mkdirSync(workDir, { recursive: true });
   const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
-  writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: {
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 }, contextPrune: {
     enabled: true, opportunisticCompaction: occ, showPruneStatusLine: false, minBatchChars: 5000, pruneOn: "agent-message", batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
@@ -55,7 +55,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", d
     sendMessage(message) { sm.appendCustomMessageEntry(message.customType, message.content, message.display, message.details); },
   };
   const ctx = { sessionManager: sm, model, cwd: dir, hasUI: false, isIdle: () => true, hasPendingMessages: () => false,
-    getContextUsage: () => ({ tokens: 90000, contextWindow: 100000 }),
+    getContextUsage: () => ({ tokens: capacity ? 96000 : 90000, contextWindow: 100000 }),
     modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "local" }), getProviderAuth: async () => undefined },
     ui: { setStatus() {}, setWidget() {}, notify() {} },
   };
@@ -277,4 +277,22 @@ test("a local rewrite holds through two steps and only releases after real reuse
     await f.finish();
     assert.equal(f.calls.length, i < 3 ? 1 : 2);
   }
+});
+
+
+test("capacity waiting imports temporary output archives without pruning their visible results", async t => {
+  const f = await fixture(t, { occ: true, capacity: true });
+  const temporary = join(f.dir, "temporary-native-output.log");
+  writeFileSync(temporary, "ARCHIVED RAW OUTPUT");
+  const call = f.add("VISIBLE RESULT TAIL", "unrecognized-command", "capacity-archive");
+  call.result.details = { fullOutputPath: temporary };
+  await f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
+  rmSync(temporary);
+  const recovered = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [call.id] }, undefined, undefined, f.ctx);
+  assert.equal(recovered.details.results[0].text, "ARCHIVED RAW OUTPUT");
+  const messages = projectBranchMessages(f.sm.getBranch());
+  const projected = (await f.emit("context", { messages }))?.messages ?? messages;
+  assert.match(JSON.stringify(projected), /VISIBLE RESULT TAIL/);
+  await f.finish();
+  assert.equal(f.calls.length, 0);
 });

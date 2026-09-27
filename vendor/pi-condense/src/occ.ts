@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { calculateContextTokens, compact, estimateTokens, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { calculateContextTokens, compact, estimateTokens, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { archiveToolOutput } from "./spill.js";
 import { isProtected } from "./protected.js";
 import { captureUnindexedBatchesFromSession } from "./batch-capture.js";
@@ -22,6 +22,7 @@ interface MaintenanceState {
   spentRequest?: string;
   attemptedSource?: string;
   waitExhaustedRequest?: string;
+  capacityWaiting?: boolean;
 }
 const fresh = (): MaintenanceState => ({ phase: "normal", work: 0, atWork: 0, atChars: 0 });
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -55,6 +56,20 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   ]);
   const chars = (ctx: ExtensionContext) => JSON.stringify(visible(ctx).messages).length;
   const estimatedTokens = (messages: any[]) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+  function capacity(ctx: ExtensionContext, settings?: { enabled: boolean; reserveTokens: number }) {
+    const window = ctx.model?.contextWindow;
+    if (!window || !Number.isFinite(window) || window <= 0) return undefined;
+    try {
+      if (!settings) {
+        // The extension API exposes no live SettingsManager. Use Pi's own
+        // read-only resolver, including project trust and per-model overrides.
+        const manager = SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted?.() ?? false });
+        if (manager.drainErrors().length) return undefined;
+        settings = manager.getCompactionSettings(ctx.model);
+      }
+      return settings.enabled ? { limit: window - settings.reserveTokens, buffer: Math.max(1024, window * 0.05) } : undefined;
+    } catch { return undefined; }
+  }
   const capability = (ctx: ExtensionContext) => {
     const request = { ctx, supported: false };
     pi.events.emit("metis:occ-capability", request);
@@ -77,12 +92,22 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     if (!enabled()) return false;
     const size = chars(ctx);
     state.request = externalRequest(ctx);
+    const usage = ctx.getContextUsage();
+    const tokens = boundaryTokens ?? usage?.tokens;
+    const budget = capacity(ctx);
+    const capacityWaiting = budget && tokens != null && Number.isFinite(tokens)
+      ? budget.limit - tokens <= budget.buffer * (state.capacityWaiting ? 1.5 : 1)
+      : !!budget && !!state.capacityWaiting;
+    if (capacityWaiting !== !!state.capacityWaiting) {
+      state.capacityWaiting = capacityWaiting;
+      if (state.phase === "waiting") state.phase = "normal";
+      persist();
+    }
+    if (capacityWaiting) { ready = false; return true; }
     if (state.phase === "hold") {
       if (state.work - state.atWork < HOLD_WORK || size - state.atChars < Math.max(5000, state.atChars * 0.15)) return true;
       state.phase = "normal";
     }
-    const usage = ctx.getContextUsage();
-    const tokens = boundaryTokens ?? usage?.tokens;
     const window = ctx.model?.contextWindow;
     const fraction = tokens != null && window && window > 0 ? tokens / window : undefined;
     if (fraction === undefined || !capability(ctx)) { ready = false; return false; }
@@ -166,6 +191,15 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const modelMessages = request.messages.filter(m => !isSummary(m));
       const upperAfter = protection.length + 4 * p.settings.reserveTokens;
       if (upperAfter >= before * 0.75) return { cancel: true as const };
+      const budget = running ? capacity(ctx, p.settings) : undefined;
+      const wholeTokens = estimatedTokens(visible(ctx).messages);
+      // Retain measured overhead and the complete kept tail. Only the removed
+      // projection is replaced by the protected sources and generated summary.
+      const retainedTokens = Math.max(p.tokensBefore, wholeTokens) - estimatedTokens(request.messages);
+      const fits = (summaryTokens: number) => !budget
+        || budget.limit - (retainedTokens + summaryTokens + 128) >= 2 * budget.buffer;
+      if (budget && (budget.limit - p.tokensBefore <= budget.buffer
+        || !fits(Math.ceil(protection.length / 4) + p.settings.reserveTokens))) return { cancel: true as const };
       if (running) {
         const cost = ctx.model.cost;
         const saved = (before - upperAfter) / 4;
@@ -206,6 +240,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (event.signal.aborted || signature(ctx) !== source) return { cancel: true as const };
       const summary = `[Program-retained sources]\n${protection}\n[Derived summary; non-authoritative]\n${result.summary}`;
       if (!result.summary.trim() || summary.length >= before * 0.8) return { cancel: true as const };
+      if (!fits(Math.ceil(summary.length / 4))) return { cancel: true as const };
       return { compaction: { ...result, summary, firstKeptEntryId: p.firstKeptEntryId,
         details: { ...result.details as object, metisOcc: { source, requirements, protectedChars: protection.length } } } };
     } catch (error) {
@@ -244,6 +279,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   // accepted user input must not inherit that cancellation's goal decision.
   pi.on("input", () => { cancelled = false; });
   pi.on("model_select", (_event, ctx) => {
+    state.capacityWaiting = false;
     boundaryTokens = undefined; requestTokens = undefined; localTokensSaved = 0;
     ready = false; rewrite(ctx);
   });
@@ -294,7 +330,11 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   });
   const off = [
     pi.events.on("metis:occ-compaction-start", (data: any) => { compactionSignal = data.signal; }),
-    pi.events.on("metis:occ-status", (data: any) => { data.deferGoal = ready || running; data.running = running; }),
+    pi.events.on("metis:occ-status", (data: any) => {
+      // Let native post-run capacity handling finish before issuing the owed
+      // continuation. Settled immediately releases it when no compaction runs.
+      data.deferGoal = ready || running || !!state.capacityWaiting; data.running = running;
+    }),
     pi.events.on("metis:occ-prepare", (data: any) => {
       if (enabled()) data.promise = prepare(data.event, data.ctx);
     }),
@@ -302,6 +342,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   pi.on("session_shutdown", () => { off.forEach(fn => fn()); sessionId = undefined; });
   return {
     enabled, deferLocal: decide, isRunning: () => running,
+    isCapacityWaiting: () => !!state.capacityWaiting,
     observeRequest(messages: any[]) {
       requestTokens = enabled() ? estimatedTokens(messages) : undefined;
       localTokensSaved = 0;

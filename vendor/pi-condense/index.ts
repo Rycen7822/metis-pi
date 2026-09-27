@@ -52,7 +52,7 @@ import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowe
 import { detectChains, withClosingMessage } from "./src/chain-detector.js";
 import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.js";
 import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.js";
-import { spillOversizedBatch } from "./src/spill.js";
+import { archiveToolOutput, spillOversizedBatch } from "./src/spill.js";
 import { bareToolCallId, occKey } from "./src/occurrence-key.js";
 import { DiagnosticSink } from "./src/diagnostics.js";
 
@@ -947,7 +947,17 @@ export default function (pi: ExtensionAPI) {
       // a spill failure leaves the result inline for the normal flush pipeline.
       try {
         const beforeRewrite = occ.measure(ctx);
-        const handled = occ.deferLocal(ctx) ? new Set<string>() : await spillOversizedBatch({
+        const deferred = occ.deferLocal(ctx);
+        if (occ.isCapacityWaiting()) {
+          for (const call of capturedBatch.toolCalls) {
+            if (!call.outputArchive || indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))) continue;
+            const archive = { indexer, sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
+              appendEntry: (type: string, data?: unknown) => (ctx.sessionManager as unknown as SessionAppender).appendCustomEntry(type, data) };
+            await archiveToolOutput(call, capturedBatch, archive);
+            indexer.addBatch({ ...capturedBatch, toolCalls: [call] }, archive.appendEntry, true);
+          }
+        }
+        const handled = deferred ? new Set<string>() : await spillOversizedBatch({
           batch: filtered,
           indexer,
           config: {

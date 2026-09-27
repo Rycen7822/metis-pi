@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 75000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 75010,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy" } = {}) {
+async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false } = {}) {
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work", "occ-host-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -24,12 +24,12 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
   } }));
   const sm = SessionManager.create(dir, dir);
-  const compaction = { enabled: auto, reserveTokens: 500, keepRecentTokens: 1000 };
-  if (installed) {
+  const compaction = { enabled: auto && !autoAfterLocal, reserveTokens: 500, keepRecentTokens: 1000, ...compactionOverrides };
+  {
     const settings = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...settings, compaction }));
   }
-  const settingsManager = installed ? SettingsManager.create(dir, dir) : SettingsManager.inMemory({ compaction });
+  const settingsManager = SettingsManager.create(dir, dir);
   const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null,
     modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model = { id: "occ-local", name: "OCC local", provider: "occ-local", api: "openai-completions",
@@ -43,7 +43,10 @@ async function host(t, { summary = "Derived progress: investigation continues.",
       const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
         content: [{ type: "text", text: "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
         stopReason: "stop", timestamp: Date.now(), usage };
-      queueMicrotask(() => { out.push({ type: "done", reason: "stop", message }); out.end(message); });
+      Promise.resolve().then(async () => {
+        if (autoAfterLocal) { settingsManager.setCompactionEnabled(true); await settingsManager.flush(); }
+        out.push({ type: "done", reason: "stop", message }); out.end(message);
+      }).catch(error => out.end({ ...message, stopReason: "error", errorMessage: String(error) }));
       return out;
     };
     registerApiProvider({ api: model.api, stream, streamSimple: stream }, "occ-test-local-summary");
@@ -112,7 +115,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   loaded.session.subscribe(event => {
     if (event.type === "compaction_start" || event.type === "compaction_end") events.push(event);
   });
-  return { ...loaded, sm, calls, errors, notices, eventBus, events };
+  return { ...loaded, sm, calls, errors, notices, eventBus, events, settingsManager };
 }
 
 test("real AgentSession automatically commits OCC once, protects source requirements and recalls exact evidence", async t => {
@@ -377,8 +380,10 @@ for (const oversized of [false, true]) test(`native threshold completes its boun
   assert.equal(compactions(h).length, oversized ? 0 : 1);
 });
 
+// Enabling auto-compaction while a local summary is in flight remains a valid
+// stale-usage boundary even though the new buffer prevents starting it there.
 test("local condense defers a stale threshold but fresh high usage still permits capacity compaction", async t => {
-  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true, autoAfterLocal: true,
     beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(1000); },
     onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
   await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
@@ -393,7 +398,7 @@ test("local condense defers a stale threshold but fresh high usage still permits
 });
 
 test("local condense does not suppress a threshold when fixed overhead still leaves pressure high", async t => {
-  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true, autoAfterLocal: true,
     // Leave most history outside condense's eligible tool output. Less than
     // the required headroom is recovered, despite publishing a local summary.
     beforeLoad(sm) {
@@ -421,7 +426,7 @@ test("explicit overflow still attempts capacity rescue immediately after OCC", a
 
 
 test("a later context edit already accounted for by Pi receives no duplicate local reduction credit", async t => {
-  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true, autoAfterLocal: true,
     beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(25000); },
     onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
   const target = h.sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).id;
@@ -468,11 +473,89 @@ test("native safety rejection preserves an owed goal continuation", async t => {
 });
 
 test("real overflow after local condense bypasses stale-threshold deferral", async t => {
-  const h = await host(t, { auto: true, workTurns: 4, localSummary: true,
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: true, autoAfterLocal: true,
     beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(1000); },
     onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 101000) }) });
   await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
   assert.deepEqual(compactionReasons(h), ["overflow"]);
   assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
   assert.equal(compactions(h).length, 1);
+});
+
+
+for (const goal of [false, true]) test(`capacity buffer skips ready OCC without spending its quota or stalling goal; goal=${goal}`, async t => {
+  const h = await host(t, { auto: true, goal, onWork: () => ({ usage: pressureUsage(95000) }) });
+  await h.session.prompt("Continue bounded work."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(h.calls.filter(c => !c.summarizing).length, goal ? 2 : 1);
+  assert.deepEqual(compactionReasons(h), []);
+  const state = h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data;
+  assert.equal(state.capacityWaiting, true);
+  assert.equal(state.spentRequest, undefined);
+});
+
+test("capacity buffer suppresses local summaries and preserves original tool results", async t => {
+  const h = await host(t, { auto: true, workTurns: 1, localSummary: true,
+    onWork: () => ({ usage: pressureUsage(95000) }) });
+  await h.session.prompt("Inspect and finish."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(h.sm.getEntries().filter(e => e.type === "custom_message" && e.customType === "context-prune-summary").length, 0);
+  assert.match(JSON.stringify(h.calls.at(-1).context), /NEW_WORK_EVIDENCE/);
+});
+
+test("capacity band hysteresis survives reload and releases only beyond 1.5 buffers", async t => {
+  const h = await host(t, { auto: true, onWork: ({ index }) => ({ usage: pressureUsage([95000, 93000, 91000][index - 1]) }) });
+  const state = () => h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data;
+  await h.session.prompt("First."); await h.session.waitForIdle();
+  assert.equal(state().capacityWaiting, true);
+  await h.session.extensionRunner.emit({ type: "session_start" });
+  await h.session.prompt("Second."); await h.session.waitForIdle();
+  assert.equal(state().capacityWaiting, true, "6500 tokens remaining is still inside the exit band");
+  await h.session.prompt("Third."); await h.session.waitForIdle();
+  assert.equal(state().capacityWaiting, false);
+  assert.equal(state().spentRequest, undefined);
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+});
+
+for (const reserve of [500, 16000]) test(`capacity buffer resolves the active model reserve override; reserve=${reserve}`, async t => {
+  const h = await host(t, { auto: true, compactionOverrides: { modelOverrides: { "occ-local/occ-local": { reserveTokens: reserve } } },
+    onWork: () => ({ usage: pressureUsage(80000) }) });
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, reserve === 500 ? 1 : 0);
+});
+
+test("disabling auto-compaction releases its buffer and leaves OCC available", async t => {
+  const h = await host(t, { auto: true, onWork: () => ({ usage: pressureUsage(95000) }) });
+  await h.session.prompt("First."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  h.session.setAutoCompactionEnabled(false); await h.settingsManager.flush();
+  // Restore an earned OCC boundary to isolate availability from work counters.
+  h.sm.appendCustomEntry("metis-occ-state", { phase: "waiting", work: 5, atWork: 4, atChars: 0, capacityWaiting: true });
+  await h.session.extensionRunner.emit({ type: "session_start" });
+  await h.session.prompt("Auto-compaction is disabled; continue."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data.capacityWaiting, false);
+});
+
+test("disabled auto-compaction does not impose its near-capacity exclusion on OCC", async t => {
+  const h = await host(t, { auto: false, onWork: () => ({ usage: pressureUsage(95000) }) });
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 1);
+});
+
+test("OCC rejects before generation when the whole retained context lacks two buffers of headroom", async t => {
+  const h = await host(t, { auto: true, onWork: () => ({ usage: pressureUsage(93000) }),
+    beforeLoad(sm) { sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = "data".repeat(1500); } });
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.deepEqual(compactionReasons(h), ["manual"]);
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+  assert.equal(compactions(h).length, 0);
+});
+
+test("OCC rechecks whole-context headroom after generating the candidate", async t => {
+  const h = await host(t, { auto: true, summary: "S".repeat(36000), onWork: () => ({ usage: pressureUsage(94000) }),
+    beforeLoad(sm) { sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = "sourcebody".repeat(5000); } });
+  await h.session.prompt("Continue."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, 1);
+  assert.equal(compactions(h).length, 0, JSON.stringify(compactions(h).map(c => ({ before: c.tokensBefore, summary: c.summary.length, protected: c.details.metisOcc.protectedChars }))));
 });

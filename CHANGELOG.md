@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- OCC 增加接近 auto-compact 阈值时的缓冲与滞回、压缩后整体容量余量检查；等待期间保留原文归档和 goal 正常续跑，关闭 auto-compact 时不让位。
+
 - 修复容量压缩取消/早期失败后 OCC 立即重启，以及 condense 发布后旧 usage 引发紧接的阈值摘要；保留新用量高占用与真实 overflow 的容量救援。
 
 - Action Fusion 使用统一扩展开关：排除 `extensions/action-fusion.ts` 同时关闭原生 edit/write、转换层 apply_patch 和 Code/Notebook 融合入口，保留普通工具；修正文档中的包内过滤路径。
