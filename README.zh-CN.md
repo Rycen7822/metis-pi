@@ -14,7 +14,7 @@ pi install .
 
 重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包已经包含 codex-conversion，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
 
-可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-goal.ts"]`。详细用法见[功能手册](docs/README.md)。
+可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-extensions/goal.ts"]`。详细用法见[功能手册](docs/README.md)。
 
 ## 功能
 
@@ -29,7 +29,7 @@ pi install .
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
 | [Codex 转换层](docs/vendor-codex-conversion.md) | 内置 provider、原生工具与 code/notebook 模式，源码补丁随本仓库维护。 |
-| [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 与 apply_patch 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，覆盖 Code/Notebook 嵌套入口。 |
+| [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 与 apply_patch 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，覆盖 Code/Notebook 嵌套入口；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，沿用配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
 
 显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/condense/vendor 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。

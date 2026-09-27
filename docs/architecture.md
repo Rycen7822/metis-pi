@@ -11,7 +11,7 @@
 | `extensions/todo.ts` → `src/todo/` | todo 工具、命令、持久化和面板。 |
 | `extensions/goal.ts` → `src/goal-state.ts` | 入口拥有宿主 I/O、命令、提示与工具；状态核心拥有目标、时钟、分支恢复和回合用量。 |
 | `extensions/condense.ts` → `vendor/pi-condense/dist/index.js` | 单一加载入口、重复安装检测和摘要用量展示；vendor 拥有归档、最终回复精简/摘要决策与分页恢复。 |
-| `extensions/action-fusion.ts` | 只包装 Pi 内建 edit/write，扩展 `then_run`，冻结 write 修改快照并管理关闭时的取消。 |
+| `extensions/action-fusion.ts` | 统一拥有所有 Action Fusion 入口的启用状态；包装 Pi 内建 edit/write，扩展 `then_run`，冻结 write 修改快照并管理关闭时的取消。 |
 | vendor `src/extension/register.ts` | Codex 转换层组合根，通过构建后的 `dist/index.js` 加载。 |
 
 显示适配保留 Pi 原生执行与结果；工具注册和模型上下文处理由独立 goal/todo/vendor 功能承担。`test/package.test.mjs` 检查自有源码的注册、持久化与上下文边界。chrome 仅依赖结构类型和注入的宿主能力。
@@ -49,7 +49,7 @@
 
 condense 将新工具结果的原文、确定性候选和发布后的表示分开管理。执行层负责截断前日志捕获，condense 负责索引、快照字节边界及回读；会话 blobs 不属于显示环形缓冲的清理范围。预热运行时通过同步事件请求同一份已完成投影，flush 期间不发起预热。goal 的动态预算作为追加消息，不再改变系统指令前缀。
 
-Action Fusion 的共享流程与按路径排队由 vendor `tools/action-fusion.ts` 拥有；`action-fusion-command.ts` 分别适配 Pi bash operations 和现有 exec session manager。原生入口与普通/嵌套 patch 消费同一版本回执。`src/fusion-view.ts` 组合既有修改和 shell renderer，分别判断两个阶段，不重新执行工具。Code/Notebook delegate 将完整回执写入独立 journal，condense 按固定字节范围导入子调用，显示 trace 淘汰不会影响证据。
+Action Fusion 的共享流程与按路径排队由 vendor `tools/action-fusion.ts` 拥有；`action-fusion-command.ts` 分别适配 Pi bash operations 和现有 exec session manager。原生入口与普通/嵌套 patch 消费同一版本回执。`extensions/action-fusion.ts` 通过会话事件总线提供启用状态，转换层在所有扩展初始化后的 session_start 同步普通 patch 声明，Code/Notebook 构造工具时读取同一状态；关闭入口时两条路径都撤去融合声明，重载时注销监听，不共享进程级开关。`src/fusion-view.ts` 组合既有修改和 shell renderer，分别判断两个阶段，不重新执行工具。Code/Notebook delegate 将完整回执写入独立 journal，condense 按固定字节范围导入子调用，显示 trace 淘汰不会影响证据。
 
 ## 数据流
 

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createEditToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { executeFusion, fusionFailed, THEN_RUN_SCHEMA } from "../vendor/pi-codex-conversion/dist/tools/action-fusion.js";
 import { runNativeFusionCommand } from "../vendor/pi-codex-conversion/dist/tools/action-fusion-command.js";
+import { ACTION_FUSION_AVAILABILITY } from "../vendor/pi-codex-conversion/dist/tools/action-fusion-availability.js";
 import { snapshotFile, computeWriteDiff } from "../src/write-tracker.ts";
 
 // Match the native tool's path normalization, including URLs and shell paths.
@@ -61,6 +62,9 @@ export function createNativeFusionTool(name: "edit" | "write", cwd: string) {
 
 
 export default function actionFusion(pi: ExtensionAPI): void {
+  const unsubscribe = pi.events.on(ACTION_FUSION_AVAILABILITY, (request) => {
+    if (request && typeof request === "object" && "enabled" in request) request.enabled = true;
+  });
   const owned = new Set<string>();
   const active = new Set<AbortController>();
   pi.on("session_start", (_event, ctx) => {
@@ -85,5 +89,5 @@ export default function actionFusion(pi: ExtensionAPI): void {
     if (owned.has(event.toolName) && fusionFailed(event.details)) return { isError: true };
     return undefined;
   });
-  pi.on("session_shutdown", () => { for (const controller of active) controller.abort(); });
+  pi.on("session_shutdown", () => { unsubscribe(); for (const controller of active) controller.abort(); });
 }

@@ -24,12 +24,12 @@ import {
 	type ApplyPatchSuccessDetails,
 } from "./render-state.ts";
 
-const APPLY_PATCH_PARAMETERS = Type.Object({
-	then_run: THEN_RUN_SCHEMA,
+const PLAIN_APPLY_PATCH_PARAMETERS = Type.Object({
 	input: Type.String({
 		description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk; use one unchanged context line for a pure move. Order each file's hunks top-to-bottom; indentation is literal",
 	}),
 });
+const APPLY_PATCH_PARAMETERS = Type.Object({ ...PLAIN_APPLY_PATCH_PARAMETERS.properties, then_run: THEN_RUN_SCHEMA });
 
 interface ApplyPatchRenderContextLike {
 	toolCallId?: string | undefined;
@@ -39,7 +39,7 @@ interface ApplyPatchRenderContextLike {
 	argsComplete?: boolean | undefined;
 }
 
-type ApplyPatchToolDefinition = ToolDefinition<typeof APPLY_PATCH_PARAMETERS, ApplyPatchToolDetails>;
+type ApplyPatchToolDefinition = ToolDefinition<typeof PLAIN_APPLY_PATCH_PARAMETERS, ApplyPatchToolDetails>;
 
 export type ApplyPatchRenderCall = NonNullable<ApplyPatchToolDefinition["renderCall"]>;
 export type ApplyPatchRenderResult = NonNullable<ApplyPatchToolDefinition["renderResult"]>;
@@ -60,8 +60,9 @@ function parseApplyPatchParams(params: unknown): { patchText: string } {
 	return { patchText: params.input };
 }
 
-function prepareApplyPatchArguments(args: unknown): { input: string; then_run?: import("../action-fusion.ts").ThenRunInput } {
+function prepareApplyPatchArguments(args: unknown, fusionEnabled = false): { input: string; then_run?: import("../action-fusion.ts").ThenRunInput } {
 	if (args && typeof args === "object") {
+		if ("then_run" in args && !fusionEnabled) throw new Error("Action Fusion is disabled");
 		const thenRun = "then_run" in args ? validateThenRun(args.then_run) : undefined;
 		const extra = thenRun === undefined ? {} : { then_run: thenRun };
 		if ("input" in args && typeof args.input === "string") return { input: args.input, ...extra };
@@ -194,7 +195,7 @@ function createPlainApplyPatchTool(options: ApplyPatchToolOptions): ApplyPatchTo
 		label: "apply_patch",
 		description: "Patch files",
 		...(options.promptSnippet === false ? {} : { promptSnippet: "Edit files with patch" }),
-		parameters: APPLY_PATCH_PARAMETERS,
+		parameters: PLAIN_APPLY_PATCH_PARAMETERS,
 		...(constrainedSampling ? { constrainedSampling } : {}),
 		executionMode: "sequential",
 		prepareArguments: prepareApplyPatchArguments,
@@ -275,13 +276,16 @@ function createPlainApplyPatchTool(options: ApplyPatchToolOptions): ApplyPatchTo
 	} satisfies ApplyPatchToolDefinition;
 }
 
-export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ToolDefinition<typeof APPLY_PATCH_PARAMETERS, unknown> {
+export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ToolDefinition<typeof APPLY_PATCH_PARAMETERS | typeof PLAIN_APPLY_PATCH_PARAMETERS, unknown> {
 	const base = createPlainApplyPatchTool(options);
+	const fusionEnabled = Boolean(options.runThenRun);
 	return {
 		...base,
+		parameters: fusionEnabled ? APPLY_PATCH_PARAMETERS : PLAIN_APPLY_PATCH_PARAMETERS,
+		prepareArguments: (args) => prepareApplyPatchArguments(args, fusionEnabled),
 		async execute(id, params, signal, update, ctx) {
-			const input = validateThenRun(params.then_run);
-			if (input && !options.runThenRun) throw new Error("then_run executor unavailable");
+			if ("then_run" in params && !fusionEnabled) throw new Error("Action Fusion is disabled");
+			const input = validateThenRun("then_run" in params ? params.then_run : undefined);
 			return executeFusion({ paths: touchedPatchPaths(ctx.cwd, params.input), thenRun: input, signal,
 				mutate: () => base.execute(id, params, signal, undefined, ctx),
 				run: options.runThenRun?.(ctx) ?? (async () => { throw new Error("then_run executor unavailable"); }),
@@ -292,7 +296,7 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}): ToolD
 			if (fusionReceipt(result.details)) return new Text(result.content.filter(b => b.type === "text").map(b => b.text).join("\n"), 0, 0);
 			return base.renderResult!(result as Parameters<NonNullable<typeof base.renderResult>>[0], display, theme, context);
 		},
-	} satisfies ToolDefinition<typeof APPLY_PATCH_PARAMETERS, unknown>;
+	} satisfies ToolDefinition<typeof APPLY_PATCH_PARAMETERS | typeof PLAIN_APPLY_PATCH_PARAMETERS, unknown>;
 }
 
 export function registerApplyPatchTool(pi: ExtensionAPI, options: ApplyPatchToolOptions = {}): void {

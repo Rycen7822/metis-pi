@@ -8,7 +8,7 @@ metis-pi 内置 pi-condense 2.11.0。沿用已有配置和归档，增加确定�
 
 如果同时安装了独立 pi-condense，内置入口会在工具发现后检测 `context_tree_query`，跳过自身注册并提示迁移；外部实例继续工作。使用内置版时，先确认更新后的 metis-pi 已安装，再移除独立的 pi-condense 安装项并重新加载。无需删除 `contextPrune`、会话文件或 sidecar。
 
-通过包入口过滤 `"extensions": ["-condense.ts"]` 可完全禁用内置功能。`metis-pi.json` 的显示层 `enabled` 不控制它。`/pruner off` 仍保留历史回读工具；上游独立的图片数量上限处理保持原行为。
+通过包入口过滤 `"extensions": ["-extensions/condense.ts"]` 可完全禁用内置功能。`metis-pi.json` 的显示层 `enabled` 不控制它。`/pruner off` 仍保留历史回读工具；上游独立的图片数量上限处理保持原行为。
 
 ## 自动精简与模型摘要
 

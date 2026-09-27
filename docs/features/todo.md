@@ -76,7 +76,7 @@ Todos 2/5 done
 另有两个同名扩展会抢占工具名 `todo` 与命令 `/todos`：mitsuhiko/agent-stuff 的 `extensions/todos.ts`（文件式 `.pi/todos/*.md`）与 pi-agent-extensions 的 `extensions/todos/index.ts`。**必须禁用其一**：
 
 - 工具名冲突是**静默后写覆盖**；命令冲突会退化成 `/todos:2`——不要靠运气。
-- 禁用方式：在 `~/.pi/agent/settings.json` 对应包的 `extensions` 数组里写 `"-extensions/todos.ts"`（`-` 前缀 = 强制排除）。
+- 禁用方式：在 `~/.pi/agent/settings.json` 的 `packages` 中修改对应包的 `extensions` 数组。禁用本包 todo 用 `"-extensions/todo.ts"`；禁用 agent-stuff 的 todo 才用 `"-extensions/todos.ts"`；pi-agent-extensions 对应 `"-extensions/todos/index.ts"`。`-` 后为相对于各自包根目录的准确路径，修改后执行 `/reload` 或重启 Pi。
 - 本扩展检测到工具名被占时**只警告一次、不刷屏**；store 与命令仍然可用。
 - 存储目录刻意不同名（`.pi/codex-todos`），双装过渡期互不踩数据；迁移旧列表用 `todo` 工具的 `add` 把 `.pi/todos/*.md` 内容转成任务即可。
 

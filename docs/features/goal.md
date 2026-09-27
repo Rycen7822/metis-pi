@@ -26,6 +26,6 @@ UI 的暂停/恢复与工具契约不同。错误会停止续跑，额度类错�
 - 分支恢复沿用最后一条 goal 记录，不把离线时间算入 active 时长。提示上下文只保留当前目标最近一条续跑消息，并移除 UI 消息。
 - `extensions/goal.ts` 拥有宿主 I/O、提示、命令和工具；`src/goal-state.ts` 的 `GoalState` 拥有状态、时钟与用量。持久化格式仍是 `goal` custom entry v2。
 
-按包入口过滤 `"extensions": ["-goal.ts"]` 可禁用该功能，不影响其它入口。
+按包入口过滤 `"extensions": ["-extensions/goal.ts"]` 可禁用该功能，不影响其它入口。
 
 源自 mitsuhiko/agent-stuff `extensions/goal.ts` @ `122e299`，本地增加逐秒刷新并重构状态所有权；Apache-2.0 归属见根目录 NOTICE 和 LICENSE-APACHE-2.0。行为由 `test/contract/goal-entry.test.mts` 驱动真实扩展入口验证；当前覆盖与限制见 [VALIDATION](../../VALIDATION.md)。

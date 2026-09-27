@@ -2,6 +2,25 @@
 
 Action Fusion 让模型在一次工具调用中明确提交文件修改与后续命令。适用于已经确定要运行的检查，例如写入配置后运行测试。只有修改全部成功后才执行命令；不会自动选择命令、追加模型请求、重试修改或回滚文件。
 
+## 统一开关
+
+默认随 `extensions/action-fusion.ts` 加载。该入口统一控制 Pi 原生 edit/write、转换层 apply_patch，以及 Code/Notebook 的融合调用。在 `~/.pi/agent/settings.json` 的 `packages` 中修改现有 metis-pi 安装项即可关闭：
+
+```json
+{
+  "packages": [
+    {
+      "source": "git:git@github.com:Rycen7822/metis-pi.git",
+      "extensions": ["-extensions/action-fusion.ts"]
+    }
+  ]
+}
+```
+
+保留现有安装项的 `source`、其他包和过滤规则；上例是配置片段的完整结构。删除该排除项可恢复默认启用；执行 `/reload` 或重启 Pi 生效。`extensions: []` 会关闭这个包的全部扩展，不能用于恢复默认加载。
+
+关闭后，原生 edit/write 恢复普通工具，转换层 apply_patch 不再声明 `then_run`，Code/Notebook 不再提供 `apply_patch_then_run`；普通修改和命令工具继续可用。转换层收到旧的或直接注入的 `then_run` 会在修改文件前拒绝执行。历史融合回执和归档仍可读取。`metis-pi.json` 的显示总开关不控制 Action Fusion；无需关闭整个 Codex 转换层。
+
 ## 调用方式
 
 Pi 原生 `edit`、`write` 和普通模式的 `apply_patch` 接受可选参数：
@@ -10,7 +29,7 @@ Pi 原生 `edit`、`write` 和普通模式的 `apply_patch` 接受可选参数�
 {"then_run": {"command": "npm test", "timeout": 60}}
 ```
 
-原有修改参数保持不变。`timeout` 以秒为单位，可省略；显式超时会终止命令，不是轮询等待时间。未提供 `then_run` 时仍按普通修改工具执行。原生入口只包装 Pi 内建工具，第三方同名工具保留自身行为。它随 `extensions/action-fusion.ts` 加载，可按 Pi 的包入口过滤规则禁用。
+启用时，原有修改参数保持不变。`timeout` 以秒为单位，可省略；显式超时会终止命令，不是轮询等待时间。未提供 `then_run` 时仍按普通修改工具执行。原生入口只包装 Pi 内建工具，第三方同名工具保留自身行为。
 
 Code Mode 和 Notebook Mode 保留原有 `tools.apply_patch(patch)` 字符串接口，并增加函数入口：
 

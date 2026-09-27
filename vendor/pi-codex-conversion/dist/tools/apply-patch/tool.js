@@ -10,20 +10,22 @@ import { recordApplyPatchDisplayInput, recordApplyPatchDisplayOutcome, shouldCom
 import { formatPatchTarget } from "./rendering.js";
 import { executePatchWithRust } from "./executor.js";
 import { isApplyPatchToolDetails, markApplyPatchFailure, markApplyPatchPartialFailure, renderApplyPatchCallFromState, setApplyPatchRenderState, } from "./render-state.js";
-const APPLY_PATCH_PARAMETERS = Type.Object({
-    then_run: THEN_RUN_SCHEMA,
+const PLAIN_APPLY_PATCH_PARAMETERS = Type.Object({
     input: Type.String({
         description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. *** Move to: path must immediately follow its Update File header and still needs a nonempty @@ hunk; use one unchanged context line for a pure move. Order each file's hunks top-to-bottom; indentation is literal",
     }),
 });
+const APPLY_PATCH_PARAMETERS = Type.Object({ ...PLAIN_APPLY_PATCH_PARAMETERS.properties, then_run: THEN_RUN_SCHEMA });
 function parseApplyPatchParams(params) {
     if (!params || typeof params !== "object" || !("input" in params) || typeof params.input !== "string") {
         throw new Error("apply_patch requires a string 'input' parameter");
     }
     return { patchText: params.input };
 }
-function prepareApplyPatchArguments(args) {
+function prepareApplyPatchArguments(args, fusionEnabled = false) {
     if (args && typeof args === "object") {
+        if ("then_run" in args && !fusionEnabled)
+            throw new Error("Action Fusion is disabled");
         const thenRun = "then_run" in args ? validateThenRun(args.then_run) : undefined;
         const extra = thenRun === undefined ? {} : { then_run: thenRun };
         if ("input" in args && typeof args.input === "string")
@@ -142,7 +144,7 @@ function createPlainApplyPatchTool(options) {
         label: "apply_patch",
         description: "Patch files",
         ...(options.promptSnippet === false ? {} : { promptSnippet: "Edit files with patch" }),
-        parameters: APPLY_PATCH_PARAMETERS,
+        parameters: PLAIN_APPLY_PATCH_PARAMETERS,
         ...(constrainedSampling ? { constrainedSampling } : {}),
         executionMode: "sequential",
         prepareArguments: prepareApplyPatchArguments,
@@ -222,12 +224,15 @@ function createPlainApplyPatchTool(options) {
 }
 export function createApplyPatchTool(options = {}) {
     const base = createPlainApplyPatchTool(options);
+    const fusionEnabled = Boolean(options.runThenRun);
     return {
         ...base,
+        parameters: fusionEnabled ? APPLY_PATCH_PARAMETERS : PLAIN_APPLY_PATCH_PARAMETERS,
+        prepareArguments: (args) => prepareApplyPatchArguments(args, fusionEnabled),
         async execute(id, params, signal, update, ctx) {
-            const input = validateThenRun(params.then_run);
-            if (input && !options.runThenRun)
-                throw new Error("then_run executor unavailable");
+            if ("then_run" in params && !fusionEnabled)
+                throw new Error("Action Fusion is disabled");
+            const input = validateThenRun("then_run" in params ? params.then_run : undefined);
             return executeFusion({ paths: touchedPatchPaths(ctx.cwd, params.input), thenRun: input, signal,
                 mutate: () => base.execute(id, params, signal, undefined, ctx),
                 run: options.runThenRun?.(ctx) ?? (async () => { throw new Error("then_run executor unavailable"); }),

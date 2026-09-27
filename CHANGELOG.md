@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Action Fusion 使用统一扩展开关：排除 `extensions/action-fusion.ts` 同时关闭原生 edit/write、转换层 apply_patch 和 Code/Notebook 融合入口，保留普通工具；修正文档中的包内过滤路径。
+
 - 增加可选受控 OCC：共享局部/全局缓冲与保持、目标和证据原文保护、有效投影校验及 goal 安全续跑；增加证据目录。修复失败状态丢失、分页读取被替换和输出去重混淆执行元数据。
 
 - 固定完整的 Pi 开发类型依赖并提交去重后的 npm 锁文件；CI 与开发验证改用 `npm ci`，避免浮动 peer 版本及重复 TUI 实例导致构建和宿主检查失败。

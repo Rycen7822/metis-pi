@@ -160,3 +160,7 @@ Current results and unverified runtime boundaries live only in the root [VALIDAT
 `tools/action-fusion.ts` validates optional `then_run`, coordinates canonical mutation paths and retains separate mutation/command status. `action-fusion-command.ts` reuses native bash operations or the existing exec manager. Compound-only interruption drains and preserves captured output; ordinary exec cancellation remains unchanged. `apply-patch/tool.ts` adds the parameter while preserving argument aliases and partial-patch semantics; `extension/tools.ts` supplies its existing executor.
 
 `adapter/code-mode.ts` exposes function-form `apply_patch_then_run` alongside the original freeform `apply_patch`. Delegate capture persists complete fusion receipts in private session JSONL journals before UI trace limits apply. Outer results carry incremental, fixed byte ranges independently of display output truncation. No Codex host/kernel sources are modified, no RTK routing or new top-level execution lifecycle is added.
+
+## Action Fusion availability
+
+`extensions/action-fusion.ts` owns fusion availability through the session event bus. Without that entry, ordinary apply_patch omits then_run and rejects stale fusion arguments before mutation; Code/Notebook omit apply_patch_then_run. Registration synchronizes at session_start so extension load order does not change availability; reload removes the old entry listener. Ordinary patching, command tools, and historical evidence remain available.

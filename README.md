@@ -14,7 +14,7 @@ pi install .
 
 Restart Pi to load the changes, then select `metis-pi` in the theme picker. To install from Git, use `pi install git:git@github.com:Rycen7822/metis-pi.git`. This package includes codex-conversion; remove or disable the standalone `@howaboua/pi-codex-conversion` before installing to avoid duplicate tool registrations.
 
-Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
+Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-extensions/goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
 
 ## Features
 
@@ -29,7 +29,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
 | [Codex conversion](docs/vendor-codex-conversion.md) | Bundled provider, native tools, and code/notebook modes, with source patches maintained in this repository. |
-| [Action Fusion](docs/features/action-fusion.md) | Native edit/write and apply_patch support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also covers nested Code/Notebook entry points. |
+| [Action Fusion](docs/features/action-fusion.md) | Native edit/write and apply_patch support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also covers nested Code/Notebook entry points. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
 | [Condense](docs/features/condense.md) | Bundles pi-condense 2.11.0 and uses its existing configuration. After each final reply, simplifies history before applying threshold-based summarization. Persists large outputs and supports paginated retrieval and summary usage display. |
 
 Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid fields fall back according to the configuration rules; the display layer does not rewrite user files. Set `enabled: false` to disable the display layer; filter the separate goal/todo/condense/vendor entries individually. Display options and defaults are maintained in the [configuration reference](docs/configuration.md). Condense uses `contextPrune` in Pi's `settings.json`.

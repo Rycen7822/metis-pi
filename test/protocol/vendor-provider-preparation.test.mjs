@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createEditToolDefinition, createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
 import { disableNetwork, modelNamed } from "../helpers/vendor-codex-provider.mjs";
 import { SEALED_WINDOW_ITEM } from "../helpers/vendor-codex-sessions.mjs";
 import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config-contract.js";
@@ -16,8 +17,12 @@ import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/dist/tool
 
 test.beforeEach(disableNetwork);
 
-test("fused native and patch schemas survive identical live/prewarm preparation across mode changes", async () => {
-  const definitions = [createNativeFusionTool("edit", "/tmp"), createNativeFusionTool("write", "/tmp"), createApplyPatchTool({})];
+for (const fusionEnabled of [true, false]) test(`native and patch schemas retain fusion enabled=${fusionEnabled} across live/prewarm mode changes`, async () => {
+  const definitions = [
+    fusionEnabled ? createNativeFusionTool("edit", "/tmp") : createEditToolDefinition("/tmp"),
+    fusionEnabled ? createNativeFusionTool("write", "/tmp") : createWriteToolDefinition("/tmp"),
+    createApplyPatchTool(fusionEnabled ? { runThenRun: () => async () => { throw new Error("schema-only test must not execute commands"); } } : {}),
+  ];
   const tools = definitions.map(({ name, description, parameters }) => ({ type: "function", name, description, parameters }));
   const original = JSON.stringify(tools);
   for (const executionMode of ["normal", "code", "notebook", "normal"]) {
@@ -32,6 +37,7 @@ test("fused native and patch schemas survive identical live/prewarm preparation 
     assert.deepEqual(functions.map(tool => tool.name), ["edit", "write", "apply_patch"]);
     for (const tool of functions) {
       const schema = tool.parameters.properties.then_run;
+      if (!fusionEnabled) { assert.equal(schema, undefined); continue; }
       assert.equal(schema.type, "object");
       assert.equal(schema.properties.command.type, "string");
       assert.equal(schema.properties.timeout.type, "number");

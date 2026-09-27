@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { executeFusion, validateThenRun } from "../../vendor/pi-codex-conversion/src/tools/action-fusion.ts";
 import { runNativeFusionCommand, runExecFusionCommand } from "../../vendor/pi-codex-conversion/src/tools/action-fusion-command.ts";
 import { createExecSessionManager } from "../../vendor/pi-codex-conversion/src/tools/exec/session-manager.ts";
-import { createNativeFusionTool } from "../../extensions/action-fusion.ts";
+import actionFusion, { createNativeFusionTool } from "../../extensions/action-fusion.ts";
 import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js";
 import { createNestedTools } from "../../vendor/pi-codex-conversion/dist/adapter/code-mode.js";
 import { normalizeCodexConversionConfig } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config.js";
@@ -73,7 +73,9 @@ for (const executionMode of ["code", "notebook"]) test(`${executionMode} nested 
   const sessions = createExecSessionManager({ bridgeBinaryPath: () => binary });
   t.after(() => sessions.shutdown());
   const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode, availableToolNames: [] }, sessions, tracker: createExecCommandTracker() };
-  const tools = createNestedTools({}, runtime, ctx);
+  const pi = { events: createEventBus(), on() {} };
+  actionFusion(pi);
+  const tools = createNestedTools(pi, runtime, ctx);
   const patch = tools.find(tool => tool.name === "apply_patch");
   const fused = tools.find(tool => tool.name === "apply_patch_then_run");
   assert.equal(toWireToolDefinition(patch).kind, "freeform");
@@ -81,7 +83,7 @@ for (const executionMode of ["code", "notebook"]) test(`${executionMode} nested 
   assert.ok(toWireToolDefinition(fused).input_schema.properties.then_run);
   const wire = tools.map(toWireToolDefinition);
   runtime.state.executionMode = executionMode === "code" ? "notebook" : "code";
-  assert.deepEqual(createNestedTools({}, runtime, ctx).map(toWireToolDefinition), wire, "mode switches retain the shared declaration and order");
+  assert.deepEqual(createNestedTools(pi, runtime, ctx).map(toWireToolDefinition), wire, "mode switches retain the shared declaration and order");
   const results = [];
   const context = { extensionContext: ctx, toolCallId: "nested", captureResult: result => results.push(result) };
   const signal = new AbortController().signal;
@@ -93,6 +95,30 @@ for (const executionMode of ["code", "notebook"]) test(`${executionMode} nested 
   assert.equal(result.details.metisActionFusion.command.exitCode, 9);
   assert.equal(readFileSync(result.details.metisActionFusion.command.fullOutputPath, "utf8"), "evidence");
   assert.equal(readFileSync(join(ctx.cwd, "new"), "utf8"), "new interface\n");
+});
+
+for (const executionMode of ["code", "notebook"]) test(`${executionMode} without fusion keeps ordinary patch and omits the fused entry`, async t => {
+  const ctx = fixture(t);
+  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode, availableToolNames: [] }, sessions: {}, tracker: createExecCommandTracker() };
+  const tools = createNestedTools({ events: createEventBus() }, runtime, ctx);
+  assert.equal(tools.some(tool => tool.name === "apply_patch_then_run"), false);
+  const patch = tools.find(tool => tool.name === "apply_patch");
+  assert.equal(toWireToolDefinition(patch).kind, "freeform");
+  await patch.invoke("*** Begin Patch\n*** Add File: plain\n+ordinary patch\n*** End Patch", { extensionContext: ctx, toolCallId: "plain", captureResult() {} }, new AbortController().signal);
+  assert.equal(readFileSync(join(ctx.cwd, "plain"), "utf8"), "ordinary patch\n");
+});
+
+test("disabled patch fusion rejects stale or injected then_run before changing files", async t => {
+  const ctx = fixture(t);
+  const patch = createApplyPatchTool();
+  assert.equal(patch.parameters.properties.then_run, undefined);
+  const input = "*** Begin Patch\n*** Add File: unexpected\n+must not be written\n*** End Patch";
+  for (const key of ["input", "patchText", "patch"]) {
+    assert.throws(() => patch.prepareArguments({ [key]: input, then_run: { command: "touch executed" } }), /Action Fusion is disabled/);
+  }
+  await assert.rejects(patch.execute("stale", { input, then_run: { command: "touch executed" } }, undefined, undefined, ctx), /Action Fusion is disabled/);
+  assert.equal(existsSync(join(ctx.cwd, "unexpected")), false);
+  assert.equal(existsSync(join(ctx.cwd, "executed")), false);
 });
 
 test("successful command runs once after mutation even if progress rendering fails", async (t) => {

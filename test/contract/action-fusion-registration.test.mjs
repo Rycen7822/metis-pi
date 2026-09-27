@@ -4,11 +4,59 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { disableNetwork } from "../helpers/vendor-codex-provider.mjs";
 
 test.beforeEach(disableNetwork);
 const fusionEntry = fileURLToPath(new URL("../../extensions/action-fusion.ts", import.meta.url));
+const vendorEntry = fileURLToPath(new URL("../../vendor/pi-codex-conversion/dist/index.js", import.meta.url));
+const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+for (const reverseOrder of [false, true]) test(`fusion entry controls native and conversion schemas with reverse load order=${reverseOrder}`, async t => {
+  const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-switch-"));
+  const prior = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = cwd;
+  let session;
+  const errors = [];
+  t.after(async () => {
+    try { await session?.extensionRunner.emit({ type: "session_shutdown" }); }
+    finally { session?.dispose(); if (prior === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = prior; rmSync(cwd, { recursive: true, force: true }); }
+    assert.deepEqual(errors, []);
+  });
+  const packages = disabled => [{ source: packageRoot, extensions: ["extensions/action-fusion.ts", "vendor/pi-codex-conversion/dist/index.js", ...(disabled ? ["-extensions/action-fusion.ts"] : [])] }];
+  const settingsManager = SettingsManager.inMemory({ packages: reverseOrder ? [] : packages(false) });
+  const events = createEventBus();
+  const resourceLoader = new DefaultResourceLoader({ cwd, agentDir: cwd, settingsManager, eventBus: events,
+    additionalExtensionPaths: reverseOrder ? [vendorEntry, fusionEntry] : [],
+    noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
+  });
+  const modelRuntime = await ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath: null, modelsStorePath: join(cwd, "models.json"), refreshOnCreate: false });
+  await resourceLoader.reload();
+  const loaded = await createAgentSession({ cwd, agentDir: cwd, settingsManager, modelRuntime, resourceLoader, sessionManager: SessionManager.inMemory(cwd) });
+  session = loaded.session;
+  assert.deepEqual(loaded.extensionsResult.errors, []);
+  await session.bindExtensions({ onError: error => errors.push(error) });
+  for (const disabled of reverseOrder ? [false] : [false, true, false]) {
+    if (!reverseOrder) { settingsManager.setPackages(packages(disabled)); await session.reload(); }
+    const tools = session.extensionRunner.getAllRegisteredTools().map(tool => tool.definition);
+    const patch = tools.find(tool => tool.name === "apply_patch");
+    assert.ok(patch, "conversion remains loaded when fusion is disabled");
+    assert.equal(Boolean(patch.parameters.properties.then_run), !disabled);
+    for (const name of ["edit", "write"]) assert.equal(Boolean(tools.find(tool => tool.name === name)?.parameters.properties.then_run), !disabled);
+    const availability = { enabled: false };
+    events.emit("metis:action-fusion-availability", availability);
+    assert.equal(availability.enabled, !disabled, "reload must not retain the previous entry's availability");
+    if (disabled) {
+      const input = "*** Begin Patch\n*** Add File: disabled-patch\n+ordinary patch still works\n*** End Patch";
+      const ctx = { cwd, sessionManager: session.sessionManager };
+      await assert.rejects(patch.execute("disabled", { input, then_run: { command: "exit 0" } }, undefined, undefined, ctx), /Action Fusion is disabled/);
+      assert.equal(existsSync(join(cwd, "disabled-patch")), false);
+      await patch.execute("plain", { input }, undefined, undefined, ctx);
+      assert.equal(readFileSync(join(cwd, "disabled-patch"), "utf8"), "ordinary patch still works\n");
+    }
+  }
+  assert.deepEqual(errors, []);
+});
 
 for (const foreignWrite of [false, true]) test(`real host registers native fusion and respects foreign write=${foreignWrite}`, async t => {
   const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-entry-"));

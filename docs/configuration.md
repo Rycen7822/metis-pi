@@ -169,11 +169,34 @@
 }
 ```
 
-只想关掉显示入口里的某一项时，也可以只在 `~/.pi/agent/settings.json` 里过滤扩展入口（`-` 前缀 = 强制排除），例如不要 goal：
+## 独立功能开关
 
-```jsonc
-{ "source": "git:git@github.com:Rycen7822/metis-pi.git", "extensions": ["-goal.ts"] }
+独立扩展通过 `~/.pi/agent/settings.json` 的 `packages` 过滤，不受 `metis-pi.json` 的显示总开关控制。`-` 后必须填写相对于包根目录的准确路径。例如关闭 goal 和全部 Action Fusion：
+
+```json
+{
+  "packages": [
+    {
+      "source": "git:git@github.com:Rycen7822/metis-pi.git",
+      "extensions": ["-extensions/goal.ts", "-extensions/action-fusion.ts"]
+    }
+  ]
+}
 ```
+
+修改现有安装项，保留其 `source`、其他包和过滤规则；执行 `/reload` 或重启 Pi 生效。移除对应排除项恢复默认加载；若没有其他过滤规则，可删除整个 `extensions` 字段。不要改成 `extensions: []`，空数组会关闭这个包的全部扩展。
+
+| 功能 | 排除项 |
+| --- | --- |
+| 整个显示层 | `-extensions/appearance.ts` |
+| goal | `-extensions/goal.ts` |
+| todo | `-extensions/todo.ts` |
+| condense 整体 | `-extensions/condense.ts` |
+| skill 输入 | 同时排除 `-extensions/skill-entry.ts`、`-extensions/skill-mux.ts` |
+| 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、转换层 apply_patch、Code/Notebook 的融合入口 |
+| 整个 Codex 转换层 | `-vendor/pi-codex-conversion/dist/index.js` |
+
+显示子项仍在 `metis-pi.json` 设置；压缩的 `contextPrune.enabled` 和 OCC 的 `contextPrune.opportunisticCompaction` 在 Pi `settings.json` 设置。`/pruner off` 关闭压缩但保留历史回读工具，排除 condense 入口才是完全禁用。Action Fusion 的开关与 condense 独立，细节见 [Action Fusion](features/action-fusion.md)。
 
 ## 验证
 
