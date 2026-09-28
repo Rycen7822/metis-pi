@@ -1,96 +1,53 @@
-# Working 行 / Header / Footer
+# Working 行、Header 与 Footer
 
-> 三块常驻 chrome：输入框上方的 Working 行、启动头、底部状态行。全部经宿主公开 widget/status 接口安装，可整体卸载。
+Working 显示本次交互进度，Header 显示运行版本，Footer 显示会话及工作区状态。配置键集中在 [配置](../configuration.md)，诊断字段见 [`/codex-ui`](diagnostics.md)。
 
-| | |
+## Working 与回合摘要
+
+交互从 `agent_start` 开始，到 `agent_settled` 结束；最终回复后的 condense 维护也包含在内。阶段为 `Working`、`Writing`、`Waiting for input`。
+
+- 安装 Working widget 成功后才隐藏宿主 loader，失败时退回 `setWorkingIndicator`，避免出现两行或完全丢失进度。
+- 时长每秒刷新；启用动画时默认 32 ms 一帧。可见 shimmer 只用于 truecolor，低色彩模式使用静态样式。
+- settle、关闭和重载清理旧计时器。交互总时长与每个 thinking 段的可测时长分别计算，见 [Thinking](thinking.md)。
+
+回合摘要按最终停止原因显示：
+
+| 原因 | 摘要 |
 | --- | --- |
-| 入口 | `extensions/appearance.ts` |
-| 实现 | `src/chrome/working.ts`、`src/chrome/header.ts`、`src/chrome/footer.ts`、`src/segments.ts` |
-| 数据快照 | `src/chrome/snapshots.ts`、`src/ui-metrics.ts`、`src/usage-ledger.ts`、`src/output-speed.ts`、`src/git-changes.ts` |
-| 安装 | `src/chrome/install.ts` |
-| 配置 | `working.*`、`footer.*` |
-| 诊断 | `/codex-ui` |
+| `stop` | `Worked` |
+| `error` | `Failed` |
+| `aborted` | `Interrupted` |
+| `length` | `Ended · output limit` |
+| 其它或未知 | `Ended` |
 
-## Working 行
+单个工具失败不必然表示整个交互失败。旧 v1 的失败标记可能仅来自工具错误，显示 `legacy status unverified`，不倒推整个交互失败。`summary.persist: true` 将摘要保存为 session custom entry；关闭持久化时只在当前界面临时显示。
 
-```
-• Working (3m 36s · thinking 24s · esc to interrupt) · read
-```
+## Header 与 Footer 布局
 
-- **相位**：`Working` / `Writing`（写作中）/ `Waiting for input`（等用户输入）；思考结束后细节里出现一次 `thought for Ns`。
-- **只在一次交互期间显示**：`agent_start` 打开、`agent_settled` 关闭（`setWidgetVisible(active)`）。
-- **安装方式**：公开的 above-editor widget（`ui.setWidget(WORKING_WIDGET_KEY, factory, { placement: "aboveEditor" })`）。装成功后**才**隐藏宿主原生 loader 行（`ui.setWorkingVisible(false)`）；如果 widget 安装失败，则退回 `ui.setWorkingIndicator`，**绝不出现两行 Working**。
-- **彗尾 shimmer**：亮头 + 连续渐隐尾，扫描速度 `SHIMMER_CELLS_PER_FRAME = 0.25`（32ms 一帧 → 每格 128ms）。
-- **两个定时器**：计时由交互时钟（1 秒）驱动，动画由自己的 `working.animation` 定时器（`animationIntervalMs`，默认 32，钳制 32..1000）驱动；settle 后都归零。
-- **动画门槛**：`truecolor` 与 `ansi256` 开启动画；`ansi16` / `none` 静态。
-- 动画帧不扫会话、不读盘、不查额度（实测约 0.003ms/帧）。
+Header 使用实际运行的 Pi 和 metis-pi 版本。Footer 依次显示模型、推理等级、provider、cwd/分支/改动、上下文、累计 I/O、缓存和速度；窄终端按完整字段换行，不随意丢弃统计。
 
-## Header
+Footer 元数据独立于编辑器，使用其它编辑器时仍可显示。不读取 auth 内容，不在右侧渲染 quota；转换层已有的左侧状态仍可显示。
 
-1–2 行极简身份行，显示**运行时读到的真实版本号**（本插件版本 + 宿主 Pi 版本），不是硬编码。
+Git 刷新默认每 2 秒一次并作 250 ms 防抖，只在已安装且可见的 Footer、启用改动显示并有 cwd 时运行。隐藏或 shutdown 后停止。上下文归一化结果按生命周期失效缓存，避免每帧遍历历史。
 
-## Footer
+## 统计口径
 
-```
-模型id · 推理深度 · provider · 目录 (分支) +A -D · ctx 已用/容量 · 占用% · ↑input ↓output · cache 命中率
-```
-
-- **布局**：编辑区结束后只有一组 footer 信息；按模型 id → 推理深度 → provider → 当前路径（分支、变更量）→ 上下文窗口占用 → 会话 I/O → cache 排列。启用时 `tok/s` 放在 cache 之后。
-- **窄屏**：路径先缩短，字段按同一顺序整组换行，不因为输入框宽度缩小而挤掉后续的 I/O/cache。
-- `composer.metadata` 控制模型、推理深度、provider 和上下文信息；不依赖编辑区背景色或 `belowEditor` widget。
-- **额度**：右侧 footer 不读取或显示 Codex 额度；左侧 `Codex adapter` 状态行由 vendor 扩展提供，仍通过宿主 extension statuses 显示。
-- **未知值显示 `—`**，从不伪造为 0。
-- Git 刷新节奏：**2 秒轮询**（`GIT_CHANGES_INTERVAL_MS`）+ agent/tool 活动触发的 **250ms 去抖**（`GIT_CHANGES_DEBOUNCE_MS`）。仅在 TUI footer 安装成功、`footer.showChanges` 开启且有工作目录时启动；隐藏、重载或关闭后停止，不在不可见时后台采样。
-- 上下文用量由 `HostData` 缓存归一化结果；消息、模型、压缩及会话生命周期事件使缓存失效，同时校验宿主实时 session/leaf/model。Working 动画帧可复用结果，不逐帧重建历史投影；未知值仍为未知，临时读取失败不缓存成空成功。
-
-## 统计口径（三个范围不混淆）
-
-| 显示 | 口径 | 来源 |
-| --- | --- | --- |
-| `ctx …` | **当前上下文占用**（宿主实时接口） | `ctx.getContextUsage()` |
-| `Σ` | **本 session 已记录的标准 usage 累计**（assistant 消息 + compaction / branch_summary；本插件自己的摘要 CustomEntry 不计回） | `src/usage-ledger.ts` |
-| `cache(last)` | 活动分支**最近一条已确认请求**的命中率 `cacheRead / (input + cacheRead + cacheWrite)`；session 加权比率在 `/codex-ui` | 同上 |
-| `↑` / `↓` | 沿用 Pi 归一化口径的 `usage.input` / `usage.output`（input **不含**缓存） | 同上 |
-| `N tok/s` | **当前或最近一次 assistant 回复**的 `usage.output ÷ 观测输出窗口`（首个→末个流式 delta，**排除 TTFT**；无非流式 delta 时退回 `message_start`→`message_end`） | `src/output-speed.ts` |
-
-`tok/s` 的隐藏条件：观测窗口 < 300ms、没有已确认的 output token、或速率越界时**整段不显示**（不是显示 0）。`/codex-ui` 会同时给出 token 数与窗口长度，并用 `scope` 区分流式中的实时值与 `message_end` 的确认值。
-
-### `+A -D`：当前工作树相对 HEAD 的未提交改动
-
-**是当前样本，不是累计量**；加过又删掉的按最终状态显示，不累计 churn。
-
-- 每次读取重新采样：`git diff --numstat HEAD`（暂存 + 未暂存从工作树侧计一次，不重复叠加）加上未跟踪、未忽略的文本文件行数。
-- 启动时已存在的 WIP **立即显示**；commit / 撤销后下一次读取数字随之下降，干净时归零；反复刷新同一状态不会累积。
-- additions 与 deletions 分开显示绝对行数，绝不压成净变化；数字不做 k/M 缩写（`formatExactCount`）。
-- rename 由 git 的 diff 判定（按新路径计入），删除按整文件行数计入。
-- 未跟踪文件按 ≤200 个、单个 ≤256 KiB 流式计数（按 size+mtime 缓存，未变不重读；二进制跳过）；git 调用 5 秒超时 + `--no-ext-diff --no-textconv --no-optional-locks`；读取失败**保留上一次正确数字**而不是清零。
-- 无 HEAD（尚未 commit，HEAD 仍是指向不存在分支的活跃 symbolic ref）时与空树比较，已 `git add` 的新文件按工作树内容计入；空树 OID 按 `git rev-parse --show-object-format` 查询，查询失败按读取失败处理，**不猜测** SHA-1/SHA-256。HEAD 查询超时、一般 git 错误或损坏的 ref 均保留上次数字，不会退回空树造成数字暴涨。
-- 只读：不写用户的 index / 工作区 / 对象库，不创建临时目录，不触发 diff 驱动或 smudge 过滤器。
-
-对账方法：`/codex-ui` 的 `git-changes` 行给出同口径总量、文件数、读取次数与基线（HEAD 或空树）；也可直接用 `git diff --numstat HEAD` 核对。
-
-## 代码位置
-
-| 关注点 | 位置 |
+| 字段 | 来源与计算 |
 | --- | --- |
-| Working 组件与相位 | `src/chrome/working.ts`（`INTERRUPT_HINT`、`SHIMMER_CELLS_PER_FRAME`、`createWorkingComponent`） |
-| Header | `src/chrome/header.ts` 的 `createHeaderComponent` |
-| Footer 字段顺序与换行 | `src/chrome/footer.ts`（`wrapFields`、`formatExactCount`） |
-| 通用分段排版 | `src/segments.ts`（`Segment`、`formatCount`、`clipLine`、窄屏降级） |
-| 快照装配 | `src/chrome/snapshots.ts` |
-| 交互时钟 | `src/ui-metrics.ts` |
-| usage 账本 | `src/usage-ledger.ts` |
-| 输出速度 | `src/output-speed.ts` |
-| 工作树改动量 | `src/git-changes.ts` |
-| 安装/卸载 | `src/chrome/install.ts` |
+| context | 实时 `getContextUsage()`，表示当前上下文占用 |
+| `Σ` I/O | 当前 session 分支的标准 assistant、compaction 和 branch summary 用量；不把本插件的摘要 custom entry 再计一次 |
+| cache | 最近一次已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；`/codex-ui` 另报 session 加权值 |
+| input | 不把缓存读取重复算为新输入 |
+| tok/s | 输出 token 除以首个至最后一个输出 delta 的时间，排除 TTFT；缺少 delta 时回退消息时间。窗口不足 300 ms、未知或无效时隐藏 |
 
-## 不变量与已知限制
+这些字段分别描述当前上下文、累计用量和最近请求，不能互相替代；condense 额外摘要用量单列，见 [历史压缩](condense.md)。
 
-- footer 数字**只读**：不写 git 状态、不读额度凭据（见 [commands.md](../commands.md) §只读保证）。
-- 三个 usage 范围（ctx / Σ / last）**永不混用**，`/codex-ui` 逐一标注来源。
-- 未跟踪文件与 git 的 diff 不同：超过 200 个或单文件超过 256 KiB 的未跟踪文件、以及未跟踪的二进制文件不计入（跟踪文件的 diff 不设此上限）。
-- 窄屏按字段换行；`footer.details: false` 隐藏会话 I/O 与 cache，`footer.showSpeed` 单独控制输出速度。
+## Git `+A -D`
 
-## 验证
+显示当前工作树相对 HEAD 的未提交改动：已暂存与未暂存内容合并比较一次，加上未被忽略的未跟踪文本文件。它不是历次编辑量，也不是新增减删除后的单一净值。
 
-`test/core/ui-metrics.test.mts`、`test/core/usage-ledger.test.mts`、`test/core/output-speed.test.mts`、`test/core/git.test.mts`、`test/resource/git-tracker.test.mts`、`test/io/git-changes.test.mts`、`test/core/working.test.mts`、`test/core/chrome.test.mjs`、`test/contract/appearance.test.mjs`、`test/contract/host-surface.test.mjs`、`scripts/pty-verify.mjs`（真实 TUI 的 Working 行/时序/摘要）。
+- 未跟踪文件最多扫描 200 个，每个最多 256 KiB，按文件大小和修改时间缓存；二进制跳过。已跟踪文件不使用这个扫描上限，重命名交给 Git 处理。
+- Git 查询超时为 5 秒，关闭外部 diff、textconv 和可选锁。失败时保留上次可用值，不凭空归零。
+- 无初始提交时，只有确认 symbolic HEAD 未出生才回退空树；按仓库实际哈希格式查询，不猜测固定 SHA。查询不写 Git 对象或临时文件。
+
+实现集中在 `src/chrome/`与 `src/turn-summary.ts`；显示与持久化所有权见 [架构](../architecture.md)，实测证据见 [VALIDATION](../../VALIDATION.md)。

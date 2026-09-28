@@ -1,46 +1,38 @@
 # 配置参考
 
-本页的显示配置集中在一个可选 JSON 文件里。**渲染路径永远不会读这个文件**（读取只发生在扩展激活时一次），**显示层不改写用户文件**。独立 [condense](features/condense.md) 沿用 Pi `settings.json` 的 `contextPrune`；其 `/pruner` 设置命令会持久化该命名空间。
+## 配置归属
 
-## 文件位置
-
-```
-<agent dir>/metis-pi.json
-```
-
-`<agent dir>` 的解析顺序（`extensions/appearance.ts` 的 `getAgentDir`）：
-
-1. 环境变量 `PI_AGENT_DIR`（本扩展自己的覆盖项）
-2. 宿主公开接口 `Pi.getAgentDir()` —— 宿主自己的环境变量是 `PI_CODING_AGENT_DIR`，所以设那个也能生效
-3. `$HOME/.pi/agent`
-
-注意 1 与 2 是两个不同的变量名；只设 `PI_CODING_AGENT_DIR` 时走 2，只设 `PI_AGENT_DIR` 时走 1。
-
-## 读取时机与生效方式
-
-| 时机 | 读什么 | 代码 |
+| 功能 | 配置位置 / 开关 | 生效方式 |
 | --- | --- | --- |
-| 扩展激活时（= pi 启动加载扩展） | 整份配置 | `src/extension.ts` 的 `loadConfig(bindings.getAgentDir?.(), bindings.readFile)` |
-| 同一次激活，另读一次 | 仅 `writePreview`（写预览行预算） | `extensions/appearance.ts` 的 `bootWritePreview` |
+| appearance 显示 | `<agentDir>/metis-pi.json` | 启动激活时读取，插件不改写；改后重启 Pi。 |
+| condense / OCC | Pi `settings.json` 的 `contextPrune` | `/pruner settings` 可写入设置，见 [condense](features/condense.md)。 |
+| dynamic-agents | `<agentDir>/dynamic-agents.json` | 下一次正式 run 读取；配置缺失时不激活，见 [动态指令](features/dynamic-agents.md)。 |
+| Codex 转换层 | `pi-codex-conversion.json` | 通过 `/codex` 管理所选范围，见 [转换层](vendor-codex-conversion.md)。 |
+| goal / todo / skill / Action Fusion 等独立入口 | Pi 包安装项的 `extensions` 过滤 | `/reload` 或重启后生效，见本页“独立功能开关”。 |
 
-**改配置后需要重启 pi 才生效。** 写预览预算也是启动时读一次后固定（早期版本每个 write 调用重读，且只认 `Pi.getAgentDir()` 一条路径，会与启动时读到的配置分叉）。
+`metis-pi.json` 的 `enabled` 只控制显示层。各功能的持久数据与写入行为见 [命令与路径](commands.md)。
 
-## 加载语义（重要）
+## 显示配置的路径与读取
+
+显示配置使用 `<agentDir>/metis-pi.json`。`extensions/appearance.ts` 按以下顺序解析目录：
+
+1. `PI_AGENT_DIR`：本显示入口的显式覆盖项。
+2. Pi 的 `getAgentDir()`：跟随宿主 `PI_CODING_AGENT_DIR`。
+3. `$HOME/.pi/agent`。
+
+激活时读取整份配置，write 预览另在启动时固定行预算；渲染帧不读配置文件。修改显示配置后重启 Pi。仅设置 `PI_AGENT_DIR` 不等于更改所有独立扩展的宿主 agent 目录。
+
+## 加载与错误处理
 
 | 情况 | 结果 |
 | --- | --- |
-| 文件不存在 | 全部默认值，`present: false`，无问题记录 |
-| JSON 解析失败 | **全部默认值**（不是部分） |
-| 根不是对象 | 全部默认值 |
-| 某个 section 不是对象（如 `"thinking": 5`） | 该 section 全部默认值，其余 section 照常 |
-| 某个键类型错 / 取值非法 | 该项回退默认值，并记录一条人类可读的 `problem` |
+| 文件缺失、JSON 解析失败或根不是对象 | 使用默认配置。 |
+| 某个 section 不是对象 | 该 section 回退，其余 section 照常处理。 |
+| 某项类型/值非法 | 按字段规则回退，并在加载结果中记录 problem。 |
+| `thinking.peekLines`、`working.animationIntervalMs` 越界 | 静默钳制到边界。 |
+| `writePreview.rows`、`fullscreen.marginX`、`fullscreen.minWidth` 越界 | 回退默认并记录 problem。 |
 
-**已知限制**：`loadConfig` 返回的 `problems` 数组目前**没有任何地方展示**（只有 `test/core/config.test.mts` 消费它）。也就是说写错配置是**静默回退**的——不会警告、不会报错、不会出现在 `/codex-ui` 里。要确认某个值有没有生效，请对照 `/codex-ui` 里报告的组件真实状态。
-
-回退语义分两类，别混淆：
-
-- **静默钳制**（越界不报问题，直接夹到边界）：`thinking.peekLines`、`working.animationIntervalMs`
-- **越界即回退默认**（并记 problem）：`writePreview.rows`、`fullscreen.marginX`、`fullscreen.minWidth`
+当前加载问题没有面向用户的统一警告输出，错误配置可能静默回退。使用 `/codex-ui` 的有效配置与组件状态核对，不能仅凭文件内容判断已生效。默认值和校验规则由 `src/config.ts` 维护。
 
 ## 键表
 
@@ -48,7 +40,7 @@
 
 | 键 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `enabled` | bool | `true` | 总开关 |
+| `enabled` | bool | `true` | appearance 显示总开关；不控制独立功能入口 |
 
 ### thinking —— 思考块
 
@@ -125,35 +117,6 @@
 | `glyphs.textPresentation` | bool | `true` | 给 `✔ ✖ ✓ ✗ ⚠` 这类符号补 U+FE0E，防止 emoji 字体画宽压住右邻字符 |
 | `glyphs.include` | string[] | `[]` | 追加字符；每项必须是单个非 ASCII 字符（否则记 problem 并跳过）、自动去重、最多 32 项 |
 
-## 颜色等级判定（`src/palette.ts` 的 `resolveColorContext`）
-
-按顺序命中即停，决定了用真彩、256 色、16 色还是**完全无色**：
-
-| 顺序 | 条件 | 结果 |
-| --- | --- | --- |
-| 1 | `NO_COLOR` 已设 | `none` |
-| 2 | `FORCE_COLOR` = `"0"`/`"false"` | `none` |
-| 3 | `FORCE_COLOR` = `"1"`/`"2"` | 终端支持真彩则 `truecolor`，否则 `ansi256` |
-| 4 | `FORCE_COLOR` = `"3"` | `truecolor` |
-| 5 | 宿主 `getCapabilities().trueColor` 为真 | `truecolor` |
-| 6 | `COLORTERM` 匹配 `truecolor`/`24bit` | `truecolor` |
-| 7 | `WT_SESSION` 已设，或 `TERM_PROGRAM=WindowsTerminal` | `truecolor` |
-| 8 | `TERM` 含 `256color` | `ansi256` |
-| 9 | 兜底 | `ansi16` |
-
-降级时不会丢失布局：diff 底色在 256 色用 `22`/`52`，16 色只保留前景色；`none` 下所有装饰字符退化为 ASCII 等价物（例如 rail 用 `|`）。
-
-颜色等级在**会话启动时解析一次并缓存**（`extensions/appearance.ts` 的 `colorLevelOnce`），中途改环境变量不会生效。
-
-## 环境变量
-
-| 变量 | 作用域 | 说明 |
-| --- | --- | --- |
-| `PI_AGENT_DIR` | 本扩展 | 覆盖 agent 目录（配置文件与 auth 都从这里找） |
-| `PI_CODING_AGENT_DIR` | 宿主 pi | 宿主自己的 agent 目录变量，经 `Pi.getAgentDir()` 间接生效 |
-| `PI_CODEX_TODO_PATH` | codex-todo | 整体搬迁任务存储目录 |
-| `NO_COLOR` / `FORCE_COLOR` / `COLORTERM` / `WT_SESSION` / `TERM_PROGRAM` / `TERM` | 本扩展 | 见上方颜色等级链 |
-
 ## 示例
 
 ```jsonc
@@ -169,9 +132,38 @@
 }
 ```
 
+## 颜色等级
+
+按顺序命中即停，决定了用真彩、256 色、16 色还是**完全无色**：
+
+| 顺序 | 条件 | 结果 |
+| --- | --- | --- |
+| 1 | `NO_COLOR` 已设 | `none` |
+| 2 | `FORCE_COLOR` = `"0"`/`"false"` | `none` |
+| 3 | `FORCE_COLOR` = `"1"`/`"2"` | 终端支持真彩则 `truecolor`，否则 `ansi256` |
+| 4 | `FORCE_COLOR` = `"3"` | `truecolor` |
+| 5 | 宿主 `getCapabilities().trueColor` 为真 | `truecolor` |
+| 6 | `COLORTERM` 匹配 `truecolor`/`24bit` | `truecolor` |
+| 7 | `WT_SESSION` 已设，或 `TERM_PROGRAM=WindowsTerminal` | `truecolor` |
+| 8 | `TERM` 含 `256color` | `ansi256` |
+| 9 | 兜底 | `ansi16` |
+
+降级时保留布局：diff 底色在 256 色用 `22`/`52`，16 色只保留前景色；无色模式使用组件提供的无色样式，例如 thinking rail 使用 `|`。
+
+颜色等级由 `src/palette.ts` 解析，并在当前扩展实例缓存。修改环境变量后重启 Pi，以便重新探测。
+
+## 环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `PI_AGENT_DIR` | 本显示入口的配置目录覆盖。 |
+| `PI_CODING_AGENT_DIR` | Pi 宿主 agent 目录；独立功能按各自说明跟随该目录。 |
+| `PI_CODEX_TODO_PATH` | 搬迁 todo 存储目录。 |
+| `NO_COLOR` / `FORCE_COLOR` / `COLORTERM` / `WT_SESSION` / `TERM_PROGRAM` / `TERM` | 影响上面的颜色能力判定。 |
+
 ## 独立功能开关
 
-独立扩展通过 `~/.pi/agent/settings.json` 的 `packages` 过滤，不受 `metis-pi.json` 的显示总开关控制。`-` 后必须填写相对于包根目录的准确路径。例如关闭 goal 和全部 Action Fusion：
+独立扩展通过 Pi agent 目录（默认 `~/.pi/agent`）下 `settings.json` 的 `packages` 过滤，不受 `metis-pi.json` 的显示总开关控制。`-` 后必须填写相对于包根目录的准确路径。例如关闭 goal 和全部 Action Fusion：
 
 ```json
 {
@@ -199,8 +191,6 @@
 
 显示子项仍在 `metis-pi.json` 设置；压缩的 `contextPrune.enabled` 和 OCC 的 `contextPrune.opportunisticCompaction` 在 Pi `settings.json` 设置。`/pruner off` 关闭压缩但保留历史回读工具，排除 condense 入口才是完全禁用。Action Fusion 的开关与 condense 独立，细节见 [Action Fusion](features/action-fusion.md)。
 
-## 验证
+## 实现与验证
 
-`test/core/config.test.mts` 覆盖：无文件、坏 JSON、部分 section、越界值、`glyphs.include` 清洗、默认值形状。
-
-独立 [dynamic-agents](features/dynamic-agents.md) 使用 `<agentDir>/dynamic-agents.json`，配置不存在时不激活。它按当前运行的模型选择全局指令，不属于显示配置或 `contextPrune`。
+显示配置见 `src/config.ts` 和 `extensions/appearance.ts`；已有 `test/core/config.test.mts` 检查默认值、坏 JSON、分区回退、范围与字符清洗。命令与实测范围分别见 [开发说明](development.md) 和 [VALIDATION](../VALIDATION.md)。

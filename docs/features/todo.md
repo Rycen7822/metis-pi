@@ -1,103 +1,53 @@
-# codex-todo 任务子插件
+# Todo 任务列表
 
-> 带常驻输入框上方面板与子任务树的磁盘持久化任务列表。融合 rpiv-todo（面板工程）、pi-goal-x（长任务推进）、pi-agent-extensions todos（持久化与认领）。
+`/todos` 打开或恢复任务面板。模型通过 `todo` 工具维护任务树；任务数据持久化在项目内，多个会话通过锁协调写入。诊断及清理命令见 [`/todos-doctor`](diagnostics.md)。
 
-| | |
+## 面板与列表生命周期
+
+面板默认显示 3 行，优先保留待办任务；完整列表可展开。展开状态持久化，右键按下可隐藏面板，之后用 `/todos` 恢复；不注册独立快捷键。
+
+活动更新保持面板高度，显式展开才调整可见范围。没有额外刷新定时器；宿主渲染时检查文件指纹（设备、inode、大小、mtime、ctime），同时处理宽度、主题和数据变化。
+
+| 情况 | 行为 |
 | --- | --- |
-| 入口 | `extensions/todo.ts`（第三个扩展入口） |
-| 实现 | `src/todo/model.ts`（纯模型）`src/todo/store.ts`（磁盘）`src/todo/tools.ts`（模型侧工具）`src/todo/widget.ts`（面板）`src/todo/commands.ts`（命令） |
-| 工具 | `todo`（单工具 + `action` 分发） |
-| 命令 | `/todos`、`/todos-doctor` |
-| 存储 | `<cwd>/.pi/codex-todos/tasks.json`（可用 `PI_CODEX_TODO_PATH` 搬迁） |
+| 当前列表还有未完成项，再添加任务 | 加入当前列表 |
+| 当前列表全部 completed/skipped 后，再添加任务 | 开始新列表，编号从 1 重启；旧路径引用失效 |
+| 当前界面看到列表完成 | 可继续显示完成结果 |
+| 下一次真实用户输入，包括 steer/follow-up | 折叠并隐藏已完成列表；单纯 `turn_start` 不触发 |
+| 历史列表过期 | 按 `gcDays` 清理，默认 7 天；可用 doctor 的 `gc` 显式执行 |
 
-## 常驻面板
+## 编号、依赖和完成条件
 
-```
-Todos 2/5 done
-○ #1  重构 store
-◐ #2  补测试
-+1 more (1 completed, 0 pending)
-```
+用户和模型使用层级路径，例如 `#1`、`#1.1`；可省略 `#`，顶层可用数字。最多 4 层、15 个任务。存储 ID 不作为展示编号；仅存在 `blockedBy` 依赖时额外显示路径列。
 
-- 标题 `Todos N/M done` + 树形行；状态符 `○ ◐ ✓ ✗ ⚠︎`（`src/todo/model.ts` 的 `TASK_GLYPHS` / `taskGlyph`，**只有存在 `blockedBy` 时才**显示层级路径列）。
-- 默认显示 **3 行任务**，超出时尾部折叠成汇总行 `+N more (a completed, b pending)`：**先丢已完成、再截断未完成**（pending 优先保留）。
-- **左键单击任意行**展开完整列表（汇总行消失、标题变 `▴ · click to collapse`），再点收回三行视图；展开态**写盘**，重启保留。
-- **右键（按下即触发）单击任意行**手动隐藏面板（隐藏态写盘，重启仍隐藏）；再执行一次 `/todos` 即恢复。
-- **无键盘快捷键**（0.17.3 起移除原 `ctrl+shift+t`），交互全部走鼠标。右键用"按下"是因为 Warp 等终端会吃掉右键松开事件。
-- 首帧锁定高度、实时更新不会缩行（防终端跳动）；显式展开/收起才允许改高。不建立刷新定时器；主动变更请求重绘，宿主渲染时按文件 dev/inode/size/mtime/ctime 指纹检查外部编辑。未变时复用解析快照与未着色任务行，仍响应宽度、会话、回合、折叠和主题变化。
+父子关系由 `parentId` 保存，每项状态独立。完成所有子项不会自动完成父项；完成父项前必须处理未完成子项。移动任务检查循环，依赖的添加和移除检查环；skip 按子树级联。
 
-## 列表生命周期
+完成任务必须给出非空 evidence，但它仍是模型的 **UNTRUSTED claim**。工具不会证明自然语言描述属实。只有显式提供的 `evidenceFiles` 才检查路径是否存在；不会从任意 evidence 文本中自动提取并验证文件路径。
 
-- **默认新建**：对一个已完成（全部 complete/skipped）的列表再 `add`，会**开一张新列表**——旧任务清空，绝不把历史任务追加到新工作后面。
-- 只有列表**还有未完成任务**时才追加（"非必要不追加"）。已完成列表本身就是历史，`gcDays`（默认 7）会回收；store 只保存**正在做的那张列表**。
-- 每次新建都会明确回报：`(new list: M finished task(s) cleared; ids restart at #1 — earlier #id references are void)`——这一句就是给模型的"旧引用作废"提示。
-- **"刚完成"只对本会话亲眼看到完成的那些任务成立**：store 按 workspace 落盘、重启后 turn 计数从 0 重来；若不看完成时刻，上次会话已做完的列表每次启动都会重新弹出（0.19.1 修掉的就是这个）。
-- 收起的触发信号是**真正的用户 prompt**（宿主 `input` 事件）：任何用户输入（新 prompt、agent 干活途中打字的 steer、排队的 follow-up）一到就折叠并刷新可见性，全部完成的面板随之消失。**不用**宿主的 `turn_start`——它的粒度是模型往返，会在同一次请求内就折叠。
+## 工具与认领
 
-## 任务编号（层级路径）
+`todo` 使用 `action` 选择操作：
 
-| 概念 | 规则 |
+| action | 用途 |
 | --- | --- |
-| 路径 | 顶层 `#1` 起，子任务 `#1.1` / `#1.2`，孙辈 `#1.1.1`，**最多 4 层**（`MAX_DEPTH`） |
-| 每张列表 | 都从 `#1` 重新开始（内部数字 id 仅用于存储，从不出现在界面或工具输出里） |
-| 工具入参 | 同一套路径：`"1"`、`"1.2"`，`#` 可省；顶层也接受数字 |
-| 找不到时 | 错误列出当前所有路径，例如 `task #2 not found — current paths: #1, #1.1`（便于模型自我纠正） |
-| 规模上限 | `MAX_TASKS` = 15 |
+| `list` / `add` | 查看列表，或用 `tasks` 平铺数组批量添加；通过 `parentId` 指定父项 |
+| `update` | 修改标题或父项；`parentId: null` 移到顶层 |
+| `complete` / `skip` / `reopen` | 提交完成证据、跳过或重新打开 |
+| `addBlockedBy` / `removeBlockedBy` | 添加或移除依赖 |
+| `claim` / `release` | subagent 认领与释放 |
 
-## 子任务树与完成门禁
+认领将任务置为进行中；已有认领不会被普通请求覆盖，显式 `force` 才允许接管。工具不凭认领或证据文本自动判断实际执行是否完成。
 
-- 模型提交**扁平** `[{title, parentId}]`；显示层直接读取模型生成的深度优先任务行，移动任务后按实际父子关系计算缩进，不依赖创建顺序。
-- 每行显示任务自身的持久化状态；子任务结束不会自动完成父任务，父任务仍需显式 `complete`。不再维护无人消费的另一套派生状态树。
-- `complete` 默认**门禁**：存在未完成子任务，或缺少非空证据时会被拒绝；若证据里出现文件路径，会检查文件**真实存在**（`src/todo/tools.ts` 用 `existsSync`，相对路径按 cwd 解析）。
-- 证据记为 **UNTRUSTED claim**（记录文本，不代表已核实语义）。
-- `blockedBy` 支持增量增删（`addBlockedBy` / `removeBlockedBy`），**waits-for 环检测**拒绝成环；`skip` 级联留痕。
-- 移动/改父时会检测环（`move: #1.2 is a descendant of #1.1 (cycle)`）。
+## 存储与恢复
 
-## subagent 认领
+状态、设置和锁默认位于 `<cwd>/.pi/codex-todos/`，分别为 `tasks.json`、`settings.json`、`tasks.lock`；`PI_CODEX_TODO_PATH` 可指定目录。写入使用进程内队列、文件锁和原子替换；锁以 `wx` 和 0600 权限创建，TTL 为 30 分钟，过期锁在取得写锁时归档处理。面板显示设置单独保存。
 
-`claim` / `release`（支持 `force` 夺取）：认领即置 `in_progress`；跨进程写操作由 `<cwd>/.pi/codex-todos/tasks.lock` 保护（`0600` + `wx` 独占创建，**TTL 30 分钟**，过期锁自动归档成 `stale-lock-<session>-<at>.json`）。被他人认领时 `claim` 报错并提示 `retry with force to take it over`。
+- 状态 JSON 损坏或结构无效时，读取会尝试归档为 `tasks.json.bak-*`，再按空状态恢复；权限和普通 I/O 错误直接报告，不冒充损坏或空列表。
+- 磁盘不可用时面板显示不可用状态，恢复后可继续读取。
+- `/todos-doctor` 的状态读取也可能触发损坏归档；`gc` 还可能写回清理结果，不能将整组命令视为只读。
 
-## 存储与损坏处理
+## 安装边界
 
-- `<cwd>/.pi/codex-todos/tasks.json`，带 `version` 字段、**原子写**。
-- 损坏（JSON 解析失败或结构不合法）→ 归档成 `tasks.json.bak-<ts>` 并空载，**绝不让会话崩溃**；`/todos-doctor` 可查。
-- 权限或 I/O 错误不视为缺失/损坏，不归档文件或缓存为空任务；已显示的面板明确显示不可用，并在下一次成功读取时恢复。
-- `gcDays` 默认 7，清理已完成列表。
+外部 codex-todo 或同名工具可能与内置入口冲突。启动警告只提示冲突，不会自动禁用对方的工具或存储；应通过 Pi 包过滤保留一个 owner。禁用本包入口使用 `-extensions/todo.ts`，保留其它包和已有过滤规则，见 [配置](../configuration.md)。
 
-## 模型侧工具行为
-
-单 `todo` 工具 + `action` 分发（`list` / `add` / `update` / `complete` / `skip` / `reopen` / `claim` / `release` / `addBlockedBy` / `removeBlockedBy`）：
-
-- 校验错误**抛出并附纠正提示**（让模型自我修正）。
-- **无变更返回 `No change: …` 成功结果**（防重试循环），例如 `No change: nothing to update (pass title and/or parentId)`。
-
-## 撞名（部署注意）
-
-另有两个同名扩展会抢占工具名 `todo` 与命令 `/todos`：mitsuhiko/agent-stuff 的 `extensions/todos.ts`（文件式 `.pi/todos/*.md`）与 pi-agent-extensions 的 `extensions/todos/index.ts`。**必须禁用其一**：
-
-- 工具名冲突是**静默后写覆盖**；命令冲突会退化成 `/todos:2`——不要靠运气。
-- 禁用方式：在 `~/.pi/agent/settings.json` 的 `packages` 中修改对应包的 `extensions` 数组。禁用本包 todo 用 `"-extensions/todo.ts"`；禁用 agent-stuff 的 todo 才用 `"-extensions/todos.ts"`；pi-agent-extensions 对应 `"-extensions/todos/index.ts"`。`-` 后为相对于各自包根目录的准确路径，修改后执行 `/reload` 或重启 Pi。
-- 本扩展检测到工具名被占时**只警告一次、不刷屏**；store 与命令仍然可用。
-- 存储目录刻意不同名（`.pi/codex-todos`），双装过渡期互不踩数据；迁移旧列表用 `todo` 工具的 `add` 把 `.pi/todos/*.md` 内容转成任务即可。
-
-## 代码位置
-
-| 关注点 | 位置 |
-| --- | --- |
-| 任务模型（纯函数，无 fs / 无 pi / 无时间源） | `src/todo/model.ts`（`TASK_GLYPHS`、`taskGlyph`、`MAX_TASKS`、`MAX_DEPTH`、`completionBlock`、`startNewList`、`pathOf`、`taskRows`） |
-| 磁盘 store | `src/todo/store.ts`（`TODO_DIR_NAME`、`TODO_STATE_FILE`、`TODO_LOCK_FILE`、`LOCK_TTL_MS`、`DEFAULT_GC_DAYS`） |
-| 工具 | `src/todo/tools.ts` |
-| 面板 widget | `src/todo/widget.ts` |
-| 命令 | `src/todo/commands.ts` |
-| 入口接线 | `extensions/todo.ts` |
-
-## 不变量与已知限制
-
-- 面板"刚完成"的可见性只在**本会话**可靠；这是 turn 计数从 0 重来的必然结果，不是 bug。
-- 编号在**同一张列表内**唯一：新建列表会复用 `#1`，所以那一刻必须靠工具回报的提示告知模型旧引用作废。
-- 证据是 UNTRUSTED claim：只做"非空 + 文件存在"级别的检查，不核验内容是否符合语义。
-- 最多 4 层、15 个任务：超限直接拒绝而不是静默截断。
-
-## 验证
-
-`test/core/todo-model.test.mts`、`test/io/todo-store.test.mts`、`test/contract/todo-tools.test.mts`、`test/core/todo-rows.test.mts`、`test/contract/todo-widget.test.mts`、`test/contract/todo-entry.test.mts`；`scripts/pty-verify.mjs` 覆盖真实 TUI 的面板展开/收起、`+N more`、完成后收起。
+入口为 `extensions/todo.ts`，工具、存储与面板位于 `src/todo/`。上游归属见根目录 [NOTICE](../../NOTICE)；验证范围见 [VALIDATION](../../VALIDATION.md)。

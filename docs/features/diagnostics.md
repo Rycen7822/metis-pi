@@ -1,66 +1,49 @@
-# 诊断命令：`/codex-ui` 与 `/todos-doctor`
+# 诊断与排查
 
-> 两个只读命令。显示出问题时先看它们——它们报告的是**真实结果**（组件是否真的装上、数值取自哪个范围），不是"应该可以"。
+显示问题先运行 `/codex-ui`；任务持久化问题使用 `/todos-doctor`。两者的副作用不同：前者报告当前显示状态，后者读取任务 store，读取损坏存档可能触发恢复归档，显式 `gc` 会写回清理结果。
 
-| | |
+## 常见问题入口
+
+| 现象 | 先检查 |
 | --- | --- |
-| `/codex-ui` | `src/diagnostics.ts` 的 `registerDiagnosticsCommand`（缺宿主 API 时静默 no-op） |
-| `/todos-doctor` | `src/todo/commands.ts` |
+| 工具行或界面外观未生效 | `transcript` / `chrome` / `decorations` 的安装和退避原因。 |
+| 改配置后无变化 | `config` 中的有效值；确认文件目录并重启 Pi。加载问题可能静默回退。 |
+| token、cache 或 Git 数字不一致 | 各行的 `scope` 与数据来源，见 [统计口径](working-footer.md)。 |
+| 复制换行或缩进不正确 | `selection-copy`、`copy-stats` 的模式、失败原因和外来包装，见 [复制](selection-copy.md)。 |
+| 旧历史暂时不可见 | `history-window` 的页边界和行预算，继续向相应方向滚动加载。 |
+| 任务列表缺失、锁或坏档 | `/todos-doctor status`，再按 [todo](todo.md) 的存储规则处理。 |
+| 动态指令或压缩状态不符 | `/dynamic-agents` 或 `/pruner status`，它们不属于显示配置。 |
 
-## `/codex-ui` 输出逐行含义
+## `/codex-ui` 字段
 
-所有行都以两个空格缩进、`键: 值` 形式给出。未知值显示 `—`（`fmt` 辅助），**从不伪造 0**。
+未知数值显示 `—`。命令报告当前进程的实际安装/状态，不以配置期望代替结果。
 
-| 行 | 回答什么 |
+| 行 | 内容 |
 | --- | --- |
-| 首行 | 版本三元组：本插件版本、`mode`（tui/print/json/rpc…）、宿主 pi 版本、`revision`（宿主上下文快照修订号） |
-| `composer:` | surface / prefix / metadata 三块**是否真的装上** |
-| `working:` | Working 行状态与动画开关；并说明中断提示用的是 `esc`（宿主未暴露重映射信息） |
-| `footer:` | **数据来源清单**：model 取 live ctx、context 取 `ctx.getContextUsage()`、session 取 `UsageLedger`（会话条目）、cwd 取 `ctx.cwd` |
-| `model:` | 真实 model id / 推理等级 / provider / context 窗口（来自 live ctx，附 `revision`） |
-| `context:` | 当前占用 token / 容量 / 百分比，并标注 `scope=live ctx` |
-| `session:` | 本 session 累计 usage（属于 `Σ` 范围） |
-| `cache:` | `cache(last)` 口径与 session 加权比率 |
-| `speed:` | `tok/s` 的 token 数、观测窗口长度、`scope`（流式中实时值 vs `message_end` 确认值） |
-| `interaction:` | 当前交互时钟状态（是否进行中、已耗时、思考耗时） |
-| `outcome:` | 终止证据判定结果（`Worked`/`Failed`/`Interrupted`/`Ended …`）及其依据 |
-| `chrome:` | editor / footer / header / working 四个 widget 的安装状态（对应 `ChromeState`） |
-| `transcript:` | 紧凑转录是否接管（未接管时给出退避原因） |
-| `decorations:` | 各装饰能力的 `applied` / `failed: <原因>` 明细 |
-| `thinking:` | 当前策略（`streaming`/`completed`/`peekLines`）与自动可见性 |
-| `fullscreen-margin:` | 留白是否生效 / `disabled(config)` / 退避原因（含实际 margin 与 minWidth） |
-| `glyphs:` | 是否应用、标记数量与字符集、已处理帧数、改写次数、`include` 追加项 |
-| `config:` | 生效配置全量（用于确认文件里的值真的进来了） |
-| `resources:` | 定时器与资源占用：ticker、working 定时器（仅 active）、git 定时器、widget |
-| `git-changes:` | 工作树 vs HEAD（无 HEAD 时 vs 空树）的 `+A -D`、文件数、读取次数、基线引用、轮询/去抖参数（可直接用 `git diff --numstat HEAD` 对账） |
-| `selection-copy:` | serializer 状态、镜像 built/degraded/throttled 计数、`other-wrapper=`（是否有外来包装）、最近失败原因 |
-| `copy-stats:` | 复制调用次数、各模式计数（exact/mixed/native/empty-decoration/failed）、最近模式/字符数/耗时/缓存命中 |
-| `history-window:` | 历史窗口状态 JSON（已装载页、是否还有更早/更晚、行预算） |
+| 首行 | 本包/Pi 版本、运行模式和宿主快照 revision。 |
+| `composer` / `working` / `chrome` | editor、prefix、metadata、Working、header/footer 的实际安装与动画状态。 |
+| `footer` / `model` | model、provider、推理等级和各显示字段的数据来源。 |
+| `context` / `session` / `cache` | 当前上下文、会话累计 usage、最近请求与会话加权 cache 口径。 |
+| `speed` | 输出 token、观测窗口、实时或确认值的 scope。 |
+| `interaction` / `outcome` | 交互/思考时钟及终止证据。 |
+| `transcript` / `decorations` / `thinking` | 接管/退避、装饰失败、思考显示策略。 |
+| `fullscreen-margin` / `history-window` | 留白、当前历史窗口、页边界和预算。 |
+| `glyphs` / `config` | 字形处理计数、字符集与有效配置。 |
+| `resources` | timer、widget 等资源状态。 |
+| `git-changes` | 工作树相对 HEAD/空树的计数、读取次数及采样参数。 |
+| `selection-copy` / `copy-stats` | 镜像构建/降级、`other-wrapper`、复制模式/字数/耗时及最近失败。 |
 
-**用法建议**：先看 `transcript` / `chrome` 判断功能有没有装上；再看 `config` 判断配置有没有生效；数字对不上时看对应行的 `scope` 与来源说明。
+没有活动会话时返回 `no active session`；宿主没有命令注册能力时不注册。诊断并不验证所有外部插件或服务是否正常。
 
-## `/todos-doctor`
+## `/todos-doctor` 的读取与清理
 
-只读诊断，做三件事：
-
-1. **坏档归档**：`tasks.json` 解析失败/结构非法 → 归档成 `tasks.json.bak-<ts>` 并空载（正常路径下也不会让会话崩溃）。
-2. **过期锁**：`tasks.lock` 超过 TTL（30 分钟）→ 归档成 `stale-lock-<session>-<at>.json`。
-3. **GC**：按 `gcDays`（默认 7）清理已完成的旧列表。
-
-## 代码位置
-
-| 关注点 | 位置 |
+| 调用 | 行为 |
 | --- | --- |
-| `/codex-ui` 注册与行拼装 | `src/diagnostics.ts`（`registerDiagnosticsCommand` 及各 `*Line` 构造器） |
-| 诊断依赖注入 | 同文件 `DiagnosticsDeps`（chrome 状态、metrics、selection copy、history window 等） |
-| `/todos-doctor` | `src/todo/commands.ts`；存储侧实现在 `src/todo/store.ts` |
+| `/todos-doctor` 或 `/todos-doctor status` | 报告目录、状态文件、任务数、gcDays、锁和归档文件；不主动执行 GC 或解除锁。 |
+| `/todos-doctor gc` | 在上述报告后执行 `store.collect()`，按 gcDays 清理已完成任务；有变化时写回。 |
 
-## 不变量与已知限制
+`store.status()` 会走正常读取路径：JSON/结构损坏时尝试将任务文件归档为 `tasks.json.bak-<时间>` 并返回空状态，因此不能承诺零文件写入。权限或 I/O 错误不会被当作损坏归档。过期锁的回收发生在写操作获取锁时；doctor 的 status 只报告是否过期及既有归档。
 
-- 两个命令都**只读**：不改配置、不写用户仓库。
-- `/codex-ui` 在**没有活动会话**时只回报 `no active session`；宿主缺少 `registerCommand` 时静默不注册（不报错）。
-- 诊断报告的是**当前进程内的真实状态**；它不会去验证外部工具（如另一个插件的存在）。
+## 实现与验证
 
-## 验证
-
-`test/contract/host-surface.test.mjs`、`test/contract/appearance.test.mjs`（组件状态）、`test/io/todo-store.test.mts`（坏档/锁/GC）、`scripts/pty-verify.mjs`（真实会话中执行命令并断言输出行）。
+显示诊断由 `src/diagnostics.ts` 装配；任务命令与存储分别在 `src/todo/commands.ts`、`src/todo/store.ts`。现有 appearance/host-surface、todo-store 与 PTY 覆盖相应行为；执行范围见 [VALIDATION](../../VALIDATION.md)。

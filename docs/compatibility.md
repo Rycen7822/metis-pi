@@ -1,42 +1,53 @@
-# Compatibility boundaries
+# 兼容性与已知限制
 
-## Target and sources
+## 版本与验证范围
 
-Current runtime checks target Pi 0.87.0; see [VALIDATION](../VALIDATION.md). The classic two-slot component contract was initially traced in:
+开发类型和组件契约固定于 Pi **0.87.0**；最近实际 CLI 安装、Git 更新和严格 PTY 使用 **0.87.1**。具体环境、成功结果及未覆盖项见 [VALIDATION](../VALIDATION.md)。版本号表示已验证范围，不保证所有未来内部 UI 改动都兼容。
 
-- `earendil-works/pi`, tag `v0.85.1`, `packages/coding-agent/src/modes/interactive/components/tool-execution.ts` (blob `5355a3637aad9df5871ac907b680378ffd67b677`).
-- The same tag's `packages/coding-agent/src/core/source-info.ts` and `packages/tui/src/components/text.ts`.
-- Codex execution-row reference: `openai/codex`, `codex-rs/tui/src/exec_cell/snapshots/codex_tui__exec_cell__render__tests__truncated_live_output_preview_and_transcript.snap` (blob `eb47a610cc5d54ede53f8e5faee8dd5fb27578b4`).
-- Codex edit/diff reference: `openai/codex` commit `94697375cb9d2aa8ae74d61957c6b396819bec94`, `codex-rs/tui/src/diff_render.rs`. The supplied Codex CLI screenshot was also used as the target visual reference. The project implements its own TypeScript formatter; it does not embed Codex Rust code.
+本包包含显示适配以及独立的任务、输入、上下文和执行功能。各入口的副作用见 [架构](architecture.md)；`metis-pi.json.enabled` 只控制显示层，禁用其他入口见 [配置参考](configuration.md)。
 
-Pi 0.86.1 was re-checked in `earendil-works/pi`, tag `v0.86.1` (`13cbf77df2396303013a41646bcfa77b4271ae56`) for the two changes that touch this package:
+## 工具行适配
 
-- `packages/ai/src/utils/transcript.ts` and `utils/text.ts` moved the provider-facing prompt and tool declarations out of `Context.systemPrompt` / `Context.tools` into transcript `system` messages, and `models.ts` normalizes before provider dispatch. The vendored Codex transport was migrated to that protocol; `vendor/pi-codex-conversion/src/providers/transcript.ts` is the local copy of the replay semantics it uses.
-- `packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts` wraps the entry in a `MouseRegion` and renders `Box → MouseRegion → Container → Text/Markdown`. The skill-label patch follows that bounded structure and leaves the host's own click handler in place; `packages/tui/src/components/mouse-region.ts` shows a `click` only reaches it after a matching `press` was claimed, so the local fold override and the upstream handler cannot toggle twice.
+`src/adapter.ts` 装饰 ToolExecutionComponent 的三个 renderer/shell selector 和该组件自身的 `render`，保留原执行与存储结果。
 
-Pi 0.87.0 was checked in `earendil-works/pi`, tag `v0.87.0` (`16787ad5`), for the two contracts the vendored Codex conversion consumes:
+| 守卫 | 行为 |
+| --- | --- |
+| 宿主形状 | selector 源码与 render 关键标记必须匹配；不匹配时退避并报告原因。 |
+| 工具来源 | Pi 内建工具使用 builtin 身份；本包 apply_patch/exec_command 使用 conversion 的精确入口路径。未知或第三方来源不接管。 |
+| 安装身份 | 原型标记防止重复安装，每次使用核对包装器仍归本扩展。 |
+| 恢复 | 保留构造时的 stock 子树；卸载恢复自己仍拥有的方法，不覆盖后来者。 |
+| 渲染失败 | 单行回退原生显示；图片顺序、高度和原生鼠标路径保留。 |
 
-- `context_edit` entries are append-only projections of an earlier entry. Requests rebuild provider context from the SessionManager, so vendored replay and repeated compaction apply the effective edit before serializing any slice. Validity is relative to the checkpoint: an edit recorded before it was already absorbed by its window and stays reusable, while a later edit that rewrites kept content has no rewrite path there. Replay, repeated compaction, the portable summary and the Pi-fallback window share that judgment, and a pending window is re-resolved before injection. An unresolvable `firstKeptEntryId` is invalid rather than an empty window: replay reports it, and native compaction cancels before any summary request, so neither the native attempt nor the optional portable summary sends the previous opaque window. When the window really is stale, ordinary replay fails explicitly and a new compaction rebuilds from the edited context without carrying the old encrypted history forward. Pi < 0.87 sessions have no such entries and keep the previous request prefix.
-- `SessionManager.appendCompaction(summary, null, tokensBefore, details)` is a legal retain-none checkpoint: 0.87 stores the checkpoint's own id as `firstKeptEntryId`, 0.86 stored `null`, and both hosts project either shape as an empty kept window. Replay treats exactly those two markers as an empty kept window; a missing field, an explicit `undefined`, an unknown id and an id after the checkpoint still fail the existing checks.
+`exec_command` 只适配命令 call 的显示，保留外层 shell 和结果布局。终端控制序列的清理发生在显示副本，存储结果不变。详细效果见 [转录显示](features/transcript.md)。
 
-## What changes
+## 其他界面与第三方插件
 
-The `getCallRenderer` and `getResultRenderer` selectors return appearance-specific functions for builtin-owned rows. The `getRenderShell` selector chooses `self` after the first compact render. A wrapper around the tool row's original `render` refreshes its display once when that mode changes. The original render method remains responsible for width, image order, and `selfRenderHeight`; the original mouse method is untouched.
+- composer、footer、Working 和 header 使用宿主 UI 能力；自定义 editor 已被占用或能力缺失时按组件规则退避。
+- fullscreen 的布局/历史窗口、选区复制和 skill 显示仍依赖内部组件结构。守卫只能覆盖已知契约，任意后装插件若改写同一实例或方法，需要查看 `/codex-ui` 的实际状态。
+- 第三方工具定义、执行结果与 renderer 保持；用户主动选择本包主题时，主题颜色仍可能影响第三方输出。
+- 独立 todo、condense 或 conversion 包可能产生同名入口；按功能页迁移或过滤，不能把显示层来源守卫当作工具注册去重。
+- 复制与鼠标能力随 fullscreen/regular 模式、终端协议和字体变化，分别见 [复制](features/selection-copy.md) 与 [全屏布局](features/fullscreen-layout.md)。本包不实现 Codex 审批语义。
 
-The constructor always sees the stock shell. Its original child tree is retained. Consequently a later owner change or uninstall can restore default rendering by repopulating the original content box. No transcript tree splicing is used.
+## 请求与会话兼容
 
-## What stays unchanged
+| 宿主契约 | 本地处理 |
+| --- | --- |
+| Pi 0.86.1 transcript | prompt 和工具定义进入 transcript 的 system 消息；conversion 的 `providers/transcript.ts` 保持正常请求、预热与回放的共同语义。 |
+| Pi 0.86.1 skill MouseRegion | fold/label 跟随有界组件结构；认领 press 后处理 click，保留宿主渲染和正文。 |
+| Pi 0.87 context_edit | 从 SessionManager 的有效投影重建；checkpoint 之前已吸收的编辑与之后改写保留内容的编辑分别判断。失效窗口明确拒绝，新的压缩从编辑后的内容重建。 |
+| retain-none checkpoint | 兼容旧宿主的 null 和 0.87 的 checkpoint 自身 ID；未知 ID、缺失字段等不当作空窗口。 |
 
-No tool registration/activation, executor replacement, schema changes, event content mutation, model messages, session entries, system prompts, global TUI rendering, theme forcing, footer/editor/spinner ownership or keyboard remapping. The runtime registers `session_start`/`session_shutdown` plus read-only lifecycle observers: `tool_execution_start/end` (write tracking, exploration grouping) and `message_start/update/end` (display-order boundaries). Message handlers only read the content shape (text/thinking/toolCall presence); they never mutate events, results or messages. Source strings are sanitized only when producing a display copy.
+无法解析 `firstKeptEntryId` 时，replay 报错，native compaction 在摘要请求前取消，避免发送旧 opaque 窗口。Pi <0.87 的会话没有 context_edit 时保留原请求前缀。具体保护与主动 OCC 的后端范围见 [condense](features/condense.md)。
 
-Third-party tool definitions and renderers are left intact, including extensions which override a builtin name. Existing self-shell tools are not reformatted. Unknown ownership fails closed. Theme tokens can still affect a third-party tool's colours if the user explicitly selects the bundled theme.
+## 平台与实测限制
 
-## Known limits
+- 当前仓库内置的原生工具载荷为 **linux-x64**；其他平台需要对应载荷及安装验证，不能仅根据纯 TypeScript 能加载推断可用。
+- 真实 Pi、tmux 和离线 provider 验证了安装/加载及终端交互；这些证据不覆盖所有真实服务端、付费模型、第三方插件组合或终端图片协议。
+- 字体、宽度和颜色能力会影响外观；逻辑选区的测试证据与系统剪贴板的实际写入/回读证据分别记录。
+- V8/Deno 后端和下载器的实测范围以 VALIDATION 为准；源代码/包检查不能替代后端运行证据。
 
-This is an internal-UI compatibility adapter, not a stable public renderer registration API. Guard checks reduce risks but cannot prove compatibility with every future version or arbitrary monkey patch. A later plugin which completely replaces the same tool-row renderer can control the final output; this package will not overwrite it.
+## 来源定位
 
-The local layout tests use an explicit harness, not real FFF/Zentui/LSP/RTK instances. A separate real-Pi test is supplied but could not run in the delivery environment. Terminal-specific image rendering, mouse interaction and clipboard behaviour require an actual target terminal run.
+最初的双槽工具组件契约来自 `earendil-works/pi` v0.85.1 的 `tool-execution.ts`（blob `5355a3637aad9df5871ac907b680378ffd67b677`）、`source-info.ts` 与 TUI `text.ts`。后续核对使用 v0.86.1 (`13cbf77df2396303013a41646bcfa77b4271ae56`) 和 v0.87.0 (`16787ad5`)。
 
-The scope is the tool transcript plus an optional palette selection. Existing editor, footer, thinking and Working-line layout are retained. There is no imitation of Codex approval semantics. Since 0.6.0, consecutive builtin exploration calls may share one group header and a separator line may appear before assistant text; both are display-only projections computed from lifecycle events (no cross-tool merging of results, no third-party renderer takeover, no data changes). Full expansion displays every text block, with display-only terminal-control sanitization; it does not alter the stored result.
-
-For dark-terminal edit rows, version 0.3.0 deliberately matches Codex's current changed-line tints (`#213A2B` add, `#4A221D` delete), line-number-first gutter order, full-row background fill and hanging indentation. Exact appearance can still vary with terminal font, width and color profile.
+工具行视觉参考包括 `openai/codex` 的 exec snapshot（blob `eb47a610cc5d54ede53f8e5faee8dd5fb27578b4`）以及提交 `94697375cb9d2aa8ae74d61957c6b396819bec94` 的 `diff_render.rs`；本地格式化器以 TypeScript 实现。vendor 的精确来源和本地分歧见 [转换层说明](vendor-codex-conversion.md)。
