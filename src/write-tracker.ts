@@ -391,9 +391,3 @@ export class WriteDiffTracker {
     return this.#pending.size;
   }
 }
-
-/** Resolve a tool path against the session cwd (mirrors Pi write tool). */
-export function resolveWritePath(path: string, cwd: string): string {
-  if (path.startsWith("/")) return path;
-  return `${cwd.replace(/\/$/, "")}/${path}`;
-}

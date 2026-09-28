@@ -18,7 +18,6 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
   let sessionCwd = process.cwd();
   let ui: { notify?: (text: string, type?: "info" | "warning" | "error") => void } | undefined;
   let turn = 0;
-  const changedHooks: (() => void)[] = [];
   let lastSessionId = "main";
 
   const notify = (text: string, type?: "info" | "warning" | "error"): void => {
@@ -53,18 +52,15 @@ export default function codexTodoExtension(pi: ExtensionAPI): void {
     },
     turn: () => turn,
     changed: (): void => {
-      for (const hook of changedHooks) {
-        try {
-          hook();
-        } catch {
-          // a broken UI hook must not break the tool
-        }
+      try {
+        widget.refresh();
+      } catch {
+        // a broken UI must not break the tool
       }
     },
   };
 
   const widget = createTodoWidget({ system, sessionId: () => lastSessionId, truncateToWidth });
-  changedHooks.push(() => widget.refresh());
 
   const releaseSession = (): void => {
     widget.detach();

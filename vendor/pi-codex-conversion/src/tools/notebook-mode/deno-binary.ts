@@ -12,7 +12,7 @@ import {
 import { basename, join, resolve } from "node:path";
 import { denoAssetUrl, DENO_VERSION, resolveDenoAsset } from "./deno-assets.ts";
 import { extractDenoArchive } from "./deno-archive.ts";
-import { acquireDirectoryLock } from "./directory-lock.ts";
+import { acquireDirectoryLock } from "../code-mode/directory-lock.ts";
 
 const DOWNLOAD_TIMEOUT_MS = 180_000;
 const INSTALL_LOCK_TIMEOUT_MS = 185_000;

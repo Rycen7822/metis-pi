@@ -7,6 +7,7 @@ import {
 	type CheckpointManifest,
 	type NotebookCheckpointIdentity,
 } from "./checkpoint-format.ts";
+import { assertCandidateNames } from "./candidate-transaction.ts";
 import { checkpointSource, restoreSource } from "./checkpoint-runtime.ts";
 import type { DenoJupyterKernel } from "./jupyter-kernel.ts";
 import {
@@ -82,12 +83,7 @@ export async function writeNotebookCheckpoint(
 	mkdirSync(paths.directory, { recursive: true });
 	const names = [...new Set(await kernel.complete("", 0))].sort();
 	const privateNames = names.filter((name) => !baselineNames.has(name) && !excludeNames.has(name));
-	if (privateNames.length > MAX_PROJECT_ENTRIES) {
-		throw new Error(`Notebook checkpoint exceeds ${MAX_PROJECT_ENTRIES} top-level values`);
-	}
-	if (privateNames.some((name) => Buffer.byteLength(name) > MAX_PROJECT_NAME_BYTES)) {
-		throw new Error(`Notebook checkpoint name exceeds ${MAX_PROJECT_NAME_BYTES} bytes`);
-	}
+	assertCandidateNames(privateNames, "Notebook checkpoint");
 	const skippedInvalid = privateNames
 		.filter((name) => !IDENTIFIER.test(name))
 		.map((name) => ({ name, reason: "unsupported identifier" }));

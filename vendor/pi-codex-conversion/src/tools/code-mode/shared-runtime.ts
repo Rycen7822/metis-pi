@@ -165,9 +165,9 @@ export class SharedCodeModeRuntime {
 				await (await previous).shutdown();
 			}
 			if (!this.notebookClientPromise) {
-				const pending = import("../notebook-mode/client.ts").then(
-					({ NotebookCodeModeClient }) =>
-						new NotebookCodeModeClient(options, this.renderStore),
+				const pending = import("../notebook-mode/session-runtime.ts").then(
+					({ NotebookSessionRuntime }) =>
+						new NotebookSessionRuntime(options, this.renderStore),
 				);
 				this.notebookClientPromise = pending;
 				this.notebookClientOptionsKey = key;

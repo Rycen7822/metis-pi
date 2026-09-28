@@ -9,11 +9,6 @@ export function cancelOperation(session, id) {
     session.rejectOperation(id, error);
     return error;
 }
-export function operationAbort(session, id) {
-    return () => {
-        cancelOperation(session, id);
-    };
-}
 export function abortError() {
     const error = new Error("Code-mode operation aborted");
     error.name = "AbortError";

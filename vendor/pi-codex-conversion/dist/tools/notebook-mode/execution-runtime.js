@@ -12,22 +12,32 @@ const TERMINATE_GRACE_MS = 1_500;
 export class NotebookExecutionRuntime {
     bridge;
     session;
-    prepareSession;
     delegate;
     stopOperations = new WeakMap();
     activeCell;
     nextCellId = 1;
-    constructor(session, prepareSession, renderStore) {
+    constructor(session, renderStore) {
         this.session = session;
-        this.prepareSession = prepareSession;
         this.delegate = new CodeModeDelegateRuntime(() => undefined, renderStore);
         this.bridge = new NotebookBridgeServer({
-            callTool: (cellId, requestId, toolName, input) => this.callTool(cellId, requestId, toolName, input),
-            cancelTools: (cellId) => this.cancelTools(cellId),
+            callTool: async (cellId, requestId, toolName, input) => {
+                this.requireActiveCell(cellId);
+                return this.delegate.invokeDirect(cellId, requestId, codeModeNameForToolIdentity(toolName), input);
+            },
+            cancelTools: (cellId) => {
+                this.requireActiveCell(cellId);
+                this.delegate.cancelCell(cellId);
+            },
             emit: (cellId, items) => this.requireActiveCell(cellId).emit(items),
-            notify: (cellId, text) => this.notify(cellId, text),
+            notify: (cellId, text) => {
+                this.requireActiveCell(cellId);
+                this.delegate.notifyDirect(cellId, text);
+            },
             yield: (cellId) => this.requireActiveCell(cellId).requestYield(),
-            memory: (cellId, usage) => this.recordMemory(cellId, usage),
+            memory: (cellId, usage) => {
+                if (this.activeCell?.id === cellId)
+                    this.session.recordMemory(usage);
+            },
         });
     }
     activeCellId() { return this.activeCell?.id; }
@@ -39,8 +49,8 @@ export class NotebookExecutionRuntime {
         if (this.activeCell) {
             throw new Error(`Notebook exec cell "${this.activeCell.id}" is still active; call wait or terminate it before starting another cell`);
         }
-        const session = this.session();
-        await this.prepareSession(context, signal);
+        const session = this.session;
+        await session.prepare(context, signal);
         await session.checkpoints.flush();
         const { code, yieldTimeMs, maxOutputTokens } = parseExecSource(source);
         const effectiveYieldTime = directToolYieldTime(code, tools) ?? yieldTimeMs ?? DEFAULT_CODE_MODE_EXEC_YIELD_MS;
@@ -136,10 +146,10 @@ export class NotebookExecutionRuntime {
     clear() {
         this.activeCell = undefined;
         this.delegate.clear();
-        this.session().recordMemory(undefined);
+        this.session.recordMemory(undefined);
     }
     async runCell(cell, source, journaled) {
-        const session = this.session();
+        const session = this.session;
         try {
             const result = await session.kernel().execute(source, {
                 cellSource: cell.source,
@@ -187,12 +197,12 @@ export class NotebookExecutionRuntime {
         }
     }
     async endCellRuntime(cell) {
-        const kernel = this.session().kernel();
+        const kernel = this.session.kernel();
         if (!kernel)
             return;
         const id = JSON.stringify(cell.id);
         const result = await kernel.execute(`if (typeof globalThis.__piNotebook?.finish !== "function") throw new Error("Notebook runtime bootstrap unavailable: __piNotebook.finish"); await globalThis.__piNotebook.finish(${id}); undefined;`);
-        await this.session().recoverFromBootstrapFailure(result);
+        await this.session.recoverFromBootstrapFailure(result);
         if (result.status !== "ok" && cell.result?.status === "ok") {
             cell.result = { status: "error", items: [], errorText: result.errorText ?? "Notebook helper flush failed" };
         }
@@ -202,7 +212,7 @@ export class NotebookExecutionRuntime {
         return this.finishObservation(cell, await cell.observe(yieldTimeMs, signal));
     }
     finishObservation(cell, kind) {
-        const notice = this.session().takeNotice();
+        const notice = this.session.takeNotice();
         if (notice)
             cell.emit([{ type: "input_text", text: notice }]);
         const contentItems = cell.takeContent();
@@ -237,14 +247,14 @@ export class NotebookExecutionRuntime {
         this.delegate.cancelCell(cell.id);
         await Promise.race([cell.waitForCompletion(), delay(CANCEL_GRACE_MS)]);
         if (!cell.isCompleted()) {
-            const kernel = this.session().kernel();
+            const kernel = this.session.kernel();
             try {
                 await kernel?.interrupt();
             }
             catch { }
         }
         if (isolateKernel)
-            await this.session().invalidateKernel(NOTEBOOK_INTERRUPTED_NOTICE);
+            await this.session.invalidateKernel(NOTEBOOK_INTERRUPTED_NOTICE);
         await Promise.race([cell.waitForCompletion(), delay(TERMINATE_GRACE_MS)]);
         if (!cell.isCompleted()) {
             cell.result = { status: "aborted", items: [] };
@@ -262,7 +272,7 @@ export class NotebookExecutionRuntime {
         if (this.activeCell)
             this.delegate.cancelCell(this.activeCell.id);
         try {
-            const restoreNotice = await this.session().restart(extension);
+            const restoreNotice = await this.session.restart(extension);
             return `Notebook kernel restarted from the last completed checkpoint; external side effects were not rolled back${restoreNotice ? `. ${restoreNotice}` : ""}`;
         }
         catch (error) {
@@ -283,24 +293,8 @@ export class NotebookExecutionRuntime {
             setBlocked: (blockerId, active) => cell.setBlocked(blockerId, active),
         };
     }
-    async callTool(cellId, requestId, toolName, input) {
-        this.requireActiveCell(cellId);
-        return this.delegate.invokeDirect(cellId, requestId, codeModeNameForToolIdentity(toolName), input);
-    }
-    cancelTools(cellId) {
-        this.requireActiveCell(cellId);
-        this.delegate.cancelCell(cellId);
-    }
-    notify(cellId, text) {
-        this.requireActiveCell(cellId);
-        this.delegate.notifyDirect(cellId, text);
-    }
-    recordMemory(cellId, usage) {
-        if (this.activeCell?.id === cellId)
-            this.session().recordMemory(usage);
-    }
     withMemory(response) {
-        const memory = this.session().memory();
+        const memory = this.session.memory();
         return memory ? { ...response, notebookMemory: memory } : response;
     }
     requireActiveCell(cellId) {

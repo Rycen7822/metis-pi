@@ -10,6 +10,14 @@ import { formatProjectStateNotice, restoreProjectState, } from "./project-state.
 import { resolveNotebookProject } from "./project-identity.js";
 import { loadNotebookProfile, NotebookProfileRestoreError } from "./profile-state.js";
 import { notebookSessionIdentity } from "./session-identity.js";
+/** The checkpoint identity shared by startup, recovery and journal initialization. */
+export function notebookCheckpointIdentity(context, agentDir) {
+    return {
+        project: resolveNotebookProject(context.cwd),
+        session: notebookSessionIdentity(context),
+        agentDir,
+    };
+}
 export async function startNotebookSession(options) {
     const { context, runtime, bridge, signal } = options;
     const startupAbort = new AbortController();
@@ -35,16 +43,11 @@ export async function startNotebookSession(options) {
         if (bootstrap.status !== "ok") {
             throw new Error(`Notebook bootstrap failed: ${bootstrap.errorText ?? "unknown error"}`);
         }
-        const project = resolveNotebookProject(context.cwd);
-        const checkpointIdentity = {
-            project,
-            session: notebookSessionIdentity(context),
-            agentDir: runtime.agentDir,
-        };
+        const checkpointIdentity = notebookCheckpointIdentity(context, runtime.agentDir);
         const journal = initializeNotebookJournal(checkpointIdentity, options.checkpointMaxBytes);
         const baselineNames = new Set(await kernel.complete("", 0, signal));
         const projectState = await restoreProjectState(kernel, {
-            project,
+            project: checkpointIdentity.project,
             agentDir: runtime.agentDir,
             maxBytes: options.checkpointMaxBytes,
             signal,

@@ -1,6 +1,6 @@
 # 内置 Codex 转换层
 
-`vendor/pi-codex-conversion/` 基于 `@howaboua/pi-codex-conversion` **3.0.34**，Pi 直接加载其 `dist/index.js`。本仓库维护源码、构建产物和补丁，安装期不构建；`pi update` 更新本包时携带这些补丁，升级 vendored 上游则需显式同步。
+`vendor/pi-codex-conversion/` 基于 `@howaboua/pi-codex-conversion` **3.0.34**，Pi 直接加载其 `dist/index.js`。本仓库以源码和 Git 历史维护本地分歧，运行 JavaScript 继续提交，安装期不构建；生成声明不入 Git，开发检查自动恢复。`pi update --extensions` 更新整个本包，上游修改由维护者在隔离分支选择性移植。
 
 ## 能力与入口
 
@@ -33,7 +33,7 @@
 
 - [UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md)：精确来源/commit、载荷裁剪与升级步骤。
 - [PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md)：本地补丁契约，包括 Pi 0.86/0.87 transcript、回放、工具放置与 Notebook 共享捕获。
-- [开发说明](development.md)：构建和检查命令；`patches/local.patch` 由脚本生成，不手改 `dist/`。
+- [开发说明](development.md)：构建和检查命令；源码和 Git 历史记录修改，累计 patch 与覆盖式同步已撤销；不手改生成 JavaScript。
 - `dist/`、`vendor/`、`code-mode/`、原生工具目录、`changelog.js` 和 `package.json` 的相对位置参与运行时资源定位，不可只因目录较多就移动或删除。
 
 当前只保留 **linux-x64** 原生工具；内置语音功能及其源码已移除。其它平台需补齐载荷并验证。后台 shell 面板在 fullscreen 模式支持左键单击展开、再次单击折叠，与 `alt+w` 共用状态；普通终端模式继续使用快捷键。拖动和滚轮不触发折叠。默认快捷键 `alt+q` 可能与 Pi 冲突，可在 vendor 配置中改 `ui.backgroundShellPrevShortcut`。

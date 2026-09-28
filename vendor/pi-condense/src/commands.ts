@@ -7,17 +7,15 @@ import {
   type FlushOptions,
   type DiagnosticKind,
   type ContextMetricsSnapshot,
-  PRUNE_ON_MODES,
-  BATCHING_MODES,
   STATUS_WIDGET_ID,
   PROGRESS_WIDGET_ID,
-  SUMMARIZER_THINKING_LEVELS,
 } from "./types.js";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { saveConfig, persistConfig } from "./config.js";
 import { formatTokens, formatCost, formatCharProgress, formatCompactCount } from "./stats.js";
 import { Text } from "@earendil-works/pi-tui";
-import { openPrunerSettings, summarizerThinkingLabel, batchingModeLabel, protectedToolsDisplay, dedupByContentHashDescription } from "./settings.js";
+import { openPrunerSettings, protectedToolsDisplay } from "./settings.js";
+import { optionLabel, optionValues, parseScalar, rowDescription, scalarRow, writeScalar } from "./setting-fields.js";
 import { buildPruneTree, TreeBrowser } from "./tree-browser.js";
 import { normalizeSummaryToolCallRefs } from "./summary-refs.js";
 import type { ToolCallIndexer } from "./indexer.js";
@@ -97,14 +95,15 @@ function parseModelAndThinkingArg(
 
   const model = value.slice(0, separatorIndex);
   const suffix = value.slice(separatorIndex + 1);
-  const thinking = SUMMARIZER_THINKING_LEVELS.find((level) => level.value === suffix)?.value;
-  if (!model || !thinking) {
+  const thinkingField = scalarRow("summarizerThinking");
+  const thinking = parseScalar(thinkingField, suffix);
+  if (!model || thinking === undefined) {
     return {
       model: value,
-      error: `Invalid model thinking suffix: ${suffix}. Use one of: ${SUMMARIZER_THINKING_LEVELS.map((level) => level.value).join(", ")}.`,
+      error: `Invalid model thinking suffix: ${suffix}. Use one of: ${optionValues(thinkingField).join(", ")}.`,
     };
   }
-  return { model, thinking };
+  return { model, thinking: thinking as ContextPruneConfig["summarizerThinking"] };
 }
 
 // ── Help text ───────────────────────────────────────────────────────────────
@@ -361,20 +360,13 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner on ──
-        case "on": {
-          currentConfig.value = { ...currentConfig.value, enabled: true };
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify("Context pruning enabled.");
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
-          break;
-        }
-
-        // ── /pruner off ──
+        // ── /pruner on | off ──
+        case "on":
         case "off": {
-          currentConfig.value = { ...currentConfig.value, enabled: false };
+          const enabled = subcommand === "on";
+          currentConfig.value = { ...currentConfig.value, enabled };
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify("Context pruning disabled.");
+          ctx.ui.notify(`Context pruning ${enabled ? "enabled" : "disabled"}.`);
           setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
           break;
         }
@@ -382,7 +374,7 @@ export function registerCommands(
         // ── /pruner status ──
         case "status": {
           const cfg = currentConfig.value;
-          const mode = PRUNE_ON_MODES.find((m) => m.value === cfg.pruneOn)?.label ?? cfg.pruneOn;
+          const mode = optionLabel("pruneOn", cfg.pruneOn);
           const s = getStats();
           const statsLine = s.callCount > 0
             ? `\n  --- summarizer ---\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens\n  cost:        ${formatCost(s.totalCost)}`
@@ -393,7 +385,7 @@ export function registerCommands(
             ? `\n  --- context ---\n  thinking:     ${formatTokens(m.openCycleThinkingTokens)} tokens (open segment)\n  chain share:  ${m.largestChainSharePct}%\n  frontier gap: ${formatTokens(m.frontierGapTokens)} tokens${getRearmed?.() ? "\n  rearmed:      yes" : ""}`
             : "";
           ctx.ui.notify(
-            `pruner status:\n  enabled:  ${cfg.enabled}\n  model:    ${cfg.summarizerModel}\n  thinking: ${summarizerThinkingLabel(cfg.summarizerThinking)} (${cfg.summarizerThinking})\n  idle to:  ${fmtTimeout(cfg.summarizerIdleTimeoutMs)}\n  max to:   ${fmtTimeout(cfg.summarizerMaxTimeoutMs)}\n  trigger:  ${mode}\n  batching: ${batchingModeLabel(cfg.batchingMode)} (${cfg.batchingMode})\n  dedup:    ${cfg.dedupByContentHash ? "on" : "off"}\n  status:   ${cfg.showPruneStatusLine ? "on" : "off"}${statsLine}${contextLine}`,
+            `pruner status:\n  enabled:  ${cfg.enabled}\n  model:    ${cfg.summarizerModel}\n  thinking: ${optionLabel("summarizerThinking", cfg.summarizerThinking)} (${cfg.summarizerThinking})\n  idle to:  ${fmtTimeout(cfg.summarizerIdleTimeoutMs)}\n  max to:   ${fmtTimeout(cfg.summarizerMaxTimeoutMs)}\n  trigger:  ${mode}\n  batching: ${optionLabel("batchingMode", cfg.batchingMode)} (${cfg.batchingMode})\n  dedup:    ${cfg.dedupByContentHash ? "on" : "off"}\n  status:   ${cfg.showPruneStatusLine ? "on" : "off"}${statsLine}${contextLine}`,
           );
           break;
         }
@@ -438,7 +430,7 @@ export function registerCommands(
           const modelArg = subArgs[0];
           if (!modelArg) {
             ctx.ui.notify(
-              `Current summarizer model: ${currentConfig.value.summarizerModel}\nCurrent summarizer thinking: ${summarizerThinkingLabel(currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`,
+              `Current summarizer model: ${currentConfig.value.summarizerModel}\nCurrent summarizer thinking: ${optionLabel("summarizerThinking", currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`,
             );
           } else {
             const parsed = parseModelAndThinkingArg(modelArg);
@@ -461,24 +453,22 @@ export function registerCommands(
         // ── /pruner thinking [value] ──
         case "thinking": {
           const thinkingArg = subArgs[0];
+          const thinkingField = scalarRow("summarizerThinking");
           if (!thinkingArg) {
             ctx.ui.notify(
-              `Current summarizer thinking: ${summarizerThinkingLabel(currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`,
+              `Current summarizer thinking: ${optionLabel("summarizerThinking", currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`,
             );
             return;
           }
-          if (SUMMARIZER_THINKING_LEVELS.some((level) => level.value === thinkingArg)) {
-            currentConfig.value = {
-              ...currentConfig.value,
-              summarizerThinking: thinkingArg as ContextPruneConfig["summarizerThinking"],
-            };
-          } else {
+          const parsedThinking = parseScalar(thinkingField, thinkingArg);
+          if (parsedThinking === undefined) {
             ctx.ui.notify(
-              `Invalid summarizer thinking level: ${thinkingArg}. Use one of: ${SUMMARIZER_THINKING_LEVELS.map((level) => level.value).join(", ")}.`,
+              `Invalid summarizer thinking level: ${thinkingArg}. Use one of: ${optionValues(thinkingField).join(", ")}.`,
               "warning",
             );
             return;
           }
+          currentConfig.value = writeScalar(currentConfig.value, thinkingField, parsedThinking);
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(`Summarizer thinking set to: ${currentConfig.value.summarizerThinking}`);
           break;
@@ -487,15 +477,15 @@ export function registerCommands(
         // ── /pruner prune-on [value] ──
         case "prune-on": {
           const modeArg = subArgs[0];
+          const pruneOnField = scalarRow("pruneOn");
           if (!modeArg) {
-            const options = PRUNE_ON_MODES.map((m) => `${m.value} — ${m.label}`);
+            const options = pruneOnField.options.map((m) => `${m.value} — ${m.label}`);
             const choice = await ctx.ui.select("pruner — choose when to trigger summarization", options);
             if (!choice) return;
             // Extract the value (first word) from "agent-message — On agent message"
-            const chosenValue = choice.split(/\s+/)[0] as ContextPruneConfig["pruneOn"];
-            currentConfig.value = { ...currentConfig.value, pruneOn: chosenValue };
+            currentConfig.value = writeScalar(currentConfig.value, pruneOnField, choice.split(/\s+/)[0]);
           } else {
-            currentConfig.value = { ...currentConfig.value, pruneOn: modeArg as ContextPruneConfig["pruneOn"] };
+            currentConfig.value = writeScalar(currentConfig.value, pruneOnField, modeArg);
           }
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
@@ -505,24 +495,25 @@ export function registerCommands(
         // ── /pruner batching [value] ──
         case "batching": {
           const batchArg = subArgs[0];
+          const batchingField = scalarRow("batchingMode");
           if (!batchArg) {
-            const options = BATCHING_MODES.map((m) => `${m.value} — ${m.label}`);
+            const options = batchingField.options.map((m) => `${m.value} — ${m.label}`);
             const choice = await ctx.ui.select("pruner — choose batching granularity", options);
             if (!choice) return;
-            const chosenValue = choice.split(/\s+/)[0] as ContextPruneConfig["batchingMode"];
-            currentConfig.value = { ...currentConfig.value, batchingMode: chosenValue };
+            currentConfig.value = writeScalar(currentConfig.value, batchingField, choice.split(/\s+/)[0]);
           } else {
-            if (!BATCHING_MODES.some((m) => m.value === batchArg)) {
+            const parsedBatch = parseScalar(batchingField, batchArg);
+            if (parsedBatch === undefined) {
               ctx.ui.notify(
-                `Invalid batching mode: ${batchArg}. Use one of: ${BATCHING_MODES.map((m) => m.value).join(", ")}.`,
+                `Invalid batching mode: ${batchArg}. Use one of: ${optionValues(batchingField).join(", ")}.`,
                 "warning",
               );
               return;
             }
-            currentConfig.value = { ...currentConfig.value, batchingMode: batchArg as ContextPruneConfig["batchingMode"] };
+            currentConfig.value = writeScalar(currentConfig.value, batchingField, parsedBatch);
           }
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(`Batching mode set to: ${batchingModeLabel(currentConfig.value.batchingMode)}`);
+          ctx.ui.notify(`Batching mode set to: ${optionLabel("batchingMode", currentConfig.value.batchingMode)}`);
           break;
         }
 
@@ -717,18 +708,19 @@ export function registerCommands(
         // guard.
         case "min-batch-chars": {
           const arg = subArgs[0];
+          const minBatchField = scalarRow("minBatchChars");
           if (!arg) {
             const cur = currentConfig.value.minBatchChars;
             const state = cur === 0 ? "disabled" : `${cur} chars`;
             ctx.ui.notify(`Current minBatchChars: ${state}.`);
             break;
           }
-          const parsed = Number.parseInt(arg, 10);
-          if (!Number.isFinite(parsed) || parsed < 0) {
+          const parsed = parseScalar(minBatchField, arg);
+          if (parsed === undefined) {
             ctx.ui.notify(`Invalid minBatchChars: "${arg}". Expected a non-negative integer (0 disables).`, "warning");
             break;
           }
-          currentConfig.value = { ...currentConfig.value, minBatchChars: parsed };
+          currentConfig.value = writeScalar(currentConfig.value, minBatchField, parsed);
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(
             parsed === 0
@@ -740,18 +732,19 @@ export function registerCommands(
 
         case "recovery-grace": {
           const arg = subArgs[0];
+          const graceField = scalarRow("recoveryGraceTurns");
           if (!arg) {
             const cur = currentConfig.value.recoveryGraceTurns;
             const state = cur === 0 ? "disabled" : `${cur} user-turn-group(s)`;
             ctx.ui.notify(`Current recovery grace: ${state}.`);
             break;
           }
-          const parsed = Number.parseInt(arg, 10);
-          if (!Number.isFinite(parsed) || parsed < 0) {
+          const parsed = parseScalar(graceField, arg);
+          if (parsed === undefined) {
             ctx.ui.notify(`Invalid recovery-grace: "${arg}". Expected a non-negative integer (0 disables).`, "warning");
             break;
           }
-          currentConfig.value = { ...currentConfig.value, recoveryGraceTurns: parsed };
+          currentConfig.value = writeScalar(currentConfig.value, graceField, parsed);
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(
             parsed === 0
@@ -766,9 +759,10 @@ export function registerCommands(
         // `status` is an explicit synonym for bare.
         case "dedup": {
           const arg = (subArgs[0] ?? "").toLowerCase();
+          const dedupField = scalarRow("dedupByContentHash");
           if (!arg || arg === "status") {
             const state = currentConfig.value.dedupByContentHash ? "ON" : "OFF";
-            ctx.ui.notify(`Content-hash dedup is ${state}. ${dedupByContentHashDescription(currentConfig.value)}`);
+            ctx.ui.notify(`Content-hash dedup is ${state}. ${rowDescription(dedupField, currentConfig.value)}`);
             break;
           }
           if (arg !== "on" && arg !== "off" && arg !== "true" && arg !== "false") {
@@ -776,7 +770,7 @@ export function registerCommands(
             break;
           }
           const next = arg === "on" || arg === "true";
-          currentConfig.value = { ...currentConfig.value, dedupByContentHash: next };
+          currentConfig.value = writeScalar(currentConfig.value, dedupField, next);
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(`Content-hash dedup turned ${next ? "ON" : "OFF"}.`);
           break;

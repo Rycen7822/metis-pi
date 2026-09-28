@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { buildSessionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { CODEX_REASONING_UPDATE_TYPE, readCodexReasoningUpdate } from "./reasoning-updates.ts";
+import { insertReconstructedMessages } from "./history-insertion.ts";
 
 export function projectCodexReasoningEntry(entry: SessionEntry): SessionEntry {
 	if (entry.type !== "custom" || entry.customType !== CODEX_REASONING_UPDATE_TYPE) return entry;
@@ -40,28 +41,9 @@ export function projectCodexReasoningHistory(
 	if (!messages) return reconstructed;
 	// Preserve other extensions' message edits and additions. Insert metadata at its
 	// persisted position, before the next surviving message or after the final one.
-	const positions = new Map<string, number[]>();
-	messages.forEach((message, index) => {
-		const key = messageKey(message);
-		const indices = positions.get(key) ?? [];
-		indices.push(index);
-		positions.set(key, indices);
-	});
-	const insertions = new Map<number, AgentMessage[]>();
-	let pending: AgentMessage[] = [];
-	let last = -1;
-	for (const message of reconstructed) {
-		const index = positions.get(messageKey(message))?.shift();
-		if (index !== undefined) {
-			if (pending.length) insertions.set(index, [...(insertions.get(index) ?? []), ...pending]);
-			pending = [];
-			last = index;
-		} else if (message.role === "custom" && message.customType === CODEX_REASONING_UPDATE_TYPE
-			&& virtualIds.has(readCodexReasoningUpdate(message.details).id)) pending.push(message);
-	}
-	if (pending.length) insertions.set(last + 1, [...(insertions.get(last + 1) ?? []), ...pending]);
-	return messages.flatMap((message, index) => [...(insertions.get(index) ?? []), message])
-		.concat(insertions.get(messages.length) ?? []);
+	return insertReconstructedMessages(messages, reconstructed, messageKey,
+		(message) => message.role === "custom" && message.customType === CODEX_REASONING_UPDATE_TYPE
+			&& virtualIds.has(readCodexReasoningUpdate(message.details).id));
 }
 
 function messageKey(message: AgentMessage): string {

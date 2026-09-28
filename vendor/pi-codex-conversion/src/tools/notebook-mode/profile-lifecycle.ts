@@ -1,7 +1,5 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { NotebookControlResult, ToolExecutionContext } from "../code-mode/types.ts";
 import { globMatcher } from "./glob.ts";
-import type { DenoJupyterKernel } from "./jupyter-kernel.ts";
 import { resolveNotebookProject } from "./project-identity.ts";
 import {
 	listNotebookProfiles,
@@ -10,91 +8,81 @@ import {
 	saveNotebookProfile,
 } from "./profile-state.ts";
 import type { ProfileStateSummary } from "./profile-state-format.ts";
+import type { NotebookSessionRuntime } from "./session-runtime.ts";
 
 const MESSAGE_BUDGET = 16 * 1024;
 
-interface NotebookProfileHost {
-	kernel(): DenoJupyterKernel | undefined;
-	activeCellId(): string | undefined;
-	checkpoint(): Promise<void>;
-	markChanged(): void;
-	baselineNames(): ReadonlySet<string>;
-	profileStorage(): { agentDir: string; maxBytes: number };
-	rollback(context: ExtensionContext): Promise<void>;
+export function listProfiles(host: NotebookSessionRuntime, query: string | undefined): NotebookControlResult {
+	const matches = query === undefined ? undefined : globMatcher(query);
+	const profiles = listNotebookProfiles(host.options.agentDir)
+		.filter(({ name }) => !matches || matches(name));
+	return {
+		message: formatProfiles(profiles, query),
+		details: { profiles, ...(query === undefined ? {} : { query }) },
+	};
 }
 
-export class NotebookProfileController {
-	private readonly host: NotebookProfileHost;
+export async function saveProfile(
+	host: NotebookSessionRuntime,
+	name: string,
+	context: ToolExecutionContext,
+	signal?: AbortSignal,
+): Promise<NotebookControlResult> {
+	const activeCell = host.activeCellId();
+	if (activeCell) throw new Error(`Cannot save a notebook profile while exec cell "${activeCell}" is running`);
+	await host.checkpoint();
+	const summary = await saveNotebookProfile({
+		name,
+		kernel: host.kernel()!,
+		project: resolveNotebookProject(context.cwd),
+		agentDir: host.options.agentDir,
+		baselineNames: host.baselineNames(),
+		maxBytes: host.checkpointMaxBytes,
+		signal,
+	});
+	return {
+		message: `Saved notebook profile ${summary.name}: ${summary.values} value(s), ${summary.definitions} definition(s), ${summary.skipped} skipped`,
+		details: { ...summary },
+	};
+}
 
-	constructor(host: NotebookProfileHost) {
-		this.host = host;
-	}
-
-	list(query: string | undefined): NotebookControlResult {
-		const storage = this.host.profileStorage();
-		const matches = query === undefined ? undefined : globMatcher(query);
-		const profiles = listNotebookProfiles(storage.agentDir)
-			.filter(({ name }) => !matches || matches(name));
-		return {
-			message: formatProfiles(profiles, query),
-			details: { profiles, ...(query === undefined ? {} : { query }) },
-		};
-	}
-
-	async save(name: string, context: ToolExecutionContext, signal?: AbortSignal): Promise<NotebookControlResult> {
-		const activeCell = this.host.activeCellId();
-		if (activeCell) throw new Error(`Cannot save a notebook profile while exec cell "${activeCell}" is running`);
-		const storage = this.host.profileStorage();
-		await this.host.checkpoint();
-		const summary = await saveNotebookProfile({
+export async function loadProfile(
+	host: NotebookSessionRuntime,
+	name: string,
+	context: ToolExecutionContext,
+	signal?: AbortSignal,
+): Promise<NotebookControlResult> {
+	const activeCell = host.activeCellId();
+	if (activeCell) throw new Error(`Cannot load a notebook profile while exec cell "${activeCell}" is running`);
+	await host.checkpoint();
+	let loaded;
+	try {
+		loaded = await loadNotebookProfile({
 			name,
-			kernel: this.host.kernel()!,
-			project: resolveNotebookProject(context.cwd),
-			agentDir: storage.agentDir,
-			baselineNames: this.host.baselineNames(),
-			maxBytes: storage.maxBytes,
+			kernel: host.kernel()!,
+			agentDir: host.options.agentDir,
+			baselineNames: host.baselineNames(),
+			maxBytes: host.checkpointMaxBytes,
 			signal,
 		});
-		return {
-			message: `Saved notebook profile ${summary.name}: ${summary.values} value(s), ${summary.definitions} definition(s), ${summary.skipped} skipped`,
-			details: { ...summary },
-		};
+	} catch (error) {
+		if (error instanceof NotebookProfileRestoreError) {
+			const extension = context.extensionContext;
+			if (extension) await host.restart(extension, undefined, true);
+		}
+		throw error;
 	}
-
-	async load(name: string, context: ToolExecutionContext, signal?: AbortSignal): Promise<NotebookControlResult> {
-		const activeCell = this.host.activeCellId();
-		if (activeCell) throw new Error(`Cannot load a notebook profile while exec cell "${activeCell}" is running`);
-		const storage = this.host.profileStorage();
-		await this.host.checkpoint();
-		let loaded;
-		try {
-			loaded = await loadNotebookProfile({
-				name,
-				kernel: this.host.kernel()!,
-				agentDir: storage.agentDir,
-				baselineNames: this.host.baselineNames(),
-				maxBytes: storage.maxBytes,
-				signal,
-			});
-		} catch (error) {
-			if (error instanceof NotebookProfileRestoreError) {
-				const extension = context.extensionContext;
-				if (extension) await this.host.rollback(extension);
-			}
-			throw error;
-		}
-		if (loaded.collisions.length > 0) {
-			throw new Error(`Notebook profile ${name} conflicts with existing bindings: ${bound(loaded.collisions.join(", "))}. Release or rename them before loading`);
-		}
-		if (loaded.loaded.length > 0) {
-			this.host.markChanged();
-			await this.host.checkpoint();
-		}
-		return {
-			message: `Loaded notebook profile ${name}: ${loaded.summary.values} value(s), ${loaded.summary.definitions} definition(s)`,
-			details: loaded,
-		};
+	if (loaded.collisions.length > 0) {
+		throw new Error(`Notebook profile ${name} conflicts with existing bindings: ${bound(loaded.collisions.join(", "))}. Release or rename them before loading`);
 	}
+	if (loaded.loaded.length > 0) {
+		host.markChanged();
+		await host.checkpoint();
+	}
+	return {
+		message: `Loaded notebook profile ${name}: ${loaded.summary.values} value(s), ${loaded.summary.definitions} definition(s)`,
+		details: loaded,
+	};
 }
 
 function formatProfiles(profiles: ProfileStateSummary[], query: string | undefined): string {

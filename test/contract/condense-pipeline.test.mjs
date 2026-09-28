@@ -19,14 +19,14 @@ import goalExtension from "../../extensions/goal.ts";
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const buildLog = Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false, occ = false, capacity = false } = {}) {
+async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false } = {}) {
   const workDir = fileURLToPath(new URL("../../.work/", import.meta.url));
   mkdirSync(workDir, { recursive: true });
   const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 }, contextPrune: {
-    enabled: true, opportunisticCompaction: occ, showPruneStatusLine: false, minBatchChars: 5000, pruneOn: "agent-message", batchingMode: "agent-message",
+    enabled: true, opportunisticCompaction: occ, showPruneStatusLine, minBatchChars: 5000, pruneOn, batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
     chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
   } }));
@@ -54,10 +54,11 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", d
     appendEntry(type, data) { sm.appendCustomEntry(type, data); },
     sendMessage(message) { sm.appendCustomMessageEntry(message.customType, message.content, message.display, message.details); },
   };
+  const notices = [], statuses = new Map(), widgets = [];
   const ctx = { sessionManager: sm, model, cwd: dir, hasUI: false, isIdle: () => true, hasPendingMessages: () => false,
     getContextUsage: () => ({ tokens: capacity ? 96000 : 90000, contextWindow: 100000 }),
     modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "local" }), getProviderAuth: async () => undefined },
-    ui: { setStatus() {}, setWidget() {}, notify() {} },
+    ui: { setStatus: (id, value) => statuses.set(id, value), setWidget: (id, value) => widgets.push([id, value]), notify: (message, type) => notices.push([message, type]) },
   };
   const emit = async (name, event = {}) => {
     let result;
@@ -83,7 +84,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", d
     rmSync(dir, { recursive: true, force: true });
   });
   sm.appendMessage({ role: "user", content: "Build", timestamp: 1 });
-  return { dir, sm, tools, calls, events, ctx, pi, emit, add, finish, release: () => release?.() };
+  return { dir, sm, tools, calls, events, ctx, pi, emit, add, finish, notices, statuses, widgets, release: () => release?.() };
 }
 
 test("packing precedes the 5000-char gate, archives exact output, and never re-compresses settled history", async (t) => {
@@ -137,6 +138,49 @@ test("one model decision at the final boundary retains code-owned refs and block
   const recall = await f.tools.get("context_tree_query").execute("q", { toolCallIds: ["t1"] }, undefined, undefined, f.ctx);
   assert.equal(recall.details.results[0].text, "important detail\n".repeat(700));
   await f.finish(); assert.equal(f.calls.length, 1, "same history is not summarized again");
+});
+
+test("session restore drops the previous queue while a tree switch keeps its own records and never reloads config", async (t) => {
+  const f = await fixture(t);
+  // A body that reaches the summarizer (buildLog packs into an archive instead).
+  const body = "important detail\n".repeat(700);
+  // agent-message queues this batch and returns before the budget gate.
+  const queued = f.add(body, "inspect-unknown-tool");
+  await f.emit("turn_end", { message: queued.assistant, toolResults: [queued.result], turnIndex: 0 });
+  assert.equal(f.calls.length, 0);
+
+  // session_start reloads config from disk and boots the status + boot widget.
+  const settings = { compaction: { enabled: false, reserveTokens: 500 }, contextPrune: {
+    enabled: true, showPruneStatusLine: true, minBatchChars: 5000, pruneOn: "on-demand", batchingMode: "agent-message",
+    autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
+    chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
+  } };
+  writeFileSync(join(f.dir, "settings.json"), JSON.stringify(settings));
+  await f.emit("session_start");
+  assert.deepEqual(f.widgets.filter(([id]) => id === "pruner-boot").map(([, value]) => value.length), [1]);
+  assert.match(f.statuses.get("context-prune"), /prune: ON/);
+
+  // The reload re-armed this branch's unindexed work: the gate flushes the
+  // recaptured batch, never a stale queue entry.
+  await f.emit("turn_end", {});
+  assert.equal(f.calls.length, 1);
+  assert.match(f.notices.map(([message]) => message).find((message) => message.includes("compacting")) ?? "", /compacting work recovered after reload/);
+  const summary = f.sm.getBranch().find((entry) => entry.type === "custom_message" && entry.details?.representation === "summary");
+  assert.ok(summary, "the restored index publishes a summary for the current branch");
+  const recall = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [queued.id] }, undefined, undefined, f.ctx);
+  assert.equal(recall.details.results[0].text, body);
+
+  // A tree switch rebuilds the same records without re-summarizing indexed work,
+  // re-arms work that only this branch holds, and (unlike session_start) neither
+  // reloads config nor shows the boot widget.
+  writeFileSync(join(f.dir, "settings.json"), JSON.stringify({ ...settings, contextPrune: { ...settings.contextPrune, showPruneStatusLine: false } }));
+  const afterBody = "later detail\n".repeat(700);
+  f.add(afterBody, "inspect-after-tree");
+  await f.emit("session_tree");
+  await f.emit("turn_end", {});
+  assert.equal(f.calls.length, 2, "the tree probe re-arms only this branch's unindexed work");
+  assert.equal(f.widgets.filter(([id]) => id === "pruner-boot").length, 1);
+  assert.match(f.statuses.get("context-prune"), /prune: ON/, "session_tree keeps the loaded config");
 });
 
 test("execution archives survive display eviction, and recall pins append-only snapshots across growth", async (t) => {

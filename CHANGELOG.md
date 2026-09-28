@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Code Mode 安装与 Notebook 共用带 owner 的目录 lease，失败和超时时仅释放自身锁；历史消息重建与 condense 归档批次各统一一处实现，原生 write 前镜像按 Pi 路径规则解析。
+
 - dynamic-agents 每次新 run 重新读取原生全局指令，支持全局/策略 Markdown 修改后免 reload 生效，并处理全局候选文件新增、删除及优先级变化；同一 run 内保持快照不变。
 
 - 新增 dynamic-agents：外置 JSON 按 provider/模型正选、反选及跨 provider 模型简称匹配全局指令；下一次 agent run 生效，只替换请求上下文，保留源文件与历史记录；支持状态查询、回退和 Codex 预热协调。

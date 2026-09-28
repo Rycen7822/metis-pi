@@ -187,10 +187,15 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     return state;
   };
 
+  /** Atomic tmp+rename write, the one rule both state and settings use. */
+  const writeJson = (path: string, value: unknown): void => {
+    const tmp = `${path}.tmp-${process.pid}-${now()}`;
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf8");
+    fs.renameSync(tmp, path);
+  };
+
   const writeState = (state: TodoState): void => {
-    const tmp = `${statePath}.tmp-${process.pid}-${now()}`;
-    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tmp, statePath);
+    writeJson(statePath, state);
     cachedSnapshot = undefined;
   };
 
@@ -281,9 +286,7 @@ export function openTodoStore(dir: string, deps: { now?: () => number; session?:
     },
     saveSettings: (patch) => {
       const next = { ...loadSettings(), ...patch };
-      const tmp = `${settingsPath}.tmp-${process.pid}-${now()}`;
-      fs.writeFileSync(tmp, JSON.stringify(next, null, 2), "utf8");
-      fs.renameSync(tmp, settingsPath);
+      writeJson(settingsPath, next);
       return next;
     },
     status: () => {

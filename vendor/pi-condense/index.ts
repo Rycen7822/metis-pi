@@ -53,7 +53,7 @@ import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowe
 import { detectChains, withClosingMessage } from "./src/chain-detector.js";
 import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.js";
 import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.js";
-import { archiveToolOutput, spillOversizedBatch } from "./src/spill.js";
+import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./src/spill.js";
 import { bareToolCallId, occKey } from "./src/occurrence-key.js";
 import { DiagnosticSink } from "./src/diagnostics.js";
 
@@ -296,6 +296,15 @@ export default function (pi: ExtensionAPI) {
       }
     };
 
+    type ResultSlot =
+      | {
+          summaryText: string;
+          usage?: import("./src/types.js").SummarizeResult["usage"];
+          deterministic?: boolean;
+        }
+      | null
+      | "trivial"
+      | "deduped";
     let batches: CapturedBatch[] = [];
     let sessionManager: SessionAppender | undefined;
     const persistArgumentEntry = (type: string, data: unknown) => appendEntry ? appendEntry(type, data) : pi.appendEntry(type, data);
@@ -333,13 +342,8 @@ export default function (pi: ExtensionAPI) {
             && projectArguments(before, [group], effectiveProtection()) !== before);
         const after = projectArguments(before, candidates.map(candidate => candidate.group), effectiveProtection());
         if (after !== before && JSON.stringify(after).length < JSON.stringify(before).length) {
-          const records: import("./src/types.js").ToolCallRecord[] = [];
-          for (const { batch } of candidates) for (const call of batch.toolCalls) {
-            await archiveToolOutput(call, batch, { indexer, sessionDir: ctx.sessionManager.getSessionDir(),
-              sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistArgumentEntry });
-            records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true });
-          }
-          await indexer.backfillChainRecords(records, { spillThreshold: currentConfig.value.spillThreshold,
+          await archiveBatches(candidates.map(({ batch }) => batch), { indexer,
+            spillThreshold: currentConfig.value.spillThreshold,
             spillPreviewBytes: currentConfig.value.spillPreviewBytes, sessionDir: ctx.sessionManager.getSessionDir(),
             sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistArgumentEntry });
           const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
@@ -401,151 +405,125 @@ export default function (pi: ExtensionAPI) {
       }
 
       // ── Pre-flush content-hash dedup pass ────────────────────────────
-      // For each tool call, check the indexer's contentHashToOriginal map.
-      // A hit means an identical (toolName, normalized resultText) pair has
-      // already been summarized in an earlier flush. Register the duplicate
-      // as an alias of the original (so pruneMessages stub-replaces its
-      // ToolResultMessage with the original's short ref) and drop it from
-      // the batch BEFORE the summarizer / trivial classifier runs.
-      //
-      // We track per-batch deduped counts so we can:
-      //   - count dedup'd tool calls toward `totalToolCallCount` and
-      //     `totalRawCharCount` (they were addressed by this flush even
-      //     though no LLM call was made for them),
-      //   - tag fully-dedup'd batches with a `"deduped"` ResultSlot so the
-      //     existing result loop treats them the same way it treats trivial
-      //     batches (advance the frontier without writing a summary).
-      const dedupedPerBatch: { toolCalls: import("./src/types.js").CapturedToolCall[]; rawChars: number }[] = batches.map(() => ({ toolCalls: [], rawChars: 0 }));
+      // A content-hash hit means an identical (toolName, exact resultText)
+      // pair was summarized in an earlier flush: register the duplicate as
+      // an alias of the original (pruneMessages then stub-replaces its
+      // ToolResultMessage) and drop it from the batch BEFORE the summarizer /
+      // trivial classifier runs, still counting it toward the flush totals.
       const pendingAliases: Array<[string, string, import("./src/types.js").ToolCallRecord]> = [];
       const dedupEnabled = currentConfig.value.dedupByContentHash;
+      const minChars = currentConfig.value.minBatchChars;
+      // Keep dedup separate from preparation so failed lookups restore the
+      // same pending batches as a flush that has not begun preparing them.
+      const dedupRecords = batches.map((batch, index) => ({
+        index,
+        batch,
+        deduped: [] as import("./src/types.js").CapturedToolCall[],
+        dedupedRawChars: 0,
+      }));
       if (dedupEnabled) {
-        for (let i = 0; i < batches.length; i++) {
-          const batch = batches[i];
+        for (const record of dedupRecords) {
+          const batch = record.batch;
           const remaining: typeof batch.toolCalls = [];
           for (const tc of batch.toolCalls) {
             const originalId = tc.spillPath || tc.archiveSource ? undefined : indexer.lookupByContent(tc.toolName, tc.resultText);
             const key = occKey(tc.toolCallId, tc.resultTimestamp);
             if (originalId && originalId !== key) {
               pendingAliases.push([key, originalId, { ...tc, turnIndex: batch.turnIndex, timestamp: batch.timestamp }]);
-              dedupedPerBatch[i].toolCalls.push(tc);
-              dedupedPerBatch[i].rawChars += tc.resultText.length;
+              record.deduped.push(tc);
+              record.dedupedRawChars += tc.resultText.length;
             } else {
               remaining.push(tc);
             }
           }
           // Shallow-clone the batch so we don't mutate the captured array
           // (pendingBatches consumers retain the original shape on retry).
-          batches[i] = { ...batch, toolCalls: remaining };
+          record.batch = { ...batch, toolCalls: remaining };
+          batches[record.index] = record.batch;
         }
       }
+      // Scheduling and commit share complete records; no parallel result or
+      // prepared arrays need to be kept aligned with the batch indexes.
+      const records = dedupRecords.map((record) => ({
+        ...record,
+        prepared: prepareBatch(record.batch),
+        rawChars: record.batch.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0),
+        result: null as ResultSlot,
+      }));
+      type BatchRecord = (typeof records)[number];
 
-      // ── Pre-flush trivial filter ─────────────────────────────────
-      // Classify each batch by total raw resultText chars BEFORE any LLM call.
-      // Batches below minBatchChars are marked trivial: the summarizer is
-      // skipped entirely, the frontier still advances, and the original
-      // tool-result messages stay verbatim in context. minBatchChars === 0
-      // disables the guard (every batch goes to the summarizer).
-      //
-      // A batch whose entire toolCalls array was just deduped is flagged
-      // `isFullyDeduped` so the result loop slots it as "deduped" without
-      // confusing it with the trivial path (different outcome + notification).
-      const prepared = batches.map(prepareBatch);
-      const minChars = currentConfig.value.minBatchChars;
-      const batchRawChars = batches.map((b) =>
-        b.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0),
-      );
-      const isFullyDeduped = batches.map((b, i) =>
-        dedupedPerBatch[i].toolCalls.length > 0 && b.toolCalls.length === 0,
-      );
-      const isTrivial = prepared.map((p) => p.candidateChars).map(
-        (c, i) => !isFullyDeduped[i] && minChars > 0 && c < minChars && batches[i].toolCalls.length > 0,
-      );
-      const nonTrivialIndices: number[] = [];
-      for (let i = 0; i < batches.length; i++) {
-        if (!isTrivial[i] && !isFullyDeduped[i]) nonTrivialIndices.push(i);
-      }
+      // Batches below minBatchChars are trivial: the summarizer is skipped
+      // entirely, the frontier still advances, and the original tool-result
+      // messages stay verbatim in context. minBatchChars === 0 disables the
+      // guard. A fully-deduped batch has empty toolCalls, so it can never take
+      // the trivial path (different outcome + notification).
+      const isFullyDeduped = (record: BatchRecord) => record.deduped.length > 0 && record.batch.toolCalls.length === 0;
+      const isTrivial = (record: BatchRecord) =>
+        minChars > 0 && record.prepared.candidateChars < minChars && record.batch.toolCalls.length > 0;
+      const packedResult = (record: BatchRecord): ResultSlot =>
+        record.prepared.packedBatch.toolCalls.length ? { summaryText: record.prepared.packedText, deterministic: true } : "trivial";
+      const summarizable = records.filter((record) => !isFullyDeduped(record) && !isTrivial(record));
 
       // Only show "summarizing…" if at least one batch will actually be sent
       // to the LLM. An all-trivial flush is purely bookkeeping.
-      if (nonTrivialIndices.length > 0) {
+      if (summarizable.length > 0) {
         setPruneStatusWidget(ctx, currentConfig.value, "prune: summarizing…");
       }
-
-      const reportBatchTextProgress = (index: number, total: number, batch: CapturedBatch, receivedChars: number) => {
-        options.onBatchTextProgress?.(index, total, batch, receivedChars);
-      };
 
       // Summarize the non-trivial subset. When onProgress is provided
       // (/pruner now overlay) we process sequentially so each row can be
       // checked off as its LLM call completes. Trivial and fully-deduped
       // batches emit a "skipped" progress event immediately, with no
-      // spinner / no LLM call. The final `results` array is index-aligned
-      // to `batches`, with possible values: SummarizeResult (success),
-      // null (LLM failure), "trivial" (pre-flush small-batch skip), or
-      // "deduped" (pre-flush dedup ate every tool call in this batch).
-      type ResultSlot = { summaryText: string; usage?: import("./src/types.js").SummarizeResult["usage"]; deterministic?: boolean } | null | "trivial" | "deduped";
-      const packedResult = (i: number): ResultSlot => prepared[i]!.packedBatch.toolCalls.length
-        ? { summaryText: prepared[i]!.packedText, deterministic: true } : "trivial";
-      const results: ResultSlot[] = new Array(batches.length).fill(null);
-
+      // spinner / no LLM call, and commit record.result directly.
       if (options.onProgress) {
-        for (let i = 0; i < batches.length; i++) {
-          if (isFullyDeduped[i]) {
-            options.onProgress(i, batches.length, batches[i], "skipped");
-            results[i] = "deduped";
+        for (const record of records) {
+          if (isFullyDeduped(record) || isTrivial(record)) {
+            options.onProgress(record.index, records.length, record.batch, "skipped");
+            record.result = isFullyDeduped(record) ? "deduped" : packedResult(record);
             continue;
           }
-          if (isTrivial[i]) {
-            options.onProgress(i, batches.length, batches[i], "skipped");
-            results[i] = packedResult(i);
-            continue;
-          }
-          options.onProgress(i, batches.length, batches[i], "start");
+          options.onProgress(record.index, records.length, record.batch, "start");
           modelAttempted = true;
-          const r = await summarizeBatch(prepared[i]!.candidate, currentConfig.value, ctx, {
+          const r = await summarizeBatch(record.prepared.candidate, currentConfig.value, ctx, {
             signal: options.signal,
             controller: fallbackController,
-            onTextProgress: (receivedChars) => {
-              reportBatchTextProgress(i, batches.length, batches[i], receivedChars);
-            },
+            onTextProgress: (receivedChars) =>
+              options.onBatchTextProgress?.(record.index, records.length, record.batch, receivedChars),
           });
-          results[i] = r;
-          options.onProgress(i, batches.length, batches[i], r ? "done" : "skipped");
+          record.result = r;
+          options.onProgress(record.index, records.length, record.batch, r ? "done" : "skipped");
         }
       } else {
         // Mark all trivial + fully-deduped slots up front, then call
         // summarizeBatches with only the remaining batches (parallel — one
         // LLM call each).
-        for (let i = 0; i < batches.length; i++) {
-          if (isFullyDeduped[i]) results[i] = "deduped";
-          else if (isTrivial[i]) results[i] = packedResult(i);
+        for (const record of records) {
+          if (isFullyDeduped(record)) record.result = "deduped";
+          else if (isTrivial(record)) record.result = packedResult(record);
         }
-        if (nonTrivialIndices.length > 0) {
-          const nonTrivialBatches = nonTrivialIndices.map((i) => prepared[i]!.candidate);
+        if (summarizable.length > 0) {
           modelAttempted = true;
-          const ntResults = await summarizeBatches(nonTrivialBatches, currentConfig.value, ctx, {
+          const ntResults = await summarizeBatches(summarizable.map((record) => record.prepared.candidate), currentConfig.value, ctx, {
             onBatchTextProgress: (ntIndex, _ntTotal, batch, receivedChars) => {
-              const origIndex = nonTrivialIndices[ntIndex];
-              reportBatchTextProgress(origIndex, batches.length, batch, receivedChars);
+              const record = summarizable[ntIndex]!;
+              options.onBatchTextProgress?.(record.index, records.length, batch, receivedChars);
             },
             signal: options.signal,
             controller: fallbackController,
           });
-          for (let k = 0; k < nonTrivialIndices.length; k++) {
-            results[nonTrivialIndices[k]] = ntResults[k];
-          }
+          for (let k = 0; k < summarizable.length; k++) summarizable[k]!.result = ntResults[k];
         }
       }
 
       // A rejected/oversized model result must not discard a useful local pack.
       // These decisions and alias publication happen after every awaited model call.
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
+      for (const record of records) {
+        const result = record.result;
         if ((!result || (typeof result === "object" && !result.deterministic
-          && result.summaryText.length >= prepared[i]!.candidateChars))
-          && prepared[i]!.packedBatch.toolCalls.length) {
+          && result.summaryText.length >= record.prepared.candidateChars))
+          && record.prepared.packedBatch.toolCalls.length) {
           if (result && typeof result === "object" && result.usage) statsAccum.add(result.usage);
-          results[i] = packedResult(i);
+          record.result = packedResult(record);
         }
       }
       for (const [key, originalId, occurrence] of pendingAliases) {
@@ -556,33 +534,31 @@ export default function (pi: ExtensionAPI) {
       // Process results in order; stop at first null (individual call failure).
       // Batches before the first failure are persisted; remaining are restored to
       // pendingBatches so they are retried on the next flush.
-      const processedBatches: CapturedBatch[] = [];
+      const processedBatches: BatchRecord[] = [];
       let totalRawCharCount = 0;
       let totalSummaryCharCount = 0;
       let totalToolCallCount = 0;
       let totalDedupedCount = 0;
-      const oversizedBatches: CapturedBatch[] = [];
-      const trivialBatches: CapturedBatch[] = [];
-      const dedupedBatches: CapturedBatch[] = [];
+      const oversizedBatches: BatchRecord[] = [];
+      const trivialBatches: BatchRecord[] = [];
+      const dedupedBatches: BatchRecord[] = [];
       let firstFailureIndex = -1;
 
       // Every tool call phase 1 will stub on the next render is a floor
       // source for supersession: dedup aliases regardless of batch outcome,
       // plus the batch's own calls when the batch was actually indexed.
-      const floorSources: import("./src/types.js").CapturedToolCall[] = [];
-      for (let i = 0; i < batches.length; i++) floorSources.push(...dedupedPerBatch[i].toolCalls);
+      const floorSources = records.flatMap((record) => record.deduped);
 
-      for (let i = 0; i < batches.length; i++) {
-        const result = results[i];
+      for (const [i, record] of records.entries()) {
+        const result = record.result;
         if (result === null) {
           firstFailureIndex = i;
           break;
         }
 
-        const batch = batches[i];
-        const batchRawCharCount = batchRawChars[i];
-        const dedupCount = dedupedPerBatch[i].toolCalls.length;
-        const dedupRawChars = dedupedPerBatch[i].rawChars;
+        const batch = record.batch;
+        const dedupCount = record.deduped.length;
+        const dedupRawChars = record.dedupedRawChars;
 
         // Fully-deduped batches: every tool call matched an existing
         // indexed record. The alias entries are already persisted; we just
@@ -594,8 +570,8 @@ export default function (pi: ExtensionAPI) {
           totalToolCallCount += dedupCount;
           totalDedupedCount += dedupCount;
           stubCount += dedupCount;
-          dedupedBatches.push(batch);
-          processedBatches.push(batch);
+          dedupedBatches.push(record);
+          processedBatches.push(record);
           continue;
         }
 
@@ -605,16 +581,16 @@ export default function (pi: ExtensionAPI) {
         if (result === "trivial") {
           // Count dedup'd tool calls (if any) on a partial-dedup batch even
           // though the rest of the batch was below minBatchChars.
-          totalRawCharCount += batchRawCharCount + dedupRawChars;
+          totalRawCharCount += record.rawChars + dedupRawChars;
           totalToolCallCount += batch.toolCalls.length + dedupCount;
           totalDedupedCount += dedupCount;
           stubCount += dedupCount;
-          trivialBatches.push(batch);
-          processedBatches.push(batch);
+          trivialBatches.push(record);
+          processedBatches.push(record);
           continue;
         }
 
-        const archivedBatch = result.deterministic ? prepared[i]!.packedBatch : batch;
+        const archivedBatch = result.deterministic ? record.prepared.packedBatch : batch;
         const summaryRefs = indexer.allocateSummaryRefs(archivedBatch);
         const toolNames = archivedBatch.toolCalls.map((tc) => tc.toolName);
         const decorated = substituteInlineRefs(result.summaryText, summaryRefs, toolNames);
@@ -635,7 +611,7 @@ export default function (pi: ExtensionAPI) {
         const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || charsSaved <= 0;
 
         if (result.usage) statsAccum.add(result.usage);
-        totalRawCharCount += batchRawCharCount + dedupRawChars;
+        totalRawCharCount += record.rawChars + dedupRawChars;
         totalSummaryCharCount += summaryText.length;
         totalToolCallCount += batch.toolCalls.length + dedupCount;
         totalDedupedCount += dedupCount;
@@ -669,7 +645,7 @@ export default function (pi: ExtensionAPI) {
             floorSources.push(...archivedBatch.toolCalls);
           } else {
             stubCount += dedupCount;
-            oversizedBatches.push(batch);
+            oversizedBatches.push(record);
           }
         } catch (err) {
           // Persistence error mid-loop: stop here, restore this and remaining batches.
@@ -681,7 +657,7 @@ export default function (pi: ExtensionAPI) {
           throw err;
         }
 
-        processedBatches.push(batch);
+        processedBatches.push(record);
       }
 
       lowerFloor(supersede, earliestResultTimestamp(floorSources));
@@ -701,16 +677,13 @@ export default function (pi: ExtensionAPI) {
       // Advance frontier to the last batch we actually processed. A fully
       // deduped batch has `toolCalls === []` (the dedup pass shallow-cloned
       // the batch with only the remaining non-dup calls). In that case, fall
-      // back to the matching `dedupedPerBatch[i].toolCalls` so the frontier
-      // anchor still points at a real tool call — otherwise we'd dereference
-      // `undefined.toolCallId` and the whole flush would throw, silently
-      // dropping the dedup-alias write's effect on subsequent flushes.
-      const lastBatch = processedBatches[processedBatches.length - 1];
-      const lastBatchOrigIndex = batches.indexOf(lastBatch);
-      const lastBatchAllTCs =
-        lastBatch.toolCalls.length > 0
-          ? lastBatch.toolCalls
-          : (lastBatchOrigIndex >= 0 ? dedupedPerBatch[lastBatchOrigIndex].toolCalls : []);
+      // back to the record's deduped calls so the frontier anchor still points
+      // at a real tool call — otherwise we'd dereference `undefined.toolCallId`
+      // and the whole flush would throw, silently dropping the dedup-alias
+      // write's effect on subsequent flushes.
+      const lastRecord = processedBatches[processedBatches.length - 1];
+      const lastBatch = lastRecord.batch;
+      const lastBatchAllTCs = lastBatch.toolCalls.length > 0 ? lastBatch.toolCalls : lastRecord.deduped;
       const lastTC = lastBatchAllTCs[lastBatchAllTCs.length - 1];
 
       // Outcome precedence: any actual summary wins; oversized beats deduped
@@ -775,31 +748,30 @@ export default function (pi: ExtensionAPI) {
       // are silenced by `quietOversizedSkips`, which acts as a single
       // "quiet all non-error skips" toggle.
       if (!currentConfig.value.quietOversizedSkips) {
-        for (const batch of oversizedBatches) {
-          const batchRaw = batch.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0);
-          const slot = results[batches.indexOf(batch)];
+        for (const record of oversizedBatches) {
+          const batch = record.batch;
+          const slot = record.result;
           const batchSummaryLen = slot && slot !== "trivial" && slot !== "deduped" ? slot.summaryText.length : 0;
           safeNotify(
             ctx,
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary was ${batchSummaryLen} chars vs ${batchRaw} raw chars; frontier advanced past this range`,
+            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary was ${batchSummaryLen} chars vs ${record.rawChars} raw chars; frontier advanced past this range`,
             "info"
           );
         }
-        for (const batch of trivialBatches) {
-          const batchRaw = batch.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0);
+        for (const record of trivialBatches) {
+          const batch = record.batch;
           safeNotify(
             ctx,
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${batchRaw} raw chars (< minBatchChars=${minChars}); no LLM call made; frontier advanced past this range`,
+            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${record.rawChars} raw chars (< minBatchChars=${minChars}); no LLM call made; frontier advanced past this range`,
             "info"
           );
         }
-        for (const batch of dedupedBatches) {
-          const idx = batches.indexOf(batch);
-          const n = dedupedPerBatch[idx].toolCalls.length;
-          const chars = dedupedPerBatch[idx].rawChars;
+        for (const record of dedupedBatches) {
+          const batch = record.batch;
+          const n = record.deduped.length;
           safeNotify(
             ctx,
-            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${chars} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`,
+            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${record.dedupedRawChars} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`,
             "info"
           );
         }
@@ -855,19 +827,16 @@ export default function (pi: ExtensionAPI) {
   };
 
   // ── session_start: restore config + index + stats ────────────────────────────────
-  pi.on("session_start", async (_event, ctx) => {
-    // Load config from <agent-dir>/settings.json `contextPrune` key (honors PI_CODING_AGENT_DIR)
-    currentConfig.value = await loadConfig();
-
-    // Rebuild in-memory index from persisted session entries
+  /** Rebuild the branch-scoped index, chain-id counter and stats accumulator. */
+  const rebuildBranchIndex = (ctx: ExtensionContext): void => {
     indexer.reconstructFromSession(ctx);
-
-    // Rebuild block-ref counter so new chain IDs don't collide with existing ones
     blockRefs.rebuildFrom(indexer.getChainEntries().map((e) => e.blockId));
-
-    // Rebuild stats accumulator from persisted session entries
     statsAccum.reconstructFromSession(ctx);
-    fallbackController.reset();
+  };
+
+  /** Reset branch-scoped diagnostics/frontier state, drop the old branch's queued
+   * batches, then re-probe for recoverable pending work and refresh the footer. */
+  const restoreBranchPending = (ctx: ExtensionContext): void => {
     diagnostics.reset();
     supersede.activated.clear();
     supersede.floor = 0;
@@ -875,7 +844,7 @@ export default function (pi: ExtensionAPI) {
     // Rebuild prune frontier from persisted session entries
     frontier.reconstructFromSession(ctx);
 
-    // Clear any batches queued before the session reload
+    // Clear any batches queued before the branch/session change
     pendingBatches.length = 0;
     previousFraction = null;
     rearmedPending = false;
@@ -889,6 +858,16 @@ export default function (pi: ExtensionAPI) {
 
     // Update footer status
     setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
+  };
+
+  pi.on("session_start", async (_event, ctx) => {
+    // Load config from <agent-dir>/settings.json `contextPrune` key (honors PI_CODING_AGENT_DIR)
+    currentConfig.value = await loadConfig();
+
+    rebuildBranchIndex(ctx);
+    // The fallback controller is per-session runtime state, not branch state.
+    fallbackController.reset();
+    restoreBranchPending(ctx);
 
     if (currentConfig.value.showPruneStatusLine) {
       ctx.ui.setWidget(
@@ -910,26 +889,8 @@ export default function (pi: ExtensionAPI) {
 
   // Rebuild index and stats after tree navigation too (branch may have different history)
   pi.on("session_tree", async (_event, ctx) => {
-    indexer.reconstructFromSession(ctx);
-    blockRefs.rebuildFrom(indexer.getChainEntries().map((e) => e.blockId));
-    statsAccum.reconstructFromSession(ctx);
-    diagnostics.reset();
-    supersede.activated.clear();
-    supersede.floor = 0;
-    frontier.reconstructFromSession(ctx);
-    // Pending batches belong to the old branch — discard them
-    pendingBatches.length = 0;
-    previousFraction = null;
-    rearmedPending = false;
-    if (currentConfig.value.enabled) {
-      try {
-        rearmedPending = capturePendingBatches(ctx, { rethrow: true }).length > 0;
-      } catch (err) {
-        console.error("pi-condense: reload rearm probe failed", err);
-      }
-    }
-
-    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
+    rebuildBranchIndex(ctx);
+    restoreBranchPending(ctx);
   });
 
   // Cache is a per-model prefix; these three moments are cold regardless, so

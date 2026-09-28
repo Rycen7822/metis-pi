@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, } from "node:fs";
 import { join, resolve } from "node:path";
-import { baselineFromProjectManifest, emptyProjectStateSummary, MAX_PROJECT_ENTRIES, MAX_PROJECT_MANIFEST_BYTES, MAX_PROJECT_NAME_BYTES, PROJECT_STATE_SCHEMA, projectStatePaths, readProjectConflictRecord, readProjectStateCandidate, readProjectStateManifest, readProjectStatePayload, } from "./project-state-format.js";
+import { assertCandidateNames, captureNotebookCandidate, publishNotebookManifest } from "./candidate-transaction.js";
+import { withNotebookStateLock } from "./notebook-state-lock.js";
+import { baselineFromProjectManifest, emptyProjectStateSummary, PROJECT_STATE_SCHEMA, projectStatePaths, readProjectConflictRecord, readProjectStateManifest, readProjectStatePayload, } from "./project-state-format.js";
 import { mergeProjectState } from "./project-state-merge.js";
-import { withProjectStateLock } from "./project-state-lock.js";
-import { parseProjectBindingNames, projectBindingNamesSource, projectStateCaptureSource, projectStateRestoreSource, promoteProjectBindingsSource, syncProjectBindingsSource, } from "./project-state-runtime.js";
+import { parseProjectBindingNames, projectBindingNamesSource, projectStateRestoreSource, promoteProjectBindingsSource, syncProjectBindingsSource, } from "./project-state-runtime.js";
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const MAX_NOTICE_NAMES = 24;
 export async function restoreProjectState(kernel, identity) {
     const paths = projectStatePaths(identity.project, identity.agentDir);
     mkdirSync(paths.directory, { recursive: true });
-    return withProjectStateLock(paths.lock, () => restoreProjectStateLocked(kernel, identity, paths), identity.signal);
+    return withNotebookStateLock(paths.lock, () => restoreProjectStateLocked(kernel, identity, paths), identity.signal);
 }
 export function projectStateBindingNames(identity, maxBytes) {
     const paths = projectStatePaths(identity.project, identity.agentDir);
@@ -50,69 +51,51 @@ async function restoreProjectStateLocked(kernel, identity, paths) {
 export async function writeProjectState(kernel, identity, baseline, baselineNames, maxBytes, excludeNames = new Set(), pins) {
     const paths = projectStatePaths(identity.project, identity.agentDir);
     mkdirSync(paths.directory, { recursive: true });
-    const candidateId = randomUUID();
-    const candidatePayloadPath = join(paths.directory, `candidate-${candidateId}.bin`);
-    const candidateManifestPath = join(paths.directory, `candidate-${candidateId}.json`);
+    const selected = await projectStateBindingSelection(kernel);
+    const available = new Set(await kernel.complete("", 0));
+    const names = selected
+        .filter((name) => available.has(name) && !baselineNames.has(name) && !excludeNames.has(name) && IDENTIFIER.test(name))
+        .sort();
+    assertCandidateNames(names, "Project notebook state");
+    const { candidate, payload } = await captureNotebookCandidate({
+        directory: paths.directory,
+        kernel,
+        names,
+        maxBytes,
+        failureMessage: "Project notebook checkpoint failed",
+        invalidMessage: "Project notebook checkpoint did not produce a valid candidate",
+    });
+    const committed = await withNotebookStateLock(paths.lock, () => commitCandidate({
+        paths,
+        identity,
+        baseline,
+        candidate,
+        candidatePayload: payload,
+        maxBytes,
+        pins,
+    }));
+    const committedNames = [...new Set([
+            ...(committed.manifest?.entries.map(({ name }) => name) ?? []),
+            ...candidate.skipped.map(({ name }) => name),
+        ])];
+    let syncWarning;
     try {
-        const marker = `__PI_NOTEBOOK_PROJECT_BINDINGS_${randomUUID()}__`;
-        const selected = parseProjectBindingNames(await kernel.execute(projectBindingNamesSource(marker)), marker);
-        const available = new Set(await kernel.complete("", 0));
-        const names = selected
-            .filter((name) => available.has(name) && !baselineNames.has(name) && !excludeNames.has(name) && IDENTIFIER.test(name))
-            .sort();
-        if (names.length > MAX_PROJECT_ENTRIES)
-            throw new Error(`Project notebook state exceeds ${MAX_PROJECT_ENTRIES} top-level values`);
-        if (names.some((name) => Buffer.byteLength(name) > MAX_PROJECT_NAME_BYTES)) {
-            throw new Error(`Project notebook name exceeds ${MAX_PROJECT_NAME_BYTES} bytes`);
-        }
-        const capture = await kernel.execute(projectStateCaptureSource({
-            candidates: names,
-            payloadPath: candidatePayloadPath,
-            manifestPath: candidateManifestPath,
-            maxBytes,
-        }));
-        if (capture.status !== "ok")
-            throw new Error(`Project notebook checkpoint failed: ${capture.errorText ?? "unknown error"}`);
-        const candidate = readProjectStateCandidate(candidateManifestPath, candidatePayloadPath, maxBytes);
-        if (!candidate)
-            throw new Error("Project notebook checkpoint did not produce a valid candidate");
-        const candidatePayload = readFileSync(candidatePayloadPath);
-        const committed = await withProjectStateLock(paths.lock, () => commitCandidate({
-            paths,
-            identity,
-            baseline,
-            candidate,
-            candidatePayload,
-            maxBytes,
-            pins,
-        }));
-        const committedNames = [...new Set([
-                ...(committed.manifest?.entries.map(({ name }) => name) ?? []),
-                ...candidate.skipped.map(({ name }) => name),
-            ])];
-        let syncWarning;
-        try {
-            const sync = await kernel.execute(syncProjectBindingsSource(committedNames));
-            if (sync.status !== "ok")
-                syncWarning = `Project notebook tracking could not be synchronized: ${sync.errorText ?? "unknown error"}`;
-        }
-        catch (error) {
-            syncWarning = `Project notebook tracking could not be synchronized: ${error instanceof Error ? error.message : String(error)}`;
-        }
-        if (!committed.manifest)
-            return { ...emptyProjectStateSummary(), skipped: candidate.skipped, conflicts: committed.conflicts };
-        return {
-            baseline: committed.baseline,
-            restored: committed.manifest.entries,
-            skipped: candidate.skipped,
-            conflicts: committed.conflicts,
-            ...(syncWarning ? { message: syncWarning } : {}),
-        };
+        const sync = await kernel.execute(syncProjectBindingsSource(committedNames));
+        if (sync.status !== "ok")
+            syncWarning = `Project notebook tracking could not be synchronized: ${sync.errorText ?? "unknown error"}`;
     }
-    finally {
-        rmSync(candidatePayloadPath, { force: true });
-        rmSync(candidateManifestPath, { force: true });
+    catch (error) {
+        syncWarning = `Project notebook tracking could not be synchronized: ${error instanceof Error ? error.message : String(error)}`;
     }
+    if (!committed.manifest)
+        return { ...emptyProjectStateSummary(), skipped: candidate.skipped, conflicts: committed.conflicts };
+    return {
+        baseline: committed.baseline,
+        restored: committed.manifest.entries,
+        skipped: candidate.skipped,
+        conflicts: committed.conflicts,
+        ...(syncWarning ? { message: syncWarning } : {}),
+    };
 }
 export async function promoteProjectStateBindings(kernel, names) {
     if (names.some((name) => !IDENTIFIER.test(name)))
@@ -197,16 +180,18 @@ function writeMergedProjectState(paths, identity, current, candidate, merged) {
         entries: merged.entries,
         skipped: candidate.skipped,
     };
-    const text = `${JSON.stringify(manifest, null, 2)}\n`;
-    if (Buffer.byteLength(text) > MAX_PROJECT_MANIFEST_BYTES)
-        throw new Error(`Project manifest exceeds ${MAX_PROJECT_MANIFEST_BYTES} bytes`);
-    writeFileSync(join(paths.directory, payload), merged.payload, { mode: 0o600 });
-    const temporary = `${paths.manifest}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, text, { mode: 0o600 });
-    renameSync(temporary, paths.manifest);
-    if (current?.payload && current.payload !== payload) {
+    const superseded = publishNotebookManifest({
+        directory: paths.directory,
+        manifestPath: paths.manifest,
+        manifest,
+        payloadName: payload,
+        payload: merged.payload,
+        previousPayload: current?.payload,
+        label: "Project",
+    });
+    if (superseded) {
         try {
-            rmSync(join(paths.directory, current.payload), { force: true });
+            rmSync(superseded, { force: true });
         }
         catch { }
     }

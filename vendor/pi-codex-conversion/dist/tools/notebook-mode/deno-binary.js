@@ -11,7 +11,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, sta
 import { basename, join, resolve } from "node:path";
 import { denoAssetUrl, DENO_VERSION, resolveDenoAsset } from "./deno-assets.js";
 import { extractDenoArchive } from "./deno-archive.js";
-import { acquireDirectoryLock } from "./directory-lock.js";
+import { acquireDirectoryLock } from "../code-mode/directory-lock.js";
 const DOWNLOAD_TIMEOUT_MS = 180_000;
 const INSTALL_LOCK_TIMEOUT_MS = 185_000;
 const INSTALL_LOCK_STALE_MS = 240_000;

@@ -32,14 +32,25 @@ export interface StartedNotebookSession {
 	restoreNotice?: string | undefined;
 }
 
-export async function startNotebookSession(options: {
+export interface NotebookSessionStartOptions {
 	context: ExtensionContext;
 	runtime: NotebookRuntimeOptions;
 	bridge: NotebookBridgeServer;
 	checkpointMaxBytes: number;
 	onKernelFailure?: ((kernel: DenoJupyterKernel, error: Error) => void) | undefined;
 	signal?: AbortSignal | undefined;
-}): Promise<StartedNotebookSession> {
+}
+
+/** The checkpoint identity shared by startup, recovery and journal initialization. */
+export function notebookCheckpointIdentity(context: ExtensionContext, agentDir: string): NotebookCheckpointIdentity {
+	return {
+		project: resolveNotebookProject(context.cwd),
+		session: notebookSessionIdentity(context),
+		agentDir,
+	};
+}
+
+export async function startNotebookSession(options: NotebookSessionStartOptions): Promise<StartedNotebookSession> {
 	const { context, runtime, bridge, signal } = options;
 	const startupAbort = new AbortController();
 	const startupSignal = signal ? AbortSignal.any([signal, startupAbort.signal]) : startupAbort.signal;
@@ -64,16 +75,11 @@ export async function startNotebookSession(options: {
 		if (bootstrap.status !== "ok") {
 			throw new Error(`Notebook bootstrap failed: ${bootstrap.errorText ?? "unknown error"}`);
 		}
-		const project = resolveNotebookProject(context.cwd);
-		const checkpointIdentity = {
-			project,
-			session: notebookSessionIdentity(context),
-			agentDir: runtime.agentDir,
-		};
+		const checkpointIdentity = notebookCheckpointIdentity(context, runtime.agentDir);
 		const journal = initializeNotebookJournal(checkpointIdentity, options.checkpointMaxBytes);
 		const baselineNames = new Set(await kernel.complete("", 0, signal));
 		const projectState = await restoreProjectState(kernel, {
-			project,
+			project: checkpointIdentity.project,
 			agentDir: runtime.agentDir,
 			maxBytes: options.checkpointMaxBytes,
 			signal,

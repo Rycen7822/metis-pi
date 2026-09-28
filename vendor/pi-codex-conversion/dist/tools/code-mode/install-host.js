@@ -8,11 +8,11 @@ var __rewriteRelativeImportExtension = (this && this.__rewriteRelativeImportExte
 };
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync, } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { codeModeHostBinaryName, hostAssetUrl, resolveCodeModeHostAsset } from "./host-assets.js";
+import { acquireDirectoryLock } from "./directory-lock.js";
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const INSTALL_LOCK_POLL_MS = 200;
 const INSTALL_LOCK_TIMEOUT_MS = 125_000;
@@ -30,11 +30,27 @@ export async function installCodeModeHost(options) {
         return;
     mkdirSync(resolve(destination, ".."), { recursive: true });
     const lockPath = `${destination}.lock`;
-    if (!(await acquireInstallLock(lockPath, destination, signal)))
+    let lock;
+    try {
+        lock = await acquireDirectoryLock(lockPath, {
+            waitMs: INSTALL_LOCK_TIMEOUT_MS, staleMs: INSTALL_LOCK_STALE_MS, pollMs: INSTALL_LOCK_POLL_MS,
+            signal, stopWaiting: () => existsSync(destination),
+        });
+    }
+    catch (error) {
+        if (error instanceof Error && error.message === `timed out waiting for lock: ${lockPath}`) {
+            if (existsSync(destination))
+                return;
+            throw new Error(`timed out waiting for code-mode host install lock: ${lockPath}`, { cause: error });
+        }
+        throw error;
+    }
+    if (!lock)
         return;
-    const temporary = mkdtempSync(join(tmpdir(), "pi-codex-code-mode-"));
+    let temporary;
     const staged = `${destination}.${process.pid}.tmp`;
     try {
+        temporary = mkdtempSync(join(tmpdir(), "pi-codex-code-mode-"));
         const assetUrl = hostAssetUrl(assetName);
         let bytes;
         try {
@@ -77,40 +93,19 @@ export async function installCodeModeHost(options) {
         renameSync(staged, destination);
     }
     finally {
-        rmSync(staged, { force: true });
-        rmSync(temporary, { recursive: true, force: true });
-        rmSync(lockPath, { recursive: true, force: true });
-    }
-}
-async function acquireInstallLock(lockPath, destination, signal) {
-    const deadline = Date.now() + INSTALL_LOCK_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-        signal?.throwIfAborted();
-        if (existsSync(destination))
-            return false;
         try {
-            mkdirSync(lockPath);
-            return true;
+            rmSync(staged, { force: true });
         }
-        catch (error) {
-            if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST")
-                throw error;
+        finally {
             try {
-                if (Date.now() - statSync(lockPath).mtimeMs > INSTALL_LOCK_STALE_MS) {
-                    rmSync(lockPath, { recursive: true, force: true });
-                    continue;
-                }
+                if (temporary)
+                    rmSync(temporary, { recursive: true, force: true });
             }
-            catch (statError) {
-                if (!statError || typeof statError !== "object" || !("code" in statError) || statError.code !== "ENOENT")
-                    throw statError;
+            finally {
+                lock.release();
             }
-            await delay(INSTALL_LOCK_POLL_MS, undefined, signal ? { signal } : undefined);
         }
     }
-    if (existsSync(destination))
-        return false;
-    throw new Error(`timed out waiting for code-mode host install lock: ${lockPath}`);
 }
 function walk(dir) {
     const paths = [];

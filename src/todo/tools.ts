@@ -99,7 +99,7 @@ export function renderListText(state: TodoState, sessionId: string): string {
   const count = (s: Task["status"]) => state.tasks.filter((t) => t.status === s).length;
   const done = count("complete") + count("skipped");
   const summary = `Todos: ${done}/${state.tasks.length} done (${count("complete")} complete, ${count("skipped")} skipped) · ${count("in_progress")} in progress · ${count("pending")} pending`;
-  const next = nextTaskId(state);
+  const next = nextTaskId(state, flat);
   return lines.length > 0
     ? `${summary}\n${lines.join("\n")}${next != null ? `\nnext: ${paths.get(next)}` : ""}`
     : `${summary}\n(no tasks — add some with the todo tool)`;

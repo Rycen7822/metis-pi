@@ -1,5 +1,9 @@
 # Local changes
 
+- Flush scheduling and commit share batch records containing deduplication, preparation and result state. Deduplication remains a separate first pass so partial failure restores the same pending batches; serial progress retains original batch indexes.
+
+- `src/setting-fields.ts` owns scalar row metadata and shared parsing, display and immutable writes for flat settings and nested chainCompression/purgeErrors settings. The overlay substitutes its default for an illegal value while `/pruner` commands report an error and save nothing; model picker and protected lists keep their own code. Do not re-list a field's options or re-implement its description at either entry point.
+- `index.ts`: `session_start` and `session_tree` share `rebuildBranchIndex` (indexer, block refs, stats) and `restoreBranchPending` (diagnostics/supersede reset, frontier, queue clearing, rearm probe, footer status). Config loading, fallback-controller reset and the boot widget stay at `session_start` only.
 - `src/query-tool.ts`: bounded UTF-8 pages with a selection/session cursor, explicit archive errors, a budget for the whole JSON response, and no unbounded raw records in result details. Uses the host's `typebox` package. The tool name and `toolCallIds` remain compatible; follow `nextCursor` for the rest of a large or multi-record response.
 - `package.json` / `tsconfig.json`: compile a self-contained runtime into `dist/` against Pi's host packages.
 - Parent entry `extensions/condense.ts`: defer registration until tool discovery is available; yield to an external `context_tree_query` owner with a migration notice; display cumulative summarizer usage through the existing extension status channel without adding it to the standard-usage footer total.

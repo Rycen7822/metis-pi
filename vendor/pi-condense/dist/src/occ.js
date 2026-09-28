@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { calculateContextTokens, compact, estimateTokens, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { archiveToolOutput } from "./spill.js";
+import { archiveBatches } from "./spill.js";
 import { isProtected } from "./protected.js";
 import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.js";
 import { ARGUMENT_HISTORY } from "./argument-history.js";
@@ -262,15 +262,7 @@ export function registerOcc(pi, indexer, config) {
             rewrite(ctx);
             // Archive original source separately from the effective projection. Archive
             // records do not authorize pruning and cannot resurrect context edits.
-            const records = [];
-            for (const batch of captureUnindexedBatchesFromSession(ctx.sessionManager.getBranch(), { isSummarized: key => !!indexer.getRecord(key) })) {
-                for (const call of batch.toolCalls) {
-                    await archiveToolOutput(call, batch, { indexer, sessionDir: ctx.sessionManager.getSessionDir(),
-                        sessionId: ctx.sessionManager.getSessionId(), appendEntry: (type, data) => pi.appendEntry(type, data) });
-                    records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true });
-                }
-            }
-            await indexer.backfillChainRecords(records, {
+            await archiveBatches(captureUnindexedBatchesFromSession(ctx.sessionManager.getBranch(), { isSummarized: key => !!indexer.getRecord(key) }), { indexer,
                 spillThreshold: config.value.spillThreshold, spillPreviewBytes: config.value.spillPreviewBytes,
                 sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
                 appendEntry: (type, data) => pi.appendEntry(type, data),

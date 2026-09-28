@@ -1,19 +1,26 @@
 import { resolveNotebookCheckpointMaxBytes } from "./checkpoint.js";
 import { NotebookCheckpointManager } from "./checkpoint-manager.js";
+import { NotebookExecutionRuntime } from "./execution-runtime.js";
 import { materializeNotebookJournal } from "./journal.js";
+import { runNotebookControl, disposeNotebookBindings } from "./lifecycle.js";
 import { extractNotebookNpmImports, recordNotebookNpmImports } from "./npm-imports.js";
 import { resolveNotebookProject } from "./project-identity.js";
 import { readRetainedProjectBindings } from "./project-state-metadata.js";
 import { NOTEBOOK_INTERRUPTED_NOTICE, NOTEBOOK_BOOTSTRAP_NOTICE, isNotebookBootstrapFailure, NOTEBOOK_KERNEL_FAILURE_NOTICE, } from "./runtime-health.js";
-import { startNotebookSession } from "./session-startup.js";
 import { notebookSessionIdentity } from "./session-identity.js";
+import { startNotebookSession } from "./session-startup.js";
 const MAX_NOTICE_CHARS = 16_384;
+/**
+ * The Notebook session owner: kernel, startup, session identity and checkpoint
+ * state, plus the execution runtime it constructs. It also exposes the narrow
+ * operation view that the lifecycle/recovery/profile modules consume and
+ * satisfies CodeModeExecutionClient for the shared code-mode runtime.
+ */
 export class NotebookSessionRuntime {
     options;
     checkpointMaxBytes;
     checkpoints;
-    bridge;
-    runningCellId;
+    execution;
     kernelValue;
     runtimeHealthValue = "not_started";
     identityValue;
@@ -27,21 +34,100 @@ export class NotebookSessionRuntime {
     baseline = new Set();
     startedAtValue;
     profileLoaded = false;
-    constructor(options) {
-        this.options = options.runtime;
-        this.bridge = options.bridge;
-        this.runningCellId = options.runningCellId;
-        this.checkpointMaxBytes = resolveNotebookCheckpointMaxBytes(options.runtime.maxHeapMiB);
+    constructor(options, renderStore) {
+        this.options = options;
+        this.checkpointMaxBytes = resolveNotebookCheckpointMaxBytes(options.maxHeapMiB);
+        this.execution = new NotebookExecutionRuntime(this, renderStore);
         this.checkpoints = new NotebookCheckpointManager({
             maxBytes: this.checkpointMaxBytes,
             currentKernel: () => this.kernelValue,
-            runningCellId: this.runningCellId,
+            runningCellId: () => this.execution.runningCellId(),
             reportNotice: (notice, showInUi) => {
                 this.addNotice(notice);
                 if (showInUi)
                     this.extensionContext?.ui.notify(notice, "warning");
             },
         });
+    }
+    // ── CodeModeExecutionClient ─────────────────────────────────────────────
+    execute(source, context, signal, tools = []) {
+        return this.execution.execute(source, context, signal, tools);
+    }
+    wait(cellId, yieldTimeMs, context, signal) {
+        return this.execution.wait(cellId, yieldTimeMs, context, signal);
+    }
+    terminate(cellId, context, signal) {
+        return this.execution.terminate(cellId, context, signal);
+    }
+    /** Identity check + lazy startup: the single preparation entry for every operation. */
+    async prepare(context, signal) {
+        const extension = context.extensionContext;
+        if (!extension)
+            throw new Error("Notebook Code Mode requires an extension session context");
+        if (!this.identityMatches(extension))
+            await this.shutdown();
+        await this.ensure(context, signal);
+    }
+    /** Persist the kernel's private bindings, then materialize the journal. */
+    async checkpoint(excludeNames, pins) {
+        try {
+            await this.checkpoints.flush({ requireIdle: true, force: true, excludeNames, pins });
+        }
+        catch (error) {
+            await this.recoverFromBootstrapFailure(error);
+            throw error;
+        }
+        try {
+            this.materializeJournal();
+        }
+        catch (error) {
+            if (!pins)
+                throw error;
+            this.addNotice(`Notebook journal was not materialized: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    async controlNotebook(request, context, signal) {
+        let result;
+        try {
+            result = await runNotebookControl(this, request, context, signal);
+        }
+        catch (error) {
+            await this.recoverFromBootstrapFailure(error);
+            throw error;
+        }
+        const notice = this.takeNotice();
+        return notice
+            ? { message: `${notice}\n${result.message}`, details: { ...result.details, startupNotice: notice } }
+            : result;
+    }
+    async shutdown() {
+        await this.abortStartup(new Error("Notebook session is shutting down"));
+        await this.execution.stopActive().catch(() => undefined);
+        await this.checkpoints.flush({ force: true }).catch(() => undefined);
+        try {
+            this.materializeJournal();
+        }
+        catch { }
+        await disposeNotebookBindings(this, AbortSignal.timeout(1_500)).catch(() => undefined);
+        this.execution.clear();
+        await this.teardown();
+    }
+    // ── Lifecycle / recovery / profile operation view ───────────────────────
+    kernel() { return this.kernelValue; }
+    activeCellId() { return this.execution.activeCellId(); }
+    stopActive() { return this.execution.stopActive(); }
+    markChanged() { this.checkpoints.schedule(); }
+    /** Stop the running cell and drop the session kernel without checkpointing it. */
+    async stopWithoutCheckpoint() {
+        const activeCell = await this.execution.stopActive();
+        this.execution.clear();
+        this.startupAbort?.abort(new Error("Notebook state is being reset"));
+        await this.startup?.catch(() => undefined);
+        const previous = this.detachKernel("not_started");
+        await this.checkpoints.discard();
+        this.notice = undefined;
+        await previous?.shutdown().catch(() => undefined);
+        return activeCell;
     }
     identityMatches(context) {
         return !this.identityValue || this.identityValue === sessionIdentity(context);
@@ -63,29 +149,14 @@ export class NotebookSessionRuntime {
             this.materializeJournal();
         }
         catch { }
-        const previous = this.kernelValue;
-        this.kernelValue = undefined;
-        this.runtimeHealthValue = "not_started";
-        this.startup = undefined;
+        const previous = this.detachKernel("not_started");
         await this.checkpoints.discard();
-        this.memoryValue = undefined;
-        this.startedAtValue = undefined;
-        this.profileLoaded = false;
-        this.checkpointIdentityValue = undefined;
         await previous?.shutdown().catch(() => undefined);
-        const pending = this.beginStartup(context, signal, skipProfile);
-        await pending;
+        await this.beginStartup(context, signal, skipProfile);
         return this.takeNotice();
     }
     async invalidateKernel(notice = NOTEBOOK_INTERRUPTED_NOTICE) {
-        const kernel = this.kernelValue;
-        this.kernelValue = undefined;
-        this.runtimeHealthValue = "invalidated";
-        this.startup = undefined;
-        this.memoryValue = undefined;
-        this.startedAtValue = undefined;
-        this.profileLoaded = false;
-        this.checkpointIdentityValue = undefined;
+        const kernel = this.detachKernel("invalidated");
         this.addNotice(notice);
         await kernel?.shutdown().catch(() => undefined);
     }
@@ -96,50 +167,10 @@ export class NotebookSessionRuntime {
             await this.invalidateKernel(NOTEBOOK_BOOTSTRAP_NOTICE);
         return true;
     }
-    async stopWithoutCheckpoint() {
-        this.startupAbort?.abort(new Error("Notebook state is being reset"));
-        await this.startup?.catch(() => undefined);
-        const previous = this.kernelValue;
-        this.kernelValue = undefined;
-        this.runtimeHealthValue = "not_started";
-        this.startup = undefined;
-        await this.checkpoints.discard();
-        this.memoryValue = undefined;
-        this.startedAtValue = undefined;
-        this.profileLoaded = false;
-        this.checkpointIdentityValue = undefined;
-        this.notice = undefined;
-        await previous?.shutdown().catch(() => undefined);
-    }
     async abortStartup(reason) {
         this.startupAbort?.abort(reason);
         await this.startup?.catch(() => undefined);
     }
-    async shutdown() {
-        await this.abortStartup(new Error("Notebook session is shutting down"));
-        try {
-            this.materializeJournal();
-        }
-        catch { }
-        const kernel = this.kernelValue;
-        this.kernelValue = undefined;
-        this.runtimeHealthValue = "not_started";
-        this.startup = undefined;
-        this.startupAbort = undefined;
-        this.identityValue = undefined;
-        this.checkpointIdentityValue = undefined;
-        this.checkpoints.reset();
-        this.notice = undefined;
-        this.memoryValue = undefined;
-        this.journalValue = undefined;
-        this.extensionContext = undefined;
-        this.baseline.clear();
-        this.startedAtValue = undefined;
-        this.profileLoaded = false;
-        await kernel?.shutdown().catch(() => undefined);
-        await this.bridge.shutdown();
-    }
-    kernel() { return this.kernelValue; }
     runtimeHealth() { return { state: this.runtimeHealthValue }; }
     runtimeHealthFor(context) {
         return this.identityMatches(context) ? this.runtimeHealth() : { state: "not_started" };
@@ -150,7 +181,7 @@ export class NotebookSessionRuntime {
             materializeNotebookJournal(this.journalValue);
     }
     baselineNames() { return this.baseline; }
-    configuredProfileLoaded() { return this.profileLoaded; }
+    configuredProfileActive() { return this.profileLoaded; }
     retainedBindings() {
         return this.checkpointIdentityValue
             ? readRetainedProjectBindings(this.checkpointIdentityValue, this.checkpointMaxBytes)
@@ -186,20 +217,55 @@ export class NotebookSessionRuntime {
             checkpoint: this.checkpoints.status(),
         };
     }
+    async teardown() {
+        await this.abortStartup(new Error("Notebook session is shutting down"));
+        try {
+            this.materializeJournal();
+        }
+        catch { }
+        const kernel = this.detachKernel("not_started");
+        this.startupAbort = undefined;
+        this.identityValue = undefined;
+        this.checkpoints.reset();
+        this.notice = undefined;
+        this.journalValue = undefined;
+        this.extensionContext = undefined;
+        this.baseline.clear();
+        await kernel?.shutdown().catch(() => undefined);
+        await this.execution.bridge.shutdown();
+    }
+    /** Detach the current kernel and forget every value derived from its identity. */
+    detachKernel(health) {
+        const kernel = this.kernelValue;
+        this.kernelValue = undefined;
+        this.runtimeHealthValue = health;
+        this.startup = undefined;
+        this.memoryValue = undefined;
+        this.startedAtValue = undefined;
+        this.profileLoaded = false;
+        this.checkpointIdentityValue = undefined;
+        return kernel;
+    }
     async start(context, signal, skipProfile = false) {
         this.identityValue = sessionIdentity(context);
         this.extensionContext = context;
         this.memoryValue = undefined;
-        const started = await startNotebookSession({
+        const started = await this.startSession({
             context,
             runtime: skipProfile && this.options.profile
                 ? { ...this.options, profile: undefined }
                 : this.options,
-            bridge: this.bridge,
+            bridge: this.execution.bridge,
             checkpointMaxBytes: this.checkpointMaxBytes,
             onKernelFailure: (kernel) => this.handleKernelFailure(kernel),
             ...(signal ? { signal } : {}),
         });
+        if (signal?.aborted) {
+            // The session was closed (or restarted) while the kernel was starting:
+            // discard the late result instead of reviving a torn-down session.
+            await started.kernel.shutdown().catch(() => undefined);
+            return;
+        }
         this.kernelValue = started.kernel;
         this.startedAtValue = Date.now();
         this.journalValue = started.journal;
@@ -212,16 +278,14 @@ export class NotebookSessionRuntime {
             this.addNotice(started.restoreNotice);
         }
     }
+    /** Session/kernel startup; tests override this to drive a controlled kernel. */
+    startSession(options) {
+        return startNotebookSession(options);
+    }
     handleKernelFailure(kernel) {
         if (this.kernelValue !== kernel)
             return;
-        this.kernelValue = undefined;
-        this.runtimeHealthValue = "invalidated";
-        this.startup = undefined;
-        this.memoryValue = undefined;
-        this.startedAtValue = undefined;
-        this.profileLoaded = false;
-        this.checkpointIdentityValue = undefined;
+        this.detachKernel("invalidated");
         this.addNotice(NOTEBOOK_KERNEL_FAILURE_NOTICE);
     }
     beginStartup(context, signal, skipProfile = false) {

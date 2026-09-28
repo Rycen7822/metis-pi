@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { CHECKPOINT_SCHEMA, } from "./checkpoint-format.js";
+import { assertCandidateNames } from "./candidate-transaction.js";
 import { checkpointSource, restoreSource } from "./checkpoint-runtime.js";
 import { MAX_PROJECT_ENTRIES, MAX_PROJECT_MANIFEST_BYTES, MAX_PROJECT_NAME_BYTES, parseProjectBindingMetadata, hasPayloadLayout, } from "./project-state-format.js";
 export const NOTEBOOK_CHECKPOINT_MAX_BYTES = 256 * 1024 * 1024;
@@ -52,12 +53,7 @@ export async function writeNotebookCheckpoint(kernel, identity, baselineNames, m
     mkdirSync(paths.directory, { recursive: true });
     const names = [...new Set(await kernel.complete("", 0))].sort();
     const privateNames = names.filter((name) => !baselineNames.has(name) && !excludeNames.has(name));
-    if (privateNames.length > MAX_PROJECT_ENTRIES) {
-        throw new Error(`Notebook checkpoint exceeds ${MAX_PROJECT_ENTRIES} top-level values`);
-    }
-    if (privateNames.some((name) => Buffer.byteLength(name) > MAX_PROJECT_NAME_BYTES)) {
-        throw new Error(`Notebook checkpoint name exceeds ${MAX_PROJECT_NAME_BYTES} bytes`);
-    }
+    assertCandidateNames(privateNames, "Notebook checkpoint");
     const skippedInvalid = privateNames
         .filter((name) => !IDENTIFIER.test(name))
         .map((name) => ({ name, reason: "unsupported identifier" }));

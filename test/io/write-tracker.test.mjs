@@ -6,8 +6,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { WriteDiffTracker } from "../../src/write-tracker.ts";
+import { resolveNativeMutationPath } from "../../src/native-tool-path.ts";
 
 const BUILTIN = { source: "builtin", path: "<builtin:write>" };
 const FOREIGN = { source: "npm:compatibility-test", path: "/test/custom.ts" };
@@ -76,5 +79,30 @@ test("writes are only tracked for builtin tools with sourceInfo (adapter install
   for (const source of [FOREIGN, undefined]) {
     tracker.trackStart("c", "write", { path: file("ext.txt"), content: "x\n" }, source, (p) => p);
     assert.equal(tracker.trackEnd("c", "write", source, false), undefined);
+  }
+});
+
+test("the native write target and captured pre-image agree across normalized paths", async (t) => {
+  const dir = temporaryDirectory(t);
+  const previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  t.after(() => { if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome; });
+  const cases = [
+    ["nested/../relative.txt", path.join(dir, "relative.txt")],
+    ["@prefixed.txt", path.join(dir, "prefixed.txt")],
+    ["unicode\u00a0space.txt", path.join(dir, "unicode space.txt")],
+    [pathToFileURL(path.join(dir, "url.txt")).href, path.join(dir, "url.txt")],
+    ["~/home.txt", path.join(dir, "home.txt")],
+  ];
+  const write = createWriteToolDefinition(dir);
+  for (const [input, target] of cases) {
+    fs.writeFileSync(target, "before\n");
+    const tracker = new WriteDiffTracker();
+    tracker.trackStart(input, "write", { path: input, content: "after\n" }, BUILTIN,
+      (value) => resolveNativeMutationPath(dir, value));
+    await write.execute(input, { path: input, content: "after\n" }, undefined, undefined, { cwd: dir });
+    assert.equal(fs.readFileSync(target, "utf8"), "after\n", input);
+    const change = tracker.trackEnd(input, "write", BUILTIN, false);
+    assert.deepEqual([change?.kind, change?.added, change?.removed], ["update", 1, 1], input);
   }
 });

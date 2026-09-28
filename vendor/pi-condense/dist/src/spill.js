@@ -101,6 +101,16 @@ export async function archiveToolOutput(call, batch, args) {
     if (!await importOutputArchive(call, args.sessionDir, args.sessionId))
         throw new Error("Execution archive unavailable");
 }
+/** Persist complete outputs and recovery records before a caller hides any history. */
+export async function archiveBatches(batches, args) {
+    const records = [];
+    for (const batch of batches)
+        for (const call of batch.toolCalls) {
+            await archiveToolOutput(call, batch, args);
+            records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true });
+        }
+    await args.indexer.backfillChainRecords(records, args);
+}
 /** Replace anything outside [A-Za-z0-9_-] so the id can't escape the blob dir. */
 export function sanitizeId(toolCallId) {
     return toolCallId.replace(/[^A-Za-z0-9_-]/g, "_");

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { withProjectStateLock } from "./project-state-lock.js";
+import { withNotebookStateLock } from "./notebook-state-lock.js";
 import { projectStatePaths } from "./project-state-format.js";
 const NPM_IMPORTS_SCHEMA = 1;
 const MAX_IMPORTS = 1_000;
@@ -39,7 +39,7 @@ export async function recordNotebookNpmImports(identity, imports) {
         return readNotebookNpmImports(identity);
     const paths = npmImportPaths(identity);
     mkdirSync(paths.directory, { recursive: true });
-    await withProjectStateLock(paths.lock, async () => {
+    await withNotebookStateLock(paths.lock, async () => {
         const combined = [...new Set([...readNotebookNpmImports(identity), ...imports])].sort();
         if (combined.length > MAX_IMPORTS)
             throw new Error(`Notebook npm inventory exceeds ${MAX_IMPORTS} imports`);

@@ -4,9 +4,15 @@
 
 当前锁文件使用 npm 12.0.2（需要 Node.js >=22.22.2）生成，并用 CI 的 npm 10.9.8 验证 `npm ci`。重新生成锁文件时需保留 Pi 与扩展共享的依赖布局；npm 10 直接重新求解上游 shrinkwrap 会保留重复的 TUI 实例，影响组件身份和原型补丁。
 
+## 源码 checkout 与发布包
+
+开发和重建使用 Git checkout，上游变更通过隔离分支比较并选择性移植。发布白名单仅携带 vendor 的运行期 JavaScript、tokenizer/WASM、原生二进制、Code Mode 提示文档、changelog、manifest 与许可证/来源说明；vendor 源码和构建配置留在仓库；声明本地生成，累计 patch 和整树同步已撤销。两份 dist 的运行 JavaScript 仍提交，保持本地与 Git 安装免构建。
+
+`test/package.test.mjs` 检查 `npm pack --dry-run` 的实际文件集合。发布范围变更还需从真实 tarball 解包，验证扩展加载、动态资源路径及原生文件权限；直接运行完整 checkout 不能证明白名单完整。
+
 ## 检查入口
 
-`vendor:build` 和 `vendor:check` 覆盖 Codex conversion 与 condense。condense 单独入口为 `node scripts/vendor-condense.mjs build|check|fresh`（选择其中一个参数）；`fresh` 在临时目录重建并逐字节比较随包发布的 `dist/`，不要求工作区已经提交。更新来源与补丁范围见 [UPSTREAM](../vendor/pi-condense/UPSTREAM.md) 和 [PATCHES](../vendor/pi-condense/PATCHES.md)。
+`vendor:build` 和 `vendor:check` 覆盖 Codex conversion 与 condense。声明不入 Git；直接 `check`、`check:core`、`check:test` 会先构建，再运行原类型检查。`verify` 共享 `vendor:fresh` 的构建：先构建 conversion，再仅生成 condense 声明，随后独立重建并对比 condense 产物，不覆盖待检查的 JS。condense 单独入口为 `node scripts/vendor-condense.mjs build|check|fresh`（选择其中一个参数）；直接调用 `fresh` 前需有本地构建的声明，全新 checkout 应使用自动补齐声明的 `npm run vendor:fresh`。`fresh` 在临时目录重建并逐字节比较 `dist/`，不要求工作区已经提交。更新来源与补丁范围见 [UPSTREAM](../vendor/pi-condense/UPSTREAM.md) 和 [PATCHES](../vendor/pi-condense/PATCHES.md)。
 
 | 命令 | 范围 |
 | --- | --- |
@@ -15,7 +21,7 @@
 | `npm run check:test` | 全部 `test/**/*.mts` 的 TypeScript 语义检查。 |
 | `npm test` | `scripts/test.mjs all` 稳定发现全部 `.test.mjs/.test.mts`；排除 support，Node 逐文件隔离。 |
 | `npm run test:fast` | 只运行 `test/core/`：规则、受控状态机及纯渲染原语；不创建临时仓库、任务 store 或技能目录。 |
-| `npm run test:host` | `test/contract/` 的宿主/扩展入口契约，加 package 静态交付检查。 |
+| `npm run test:host` | `test/contract/` 的宿主/扩展入口契约，加 package 实际打包检查。 |
 | `npm run test:protocol` | `test/protocol/` 的请求准备、转录、compaction/replay 与 context operation 协议；直接使用构建后的 provider。 |
 | `npm run test:io` | `test/io/` 的 Git/文件读取、todo store、patch 前镜像及 vendor 补丁交付。 |
 | `npm run test:resource` | `test/resource/` 的进程、缓存/heap、clipboard、受控 Git tracker、warning 租约与 vendor 状态/传输资源测试。 |
@@ -35,7 +41,7 @@ E3只在终端验证单击、滚轮、双击的单向链路，状态往返归组
 
 E1独占真实Git运行中更新到footer的绿红显示；E4独占滚动inset选区的完整Ctrl+C、精确sink文本、草稿保留/提交与无选区清空；清空后必须实际提交并核对provider请求，shell回显不能证明Pi存活。PTY子进程显式清除NO_COLOR并启用truecolor；全屏视口外内容不能用tmux scrollback存在性来证明，应检查当前可见窗口和实际输出。
 
-测试按执行依赖归入 `test/core/`、`test/contract/`、`test/protocol/`、`test/io/` 和 `test/resource/`；根目录只保留 package 静态交付检查。上游更新禁令检查源码；生成物由 `vendor:fresh` 清理重建并检查一致性，注册接线由真实宿主契约负责。原 chrome、transcript、host 与 vendor 专题已分配执行归属，专题命令可跨层选取。`vendor:smoke` 是注册契约的便利入口，不在 `verify` 中重复运行。测试应核对最终行为或真实宿主形状，避免只证明内部假设。
+测试按执行依赖归入 `test/core/`、`test/contract/`、`test/protocol/`、`test/io/` 和 `test/resource/`；根目录只保留 package 实际打包检查。上游更新禁令检查源码；生成物由 `vendor:fresh` 清理重建并检查一致性，注册接线由真实宿主契约负责。原 chrome、transcript、host 与 vendor 专题已分配执行归属，专题命令可跨层选取。`vendor:smoke` 是注册契约的便利入口，不在 `verify` 中重复运行。测试应核对最终行为或真实宿主形状，避免只证明内部假设。
 
 已拆开的职责边界：
 
@@ -116,13 +122,12 @@ HostData 的 core 测试只提供 model、session 标识和 getContextUsage 能�
 
 ```bash
 npm run vendor:build
-npm run vendor:patch
 npm run verify
 ```
 
-`dist/` 和 `changelog.js` 随包分发，必须由源码生成。`vendor:patch` 需要 `references/howaboua-pi-stuff/` 的 pristine 基线；只接受 git diff 的正常退出或差异退出码，启动失败、信号、输出超限及其它错误必须失败并保留旧补丁，不能发布截断输出。升级上游及载荷范围只在 [UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md)维护；本地差异只在 [PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md)维护。
+`dist/**/*.js` 和 `changelog.js` 随包分发，必须由源码生成并提交。`dist/**/*.d.ts` 由类型检查前的构建恢复，不提交。源码和 Git 历史是实现事实，[PATCHES.md](../vendor/pi-codex-conversion/PATCHES.md) 解释本地差异；[UPSTREAM.md](../vendor/pi-codex-conversion/UPSTREAM.md) 记录固定来源、载荷范围与选择性移植流程。`vendor:patch`、`vendor:sync` 及累计 patch 已撤销。
 
-`vendor:fresh` 重建后检查 tracked 改动和新生成的 untracked 文件是否与 Git 基线一致；未提交的合法源码/产物修改也会导致它失败，因此工作区修改期间需比较重复构建结果，并在隔离上游副本验证补丁重放，不能把该退出码直接当作构建漂移。
+`vendor:fresh` 重建后检查运行产物的 tracked 改动和新增 untracked 文件，并核对 condense 的完整构建输出。未提交的合法源码/运行产物修改也会导致它失败，因此工作期间比较重建字节，并在包含完整候选内容的干净隔离快照验证；不能把该退出码直接当作构建漂移。
 
 ## 代码与文档约定
 

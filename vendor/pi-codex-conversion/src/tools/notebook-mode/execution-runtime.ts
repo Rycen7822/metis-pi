@@ -13,9 +13,7 @@ import {
 	resolveCodeModeToolIdentity,
 } from "../code-mode/tool-identity.ts";
 import type {
-	CodeModeToolIdentity,
 	CodeModeToolDefinition,
-	NotebookMemoryUsage,
 	RuntimeResponse,
 	ToolExecutionContext,
 } from "../code-mode/types.ts";
@@ -30,28 +28,36 @@ const TERMINATE_GRACE_MS = 1_500;
 
 export class NotebookExecutionRuntime {
 	readonly bridge: NotebookBridgeServer;
-	private readonly session: () => NotebookSessionRuntime;
-	private readonly prepareSession: (context: ToolExecutionContext, signal?: AbortSignal) => Promise<void>;
+	private readonly session: NotebookSessionRuntime;
 	private readonly delegate: CodeModeDelegateRuntime;
 	private readonly stopOperations = new WeakMap<NotebookCell, Promise<void>>();
 	private activeCell: NotebookCell | undefined;
 	private nextCellId = 1;
 
 	constructor(
-		session: () => NotebookSessionRuntime,
-		prepareSession: (context: ToolExecutionContext, signal?: AbortSignal) => Promise<void>,
+		session: NotebookSessionRuntime,
 		renderStore?: CodeModeNestedRenderStore,
 	) {
 		this.session = session;
-		this.prepareSession = prepareSession;
 		this.delegate = new CodeModeDelegateRuntime(() => undefined, renderStore);
 		this.bridge = new NotebookBridgeServer({
-			callTool: (cellId, requestId, toolName, input) => this.callTool(cellId, requestId, toolName, input),
-			cancelTools: (cellId) => this.cancelTools(cellId),
+			callTool: async (cellId, requestId, toolName, input) => {
+				this.requireActiveCell(cellId);
+				return this.delegate.invokeDirect(cellId, requestId, codeModeNameForToolIdentity(toolName), input);
+			},
+			cancelTools: (cellId) => {
+				this.requireActiveCell(cellId);
+				this.delegate.cancelCell(cellId);
+			},
 			emit: (cellId, items) => this.requireActiveCell(cellId).emit(items),
-			notify: (cellId, text) => this.notify(cellId, text),
+			notify: (cellId, text) => {
+				this.requireActiveCell(cellId);
+				this.delegate.notifyDirect(cellId, text);
+			},
 			yield: (cellId) => this.requireActiveCell(cellId).requestYield(),
-			memory: (cellId, usage) => this.recordMemory(cellId, usage),
+			memory: (cellId, usage) => {
+				if (this.activeCell?.id === cellId) this.session.recordMemory(usage);
+			},
 		});
 	}
 
@@ -70,8 +76,8 @@ export class NotebookExecutionRuntime {
 		if (this.activeCell) {
 			throw new Error(`Notebook exec cell "${this.activeCell.id}" is still active; call wait or terminate it before starting another cell`);
 		}
-		const session = this.session();
-		await this.prepareSession(context, signal);
+		const session = this.session;
+		await session.prepare(context, signal);
 		await session.checkpoints.flush();
 		const { code, yieldTimeMs, maxOutputTokens } = parseExecSource(source);
 		const effectiveYieldTime = directToolYieldTime(code, tools) ?? yieldTimeMs ?? DEFAULT_CODE_MODE_EXEC_YIELD_MS;
@@ -176,11 +182,11 @@ export class NotebookExecutionRuntime {
 	clear(): void {
 		this.activeCell = undefined;
 		this.delegate.clear();
-		this.session().recordMemory(undefined);
+		this.session.recordMemory(undefined);
 	}
 
 	private async runCell(cell: NotebookCell, source: string, journaled: boolean): Promise<void> {
-		const session = this.session();
+		const session = this.session;
 		try {
 			const result = await session.kernel()!.execute(source, {
 				cellSource: cell.source,
@@ -226,11 +232,11 @@ export class NotebookExecutionRuntime {
 	}
 
 	private async endCellRuntime(cell: NotebookCell): Promise<void> {
-		const kernel = this.session().kernel();
+		const kernel = this.session.kernel();
 		if (!kernel) return;
 		const id = JSON.stringify(cell.id);
 		const result = await kernel.execute(`if (typeof globalThis.__piNotebook?.finish !== "function") throw new Error("Notebook runtime bootstrap unavailable: __piNotebook.finish"); await globalThis.__piNotebook.finish(${id}); undefined;`);
-		await this.session().recoverFromBootstrapFailure(result);
+		await this.session.recoverFromBootstrapFailure(result);
 		if (result.status !== "ok" && cell.result?.status === "ok") {
 			cell.result = { status: "error", items: [], errorText: result.errorText ?? "Notebook helper flush failed" };
 		}
@@ -242,7 +248,7 @@ export class NotebookExecutionRuntime {
 	}
 
 	private finishObservation(cell: NotebookCell, kind: RuntimeResponse["kind"]): RuntimeResponse {
-		const notice = this.session().takeNotice();
+		const notice = this.session.takeNotice();
 		if (notice) cell.emit([{ type: "input_text", text: notice }]);
 		const contentItems = cell.takeContent();
 		const response: RuntimeResponse = kind === "result"
@@ -276,10 +282,10 @@ export class NotebookExecutionRuntime {
 		this.delegate.cancelCell(cell.id);
 		await Promise.race([cell.waitForCompletion(), delay(CANCEL_GRACE_MS)]);
 		if (!cell.isCompleted()) {
-			const kernel = this.session().kernel();
+			const kernel = this.session.kernel();
 			try { await kernel?.interrupt(); } catch {}
 		}
-		if (isolateKernel) await this.session().invalidateKernel(NOTEBOOK_INTERRUPTED_NOTICE);
+		if (isolateKernel) await this.session.invalidateKernel(NOTEBOOK_INTERRUPTED_NOTICE);
 		await Promise.race([cell.waitForCompletion(), delay(TERMINATE_GRACE_MS)]);
 		if (!cell.isCompleted()) {
 			cell.result = { status: "aborted", items: [] };
@@ -297,7 +303,7 @@ export class NotebookExecutionRuntime {
 		if (!extension) return "Notebook kernel could not restart because its session context is unavailable";
 		if (this.activeCell) this.delegate.cancelCell(this.activeCell.id);
 		try {
-			const restoreNotice = await this.session().restart(extension);
+			const restoreNotice = await this.session.restart(extension);
 			return `Notebook kernel restarted from the last completed checkpoint; external side effects were not rolled back${restoreNotice ? `. ${restoreNotice}` : ""}`;
 		} catch (error) {
 			return `Notebook kernel restart failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -320,27 +326,8 @@ export class NotebookExecutionRuntime {
 		};
 	}
 
-	private async callTool(cellId: string, requestId: number, toolName: CodeModeToolIdentity, input: unknown): Promise<unknown> {
-		this.requireActiveCell(cellId);
-		return this.delegate.invokeDirect(cellId, requestId, codeModeNameForToolIdentity(toolName), input);
-	}
-
-	private cancelTools(cellId: string): void {
-		this.requireActiveCell(cellId);
-		this.delegate.cancelCell(cellId);
-	}
-
-	private notify(cellId: string, text: string): void {
-		this.requireActiveCell(cellId);
-		this.delegate.notifyDirect(cellId, text);
-	}
-
-	private recordMemory(cellId: string, usage: NotebookMemoryUsage): void {
-		if (this.activeCell?.id === cellId) this.session().recordMemory(usage);
-	}
-
 	private withMemory(response: RuntimeResponse): RuntimeResponse {
-		const memory = this.session().memory();
+		const memory = this.session.memory();
 		return memory ? { ...response, notebookMemory: memory } : response;
 	}
 

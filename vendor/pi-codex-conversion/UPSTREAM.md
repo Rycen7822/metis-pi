@@ -1,7 +1,7 @@
 # Vendored upstream: `@howaboua/pi-codex-conversion`
 
-This directory is a **local copy of one npm package**, vendored into metis-pi so that metis-pi
-owns it: patches live in this repo's git history instead of being wiped by `pi update`.
+This directory is a **locally maintained fork of one npm package**. Its source and
+Git history own local changes; `pi update` updates metis-pi as a whole.
 
 | | |
 |---|---|
@@ -15,14 +15,15 @@ owns it: patches live in this repo's git history instead of being wiped by `pi u
 
 This copy deliberately stays on the 3.0.34 baseline + the patches in `PATCHES.md`.
 metis-pi owns its release and update lifecycle: the upstream npm version query and
-local-checkout warning are removed, not muted. Upstream synchronization is an explicit
-maintainer action and must preserve all applicable local patches.
+local-checkout warning are removed, not muted. Upstream changes are compared and
+selectively ported in an isolated branch, preserving the behavior in `PATCHES.md`.
 
 ## What is here
 
 - `src/**` — the locally maintained upstream-derived TypeScript sources, excluding the retired voice implementation. **This is where patches are made.**
-- `dist/**` — build output (`tsc -p tsconfig.build.json`), **committed** so pi can load the
-  extension with no build step at install time.
+- `dist/**/*.js` — build output (`tsc -p tsconfig.build.json`), **committed** so pi can load
+  the extension with no install-time build. Generated `.d.ts` files are ignored by Git
+  and recreated by development checks.
 - `vendor/**` — runtime assets: `tree-sitter-bash.wasm`, `js-tiktoken` ranks.
 - `code-mode/**` — code-mode host assets and upstream notices.
 - `types/**` — public type declarations.
@@ -39,6 +40,15 @@ maintainer action and must preserve all applicable local patches.
   peer dependencies. `private: true` (we are not republishing it); its upstream identity
   and version record provenance, not an independently updated runtime package.
 
+## Published package
+
+The root `package.json` publishes compiled JavaScript, runtime tokenizer/WASM assets,
+native `src/tools/*/bin` payloads, `CUSTOM-TOOLS.md`, changelog, manifests and notices.
+TypeScript/Rust sources and build configuration remain in Git; generated declarations
+are local build outputs. There is no cumulative patch or whole-tree sync command.
+Runtime JavaScript stays committed; local/Git installs require no build step. Runtime asset
+paths and native executable permissions are preserved in packed releases.
+
 ## Deliberate omissions (payload scope)
 
 The vendored copy excludes upstream voice and keeps only the native tool binaries
@@ -49,9 +59,9 @@ needed on linux-x64. Excluded, by decision:
 - `src/tools/{exec,apply-patch,view-image}/bin/{darwin,win32}-*` and `linux-arm64` — only
   **linux-x64** native tools are vendored (this machine's platform).
 
-Re-vendoring for another platform: adjust the native-tool exclusions in
-`scripts/vendor-codex-conversion.mjs` before running `sync`. The voice exclusions
-remain in place.
+Porting another platform is an explicit source/asset change: add and verify only the
+required native payload, including its provenance, license and executable mode.
+The retired voice implementation and unrelated platform payloads remain excluded.
 
 Runtime asset lookups are relative to the package root (the code computes it as four levels up from
 `dist/tools/native/binary.js`), so the directory structure above is not free-form: `dist/`,
@@ -60,11 +70,15 @@ Runtime asset lookups are relative to the package root (the code computes it as 
 
 ## Upgrading upstream
 
-1. Refresh the pristine checkout: `cd references/howaboua-pi-stuff && git fetch --depth 1 origin main && git checkout FETCH_HEAD`
-2. `npm run vendor:sync` — copies the new sources over this tree, replays `patches/local.patch`,
-   rebuilds `dist/`, and reports any patch that no longer applies.
-3. Run the gate suite (`npm test`, `npm run check`, `npm run vendor:check`, `npm run test:pty`).
-4. Update the version/commit in this file and the entry in `CHANGELOG.md`.
+1. Create an isolated branch from the complete current source; keep a recoverable base.
+2. Compare the intended upstream revision with the pinned baseline above. Selectively port
+   source/assets while preserving `PATCHES.md`, the payload scope and runtime paths;
+   do not overwrite this tree wholesale. `references/` is an optional comparison input.
+3. Run `npm run vendor:build` and `npm run verify` from a clean candidate, then verify
+   local/Git/package loading and strict PTY for affected behavior. Commit generated JS
+   with its source changes; declarations remain reproducible local output.
+4. Update the reviewed upstream version/commit here and relevant `PATCHES.md`/CHANGELOG
+   explanations. Git history records the actual changes; no separate patch is replayed.
 
 ## Runtime notices this copy can print
 

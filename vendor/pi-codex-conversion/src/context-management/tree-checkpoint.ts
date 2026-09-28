@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { buildSessionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { buildTreeArchiveIndex, hasTreeArchiveSuccessor, TREE_ARCHIVE_ENTRY_TYPE } from "./tree-archive.ts";
+import { insertReconstructedMessages } from "../adapter/history-insertion.ts";
 
 /** Restore the archived checkpoint's source path only in model/replay context. */
 export function projectTreeCheckpointBranch(
@@ -63,26 +64,7 @@ export function projectTreeCheckpointMessages(
 	const reconstructed = buildSessionContext([...projected]).messages;
 	const desired = new Set(reconstructed.map(messageKey));
 	const retained = messages.filter((message) => !original.has(messageKey(message)) || desired.has(messageKey(message)));
-	const positions = new Map<string, number[]>();
-	retained.forEach((message, index) => {
-		const key = messageKey(message);
-		positions.set(key, [...(positions.get(key) ?? []), index]);
-	});
-	const insertions = new Map<number, AgentMessage[]>();
-	let pending: AgentMessage[] = [];
-	let last = -1;
-	for (const message of reconstructed) {
-		const key = messageKey(message);
-		const position = positions.get(key)?.shift();
-		if (position !== undefined) {
-			if (pending.length) insertions.set(position, [...(insertions.get(position) ?? []), ...pending]);
-			pending = [];
-			last = position;
-		} else if (!original.has(key)) pending.push(message);
-	}
-	if (pending.length) insertions.set(last + 1, [...(insertions.get(last + 1) ?? []), ...pending]);
-	return retained.flatMap((message, index) => [...(insertions.get(index) ?? []), message])
-		.concat(insertions.get(retained.length) ?? []);
+	return insertReconstructedMessages(retained, reconstructed, messageKey, (_message, key) => !original.has(key));
 }
 
 function messageKey(message: AgentMessage): string {

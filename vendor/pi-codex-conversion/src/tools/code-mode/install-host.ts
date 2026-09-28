@@ -9,13 +9,12 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { codeModeHostBinaryName, hostAssetUrl, resolveCodeModeHostAsset } from "./host-assets.ts";
+import { acquireDirectoryLock } from "./directory-lock.ts";
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const INSTALL_LOCK_POLL_MS = 200;
@@ -41,11 +40,25 @@ export async function installCodeModeHost(options: InstallCodeModeHostOptions): 
 	if (existsSync(destination)) return;
 	mkdirSync(resolve(destination, ".."), { recursive: true });
 	const lockPath = `${destination}.lock`;
-	if (!(await acquireInstallLock(lockPath, destination, signal))) return;
+	let lock;
+	try {
+		lock = await acquireDirectoryLock(lockPath, {
+			waitMs: INSTALL_LOCK_TIMEOUT_MS, staleMs: INSTALL_LOCK_STALE_MS, pollMs: INSTALL_LOCK_POLL_MS,
+			signal, stopWaiting: () => existsSync(destination),
+		});
+	} catch (error) {
+		if (error instanceof Error && error.message === `timed out waiting for lock: ${lockPath}`) {
+			if (existsSync(destination)) return;
+			throw new Error(`timed out waiting for code-mode host install lock: ${lockPath}`, { cause: error });
+		}
+		throw error;
+	}
+	if (!lock) return;
 
-	const temporary = mkdtempSync(join(tmpdir(), "pi-codex-code-mode-"));
+	let temporary: string | undefined;
 	const staged = `${destination}.${process.pid}.tmp`;
 	try {
+		temporary = mkdtempSync(join(tmpdir(), "pi-codex-code-mode-"));
 		const assetUrl = hostAssetUrl(assetName);
 		let bytes: Buffer;
 		try {
@@ -82,35 +95,12 @@ export async function installCodeModeHost(options: InstallCodeModeHostOptions): 
 		}
 		renameSync(staged, destination);
 	} finally {
-		rmSync(staged, { force: true });
-		rmSync(temporary, { recursive: true, force: true });
-		rmSync(lockPath, { recursive: true, force: true });
-	}
-}
-
-async function acquireInstallLock(lockPath: string, destination: string, signal: AbortSignal | undefined): Promise<boolean> {
-	const deadline = Date.now() + INSTALL_LOCK_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		signal?.throwIfAborted();
-		if (existsSync(destination)) return false;
-		try {
-			mkdirSync(lockPath);
-			return true;
-		} catch (error) {
-			if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error;
-			try {
-				if (Date.now() - statSync(lockPath).mtimeMs > INSTALL_LOCK_STALE_MS) {
-					rmSync(lockPath, { recursive: true, force: true });
-					continue;
-				}
-			} catch (statError) {
-				if (!statError || typeof statError !== "object" || !("code" in statError) || statError.code !== "ENOENT") throw statError;
-			}
-			await delay(INSTALL_LOCK_POLL_MS, undefined, signal ? { signal } : undefined);
+		try { rmSync(staged, { force: true }); }
+		finally {
+			try { if (temporary) rmSync(temporary, { recursive: true, force: true }); }
+			finally { lock.release(); }
 		}
 	}
-	if (existsSync(destination)) return false;
-	throw new Error(`timed out waiting for code-mode host install lock: ${lockPath}`);
 }
 
 function walk(dir: string): string[] {

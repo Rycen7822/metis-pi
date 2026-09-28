@@ -5,7 +5,8 @@ import { installStartupWarningFilter } from "./startup-warning-filter.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
-import { WriteDiffTracker, resolveWritePath, type WriteDiff } from "./write-tracker.ts";
+import { WriteDiffTracker, type WriteDiff } from "./write-tracker.ts";
+import { resolveNativeMutationPath } from "./native-tool-path.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration } from "./ui-metrics.ts";
 import { OutputSpeedTracker } from "./output-speed.ts";
@@ -427,7 +428,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled) return;
     const info = sourceInfoFor(event.toolName);
-    tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveWritePath(path, ctx.cwd));
+    tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveNativeMutationPath(ctx.cwd, path));
     transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
     if (chromeEnabled) metrics.toolStart(event.toolCallId, event.toolName);
     if (chromeEnabled && event.toolName === "write") metrics.writeStreaming();

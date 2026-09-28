@@ -4,7 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { isAbsolute, relative, join } from "node:path";
-import type { CapturedBatch, CapturedToolCall } from "./types.js";
+import type { CapturedBatch, CapturedToolCall, ToolCallRecord } from "./types.js";
 
 import type { ToolCallIndexer } from "./indexer.js";
 import { hashToolResult } from "./content-hash.js";
@@ -93,6 +93,20 @@ export async function archiveToolOutput(call: CapturedToolCall, batch: CapturedB
   if (!call.outputArchive) return;
   await importFusionJournal(call, batch, { ...args, archiveOnly: true });
   if (!await importOutputArchive(call, args.sessionDir, args.sessionId)) throw new Error("Execution archive unavailable");
+}
+
+/** Persist complete outputs and recovery records before a caller hides any history. */
+export async function archiveBatches(batches: readonly CapturedBatch[], args: {
+  indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
+  appendEntry: (customType: string, data?: unknown) => void;
+  spillThreshold: number; spillPreviewBytes: number;
+}): Promise<void> {
+  const records: ToolCallRecord[] = [];
+  for (const batch of batches) for (const call of batch.toolCalls) {
+    await archiveToolOutput(call, batch, args);
+    records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true });
+  }
+  await args.indexer.backfillChainRecords(records, args);
 }
 
 /** Replace anything outside [A-Za-z0-9_-] so the id can't escape the blob dir. */

@@ -117,11 +117,11 @@ export function resolveTaskRef(state: TodoState, ref: string | number): TaskRef 
     return { ok: false, error: `bad task reference "${String(ref)}" — use a path like #1 or #1.2` };
   }
   const wanted = `#${raw}`;
-  for (const [id, path] of taskPaths(state)) {
+  const paths = taskPaths(state);
+  for (const [id, path] of paths) {
     if (path === wanted) return { ok: true, id };
   }
-  const known = [...taskPaths(state).values()].join(", ") || "none";
-  return { ok: false, error: `task ${wanted} not found — current paths: ${known}` };
+  return { ok: false, error: `task ${wanted} not found — current paths: ${[...paths.values()].join(", ") || "none"}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -243,17 +243,6 @@ export function isAncestorOf(state: TodoState, ancestorId: number, id: number): 
   return false;
 }
 
-function wouldCreateCycle(state: TodoState, id: number, newParentId: number): boolean {
-  // parent chains never cycle by construction; only a reparent can. Moving id
-  // under newParentId closes a loop iff newParentId is id or a descendant of id.
-  let cur: Task | undefined = byId(state, newParentId);
-  while (cur) {
-    if (cur.id === id) return true;
-    cur = cur.parentId == null ? undefined : byId(state, cur.parentId);
-  }
-  return false;
-}
-
 /** Titles that would duplicate an existing open task (case-insensitive). */
 function openDuplicateTitles(state: TodoState): Set<string> {
   const seen = new Set<string>();
@@ -335,7 +324,7 @@ export function moveTask(state: TodoState, id: number, parentId: number | null, 
   if (parentId != null) {
     if (parentId === id) return { ok: false, error: `move: ${formatTaskId(id)} cannot be its own parent` };
     if (!byId(state, parentId)) return { ok: false, error: `move: parent ${formatTaskId(parentId)} does not exist` };
-    if (wouldCreateCycle(state, id, parentId)) return { ok: false, error: `move: ${formatTaskId(parentId)} is a descendant of ${formatTaskId(id)} (cycle)` };
+    if (isAncestorOf(state, id, parentId)) return { ok: false, error: `move: ${formatTaskId(parentId)} is a descendant of ${formatTaskId(id)} (cycle)` };
     if (depthOf(state, parentId) >= MAX_DEPTH) return { ok: false, error: `move: MAX_DEPTH=${MAX_DEPTH} reached` };
   }
   return patchTask(state, id, now, (t) => { t.parentId = parentId; });
@@ -369,7 +358,7 @@ export function skipTask(state: TodoState, id: number, reason: string, now: numb
   const clean = sanitizeText(reason);
   if (!clean) return { ok: false, error: "skip: reason required (record why for the ledger)" };
   // Cascade: unfinished descendants inherit the skip (pi-goal-x skipAllSubtasks).
-  let next = clone(state);
+  const next = clone(state);
   const affected: Task[] = [];
   const visit = (tid: number): void => {
     const t = next.tasks.find((x) => x.id === tid);
@@ -384,7 +373,6 @@ export function skipTask(state: TodoState, id: number, reason: string, now: numb
     for (const child of next.tasks.filter((x) => x.parentId === tid)) visit(child.id);
   };
   visit(id);
-  next = { ...next };
   return { ok: true, state: next, value: affected };
 }
 
@@ -531,8 +519,8 @@ export function taskRows(state: TodoState): TaskRow[] {
 }
 
 /** First available pending task, excluding top-level containers. */
-export function nextTaskId(state: TodoState): number | null {
-  const node = taskRows(state).find((n) => n.task.parentId !== null || !n.hasChildren
+export function nextTaskId(state: TodoState, rows: TaskRow[] = taskRows(state)): number | null {
+  const node = rows.find((n) => n.task.parentId !== null || !n.hasChildren
     ? n.task.status === "pending" && !n.task.claim && !isBlocked(state, n.task.id)
     : false);
   return node ? node.task.id : null;

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 const load = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 
 test("theme removes tool backgrounds through the supported palette mechanism", () => {
@@ -30,27 +31,29 @@ test("chrome modules have no direct host imports (src/ rule)", () => {
 test("package exposes display, goal, todo, condense, dynamic-agents and codex-conversion entries", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./vendor/pi-codex-conversion/dist/index.js"]);
-  assert.equal(existsSync(new URL("../extensions/appearance.ts", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../extensions/goal.ts", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../extensions/todo.ts", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../extensions/condense.ts", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../extensions/dynamic-agents.ts", import.meta.url)), true);
-  for (const path of ["dist/index.js", "dist/src/query-tool.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
-    assert.ok(existsSync(new URL(`../vendor/pi-condense/${path}`, import.meta.url)), path);
+  const packed = Object.values(JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: new URL("..", import.meta.url), encoding: "utf8",
+  })))[0];
+  const files = new Set(packed.files.map(({ path }) => path));
+  for (const name of ["appearance", "goal", "todo", "condense", "dynamic-agents"]) {
+    assert.ok(files.has(`extensions/${name}.ts`), name);
   }
-  // The vendored codex-conversion entry is loaded from its build output, which is
-  // committed (see vendor/pi-codex-conversion/UPSTREAM.md); the built entry, its
-  // runtime assets and the pristine-source patch record must all ship.
-  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/vendor/tree-sitter-bash/tree-sitter-bash.wasm", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/src/tools/exec/bin/linux-x64", import.meta.url)), true);
-  assert.equal(existsSync(new URL("../vendor/pi-codex-conversion/patches/local.patch", import.meta.url)), true);
-  // goal.ts is vendored from an Apache-2.0 upstream, so its licence text and
-  // attribution must ship with the package.
-  assert.equal(existsSync(new URL("../LICENSE-APACHE-2.0", import.meta.url)), true);
-  assert.ok(pkg.files.includes("extensions"));
-  assert.ok(pkg.files.includes("vendor"), "the vendored runtime must be part of the published files");
-  assert.ok(pkg.files.includes("LICENSE-APACHE-2.0"));
+  for (const name of ["pi-codex-conversion", "pi-condense"]) {
+    for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
+      assert.ok(files.has(`vendor/${name}/${path}`), `${name}/${path}`);
+    }
+    assert.ok(!files.has(`vendor/${name}/dist/index.d.ts`), "declarations stay in the source checkout");
+  }
+  for (const path of [
+    "changelog.js", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
+    "vendor/js-tiktoken/ranks/o200k_base.js", "src/tools/code-mode/CUSTOM-TOOLS.md",
+    "src/tools/exec/bin/linux-x64/exec_bridge", "src/tools/apply-patch/bin/linux-x64/apply_patch",
+    "src/tools/view-image/bin/linux-x64/view_image", "code-mode/vendor/code-mode-src/NOTICE",
+  ]) assert.ok(files.has(`vendor/pi-codex-conversion/${path}`), path);
+  for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
+  assert.ok(!files.has("vendor/pi-codex-conversion/patches/local.patch"), "patch replay belongs to the source checkout");
+  assert.ok(!files.has("vendor/pi-codex-conversion/src/index.ts"));
+  assert.ok(!files.has("vendor/pi-condense/index.ts"));
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);

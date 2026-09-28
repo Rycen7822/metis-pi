@@ -1,7 +1,11 @@
-import type { CodeModeHostSession } from "./host-session.js";
+/** The abort/cancel view of the host connection that operation helpers need. */
+export interface OperationCanceller {
+	send(message: unknown): void;
+	rejectOperation(id: number, error: Error): void;
+}
 
 export function cancelOperation(
-	session: CodeModeHostSession,
+	session: OperationCanceller,
 	id: number,
 ): Error {
 	const error = abortError();
@@ -12,15 +16,6 @@ export function cancelOperation(
 	}
 	session.rejectOperation(id, error);
 	return error;
-}
-
-export function operationAbort(
-	session: CodeModeHostSession,
-	id: number,
-): () => void {
-	return () => {
-		cancelOperation(session, id);
-	};
 }
 
 export function abortError(): Error {

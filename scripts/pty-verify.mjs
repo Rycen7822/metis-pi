@@ -290,7 +290,7 @@ const bootPi = () => {
   tmux(["set-option", "-g", "set-clipboard", "off"]);
   tmux(["set-option", "-g", "allow-passthrough", "off"]);
   // Keep asynchronous update banners from moving mouse targets.
-  sendKeys(["-l", `env -u DISPLAY -u WAYLAND_DISPLAY -u WSL_INTEROP -u WSL_DISTRO_NAME -u NO_COLOR FORCE_COLOR=3 COLORTERM=truecolor HOME=${HOME_DIR} PI_SKIP_VERSION_CHECK=1 PCX_PTY_CLIPBOARD_SINK=${CLIPBOARD_SINK} PCX_PTY_CLIPBOARD_READY=${CLIPBOARD_READY} ${PI_BIN}`]);
+  sendKeys(["-l", `env -u DISPLAY -u WAYLAND_DISPLAY -u WSL_INTEROP -u WSL_DISTRO_NAME -u NO_COLOR FORCE_COLOR=3 COLORTERM=truecolor HOME=${HOME_DIR} PI_SKIP_VERSION_CHECK=1 PCX_PTY_CLIPBOARD_SINK=${CLIPBOARD_SINK} PCX_PTY_CLIPBOARD_READY=${CLIPBOARD_READY} ${PI_BIN} --approve`]);
   sendKeys(["Enter"]);
 };
 const startJourney = async (name) => {

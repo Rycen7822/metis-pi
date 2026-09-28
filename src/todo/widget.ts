@@ -146,23 +146,17 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
   let tuiRef: { requestRender?: () => void } | undefined;
   let widgetRegistered = false;
   // The store opens at session_start, not at extension load — read the view
-  // state lazily and default to the collapsed list until then.
-  let expanded = (() => {
+  // state lazily and default to the collapsed, visible panel until then.
+  const storedView = (() => {
     try {
-      return system.store.settings().widgetExpanded;
+      return system.store.settings();
     } catch {
-      return false;
+      return undefined;
     }
   })();
+  let expanded = storedView?.widgetExpanded ?? false;
   // User-level hide: while set the panel stays gone regardless of tasks.
-  // Lazily read like `expanded` — the store opens at session_start.
-  let hidden = (() => {
-    try {
-      return system.store.settings().widgetHidden;
-    } catch {
-      return false;
-    }
-  })();
+  let hidden = storedView?.widgetHidden ?? false;
   // Session boundary for the completed-fold: ms epoch stamped when the panel
   // attaches (session_start). 0 before that, so a pure visibleRows() call keeps
   // the turn-only rule. See visibleRows() for why the boundary exists.
@@ -335,9 +329,7 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     toggleExpanded,
     isExpanded: () => expanded,
     setHidden,
-    hide: () => setHidden(true),
     show: () => setHidden(false),
-    isHidden: () => hidden,
     /** Test seam: the widget component the host sees (render + handleMouse). */
     component: (tui: unknown, theme?: TodoWidgetTheme) => factory(tui, theme) as {
       render(width: number): string[];
@@ -345,7 +337,6 @@ export function createTodoWidget(deps: TodoWidgetDeps) {
     },
     /** changed-hook entry point — re-evaluate visibility, render if shown. */
     refresh,
-    visibleRows,
   };
 }
 

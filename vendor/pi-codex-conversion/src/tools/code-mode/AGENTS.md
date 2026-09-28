@@ -4,4 +4,5 @@
 - Keep model-native `exec`/`wait`; never rename, configure, or add collision fallbacks.
 - Low-context custom tools belong to Code/Notebook: promoted tools get one usage line, deferred tools none; never mimic this in Structured mode.
 - `src/code-mode-preflight.ts` is the lightweight public guard API; keep its shared protocol dependency free of the extension graph.
-- `shared-runtime.ts` selects the V8 or lazily imported Notebook client; Notebook implementation stays under sibling `tools/notebook-mode/`.
+- `shared-runtime.ts` selects the V8 host client or the lazily imported Notebook session runtime; Notebook implementation stays under sibling `tools/notebook-mode/`.
+- `directory-lock.ts` owns the cross-process lease shared with Notebook; release only the observed owner file.

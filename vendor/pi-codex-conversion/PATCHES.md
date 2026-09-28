@@ -1,6 +1,6 @@
 # Local patches: pi-codex-conversion 3.0.34
 
-Edit `src/**`, run `npm run vendor:build`, then `npm run vendor:patch`. `patches/local.patch` is generated against the pristine source named in [UPSTREAM.md](UPSTREAM.md); apply with `git apply -p1` from the vendor directory. Never edit `dist/` directly. Build config and payload trimming are maintained separately in UPSTREAM.
+Edit `src/**`, run `npm run vendor:build`, and commit source with its generated runtime JavaScript. Git history owns the implementation changes; this document explains them. Generated declarations are local build output. Upstream changes are selectively ported using [UPSTREAM.md](UPSTREAM.md); there is no cumulative patch or whole-tree sync command. Never edit generated JavaScript directly.
 
 ## 1. Notebook parameters are a top-level object
 
@@ -55,9 +55,9 @@ Provider and model-related patches use the tightened JSON object contract and om
 
 ## 7. Notebook capture and payload validation
 
-`tools/notebook-mode/{capture-bindings-source,checkpoint-runtime,checkpoint,project-state-runtime,project-state-format,project-state-metadata,profile-state-format}.ts` share lexical-binding capture, hashed project/profile payload reads and checkpoint/metadata layout validation.
+`tools/notebook-mode/{capture-bindings-source,checkpoint-runtime,checkpoint,project-state-runtime,project-state-format,project-state-metadata,profile-state-format}.ts` share lexical-binding capture, hashed project/profile payload reads and checkpoint/metadata layout validation. `candidate-transaction.ts` owns the Node-side candidate allocation/capture/verification/cleanup and the payload+manifest atomic publish; `notebook-state-lock.ts` owns the store lease. Project keeps generation merge, pins and conflict records; profile keeps naming, by-value load and collision rules; the injected checkpoint protocol keeps publishing its own files. `session-runtime.ts` owns kernel, startup, session identity and checkpoint state and constructs the execution runtime, which keeps active-cell, cancellation and trace state. Lifecycle, recovery and profile operations are functions of that session owner; the duplicate controller objects, host interfaces and forwarding callbacks are removed. Startup and recovery share `notebookCheckpointIdentity`; store-specific commit and restore rules remain explicit.
 
-Preserve partial writes, close/commit order, function metadata, byte limits, scope-specific error text and checkpoint-only invalid-name entries. Callers retain schemas, restores, locks and transactions. Layout checks intentionally do not hash content. Generated-code tests use Node V8 with a Deno file-API substitute, not a live kernel.
+Preserve partial writes, close/commit order, function metadata, byte limits, scope-specific error text and checkpoint-only invalid-name entries. Callers retain schemas, restores, locks and transactions. Layout checks intentionally do not hash content. Generated-code tests use Node V8 with a Deno file-API substitute, not a live kernel; session lifecycle tests drive a controlled kernel and the real bridge, not a real Jupyter kernel.
 
 ## 8. Configuration and settings ownership
 
@@ -168,3 +168,11 @@ Current results and unverified runtime boundaries live only in the root [VALIDAT
 ## Dynamic global instructions
 
 `extension/events.ts` resolves the main-run policy through `metis:dynamic-agents` after Reserve chooses the final model, before rendering the prompt. `extension/runtime.ts` shares the source-aware history projection with live/idle requests and gates every prewarm on a resolved run snapshot. No dynamic extension listener preserves upstream behavior. The feature owner is `extensions/dynamic-agents.ts`; provider matching/configuration and request-only projection live in `src/dynamic-agents.ts`. Offline lifecycle and final-payload coverage: `test/contract/dynamic-agents.test.mjs`.
+
+## Shared history insertion and directory lease
+
+`adapter/history-insertion.ts` performs stable insertion for reasoning bookkeeping and tree checkpoints; their message identities and eligibility rules remain with each caller. `tools/code-mode/directory-lock.ts` owns one cross-process lease for Code Mode installation and Notebook persistence/install paths; `tools/notebook-mode/notebook-state-lock.ts` wraps that lease for the notebook state stores (project, profile, npm inventory, session checkpoints). Code Mode keeps its download and checksum flow, but releases only the acquired owner instead of recursively removing the lock directory.
+
+## Code Mode host client ownership
+
+`tools/code-mode/host-client.ts` owns the framed host connection, the session protocol (`session/open`, `session/execute`, `session/wait`, `session/terminate`, `session/shutdown` with its shutdown deadline), request/pending bookkeeping and the delegate/cell reply mapping; `host-connection.ts`, `host-process.ts` and `host-protocol.ts` keep framing, process and wire-schema responsibilities. The former single-purpose forwarding modules (`host-session.ts`, `host-delegation.ts`, `host-cell-operations.ts`) are gone, so do not restore a second layer that only re-exports those calls. The Rust host source, protocol fields, resource paths and the `exec`/`wait` tool names are unchanged. `test/resource/vendor-code-mode-host.test.mjs` drives a real client against a stand-in host process over the shipped frame protocol; it proves the adapter protocol, not a real V8 host cell.

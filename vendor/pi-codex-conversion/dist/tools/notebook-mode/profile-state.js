@@ -1,72 +1,67 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, } from "node:fs";
 import { join, resolve } from "node:path";
-import { acquireDirectoryLock } from "./directory-lock.js";
+import { assertCandidateNames, captureNotebookCandidate, publishNotebookManifest, } from "./candidate-transaction.js";
+import { withNotebookStateLock } from "./notebook-state-lock.js";
 import { assertProfileName, assertSafeProfileDirectory, hashProfileBytes, PROFILE_STATE_SCHEMA, profilesDirectory, profileStatePaths, profileSummary, readProfileStateManifest, readProfileStatePayload, } from "./profile-state-format.js";
-import { MAX_PROJECT_ENTRIES, MAX_PROJECT_MANIFEST_BYTES, MAX_PROJECT_NAME_BYTES, readProjectStateCandidate, } from "./project-state-format.js";
-import { projectStateCaptureSource, projectStateRestoreSource } from "./project-state-runtime.js";
+import { projectStateRestoreSource } from "./project-state-runtime.js";
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const LOCK_STALE_MS = 5 * 60_000;
-const LOCK_WAIT_MS = 5_000;
 export async function saveNotebookProfile(options) {
     assertProfileName(options.name);
     const paths = profileStatePaths(options.name, options.agentDir);
     assertSafeProfileDirectory(paths.directory, options.agentDir);
     mkdirSync(paths.directory, { recursive: true });
-    const id = randomUUID();
-    const candidatePayload = join(paths.directory, `candidate-${id}.bin`);
-    const candidateManifest = join(paths.directory, `candidate-${id}.json`);
-    try {
-        const names = [...new Set(await options.kernel.complete("", 0, options.signal))]
-            .filter((name) => IDENTIFIER.test(name) && !options.baselineNames.has(name))
-            .sort();
-        if (names.length > MAX_PROJECT_ENTRIES)
-            throw new Error(`Notebook profile exceeds ${MAX_PROJECT_ENTRIES} top-level values`);
-        if (names.some((name) => Buffer.byteLength(name) > MAX_PROJECT_NAME_BYTES)) {
-            throw new Error(`Notebook profile name exceeds ${MAX_PROJECT_NAME_BYTES} bytes`);
-        }
-        const capture = await options.kernel.execute(projectStateCaptureSource({
-            candidates: names,
-            payloadPath: candidatePayload,
-            manifestPath: candidateManifest,
-            maxBytes: options.maxBytes,
-        }), { signal: options.signal });
-        if (capture.status !== "ok")
-            throw new Error(`Notebook profile capture failed: ${capture.errorText ?? "unknown error"}`);
-        const candidate = readProjectStateCandidate(candidateManifest, candidatePayload, options.maxBytes);
-        if (!candidate)
-            throw new Error("Notebook profile capture did not produce valid state");
-        const payload = readFileSync(candidatePayload);
-        const generation = randomUUID();
-        const payloadName = `profile-${generation}.bin`;
-        const manifest = {
-            schema: PROFILE_STATE_SCHEMA,
-            name: options.name,
-            deno: candidate.deno,
-            v8: candidate.v8,
-            payload: payloadName,
-            createdAt: new Date().toISOString(),
-            sourceProject: resolve(options.project),
-            entries: candidate.entries.map((entry) => ({
-                ...entry,
-                hash: hashProfileBytes(payload.subarray(entry.offset, entry.offset + entry.length)),
-            })),
-            skipped: candidate.skipped,
-        };
-        await withProfileLock(paths.lock, async () => writeProfile(paths, manifest, payload), options.signal);
-        return profileSummary(manifest);
-    }
-    finally {
-        rmSync(candidatePayload, { force: true });
-        rmSync(candidateManifest, { force: true });
-    }
+    const names = [...new Set(await options.kernel.complete("", 0, options.signal))]
+        .filter((name) => IDENTIFIER.test(name) && !options.baselineNames.has(name))
+        .sort();
+    assertCandidateNames(names, "Notebook profile");
+    const { candidate, payload } = await captureNotebookCandidate({
+        directory: paths.directory,
+        kernel: options.kernel,
+        names,
+        maxBytes: options.maxBytes,
+        signal: options.signal,
+        failureMessage: "Notebook profile capture failed",
+        invalidMessage: "Notebook profile capture did not produce valid state",
+    });
+    const generation = randomUUID();
+    const payloadName = `profile-${generation}.bin`;
+    const manifest = {
+        schema: PROFILE_STATE_SCHEMA,
+        name: options.name,
+        deno: candidate.deno,
+        v8: candidate.v8,
+        payload: payloadName,
+        createdAt: new Date().toISOString(),
+        sourceProject: resolve(options.project),
+        entries: candidate.entries.map((entry) => ({
+            ...entry,
+            hash: hashProfileBytes(payload.subarray(entry.offset, entry.offset + entry.length)),
+        })),
+        skipped: candidate.skipped,
+    };
+    await withNotebookStateLock(paths.lock, async () => {
+        const previous = readProfileStateManifest(paths.manifest, manifest.name);
+        const superseded = publishNotebookManifest({
+            directory: paths.directory,
+            manifestPath: paths.manifest,
+            manifest,
+            payloadName: manifest.payload,
+            payload,
+            previousPayload: previous?.payload,
+            label: "Notebook profile",
+        });
+        if (superseded)
+            rmSync(superseded, { force: true });
+    }, options.signal);
+    return profileSummary(manifest);
 }
 export async function loadNotebookProfile(options) {
     assertProfileName(options.name);
     const paths = profileStatePaths(options.name, options.agentDir);
     assertSafeProfileDirectory(paths.directory, options.agentDir);
     mkdirSync(paths.directory, { recursive: true });
-    return withProfileLock(paths.lock, async () => {
+    return withNotebookStateLock(paths.lock, async () => {
         const manifest = readProfileStateManifest(paths.manifest, options.name);
         if (!manifest)
             throw new Error(`Notebook profile not found or invalid: ${options.name}`);
@@ -74,7 +69,7 @@ export async function loadNotebookProfile(options) {
         if (!readProfileStatePayload(manifest, payloadPath, options.maxBytes)) {
             throw new Error(`Notebook profile payload is missing or invalid: ${options.name}`);
         }
-        const current = new Set([...new Set(await options.kernel.complete("", 0, options.signal))]
+        const current = new Set((await options.kernel.complete("", 0, options.signal))
             .filter((name) => IDENTIFIER.test(name) && !options.baselineNames.has(name)));
         const collisions = manifest.entries.map(({ name }) => name).filter((name) => current.has(name));
         if (collisions.length > 0)
@@ -130,32 +125,9 @@ export function notebookProfileBindingNames(name, agentDir, maxBytes) {
         return [];
     }
 }
-function writeProfile(paths, manifest, payload) {
-    const previous = readProfileStateManifest(paths.manifest, manifest.name);
-    const text = `${JSON.stringify(manifest, null, 2)}\n`;
-    if (Buffer.byteLength(text) > MAX_PROJECT_MANIFEST_BYTES)
-        throw new Error(`Notebook profile manifest exceeds ${MAX_PROJECT_MANIFEST_BYTES} bytes`);
-    writeFileSync(join(paths.directory, manifest.payload), payload, { mode: 0o600 });
-    const temporary = `${paths.manifest}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, text, { mode: 0o600 });
-    renameSync(temporary, paths.manifest);
-    if (previous?.payload && previous.payload !== manifest.payload)
-        rmSync(join(paths.directory, previous.payload), { force: true });
-}
 export class NotebookProfileRestoreError extends Error {
     constructor(message, options) {
         super(message, options);
         this.name = "NotebookProfileRestoreError";
-    }
-}
-async function withProfileLock(path, operation, signal) {
-    const lock = await acquireDirectoryLock(path, { waitMs: LOCK_WAIT_MS, staleMs: LOCK_STALE_MS, pollMs: 50, signal });
-    if (!lock)
-        throw new Error("Notebook profile lock became unavailable");
-    try {
-        return await operation();
-    }
-    finally {
-        lock.release();
     }
 }

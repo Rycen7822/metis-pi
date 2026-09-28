@@ -52,7 +52,7 @@ test("renderedThinkingRuns: semantic typing, empty runs, barriers and boundaries
   ]);
 });
 
-test("serial read appends update group membership, refresh hints and only the last image notice", () => {
+test("serial read appends update group membership and only the last image notice", () => {
   const transcript = new TranscriptState();
   const session = { ...sessionStub, transcript };
   const renderers = makeRenderers((s) => new FakeText(s), () => "ctrl+o to expand", undefined, undefined, undefined, undefined, session);
@@ -67,7 +67,6 @@ test("serial read appends update group membership, refresh hints and only the la
     ids.push(id);
     assert.deepEqual(transcript.groupMemberIds(1), ids);
     assert.equal(transcript.explorationPlan(ids[0]).groupImages, ids.length, "older members see the new total");
-    assert.ok(transcript.takeDirtyViews().some((key) => key.startsWith("member:")), "every append requests member refresh");
     for (let member = 0; member < ids.length; member++) {
       const args = { path: `figures/${IMAGE_NAMES[member]}` };
       const call = renderers.read.renderCall(args, theme, { toolCallId: ids[member], isPartial: false, state: {}, args });

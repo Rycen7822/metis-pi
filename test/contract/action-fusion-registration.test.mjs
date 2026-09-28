@@ -95,6 +95,11 @@ for (const foreignWrite of [false, true]) test(`real host registers native fusio
   const changed = await session.extensionRunner.emitToolResult({ type: "tool_result", toolName: "write", toolCallId: "native-fused", input: {}, content: result.content, details: result.details, isError: false });
   assert.equal(changed.isError, true);
   assert.equal(result.details.metisActionFusion.mutationStatus, "success");
+  const normalizedTarget = join(cwd, "fusion path");
+  writeFileSync(normalizedTarget, "before");
+  const normalized = await write.definition.execute("normalized", { path: "@fusion\u00a0path", content: "after" }, undefined, undefined, ctx);
+  assert.equal(readFileSync(normalizedTarget, "utf8"), "after");
+  assert.equal(normalized.details.metisWriteDiff.kind, "update");
   await session.extensionRunner.emit({ type: "session_start" });
   assert.equal(session.extensionRunner.getAllRegisteredTools().filter(tool => tool.definition.name === "write").length, 1);
   const pending = write.definition.execute("shutdown-fused", { path: "other", content: "saved before shutdown", then_run: { command: "printf started > started; sleep 20" } }, undefined, undefined, ctx);

@@ -1,25 +1,12 @@
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type TProperties, type TObject, type Static } from "typebox";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createEditToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { executeFusion, fusionFailed, THEN_RUN_SCHEMA } from "../vendor/pi-codex-conversion/dist/tools/action-fusion.js";
 import { runNativeFusionCommand } from "../vendor/pi-codex-conversion/dist/tools/action-fusion-command.js";
 import { ACTION_FUSION_AVAILABILITY } from "../vendor/pi-codex-conversion/dist/tools/action-fusion-availability.js";
 import { snapshotFile, computeWriteDiff } from "../src/write-tracker.ts";
-
-// Match the native tool's path normalization, including URLs and shell paths.
-export function resolveNativeMutationPath(cwd: string, path: string): string {
-  let value = path.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/gu, " ").replace(/^@/, "");
-  if (process.platform === "win32" && !value.includes("\\")) {
-    value = value.replace(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i, (_, drive: string, rest = "") => `${drive.toUpperCase()}:\\${rest.replaceAll("/", "\\")}`);
-  }
-  if (value.startsWith("file://")) value = fileURLToPath(value);
-  if (value === "~") return homedir();
-  if (value.startsWith("~/") || (process.platform === "win32" && value.startsWith("~\\"))) return resolve(homedir(), value.slice(2));
-  return resolve(cwd, value);
-}
+import { resolveNativeMutationPath } from "../src/native-tool-path.ts";
+export { resolveNativeMutationPath } from "../src/native-tool-path.ts";
 
 function wrapNative<P extends TProperties, D, S>(base: ToolDefinition<TObject<P>, D, S>) {
   const parameters = Type.Object({ ...base.parameters.properties, then_run: THEN_RUN_SCHEMA });

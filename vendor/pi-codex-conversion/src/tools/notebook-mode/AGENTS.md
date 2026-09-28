@@ -6,6 +6,6 @@
 - Startup lists exact-version npm imports previously used by successful project cells; guidance requires user approval before any unlisted package
 - `notebook-diagnostics.ts` maps journals to one-shot Deno diagnostics; `lsp-process.ts` owns bounded JSON-RPC process transport and never stays resident
 - Profiles load by value and never replay cells
-- `directory-lock.ts` owns cross-process leases; release only the observed owner file and never recursively delete a lock path.
+- `../code-mode/directory-lock.ts` owns cross-process leases; release only the observed owner file and never recursively delete a lock path.
 - Existing V8 Code Mode remains under `tools/code-mode/`; share its public tool, rendering, nested-tool, and output contracts without changing the vendored host.
 - Notebook Deno targets Linux, macOS, and Windows on x64/arm64; every archive and extracted executable stays version-, size-, and checksum-pinned.

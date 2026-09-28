@@ -25,8 +25,6 @@ export interface ExplorationMember {
 export interface ExplorationGroup {
   readonly id: number;
   readonly members: ExplorationMember[];
-  /** open = semantic boundary not yet hit; more members may append. */
-  open: boolean;
 }
 
 export interface ExplorationPlan {
@@ -280,8 +278,6 @@ export class TranscriptState {
    */
   private readonly sealedFingerprints = new Map<string, MessageViewKey>();
   private sessionKey = "default";
-  /** Views (groups/heads) whose plan changed since the last takeDirtyViews. */
-  private dirtyViews = new Set<string>();
 
   /** Wall clock is injectable so tests can drive run durations deterministically. */
   private readonly now: () => number;
@@ -304,7 +300,6 @@ export class TranscriptState {
     this.identityByObject = new WeakMap();
     this.nextMessageSeq = 1;
     this.sealedFingerprints.clear();
-    this.dirtyViews.clear();
   }
 
   /** Stable key for a streaming assistant message (object identity first). */
@@ -351,7 +346,6 @@ export class TranscriptState {
         const key = this.messageKeyFor(sourceObject);
         const plan = this.ensureMessagePlan(key, sourceObject);
         if (plan.finalized) break;
-        const grew = message.content.length > plan.blockCount;
         plan.blockCount = Math.max(plan.blockCount, message.content.length);
         // ONLY VISIBLE content is a boundary: a tool-call-only message_update
         // that merely appends toolCall blocks must NOT close the exploration
@@ -371,9 +365,6 @@ export class TranscriptState {
         if (visible) {
           this.closeOpenGroup();
           this.lastNode = "assistant-text";
-          this.dirtyViews.add(key);
-        } else if (grew) {
-          this.dirtyViews.add(key);
         }
         break;
       }
@@ -411,19 +402,13 @@ export class TranscriptState {
         const groupId = this.memberOf.get(event.toolCallId);
         if (groupId !== undefined) {
           const group = this.groups.get(groupId);
-          const index = group?.members.findIndex((m) => m.toolCallId === event.toolCallId) ?? -1;
-          const member = group?.members[index];
+          const member = group?.members.find((m) => m.toolCallId === event.toolCallId);
           if (member && group) {
             member.done = true;
             member.isError = event.isError === true;
             member.images = event.imageCount ?? member.images;
-            // Images grew the group total: the previous tail's aggregated
-            // notice must refresh (footer ownership moves on append anyway).
-            this.dirtyViews.add(`group:${groupId}`);
-            if (index === group.members.length - 1) this.dirtyViews.add(`member:${member.toolCallId}`);
             if (member.isError) {
-              group.open = false;
-              if (this.openGroupId === groupId) this.openGroupId = undefined;
+              this.closeOpenGroup();
             }
           }
         } else {
@@ -459,11 +444,7 @@ export class TranscriptState {
   }
 
   private closeOpenGroup(): void {
-    if (this.openGroupId !== undefined) {
-      const group = this.groups.get(this.openGroupId);
-      if (group) group.open = false;
-      this.openGroupId = undefined;
-    }
+    this.openGroupId = undefined;
   }
 
   private joinOrCreateGroup(toolCallId: string, toolName: string): void {
@@ -471,17 +452,12 @@ export class TranscriptState {
     if (existing !== undefined) return;
     let group = this.openGroupId === undefined ? undefined : this.groups.get(this.openGroupId);
     if (!group) {
-      group = { id: this.nextGroupId++, members: [], open: true };
+      group = { id: this.nextGroupId++, members: [] };
       this.groups.set(group.id, group);
       this.openGroupId = group.id;
     }
-    const previousTail = group.members.at(-1);
     group.members.push({ toolCallId, toolName, order: group.members.length, isError: false, images: 0, done: false });
     this.memberOf.set(toolCallId, group.id);
-    // Appending moves footer ownership from the old tail to the new member.
-    if (previousTail) this.dirtyViews.add(`member:${previousTail.toolCallId}`);
-    this.dirtyViews.add(`member:${toolCallId}`);
-    this.dirtyViews.add(`group:${group.id}`);
   }
 
   /** Display plan for an exploration member row (or undefined if ungrouped). */
@@ -598,13 +574,6 @@ export class TranscriptState {
     return key;
   }
 
-  /** Keys whose plans changed since the last call (grouped refresh hints). */
-  takeDirtyViews(): string[] {
-    const keys = [...this.dirtyViews];
-    this.dirtyViews.clear();
-    return keys;
-  }
-
   /**
    * Adopt the CURRENT open assistant plan for an unanchored component
    * (updateContent during streaming, where the host never passes the message
@@ -622,10 +591,7 @@ export class TranscriptState {
       if (plan.blockCount < content.length) continue;
       adopted = plan.key; // keep the LAST match: insertion order = stream order
     }
-    if (adopted) {
-      this.identityByObject.set(component, adopted);
-      this.dirtyViews.add(adopted);
-    }
+    if (adopted) this.identityByObject.set(component, adopted);
     return adopted;
   }
 
@@ -636,11 +602,6 @@ export class TranscriptState {
 
   groupMemberIds(groupId: number): string[] {
     return this.groups.get(groupId)?.members.map((m) => m.toolCallId) ?? [];
-  }
-
-  groupOpen(toolCallId: string): boolean {
-    const groupId = this.memberOf.get(toolCallId);
-    return groupId !== undefined && this.groups.get(groupId)?.open === true;
   }
 
 }
