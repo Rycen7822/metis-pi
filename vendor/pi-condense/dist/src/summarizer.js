@@ -288,6 +288,8 @@ async function runSummarization(userMessage, config, ctx, options) {
  */
 export async function summarizeBatch(batch, config, ctx, options = {}) {
     const serialized = serializeBatchForSummarizer(batch);
+    if (serialized === undefined)
+        return null;
     const userMessage = SYSTEM_PROMPT + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
     return runSummarization(userMessage, config, ctx, options);
 }

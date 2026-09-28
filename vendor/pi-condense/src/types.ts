@@ -770,6 +770,10 @@ export interface FlushMetricsEntry {
   processedBatches: number;
   /** Tool calls this flush newly made stub-eligible: dedup aliases on processed batches plus calls of batches actually indexed. 0 when nothing was indexed or aliased (all-trivial/oversized, or failure before any batch was processed). */
   stubCount: number;
+  /** Net serialized projection reductions; not provider token/cost measurements. */
+  publishedCharsSaved?: number;
+  argumentCharsSaved?: number;
+  firstChangedMessage?: number;
   outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "empty" | "error";
   /** Computed at flush ENTRY (pre-flush pressure). */
   metrics: ContextMetricsSnapshot;

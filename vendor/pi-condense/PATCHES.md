@@ -15,4 +15,10 @@
 - Capacity handoff: resolve Pi auto-compaction settings with trust/model overrides; persist 5%-window proximity and 1.5x exit hysteresis, defer automatic local/OCC rewrites without spending quota, retain archive-only imports, and require 2x buffer of whole-context headroom before/after proactive summary generation. Goal tickets wait only for native post-run handling; manual/capacity rescue remains independent.
 - Occurrence correctness: preserve error state, exact body hashes and each duplicate's own metadata/ref; recover old aliases from source or report unknown. Protected-read superseding requires identical successful reads of the same arguments/content. Projection rescans retain raw source turn indices across compaction/context edits. Recovery directory is paginated by omitting toolCallIds.
 
-The upstream summarizer implementation, existing configuration defaults and recovery grace remain. Automatic scheduling/publication and output capture differ as documented above. Settings are not migrated or overwritten; the agreed 5000-character threshold uses existing `minBatchChars`.
+- Summary inputs share a bounded 32K-character excerpt budget; preserve retained tails and cap argument previews. Recover complete arguments or historical source entries through the existing paginated query tool.
+- Successful closed large mutation groups can become stable historical records after archival and net projection shrink checks; preserve the recent interaction, fusion receipts, protected sources and edited evidence.
+- New OCC protection uses flat program metadata and historical entry references; unknown legacy and manual-chain content stays conservative. Exclude recall/polling/errors/repeated observations from work qualification and record candidate decisions without affecting request quotas.
+
+Existing configuration defaults and recovery grace remain. Automatic scheduling/publication and output capture differ as documented above. Settings are not migrated or overwritten; the agreed 5000-character threshold uses existing `minBatchChars`.
+
+- OCC headroom accounting retains system/tool-schema tokens that Pi carries through compaction; installed-package coverage includes the full extension tool table.

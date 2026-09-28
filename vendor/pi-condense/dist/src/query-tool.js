@@ -51,11 +51,13 @@ export function registerQueryTool(pi, indexer) {
     pi.registerTool({
         name: QUERY_TOOL_NAME,
         label: "Query Original Tool History",
-        description: "Omit toolCallIds to list the evidence directory, then recover archived tool outputs by short refs (t12) or raw tool call IDs. Returns JSON pages with exact text, byte offsets, completeness, and nextCursor. Repeat the same toolCallIds with nextCursor until eof. Reused IDs return every indexed occurrence. These are historical captured tool outputs, not current file contents or necessarily unfiltered process logs. Missing archives are explicit errors.",
+        description: "Omit toolCallIds to list the evidence directory, then recover archived tool outputs by short refs (t12) or raw tool call IDs. Set component=arguments to recover full original parameters, or sourceEntryIds to recover historical message/compaction/summary entries from this branch. Returns JSON pages with exact text, byte offsets, completeness, and nextCursor. Repeat the same toolCallIds with nextCursor until eof. Reused IDs return every indexed occurrence. These are historical captured tool outputs, not current file contents or necessarily unfiltered process logs. Missing archives are explicit errors.",
         promptSnippet: "Retrieve archived tool outputs by ref, following nextCursor for subsequent pages",
         promptGuidelines: ["Use context_tree_query to recover evidence omitted from pruner summaries. Follow nextCursor until the needed range or eof; incomplete pages and archive errors are not complete original outputs."],
         parameters: Type.Object({
             toolCallIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),
+            component: Type.Optional(Type.Union([Type.Literal("output"), Type.Literal("arguments")])),
+            sourceEntryIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),
             cursor: Type.Optional(Type.String({ maxLength: 2048, description: "The previous response's nextCursor; keep toolCallIds unchanged." })),
             maxBytes: Type.Optional(Type.Integer({ minimum: 2048, maximum: MAX_BYTES, description: "Total JSON text budget, including metadata and the continuation cursor. Default 32768." })),
         }),
@@ -64,7 +66,20 @@ export function registerQueryTool(pi, indexer) {
             const budget = params.maxBytes ?? MAX_BYTES;
             if (!Number.isSafeInteger(budget) || budget < 2048 || budget > MAX_BYTES)
                 throw new Error("maxBytes must be between 2048 and 32768.");
-            const selected = params.toolCallIds ? params.toolCallIds.flatMap((ref) => {
+            const component = params.component ?? "output";
+            if (params.sourceEntryIds && (params.toolCallIds || component !== "output"))
+                throw new Error("Choose sourceEntryIds or toolCallIds, not both; arguments requires toolCallIds.");
+            if (component === "arguments" && !params.toolCallIds)
+                throw new Error("Arguments requires toolCallIds.");
+            const selected = params.sourceEntryIds ? params.sourceEntryIds.map(ref => {
+                const entry = ctx.sessionManager.getBranch().find(entry => entry.id === ref);
+                const allowed = entry && (entry.type === "message" || entry.type === "compaction"
+                    || (entry.type === "custom_message" && entry.customType === "context-prune-summary"));
+                return { ref, record: allowed ? {
+                        toolCallId: ref, toolName: "historical-source", args: {}, isError: false, turnIndex: -1, timestamp: 0,
+                        resultText: JSON.stringify(entry),
+                    } : undefined };
+            }) : params.toolCallIds ? params.toolCallIds.flatMap((ref) => {
                 const records = indexer.getRecordsForId(ref);
                 return records.length ? records.map((record) => ({ ref, record })) : [{ ref }];
             }) : [{ ref: "directory", record: {
@@ -78,8 +93,8 @@ export function registerQueryTool(pi, indexer) {
                     } }];
             // Stable across reloads and normal conversation growth; branch changes
             // invalidate the cursor if they change the selected occurrences.
-            const selection = digest(JSON.stringify([ctx.sessionManager.getSessionId(), selected.map(({ ref, record: r }) => [
-                    ref, r?.toolCallId, r?.resultTimestamp, r?.timestamp, r?.contentHash ?? (r && digest(r.resultText)), r?.spillPath,
+            const selection = digest(JSON.stringify([ctx.sessionManager.getSessionId(), component, !!params.sourceEntryIds, selected.map(({ ref, record: r }) => [
+                    ref, r?.toolCallId, r?.resultTimestamp, r?.timestamp, component === "arguments" && r ? digest(JSON.stringify(r.args)) : r?.contentHash ?? (r && digest(r.resultText)), r?.spillPath,
                 ])]));
             let current = params.cursor ? decode(params.cursor) : { selection, index: 0, offset: 0 };
             if (current.selection !== selection || current.index >= selected.length)
@@ -102,17 +117,20 @@ export function registerQueryTool(pi, indexer) {
                     page = {
                         ...page, occurrence: record.resultTimestamp === undefined ? record.toolCallId : `${record.toolCallId}@${record.resultTimestamp}`,
                         legacy: record.resultTimestamp === undefined, turnIndex: record.turnIndex,
-                        source: record.archiveSource ?? "tool-result", archiveComplete: record.archiveComplete,
+                        component: params.sourceEntryIds ? "historical-source" : component,
+                        source: params.sourceEntryIds ? "historical-source" : component === "arguments" ? "tool-arguments" : record.archiveSource ?? "tool-result",
+                        archiveComplete: component === "arguments" ? !record.metadataUnavailable : record.archiveComplete,
                         tool: record.toolName, status: record.metadataUnavailable ? "UNKNOWN" : record.isError ? "ERROR" : "OK",
                         argsPreview: args.slice(0, 256), argsTruncated: args.length > 256,
                     };
-                    if (record.archiveComplete === false)
+                    if (component === "output" && record.archiveComplete === false)
                         page.error = "Execution archive is incomplete; only the captured prefix is available.";
                     if (record.metadataUnavailable)
                         page.error = "Legacy dedup source metadata is unavailable; this is the shared historical body, not verified output of this occurrence.";
                     let source;
                     try {
-                        source = await readPage(record, current.offset, budget);
+                        source = await readPage(component === "arguments"
+                            ? { ...record, spillPath: undefined, resultText: args } : record, current.offset, budget);
                     }
                     catch (error) {
                         page.error = `Archive unavailable (${error.code ?? "read failed"}); preview is not the original output.`;

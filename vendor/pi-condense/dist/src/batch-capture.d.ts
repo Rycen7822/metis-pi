@@ -38,8 +38,8 @@ export declare function captureBatch(message: any, toolResults: any[], turnIndex
 export declare function captureUnindexedBatchesFromSession(branch: any[], indexer: {
     isSummarized(id: string): boolean;
 }, exclude?: (toolName: string, args: unknown) => boolean, sourceTurnIndices?: ReadonlyMap<string, number>): CapturedBatch[];
-/** Serializes a single CapturedBatch into readable text for the summarizer LLM. */
-export declare function serializeBatchForSummarizer(batch: CapturedBatch): string;
+/** Undefined means the batch identities themselves cannot safely fit the input budget. */
+export declare function serializeBatchForSummarizer(batch: CapturedBatch): string | undefined;
 /**
  * Groups CapturedBatches according to the chosen batching mode.
  *

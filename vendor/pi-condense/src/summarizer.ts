@@ -354,6 +354,7 @@ export async function summarizeBatch(
   options: SummarizeBatchOptions = {}
 ): Promise<SummarizeResult | null> {
   const serialized = serializeBatchForSummarizer(batch);
+  if (serialized === undefined) return null;
   const userMessage =
     SYSTEM_PROMPT + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
   return runSummarization(userMessage, config, ctx, options);

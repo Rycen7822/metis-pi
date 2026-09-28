@@ -14,7 +14,12 @@ export declare function withoutThinkingBlocks(msg: AssistantMessage): AssistantM
 export declare function buildSyntheticChainMessage(entry: ChainCompressionEntry, summary: string, blockSummaryLookup?: (blockId: string) => string | undefined, protectedOutputs?: {
     tool: string;
     text: string;
-}[]): UserMessage;
+}[]): UserMessage & {
+    metisDerived: {
+        kind: "condense-chain";
+        blockId: string;
+    };
+};
 /**
  * Resolves a persisted chain entry to a positional index range.
  *

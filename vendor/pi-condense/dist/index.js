@@ -16,11 +16,12 @@ import { registerOcc } from "./src/occ.js";
 import { loadConfig } from "./src/config.js";
 import { capImages, imageLimitFor } from "./src/image-cap.js";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.js";
+import { ARGUMENT_HISTORY, argumentCandidates, projectArguments } from "./src/argument-history.js";
 import { prepareBatch } from "./src/packing.js";
 import { summarizeBatch, summarizeBatches, summarizeRange } from "./src/summarizer.js";
 import { FallbackController } from "./src/summarizer-fallback.js";
 import { ToolCallIndexer } from "./src/indexer.js";
-import { pruneMessages } from "./src/pruner.js";
+import { pruneMessages, toolResultStub } from "./src/pruner.js";
 import { isProtected } from "./src/protected.js";
 import { registerQueryTool } from "./src/query-tool.js";
 import { registerCommands, setPruneStatusWidget } from "./src/commands.js";
@@ -51,6 +52,14 @@ export default function (pi) {
     // Shared indexer — rebuilt from session on every session_start / session_tree
     const indexer = new ToolCallIndexer();
     const occ = registerOcc(pi, indexer, currentConfig);
+    let argumentHistory = [];
+    const restoreArguments = (ctx) => {
+        argumentHistory = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === ARGUMENT_HISTORY)
+            .map(entry => entry.data)
+            .filter(group => group?.version === 1 && Array.isArray(group.sourceIds) && Array.isArray(group.fingerprints) && Array.isArray(group.keys) && typeof group.text === "string");
+    };
+    pi.on("session_start", (_event, ctx) => restoreArguments(ctx));
+    pi.on("session_tree", (_event, ctx) => restoreArguments(ctx));
     // Shared stats accumulator — tracks cumulative token/cost stats for summarizer calls
     const statsAccum = new StatsAccumulator();
     // Session-scoped summarizer outage-fallback controller (in-memory; reset on session_start).
@@ -211,6 +220,9 @@ export default function (pi) {
         let processedCount = 0;
         let stubCount = 0;
         let publishedAliasesOrArchives = false;
+        let publishedCharsSaved = 0;
+        let argumentCharsSaved = 0;
+        let firstChangedMessage;
         let modelAttempted = false;
         let outcome = "empty";
         let appendEntry;
@@ -222,6 +234,7 @@ export default function (pi) {
                 capturedBatches,
                 processedBatches: processedCount,
                 stubCount,
+                publishedCharsSaved, argumentCharsSaved, firstChangedMessage,
                 outcome,
                 metrics: entryMetrics,
             };
@@ -237,6 +250,7 @@ export default function (pi) {
         };
         let batches = [];
         let sessionManager;
+        const persistArgumentEntry = (type, data) => appendEntry ? appendEntry(type, data) : pi.appendEntry(type, data);
         try {
             // Bind the session appender as soon as delivery is known, BEFORE the
             // empty-capture/aborted exits below — so emitFlushMetricsOnce's finally
@@ -259,6 +273,41 @@ export default function (pi) {
                 batches = [{ ...batches[batches.length - 1],
                         assistantText: batches.map((batch) => batch.assistantText).filter(Boolean).join("\n"),
                         toolCalls: batches.flatMap((batch) => batch.toolCalls), }];
+            }
+            isFlushing = true;
+            if (trigger === "message-end") {
+                const base = ctx.sessionManager.buildSessionProjection();
+                const before = projectContext(base.messages, ctx.model?.api, ctx).messages;
+                const argumentProtection = effectiveProtection();
+                const candidates = argumentCandidates(base.entries, argumentProtection, argumentHistory)
+                    .filter(({ group }) => !group.keys.some(key => indexer.getRecord(key)?.metadataUnavailable)
+                    && projectArguments(before, [group], effectiveProtection()) !== before);
+                const after = projectArguments(before, candidates.map(candidate => candidate.group), effectiveProtection());
+                if (after !== before && JSON.stringify(after).length < JSON.stringify(before).length) {
+                    const records = [];
+                    for (const { batch } of candidates)
+                        for (const call of batch.toolCalls) {
+                            await archiveToolOutput(call, batch, { indexer, sessionDir: ctx.sessionManager.getSessionDir(),
+                                sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistArgumentEntry });
+                            records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true });
+                        }
+                    await indexer.backfillChainRecords(records, { spillThreshold: currentConfig.value.spillThreshold,
+                        spillPreviewBytes: currentConfig.value.spillPreviewBytes, sessionDir: ctx.sessionManager.getSessionDir(),
+                        sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistArgumentEntry });
+                    const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
+                    if (currentConfig.value.enabled && JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection)
+                        && JSON.stringify(current) === JSON.stringify(before)) {
+                        for (const { group } of candidates) {
+                            persistArgumentEntry(ARGUMENT_HISTORY, group);
+                            argumentHistory.push(group);
+                        }
+                        const keys = new Set(candidates.flatMap(candidate => candidate.group.keys));
+                        batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !keys.has(occKey(call.toolCallId, call.resultTimestamp))) })).filter(batch => batch.toolCalls.length);
+                        publishedAliasesOrArchives = true;
+                        argumentCharsSaved += JSON.stringify(before).length - JSON.stringify(after).length;
+                        firstChangedMessage = before.findIndex((message, index) => JSON.stringify(message) !== JSON.stringify(after[index]));
+                    }
+                }
             }
             capturedBatches = batches.length;
             if (batches.length === 0) {
@@ -497,17 +546,33 @@ export default function (pi) {
                 const toolNames = archivedBatch.toolCalls.map((tc) => tc.toolName);
                 const decorated = substituteInlineRefs(result.summaryText, summaryRefs, toolNames);
                 const summaryText = decorated + formatSummaryToolCallRefs(summaryRefs);
-                const replacedChars = archivedBatch.toolCalls.reduce((n, call) => n + call.resultText.length, 0);
-                const shouldSkipOversized = summaryText.length + archivedBatch.toolCalls.length * 120 > replacedChars;
+                const batchDetails = { ...makeSummaryDetails(archivedBatch, summaryRefs), representation: result.deterministic ? "packed" : "summary" };
+                const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
+                const replacements = new Map(archivedBatch.toolCalls.map((call, i) => [occKey(call.toolCallId, call.resultTimestamp), { call, ref: summaryRefs[i].shortId }]));
+                let replaced = 0;
+                const proposed = visible.map((message) => {
+                    if (message.role !== "toolResult")
+                        return message;
+                    const candidate = replacements.get(occKey(message.toolCallId, message.timestamp));
+                    if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args))
+                        return message;
+                    replaced++;
+                    return toolResultStub(message, { ...candidate.call, turnIndex: archivedBatch.turnIndex, timestamp: archivedBatch.timestamp }, candidate.ref);
+                });
+                proposed.push({ role: "custom", customType: CUSTOM_TYPE_SUMMARY, content: summaryText, display: false, details: batchDetails, timestamp: Date.now() });
+                const charsSaved = JSON.stringify(visible).length - JSON.stringify(proposed).length;
+                const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || charsSaved <= 0;
                 if (result.usage)
                     statsAccum.add(result.usage);
                 totalRawCharCount += batchRawCharCount + dedupRawChars;
                 totalSummaryCharCount += summaryText.length;
                 totalToolCallCount += batch.toolCalls.length + dedupCount;
                 totalDedupedCount += dedupCount;
-                const batchDetails = { ...makeSummaryDetails(archivedBatch, summaryRefs), representation: result.deterministic ? "packed" : "summary" };
                 try {
                     if (!shouldSkipOversized) {
+                        publishedCharsSaved += charsSaved;
+                        const first = visible.findIndex((message, index) => JSON.stringify(message) !== JSON.stringify(proposed[index]));
+                        firstChangedMessage = firstChangedMessage === undefined ? first : Math.min(firstChangedMessage, first);
                         // Write one hidden summary message per turn and index its tool calls.
                         // `display: false` keeps the summary in future LLM context (convertToLlm
                         // ignores `display`) while suppressing the full markdown block from Pi's
@@ -991,12 +1056,17 @@ export default function (pi) {
         // the five phases changed anything; index/registry emptiness alone does not
         // imply a no-op, since error-purge (phase 2) prunes independently of them.
         // Calling it unconditionally is safe and avoids a split gate here.
+        const beforeArguments = messages;
+        messages = projectArguments(messages, argumentHistory, effectiveProtection());
+        const argumentsChanged = messages !== beforeArguments;
+        changed ||= argumentsChanged;
         const result = pruneMessages(messages, indexer, currentConfig.value.chainCompression, occ.enabled() ? { ...currentConfig.value.purgeErrors, enabled: false } : currentConfig.value.purgeErrors, effectiveProtection(), currentConfig.value.recoveryGraceTurns, diagnostics, occ.enabled() ? undefined : { state: supersede, isProtected: protectionPredicate }, editedToolIds);
         if (result.pruned) {
             messages = result.messages;
             changed = true;
         }
-        return { messages, changed, beforeChars: result.beforeChars, afterChars: result.afterChars };
+        return { messages, changed, beforeChars: argumentsChanged ? JSON.stringify(input).length : result.beforeChars,
+            afterChars: argumentsChanged ? JSON.stringify(messages).length : result.afterChars };
     };
     let activeSessionId;
     let projectionContext;

@@ -185,25 +185,49 @@ export function captureUnindexedBatchesFromSession(branch, indexer, exclude = ()
     }
     return batches;
 }
-/** Serializes a single CapturedBatch into readable text for the summarizer LLM. */
+// One budget covers the complete batch. The system prompt is small and separate.
+const SUMMARY_INPUT_CHARS = 32768;
+/** Bounded original excerpts; never silently turn partial evidence into a full result. */
+function excerpt(text, budget, diagnostics = false) {
+    if (text.length <= budget)
+        return text;
+    const marker = "\n[Original text omitted; recover the full occurrence with context_tree_query.]\n";
+    const room = Math.max(0, budget - 2 * marker.length);
+    let selected = "";
+    if (diagnostics) {
+        for (const line of text.split("\n")) {
+            if (/\b(error|fail(?:ed|ure|ures)?|warning|panic|exception|traceback|assert(?:ion)?|passed)\b/i.test(line)
+                && selected.length + line.length + 1 <= room / 3)
+                selected += line + "\n";
+        }
+    }
+    const headEnd = Math.floor((room - selected.length) / 2);
+    const tailStart = text.length - (room - selected.length - headEnd);
+    // Keep UTF-16 surrogate pairs intact; the output is later encoded as UTF-8.
+    const head = text.slice(0, headEnd).replace(/[\uD800-\uDBFF]$/, "");
+    const tail = text.slice(tailStart).replace(/^[\uDC00-\uDFFF]/, "");
+    return head + marker + selected + marker + tail;
+}
+/** Undefined means the batch identities themselves cannot safely fit the input budget. */
 export function serializeBatchForSummarizer(batch) {
     const parts = [];
-    if (batch.assistantText) {
-        parts.push(`Assistant said: ${batch.assistantText}\n`);
+    if (batch.assistantText)
+        parts.push(`Assistant said: ${excerpt(batch.assistantText, 2048)}\n`);
+    let remaining = SUMMARY_INPUT_CHARS - parts.join("").length;
+    for (const [index, tc] of batch.toolCalls.entries()) {
+        const header = `[[${index + 1}:${tc.toolName}]] Tool: ${tc.toolName}\nArguments (historical JSON):\n`;
+        const resultHeader = `\nResult (${tc.isError ? "ERROR" : "OK"}; excerpts are explicitly marked):\n`;
+        const quota = Math.floor(remaining / (batch.toolCalls.length - index)) - header.length - resultHeader.length - 5;
+        if (quota < 512)
+            return undefined;
+        const args = excerpt(JSON.stringify(tc.args, null, 2), Math.min(2048, Math.floor(quota / 3)));
+        const result = excerpt(tc.resultText, quota - args.length, true);
+        const part = header + args + resultHeader + result;
+        parts.push(part);
+        remaining -= part.length + 5;
     }
-    const toolParts = batch.toolCalls.map((tc, index) => {
-        const status = tc.isError ? "ERROR" : "OK";
-        const argsJson = JSON.stringify(tc.args, null, 2);
-        let resultText = tc.resultText;
-        const MAX_CHARS = 2000;
-        if (resultText.length > MAX_CHARS) {
-            const remaining = resultText.length - MAX_CHARS;
-            resultText = resultText.slice(0, MAX_CHARS) + ` ...[${remaining} chars truncated]`;
-        }
-        return `[[${index + 1}:${tc.toolName}]] Tool: ${tc.toolName}(${argsJson})\nResult (${status}): ${resultText}`;
-    });
-    parts.push(toolParts.join("\n---\n"));
-    return parts.join("\n");
+    const serialized = parts.join("\n---\n");
+    return serialized.length <= SUMMARY_INPUT_CHARS ? serialized : undefined;
 }
 /**
  * Groups CapturedBatches according to the chosen batching mode.

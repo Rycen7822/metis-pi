@@ -7,7 +7,7 @@ import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent"
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
 import registerCondense from "../../vendor/pi-condense/dist/index.js";
-import { captureBatch, projectBranchMessages } from "../../vendor/pi-condense/dist/src/batch-capture.js";
+import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../vendor/pi-condense/dist/src/batch-capture.js";
 import { spillOversizedBatch } from "../../vendor/pi-condense/dist/src/spill.js";
 import { ToolCallIndexer } from "../../vendor/pi-condense/dist/src/indexer.js";
 import { registerQueryTool } from "../../vendor/pi-condense/dist/src/query-tool.js";
@@ -296,3 +296,101 @@ test("capacity waiting imports temporary output archives without pruning their v
   await f.finish();
   assert.equal(f.calls.length, 0);
 });
+
+
+test("summary provider sees the retained test tail and bounded original argument excerpts", async (t) => {
+  const f = await fixture(t);
+  const tail = "FINAL_TEST_RESULT_SENTINEL: all checks completed";
+  const text = Array.from({ length: 260 }, (_, i) => `${i % 12 === 0 ? "warning" : "progress"} ${i}: ${"x".repeat(150)}`).join("\n") + "\n" + tail;
+  f.add(text);
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  assert.ok(JSON.stringify(f.calls[0]).includes(tail), "packing's retained tail reaches the actual summary provider");
+  const batch = { turnIndex: 0, timestamp: 1, assistantText: "plan ".repeat(5000), toolCalls: [{
+    toolCallId: "large-write", toolName: "write", args: { path: "large.ts", content: "🙂".repeat(50000) },
+    resultText: "log ".repeat(20000) + "FAILURE_AT_END", isError: true,
+  }] };
+  const input = serializeBatchForSummarizer(batch);
+  assert.ok(input.length <= 32768);
+  assert.match(input, /large\.ts/);
+  assert.match(input, /FAILURE_AT_END/);
+  assert.match(input, /Original text omitted/);
+  assert.equal(input.isWellFormed(), true);
+  assert.equal(serializeBatchForSummarizer({ ...batch, toolCalls: Array(1000).fill(batch.toolCalls[0]) }), undefined);
+});
+
+
+test("recall pages original arguments and branch-owned summaries with content-bound cursors", async (t) => {
+  const f = await fixture(t);
+  const indexer = new ToolCallIndexer();
+  const args = { path: "historical.ts", content: "🙂原文\n".repeat(6000) };
+  indexer.addBatch({ turnIndex: 1, timestamp: 2, toolCalls: [{ toolCallId: "write", toolName: "write", args, resultText: "done", isError: false, resultTimestamp: 3 }] }, () => {});
+  let tool; registerQueryTool({ registerTool(value) { tool = value; } }, indexer);
+  const query = params => tool.execute("q", params, undefined, undefined, f.ctx).then(r => r.details);
+  const params = { toolCallIds: ["write@3"], component: "arguments", maxBytes: 2048 };
+  const first = await query(params);
+  assert.equal(first.results[0].source, "tool-arguments");
+  await assert.rejects(query({ ...params, component: "output", cursor: first.nextCursor }), /cursor no longer matches/i);
+  let page = first, text = first.results[0].text;
+  while (page.nextCursor) { page = await query({ ...params, cursor: page.nextCursor }); text += page.results[0].text; }
+  assert.equal(text, JSON.stringify(args));
+  f.sm.appendCustomMessageEntry("context-prune-summary", "DERIVED_HISTORY ".repeat(1000), false, {});
+  const entry = f.sm.getBranch().at(-1);
+  page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048 }); text = page.results[0].text;
+  while (page.nextCursor) { page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048, cursor: page.nextCursor }); text += page.results[0].text; }
+  assert.deepEqual(JSON.parse(text), entry);
+  assert.match((await query({ sourceEntryIds: ["missing"] })).results[0].error, /Not found/);
+  await assert.rejects(query({ sourceEntryIds: [entry.id], ...params }), /Choose sourceEntryIds/);
+});
+
+
+test("closed large write arguments become stable historical records with exact recall and edit recovery", async t => {
+  const f = await fixture(t);
+  const args = { path: "large.ts", content: "ORIGINAL_CODE\n".repeat(3000) };
+  const assistant = { role: "assistant", content: [{ type: "toolCall", id: "large-write", name: "write", arguments: args }], stopReason: "toolUse", timestamp: 2 };
+  const sourceId = f.sm.appendMessage(assistant);
+  f.sm.appendMessage({ role: "toolResult", toolCallId: "large-write", toolName: "write", isError: false, content: [{ type: "text", text: "Successfully wrote file" }], timestamp: 3 });
+  f.add("Recent evidence stays inline", "echo recent");
+  await f.finish();
+  assert.equal(f.calls.length, 0);
+  const original = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: original })).messages;
+  assert.ok(JSON.stringify(projected).length < JSON.stringify(original).length / 2);
+  assert.ok(!projected.some(m => m.role === "toolResult" && m.toolCallId === "large-write"));
+  assert.ok(!projected.some(m => m.role === "assistant" && m.content.some(b => b.type === "toolCall" && b.id === "large-write")));
+  assert.match(JSON.stringify(projected), /component=arguments/);
+  const tool = f.tools.get("context_tree_query");
+  let page = (await tool.execute("q", { toolCallIds: ["large-write@3"], component: "arguments" }, undefined, undefined, f.ctx)).details;
+  let restored = page.results[0].text;
+  while (page.nextCursor) { page = (await tool.execute("q", { toolCallIds: ["large-write@3"], component: "arguments", cursor: page.nextCursor }, undefined, undefined, f.ctx)).details; restored += page.results[0].text; }
+  assert.deepEqual(JSON.parse(restored), args);
+  await f.emit("session_start");
+  assert.deepEqual((await f.emit("context", { messages: original })).messages, projected);
+  f.sm.appendContextEdit(sourceId, { content: [{ ...assistant.content[0], arguments: { path: "large.ts", content: "CORRECTED" } }] });
+  const effective = f.sm.buildSessionProjection().messages;
+  const afterEdit = (await f.emit("context", { messages: effective }))?.messages ?? effective;
+  assert.ok(afterEdit.some(m => m.role === "toolResult" && m.toolCallId === "large-write"));
+  assert.match(JSON.stringify(afterEdit), /CORRECTED/);
+});
+
+
+for (const kind of ["failed", "protected", "mixed", "recent", "fusion-failed"]) {
+  test(`argument compaction keeps ${kind} tool groups verbatim`, async t => {
+    const f = await fixture(t);
+    const args = { path: kind === "protected" ? "skills/rule.md" : "large.ts", content: "code ".repeat(6000) };
+    const content = [{ type: "toolCall", id: "write-guard", name: "write", arguments: args }];
+    if (kind === "mixed") content.push({ type: "toolCall", id: "other", name: "read", arguments: { path: "other.txt" } });
+    f.sm.appendMessage({ role: "assistant", content, stopReason: "toolUse", timestamp: 2 });
+    f.sm.appendMessage({ role: "toolResult", toolCallId: "write-guard", toolName: "write", timestamp: 3,
+      isError: kind === "failed", content: [{ type: "text", text: "mutation result" }, { type: "text", text: "command failed" }],
+      ...(kind === "fusion-failed" ? { details: { metisActionFusion: { version: 1, mutationStatus: "success", command: { command: "npm test", status: "failed", exitCode: 1, outputBlock: 1 } } } } : {}) });
+    if (kind === "mixed") f.sm.appendMessage({ role: "toolResult", toolCallId: "other", toolName: "read", content: [{ type: "text", text: "other evidence" }], isError: false, timestamp: 4 });
+    if (kind !== "recent") f.add("newest evidence", "echo newest");
+    await f.finish();
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-arguments").length, 0);
+    const original = f.sm.buildSessionProjection().messages;
+    const rendered = (await f.emit("context", { messages: original }))?.messages ?? original;
+    const write = rendered.find(m => m.role === "assistant" && m.content.some(b => b.id === "write-guard"));
+    assert.deepEqual(write.content[0].arguments, args);
+  });
+}

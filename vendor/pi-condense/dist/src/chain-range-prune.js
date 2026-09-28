@@ -35,6 +35,7 @@ export function buildSyntheticChainMessage(entry, summary, blockSummaryLookup, p
         .join("");
     return {
         role: "user",
+        metisDerived: { kind: "condense-chain", blockId: entry.blockId },
         content: [
             {
                 type: "text",

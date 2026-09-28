@@ -1,5 +1,5 @@
 import type { ToolCallIndexer } from "./indexer.js";
-import type { ChainCompressionConfig, ErrorPurgeConfig } from "./types.js";
+import type { ChainCompressionConfig, ErrorPurgeConfig, ToolCallRecord } from "./types.js";
 import { type ProtectionConfig } from "./protected.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { type SupersedeState } from "./supersede.js";
@@ -77,3 +77,4 @@ export declare function pruneMessages(messages: any[], indexer: ToolCallIndexer,
     beforeChars: number;
     afterChars: number;
 };
+export declare function toolResultStub(msg: any, record: ToolCallRecord | undefined, ref: string): any;

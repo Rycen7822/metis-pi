@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { registerOcc } from "../../vendor/pi-condense/dist/src/occ.js";
+import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -63,6 +65,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
       Promise.resolve().then(async () => {
         if (summarizing) await onSummary?.({ sm, options });
         const toolUse = !summarizing && actualWork++ < workTurns;
+        if (toolUse) writeFileSync(join(dir, "work.txt"), `NEW_WORK_EVIDENCE_${actualWork} `.repeat(350));
         const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
           content: toolUse ? [{ type: "toolCall", id: `work-${actualWork}`, name: "read", arguments: { path: join(dir, "work.txt") } }]
             : [{ type: "text", text: summarizing ? summary : "Final response." }],
@@ -450,7 +453,7 @@ test("an idle manual cancellation does not cancel a later user request's goal co
       sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = "source-body ".repeat(10000);
       sm.getBranch().find(e => e.type === "custom" && e.customType === "goal").data.goal.tokenBudget = 450000;
     },
-    onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
+    onWork: ({ toolUse, index }) => ({ usage: pressureUsage(toolUse ? 61000 : index > 6 ? 60000 : 99900) }) });
   const unsubscribe = h.session.subscribe(event => {
     if (event.type === "compaction_start" && event.reason === "manual") h.session.abortCompaction();
   });
@@ -553,9 +556,57 @@ test("OCC rejects before generation when the whole retained context lacks two bu
 });
 
 test("OCC rechecks whole-context headroom after generating the candidate", async t => {
-  const h = await host(t, { auto: true, summary: "S".repeat(36000), onWork: () => ({ usage: pressureUsage(94000) }),
+  // Pi retains the system/tool table: counting it as freed history admits this candidate.
+  const h = await host(t, { auto: true, summary: "S".repeat(32000), onWork: () => ({ usage: pressureUsage(94000) }),
     beforeLoad(sm) { sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message.content[0].text = "sourcebody".repeat(5000); } });
   await h.session.prompt("Continue."); await h.session.waitForIdle();
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
   assert.equal(compactions(h).length, 0, JSON.stringify(compactions(h).map(c => ({ before: c.tokensBefore, summary: c.summary.length, protected: c.details.metisOcc.protectedChars }))));
+});
+
+
+test("successive native compactions flatten protected sources and retain exact historical entry recall", async t => {
+  let model;
+  const h = await host(t, { beforeLoad(_sm, m) { model = m; } });
+  await h.session.prompt("Continue inspecting without deployment.");
+  await h.session.waitForIdle();
+  const first = compactions(h)[0];
+  assert.ok(first.details.metisOcc.protection);
+  for (let round = 1; round <= 2; round++) {
+    h.sm.appendMessage({ role: "user", content: `CORRECTION_${round}: keep this constraint`, timestamp: 100 + round * 10 });
+    h.sm.appendMessage({ role: "assistant", ...model, model: model.id, content: [{ type: "toolCall", id: `next-${round}`, name: "read", arguments: { path: `round-${round}.log` } }], stopReason: "toolUse", usage, timestamp: 101 + round * 10 });
+    h.sm.appendMessage({ role: "toolResult", toolCallId: `next-${round}`, toolName: "read", isError: false, content: [{ type: "text", text: "NEW_SOURCE ".repeat(16000) }], timestamp: 102 + round * 10 });
+    h.sm.appendMessage({ role: "assistant", ...model, model: model.id, content: [{ type: "text", text: "Round complete" }], stopReason: "stop", usage, timestamp: 103 + round * 10 });
+    await h.session.compact();
+    const latest = compactions(h).at(-1);
+    assert.equal(latest.details.metisOcc.protection.format, "metis-occ-protected-v2");
+    assert.equal(latest.summary.split("[Program-retained sources]").length, 2, "one flat envelope");
+    assert.match(latest.summary, /ORIGINAL_GOAL/);
+    assert.match(latest.summary, new RegExp(`CORRECTION_${round}`));
+    assert.equal(latest.details.metisOcc.protection.legacy.length, 0);
+    assert.ok(latest.details.metisOcc.protection.history.length);
+  }
+  assert.equal(compactions(h).length, 3);
+  for (const call of h.calls.filter(c => c.summarizing)) assert.doesNotMatch(JSON.stringify(call.context), /Program-retained sources|Derived progress: investigation continues/);
+  const query = h.session.extensionRunner.getAllRegisteredTools().find(t => t.definition.name === "context_tree_query").definition;
+  const result = await query.execute("q", { sourceEntryIds: [first.id] }, undefined, undefined, { sessionManager: h.sm });
+  assert.equal(JSON.parse(result.details.results[0].text).summary, first.summary);
+});
+
+
+test("OCC work ignores recall, polling, failures and repeated identical observations", () => {
+  const hooks = new Map(), states = [];
+  registerOcc({ on(name, fn) { hooks.set(name, fn); }, events: { on() { return () => {}; } }, appendEntry(_kind, data) { states.push(data); } }, {},
+    { value: { ...DEFAULT_CONFIG, enabled: true, opportunisticCompaction: true } });
+  const observe = (id, name, isError, text) => hooks.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse", timestamp: id,
+    content: [{ type: "toolCall", id: String(id), name, arguments: { path: "same.txt" } }] },
+    toolResults: [{ role: "toolResult", toolCallId: String(id), toolName: name, isError, timestamp: id + 1, content: [{ type: "text", text }] }] }, {});
+  for (let i = 0; i < 4; i++) observe(i, "context_tree_query", true, "missing");
+  observe(10, "write_stdin", false, "still running");
+  observe(11, "read", true, "missing");
+  assert.equal(states.length, 0);
+  for (let i = 20; i < 24; i++) observe(i, "read", false, "unchanged evidence");
+  assert.equal(states.at(-1).work, 1);
+  observe(30, "read", false, "new evidence");
+  assert.equal(states.at(-1).work, 2);
 });

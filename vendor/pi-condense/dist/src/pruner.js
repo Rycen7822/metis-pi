@@ -107,24 +107,7 @@ export function pruneMessages(messages, indexer, chainCompression, errorPurge, p
         }
         pruned = true;
         const ref = indexer.getShortRefForToolCallId(lookupKey) ?? lookupKey;
-        const text = record?.spillPath
-            ? [
-                `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
-                `Tool: ${record.toolName}`,
-                record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
-                record.resultPreview ?? "",
-                `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
-                `Or use context_tree_query with ref \`${ref}\`.`,
-            ].join("\n")
-            : `[Captured ${msg.toolName} output retained, status ${msg.isError ? "ERROR" : "OK"}, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
-        return {
-            role: "toolResult",
-            toolCallId: msg.toolCallId,
-            toolName: msg.toolName,
-            content: [{ type: "text", text }],
-            isError: msg.isError,
-            timestamp: msg.timestamp,
-        };
+        return toolResultStub(msg, record, ref);
     });
     let current = pruned ? next : messages;
     // Phase 1b: supersede older protected reads of a re-read path
@@ -183,4 +166,24 @@ export function pruneMessages(messages, indexer, chainCompression, errorPurge, p
     return pruned
         ? { messages: current, pruned, beforeChars: sizeMessages(messages), afterChars: sizeMessages(current) }
         : { messages, pruned, beforeChars: 0, afterChars: 0 };
+}
+export function toolResultStub(msg, record, ref) {
+    const text = record?.spillPath
+        ? [
+            `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
+            `Tool: ${record.toolName}`,
+            record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
+            record.resultPreview ?? "",
+            `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
+            `Or use context_tree_query with ref \`${ref}\`.`,
+        ].join("\n")
+        : `[Captured ${msg.toolName} output retained, status ${msg.isError ? "ERROR" : "OK"}, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
+    return {
+        role: "toolResult",
+        toolCallId: msg.toolCallId,
+        toolName: msg.toolName,
+        content: [{ type: "text", text }],
+        isError: msg.isError,
+        timestamp: msg.timestamp,
+    };
 }

@@ -44,7 +44,7 @@ export function buildSyntheticChainMessage(
   summary: string,
   blockSummaryLookup?: (blockId: string) => string | undefined,
   protectedOutputs: { tool: string; text: string }[] = [],
-): UserMessage {
+): UserMessage & { metisDerived: { kind: "condense-chain"; blockId: string } } {
   const resolvedSummary = blockSummaryLookup
     ? substituteBlockRefs(summary, blockSummaryLookup, { selfBlockId: entry.blockId })
     : summary;
@@ -54,6 +54,7 @@ export function buildSyntheticChainMessage(
     .join("");
   return {
     role: "user",
+    metisDerived: { kind: "condense-chain", blockId: entry.blockId },
     content: [
       {
         type: "text",

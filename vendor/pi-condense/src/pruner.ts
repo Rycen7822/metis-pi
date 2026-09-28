@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ToolCallIndexer } from "./indexer.js";
-import type { ChainCompressionConfig, ErrorPurgeConfig } from "./types.js";
+import type { ChainCompressionConfig, ErrorPurgeConfig, ToolCallRecord } from "./types.js";
 import { isProtected, type ProtectionConfig } from "./protected.js";
 import { applyChainCompressions } from "./chain-range-prune.js";
 import { purgeErroredArgs } from "./error-purge.js";
@@ -122,24 +122,7 @@ export function pruneMessages(
     }
     pruned = true;
     const ref = indexer.getShortRefForToolCallId(lookupKey) ?? lookupKey;
-    const text = record?.spillPath
-      ? [
-          `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
-          `Tool: ${record.toolName}`,
-          record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
-          record.resultPreview ?? "",
-          `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
-          `Or use context_tree_query with ref \`${ref}\`.`,
-        ].join("\n")
-      : `[Captured ${msg.toolName} output retained, status ${msg.isError ? "ERROR" : "OK"}, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
-    return {
-      role: "toolResult",
-      toolCallId: msg.toolCallId,
-      toolName: msg.toolName,
-      content: [{ type: "text", text }],
-      isError: msg.isError,
-      timestamp: msg.timestamp,
-    };
+    return toolResultStub(msg, record, ref);
   });
 
   let current: any[] = pruned ? next : messages;
@@ -216,4 +199,25 @@ export function pruneMessages(
   return pruned
     ? { messages: current, pruned, beforeChars: sizeMessages(messages), afterChars: sizeMessages(current) }
     : { messages, pruned, beforeChars: 0, afterChars: 0 };
+}
+
+export function toolResultStub(msg: any, record: ToolCallRecord | undefined, ref: string): any {
+    const text = record?.spillPath
+      ? [
+          `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
+          `Tool: ${record.toolName}`,
+          record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
+          record.resultPreview ?? "",
+          `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
+          `Or use context_tree_query with ref \`${ref}\`.`,
+        ].join("\n")
+      : `[Captured ${msg.toolName} output retained, status ${msg.isError ? "ERROR" : "OK"}, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
+    return {
+      role: "toolResult",
+      toolCallId: msg.toolCallId,
+      toolName: msg.toolName,
+      content: [{ type: "text", text }],
+      isError: msg.isError,
+      timestamp: msg.timestamp,
+    };
 }
