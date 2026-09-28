@@ -10,6 +10,7 @@
 | `extensions/skill-mux.ts` / `skill-entry.ts` | skill 输入展开/补全、标签和点击折叠。 |
 | `extensions/todo.ts` → `src/todo/` | todo 工具、命令、持久化和面板。 |
 | `extensions/goal.ts` → `src/goal-state.ts` | 入口拥有宿主 I/O、命令、提示与工具；状态核心拥有目标、时钟、分支恢复和回合用量。 |
+| `extensions/dynamic-agents.ts` → `src/dynamic-agents.ts` | 入口拥有每次运行的全局策略快照、来源恢复和诊断；核心拥有匹配、只读配置和请求投影。conversion 通过会话事件总线复用准备/投影/预热门禁。 |
 | `extensions/condense.ts` → `vendor/pi-condense/dist/index.js` | 单一加载入口、重复安装检测和摘要用量展示；vendor 拥有归档、最终回复精简/摘要决策与分页恢复。 |
 | `extensions/action-fusion.ts` | 统一拥有所有 Action Fusion 入口的启用状态；包装 Pi 内建 edit/write，扩展 `then_run`，冻结 write 修改快照并管理关闭时的取消。 |
 | vendor `src/extension/register.ts` | Codex 转换层组合根，通过构建后的 `dist/index.js` 加载。 |

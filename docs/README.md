@@ -24,6 +24,7 @@
 | 任务编号、依赖和面板 | [todo](features/todo.md) |
 | 长任务目标、暂停/恢复与预算 | [goal](features/goal.md) |
 | 历史压缩、分页回读和独立 condense 迁移 | [condense](features/condense.md) |
+| 按 provider/模型动态切换全局 AGENTS | [dynamic-agents](features/dynamic-agents.md) |
 | 修改后执行命令、融合状态和日志恢复 | [action-fusion](features/action-fusion.md) |
 | 多 skill 输入、补全与折叠 | [skills](features/skills.md) |
 | 字形撑宽 | [glyphs](features/glyphs.md) |

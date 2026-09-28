@@ -27,13 +27,14 @@ test("chrome modules have no direct host imports (src/ rule)", () => {
 });
 
 
-test("package exposes display, goal, todo, condense and codex-conversion entries", () => {
+test("package exposes display, goal, todo, condense, dynamic-agents and codex-conversion entries", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./vendor/pi-codex-conversion/dist/index.js"]);
   assert.equal(existsSync(new URL("../extensions/appearance.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions/goal.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions/todo.ts", import.meta.url)), true);
   assert.equal(existsSync(new URL("../extensions/condense.ts", import.meta.url)), true);
+  assert.equal(existsSync(new URL("../extensions/dynamic-agents.ts", import.meta.url)), true);
   for (const path of ["dist/index.js", "dist/src/query-tool.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
     assert.ok(existsSync(new URL(`../vendor/pi-condense/${path}`, import.meta.url)), path);
   }

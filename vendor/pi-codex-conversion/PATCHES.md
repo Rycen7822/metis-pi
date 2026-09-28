@@ -164,3 +164,7 @@ Current results and unverified runtime boundaries live only in the root [VALIDAT
 ## Action Fusion availability
 
 `extensions/action-fusion.ts` owns fusion availability through the session event bus. Without that entry, ordinary apply_patch omits then_run and rejects stale fusion arguments before mutation; Code/Notebook omit apply_patch_then_run. Registration synchronizes at session_start so extension load order does not change availability; reload removes the old entry listener. Ordinary patching, command tools, and historical evidence remain available.
+
+## Dynamic global instructions
+
+`extension/events.ts` resolves the main-run policy through `metis:dynamic-agents` after Reserve chooses the final model, before rendering the prompt. `extension/runtime.ts` shares the source-aware history projection with live/idle requests and gates every prewarm on a resolved run snapshot. No dynamic extension listener preserves upstream behavior. The feature owner is `extensions/dynamic-agents.ts`; provider matching/configuration and request-only projection live in `src/dynamic-agents.ts`. Offline lifecycle and final-payload coverage: `test/contract/dynamic-agents.test.mjs`.

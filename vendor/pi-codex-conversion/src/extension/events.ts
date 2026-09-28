@@ -329,6 +329,8 @@ export function registerCodexEvents(
 		state.contextWindows.clearTurnNotes();
 		state.contextTree.handoff.preparing(event.prompt);
 		if (!state.config.voiceFeaturesOnly) await reserve.beforeTurn(ctx);
+		// Resolve the final run model before rendering or warming its prompt.
+		pi.events.emit("metis:dynamic-agents", { kind: "prepare", options: event.systemPromptOptions, ctx });
 		runtime.autoReasoning.begin(ctx);
 		turnPrewarm = undefined;
 		const systemPrompt = event.systemPrompt;

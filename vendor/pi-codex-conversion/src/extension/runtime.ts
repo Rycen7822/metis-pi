@@ -187,6 +187,9 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 		requestSource?: "captured" | "reconstructed",
 		generate = false,
 	): Promise<CodexPrewarmResult> | undefined => {
+		const policy = { kind: "prewarm", model: ctx.model, allowed: true };
+		pi.events.emit("metis:dynamic-agents", policy);
+		if (!policy.allowed) return undefined;
 		const plan = buildPrewarmPlan(ctx, systemPrompt, prepared, messages, rewriteFinalRequest, kind === "keepalive");
 		if (!plan) return undefined;
 		const { model, config, executionMode, preparedSystemPrompt, tools, reasoning, key: requestKey } = plan;
@@ -293,6 +296,9 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 			messages: projected.filter((message) => !isProviderContextExcludedMessage(message)), busy: false,
 		};
 		pi.events.emit("metis:condense-project", projection);
+		const policy = { kind: "project", messages: projection.messages };
+		pi.events.emit("metis:dynamic-agents", policy);
+		projection.messages = policy.messages;
 		return projection;
 	};
 

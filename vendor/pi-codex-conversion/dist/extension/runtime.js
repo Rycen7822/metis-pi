@@ -124,6 +124,10 @@ export function createCodexExtensionRuntime(pi) {
         };
     };
     const startPrewarm = (ctx, systemPrompt = ctx.getSystemPrompt(), prepared = false, messages = [], rewriteFinalRequest = false, force = false, kind = "ordinary", preserveContinuation = false, keepaliveStrategy, requestSource, generate = false) => {
+        const policy = { kind: "prewarm", model: ctx.model, allowed: true };
+        pi.events.emit("metis:dynamic-agents", policy);
+        if (!policy.allowed)
+            return undefined;
         const plan = buildPrewarmPlan(ctx, systemPrompt, prepared, messages, rewriteFinalRequest, kind === "keepalive");
         if (!plan)
             return undefined;
@@ -234,6 +238,9 @@ export function createCodexExtensionRuntime(pi) {
             messages: projected.filter((message) => !isProviderContextExcludedMessage(message)), busy: false,
         };
         pi.events.emit("metis:condense-project", projection);
+        const policy = { kind: "project", messages: projection.messages };
+        pi.events.emit("metis:dynamic-agents", policy);
+        projection.messages = policy.messages;
         return projection;
     };
     const projectContextMessages = (ctx, messages) => projectContext(ctx, messages).messages;

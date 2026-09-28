@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 新增 dynamic-agents：外置 JSON 按 provider/模型正选、反选及跨 provider 模型简称匹配全局指令；下一次 agent run 生效，只替换请求上下文，保留源文件与历史记录；支持状态查询、回退和 Codex 预热协调。
+
 - condense 统一摘要输入预算，保留关键首尾并约束大型参数；增加完整参数/历史 entry 分页回读、成功大写入组的确定性精简，以及完整投影净缩减检查。OCC 新保护结构展平并保留历史引用，收紧工作资格，补充拒绝原因；维持现有请求额度，并修复容量估算错误扣除保留的 system/工具定义开销。
 
 - 主动 OCC 执行时显示独立的 `OCC: compacting…` 状态栏标识，结束后保留最近一次结果，并在 reload 后恢复；新增默认开启的 `showOccStatusLine` 开关，可通过 `/pruner settings` 即时切换。

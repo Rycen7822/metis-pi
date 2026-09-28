@@ -2371,7 +2371,7 @@ index ad6a7b6..3055fc6 100644
 +	{ additionalProperties: false },
 +);
 diff --git a/src/extension/events.ts b/src/extension/events.ts
-index 0401a67..737e58b 100644
+index 0401a67..da979cd 100644
 --- a/src/extension/events.ts
 +++ b/src/extension/events.ts
 @@ -10,7 +10,6 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
@@ -2412,7 +2412,16 @@ index 0401a67..737e58b 100644
  	});
  
  	pi.on("thinking_level_select", (event, ctx) => {
-@@ -406,6 +410,7 @@ export function registerCodexEvents(
+@@ -325,6 +329,8 @@ export function registerCodexEvents(
+ 		state.contextWindows.clearTurnNotes();
+ 		state.contextTree.handoff.preparing(event.prompt);
+ 		if (!state.config.voiceFeaturesOnly) await reserve.beforeTurn(ctx);
++		// Resolve the final run model before rendering or warming its prompt.
++		pi.events.emit("metis:dynamic-agents", { kind: "prepare", options: event.systemPromptOptions, ctx });
+ 		runtime.autoReasoning.begin(ctx);
+ 		turnPrewarm = undefined;
+ 		const systemPrompt = event.systemPrompt;
+@@ -406,6 +412,7 @@ export function registerCodexEvents(
  		rewriteCodexProviderHeaders(event.headers, ctx, state);
  	});
  	pi.on("session_before_compact", async (event, ctx) => {
@@ -2420,7 +2429,7 @@ index 0401a67..737e58b 100644
  		if (state.contextTree.handoff.active) return { cancel: true };
  		state.cwd = ctx.cwd;
  		const plan = resolveCodexRuntimePlanForState(
-@@ -429,9 +434,14 @@ export function registerCodexEvents(
+@@ -429,9 +436,14 @@ export function registerCodexEvents(
  			await codeMode.checkpointNotebook();
  		} catch (error) {
  			ctx.ui.notify(`Notebook checkpoint before compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
@@ -2437,10 +2446,20 @@ index 0401a67..737e58b 100644
  			const result = await handleCodexSessionBeforeCompact(
  				event,
 diff --git a/src/extension/runtime.ts b/src/extension/runtime.ts
-index f35fc64..40045da 100644
+index f35fc64..ecb8cdd 100644
 --- a/src/extension/runtime.ts
 +++ b/src/extension/runtime.ts
-@@ -275,7 +275,7 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -187,6 +187,9 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 		requestSource?: "captured" | "reconstructed",
+ 		generate = false,
+ 	): Promise<CodexPrewarmResult> | undefined => {
++		const policy = { kind: "prewarm", model: ctx.model, allowed: true };
++		pi.events.emit("metis:dynamic-agents", policy);
++		if (!policy.allowed) return undefined;
+ 		const plan = buildPrewarmPlan(ctx, systemPrompt, prepared, messages, rewriteFinalRequest, kind === "keepalive");
+ 		if (!plan) return undefined;
+ 		const { model, config, executionMode, preparedSystemPrompt, tools, reasoning, key: requestKey } = plan;
+@@ -275,7 +278,7 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  		return promise;
  	};
  
@@ -2449,7 +2468,7 @@ index f35fc64..40045da 100644
  		const plan = resolveCodexRuntimePlanForState(ctx, state);
  		const branch = ctx.sessionManager.getBranch();
  		const allEntries = plan.contextManagementMode === "tree" ? ctx.sessionManager.getEntries() : branch;
-@@ -288,13 +288,22 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -288,13 +291,25 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  			allEntries,
  			plan.contextManagementHybrid,
  		);
@@ -2459,6 +2478,9 @@ index f35fc64..40045da 100644
 +			messages: projected.filter((message) => !isProviderContextExcludedMessage(message)), busy: false,
 +		};
 +		pi.events.emit("metis:condense-project", projection);
++		const policy = { kind: "project", messages: projection.messages };
++		pi.events.emit("metis:dynamic-agents", policy);
++		projection.messages = policy.messages;
 +		return projection;
  	};
  
@@ -2474,7 +2496,7 @@ index f35fc64..40045da 100644
  				supportsCodexDeveloperMessages(ctx, state),
  				ctx.model,
  			),
-@@ -308,11 +317,13 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -308,11 +323,13 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  		if (kind === "keepalive" && !keepalivePlan) return undefined;
  		const preserveContinuation = kind === "keepalive";
  		const activeSystemPrompt = state.activeProviderSystemPrompt;
@@ -2489,7 +2511,7 @@ index f35fc64..40045da 100644
  			true,
  			kind === "keepalive",
  			kind,
-@@ -443,7 +454,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -443,7 +460,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  			closeOpenAICodexWebSocketSessions(sessionId);
  		},
  		waitForPrewarm(ctx, systemPrompt) {

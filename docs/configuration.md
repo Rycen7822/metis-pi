@@ -191,6 +191,7 @@
 | 整个显示层 | `-extensions/appearance.ts` |
 | goal | `-extensions/goal.ts` |
 | todo | `-extensions/todo.ts` |
+| dynamic-agents | `-extensions/dynamic-agents.ts`；运行中恢复原生规则建议先在独立 JSON 设置 `enabled: false`，详见功能页 |
 | condense 整体 | `-extensions/condense.ts` |
 | skill 输入 | 同时排除 `-extensions/skill-entry.ts`、`-extensions/skill-mux.ts` |
 | 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、转换层 apply_patch、Code/Notebook 的融合入口 |
@@ -201,3 +202,5 @@
 ## 验证
 
 `test/core/config.test.mts` 覆盖：无文件、坏 JSON、部分 section、越界值、`glyphs.include` 清洗、默认值形状。
+
+独立 [dynamic-agents](features/dynamic-agents.md) 使用 `<agentDir>/dynamic-agents.json`，配置不存在时不激活。它按当前运行的模型选择全局指令，不属于显示配置或 `contextPrune`。
