@@ -218,7 +218,7 @@ const copiedTexts = () => fs.existsSync(CLIPBOARD_SINK)
   : [];
 const waitForSink = (previous) =>
   waitUntil(() => copiedTexts().length > previous ? true : undefined,
-    10_000, "Ctrl+C to reach the isolated clipboard sink", 100);
+    10_000, "copy to reach the isolated clipboard sink", 100);
 /** A settled line must follow this request's marker, not an older scrollback hit. */
 const waitForAfter = (pattern, marker, timeoutMs, label) =>
   waitUntil((frame) => {
@@ -441,6 +441,7 @@ try {
     const pressX = cellOf(beginLine, "SELECT_BEGIN_MARK", 0);
     // Drag to the end of the END marker row (past its last cell → boundary).
     const endX = cellOf(endLine, "SELECT_END_MARK", "SELECT_END_MARK".length);
+    const copiesBeforeDrag = copiedTexts().length;
     sendKeys(["-H", ...sgrSeq(0, pressX, beginRow + 1)]);
     sendKeys(["-H", ...sgrSeq(32, endX, endRow + 1)]);
     sendKeys(["-H", ...sgrSeq(0, endX, endRow + 1, true)]);
@@ -448,6 +449,9 @@ try {
     await waitUntil(() => capture(true).split("\n").some((line) =>
       line.includes("\u001b[7m") && /SELECT_|alpha beta gamma/.test(line)) ? true : undefined,
       10_000, "the drag establishes a reverse-video selection over the reply");
+    // Highlighting can precede mouse release and Pi's default copy-on-select.
+    await waitForSink(copiesBeforeDrag);
+    assert.equal(copiedTexts().length, copiesBeforeDrag + 1, "one drag release adds one clipboard write");
     // One Ctrl+C must copy silently while preserving the draft and the app.
     const copiesBeforeCtrlC = copiedTexts().length;
     sendKeys(["C-c"]);
