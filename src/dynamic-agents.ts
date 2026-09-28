@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 export const DYNAMIC_AGENTS = "metis:dynamic-agents";
@@ -61,6 +61,22 @@ export function loadPolicy(configPath: string, model: ModelIdentity | undefined)
 
 export function globalPaths(agentDir: string): string[] {
   return GLOBAL_NAMES.map(name => join(resolve(agentDir), name));
+}
+
+/** Refresh Pi's global-file precedence at a run boundary, without its loader cache. */
+export function loadGlobal(agentDir: string): { file?: AgentFile; error?: string } {
+  const errors: string[] = [];
+  for (const path of globalPaths(agentDir)) {
+    try {
+      if (!statSync(path).isFile()) continue;
+      return { file: { path, content: readFileSync(path, "utf8").replace(/^\uFEFF/, "") },
+        ...(errors.length ? { error: errors.join("; ") } : {}) };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      errors.push(`Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return errors.length ? { error: errors.join("; ") } : {};
 }
 
 export function replaceGlobal(files: AgentFile[], sources: Set<string>, replacement: AgentFile | undefined): AgentFile[] {

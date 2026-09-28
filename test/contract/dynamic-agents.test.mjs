@@ -118,6 +118,49 @@ test("policy is frozen across tool steps and refreshes only at the next run", as
   assert.match(next, /POLICY_UPDATED_SENTINEL/); assert.doesNotMatch(next, /POLICY_A_SENTINEL/);
 });
 
+for (const converted of [false, true]) test(`global file edits refresh next run without reload, converted=${converted}`, async t => {
+  const h = await host(t, converted);
+  await h.session.setModel(h.model("other"));
+  h.setReply(count => {
+    if (count !== 1) return;
+    writeFileSync(join(h.agentDir, "AGENTS.md"), "UPDATED_GLOBAL_SENTINEL");
+    return { content: [{ type: "toolCall", id: "read-project", name: "read", arguments: { path: join(h.cwd, "AGENTS.md") } }], stopReason: "toolUse" };
+  });
+  await h.run();
+  assert.equal(h.calls.length, 2);
+  for (const call of h.calls) {
+    assert.match(JSON.stringify(call.context), /NATIVE_GLOBAL_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(call.context), /UPDATED_GLOBAL_SENTINEL/);
+  }
+  const updated = await h.run();
+  const body = converted ? await captureBody(updated.model, updated.context,
+    { onPayload: body => h.session.extensionRunner.emitBeforeProviderRequest(body) }) : updated.context;
+  assert.match(JSON.stringify(body), /UPDATED_GLOBAL_SENTINEL/);
+  assert.doesNotMatch(JSON.stringify(body), /NATIVE_GLOBAL_SENTINEL/);
+  assert.match(JSON.stringify(body), /PROJECT_SENTINEL/);
+  writeFileSync(join(h.agentDir, "AGENTS.override.md"), "OVERRIDE_GLOBAL_SENTINEL");
+  assert.match(JSON.stringify((await h.run()).context), /OVERRIDE_GLOBAL_SENTINEL/);
+  rmSync(join(h.agentDir, "AGENTS.override.md"));
+  assert.match(JSON.stringify((await h.run()).context), /UPDATED_GLOBAL_SENTINEL/);
+  rmSync(join(h.agentDir, "AGENTS.md"));
+  const removed = JSON.stringify((await h.run()).context);
+  assert.doesNotMatch(removed, /(?:UPDATED|OVERRIDE|NATIVE)_GLOBAL_SENTINEL/);
+  assert.match(removed, /PROJECT_SENTINEL/);
+  writeFileSync(join(h.agentDir, "AGENTS.md"), "RECREATED_GLOBAL_SENTINEL");
+  assert.match(JSON.stringify((await h.run()).context), /RECREATED_GLOBAL_SENTINEL/);
+});
+
+test("editing an inactive policy affects only the next run that selects it", async t => {
+  const h = await host(t, false);
+  await h.run();
+  writeFileSync(join(h.agentDir, "B.md"), "UPDATED_B_SENTINEL");
+  const unchanged = JSON.stringify((await h.run()).context);
+  assert.match(unchanged, /POLICY_A_SENTINEL/); assert.doesNotMatch(unchanged, /UPDATED_B_SENTINEL/);
+  await h.session.setModel(h.model("b"));
+  const selected = JSON.stringify((await h.run()).context);
+  assert.match(selected, /UPDATED_B_SENTINEL/); assert.doesNotMatch(selected, /POLICY_[AB]_SENTINEL/);
+});
+
 test("bad config, disabling, and reload restore native rules without inheriting the last policy", async t => {
   const h = await host(t, false);
   await h.run();

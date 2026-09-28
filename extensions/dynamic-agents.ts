@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DYNAMIC_AGENTS, DYNAMIC_AGENTS_STATE, globalPaths, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
+import { DYNAMIC_AGENTS, DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "../src/dynamic-agents.ts";
 
 type Options = { contextFiles: AgentFile[]; forceSystemPrompt?: string };
@@ -19,15 +19,18 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
   let dirty = true;
   let preparing = false;
   let nativeGlobal: AgentFile | undefined;
+  let globalError: string | undefined;
   let lastOptions: Options | undefined;
   let managed = existsSync(configPath);
 
   const prepare = (options: Options, ctx: ExtensionContext) => {
     if (!managed && !existsSync(configPath)) return;
-    // Each run begins with Pi's resource-loader files. A converter can repeat
-    // preparation after selecting its final model without losing that baseline.
+    // Read globals once for this run. A converter may repeat preparation after
+    // selecting its final model; tool steps still keep the same file snapshot.
     if (lastOptions !== options) {
-      nativeGlobal = options.contextFiles.find(file => globalPaths(getAgentDir()).includes(file.path));
+      const global = loadGlobal(getAgentDir());
+      nativeGlobal = global.file;
+      globalError = global.error;
       lastOptions = options;
       dirty = true;
     }
@@ -37,6 +40,7 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
         policy.error = "Policy file is already loaded as project instructions";
         delete policy.file; delete policy.group;
       }
+      if (!policy.file && globalError) policy.error = [policy.error, globalError].filter(Boolean).join("; ");
       managed = existsSync(configPath) || sources.size > globalPaths(getAgentDir()).length;
       snapshot = { model: identity(ctx.model), policy, replacement: policy.file ?? nativeGlobal };
       if (policy.file) sources.add(policy.file.path);
