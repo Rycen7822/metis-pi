@@ -42,7 +42,7 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
     for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
       assert.ok(files.has(`vendor/${name}/${path}`), `${name}/${path}`);
     }
-    assert.ok(!files.has(`vendor/${name}/dist/index.d.ts`), "declarations stay in the source checkout");
+    assert.ok(!files.has(`vendor/${name}/dist/index.d.ts`), "runtime needs no generated declarations");
   }
   for (const path of [
     "changelog.js", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
@@ -52,8 +52,11 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
   ]) assert.ok(files.has(`vendor/pi-codex-conversion/${path}`), path);
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
   assert.ok(!files.has("vendor/pi-codex-conversion/patches/local.patch"), "patch replay belongs to the source checkout");
-  assert.ok(!files.has("vendor/pi-codex-conversion/src/index.ts"));
-  assert.ok(!files.has("vendor/pi-condense/index.ts"));
+  assert.ok(files.has("vendor/pi-codex-conversion/src/index.ts"));
+  assert.ok(files.has("vendor/pi-condense/index.ts"));
+  assert.ok(files.has("vendor/pi-codex-conversion/changelog.ts"));
+  assert.ok(![...files].some((path) => path.startsWith("vendor/pi-codex-conversion/src/tools/rust/")), "Rust build inputs stay outside the runtime package");
+  assert.ok(![...files].some((path) => /^vendor\/[^/]+\/dist\/.+\//.test(path)), "no generated implementation tree ships");
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);
@@ -70,7 +73,7 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
 });
 
 test("metis-pi owns vendored updates without an upstream npm check", () => {
-  // vendor:fresh owns generated output; the real AgentSession test owns initialization.
+  // The real AgentSession test owns initialization; source owns the runtime.
   const root = new URL("../vendor/pi-codex-conversion/src/", import.meta.url);
   for (const path of readdirSync(root, { recursive: true })) {
     if (!/\.(ts|js)$/.test(path)) continue;

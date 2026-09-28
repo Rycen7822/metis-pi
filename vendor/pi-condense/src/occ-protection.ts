@@ -1,5 +1,5 @@
-import { ARGUMENT_HISTORY } from "./argument-history.js";
-import { CUSTOM_TYPE_SUMMARY } from "./types.js";
+import { ARGUMENT_HISTORY } from "./argument-history.ts";
+import { CUSTOM_TYPE_SUMMARY } from "./types.ts";
 
 export interface SourceQuote { source: string; content: unknown }
 export interface Obligation {

@@ -1,5 +1,5 @@
 import type { ContextUsage } from "@earendil-works/pi-coding-agent";
-import type { ContextMetricsSnapshot } from "./types.js";
+import type { ContextMetricsSnapshot } from "./types.ts";
 
 // Ceiling on what the budget triggers treat as the context window. Advertised
 // windows reach 1M, which makes any (0,1] fraction unreachable in a real session.

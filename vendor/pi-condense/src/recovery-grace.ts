@@ -1,5 +1,5 @@
-import { QUERY_TOOL_NAME } from "./types.js";
-import { occKey } from "./occurrence-key.js";
+import { QUERY_TOOL_NAME } from "./types.ts";
+import { occKey } from "./occurrence-key.ts";
 
 /**
  * Set of `context_tree_query` occurrence keys (or bare ids when the message

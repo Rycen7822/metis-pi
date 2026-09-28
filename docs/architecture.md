@@ -13,9 +13,9 @@
 | `todo.ts` → `src/todo/` | 工具/命令、持久化列表、任务面板及会话交接。 |
 | `goal.ts` → `src/goal-state.ts` | 入口处理宿主 I/O、提示和工具；状态核心处理目标、计时、分支恢复和回合用量。 |
 | `dynamic-agents.ts` → `src/dynamic-agents.ts` | 每次 run 的全局策略快照、来源恢复和请求投影；conversion 通过事件总线共享结果。 |
-| `condense.ts` → `vendor/pi-condense/dist/index.js` | 重复安装检测、单一加载入口和摘要用量展示；vendor 负责归档、精简/摘要和恢复。 |
+| `condense.ts` → `vendor/pi-condense/index.ts` | 重复安装检测、单一加载入口和摘要用量展示；vendor 负责归档、精简/摘要和恢复。 |
 | `action-fusion.ts` | 融合修改/命令的统一开关、原生 edit/write 适配、修改快照和取消。 |
-| conversion `dist/index.js` | `vendor/pi-codex-conversion/src/extension/register.ts` 的构建入口：provider、执行工具、上下文与设置。 |
+| conversion `dist/index.js` | 转导出 `src/index.ts`，由 `src/extension/register.ts` 接线：provider、执行工具、上下文与设置。 |
 
 `metis-pi.json.enabled` 控制 appearance。其他入口的配置与禁用方法见 [配置参考](configuration.md)。
 
@@ -76,6 +76,6 @@ OCC 使用宿主 `context_edit` 后的有效投影，frontier 仍使用原始 as
 
 ## 源码与生成物
 
-源码和 Git 历史保存本地实现；vendor `UPSTREAM.md` / `PATCHES.md` 说明来源和差异。运行 JS、模块相对位置及本地资产继续提交，声明由开发检查生成并忽略；累计 patch 和覆盖式同步已退休。
+源码和 Git 历史保存本地实现；vendor `UPSTREAM.md` / `PATCHES.md` 说明来源和差异。运行实现直接采用 TS；`dist/` 仅保留旧入口和公开 API 的转导出，开发检查不生成 JS/声明。本地资产及相对位置继续保留；累计 patch 和覆盖式同步已退休。
 
-编译入口参与工具来源认领，部分共享状态 key 包含模块 URL，资源也依赖相对路径。公开 facade、原生 ABI 和惰性加载不能仅凭静态导入图判断为可删代码。实际验证范围见 [VALIDATION](../VALIDATION.md)。
+旧入口路径仍参与工具来源认领，部分共享状态 key 包含模块 URL，资源也依赖相对路径。公开 facade、原生 ABI 和惰性加载不能仅凭静态导入图判断为可删代码。实际验证范围见 [VALIDATION](../VALIDATION.md)。

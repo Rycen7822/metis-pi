@@ -3,12 +3,12 @@ import type {
 	RuntimeToolResult,
 	RuntimeToolTrace,
 	ToolExecutionContext,
-} from "./types.js";
+} from "./types.ts";
 import {
 	boundRuntimeToolResult,
 	cloneTrace,
 	sanitizeTraceInput,
-} from "./trace-values.js";
+} from "./trace-values.ts";
 
 const MAX_TRACE_COUNT = 50;
 const MAX_TRACE_INPUT_CHARS = 16_384;

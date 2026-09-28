@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
-import { createExecSessionManager } from "../../vendor/pi-codex-conversion/dist/tools/exec/session-manager.js";
-import { createExecCommandTool } from "../../vendor/pi-codex-conversion/dist/tools/exec/command-tool.js";
-import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/dist/tools/exec/command-state.js";
-import { captureBatch } from "../../vendor/pi-condense/dist/src/batch-capture.js";
-import { packToolResult } from "../../vendor/pi-condense/dist/src/packing.js";
-import { waitForExitOrInactivity } from "../../vendor/pi-codex-conversion/dist/tools/exec/wait.js";
+import { createExecSessionManager } from "../../vendor/pi-codex-conversion/src/tools/exec/session-manager.ts";
+import { createExecCommandTool } from "../../vendor/pi-codex-conversion/src/tools/exec/command-tool.ts";
+import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/src/tools/exec/command-state.ts";
+import { captureBatch } from "../../vendor/pi-condense/src/batch-capture.ts";
+import { packToolResult } from "../../vendor/pi-condense/src/packing.ts";
+import { waitForExitOrInactivity } from "../../vendor/pi-codex-conversion/src/tools/exec/wait.ts";
 import { trackExecSpools } from "../helpers/exec.mjs";
 
 const Mi = 1024 * 1024;

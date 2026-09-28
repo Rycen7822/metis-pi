@@ -8,8 +8,8 @@ import {
 	PREFLIGHT_PROTOCOL,
 	PREFLIGHT_REQUEST_CHANNEL,
 	type PreflightBroker,
-} from "./preflight-protocol.js";
-import type { ToolExecutionContext } from "./types.js";
+} from "./preflight-protocol.ts";
+import type { ToolExecutionContext } from "./types.ts";
 
 export type CodeModeToolPreflightRunner = (
 	call: CodeModeToolPreflightCall,

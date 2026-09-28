@@ -1,5 +1,5 @@
-import { codeModeGlobalName } from "./tool-identity.js";
-import type { CodeModeToolDefinition } from "./types.js";
+import { codeModeGlobalName } from "./tool-identity.ts";
+import type { CodeModeToolDefinition } from "./types.ts";
 
 // Inject the same formatter into V8 and Deno without changing returned objects.
 export const plainCommandOutputFormatterSource = `(value) => {

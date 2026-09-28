@@ -2,7 +2,7 @@ import type {
 	CodeModeToolDefinition,
 	CodeModeToolMetadata,
 	CustomToolDefinition,
-} from "./types.js";
+} from "./types.ts";
 import {
 	translateCodeModeGuideline,
 	translateCodeModeToolReferences,

@@ -3,8 +3,8 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import type { CodeModeToolPreflightRunner } from "./nested-tool-preflight.js";
-import type { CodeModeToolCompletion } from "./preflight-protocol.js";
+import type { CodeModeToolPreflightRunner } from "./nested-tool-preflight.ts";
+import type { CodeModeToolCompletion } from "./preflight-protocol.ts";
 
 export type CustomToolInputMode = "arg" | "stdin";
 
@@ -165,7 +165,7 @@ export type RuntimeResponse = (
 			errorText?: string | undefined;
 	  }
 ) & {
-	fusionEvidence?: import("./fusion-evidence.js").FusionEvidenceRef | undefined;
+	fusionEvidence?: import("./fusion-evidence.ts").FusionEvidenceRef | undefined;
 	fusionEvidenceError?: string | undefined;
 	maxOutputTokens?: number | undefined;
 	missingCell?: true | undefined;

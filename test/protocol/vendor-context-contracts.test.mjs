@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { disableNetwork, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
-import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/dist/context-management/history-notes.js";
+import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/src/context-management/history-notes.ts";
 import {
 	rewriteContextNamespaceTools,
 	routeContextNamespaceToolStream,
 	unrouteContextNamespaceToolCall,
-} from "../../vendor/pi-codex-conversion/dist/context-management/namespace-tools.js";
+} from "../../vendor/pi-codex-conversion/src/context-management/namespace-tools.ts";
 
 test.beforeEach(disableNetwork);
 

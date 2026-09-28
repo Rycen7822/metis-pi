@@ -1,4 +1,4 @@
-import type { CapturedBatch, CapturedToolCall } from "./types.js";
+import type { CapturedBatch, CapturedToolCall } from "./types.ts";
 
 // Restrict lossy packing to recognizable successful build/test output. Reads,
 // searches, arbitrary shell programs and failed tools retain the existing path.

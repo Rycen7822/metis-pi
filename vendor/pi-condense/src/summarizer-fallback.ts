@@ -31,11 +31,14 @@ export interface ModelLike {
 }
 
 export class FallbackController {
+  private readonly now: () => number;
+
   inFallback = false;
   private lastProbeAt = 0;
   private owedEnterWarning = false;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(now: () => number = Date.now) {
+    this.now = now;}
 
   reset(): void {
     this.inFallback = false;

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { openPrunerSettings } from "../../vendor/pi-condense/dist/src/settings.js";
-import { registerCommands } from "../../vendor/pi-condense/dist/src/commands.js";
-import { ToolCallIndexer } from "../../vendor/pi-condense/dist/src/indexer.js";
-import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
+import { openPrunerSettings } from "../../vendor/pi-condense/src/settings.ts";
+import { registerCommands } from "../../vendor/pi-condense/src/commands.ts";
+import { ToolCallIndexer } from "../../vendor/pi-condense/src/indexer.ts";
+import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
 
 const ROW_ORDER = [
   "enabled", "showPruneStatusLine", "showOccStatusLine", "pruneOn", "summarizerModel",

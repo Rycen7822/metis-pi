@@ -4,14 +4,14 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { CodeModeDelegateRuntime } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/delegate-runtime.js";
-import { toCodeModeToolResult } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/tool-result.js";
-import { FusionEvidenceStore } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/fusion-evidence.js";
-import { captureBatch } from "../../vendor/pi-condense/dist/src/batch-capture.js";
-import { archiveToolOutput, spillOversizedBatch } from "../../vendor/pi-condense/dist/src/spill.js";
-import { ToolCallIndexer } from "../../vendor/pi-condense/dist/src/indexer.js";
-import { registerQueryTool } from "../../vendor/pi-condense/dist/src/query-tool.js";
-import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
+import { CodeModeDelegateRuntime } from "../../vendor/pi-codex-conversion/src/tools/code-mode/delegate-runtime.ts";
+import { toCodeModeToolResult } from "../../vendor/pi-codex-conversion/src/tools/code-mode/tool-result.ts";
+import { FusionEvidenceStore } from "../../vendor/pi-codex-conversion/src/tools/code-mode/fusion-evidence.ts";
+import { captureBatch } from "../../vendor/pi-condense/src/batch-capture.ts";
+import { archiveToolOutput, spillOversizedBatch } from "../../vendor/pi-condense/src/spill.ts";
+import { ToolCallIndexer } from "../../vendor/pi-condense/src/indexer.ts";
+import { registerQueryTool } from "../../vendor/pi-condense/src/query-tool.ts";
+import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "fusion-evidence-"));

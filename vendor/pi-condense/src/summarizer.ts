@@ -8,9 +8,9 @@ import type {
   SummarizeBatchOptions,
   SummarizeBatchesOptions,
   SummarizeResult,
-} from "./types.js";
-import { serializeBatchForSummarizer } from "./batch-capture.js";
-import { FallbackController, type FallbackTransition } from "./summarizer-fallback.js";
+} from "./types.ts";
+import { serializeBatchForSummarizer } from "./batch-capture.ts";
+import { FallbackController, type FallbackTransition } from "./summarizer-fallback.ts";
 
 const SYSTEM_PROMPT = `You are summarizing a batch of tool calls made by an AI coding assistant.
 For each tool call provide:

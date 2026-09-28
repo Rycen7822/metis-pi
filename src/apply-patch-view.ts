@@ -1,8 +1,8 @@
 // Read the conversion layer's pre-execution snapshot; never rebuild a diff from
 // files that the tool has already changed. Painting is shared with edit/write.
-import { getApplyPatchRenderSnapshot } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/render-state.js";
-import { shouldCompactApplyPatchDisplay } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/display-broker.js";
-import { formatPatchTarget } from "../vendor/pi-codex-conversion/dist/tools/apply-patch/rendering.js";
+import { getApplyPatchRenderSnapshot } from "../vendor/pi-codex-conversion/src/tools/apply-patch/render-state.ts";
+import { shouldCompactApplyPatchDisplay } from "../vendor/pi-codex-conversion/src/tools/apply-patch/display-broker.ts";
+import { formatPatchTarget } from "../vendor/pi-codex-conversion/src/tools/apply-patch/rendering.ts";
 import { OWNED_CONVERSION_ENTRY, type AdapterOptions } from "./adapter.ts";
 import type { DiffRow } from "./diff.ts";
 import { productFor, publishRows, registerProduct, type CopyRow } from "./selection-copy/model.ts";

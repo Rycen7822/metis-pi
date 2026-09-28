@@ -1,5 +1,5 @@
-import { CUSTOM_TYPE_DIAGNOSTIC } from "./types.js";
-import type { DiagnosticEntryData, DiagnosticKind } from "./types.js";
+import { CUSTOM_TYPE_DIAGNOSTIC } from "./types.ts";
+import type { DiagnosticEntryData, DiagnosticKind } from "./types.ts";
 
 /**
  * Out-of-band diagnostic channel for prune-time degradations. Session entries
@@ -8,6 +8,8 @@ import type { DiagnosticEntryData, DiagnosticKind } from "./types.js";
  * entry, not one per render.
  */
 export class DiagnosticSink {
+  private readonly appendEntry: (customType: string, data?: unknown) => void;
+
   private readonly seen = new Set<string>();
   private readonly counters: Record<DiagnosticKind, number> = {
     "unresolved-range": 0,
@@ -16,7 +18,8 @@ export class DiagnosticSink {
     "backfill-empty": 0,
   };
 
-  constructor(private readonly appendEntry: (customType: string, data?: unknown) => void) {}
+  constructor(appendEntry: (customType: string, data?: unknown) => void) {
+    this.appendEntry = appendEntry;}
 
   report(kind: DiagnosticKind, dedupKey: string, detail: string): void {
     const key = `${kind}:${dedupKey}`;

@@ -1,11 +1,11 @@
-import { formatCodeModeToolHelp } from "./custom-tool-prompt.js";
+import { formatCodeModeToolHelp } from "./custom-tool-prompt.ts";
 import { codeModeNameForToolIdentity, resolveCodeModeToolIdentity } from "./tool-identity.ts";
 import type {
 	CodeModeToolDefinition,
 	CustomToolDefinition,
 	RuntimeContentItem,
 	RuntimeResponse,
-} from "./types.js";
+} from "./types.ts";
 
 export const MAX_CODE_MODE_OUTPUT_TOKENS = 100_000;
 export const DEFAULT_CODE_MODE_OUTPUT_TOKENS = 10_000;

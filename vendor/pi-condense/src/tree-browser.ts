@@ -3,11 +3,11 @@ import { Markdown, getKeybindings, matchesKey, truncateToWidth, visibleWidth } f
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { ToolCallRecord } from "./types.js";
-import { CUSTOM_TYPE_SUMMARY } from "./types.js";
-import { normalizeSummaryToolCallRefs } from "./summary-refs.js";
-import type { ToolCallIndexer } from "./indexer.js";
-import { occKey } from "./occurrence-key.js";
+import type { ToolCallRecord } from "./types.ts";
+import { CUSTOM_TYPE_SUMMARY } from "./types.ts";
+import { normalizeSummaryToolCallRefs } from "./summary-refs.ts";
+import type { ToolCallIndexer } from "./indexer.ts";
+import { occKey } from "./occurrence-key.ts";
 
 // ── Tree node types ─────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ function boxLines(
   lines: string[],
   width: number,
   title: string,
-  theme: Theme,
+  _theme: Theme,
 ): string[] {
   const innerWidth = Math.max(0, width - 2);
   const result: string[] = [];
@@ -175,6 +175,8 @@ function toolCallNode(record: ToolCallRecord, depth: number): TreeNode {
 // ── TreeBrowser component ───────────────────────────────────────────────────
 
 export class TreeBrowser implements Component {
+  private readonly roots: TreeNode[];
+
   private flatRows: VisibleRow[] = [];
   private selectedIndex = 0;
   private theme: Theme;
@@ -182,10 +184,11 @@ export class TreeBrowser implements Component {
   private summaryOverlay: SummaryOverlayState | null = null;
 
   constructor(
-    private readonly roots: TreeNode[],
+    roots: TreeNode[],
     theme: Theme,
     onDone: () => void,
   ) {
+    this.roots = roots;
     this.theme = theme;
     this.onDone = onDone;
     this.rebuildFlatRows();
@@ -298,7 +301,6 @@ export class TreeBrowser implements Component {
     const overlayInnerWidth = Math.max(1, overlayWidth - 2);
     const markdown = new Markdown(overlay.text, 1, 0, getMarkdownTheme());
     const markdownLines = markdown.render(Math.max(1, overlayInnerWidth));
-    const reservedLines = 5;
     const maxContentHeight = Math.max(12, Math.min(markdownLines.length, baseLines.length + 8));
     const maxScroll = Math.max(0, markdownLines.length - maxContentHeight);
     overlay.scrollOffset = Math.min(overlay.scrollOffset, maxScroll);

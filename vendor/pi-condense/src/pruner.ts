@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import type { ToolCallIndexer } from "./indexer.js";
-import type { ChainCompressionConfig, ErrorPurgeConfig, ToolCallRecord } from "./types.js";
-import { isProtected, type ProtectionConfig } from "./protected.js";
-import { applyChainCompressions } from "./chain-range-prune.js";
-import { purgeErroredArgs } from "./error-purge.js";
-import { inGraceRecoveryToolCallIds } from "./recovery-grace.js";
-import { bareToolCallId, occKey } from "./occurrence-key.js";
-import { sweepOrphanToolResults } from "./orphan-sweep.js";
-import type { DiagnosticSink } from "./diagnostics.js";
-import { applySupersede, type SupersedeState } from "./supersede.js";
+import type { ToolCallIndexer } from "./indexer.ts";
+import type { ChainCompressionConfig, ErrorPurgeConfig, ToolCallRecord } from "./types.ts";
+import { isProtected, type ProtectionConfig } from "./protected.ts";
+import { applyChainCompressions } from "./chain-range-prune.ts";
+import { purgeErroredArgs } from "./error-purge.ts";
+import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
+import { bareToolCallId, occKey } from "./occurrence-key.ts";
+import { sweepOrphanToolResults } from "./orphan-sweep.ts";
+import type { DiagnosticSink } from "./diagnostics.ts";
+import { applySupersede, type SupersedeState } from "./supersede.ts";
 
 /**
  * Estimate of a message array's context weight. Serializing the whole array

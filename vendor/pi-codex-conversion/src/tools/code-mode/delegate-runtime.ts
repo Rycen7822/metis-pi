@@ -1,16 +1,16 @@
-import { runCustomTool } from "./custom-tool-runner.js";
-import { isCustomToolDefinition, type DelegateRequestMessage } from "./host-protocol.js";
-import { runCodeModeToolWithHooks } from "./nested-tool-completion.js";
+import { runCustomTool } from "./custom-tool-runner.ts";
+import { isCustomToolDefinition, type DelegateRequestMessage } from "./host-protocol.ts";
+import { runCodeModeToolWithHooks } from "./nested-tool-completion.ts";
 import { codeModeNameForToolIdentity } from "./tool-identity.ts";
-import { CodeModeNestedRenderStore } from "./trace-render-state.js";
-import { CodeModeTraceStore } from "./trace-store.js";
-import { FusionEvidenceStore } from "./fusion-evidence.js";
-import { toolResultFromValue, truncateTraceText } from "./trace-values.js";
+import { CodeModeNestedRenderStore } from "./trace-render-state.ts";
+import { CodeModeTraceStore } from "./trace-store.ts";
+import { FusionEvidenceStore } from "./fusion-evidence.ts";
+import { toolResultFromValue, truncateTraceText } from "./trace-values.ts";
 import type {
 	CodeModeToolDefinition,
 	RuntimeResponse,
 	ToolExecutionContext,
-} from "./types.js";
+} from "./types.ts";
 
 const MAX_TRACE_ERROR_CHARS = 16_384;
 const MAX_NOTIFICATION_CHARS = 16_384;

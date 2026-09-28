@@ -6,9 +6,9 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { disableNetwork, captureBody, declaredToolNames, FAKE_API_KEY, inPlaceToolItems, kindsOf, modelNamed } from "../helpers/vendor-codex-provider.mjs";
 import { assistantToolCall, systemMessage, tool, toolResult, userMessage } from "../helpers/vendor-codex-sessions.mjs";
-import { streamCodeModeResponsesProxy } from "../../vendor/pi-codex-conversion/dist/providers/code-mode-proxy-provider.js";
-import { hasContextNamespaceRouters } from "../../vendor/pi-codex-conversion/dist/context-management/namespace-tools.js";
-import { prewarmOpenAICodexWebSocket } from "../../vendor/pi-codex-conversion/dist/providers/openai-codex-custom-provider.js";
+import { streamCodeModeResponsesProxy } from "../../vendor/pi-codex-conversion/src/providers/code-mode-proxy-provider.ts";
+import { hasContextNamespaceRouters } from "../../vendor/pi-codex-conversion/src/context-management/namespace-tools.ts";
+import { prewarmOpenAICodexWebSocket } from "../../vendor/pi-codex-conversion/src/providers/openai-codex-custom-provider.ts";
 
 test.beforeEach(disableNetwork);
 

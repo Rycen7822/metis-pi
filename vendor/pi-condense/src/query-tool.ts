@@ -2,8 +2,8 @@ import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { ToolCallIndexer } from "./indexer.js";
-import { QUERY_TOOL_NAME, type ToolCallRecord } from "./types.js";
+import type { ToolCallIndexer } from "./indexer.ts";
+import { QUERY_TOOL_NAME, type ToolCallRecord } from "./types.ts";
 
 const MAX_BYTES = 32768;
 interface Cursor { selection: string; index: number; offset: number; version?: string }

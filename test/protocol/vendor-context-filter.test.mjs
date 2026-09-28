@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isProviderContextExcludedMessage } from "../../vendor/pi-codex-conversion/dist/adapter/prompt/context-filter.js";
+import { isProviderContextExcludedMessage } from "../../vendor/pi-codex-conversion/src/adapter/prompt/context-filter.ts";
 
 test("retired session metadata stays out of provider context", () => {
 	assert.equal(isProviderContextExcludedMessage({ role: "custom", customType: "codex-realtime-voice" }), true);

@@ -1,6 +1,6 @@
-import { detectChains, isChainAnchorCustom } from "./chain-detector.js";
-import { occKey, resultTimestampOf } from "./occurrence-key.js";
-import type { ContextMetricsSnapshot, PruneFrontier } from "./types.js";
+import { detectChains, isChainAnchorCustom } from "./chain-detector.ts";
+import { occKey, resultTimestampOf } from "./occurrence-key.ts";
+import type { ContextMetricsSnapshot, PruneFrontier } from "./types.ts";
 
 function charsOf(msg: any): number {
   return JSON.stringify(msg).length;

@@ -1,12 +1,12 @@
-import type { ContextPruneConfig } from "./types.js";
+import type { ContextPruneConfig } from "./types.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import {
   SCALAR_ROWS, displayValue, fallbackValue, optionValues, parseScalar,
   rowDescription, type ScalarRow, writeScalar,
-} from "./setting-fields.js";
-import { persistConfig } from "./config.js";
+} from "./setting-fields.ts";
+import { persistConfig } from "./config.ts";
 
 /**
  * Wraps a SettingsList with a border + title, delegating all input handling
@@ -14,11 +14,14 @@ import { persistConfig } from "./config.js";
  * forward handleInput manually.
  */
 class SettingsOverlay extends Container {
+  private readonly settingsList: SettingsList;
+
   constructor(
     title: string,
-    private readonly settingsList: SettingsList,
+    settingsList: SettingsList,
   ) {
     super();
+    this.settingsList = settingsList;
     this.addChild(new DynamicBorder());
     this.addChild(new Text(title, 0, 0));
     this.addChild(settingsList);

@@ -1,5 +1,5 @@
-import type { CapturedBatch } from "./types.js";
-import { resultTimestampOf } from "./occurrence-key.js";
+import type { CapturedBatch } from "./types.ts";
+import { resultTimestampOf } from "./occurrence-key.ts";
 
 export interface SummaryToolCallRef {
   shortId: string;

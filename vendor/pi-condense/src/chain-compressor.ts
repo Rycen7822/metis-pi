@@ -1,11 +1,10 @@
-import { CUSTOM_TYPE_CHAIN } from "./types.js";
-import type { ChainRange, ChainCompressionEntry, ToolCallRecord } from "./types.js";
-import type { ToolCallIndexer } from "./indexer.js";
-import type { BlockRefIssuer } from "./block-refs.js";
-import type { DiagnosticSink } from "./diagnostics.js";
-import { bareToolCallId, occKey, parseOccKey, resultTimestampOf } from "./occurrence-key.js";
-import { resolveRange } from "./chain-range-prune.js";
-import { extractToolResultText } from "./batch-capture.js";
+import { CUSTOM_TYPE_CHAIN } from "./types.ts";
+import type { ChainRange, ChainCompressionEntry, ToolCallRecord } from "./types.ts";
+import type { BlockRefIssuer } from "./block-refs.ts";
+import type { DiagnosticSink } from "./diagnostics.ts";
+import { bareToolCallId, occKey, parseOccKey, resultTimestampOf } from "./occurrence-key.ts";
+import { resolveRange } from "./chain-range-prune.ts";
+import { extractToolResultText } from "./batch-capture.ts";
 
 /**
  * Grace ids are keyed the same way `recovery-grace.ts` keys them: occurrence
@@ -63,11 +62,11 @@ export function selectEligible(
  * and documents its real dependency surface.
  */
 export interface ChainCompressorIndexerDeps {
-  getChainEntries(): import("./types.js").ChainCompressionEntry[];
+  getChainEntries(): import("./types.ts").ChainCompressionEntry[];
   hasPerBatchSummaryCoveringAny(toolCallIds: string[]): boolean;
   getPerBatchSummariesForToolCallIds(toolCallIds: string[]): string[];
   getToolRefsForToolCallIds(toolCallIds: string[]): string[];
-  registerChain(entry: import("./types.js").ChainCompressionEntry): void;
+  registerChain(entry: import("./types.ts").ChainCompressionEntry): void;
   getIndex(): Map<string, ToolCallRecord>;
   backfillChainRecords(
     records: ToolCallRecord[],
@@ -78,7 +77,7 @@ export interface ChainCompressorIndexerDeps {
       sessionId: string;
       appendEntry: (customType: string, data?: unknown) => void;
     },
-  ): Promise<import("./types.js").SummaryToolCallRef[]>;
+  ): Promise<import("./types.ts").SummaryToolCallRef[]>;
 }
 
 export interface CompressEligibleDeps {

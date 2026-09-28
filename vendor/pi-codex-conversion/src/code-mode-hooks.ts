@@ -6,18 +6,18 @@ import {
 	isPreflightBroker,
 	type CodeModeToolCompletion,
 	type PreflightBroker,
-} from "./tools/code-mode/preflight-protocol.js";
+} from "./tools/code-mode/preflight-protocol.ts";
 export {
 	registerCodeModeToolPreflight,
 	type CodeModeToolPreflight,
 	type CodeModeToolPreflightCall,
 	type CodeModeToolPreflightResult,
 	type CodeModeToolPreflightRegistration,
-} from "./code-mode-preflight.js";
+} from "./code-mode-preflight.ts";
 export type {
 	CodeModeToolCompletion,
 	CodeModeToolCompletionCall,
-} from "./tools/code-mode/preflight-protocol.js";
+} from "./tools/code-mode/preflight-protocol.ts";
 
 export interface CodeModeToolCompletionRegistration {
 	readonly available: boolean;

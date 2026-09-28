@@ -9,20 +9,20 @@ import {
 	previewText,
 	renderTextAndImages,
 	type RenderedToolContent,
-} from "./render-content.js";
-import type { CodeModeRenderTracker } from "./render-tracker.js";
-import { formatNotebookMemoryWarning } from "./tool-result.js";
+} from "./render-content.ts";
+import type { CodeModeRenderTracker } from "./render-tracker.ts";
+import { formatNotebookMemoryWarning } from "./tool-result.ts";
 import {
 	type CodeModeNestedRenderStore,
 	renderTraceAndOutput,
-} from "./trace-rendering.js";
+} from "./trace-rendering.ts";
 import type {
 	CodeModeRenderContext,
 	CodeModeRenderTheme,
 	CodeModeToolDefinition,
 	NotebookMemoryUsage,
 	RuntimeToolTrace,
-} from "./types.js";
+} from "./types.ts";
 
 interface CodeModeResultDetails {
 	cellId?: string | undefined;

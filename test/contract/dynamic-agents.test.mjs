@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { captureBody, disableNetwork, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
-import { createCodexExtensionRuntime } from "../../vendor/pi-codex-conversion/dist/extension/runtime.js";
+import { createCodexExtensionRuntime } from "../../vendor/pi-codex-conversion/src/extension/runtime.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };

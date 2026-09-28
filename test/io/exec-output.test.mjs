@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { ExecOutputBuffer } from "../../vendor/pi-codex-conversion/dist/tools/exec/output-buffer.js";
-import { consumeOutput, peekOutputSince, peekUnconsumedOutput } from "../../vendor/pi-codex-conversion/dist/tools/exec/output.js";
+import { ExecOutputBuffer } from "../../vendor/pi-codex-conversion/src/tools/exec/output-buffer.ts";
+import { consumeOutput, peekOutputSince, peekUnconsumedOutput } from "../../vendor/pi-codex-conversion/src/tools/exec/output.ts";
 import { trackExecSpools } from "../helpers/exec.mjs";
 
 const Mi = 1024 * 1024;

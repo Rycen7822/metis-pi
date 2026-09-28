@@ -6,7 +6,7 @@ import {
 	recordCanonicalSessionResponse,
 	resolveCanonicalCompactionPromptInput,
 	validateCanonicalSessionRequest,
-} from "../../vendor/pi-codex-conversion/dist/providers/openai-codex/session-continuity.js";
+} from "../../vendor/pi-codex-conversion/src/providers/openai-codex/session-continuity.ts";
 
 const identity = { url: "https://example.invalid/responses", accountId: "offline-account" };
 const user = (text) => ({ role: "user", content: [{ type: "input_text", text }] });

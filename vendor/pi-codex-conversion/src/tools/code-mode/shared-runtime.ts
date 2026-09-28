@@ -1,15 +1,15 @@
-import { ensureCodeModeHostBinary } from "./binary.js";
-import { CodeModeHostClient } from "./host-client.js";
+import { ensureCodeModeHostBinary } from "./binary.ts";
+import { CodeModeHostClient } from "./host-client.ts";
 import { createNotebookControlProxy } from "./notebook-tool.ts";
 import { codeModeGlobalName } from "./tool-identity.ts";
-import { CodeModeNestedRenderStore } from "./trace-render-state.js";
+import { CodeModeNestedRenderStore } from "./trace-render-state.ts";
 import type {
 	CodeModeToolDefinition,
 	NotebookControlRequest,
 	NotebookControlResult,
 	RuntimeResponse,
 	ToolExecutionContext,
-} from "./types.js";
+} from "./types.ts";
 
 export type CodeModeExecutionKind = "code" | "notebook";
 

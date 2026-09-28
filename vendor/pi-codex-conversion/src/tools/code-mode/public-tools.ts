@@ -4,32 +4,32 @@ import { getExperimentalToolSampling } from "../tool-sampling.ts";
 import {
 	DEFAULT_CODE_MODE_OUTPUT_TOKENS,
 	MAX_CODE_MODE_OUTPUT_TOKENS,
-} from "./host-protocol.js";
+} from "./host-protocol.ts";
 import {
 	EXEC_DESCRIPTION,
 	WAIT_DESCRIPTION,
-} from "./custom-tool-prompt.js";
-import { createCodeModeRenderTracker } from "./render-tracker.js";
+} from "./custom-tool-prompt.ts";
+import { createCodeModeRenderTracker } from "./render-tracker.ts";
 import {
 	renderExecCall,
 	renderWaitCall,
-} from "./call-rendering.js";
-import { renderTrackedCodeModeResult } from "./result-rendering.js";
-import type { SharedCodeModeRuntime } from "./shared-runtime.js";
+} from "./call-rendering.ts";
+import { renderTrackedCodeModeResult } from "./result-rendering.ts";
+import type { SharedCodeModeRuntime } from "./shared-runtime.ts";
 import {
 	formatRunningExecSessionGuidance,
 	toCodeModeToolResult,
-} from "./tool-result.js";
+} from "./tool-result.ts";
 import type {
 	CodeModeRenderContext,
 	CodeModeRenderTheme,
 	ToolExecutionContext,
-} from "./types.js";
-import { CODE_MODE_EXEC_CONSTRAINED_SAMPLING } from "./exec-contract.js";
+} from "./types.ts";
+import { CODE_MODE_EXEC_CONSTRAINED_SAMPLING } from "./exec-contract.ts";
 import {
 	registerCodeModePreflightBroker,
-} from "./nested-tool-preflight.js";
-import { runCodeModeToolWithHooks } from "./nested-tool-completion.js";
+} from "./nested-tool-preflight.ts";
+import { runCodeModeToolWithHooks } from "./nested-tool-completion.ts";
 import { registerNotebookTool } from "./notebook-tool.ts";
 
 const DEFAULT_WAIT_MS = 10_000;

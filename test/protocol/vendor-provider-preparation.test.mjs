@@ -3,17 +3,17 @@ import test from "node:test";
 import { createEditToolDefinition, createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
 import { disableNetwork, modelNamed } from "../helpers/vendor-codex-provider.mjs";
 import { SEALED_WINDOW_ITEM } from "../helpers/vendor-codex-sessions.mjs";
-import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config-contract.js";
-import { resolveCodexRuntimePlanForState } from "../../vendor/pi-codex-conversion/dist/adapter/activation/runtime-plan.js";
-import { CodexDeveloperMessageBridge } from "../../vendor/pi-codex-conversion/dist/adapter/developer-messages.js";
+import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/src/adapter/activation/config-contract.ts";
+import { resolveCodexRuntimePlanForState } from "../../vendor/pi-codex-conversion/src/adapter/activation/runtime-plan.ts";
+import { CodexDeveloperMessageBridge } from "../../vendor/pi-codex-conversion/src/adapter/developer-messages.ts";
 import {
 	rewriteCodexProviderRequest,
 	rewriteCodexPrewarmProviderRequest,
-} from "../../vendor/pi-codex-conversion/dist/adapter/provider-request.js";
-import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/dist/context-management/history-notes.js";
-import { rewriteWindowPayload } from "../../vendor/pi-codex-conversion/dist/context-management/window-request.js";
+} from "../../vendor/pi-codex-conversion/src/adapter/provider-request.ts";
+import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/src/context-management/history-notes.ts";
+import { rewriteWindowPayload } from "../../vendor/pi-codex-conversion/src/context-management/window-request.ts";
 import { createNativeFusionTool } from "../../extensions/action-fusion.ts";
-import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js";
+import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts";
 
 test.beforeEach(disableNetwork);
 

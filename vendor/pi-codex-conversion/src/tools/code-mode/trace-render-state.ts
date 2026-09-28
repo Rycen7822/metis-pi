@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import type { RuntimeToolTrace } from "./types.js";
+import type { RuntimeToolTrace } from "./types.ts";
 
 const MAX_NESTED_RENDER_STATES = 512;
 const MAX_NESTED_RENDER_BYTES = 32 * 1024 * 1024;

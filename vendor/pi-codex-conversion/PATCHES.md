@@ -1,6 +1,6 @@
 # Local patches: pi-codex-conversion 3.0.34
 
-Edit `src/**`, run `npm run vendor:build`, and commit source with its generated runtime JavaScript. Git history owns the implementation changes; this document explains them. Generated declarations are local build output. Upstream changes are selectively ported using [UPSTREAM.md](UPSTREAM.md); there is no cumulative patch or whole-tree sync command. Never edit generated JavaScript directly.
+Edit `src/**` and run `npm run vendor:check`. Runtime and tests consume TS directly; `dist/` contains only hand-written re-exports preserving the old entry and public API paths. Git history owns implementation changes; upstream updates are selectively ported using [UPSTREAM.md](UPSTREAM.md). There is no generated implementation tree, cumulative patch or whole-tree sync command.
 
 ## 1. Notebook parameters are a top-level object
 
@@ -124,7 +124,7 @@ narrow widths, headless contexts, cleanup and real host widget hit routing.
 
 ## Maintenance verification
 
-Run project/vendor checks and real built-provider tests. Rebuild twice to check deterministic output; regenerate the patch twice to check idempotence. Apply it to an isolated pristine 3.0.34 source copy using the documented payload exclusions and compare file contents and modes. New-file diff headers must use `a/src/` and `b/src/` on both sides. Do not remove unified-diff context prefixes to silence patch-file whitespace diagnostics.
+Run project/vendor no-emit checks and real host/provider tests. Verify local, Git-update and npm-package loading without a compiler or lifecycle scripts; preserve old entry filters, shared TS module identity and resource paths. Public facade paths remain importable through the host loader. Full `npm run verify` and strict PTY checks own behavioral evidence.
 
 ## Bounded resident output and request preparation
 

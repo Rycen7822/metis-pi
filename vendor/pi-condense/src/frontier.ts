@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { PruneFrontier } from "./types.js";
-import { CUSTOM_TYPE_FRONTIER } from "./types.js";
+import type { PruneFrontier } from "./types.ts";
+import { CUSTOM_TYPE_FRONTIER } from "./types.ts";
 
 /**
  * Tracks the most recent completed prune-attempt boundary.

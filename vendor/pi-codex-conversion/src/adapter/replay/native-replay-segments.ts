@@ -1,9 +1,9 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ResponsesCompatibleRequestPayload } from "../compaction/compaction-runtime.ts";
-import type { NativeCompactionEntry } from "../compaction/types.js";
+import type { NativeCompactionEntry } from "../compaction/types.ts";
 import { resolveToolPlacement, type DeferredToolPlacement } from "../../providers/openai-responses/shared.ts";
-import { compareResponsesInputParity, serializeMessagesToResponsesInput, type ResponsesInputItem, type ResponsesInputMessageItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.js";
+import { compareResponsesInputParity, serializeMessagesToResponsesInput, type ResponsesInputItem, type ResponsesInputMessageItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.ts";
 import { applyContextEdits, inspectCheckpointWindow } from "./context-edits.ts";
 import { cloneOpaqueCompactedWindow, cloneResponsesInputSlice } from "./payload-structured.ts";
 import { extractFreshAuthoritativePreamble } from "./payload-preamble.ts";

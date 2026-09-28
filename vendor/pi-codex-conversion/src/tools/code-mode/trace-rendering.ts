@@ -4,11 +4,11 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import { previewText, renderTextAndImages } from "./render-content.js";
+import { previewText, renderTextAndImages } from "./render-content.ts";
 import {
 	CodeModeNestedRenderStore,
 	type NestedRenderState,
-} from "./trace-render-state.js";
+} from "./trace-render-state.ts";
 import type {
 	CodeModeRenderContext,
 	CodeModeNestedRenderContext,
@@ -16,9 +16,9 @@ import type {
 	CodeModeToolDefinition,
 	ProgrammaticCodeModeToolDefinition,
 	RuntimeToolTrace,
-} from "./types.js";
+} from "./types.ts";
 
-export { CodeModeNestedRenderStore } from "./trace-render-state.js";
+export { CodeModeNestedRenderStore } from "./trace-render-state.ts";
 
 export function renderTraceAndOutput(
 	traces: RuntimeToolTrace[],

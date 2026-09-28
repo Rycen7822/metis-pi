@@ -1,4 +1,4 @@
-import type { CapturedToolCall } from "./types.js";
+import type { CapturedToolCall } from "./types.ts";
 
 /** Structural versioned boundary; never infer execution success from log text. */
 export function captureFusionResult(result: any): Partial<CapturedToolCall> {

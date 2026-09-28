@@ -2,10 +2,10 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ResponsesCompatibleRequestPayload } from "../compaction/compaction-runtime.ts";
-import { serializeMessagesToResponsesInput, type ResponsesInputItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.js";
+import { serializeMessagesToResponsesInput, type ResponsesInputItem, type SerializeResponsesMessagesOptions } from "../compaction/serializer.ts";
 import { areEquivalentValues, cloneResponsesInputSlice, isRecord } from "./payload-structured.ts";
 import type { FreshAuthoritativePreamble } from "./payload-preamble.ts";
-import type { NativeCompactionEntry } from "../compaction/types.js";
+import type { NativeCompactionEntry } from "../compaction/types.ts";
 import { toPiReplayAgentMessage, toReplayAgentMessage } from "./replay-message-conversion.ts";
 
 export type SerializedReplaySlice = {

@@ -7,15 +7,15 @@
 // `parseScalar` only answers legality. Complex shapes (model picker, protected
 // lists) keep their dedicated code in settings.ts.
 
-import type { ContextPruneConfig } from "./types.js";
+import type { ContextPruneConfig } from "./types.ts";
 import {
   PRUNE_ON_MODES, BATCHING_MODES, SUMMARIZER_THINKING_LEVELS,
   MIN_BATCH_CHARS_PRESETS, RECOVERY_GRACE_PRESETS,
   SUMMARIZER_IDLE_TIMEOUT_PRESETS, SUMMARIZER_MAX_TIMEOUT_PRESETS,
   AUTO_BUDGET_PRESETS, ROLLING_WINDOW_PRESETS,
   PURGE_COOLDOWN_PRESETS, PURGE_MIN_ARG_PRESETS, DEFAULT_CONFIG,
-} from "./types.js";
-import { MAX_BUDGET_WINDOW } from "./budget.js";
+} from "./types.ts";
+import { MAX_BUDGET_WINDOW } from "./budget.ts";
 
 export interface FieldOption {
   readonly value: string;

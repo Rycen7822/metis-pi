@@ -1,5 +1,5 @@
-import { occKey, resultTimestampOf } from "./occurrence-key.js";
-import type { ChainRange } from "./types.js";
+import { occKey, resultTimestampOf } from "./occurrence-key.ts";
+import type { ChainRange } from "./types.ts";
 
 /** Prefix that identifies a synthetic chain-compression user message. */
 const COMPRESSED_CHAIN_PREFIX = "<compressed-chain";

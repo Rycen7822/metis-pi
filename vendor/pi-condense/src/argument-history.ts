@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { captureBatch } from "./batch-capture.js";
-import { isProtected, type ProtectionConfig } from "./protected.js";
-import type { CapturedBatch } from "./types.js";
-import { occKey } from "./occurrence-key.js";
+import { captureBatch } from "./batch-capture.ts";
+import { isProtected, type ProtectionConfig } from "./protected.ts";
+import type { CapturedBatch } from "./types.ts";
+import { occKey } from "./occurrence-key.ts";
 
 export const ARGUMENT_HISTORY = "context-prune-arguments";
 export interface ArgumentHistory {

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
-import registerCondense from "../vendor/pi-condense/dist/index.js";
+import registerCondense from "../vendor/pi-condense/index.ts";
 
 /** Defer registration until Pi can identify an already installed recovery tool. */
 export default function condense(pi: ExtensionAPI): void {

@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { calculateContextTokens, compact, estimateTokens, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
-import { archiveBatches } from "./spill.js";
-import { isProtected } from "./protected.js";
-import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.js";
-import type { ToolCallIndexer } from "./indexer.js";
-import { ARGUMENT_HISTORY } from "./argument-history.js";
-import { isDerived, retainSources, type Obligation } from "./occ-protection.js";
-import type { ContextPruneConfig } from "./types.js";
+import { archiveBatches } from "./spill.ts";
+import { isProtected } from "./protected.ts";
+import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.ts";
+import type { ToolCallIndexer } from "./indexer.ts";
+import { ARGUMENT_HISTORY } from "./argument-history.ts";
+import { isDerived, retainSources, type Obligation } from "./occ-protection.ts";
+import type { ContextPruneConfig } from "./types.ts";
 
 const STATE = "metis-occ-state";
 const HOLD_WORK = 4;
@@ -291,7 +291,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     requestTokens = undefined;
     localTokensSaved = 0;
   }
-  pi.on("turn_end", (event, ctx) => {
+  pi.on("turn_end", (event) => {
     if (!enabled() || event.message.role !== "assistant" || event.message.stopReason === "error" || event.message.stopReason === "aborted" || !event.toolResults.length) return;
     const calls = captureBatch(event.message, event.toolResults, 0, 0).toolCalls.filter(call =>
       !call.isError && !["context_tree_query", "write_stdin", "get_goal"].includes(call.toolName)

@@ -1,8 +1,8 @@
 import {
 	DEFAULT_CODE_MODE_OUTPUT_TOKENS,
 	MAX_CODE_MODE_OUTPUT_TOKENS,
-} from "./host-protocol.js";
-import type { NotebookMemoryUsage, RuntimeContentItem, RuntimeResponse } from "./types.js";
+} from "./host-protocol.ts";
+import type { NotebookMemoryUsage, RuntimeContentItem, RuntimeResponse } from "./types.ts";
 
 const MAX_OUTPUT_IMAGE_COUNT = 4;
 const MAX_OUTPUT_IMAGE_CHARS = 16 * 1024 * 1024;

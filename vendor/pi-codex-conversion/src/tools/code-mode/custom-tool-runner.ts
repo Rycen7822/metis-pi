@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import type { CustomToolDefinition } from "./types.js";
+import type { CustomToolDefinition } from "./types.ts";
 
 const MAX_OUTPUT_BYTES = 50 * 1024;
 

@@ -1,6 +1,6 @@
-import { runCodeModeToolPreflight } from "./nested-tool-preflight.js";
-import type { CodeModeToolCompletionCall } from "./preflight-protocol.js";
-import type { RuntimeToolResult, ToolExecutionContext } from "./types.js";
+import { runCodeModeToolPreflight } from "./nested-tool-preflight.ts";
+import type { CodeModeToolCompletionCall } from "./preflight-protocol.ts";
+import type { RuntimeToolResult, ToolExecutionContext } from "./types.ts";
 
 // Completion is observational: neither snapshot nor subscriber failures may
 // replace the tool's return value or original error.

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCodexConversionConfig as normalize } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config.js";
-import { buildDisplaySettings } from "../../vendor/pi-codex-conversion/dist/ui/settings/config-items-display.js";
-import { buildToolsSettings } from "../../vendor/pi-codex-conversion/dist/ui/settings/config-items-tools.js";
-import { buildOpenAISettings } from "../../vendor/pi-codex-conversion/dist/ui/settings/config-items-openai.js";
+import { normalizeCodexConversionConfig as normalize } from "../../vendor/pi-codex-conversion/src/adapter/activation/config.ts";
+import { buildDisplaySettings } from "../../vendor/pi-codex-conversion/src/ui/settings/config-items-display.ts";
+import { buildToolsSettings } from "../../vendor/pi-codex-conversion/src/ui/settings/config-items-tools.ts";
+import { buildOpenAISettings } from "../../vendor/pi-codex-conversion/src/ui/settings/config-items-openai.ts";
 
 test("vendor config retains legacy aliases, optional fields and dependent switches", () => {
   const config = normalize({

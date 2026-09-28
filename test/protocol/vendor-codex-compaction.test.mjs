@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { disableNetwork, FAKE_API_KEY, captureRegistration, captureSession, declaredToolNames, inPlaceToolItems, kindsOf, modelNamed } from "../helpers/vendor-codex-provider.mjs";
 import { SEALED_WINDOW_ITEM, assistantToolCall, checkpointSession, latestCheckpointFor, session, systemMessage, tool, toolResult, userMessage } from "../helpers/vendor-codex-sessions.mjs";
-import { buildNativeReplaySegments } from "../../vendor/pi-codex-conversion/dist/adapter/replay/payload-rewrite.js";
-import { buildNativeCompactionInput, resolveCanonicalCompactionReplay } from "../../vendor/pi-codex-conversion/dist/adapter/compaction/compaction.js";
-import { executeRemoteCompactionV2 } from "../../vendor/pi-codex-conversion/dist/adapter/compaction/remote-v2-client.js";
-import { extractAccountId, resolveCodexWebSocketUrl } from "../../vendor/pi-codex-conversion/dist/providers/openai-codex/headers.js";
-import { canonicalCompactionRequestBody, clearCanonicalSessions, recordCanonicalSessionResponse } from "../../vendor/pi-codex-conversion/dist/providers/openai-codex/session-continuity.js";
+import { buildNativeReplaySegments } from "../../vendor/pi-codex-conversion/src/adapter/replay/payload-rewrite.ts";
+import { buildNativeCompactionInput, resolveCanonicalCompactionReplay } from "../../vendor/pi-codex-conversion/src/adapter/compaction/compaction.ts";
+import { executeRemoteCompactionV2 } from "../../vendor/pi-codex-conversion/src/adapter/compaction/remote-v2-client.ts";
+import { extractAccountId, resolveCodexWebSocketUrl } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/headers.ts";
+import { canonicalCompactionRequestBody, clearCanonicalSessions, recordCanonicalSessionResponse } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/session-continuity.ts";
 
 test.beforeEach(disableNetwork);
 

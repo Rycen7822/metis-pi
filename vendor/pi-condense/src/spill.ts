@@ -4,13 +4,13 @@ import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { isAbsolute, relative, join } from "node:path";
-import type { CapturedBatch, CapturedToolCall, ToolCallRecord } from "./types.js";
+import type { CapturedBatch, CapturedToolCall, ToolCallRecord } from "./types.ts";
 
-import type { ToolCallIndexer } from "./indexer.js";
-import { hashToolResult } from "./content-hash.js";
-import { occKey } from "./occurrence-key.js";
-import { captureFusionResult } from "./fusion.js";
-import { packToolResult } from "./packing.js";
+import type { ToolCallIndexer } from "./indexer.ts";
+import { hashToolResult } from "./content-hash.ts";
+import { occKey } from "./occurrence-key.ts";
+import { captureFusionResult } from "./fusion.ts";
+import { packToolResult } from "./packing.ts";
 
 /** Import the execution layer's full output, not its truncated display text. */
 export async function importOutputArchive(call: CapturedToolCall, sessionDir: string, sessionId: string): Promise<boolean> {

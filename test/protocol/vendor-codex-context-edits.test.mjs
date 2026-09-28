@@ -11,14 +11,14 @@ import { SEALED_WINDOW_ITEM, assistantToolCall, checkpointDetails, checkpointSes
 import {
 	buildNativeCompactionInput, handleCodexSessionBeforeCompact, injectNativeWindowIntoPiCompactionRequest,
 	resolveCanonicalCompactionReplay, resolveOpaqueNativeCompactionFallbackEntry,
-} from "../../vendor/pi-codex-conversion/dist/adapter/compaction/compaction.js";
-import { buildNativeReplaySegments } from "../../vendor/pi-codex-conversion/dist/adapter/replay/payload-rewrite.js";
-import { extractAccountId, resolveCodexWebSocketUrl } from "../../vendor/pi-codex-conversion/dist/providers/openai-codex/headers.js";
-import { clearCanonicalSessions, recordCanonicalSessionResponse } from "../../vendor/pi-codex-conversion/dist/providers/openai-codex/session-continuity.js";
-import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config-contract.js";
-import { CodexDeveloperMessageBridge } from "../../vendor/pi-codex-conversion/dist/adapter/developer-messages.js";
-import { resolveCodexRuntimePlanForState } from "../../vendor/pi-codex-conversion/dist/adapter/activation/runtime-plan.js";
-import { rewriteCodexProviderRequest, rewriteCodexPrewarmProviderRequest } from "../../vendor/pi-codex-conversion/dist/adapter/provider-request.js";
+} from "../../vendor/pi-codex-conversion/src/adapter/compaction/compaction.ts";
+import { buildNativeReplaySegments } from "../../vendor/pi-codex-conversion/src/adapter/replay/payload-rewrite.ts";
+import { extractAccountId, resolveCodexWebSocketUrl } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/headers.ts";
+import { clearCanonicalSessions, recordCanonicalSessionResponse } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/session-continuity.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/src/adapter/activation/config-contract.ts";
+import { CodexDeveloperMessageBridge } from "../../vendor/pi-codex-conversion/src/adapter/developer-messages.ts";
+import { resolveCodexRuntimePlanForState } from "../../vendor/pi-codex-conversion/src/adapter/activation/runtime-plan.ts";
+import { rewriteCodexProviderRequest, rewriteCodexPrewarmProviderRequest } from "../../vendor/pi-codex-conversion/src/adapter/provider-request.ts";
 
 test.beforeEach(disableNetwork);
 

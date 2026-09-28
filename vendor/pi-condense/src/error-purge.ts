@@ -1,4 +1,4 @@
-import type { ErrorPurgeConfig } from "./types.js";
+import type { ErrorPurgeConfig } from "./types.ts";
 
 /**
  * Replaces the `arguments` body of failed toolCall blocks with a compact stub

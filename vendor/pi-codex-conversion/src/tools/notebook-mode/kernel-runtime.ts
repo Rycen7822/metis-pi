@@ -1,4 +1,4 @@
-import { plainCommandOutputFormatterSource } from "../code-mode/command-output.js";
+import { plainCommandOutputFormatterSource } from "../code-mode/command-output.ts";
 
 const MAX_CELL_OUTPUT_CHARS = 32 * 1024 * 1024;
 const MAX_CELL_OUTPUT_ITEMS = 10_000;

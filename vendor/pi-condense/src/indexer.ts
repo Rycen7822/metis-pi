@@ -5,23 +5,23 @@ import type {
   DedupAliasEntryData,
   IndexEntryData,
   ToolCallRecord,
-} from "./types.js";
+} from "./types.ts";
 import {
   CUSTOM_TYPE_CHAIN,
   CUSTOM_TYPE_DEDUP_ALIAS,
   CUSTOM_TYPE_INDEX,
   CUSTOM_TYPE_SUMMARY,
-} from "./types.js";
+} from "./types.ts";
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,
   type SummaryToolCallRef,
-} from "./summary-refs.js";
-import { captureUnindexedBatchesFromSession } from "./batch-capture.js";
-import { hashToolResult } from "./content-hash.js";
-import { occKey, parseOccKey } from "./occurrence-key.js";
+} from "./summary-refs.ts";
+import { captureUnindexedBatchesFromSession } from "./batch-capture.ts";
+import { hashToolResult } from "./content-hash.ts";
+import { occKey, parseOccKey } from "./occurrence-key.ts";
 import { mkdir, writeFile } from "node:fs/promises";
-import { applySpill, blobDirFor, blobPathFor } from "./spill.js";
+import { applySpill, blobDirFor, blobPathFor } from "./spill.ts";
 
 export class ToolCallIndexer {
   /** occurrence key (`id@resultTimestamp`, or bare id for legacy) -> record */

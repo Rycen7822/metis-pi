@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fusionReceipt } from "../action-fusion.ts";
-import type { RuntimeToolResult, ToolExecutionContext } from "./types.js";
+import type { RuntimeToolResult, ToolExecutionContext } from "./types.ts";
 
 export interface FusionEvidenceRef { path: string; offsetBytes: number; bytes: number }
 interface Journal { path: string; bytes: number; published: number; error?: string }

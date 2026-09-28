@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CodeModeHostClient } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/host-client.js";
+import { CodeModeHostClient } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-client.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 
 // Speaks the host wire protocol (4-byte LE length + JSON) and follows the scenario
@@ -180,12 +180,12 @@ test("a host that exits fails the request that was still pending", async (t) => 
 test("shutdown honours its deadline when the host never answers and drops pending calls", async (t) => {
   const { host, client, context } = startClient(t, { holdWait: true, ignoreShutdown: true }, 100);
   await client.execute("probe();", context, undefined, []);
-  const waiting = client.wait("cell-1", 5, context);
+  const waiting = assert.rejects(client.wait("cell-1", 5, context), /Code-mode host (shut down|is not running|exited with code)/);
   await waitFor(() => host.messages().some((entry) => entry.held !== undefined));
 
-  const started = Date.now();
+  const started = performance.now();
   await client.shutdown();
-  assert.ok(Date.now() - started < 2_000, "shutdown gives up on a silent host");
+  assert.ok(performance.now() - started < 2_000, "shutdown gives up on a silent host");
   assert.ok(host.messages().some((entry) => entry.method === "session/shutdown"), "the shutdown request was sent");
-  await assert.rejects(waiting, /Code-mode host (shut down|is not running|exited with code)/);
+  await waiting;
 });

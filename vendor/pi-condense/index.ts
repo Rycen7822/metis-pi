@@ -14,20 +14,20 @@
  */
 
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { registerOcc } from "./src/occ.js";
-import { loadConfig } from "./src/config.js";
-import { capImages, imageLimitFor } from "./src/image-cap.js";
-import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.js";
-import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./src/argument-history.js";
-import { prepareBatch } from "./src/packing.js";
-import { summarizeBatch, summarizeBatches, summarizeRange } from "./src/summarizer.js";
-import { FallbackController } from "./src/summarizer-fallback.js";
-import { ToolCallIndexer } from "./src/indexer.js";
-import { pruneMessages, toolResultStub } from "./src/pruner.js";
-import { isProtected } from "./src/protected.js";
-import { registerQueryTool } from "./src/query-tool.js";
-import { registerCommands, setPruneStatusWidget } from "./src/commands.js";
-import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./src/summary-refs.js";
+import { registerOcc } from "./src/occ.ts";
+import { loadConfig } from "./src/config.ts";
+import { capImages, imageLimitFor } from "./src/image-cap.ts";
+import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.ts";
+import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./src/argument-history.ts";
+import { prepareBatch } from "./src/packing.ts";
+import { summarizeBatch, summarizeBatches, summarizeRange } from "./src/summarizer.ts";
+import { FallbackController } from "./src/summarizer-fallback.ts";
+import { ToolCallIndexer } from "./src/indexer.ts";
+import { pruneMessages, toolResultStub } from "./src/pruner.ts";
+import { isProtected } from "./src/protected.ts";
+import { registerQueryTool } from "./src/query-tool.ts";
+import { registerCommands, setPruneStatusWidget } from "./src/commands.ts";
+import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./src/summary-refs.ts";
 import type {
   ContextPruneConfig,
   CapturedBatch,
@@ -36,26 +36,26 @@ import type {
   ContextMetricsSnapshot,
   FlushMetricsEntry,
   FlushTrigger,
-} from "./src/types.js";
+} from "./src/types.ts";
 import {
   DEFAULT_CONFIG,
   CUSTOM_TYPE_SUMMARY,
   CUSTOM_TYPE_STATS,
   CUSTOM_TYPE_FRONTIER,
   CUSTOM_TYPE_FLUSH_METRICS,
-} from "./src/types.js";
-import { computeContextMetrics } from "./src/context-metrics.js";
-import { StatsAccumulator, emitExternalCost } from "./src/stats.js";
-import { PruneFrontierTracker } from "./src/frontier.js";
-import { BlockRefIssuer } from "./src/block-refs.js";
-import { compressEligible } from "./src/chain-compressor.js";
-import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./src/supersede.js";
-import { detectChains, withClosingMessage } from "./src/chain-detector.js";
-import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.js";
-import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.js";
-import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./src/spill.js";
-import { bareToolCallId, occKey } from "./src/occurrence-key.js";
-import { DiagnosticSink } from "./src/diagnostics.js";
+} from "./src/types.ts";
+import { computeContextMetrics } from "./src/context-metrics.ts";
+import { StatsAccumulator, emitExternalCost } from "./src/stats.ts";
+import { PruneFrontierTracker } from "./src/frontier.ts";
+import { BlockRefIssuer } from "./src/block-refs.ts";
+import { compressEligible } from "./src/chain-compressor.ts";
+import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./src/supersede.ts";
+import { detectChains } from "./src/chain-detector.ts";
+import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.ts";
+import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.ts";
+import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./src/spill.ts";
+import { bareToolCallId, occKey } from "./src/occurrence-key.ts";
+import { DiagnosticSink } from "./src/diagnostics.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 
@@ -299,7 +299,7 @@ export default function (pi: ExtensionAPI) {
     type ResultSlot =
       | {
           summaryText: string;
-          usage?: import("./src/types.js").SummarizeResult["usage"];
+          usage?: import("./src/types.ts").SummarizeResult["usage"];
           deterministic?: boolean;
         }
       | null
@@ -410,7 +410,7 @@ export default function (pi: ExtensionAPI) {
       // an alias of the original (pruneMessages then stub-replaces its
       // ToolResultMessage) and drop it from the batch BEFORE the summarizer /
       // trivial classifier runs, still counting it toward the flush totals.
-      const pendingAliases: Array<[string, string, import("./src/types.js").ToolCallRecord]> = [];
+      const pendingAliases: Array<[string, string, import("./src/types.ts").ToolCallRecord]> = [];
       const dedupEnabled = currentConfig.value.dedupByContentHash;
       const minChars = currentConfig.value.minBatchChars;
       // Keep dedup separate from preparation so failed lookups restore the
@@ -418,7 +418,7 @@ export default function (pi: ExtensionAPI) {
       const dedupRecords = batches.map((batch, index) => ({
         index,
         batch,
-        deduped: [] as import("./src/types.js").CapturedToolCall[],
+        deduped: [] as import("./src/types.ts").CapturedToolCall[],
         dedupedRawChars: 0,
       }));
       if (dedupEnabled) {

@@ -9,11 +9,11 @@ import { executeFusion, validateThenRun } from "../../vendor/pi-codex-conversion
 import { runNativeFusionCommand, runExecFusionCommand } from "../../vendor/pi-codex-conversion/src/tools/action-fusion-command.ts";
 import { createExecSessionManager } from "../../vendor/pi-codex-conversion/src/tools/exec/session-manager.ts";
 import actionFusion, { createNativeFusionTool } from "../../extensions/action-fusion.ts";
-import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js";
-import { createNestedTools } from "../../vendor/pi-codex-conversion/dist/adapter/code-mode.js";
-import { normalizeCodexConversionConfig } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config.js";
-import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/dist/tools/exec/command-state.js";
-import { toWireToolDefinition } from "../../vendor/pi-codex-conversion/dist/tools/code-mode/host-protocol.js";
+import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts";
+import { createNestedTools } from "../../vendor/pi-codex-conversion/src/adapter/code-mode.ts";
+import { normalizeCodexConversionConfig } from "../../vendor/pi-codex-conversion/src/adapter/activation/config.ts";
+import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/src/tools/exec/command-state.ts";
+import { toWireToolDefinition } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-protocol.ts";
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-"));

@@ -1,4 +1,4 @@
-import type { ResponsesInputContentItem, ResponsesInputItem, ResponsesInputMessageItem } from "../compaction/serializer.js";
+import type { ResponsesInputContentItem, ResponsesInputItem, ResponsesInputMessageItem } from "../compaction/serializer.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);

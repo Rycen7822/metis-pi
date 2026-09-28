@@ -1,8 +1,8 @@
-import { captureFusionResult, captureFusionJournal } from "./fusion.js";
+import { captureFusionResult, captureFusionJournal } from "./fusion.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.js";
-import { occKey, resultTimestampOf } from "./occurrence-key.js";
-import { isChainAnchorCustom } from "./chain-detector.js";
+import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
+import { occKey, resultTimestampOf } from "./occurrence-key.ts";
+import { isChainAnchorCustom } from "./chain-detector.ts";
 
 /**
  * Unwraps a SessionEntry[] branch into AgentMessage-like objects, including

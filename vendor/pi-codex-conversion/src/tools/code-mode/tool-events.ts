@@ -2,8 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	buildCodeModeToolsPrompt,
 	injectCodeModeToolsPrompt,
-} from "./custom-tool-prompt.js";
-import type { SharedCodeModeRuntime } from "./shared-runtime.js";
+} from "./custom-tool-prompt.ts";
+import type { SharedCodeModeRuntime } from "./shared-runtime.ts";
 
 export function registerCodeModeEvents(
 	pi: ExtensionAPI,

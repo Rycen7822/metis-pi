@@ -1,5 +1,15 @@
 # Validation
 
+## Direct TypeScript runtime migration (2026-09-29)
+
+- Both vendor implementations run from TS. Ten small re-export files retain the old conversion discovery/filter path and public entry paths; no generated implementation tree or declaration build is required. Rust, native binaries, tokenizer/WASM, dependencies and persistent formats are unchanged.
+- Source checks plus all 451 existing tests passed on Node 24.15.0 and Node 22.23.2/npm 10.9.8. Node 22.19.0 passed 25 focused host/condense/fusion tests and actual installed-package RPC loading. Parameter-property rewrites in five condense classes transpiled identically before unused-declaration cleanup required by root strict checking.
+- Isolated Pi 0.87.1 CLI loaded local, Git initial/update, and actual npm tarball installations with lifecycle disabled and no development TypeScript in production installs. All nine commands loaded; the old conversion exclusion filter still removed its command. Installed public facades matched TS exports, native paths retained execute permission, and tokenizer/WASM probes passed.
+- Strict PTY E1–E6 passed against the Git-installed candidate (161 exact clipboard characters). Direct TS probes exercised the pinned real V8 host (execution, sandbox error, throw, delegation, shutdown) and Deno kernel (execution, error, checkpoint, profile restore, shutdown); no processes remained. These backend probes did not use a paid model session.
+- Same-environment fresh-process local RPC readiness: baseline 0.442–0.454 s, candidate 0.517–0.524 s; roughly 70–80 ms higher. These are two samples per variant, not a universal performance bound. An earlier probe mixed buffered readline with selectors and overreported time; corrected raw-pipe measurements are the reported values.
+- Final-gate clock fault: the silent-host shutdown test used wall-clock elapsed time; a roughly 130 ms monotonic test duration could fail its two-second wall-clock assertion after a clock adjustment. It now uses `performance.now()` with the same limit and observes pending rejection before shutdown. A temporary injected three-second wall-clock jump fails the original assertion and passes the corrected one. No production shutdown code changed.
+- Detailed immutable constraints, plan, per-file accounting, installation and protocol evidence remain in ignored `.work/ts-runtime*`. Personal configuration and installed plugins were not changed.
+
 ## Git generated-artifact deduplication (2026-09-29)
 
 - Removed 305 generated declarations (7,414 lines) and the cumulative patch (10,394 lines) from the candidate Git tree. Declarations remain reproducible local output. Runtime JavaScript, production sources, assets, executable modes and loading paths match the pre-change working-tree snapshot; 37,400 lines of dist JavaScript and the 337-line generated changelog remain tracked.

@@ -1,4 +1,4 @@
-import { fusionReceipt } from "../vendor/pi-codex-conversion/dist/tools/action-fusion.js";
+import { fusionReceipt } from "../vendor/pi-codex-conversion/src/tools/action-fusion.ts";
 import { asRecord, type Component, type Renderers, type ViewContext } from "./tool-names.ts";
 import { productFor, publishRows, registerProduct, type CopyRow } from "./selection-copy/model.ts";
 

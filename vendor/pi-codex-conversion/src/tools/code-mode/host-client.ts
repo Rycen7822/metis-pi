@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { withPlainCommandOutput } from "./command-output.js";
-import { CodeModeDelegateRuntime } from "./delegate-runtime.js";
-import { CodeModeHostConnection } from "./host-connection.js";
+import { withPlainCommandOutput } from "./command-output.ts";
+import { CodeModeDelegateRuntime } from "./delegate-runtime.ts";
+import { CodeModeHostConnection } from "./host-connection.ts";
 import {
 	abortError,
 	cancelOperation,
 	throwIfAborted,
 	toError,
-} from "./host-operation.js";
+} from "./host-operation.ts";
 import {
 	DEFAULT_CODE_MODE_EXEC_YIELD_MS,
 	executionCellId,
@@ -17,19 +17,19 @@ import {
 	runtimeOutcome,
 	toWireToolDefinition,
 	type HostMessage,
-} from "./host-protocol.js";
+} from "./host-protocol.ts";
 import {
 	directToolYieldTime,
 	scopeAllToolsToDeferredCustom,
-} from "./tool-source.js";
-import type { CodeModeNestedRenderStore } from "./trace-render-state.js";
+} from "./tool-source.ts";
+import type { CodeModeNestedRenderStore } from "./trace-render-state.ts";
 import type {
 	CodeModeToolDefinition,
 	RuntimeResponse,
 	ToolExecutionContext,
-} from "./types.js";
+} from "./types.ts";
 
-export { scopeAllToolsToDeferredCustom } from "./tool-source.js";
+export { scopeAllToolsToDeferredCustom } from "./tool-source.ts";
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 250;
 

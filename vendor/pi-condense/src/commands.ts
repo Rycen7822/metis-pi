@@ -9,16 +9,16 @@ import {
   type ContextMetricsSnapshot,
   STATUS_WIDGET_ID,
   PROGRESS_WIDGET_ID,
-} from "./types.js";
+} from "./types.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { saveConfig, persistConfig } from "./config.js";
-import { formatTokens, formatCost, formatCharProgress, formatCompactCount } from "./stats.js";
+import { saveConfig, persistConfig } from "./config.ts";
+import { formatTokens, formatCost, formatCharProgress, formatCompactCount } from "./stats.ts";
 import { Text } from "@earendil-works/pi-tui";
-import { openPrunerSettings, protectedToolsDisplay } from "./settings.js";
-import { optionLabel, optionValues, parseScalar, rowDescription, scalarRow, writeScalar } from "./setting-fields.js";
-import { buildPruneTree, TreeBrowser } from "./tree-browser.js";
-import { normalizeSummaryToolCallRefs } from "./summary-refs.js";
-import type { ToolCallIndexer } from "./indexer.js";
+import { openPrunerSettings, protectedToolsDisplay } from "./settings.ts";
+import { optionLabel, optionValues, parseScalar, rowDescription, scalarRow, writeScalar } from "./setting-fields.ts";
+import { buildPruneTree, TreeBrowser } from "./tree-browser.ts";
+import { normalizeSummaryToolCallRefs } from "./summary-refs.ts";
+import type { ToolCallIndexer } from "./indexer.ts";
 
 // ── Status widget text ──────────────────────────────────────────────────────
 

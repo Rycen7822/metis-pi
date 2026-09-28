@@ -114,8 +114,8 @@ test("shipped entry owns grouped read rows and images without changing the nativ
 
 test("built exec_command delegates its real Pi row to the shell display", async (t) => {
   const h = entry(t);
-  const { createExecCommandTool } = await import("../../vendor/pi-codex-conversion/dist/tools/exec/command-tool.js");
-  const { createExecCommandTracker } = await import("../../vendor/pi-codex-conversion/dist/tools/exec/command-state.js");
+  const { createExecCommandTool } = await import("../../vendor/pi-codex-conversion/src/tools/exec/command-tool.ts");
+  const { createExecCommandTracker } = await import("../../vendor/pi-codex-conversion/src/tools/exec/command-state.ts");
   const { highlightBashScript } = await import("../../src/bash-lexer.ts");
   const { detectColorLevel } = await import("../../src/palette.ts");
   const tracker = createExecCommandTracker();
@@ -193,7 +193,7 @@ test("streamed write executes through the entry and real padded edits reach the 
 test("shipped apply_patch executes add/move/delete and retains pre-image in folded real rows", async (t) => {
   const h = entry(t);
   const cwd = temporaryDirectory(t, "metis-entry-patch-");
-  const { createApplyPatchTool } = await import("../../vendor/pi-codex-conversion/dist/tools/apply-patch/tool.js");
+  const { createApplyPatchTool } = await import("../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts");
   const tool = createApplyPatchTool({ showDiffWhenCollapsed: true });
   const root = resolve(import.meta.dirname, "../..");
   h.definitions.push({ name: "apply_patch", sourceInfo: {

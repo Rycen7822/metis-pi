@@ -9,14 +9,14 @@ import {
 	discoverCustomToolsFromDirectories,
 	getCustomToolsDir,
 	getProjectCustomToolsDir,
-} from "./custom-tools.js";
-import { replaceCodeModeToolsPrompt } from "./custom-tool-prompt.js";
-import { registerPublicCodeModeTools } from "./public-tools.js";
+} from "./custom-tools.ts";
+import { replaceCodeModeToolsPrompt } from "./custom-tool-prompt.ts";
+import { registerPublicCodeModeTools } from "./public-tools.ts";
 import {
 	SharedCodeModeRuntime,
 	type CodeModeToolProvider,
-} from "./shared-runtime.js";
-import { registerCodeModeEvents } from "./tool-events.js";
+} from "./shared-runtime.ts";
+import { registerCodeModeEvents } from "./tool-events.ts";
 
 // Providers in one extension instance share a process-lifetime host runtime.
 // Pi replaces ExtensionAPI registrations on reload, so each API binds its own surface.

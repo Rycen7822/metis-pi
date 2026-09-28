@@ -1,11 +1,11 @@
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
-import { CUSTOM_TYPE_SUMMARY } from "./types.js";
-import type { ChainCompressionEntry } from "./types.js";
-import { substituteBlockRefs } from "./nested-placeholders.js";
-import { extractToolResultText } from "./batch-capture.js";
-import { isChainAnchorCustom } from "./chain-detector.js";
-import { bareToolCallId, occKey, resultTimestampOf } from "./occurrence-key.js";
-import type { DiagnosticSink } from "./diagnostics.js";
+import { CUSTOM_TYPE_SUMMARY } from "./types.ts";
+import type { ChainCompressionEntry } from "./types.ts";
+import { substituteBlockRefs } from "./nested-placeholders.ts";
+import { extractToolResultText } from "./batch-capture.ts";
+import { isChainAnchorCustom } from "./chain-detector.ts";
+import { bareToolCallId, occKey, resultTimestampOf } from "./occurrence-key.ts";
+import type { DiagnosticSink } from "./diagnostics.ts";
 
 export function isPerBatchSummaryMessage(msg: any): boolean {
   return msg.role === "custom" && msg.customType === CUSTOM_TYPE_SUMMARY;

@@ -1,5 +1,5 @@
 import type { ResponsesCompatibleRequestPayload } from "../compaction/compaction-runtime.ts";
-import type { ResponsesInputMessageItem } from "../compaction/serializer.js";
+import type { ResponsesInputMessageItem } from "../compaction/serializer.ts";
 import { areEquivalentValues, cloneResponsesInputMessageItem, isPreambleRole, isResponsesInputMessageItem } from "./payload-structured.ts";
 
 export type FreshAuthoritativePreamble = {

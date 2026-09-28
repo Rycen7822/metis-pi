@@ -1,6 +1,6 @@
 # 内置 Codex 转换层
 
-本包内置基于 `@howaboua/pi-codex-conversion` **3.0.34** 的本地 fork，Pi 加载其 `dist/index.js`。它负责 provider、执行工具和上下文能力；显示层只对明确属于本包的工具行做适配。
+本包内置基于 `@howaboua/pi-codex-conversion` **3.0.34** 的本地 fork，Pi 通过保留的 `dist/index.js` 转导出入口加载 `src/index.ts`。它负责 provider、执行工具和上下文能力；显示层只对明确属于本包的工具行做适配。
 
 ## 使用与配置
 
@@ -36,7 +36,7 @@ WebSocket 成功路径不预先生成无用的 SSE 请求体；实际使用 SSE 
 
 ## 安装、平台与维护
 
-运行 JavaScript 随源码提交，本地/Git 安装免构建；声明由开发检查生成。`dist/`、`vendor/`、`code-mode/`、原生工具目录、`changelog.js` 和 manifest 的相对布局参与资源定位。
+运行实现直接采用 TS，本地/Git/npm 安装免构建。`dist/` 仅保留旧入口和公开 API 的转导出文件，内部调用统一到 TS。`src/`、`vendor/`、`code-mode/`、原生工具目录、`changelog.ts` 和 manifest 的相对布局参与资源定位。
 
 当前只内置 **linux-x64** 原生工具，语音功能及其源码已移除。其他平台需补齐并验证载荷。转换层不在启动时查询上游 npm 版本，随 metis-pi 一起更新；Pi 0.87.1 的扩展更新命令为 `pi update --extensions`。
 
@@ -44,5 +44,5 @@ WebSocket 成功路径不预先生成无用的 SSE 请求体；实际使用 SSE 
 
 - [UPSTREAM](../vendor/pi-codex-conversion/UPSTREAM.md)：固定来源、许可、载荷范围与升级步骤。
 - [PATCHES](../vendor/pi-codex-conversion/PATCHES.md)：本地行为修改。
-- [开发说明](development.md)：构建、freshness、安装与发布检查。
+- [开发说明](development.md)：类型、安装与发布检查。
 - [VALIDATION](../VALIDATION.md)：真实后端、下载器与服务端的已测/未测范围。

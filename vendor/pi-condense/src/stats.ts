@@ -1,5 +1,5 @@
-import type { SummarizerStats, ExternalCostUpdate, LiveReclaim } from "./types.js";
-import { CUSTOM_TYPE_STATS, EXTERNAL_COST_CHANNEL, EXTERNAL_COST_SOURCE } from "./types.js";
+import type { SummarizerStats, ExternalCostUpdate, LiveReclaim } from "./types.ts";
+import { CUSTOM_TYPE_STATS, EXTERNAL_COST_CHANNEL, EXTERNAL_COST_SOURCE } from "./types.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**

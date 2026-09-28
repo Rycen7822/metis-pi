@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { registerOcc } from "../../vendor/pi-condense/dist/src/occ.js";
-import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
+import { registerOcc } from "../../vendor/pi-condense/src/occ.ts";
+import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";

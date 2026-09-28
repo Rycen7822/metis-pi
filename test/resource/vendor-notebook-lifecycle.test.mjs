@@ -10,10 +10,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { NotebookSessionRuntime } from "../../vendor/pi-codex-conversion/dist/tools/notebook-mode/session-runtime.js";
-import { initializeNotebookJournal } from "../../vendor/pi-codex-conversion/dist/tools/notebook-mode/journal.js";
-import { notebookCheckpointIdentity } from "../../vendor/pi-codex-conversion/dist/tools/notebook-mode/session-startup.js";
-import { NOTEBOOK_KERNEL_FAILURE_NOTICE } from "../../vendor/pi-codex-conversion/dist/tools/notebook-mode/runtime-health.js";
+import { NotebookSessionRuntime } from "../../vendor/pi-codex-conversion/src/tools/notebook-mode/session-runtime.ts";
+import { initializeNotebookJournal } from "../../vendor/pi-codex-conversion/src/tools/notebook-mode/journal.ts";
+import { notebookCheckpointIdentity } from "../../vendor/pi-codex-conversion/src/tools/notebook-mode/session-startup.ts";
+import { NOTEBOOK_KERNEL_FAILURE_NOTICE } from "../../vendor/pi-codex-conversion/src/tools/notebook-mode/runtime-health.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { runCaptureSource } from "../helpers/vendor-notebook-capture.mjs";
 

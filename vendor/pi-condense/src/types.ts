@@ -42,7 +42,7 @@
  *     NOT a hidden side-channel. It makes an explicit LLM call from turn_end.
  */
 
-import type { FallbackController } from "./summarizer-fallback.js";
+import type { FallbackController } from "./summarizer-fallback.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 

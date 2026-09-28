@@ -1,16 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { ApplyPatchDisplayData } from "../../apply-patch-display.js";
+import type { ApplyPatchDisplayData } from "../../apply-patch-display.ts";
 import {
 	APPLY_PATCH_DISPLAY_AVAILABLE_CHANNEL,
 	APPLY_PATCH_DISPLAY_PROTOCOL,
 	APPLY_PATCH_DISPLAY_REQUEST_CHANNEL,
 	type ApplyPatchDisplayBroker,
 	isApplyPatchDisplayRequest,
-} from "./display-protocol.js";
+} from "./display-protocol.ts";
 import {
 	type ApplyPatchToolDetails,
 	isApplyPatchToolDetails,
-} from "./render-state.js";
+} from "./render-state.ts";
 
 interface ApplyPatchDisplayEvent {
 	toolName: string;

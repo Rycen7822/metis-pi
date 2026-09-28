@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { ToolCallIndexer } from "../../vendor/pi-condense/dist/src/indexer.js";
-import { registerQueryTool } from "../../vendor/pi-condense/dist/src/query-tool.js";
-import { pruneMessages } from "../../vendor/pi-condense/dist/src/pruner.js";
-import { findSuperseded } from "../../vendor/pi-condense/dist/src/supersede.js";
-import { hashToolResult } from "../../vendor/pi-condense/dist/src/content-hash.js";
-import { DEFAULT_CONFIG } from "../../vendor/pi-condense/dist/src/types.js";
+import { ToolCallIndexer } from "../../vendor/pi-condense/src/indexer.ts";
+import { registerQueryTool } from "../../vendor/pi-condense/src/query-tool.ts";
+import { pruneMessages } from "../../vendor/pi-condense/src/pruner.ts";
+import { findSuperseded } from "../../vendor/pi-condense/src/supersede.ts";
+import { hashToolResult } from "../../vendor/pi-condense/src/content-hash.ts";
+import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
 import { disableNetwork, captureRegistration, modelNamed, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
 

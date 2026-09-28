@@ -1,4 +1,4 @@
-import type { RuntimeToolResult, RuntimeToolTrace } from "./types.js";
+import type { RuntimeToolResult, RuntimeToolTrace } from "./types.ts";
 
 const MAX_TRACE_TEXT_CHARS = 32_768;
 const MAX_TRACE_DETAILS_CHARS = 65_536;

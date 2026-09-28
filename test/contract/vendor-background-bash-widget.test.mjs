@@ -6,8 +6,8 @@ import {
   BACKGROUND_BASH_WIDGET_ID,
   renderBackgroundBashWidget,
   registerBackgroundBashWidgetShortcuts,
-} from "../../vendor/pi-codex-conversion/dist/ui/background-bash-widget.js";
-import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/dist/adapter/activation/config-contract.js";
+} from "../../vendor/pi-codex-conversion/src/ui/background-bash-widget.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/src/adapter/activation/config-contract.ts";
 
 function mouseEvent(type = "click", button = "left", y = 0) {
   return { type, button, x: 3, y, screenX: 3, screenY: y, width: 80, height: 20,

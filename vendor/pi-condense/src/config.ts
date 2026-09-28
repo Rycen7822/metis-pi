@@ -2,8 +2,8 @@ import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ContextPruneConfig, PruneOn, SummarizerThinking } from "./types.js";
-import { DEFAULT_CONFIG, PRUNE_ON_MODES, SUMMARIZER_THINKING_LEVELS } from "./types.js";
+import type { ContextPruneConfig, PruneOn, SummarizerThinking } from "./types.ts";
+import { DEFAULT_CONFIG, PRUNE_ON_MODES, SUMMARIZER_THINKING_LEVELS } from "./types.ts";
 
 /**
  * Settings location: the active pi agent's main `settings.json` under the
@@ -127,11 +127,16 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
 }
 
 export class SettingsReadError extends Error {
+  public readonly path: string;
+  public readonly reason: string;
+
   constructor(
-    public readonly path: string,
-    public readonly reason: string,
+    path: string,
+    reason: string,
   ) {
     super(`settings.json unreadable at ${path}: ${reason}`);
+    this.path = path;
+    this.reason = reason;
     this.name = "SettingsReadError";
   }
 }

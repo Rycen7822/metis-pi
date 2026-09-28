@@ -16,9 +16,9 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 
 | 命令 | 范围 |
 | --- | --- |
-| `npm run check` | 重建 vendor 声明后检查项目 TypeScript。 |
-| `npm run check:core` | 重建声明后检查 `src/`。 |
-| `npm run check:test` | 重建声明后检查 `test/**/*.mts` 的类型语义。 |
+| `npm run check` | 直接检查项目及其导入的 TS 源码，不生成文件。 |
+| `npm run check:core` | 直接检查 `src/`。 |
+| `npm run check:test` | 直接检查 `test/**/*.mts` 的类型语义。 |
 | `npm test` | 所有 `.test.mjs` / `.test.mts`，由 Node 按文件隔离执行。 |
 | `npm run test:fast` | `test/core/` 的规则、状态机和渲染原语。 |
 | `npm run test:host` | `test/contract/` 的真实宿主接口与扩展接线，加实际包内容检查。 |
@@ -26,7 +26,7 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 | `npm run test:io` | Git、文件、todo 持久化、写入前后镜像与日志归档。 |
 | `npm run test:resource` | 进程、计时器、锁、缓存/heap、剪贴板传输和状态存储。 |
 | `npm run test:chrome` | 跨上述层级选取界面、布局、复制与相关资源测试。 |
-| `npm run verify` | vendor freshness、项目/测试/vendor 类型、全部 Node 测试及 `npm pack --dry-run`。 |
+| `npm run verify` | 项目/测试/vendor 类型、全部 Node 测试及 `npm pack --dry-run`。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E6；`test:pty` 采用相同必执行规则。 |
 | `npm run vendor:smoke` | 单独运行真实 Pi 的 vendor 注册契约；已包含在完整测试中。 |
 | `npm run preview` | 从生产渲染器生成 `docs/preview.html`、`transcript.ansi`、`transcript.txt`。 |
@@ -72,23 +72,19 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 
 可用 `npm run test:pty:strict -- --journey=E3` 单跑一段。缺依赖、设置 `PCX_PTY_SKIP_WHEEL=1` 或等待稳定帧超时均失败。驱动清除 `NO_COLOR` 并启用 truecolor；颜色断言不能被环境变量削弱。检查当前可见帧，不能用旧 scrollback 证明显示成功。provider 的意外请求或未消费响应也会失败。
 
-`verify` 会重建 dist，不能与读取同一工作树产物的 PTY 并行执行。
+## vendor 源码与更新
 
-## vendor 构建与更新
+两份 vendor 直接运行 TS；根扩展、测试与共享状态消费者使用同一源码路径。`dist/` 仅保留公开 API 和旧入口的手写转导出文件，conversion 的 `dist/index.js` 继续作为扩展发现/过滤路径。不要重新引入完整编译副本。
 
-两份 vendor 的源码与运行 JS 都保留在 Git；`.d.ts` 是忽略的本地构建结果。修改源码后执行 `npm run vendor:build`，核对生成 JS，并在干净候选快照运行 `npm run verify`。
-
-- `vendor:build` / `vendor:check` 覆盖 conversion 和 condense。不要手改生成 JS。
-- `vendor:fresh` 沿用 conversion 的重建与 Git 状态检查；condense 先只生成声明，再在临时目录独立重建、逐字节比较，待检查的 JS 不会先被覆盖。
-- 直接运行 `node scripts/vendor-condense.mjs fresh` 需要已有本地声明；全新 checkout 使用 `npm run vendor:fresh` 自动补齐。
-- conversion freshness 会报告 tracked 改动和新增 untracked 运行文件，因此合法的未提交修改也会失败。工作期间比较重建字节，交付门禁使用包含完整改动的干净候选。
+- `vendor:check` 对两份 vendor 做 `noEmit` 类型检查；`vendor:build` / `vendor:fresh` 保留为该检查的兼容命令，不生成 JS 或声明。
+- 项目与测试检查直接消费源码，不依赖本地残留的 `.d.ts`。condense 与 conversion 使用可擦除 TS 语法，本地模块导入显式写 `.ts`。
 - 累计 `local.patch`、`vendor:patch` 和覆盖式 `vendor:sync` 已退休。上游更新在独立分支比较并选择性移植，源码与 Git 历史保存实际分歧。
 
 精确来源、许可、载荷范围与升级步骤见 [conversion UPSTREAM](../vendor/pi-codex-conversion/UPSTREAM.md) / [PATCHES](../vendor/pi-codex-conversion/PATCHES.md) 和 [condense UPSTREAM](../vendor/pi-condense/UPSTREAM.md) / [PATCHES](../vendor/pi-condense/PATCHES.md)。
 
 ## 发布与安装验证
 
-发布包携带运行 JS、tokenizer/WASM、本地二进制、提示文档、changelog、manifest 与许可/来源说明；vendor 源码和构建配置留在 Git。保留编译 JS 支持本地/Git 安装免构建，运行时不依赖开发声明。
+发布包携带运行 TS、少量旧路径转导出 JS、tokenizer/WASM、本地二进制、提示文档、changelog、manifest 与许可/来源说明。Rust 来源和开发配置留在 Git。宿主现有 TS 加载器负责运行，本地/Git/npm 安装不增加编译步骤，不依赖开发 TypeScript 或 npm lifecycle。
 
 `test/package.test.mjs` 检查实际 `npm pack --dry-run` 文件集合。变更交付范围时还需真实打包、解包并验证入口、动态资源、二进制内容及执行权限；本地路径、Git 初装/更新应分别在隔离 profile 验证。Git 更新会清理 ignored 文件，真实 npm 安装目录不能链接共享 node_modules。
 

@@ -1,5 +1,5 @@
-import { normalizePath } from "./protected.js";
-import { occKey, resultTimestampOf } from "./occurrence-key.js";
+import { normalizePath } from "./protected.ts";
+import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 
 /**
  * Protected reads are never indexed, so nothing else in the pipeline ever

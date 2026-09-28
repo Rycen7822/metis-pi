@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
-import { createGrammarToolInputProperties } from "./constrained-sampling.js";
+import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { declaredToolsOf } from "./transcript.ts";
 import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexRequestRouting, resolveCodexWebSocketUrl } from "./openai-codex/headers.ts";
 import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";

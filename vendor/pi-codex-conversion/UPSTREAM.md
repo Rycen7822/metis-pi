@@ -20,33 +20,22 @@ selectively ported in an isolated branch, preserving the behavior in `PATCHES.md
 
 ## What is here
 
-- `src/**` — the locally maintained upstream-derived TypeScript sources, excluding the retired voice implementation. **This is where patches are made.**
-- `dist/**/*.js` — build output (`tsc -p tsconfig.build.json`), **committed** so pi can load
-  the extension with no install-time build. Generated `.d.ts` files are ignored by Git
-  and recreated by development checks.
-- `vendor/**` — runtime assets: `tree-sitter-bash.wasm`, `js-tiktoken` ranks.
-- `code-mode/**` — code-mode host assets and upstream notices.
-- `types/**` — public type declarations.
-- `changelog.ts` / `changelog.js` — the "what's new" payload the entry imports dynamically;
-  `changelog.js` is generated from `changelog.ts` by `npm run vendor:build`.
-- `CHANGELOG.md` — read by the vendored changelog module (its state file is
-  `<agentDir>/howaboua-pi-stuff-changelog.json`) and by the host; omitting it prints a startup warning.
-- `tsconfig.build.json` — upstream, unchanged.
-- `tsconfig.json` — upstream except one line: it extends `./tsconfig.base.json` instead of the
-  monorepo's `../../tsconfig.base.json`, so the tree stands alone.
-- `tsconfig.base.json` — upstream's monorepo base config minus `stableTypeOrdering`, which is a
-  bun-only option TypeScript 5.9.3 does not accept. These two config edits are the only ones.
-- `package.json` — trimmed from upstream: identity, version, license, engines, dependencies and
-  peer dependencies. `private: true` (we are not republishing it); its upstream identity
-  and version record provenance, not an independently updated runtime package.
+- `src/**` — locally maintained, directly executed TypeScript; edit implementation here.
+- `dist/*.js` — eight small hand-written public/entry re-exports to `src/*.ts`. Keeping `dist/index.js` preserves Pi's existing extension filters and tool ownership path; internal consumers share canonical TS URLs.
+- `vendor/**` — runtime tokenizer ranks and tree-sitter WASM.
+- `code-mode/**` and `src/tools/**/rust` — unchanged native source, build inputs and notices; native binaries retain their existing paths.
+- `types/**` — source declarations.
+- `changelog.ts` — the dynamically loaded changelog program; `changelog.js` preserves its former default-export path. `CHANGELOG.md` remains required.
+- `tsconfig.json` / `tsconfig.base.json` — standalone no-emit, erasable-syntax type checks.
+- `package.json` — upstream-derived identity, runtime/peer dependencies and engines; main remains the old entry facade.
+
+The root package ships TS, public facades and runtime assets, with no development compiler or install-time build. `npm run vendor:build` and `vendor:fresh` remain aliases of the source checks. Generated `.d.ts` or deep dist JS are not runtime inputs.
 
 ## Published package
 
-The root `package.json` publishes compiled JavaScript, runtime tokenizer/WASM assets,
+The root `package.json` publishes TypeScript, small compatibility re-exports, runtime tokenizer/WASM assets,
 native `src/tools/*/bin` payloads, `CUSTOM-TOOLS.md`, changelog, manifests and notices.
-TypeScript/Rust sources and build configuration remain in Git; generated declarations
-are local build outputs. There is no cumulative patch or whole-tree sync command.
-Runtime JavaScript stays committed; local/Git installs require no build step. Runtime asset
+TypeScript is shipped and executed directly; Rust sources and development configuration remain in Git. No generated declarations are required. There is no cumulative patch or whole-tree sync command. Local/Git/npm installs require no build step. Runtime asset
 paths and native executable permissions are preserved in packed releases.
 
 ## Deliberate omissions (payload scope)
@@ -64,7 +53,7 @@ required native payload, including its provenance, license and executable mode.
 The retired voice implementation and unrelated platform payloads remain excluded.
 
 Runtime asset lookups are relative to the package root (the code computes it as four levels up from
-`dist/tools/native/binary.js`), so the directory structure above is not free-form: `dist/`,
+`src/tools/native/binary.ts`), so the directory structure above is not free-form: `src/`,
 `vendor/`, `code-mode/`, `src/tools/<tool>/bin/<platform>-<arch>/`, `changelog.js` and
 `package.json` must stay where they are.
 
@@ -75,8 +64,8 @@ Runtime asset lookups are relative to the package root (the code computes it as 
    source/assets while preserving `PATCHES.md`, the payload scope and runtime paths;
    do not overwrite this tree wholesale. `references/` is an optional comparison input.
 3. Run `npm run vendor:build` and `npm run verify` from a clean candidate, then verify
-   local/Git/package loading and strict PTY for affected behavior. Commit generated JS
-   with its source changes; declarations remain reproducible local output.
+   local/Git/package loading and strict PTY for affected behavior. Commit source and reviewed
+   facade changes; there is no generated implementation output.
 4. Update the reviewed upstream version/commit here and relevant `PATCHES.md`/CHANGELOG
    explanations. Git history records the actual changes; no separate patch is replayed.
 
