@@ -72,7 +72,7 @@
     "vendor/pi-codex-conversion/{package.json,changelog.js,CHANGELOG.md,LICENSE,PATCHES.md,UPSTREAM.md}",
     "vendor/pi-codex-conversion/dist/**/*.js",
     "vendor/pi-codex-conversion/vendor",
-    "vendor/pi-codex-conversion/src/tools/*/bin",
+    "vendor/pi-codex-conversion/src/tools/*/bin/**",
     "vendor/pi-codex-conversion/src/tools/code-mode/CUSTOM-TOOLS.md",
     "vendor/pi-codex-conversion/code-mode/bin",
     "vendor/pi-codex-conversion/code-mode/vendor/code-mode-src/{LICENSE,NOTICE,UPSTREAM}",
