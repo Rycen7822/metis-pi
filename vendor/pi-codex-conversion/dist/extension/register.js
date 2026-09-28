@@ -7,12 +7,10 @@ import { prepareCodeModeHost, registerCodexEvents } from "./events.js";
 import { createCodexExtensionRuntime } from "./runtime.js";
 import { registerCodexTools } from "./tools.js";
 import { registerCodexUi } from "./ui.js";
-import { registerCodexVoiceRenderer } from "../voice/ui.js";
 import { resolveCodexRuntimePlanForState } from "../adapter/activation/runtime-plan.js";
 import { captureActiveProviderSystemPrompt } from "../adapter/provider-request.js";
 import { hasCodexCacheKeepalivePlanChanged } from "../adapter/activation/cache-keepalive.js";
 export async function registerCodexConversion(pi) {
-    registerCodexVoiceRenderer(pi);
     registerApplyPatchDisplayBroker(pi);
     const runtime = createCodexExtensionRuntime(pi);
     runtime.state.contextTree.register(pi);
@@ -35,7 +33,7 @@ export async function registerCodexConversion(pi) {
         cleanupProxyProvider = proxyProvider;
         const tools = registerCodexTools(pi, runtime);
         const ui = registerCodexUi(pi, runtime);
-        registerCodexCommand(pi, runtime.state, runtime.voice, runtime.lanVoice, (config, ctx, previousConfig) => {
+        registerCodexCommand(pi, runtime.state, (config, ctx, previousConfig) => {
             const executionModeChanged = config.executionMode !== previousConfig.executionMode;
             const contextManagementChanged = config.compaction.contextManagement !==
                 previousConfig.compaction.contextManagement;
@@ -63,8 +61,7 @@ export async function registerCodexConversion(pi) {
             if (hasCodexCacheKeepalivePlanChanged(ctx.model?.id, previousConfig.openai, config.openai)) {
                 runtime.cancelCacheKeepalive();
             }
-            if (config.voiceFeaturesOnly !== previousConfig.voiceFeaturesOnly
-                || executionModeChanged
+            if (executionModeChanged
                 || config.prompt.heavySystemPromptOverwrite !== previousConfig.prompt.heavySystemPromptOverwrite
                 || config.openai.fast !== previousConfig.openai.fast
                 || config.openai.harnessIdentifierHeader !== previousConfig.openai.harnessIdentifierHeader
@@ -73,12 +70,7 @@ export async function registerCodexConversion(pi) {
                 || config.compaction.responsesCompaction !== previousConfig.compaction.responsesCompaction) {
                 runtime.resetTransport(ctx.sessionManager.getSessionId());
             }
-            if (config.voiceFeaturesOnly && !previousConfig.voiceFeaturesOnly) {
-                void codeMode.shutdownHost().catch((error) => {
-                    ctx.ui.notify(`Could not stop Code Mode host: ${error instanceof Error ? error.message : String(error)}`, "warning");
-                });
-            }
-            else if (executionModeChanged) {
+            if (executionModeChanged) {
                 void codeMode.shutdownHost()
                     .then(() => prepareCodeModeHost(codeMode, ctx))
                     .catch((error) => {

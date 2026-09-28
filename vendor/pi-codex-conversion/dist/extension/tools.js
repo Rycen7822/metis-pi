@@ -44,17 +44,14 @@ export function registerCodexTools(pi, runtime) {
             ...renderOptions(config),
         });
     };
-    if (!runtime.state.config.voiceFeaturesOnly)
-        registerCore(runtime.state.config);
+    registerCore(runtime.state.config);
     // All entry factories have completed by session_start, regardless of order.
     pi.on("session_start", () => {
-        if (!runtime.state.config.voiceFeaturesOnly)
-            registerCore(runtime.state.config);
+        registerCore(runtime.state.config);
     });
     return {
         applyConfig(config) {
-            if (!config.voiceFeaturesOnly)
-                registerCore(config);
+            registerCore(config);
             runtime.sessions.setBaseEnv(runtime.execEnv(config));
         },
         shutdown() {

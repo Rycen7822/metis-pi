@@ -36,7 +36,7 @@ requests clone their schemas rather than mutating the shared contract.
 
 ## 4. Direct provider calls
 
-`extension/runtime.ts`, `adapter/compaction/portable-summary.ts`, `voice/context.ts` and `voice/native-context.ts` normalize legacy Context at direct-call boundaries. Preserve prewarm/keepalive and summary semantics; do not add a second system/tool injection to an already normalized transcript.
+`extension/runtime.ts` and `adapter/compaction/portable-summary.ts` normalize legacy Context at direct-call boundaries. Preserve prewarm/keepalive and summary semantics; do not add a second system/tool injection to an already normalized transcript.
 
 `adapter/provider-request.ts` shares common live/prewarm preparation while leaving
 native-window injection, replay and prompt capture at the final-request boundary.
@@ -63,7 +63,7 @@ Preserve partial writes, close/commit order, function metadata, byte limits, sco
 
 `adapter/activation/config-normalize.ts` normalizes common boolean fields from their defaults, then applies dependent switches once. Enum readers, legacy `toolRendering`, optional fields, invalid-root defaults and input immutability retain their existing behavior. The public config facade remains unchanged.
 
-`ui/settings/config-items-shared.ts` owns simple boolean controls used by display/tools/voice/OpenAI tabs: read the displayed config, update the latest draft without mutating it. Custom controls, action markers and coupled compaction updates remain explicit. `test/vendor-config.test.mjs` covers alias/dependency/optional-field semantics and all 15 converted controls.
+`ui/settings/config-items-shared.ts` owns simple boolean controls used by display/tools/OpenAI tabs: read the displayed config, update the latest draft without mutating it. Custom controls, action markers and coupled compaction updates remain explicit. `test/vendor-config.test.mjs` covers alias/dependency/optional-field semantics and the 12 remaining controls.
 
 ## 9. metis-pi-owned update lifecycle
 

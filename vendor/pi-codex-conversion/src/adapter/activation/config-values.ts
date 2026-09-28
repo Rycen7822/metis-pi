@@ -1,5 +1,3 @@
-import type { VoiceContextModel } from "./config-contract.ts";
-
 export function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -32,15 +30,6 @@ export function normalizeIntegerInRange(
 		value <= maximum
 		? value
 		: fallback;
-}
-
-export function normalizeVoiceContextModel(
-	value: unknown,
-): VoiceContextModel | undefined {
-	if (!isObject(value)) return undefined;
-	const provider = normalizeOptionalString(value["provider"]);
-	const modelId = normalizeOptionalString(value["modelId"]);
-	return provider && modelId ? { provider, modelId } : undefined;
 }
 
 export function normalizeNotebookProfile(value: unknown): string | undefined {

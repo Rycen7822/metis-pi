@@ -22,15 +22,6 @@ function mergeConfigDocument(existing, owned) {
     }
     return merged;
 }
-function clearAbsentOwnedOptionals(document, owned) {
-    const voice = isRecord(document["voice"]) ? document["voice"] : undefined;
-    const ownedVoice = isRecord(owned["voice"]) ? owned["voice"] : undefined;
-    if (!voice || !ownedVoice)
-        return;
-    for (const key of ["contextModel", "inputDevice", "outputDevice"])
-        if (!(key in ownedVoice))
-            delete voice[key];
-}
 function writeConfigDocumentAtomic(configPath, document) {
     const temporaryPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
     mkdirSync(dirname(configPath), { recursive: true });
@@ -111,11 +102,6 @@ export function readCodexConversionConfig(configPath = getCodexConversionConfigP
         return structuredClone(DEFAULT_CODEX_CONVERSION_CONFIG);
     const migration = migrateCodexConversionConfigIfNeeded(parsed);
     const config = withoutProjectOnlyConfig(normalizeCodexConversionConfig(migration.config));
-    const voice = isRecord(parsed) && isRecord(parsed["voice"])
-        ? parsed["voice"]
-        : undefined;
-    if (typeof voice?.["audioSetupCompleted"] !== "boolean")
-        config.voice.audioSetupCompleted = true;
     return config;
 }
 export function readProjectCodexConversionDocument(cwd, projectTrusted) {
@@ -268,7 +254,6 @@ export function writeCodexConversionConfig(config, configPath = getCodexConversi
         document = folderScope
             ? withoutDisabledProjectCacheKeepalive(withoutGlobalOnlyDocument(document))
             : withoutProjectOnlyDocument(document);
-        clearAbsentOwnedOptionals(document, normalized);
         for (const key of LEGACY_OWNED_CONFIG_KEYS)
             delete document[key];
         writeConfigDocumentAtomic(configPath, document);

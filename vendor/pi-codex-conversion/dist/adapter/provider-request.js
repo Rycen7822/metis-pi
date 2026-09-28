@@ -8,13 +8,11 @@ import { rewriteContextNamespaceTools } from "../context-management/namespace-to
 // Shared wire preparation only: ordinary prewarm must not consume pending
 // compaction windows or capture the active prompt from a speculative request.
 function prepareCodexProviderRequest(payload, ctx, state) {
-    if (state.config.voiceFeaturesOnly)
-        return undefined;
     const plan = resolveCodexRuntimePlanForState(ctx, state);
     if (!isAdapterRuntime(plan) || (!plan.effectiveOpenAICodex && !isResponsesContext(ctx))) {
         return undefined;
     }
-    let preparedPayload = applyCodexRequestOptions(applyVoiceSystemPrompt(payload, state.voiceSystemPromptOverride), state.config, {
+    let preparedPayload = applyCodexRequestOptions(payload, state.config, {
         serviceTier: plan.effectiveOpenAICodex,
         verbosity: true,
     });
@@ -28,15 +26,8 @@ function prepareCodexProviderRequest(payload, ctx, state) {
     return { plan, preparedPayload };
 }
 export function supportsCodexDeveloperMessages(ctx, state) {
-    if (state.config.voiceFeaturesOnly)
-        return false;
     const plan = resolveCodexRuntimePlanForState(ctx, state);
     return isAdapterRuntime(plan) && isResponsesContext(ctx);
-}
-function applyVoiceSystemPrompt(payload, systemPrompt) {
-    if (!systemPrompt || !isRecord(payload))
-        return payload;
-    return { ...payload, instructions: systemPrompt };
 }
 function applyCodexRuntimePayload(payload, responsesLite) {
     return responsesLite && isCodeModeCompatibleBody(payload)
@@ -44,8 +35,6 @@ function applyCodexRuntimePayload(payload, responsesLite) {
         : payload;
 }
 export function rewriteCodexProviderHeaders(headers, ctx, state) {
-    if (state.config.voiceFeaturesOnly)
-        return;
     const plan = resolveCodexRuntimePlanForState(ctx, state);
     if (plan.transport === "responses-lite") {
         headers[RESPONSES_LITE_HEADER] = "true";

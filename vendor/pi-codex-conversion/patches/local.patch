@@ -1,12 +1,146 @@
+diff --git a/src/adapter/activation/activation.ts b/src/adapter/activation/activation.ts
+index cf4b2fd..9bdfc28 100644
+--- a/src/adapter/activation/activation.ts
++++ b/src/adapter/activation/activation.ts
+@@ -41,7 +41,7 @@ function enableExtraTools(
+ 		pi,
+ 		mergeToolNames(state.previousToolNames ?? DEFAULT_TOOL_NAMES, plan.toolNames),
+ 	);
+-	if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, !state.config.voiceFeaturesOnly && state.config.ui.statusLine ? buildExtraToolsOnlyStatusText(plan.toolNames, ctx.ui.theme) : undefined);
++	if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, state.config.ui.statusLine ? buildExtraToolsOnlyStatusText(plan.toolNames, ctx.ui.theme) : undefined);
+ }
+ 
+ function enableAdapter(
+diff --git a/src/adapter/activation/config-contract.ts b/src/adapter/activation/config-contract.ts
+index fff0438..01cb460 100644
+--- a/src/adapter/activation/config-contract.ts
++++ b/src/adapter/activation/config-contract.ts
+@@ -9,34 +9,6 @@ export type ContextManagementMode = "off" | "local" | "tree" | "remote";
+ export type V2UserMessageRetention = 16 | 32 | 64;
+ export const MIN_NOTEBOOK_HEAP_MIB = 256;
+ export const MAX_NOTEBOOK_HEAP_MIB = 65_536;
+-export type DictationShortcutMode = "push" | "toggle";
+-export const VOICE_CONTEXT_REASONING_LEVELS = [
+-	"off",
+-	"minimal",
+-	"low",
+-	"medium",
+-	"high",
+-	"xhigh",
+-	"max",
+-] as const;
+-export type VoiceContextReasoning =
+-	(typeof VOICE_CONTEXT_REASONING_LEVELS)[number];
+-export const DEFAULT_VOICE_CONTEXT_REASONING: VoiceContextReasoning = "high";
+-export type VoiceContextModel = { provider: string; modelId: string };
+-
+-export const REALTIME_V3_VOICES = [
+-	"juniper",
+-	"maple",
+-	"spruce",
+-	"ember",
+-	"vale",
+-	"breeze",
+-	"arbor",
+-	"sol",
+-	"cove",
+-] as const;
+-export type RealtimeV3Voice = (typeof REALTIME_V3_VOICES)[number];
+-
+ export const V2_USER_MESSAGE_RETENTION_OPTIONS: readonly V2UserMessageRetention[] =
+ 	[16, 32, 64];
+ export const LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS: readonly LunaCacheKeepaliveMinutes[] =
+@@ -44,7 +16,6 @@ export const LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS: readonly LunaCacheKeepaliveMi
+ 
+ export interface CodexConversionConfig {
+ 	executionMode: ExecutionMode;
+-	voiceFeaturesOnly: boolean;
+ 	prompt: { heavySystemPromptOverwrite: boolean };
+ 	scope: { allProviders: AllProvidersMode; additionalProviders: string[] };
+ 	tools: {
+@@ -77,23 +48,6 @@ export interface CodexConversionConfig {
+ 		plainCommandOutput: boolean;
+ 		profile?: string | undefined;
+ 	};
+-	voice: {
+-		v3Voice: RealtimeV3Voice;
+-		autoResumeRealtime: boolean;
+-		refreshRealtimeAfterCompaction: boolean;
+-		audioSetupCompleted: boolean;
+-		delegationAcknowledgements: boolean;
+-		forwardReasoningSummaries: boolean;
+-		dictationShortcut: string;
+-		realtimeShortcut: string;
+-		muteShortcut: string;
+-		serverShortcut: string;
+-		dictationShortcutMode: DictationShortcutMode;
+-		contextModel?: VoiceContextModel | undefined;
+-		contextReasoning: VoiceContextReasoning;
+-		inputDevice?: string | undefined;
+-		outputDevice?: string | undefined;
+-	};
+ 	openai: {
+ 		fast: boolean;
+ 		verbosity: CodexVerbosity;
+@@ -108,7 +62,6 @@ export interface CodexConversionConfig {
+ 
+ export const DEFAULT_CODEX_CONVERSION_CONFIG: CodexConversionConfig = {
+ 	executionMode: "normal",
+-	voiceFeaturesOnly: false,
+ 	prompt: { heavySystemPromptOverwrite: false },
+ 	scope: { allProviders: "off", additionalProviders: [] },
+ 	tools: {
+@@ -137,24 +90,6 @@ export const DEFAULT_CODEX_CONVERSION_CONFIG: CodexConversionConfig = {
+ 		v2UserMessageRetention: 64,
+ 	},
+ 	notebook: { maxHeapMiB: 4_096, plainCommandOutput: false },
+-	voice: {
+-		v3Voice: "cove",
+-		autoResumeRealtime: true,
+-		refreshRealtimeAfterCompaction: true,
+-		audioSetupCompleted: false,
+-		delegationAcknowledgements: true,
+-		forwardReasoningSummaries: true,
+-		dictationShortcut: "ctrl+alt+d",
+-		realtimeShortcut: "ctrl+alt+space",
+-		muteShortcut: "ctrl+alt+m",
+-		serverShortcut: "ctrl+alt+g",
+-		dictationShortcutMode: "push",
+-		contextModel: {
+-			provider: "openai-codex",
+-			modelId: "gpt-5.6-luna",
+-		},
+-		contextReasoning: DEFAULT_VOICE_CONTEXT_REASONING,
+-	},
+ 	openai: {
+ 		fast: false,
+ 		verbosity: "low",
 diff --git a/src/adapter/activation/config-normalize.ts b/src/adapter/activation/config-normalize.ts
-index 4f9da84..7c22b8b 100644
+index 4f9da84..01c5572 100644
 --- a/src/adapter/activation/config-normalize.ts
 +++ b/src/adapter/activation/config-normalize.ts
-@@ -29,14 +29,26 @@ import {
+@@ -12,235 +12,120 @@ import {
+ 	normalizeCompactToolsMode,
+ 	normalizeContextManagementMode,
+ 	normalizeCustomRustBinariesDir,
+-	normalizeDictationShortcutMode,
+ 	normalizeLunaCacheKeepaliveMinutes,
+ 	normalizeProviderList,
+-	normalizeRealtimeV3Voice,
+ 	normalizeV2UserMessageRetention,
+-	normalizeVoiceContextReasoning,
+ } from "./config-normalizers.ts";
+ import {
+ 	normalizeBoolean,
+ 	normalizeIntegerInRange,
+ 	normalizeNotebookProfile,
+-	normalizeOptionalString,
+ 	normalizeString,
+-	normalizeVoiceContextModel,
  } from "./config-values.ts";
  import { normalizeExecutionMode } from "./execution-mode.ts";
  
-+type Section = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
++type Section = Exclude<keyof CodexConversionConfig, "executionMode">;
 +type BooleanFields<T> = { [K in keyof T as T[K] extends boolean ? K : never]: T[K] };
 +
 +// Default booleans have one rule. Enum/string/optional fields and dependencies stay explicit below.
@@ -30,8 +164,11 @@ index 4f9da84..7c22b8b 100644
 +	if (typeof ui["toolRenaming"] !== "boolean") ui["toolRenaming"] = ui["toolRendering"];
  	const compaction = isObject(value["compaction"]) ? value["compaction"] : {};
  	const notebook = isObject(value["notebook"]) ? value["notebook"] : {};
- 	const voice = isObject(value["voice"]) ? value["voice"] : {};
-@@ -47,162 +59,93 @@ export function normalizeCodexConversionConfig(
+-	const voice = isObject(value["voice"]) ? value["voice"] : {};
+ 	const openai = isObject(value["openai"]) ? value["openai"] : {};
+-	const inputDevice = normalizeOptionalString(voice["inputDevice"]);
+-	const outputDevice = normalizeOptionalString(voice["outputDevice"]);
+-	const contextModel = normalizeVoiceContextModel(voice["contextModel"]);
  	const notebookProfile = normalizeNotebookProfile(notebook["profile"]);
  	const executionMode =
  		normalizeExecutionMode(value["executionMode"]) ??
@@ -52,11 +189,10 @@ index 4f9da84..7c22b8b 100644
 +		defaults.compaction.contextManagement;
 +	const config: CodexConversionConfig = {
  		executionMode,
- 		voiceFeaturesOnly: normalizeBoolean(
- 			value["voiceFeaturesOnly"],
+-		voiceFeaturesOnly: normalizeBoolean(
+-			value["voiceFeaturesOnly"],
 -			DEFAULT_CODEX_CONVERSION_CONFIG.voiceFeaturesOnly,
-+			defaults.voiceFeaturesOnly,
- 		),
+-		),
  		prompt: {
 -			heavySystemPromptOverwrite: normalizeBoolean(
 -				prompt["heavySystemPromptOverwrite"],
@@ -165,10 +301,9 @@ index 4f9da84..7c22b8b 100644
 -			),
  			...(notebookProfile ? { profile: notebookProfile } : {}),
  		},
- 		voice: {
-+			...booleans("voice", voice),
- 			v3Voice:
- 				normalizeRealtimeV3Voice(voice["v3Voice"]) ??
+-		voice: {
+-			v3Voice:
+-				normalizeRealtimeV3Voice(voice["v3Voice"]) ??
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.v3Voice,
 -			autoResumeRealtime: normalizeBoolean(
 -				voice["autoResumeRealtime"],
@@ -190,37 +325,32 @@ index 4f9da84..7c22b8b 100644
 -				voice["forwardReasoningSummaries"],
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.forwardReasoningSummaries,
 -			),
-+				defaults.voice.v3Voice,
- 			dictationShortcut: normalizeString(
- 				voice["dictationShortcut"],
+-			dictationShortcut: normalizeString(
+-				voice["dictationShortcut"],
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.dictationShortcut,
-+				defaults.voice.dictationShortcut,
- 			),
- 			realtimeShortcut: normalizeString(
- 				voice["realtimeShortcut"],
+-			),
+-			realtimeShortcut: normalizeString(
+-				voice["realtimeShortcut"],
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.realtimeShortcut,
-+				defaults.voice.realtimeShortcut,
- 			),
- 			muteShortcut: normalizeString(
- 				voice["muteShortcut"],
+-			),
+-			muteShortcut: normalizeString(
+-				voice["muteShortcut"],
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.muteShortcut,
-+				defaults.voice.muteShortcut,
- 			),
- 			serverShortcut: normalizeString(
- 				voice["serverShortcut"],
+-			),
+-			serverShortcut: normalizeString(
+-				voice["serverShortcut"],
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.serverShortcut,
-+				defaults.voice.serverShortcut,
- 			),
- 			dictationShortcutMode:
- 				normalizeDictationShortcutMode(voice["dictationShortcutMode"]) ??
+-			),
+-			dictationShortcutMode:
+-				normalizeDictationShortcutMode(voice["dictationShortcutMode"]) ??
 -				DEFAULT_CODEX_CONVERSION_CONFIG.voice.dictationShortcutMode,
-+				defaults.voice.dictationShortcutMode,
- 			...(contextModel ? { contextModel } : {}),
- 			contextReasoning: normalizeVoiceContextReasoning(
- 				voice["contextReasoning"],
-@@ -211,36 +154,23 @@ export function normalizeCodexConversionConfig(
- 			...(outputDevice ? { outputDevice } : {}),
- 		},
+-			...(contextModel ? { contextModel } : {}),
+-			contextReasoning: normalizeVoiceContextReasoning(
+-				voice["contextReasoning"],
+-			),
+-			...(inputDevice ? { inputDevice } : {}),
+-			...(outputDevice ? { outputDevice } : {}),
+-		},
  		openai: {
 -			fast: normalizeBoolean(
 -				openai["fast"],
@@ -262,9 +392,159 @@ index 4f9da84..7c22b8b 100644
 +	config.compaction.hybridCompaction &&= contextManagement !== "off";
 +	config.compaction.responsesCompaction &&= contextManagement === "off";
 +	config.compaction.portableSummary &&= config.compaction.responsesCompaction;
-+	config.voice.refreshRealtimeAfterCompaction &&= contextModel !== undefined;
 +	return config;
  }
+diff --git a/src/adapter/activation/config-normalizers.ts b/src/adapter/activation/config-normalizers.ts
+index e22c5e4..842087c 100644
+--- a/src/adapter/activation/config-normalizers.ts
++++ b/src/adapter/activation/config-normalizers.ts
+@@ -4,15 +4,9 @@ import {
+ 	type CodexVerbosity,
+ 	type CompactToolsMode,
+ 	type ContextManagementMode,
+-	DEFAULT_VOICE_CONTEXT_REASONING,
+-	type DictationShortcutMode,
+ 	LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS,
+ 	type LunaCacheKeepaliveMinutes,
+-	REALTIME_V3_VOICES,
+-	type RealtimeV3Voice,
+ 	type V2UserMessageRetention,
+-	VOICE_CONTEXT_REASONING_LEVELS,
+-	type VoiceContextReasoning,
+ } from "./config-contract.ts";
+ import { normalizeOptionalString } from "./config-values.ts";
+ 
+@@ -85,20 +79,6 @@ export function normalizeV2UserMessageRetention(
+ 	return value === 16 || value === 32 || value === 64 ? value : undefined;
+ }
+ 
+-export function normalizeDictationShortcutMode(
+-	value: unknown,
+-): DictationShortcutMode | undefined {
+-	return value === "push" || value === "toggle" ? value : undefined;
+-}
+-
+-export function normalizeRealtimeV3Voice(
+-	value: unknown,
+-): RealtimeV3Voice | undefined {
+-	return typeof value === "string"
+-		? REALTIME_V3_VOICES.find((voice) => voice === value)
+-		: undefined;
+-}
+-
+ export function normalizeProviderList(value: unknown): string[] {
+ 	if (!Array.isArray(value)) return [];
+ 	return [
+@@ -111,15 +91,6 @@ export function normalizeProviderList(value: unknown): string[] {
+ 	];
+ }
+ 
+-export function normalizeVoiceContextReasoning(
+-	value: unknown,
+-): VoiceContextReasoning {
+-	return typeof value === "string" &&
+-		(VOICE_CONTEXT_REASONING_LEVELS as readonly string[]).includes(value)
+-		? (value as VoiceContextReasoning)
+-		: DEFAULT_VOICE_CONTEXT_REASONING;
+-}
+-
+ export function normalizeCustomRustBinariesDir(value: unknown): string {
+ 	return normalizeOptionalString(value) ?? "";
+ }
+diff --git a/src/adapter/activation/config-store.ts b/src/adapter/activation/config-store.ts
+index 2c2e785..66ed658 100644
+--- a/src/adapter/activation/config-store.ts
++++ b/src/adapter/activation/config-store.ts
+@@ -36,14 +36,6 @@ function mergeConfigDocument(existing: Record<string, unknown>, owned: Record<st
+ 	return merged;
+ }
+ 
+-function clearAbsentOwnedOptionals(document: Record<string, unknown>, owned: Record<string, unknown>): void {
+-	const voice = isRecord(document["voice"]) ? document["voice"] : undefined;
+-	const ownedVoice = isRecord(owned["voice"]) ? owned["voice"] : undefined;
+-	if (!voice || !ownedVoice) return;
+-	for (const key of ["contextModel", "inputDevice", "outputDevice"])
+-		if (!(key in ownedVoice)) delete voice[key];
+-}
+-
+ function writeConfigDocumentAtomic(configPath: string, document: Record<string, unknown>): void {
+ 	const temporaryPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+ 	mkdirSync(dirname(configPath), { recursive: true });
+@@ -119,11 +111,6 @@ export function readCodexConversionConfig(configPath: string = getCodexConversio
+ 	if (parsed === undefined) return structuredClone(DEFAULT_CODEX_CONVERSION_CONFIG);
+ 	const migration = migrateCodexConversionConfigIfNeeded(parsed);
+ 	const config = withoutProjectOnlyConfig(normalizeCodexConversionConfig(migration.config));
+-	const voice = isRecord(parsed) && isRecord(parsed["voice"])
+-		? parsed["voice"]
+-		: undefined;
+-	if (typeof voice?.["audioSetupCompleted"] !== "boolean")
+-		config.voice.audioSetupCompleted = true;
+ 	return config;
+ }
+ 
+@@ -284,7 +271,6 @@ export function writeCodexConversionConfig(
+ 		document = folderScope
+ 			? withoutDisabledProjectCacheKeepalive(withoutGlobalOnlyDocument(document))
+ 			: withoutProjectOnlyDocument(document);
+-		clearAbsentOwnedOptionals(document, normalized);
+ 		for (const key of LEGACY_OWNED_CONFIG_KEYS) delete document[key];
+ 		writeConfigDocumentAtomic(configPath, document);
+ 		return { ok: true };
+diff --git a/src/adapter/activation/config-values.ts b/src/adapter/activation/config-values.ts
+index 38ad06b..8ee361b 100644
+--- a/src/adapter/activation/config-values.ts
++++ b/src/adapter/activation/config-values.ts
+@@ -1,5 +1,3 @@
+-import type { VoiceContextModel } from "./config-contract.ts";
+-
+ export function isObject(value: unknown): value is Record<string, unknown> {
+ 	return typeof value === "object" && value !== null && !Array.isArray(value);
+ }
+@@ -34,15 +32,6 @@ export function normalizeIntegerInRange(
+ 		: fallback;
+ }
+ 
+-export function normalizeVoiceContextModel(
+-	value: unknown,
+-): VoiceContextModel | undefined {
+-	if (!isObject(value)) return undefined;
+-	const provider = normalizeOptionalString(value["provider"]);
+-	const modelId = normalizeOptionalString(value["modelId"]);
+-	return provider && modelId ? { provider, modelId } : undefined;
+-}
+-
+ export function normalizeNotebookProfile(value: unknown): string | undefined {
+ 	const name = normalizeOptionalString(value);
+ 	return name && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)
+diff --git a/src/adapter/activation/runtime-plan.ts b/src/adapter/activation/runtime-plan.ts
+index c603451..3b96025 100644
+--- a/src/adapter/activation/runtime-plan.ts
++++ b/src/adapter/activation/runtime-plan.ts
+@@ -144,12 +144,10 @@ export function resolveCodexRuntimePlan(
+ 	};
+ 	const extras = hasExtras(config)
+ 		&& (config.scope.allProviders === "extras"
+-			|| (config.voiceFeaturesOnly && config.scope.allProviders === "on")
+ 			|| (config.scope.allProviders === "off" && (isConfigured || isCodexLikeModel(ctx.model))));
+ 	if (extras) {
+ 		return { ...base, kind: "extras", toolNames: extraToolNames(ctx, config), prompt: undefined, transport: "responses" };
+ 	}
+-	if (config.voiceFeaturesOnly) return { ...base, kind: "inactive", toolNames: [], prompt: undefined, transport: undefined };
+ 
+ 	const active = config.scope.allProviders === "on" || isConfigured || isCodexLikeModel(ctx.model);
+ 	if (!active) return { ...base, kind: "inactive", toolNames: [], prompt: undefined, transport: undefined };
+diff --git a/src/adapter/activation/state.ts b/src/adapter/activation/state.ts
+index bfc8989..943fb34 100644
+--- a/src/adapter/activation/state.ts
++++ b/src/adapter/activation/state.ts
+@@ -27,7 +27,6 @@ export interface AdapterState {
+ 	promptSkills: PromptSkill[];
+ 	activeProviderSystemPrompt?: string | undefined;
+ 	pendingActiveProviderPromptCapture?: boolean | undefined;
+-	voiceSystemPromptOverride?: string | undefined;
+ 	weeklyUsageLeft?: number | undefined;
+ 	config: CodexConversionConfig;
+ 	executionMode: ExecutionMode;
 diff --git a/src/adapter/code-mode.ts b/src/adapter/code-mode.ts
 index 2d28acd..1957808 100644
 --- a/src/adapter/code-mode.ts
@@ -1147,11 +1427,33 @@ index 565efd2..0000000
 -		return;
 -	}
 -}
+diff --git a/src/adapter/prompt/context-filter.ts b/src/adapter/prompt/context-filter.ts
+index 3e68200..7dd5bee 100644
+--- a/src/adapter/prompt/context-filter.ts
++++ b/src/adapter/prompt/context-filter.ts
+@@ -1,5 +1,4 @@
+ import type { CustomMessageEntry } from "@earendil-works/pi-coding-agent";
+-import { isVoiceContextExcludedMessage } from "../../voice/context-visibility.ts";
+ import { NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE } from "../compaction/types.ts";
+ import { EXECUTION_MODE_SESSION_ENTRY } from "../activation/execution-mode.ts";
+ import { NOTEBOOK_TREE_EPOCH_ENTRY } from "../../tools/notebook-mode/session-identity.ts";
+@@ -18,7 +17,10 @@ export function isProviderContextExcludedMessage(message: {
+ 	summary?: unknown;
+ }): boolean {
+ 	return (message.role === "compactionSummary" && message.summary === CONTEXT_WINDOW_COMPACTION_SUMMARY)
+-		|| isVoiceContextExcludedMessage(message)
++		// Retired session entries can still appear when an older conversation is reopened.
++		|| (message.role === "custom" && (message.customType === "codex-realtime-voice"
++			|| (message.customType === "codex-voice-mode"
++				&& (typeof message.content !== "string" || !message.content.startsWith('<realtime_voice_session state="')))))
+ 		|| (message.role === "custom" && typeof message.customType === "string" && ADAPTER_CONTEXT_EXCLUDED_CUSTOM_MESSAGE_TYPES.has(message.customType));
+ }
+ 
 diff --git a/src/adapter/provider-request.ts b/src/adapter/provider-request.ts
-index f4d861d..60311c8 100644
+index f4d861d..0a0389f 100644
 --- a/src/adapter/provider-request.ts
 +++ b/src/adapter/provider-request.ts
-@@ -4,24 +4,30 @@ import { isResponsesContext } from "./prompt/codex-model.ts";
+@@ -4,40 +4,39 @@ import { isResponsesContext } from "./prompt/codex-model.ts";
  import { applyCodexRequestOptions } from "./request-options.ts";
  import type { AdapterState } from "./activation/state.ts";
  import { isAdapterRuntime, resolveCodexRuntimePlanForState } from "./activation/runtime-plan.ts";
@@ -1164,7 +1466,7 @@ index f4d861d..60311c8 100644
 +// Shared wire preparation only: ordinary prewarm must not consume pending
 +// compaction windows or capture the active prompt from a speculative request.
  function prepareCodexProviderRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState) {
- 	if (state.config.voiceFeaturesOnly) return undefined;
+-	if (state.config.voiceFeaturesOnly) return undefined;
  	const plan = resolveCodexRuntimePlanForState(ctx, state);
  	if (!isAdapterRuntime(plan) || (!plan.effectiveOpenAICodex && !isResponsesContext(ctx))) {
  		return undefined;
@@ -1176,7 +1478,7 @@ index f4d861d..60311c8 100644
 -			verbosity: true,
 -		}),
 -	};
-+	let preparedPayload = applyCodexRequestOptions(applyVoiceSystemPrompt(payload, state.voiceSystemPromptOverride), state.config, {
++	let preparedPayload = applyCodexRequestOptions(payload, state.config, {
 +		serviceTier: plan.effectiveOpenAICodex,
 +		verbosity: true,
 +	});
@@ -1190,7 +1492,31 @@ index f4d861d..60311c8 100644
  }
  
  export function supportsCodexDeveloperMessages(
-@@ -70,24 +76,17 @@ export function captureActiveProviderSystemPrompt(payload: unknown, state: Adapt
+ 	ctx: Pick<ExtensionContext, "model">,
+ 	state: AdapterState,
+ ): boolean {
+-	if (state.config.voiceFeaturesOnly) return false;
+ 	const plan = resolveCodexRuntimePlanForState(ctx, state);
+ 	return isAdapterRuntime(plan) && isResponsesContext(ctx);
+ }
+ 
+-function applyVoiceSystemPrompt(payload: unknown, systemPrompt: string | undefined): unknown {
+-	if (!systemPrompt || !isRecord(payload)) return payload;
+-	return { ...payload, instructions: systemPrompt };
+-}
+-
+ function applyCodexRuntimePayload(payload: unknown, responsesLite: boolean): unknown {
+ 	return responsesLite && isCodeModeCompatibleBody(payload)
+ 		? applyResponsesLiteRequest(payload)
+@@ -49,7 +48,6 @@ export function rewriteCodexProviderHeaders(
+ 	ctx: ExtensionContext,
+ 	state: AdapterState,
+ ): void {
+-	if (state.config.voiceFeaturesOnly) return;
+ 	const plan = resolveCodexRuntimePlanForState(ctx, state);
+ 	if (plan.transport === "responses-lite") {
+ 		headers[RESPONSES_LITE_HEADER] = "true";
+@@ -70,24 +68,17 @@ export function captureActiveProviderSystemPrompt(payload: unknown, state: Adapt
  export async function rewriteCodexProviderRequest(payload: unknown, ctx: ExtensionContext, state: AdapterState): Promise<unknown | undefined> {
  	const prepared = prepareCodexProviderRequest(payload, ctx, state);
  	if (!prepared) return undefined;
@@ -1225,7 +1551,7 @@ index f4d861d..60311c8 100644
  	}
  	const finalPayload = applyCodexRuntimePayload(
  		rewrittenPayload,
-@@ -108,25 +107,8 @@ export function rewriteCodexPrewarmProviderRequest(
+@@ -108,25 +99,8 @@ export function rewriteCodexPrewarmProviderRequest(
  ): unknown | undefined {
  	const prepared = prepareCodexProviderRequest(payload, ctx, state);
  	if (!prepared) return undefined;
@@ -1252,7 +1578,7 @@ index f4d861d..60311c8 100644
  		prepared.plan.transport === "responses-lite",
  	);
  }
-@@ -142,6 +124,7 @@ function rewriteContextTools(
+@@ -142,6 +116,7 @@ function rewriteContextTools(
  	ctx: Pick<ExtensionContext, "model">,
  	remote: boolean,
  ): unknown {
@@ -2371,18 +2697,23 @@ index ad6a7b6..3055fc6 100644
 +	{ additionalProperties: false },
 +);
 diff --git a/src/extension/events.ts b/src/extension/events.ts
-index 0401a67..da979cd 100644
+index 0401a67..ae26241 100644
 --- a/src/extension/events.ts
 +++ b/src/extension/events.ts
-@@ -10,7 +10,6 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
+@@ -10,12 +10,9 @@ import { hasNoSkillsFlag } from "../adapter/prompt/skills.ts";
  import { onCodeModeExtensionToolsRefresh } from "../code-mode-extension-tools.ts";
  import { extractPiPromptSkills, resolvePromptSkills } from "../prompt/build-system-prompt.ts";
  import type { CodeModeProxyProviderRegistration } from "../providers/code-mode-proxy-provider.ts";
 -import { maybeWarnLocalCheckoutVersion } from "../adapter/local-version-warning.ts";
  import { clearApplyPatchRenderState } from "../tools/apply-patch/tool.ts";
  import type { CodeModeRegistration } from "../tools/code-mode/tools.ts";
- import { parseRealtimeVoicePrompt, REALTIME_VOICE_PROMPT_CHANNEL } from "../realtime-voice.ts";
-@@ -69,6 +68,12 @@ export function registerCodexEvents(
+-import { parseRealtimeVoicePrompt, REALTIME_VOICE_PROMPT_CHANNEL } from "../realtime-voice.ts";
+ import { initializeBashParser } from "../shell/bash.ts";
+-import { prepareVoiceDelegation } from "../voice/delegation-preflight.ts";
+ import { appendNotebookTreeEpoch } from "../tools/notebook-mode/session-identity.ts";
+ import { formatCompactionCacheDiagnostic } from "../adapter/compaction/diagnostics.ts";
+ import type { CodexExtensionRuntime } from "./runtime.ts";
+@@ -69,6 +66,12 @@ export function registerCodexEvents(
  ): void {
  	const { state, tracker, sessions } = runtime;
  	const reserve = createCodexReserveController(pi);
@@ -2395,8 +2726,15 @@ index 0401a67..da979cd 100644
  	let activeContext: ExtensionContext | undefined;
  	let pendingExtensionToolRefresh = false;
  	let turnPrewarm: ReturnType<CodexExtensionRuntime["waitForPrewarm"]>;
-@@ -98,7 +103,7 @@ export function registerCodexEvents(
- 	runtime.voice.setDelegationPreflight((ctx, signal) => prepareVoiceDelegation(runtime, codeMode, ctx, signal));
+@@ -91,22 +94,14 @@ export function registerCodexEvents(
+ 			syncAdapter(pi, activeContext, state);
+ 		},
+ 	);
+-	pi.events.on(REALTIME_VOICE_PROMPT_CHANNEL, (value) => {
+-		const report = parseRealtimeVoicePrompt(value);
+-		if (report) runtime.voice.setPrompt(report);
+-	});
+-	runtime.voice.setDelegationPreflight((ctx, signal) => prepareVoiceDelegation(runtime, codeMode, ctx, signal));
  	sessions.onSessionExit((sessionId) => tracker.recordSessionFinished(sessionId));
  
 -	pi.on("session_start", async (event, ctx) => {
@@ -2404,7 +2742,32 @@ index 0401a67..da979cd 100644
  		updateCodexPreparedIdleKickoff(pi, "session_reset");
  		turnPrewarm = undefined;
  		activeContext = ctx;
-@@ -147,7 +152,6 @@ export function registerCodexEvents(
+ 		pendingExtensionToolRefresh = false;
+ 		ui.invalidateUsageStatus();
+-		await runtime.lanVoice.stop(ctx);
+-		runtime.voice.resetContextAnnouncements();
+-		runtime.voice.resetSessionContext();
+ 		initializeBashParser();
+ 		runtime.resetTransport();
+ 		state.developerMessages.clear();
+@@ -122,16 +117,8 @@ export function registerCodexEvents(
+ 		state.weeklyUsageLeft = undefined;
+ 		state.executionMode = state.config.executionMode;
+ 		state.activeProviderSystemPrompt = undefined;
+-		state.voiceSystemPromptOverride = undefined;
+ 		proxyProvider.applyConfig(state.config, ctx.modelRegistry);
+ 		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+-		if (state.config.voiceFeaturesOnly) {
+-			clearApplyPatchRenderState();
+-			ui.clearBackgroundWidget();
+-			syncAdapter(pi, ctx, state);
+-			await runtime.configureDiagnostics(ctx);
+-			return;
+-		}
+ 		sessions.setBaseEnv(runtime.execEnv());
+ 		tracker.clear();
+ 		clearApplyPatchRenderState();
+@@ -147,7 +134,6 @@ export function registerCodexEvents(
  		prepareCodeModeHost(codeMode, ctx);
  		if (!state.config.prompt.heavySystemPromptOverwrite)
  			void runtime.startPrewarm(ctx, codeMode.refreshPromptTools(ctx.getSystemPrompt(), ctx));
@@ -2412,16 +2775,132 @@ index 0401a67..da979cd 100644
  	});
  
  	pi.on("thinking_level_select", (event, ctx) => {
-@@ -325,6 +329,8 @@ export function registerCodexEvents(
+@@ -163,16 +149,9 @@ export function registerCodexEvents(
+ 		runtime.resetTransport(ctx.sessionManager.getSessionId());
+ 		state.cwd = ctx.cwd;
+ 		state.activeProviderSystemPrompt = undefined;
+-		state.voiceSystemPromptOverride = undefined;
+ 		state.weeklyUsageLeft = undefined;
+ 		state.promptSkills = extractPiPromptSkills(ctx.getSystemPrompt());
+ 		proxyProvider.applyConfig(state.config, ctx.modelRegistry);
+-		if (state.config.voiceFeaturesOnly) {
+-			ui.clearBackgroundWidget();
+-			syncAdapter(pi, ctx, state);
+-			await runtime.configureDiagnostics(ctx);
+-			return;
+-		}
+ 		const plan = syncAdapter(pi, ctx, state);
+ 		state.contextWindows.ensureInitialized(
+ 			pi,
+@@ -201,7 +180,6 @@ export function registerCodexEvents(
+ 		pendingExtensionToolRefresh = false;
+ 		const previousMode = state.executionMode;
+ 		state.activeProviderSystemPrompt = undefined;
+-		state.voiceSystemPromptOverride = undefined;
+ 		runtime.resetTransport(ctx.sessionManager.getSessionId());
+ 		if (state.contextTree.handleSessionTree(event)) return;
+ 		if (previousMode === "notebook" || state.executionMode === "notebook") appendNotebookTreeEpoch(pi);
+@@ -220,19 +198,8 @@ export function registerCodexEvents(
+ 	});
+ 
+ 	pi.on("message_start", async (event) => {
+-		if (event.message.role === "user")
+-			runtime.voice.piUserMessage(event.message);
+ 		if (event.message.role !== "toolResult" && !isToolCallOnlyAssistantMessage(event.message)) tracker.resetExplorationGroup();
+ 	});
+-	pi.on("message_end", async (event) => {
+-		if (event.message.role === "assistant") {
+-			runtime.voice.finishAgentMessage(
+-				event.message,
+-				state.config.voice.forwardReasoningSummaries,
+-			);
+-			runtime.lanVoice.assistantMessage(event.message);
+-		}
+-	});
+ 	pi.on("turn_end", (event, ctx) => {
+ 		flushCodexReasoningUpdates(pi, ctx);
+ 		if (event.message.role !== "assistant") return;
+@@ -262,11 +229,6 @@ export function registerCodexEvents(
+ 			plan.contextManagement,
+ 		);
+ 	});
+-	pi.on("message_update", async (event) => {
+-		const update = event.assistantMessageEvent;
+-		if (update.type === "text_delta" && typeof update.delta === "string")
+-			runtime.voice.streamDelta(update.delta);
+-	});
+ 	pi.on("tool_execution_start", async (event) => {
+ 		if (event.toolName !== "exec_command") {
+ 			tracker.resetExplorationGroup();
+@@ -286,9 +248,6 @@ export function registerCodexEvents(
+ 		pendingExtensionToolRefresh = false;
+ 		await runShutdownStep(failures, unregisterExtensionToolRefresh);
+ 		await runShutdownStep(failures, () => ui.invalidateBackgroundWidget());
+-		await runShutdownStep(failures, () => runtime.lanVoice.stop(ctx));
+-		await runShutdownStep(failures, () => runtime.voice.stop({ announce: true }));
+-		// Voice's persisted end policy still needs the active developer broker.
+ 		activeContext = undefined;
+ 		await runShutdownStep(failures, unregisterDeveloperMessageBroker);
+ 		await runShutdownStep(failures, () => runtime.shutdownTransport(ctx.sessionManager.getSessionId()));
+@@ -318,17 +277,16 @@ export function registerCodexEvents(
+ 				plan.contextManagement,
+ 			);
+ 		}
+-		if (event.source !== "extension")
+-			runtime.voice.piInput(event.text, event.streamingBehavior);
+ 	});
+ 	pi.on("before_agent_start", async (event, ctx) => {
  		state.contextWindows.clearTurnNotes();
  		state.contextTree.handoff.preparing(event.prompt);
- 		if (!state.config.voiceFeaturesOnly) await reserve.beforeTurn(ctx);
+-		if (!state.config.voiceFeaturesOnly) await reserve.beforeTurn(ctx);
++		await reserve.beforeTurn(ctx);
 +		// Resolve the final run model before rendering or warming its prompt.
 +		pi.events.emit("metis:dynamic-agents", { kind: "prepare", options: event.systemPromptOptions, ctx });
  		runtime.autoReasoning.begin(ctx);
  		turnPrewarm = undefined;
  		const systemPrompt = event.systemPrompt;
-@@ -406,6 +412,7 @@ export function registerCodexEvents(
+-		state.voiceSystemPromptOverride = undefined;
+ 		if (!isAdapterRuntime(resolveCodexRuntimePlanForState(ctx, state))) {
+ 			state.activeProviderSystemPrompt = undefined;
+ 			state.pendingActiveProviderPromptCapture = false;
+@@ -355,14 +313,6 @@ export function registerCodexEvents(
+ 		state.contextTree.handoff.started(ctx);
+ 		runtime.autoReasoning.begin(ctx);
+ 		runtime.cancelCacheKeepalive();
+-		runtime.voice.agentStarted();
+-		runtime.lanVoice.agentStarted();
+-	});
+-	pi.on("ui_prompt_start", async (event) => {
+-		runtime.lanVoice.uiPromptStarted(event.title);
+-	});
+-	pi.on("ui_prompt_end", async (_event, ctx) => {
+-		runtime.lanVoice.uiPromptEnded(!ctx.isIdle());
+ 	});
+ 	pi.on("agent_settled", async (_event, ctx) => {
+ 		state.contextWindows.settleTurn(ctx);
+@@ -373,7 +323,7 @@ export function registerCodexEvents(
+ 			|| state.contextTree.rolloverPending || state.contextKickoff.pending;
+ 		if (!continuingWork) runtime.autoReasoning.settle(ctx);
+ 		// Reserve must capture the user's restored level, never a temporary Astra override.
+-		const quotaExhausted = !continuingWork && !state.config.voiceFeaturesOnly && await reserve.settled(ctx);
++		const quotaExhausted = !continuingWork && await reserve.settled(ctx);
+ 		let rolled = false;
+ 		let continued = false;
+ 		try {
+@@ -383,11 +333,8 @@ export function registerCodexEvents(
+ 				syncAdapter(pi, ctx, state);
+ 			}
+ 			state.pendingActiveProviderPromptCapture = false;
+-			state.voiceSystemPromptOverride = undefined;
+ 			state.codexTurnState.reset();
+-			runtime.voice.settleTurn();
+-			runtime.lanVoice.agentSettled();
+-			if (!state.config.voiceFeaturesOnly) void ui.refreshUsageStatus(ctx);
++			void ui.refreshUsageStatus(ctx);
+ 			rolled = await state.contextTree.settle(pi, ctx) || await state.contextKickoff.settlePostCompaction(pi, ctx);
+ 			if (rolled) runtime.resetTransportAfterCompaction(ctx.sessionManager.getSessionId());
+ 			state.contextTree.handoff.settled(ctx);
+@@ -406,6 +353,7 @@ export function registerCodexEvents(
  		rewriteCodexProviderHeaders(event.headers, ctx, state);
  	});
  	pi.on("session_before_compact", async (event, ctx) => {
@@ -2429,7 +2908,15 @@ index 0401a67..da979cd 100644
  		if (state.contextTree.handoff.active) return { cancel: true };
  		state.cwd = ctx.cwd;
  		const plan = resolveCodexRuntimePlanForState(
-@@ -429,9 +436,14 @@ export function registerCodexEvents(
+@@ -421,35 +369,24 @@ export function registerCodexEvents(
+ 			: undefined;
+ 		if (contextManagementResult && "cancel" in contextManagementResult)
+ 			return contextManagementResult;
+-		if (event.reason !== "manual") runtime.voice.announceContextTransition(event.reason);
+ 		const nativeCompaction = plan.nativeCompaction;
+-		if (nativeCompaction || plan.contextManagement)
+-			runtime.voice.compactionStarted();
+ 		try {
  			await codeMode.checkpointNotebook();
  		} catch (error) {
  			ctx.ui.notify(`Notebook checkpoint before compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
@@ -2437,19 +2924,277 @@ index 0401a67..da979cd 100644
  		}
  		if (contextManagementResult) return contextManagementResult;
 -		if (!nativeCompaction) return undefined;
+-		try {
+-			const result = await handleCodexSessionBeforeCompact(
+-				event,
+-				ctx,
+-				state,
+-				pi,
+-			);
+-			if (!result?.compaction) runtime.voice.compactionFinished();
+-			return result;
+-		} catch (error) {
+-			runtime.voice.compactionFinished();
+-			throw error;
 +		if (!nativeCompaction) {
 +			const request: { event: typeof event; ctx: typeof ctx; promise?: Promise<any> } = { event, ctx };
 +			pi.events.emit("metis:occ-prepare", request);
 +			return request.promise ? await request.promise : undefined;
+ 		}
++		return handleCodexSessionBeforeCompact(event, ctx, state, pi);
+ 	});
+ 	pi.on("session_compact_failed", async (event, ctx) => {
+ 		if (state.contextWindows.isHybridCompactionRunning()) runtime.autoReasoning.settle(ctx);
+ 		state.pendingPiCompactionNativeWindow = undefined;
+-		runtime.voice.compactionFinished();
+ 		const plan = resolveCodexRuntimePlanForState(ctx, state);
+ 		const reuseNotes = state.contextWindows.finishManualCheckpointRequest(
+ 			pi, ctx, event, plan.contextManagement && !plan.contextManagementHybrid,
+@@ -471,85 +408,77 @@ export function registerCodexEvents(
+ 		}
+ 	});
+ 	pi.on("session_compact", async (event, ctx) => {
+-		try {
+-			runtime.voice.resetContextAnnouncements();
+-			state.pendingPiCompactionNativeWindow = undefined;
+-			state.contextWindows.recordCompaction(event.compactionEntry.details);
+-			const plan = resolveCodexRuntimePlanForState(ctx, state);
+-			let nativeCompaction = false;
+-			let treeRolloverScheduled = false;
+-			const contextCompaction =
+-				event.fromExtension &&
+-				isContextWindowCompactionDetails(event.compactionEntry.details);
+-			const compactionEntry = findLatestCompactionEntry(ctx.sessionManager.getBranch());
+-			if (event.fromExtension && compactionEntry && isNativeCompactionDetails(compactionEntry.details)) {
+-				const details = compactionEntry.details;
+-				nativeCompaction = true;
+-				// Presentation entries persist and render without entering Pi's turn queue or LLM context.
++		state.pendingPiCompactionNativeWindow = undefined;
++		state.contextWindows.recordCompaction(event.compactionEntry.details);
++		const plan = resolveCodexRuntimePlanForState(ctx, state);
++		let nativeCompaction = false;
++		let treeRolloverScheduled = false;
++		const contextCompaction =
++			event.fromExtension &&
++			isContextWindowCompactionDetails(event.compactionEntry.details);
++		const compactionEntry = findLatestCompactionEntry(ctx.sessionManager.getBranch());
++		if (event.fromExtension && compactionEntry && isNativeCompactionDetails(compactionEntry.details)) {
++			const details = compactionEntry.details;
++			nativeCompaction = true;
++			// Presentation entries persist and render without entering Pi's turn queue or LLM context.
++			pi.appendEntry<NativeCompactionDisplayEntry>(NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, {
++				content: hasPortableNativeCompactionSummary(compactionEntry)
++					? NATIVE_COMPACTION_PORTABLE_DISPLAY_TEXT
++					: NATIVE_COMPACTION_DISPLAY_TEXT,
++				compactionEntryId: compactionEntry.id,
++			});
++			if (details.strategy === NATIVE_COMPACTION_STRATEGY && details.usage) {
+ 				pi.appendEntry<NativeCompactionDisplayEntry>(NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, {
+-					content: hasPortableNativeCompactionSummary(compactionEntry)
+-						? NATIVE_COMPACTION_PORTABLE_DISPLAY_TEXT
+-						: NATIVE_COMPACTION_DISPLAY_TEXT,
++					content: formatCompactionUsage(details.usage),
+ 					compactionEntryId: compactionEntry.id,
++					kind: "usage",
+ 				});
+-				if (details.strategy === NATIVE_COMPACTION_STRATEGY && details.usage) {
+-					pi.appendEntry<NativeCompactionDisplayEntry>(NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE, {
+-						content: formatCompactionUsage(details.usage),
+-						compactionEntryId: compactionEntry.id,
+-						kind: "usage",
+-					});
+-				}
+ 			}
+-			if (plan.contextManagementHybrid) {
+-				if (plan.contextManagementMode === "tree" && compactionEntry) {
+-					const requested = state.contextWindows.isHybridCompactionRunning();
+-					treeRolloverScheduled = state.contextTree.schedule(ctx, {
+-						compactionEntryId: compactionEntry.id,
+-						triggerTurn: requested || event.reason === "overflow",
+-					});
+-					if (event.reason === "manual" && !requested) {
+-						await state.contextTree.settle(pi, ctx);
+-						treeRolloverScheduled = false;
+-					}
+-				} else if (event.reason === "overflow") {
+-					state.contextKickoff.schedulePostCompactionWindow(ctx, {
+-						mode: plan.contextManagementMode, triggerTurn: true, trimPreviousWindow: false,
+-					});
+-				} else await state.contextWindows.completeHybridCompaction(pi, ctx, plan.contextManagementMode);
+-			} else if (
+-				contextCompaction &&
+-				event.reason === "overflow"
+-			) {
+-				if (plan.contextManagementMode === "tree") {
+-					treeRolloverScheduled = state.contextTree.schedule(ctx, {
+-						sourceLeafId: compactionEntry?.parentId ?? undefined,
+-					});
+-				} else {
+-					state.contextKickoff.schedulePostCompactionWindow(ctx, {
+-						triggerTurn: true,
+-						mode: plan.contextManagementMode,
+-						trimPreviousWindow: false,
+-						sourceLeafId: compactionEntry?.parentId ?? undefined,
+-					});
 +		}
- 		try {
- 			const result = await handleCodexSessionBeforeCompact(
- 				event,
++		if (plan.contextManagementHybrid) {
++			if (plan.contextManagementMode === "tree" && compactionEntry) {
++				const requested = state.contextWindows.isHybridCompactionRunning();
++				treeRolloverScheduled = state.contextTree.schedule(ctx, {
++					compactionEntryId: compactionEntry.id,
++					triggerTurn: requested || event.reason === "overflow",
++				});
++				if (event.reason === "manual" && !requested) {
++					await state.contextTree.settle(pi, ctx);
++					treeRolloverScheduled = false;
+ 				}
++			} else if (event.reason === "overflow") {
++				state.contextKickoff.schedulePostCompactionWindow(ctx, {
++					mode: plan.contextManagementMode, triggerTurn: true, trimPreviousWindow: false,
++				});
++			} else await state.contextWindows.completeHybridCompaction(pi, ctx, plan.contextManagementMode);
++		} else if (
++			contextCompaction &&
++			event.reason === "overflow"
++		) {
++			if (plan.contextManagementMode === "tree") {
++				treeRolloverScheduled = state.contextTree.schedule(ctx, {
++					sourceLeafId: compactionEntry?.parentId ?? undefined,
++				});
++			} else {
++				state.contextKickoff.schedulePostCompactionWindow(ctx, {
++					triggerTurn: true,
++					mode: plan.contextManagementMode,
++					trimPreviousWindow: false,
++					sourceLeafId: compactionEntry?.parentId ?? undefined,
++				});
+ 			}
+-			const postCompactionPrompt = codeMode.refreshPromptTools(
+-				state.activeProviderSystemPrompt ?? ctx.getSystemPrompt(),
+-				ctx,
+-			);
+-			state.activeProviderSystemPrompt = postCompactionPrompt;
+-			if (!treeRolloverScheduled) {
+-				runtime.resetTransportAfterCompaction(ctx.sessionManager.getSessionId());
+-				// Tool-requested rollover appends its marker in onComplete; do not prewarm the old window.
+-				if (!state.contextWindows.isHybridCompactionRunning() && !state.contextKickoff.pending) await (nativeCompaction
+-					? runtime.startCompactionPrewarm(ctx)
+-					: runtime.startPrewarm(ctx, postCompactionPrompt, true));
+-			}
+-			// Hybrid refreshes at its window boundary, after compaction and before continuation.
+-			if (!contextCompaction && !plan.contextManagementHybrid)
+-				await runtime.voice.refreshRealtimeContext(ctx, state.config);
+-		} finally {
+-			runtime.voice.compactionFinished();
++		}
++		const postCompactionPrompt = codeMode.refreshPromptTools(
++			state.activeProviderSystemPrompt ?? ctx.getSystemPrompt(),
++			ctx,
++		);
++		state.activeProviderSystemPrompt = postCompactionPrompt;
++		if (!treeRolloverScheduled) {
++			runtime.resetTransportAfterCompaction(ctx.sessionManager.getSessionId());
++			// Tool-requested rollover appends its marker in onComplete; do not prewarm the old window.
++			if (!state.contextWindows.isHybridCompactionRunning() && !state.contextKickoff.pending) await (nativeCompaction
++				? runtime.startCompactionPrewarm(ctx)
++				: runtime.startPrewarm(ctx, postCompactionPrompt, true));
+ 		}
+ 	});
+ 	pi.on("context", async (event, ctx) => {
+diff --git a/src/extension/register.ts b/src/extension/register.ts
+index 31171b6..dbdd1c1 100644
+--- a/src/extension/register.ts
++++ b/src/extension/register.ts
+@@ -8,13 +8,11 @@ import { prepareCodeModeHost, registerCodexEvents } from "./events.ts";
+ import { createCodexExtensionRuntime } from "./runtime.ts";
+ import { registerCodexTools } from "./tools.ts";
+ import { registerCodexUi } from "./ui.ts";
+-import { registerCodexVoiceRenderer } from "../voice/ui.ts";
+ import { resolveCodexRuntimePlanForState } from "../adapter/activation/runtime-plan.ts";
+ import { captureActiveProviderSystemPrompt } from "../adapter/provider-request.ts";
+ import { hasCodexCacheKeepalivePlanChanged } from "../adapter/activation/cache-keepalive.ts";
+ 
+ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
+-	registerCodexVoiceRenderer(pi);
+ 	registerApplyPatchDisplayBroker(pi);
+ 	const runtime = createCodexExtensionRuntime(pi);
+ 	runtime.state.contextTree.register(pi);
+@@ -36,7 +34,7 @@ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
+ 		cleanupProxyProvider = proxyProvider;
+ 		const tools = registerCodexTools(pi, runtime);
+ 		const ui = registerCodexUi(pi, runtime);
+-		registerCodexCommand(pi, runtime.state, runtime.voice, runtime.lanVoice, (config, ctx, previousConfig) => {
++		registerCodexCommand(pi, runtime.state, (config, ctx, previousConfig) => {
+ 			const executionModeChanged = config.executionMode !== previousConfig.executionMode;
+ 			const contextManagementChanged =
+ 				config.compaction.contextManagement !==
+@@ -73,8 +71,7 @@ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
+ 				runtime.cancelCacheKeepalive();
+ 			}
+ 			if (
+-				config.voiceFeaturesOnly !== previousConfig.voiceFeaturesOnly
+-				|| executionModeChanged
++				executionModeChanged
+ 				|| config.prompt.heavySystemPromptOverwrite !== previousConfig.prompt.heavySystemPromptOverwrite
+ 				|| config.openai.fast !== previousConfig.openai.fast
+ 				|| config.openai.harnessIdentifierHeader !== previousConfig.openai.harnessIdentifierHeader
+@@ -84,11 +81,7 @@ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
+ 			) {
+ 				runtime.resetTransport(ctx.sessionManager.getSessionId());
+ 			}
+-			if (config.voiceFeaturesOnly && !previousConfig.voiceFeaturesOnly) {
+-				void codeMode.shutdownHost().catch((error: unknown) => {
+-					ctx.ui.notify(`Could not stop Code Mode host: ${error instanceof Error ? error.message : String(error)}`, "warning");
+-				});
+-			} else if (executionModeChanged) {
++			if (executionModeChanged) {
+ 				void codeMode.shutdownHost()
+ 					.then(() => prepareCodeModeHost(codeMode, ctx))
+ 					.catch((error: unknown) => {
 diff --git a/src/extension/runtime.ts b/src/extension/runtime.ts
-index f35fc64..ecb8cdd 100644
+index f35fc64..e95736b 100644
 --- a/src/extension/runtime.ts
 +++ b/src/extension/runtime.ts
-@@ -187,6 +187,9 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -20,8 +20,6 @@ import { createExecCommandTracker } from "../tools/exec/command-state.ts";
+ import { createExecSessionManager } from "../tools/exec/session-manager.ts";
+ import { getBundledToolBinaryPath } from "../tools/native/binary.ts";
+ import type { BackgroundBashWidgetState } from "../ui/background-bash-widget.ts";
+-import { CodexVoiceController } from "../voice/controller.ts";
+-import { CodexLanVoiceServerController } from "../voice/lan/controller.ts";
+ import { getActiveToolsInActiveOrder } from "../adapter/active-tools.ts";
+ import { createLazyCodexDiagnostics } from "../diagnostics/lazy.ts";
+ import type { CodexDiagnosticsSink } from "../providers/openai-codex/types.ts";
+@@ -48,8 +46,6 @@ export interface CodexExtensionRuntime {
+ 	tracker: ReturnType<typeof createExecCommandTracker>;
+ 	sessions: ReturnType<typeof createExecSessionManager>;
+ 	backgroundWidget: BackgroundBashWidgetState;
+-	voice: CodexVoiceController;
+-	lanVoice: CodexLanVoiceServerController;
+ 	projectContextMessages(ctx: CodexContext, messages?: readonly AgentMessage[]): AgentMessage[];
+ 	execEnv(config?: CodexConversionConfig): NodeJS.ProcessEnv;
+ 	codexSystemPrompt(basePrompt: string, ctx: CodexContext, skills?: AdapterState["promptSkills"], systemPromptOptions?: PiSystemPromptOptions): string;
+@@ -84,18 +80,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 		console.warn(`[pi-codex-conversion] ${warning}`);
+ 	}
+ 	const initialConfig = readEffectiveCodexConversionConfig({ cwd: process.cwd(), projectTrusted: false });
+-	const voice = new CodexVoiceController(pi);
+-	const contextWindows = new CodexContextWindowManager(undefined, async (ctx, options) => {
+-		voice.announceContextTransition("rollover");
+-		await voice.refreshRealtimeContext(ctx, state.config, options);
+-	});
+-	const contextKickoff = new CodexContextWindowKickoff(contextWindows, (input) => {
+-		// Extension kickoffs bypass ordinary voice input routing, including after call replacement.
+-		const text = typeof input === "string" ? input : input
+-			.flatMap((part) => part.type === "text" ? [part.text] : [])
+-			.join("\n");
+-		voice.piInput(text.trim() ? text : "Continue.");
+-	});
++	const contextWindows = new CodexContextWindowManager();
++	const contextKickoff = new CodexContextWindowKickoff(contextWindows);
+ 	const state: AdapterState = {
+ 		enabled: false,
+ 		cwd: process.cwd(),
+@@ -187,6 +173,9 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  		requestSource?: "captured" | "reconstructed",
  		generate = false,
  	): Promise<CodexPrewarmResult> | undefined => {
@@ -2459,7 +3204,7 @@ index f35fc64..ecb8cdd 100644
  		const plan = buildPrewarmPlan(ctx, systemPrompt, prepared, messages, rewriteFinalRequest, kind === "keepalive");
  		if (!plan) return undefined;
  		const { model, config, executionMode, preparedSystemPrompt, tools, reasoning, key: requestKey } = plan;
-@@ -275,7 +278,7 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -275,7 +264,7 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  		return promise;
  	};
  
@@ -2468,7 +3213,7 @@ index f35fc64..ecb8cdd 100644
  		const plan = resolveCodexRuntimePlanForState(ctx, state);
  		const branch = ctx.sessionManager.getBranch();
  		const allEntries = plan.contextManagementMode === "tree" ? ctx.sessionManager.getEntries() : branch;
-@@ -288,13 +291,25 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -288,13 +277,25 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  			allEntries,
  			plan.contextManagementHybrid,
  		);
@@ -2496,7 +3241,7 @@ index f35fc64..ecb8cdd 100644
  				supportsCodexDeveloperMessages(ctx, state),
  				ctx.model,
  			),
-@@ -308,11 +323,13 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -308,11 +309,13 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  		if (kind === "keepalive" && !keepalivePlan) return undefined;
  		const preserveContinuation = kind === "keepalive";
  		const activeSystemPrompt = state.activeProviderSystemPrompt;
@@ -2511,7 +3256,24 @@ index f35fc64..ecb8cdd 100644
  			true,
  			kind === "keepalive",
  			kind,
-@@ -443,7 +460,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+@@ -382,16 +385,6 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
+ 		tracker,
+ 		sessions,
+ 		backgroundWidget: { folded: true },
+-		voice,
+-		lanVoice: new CodexLanVoiceServerController(
+-			voice,
+-			() => state.config,
+-			(text, ctx) => {
+-				if (ctx.isIdle()) pi.sendUserMessage(text);
+-				else pi.sendUserMessage(text, { deliverAs: "steer" });
+-			},
+-			dirname(getCodexConversionConfigPath()),
+-		),
+ 		execEnv(_config = state.config) {
+ 			return { ...process.env };
+ 		},
+@@ -443,7 +436,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
  			closeOpenAICodexWebSocketSessions(sessionId);
  		},
  		waitForPrewarm(ctx, systemPrompt) {
@@ -2522,7 +3284,7 @@ index f35fc64..ecb8cdd 100644
  		prewarmIdentity(ctx, systemPrompt) {
  			return buildPrewarmPlan(ctx, systemPrompt, true, [], false)?.identity;
 diff --git a/src/extension/tools.ts b/src/extension/tools.ts
-index 315ca24..807b539 100644
+index 315ca24..89e5cf0 100644
 --- a/src/extension/tools.ts
 +++ b/src/extension/tools.ts
 @@ -1,3 +1,5 @@
@@ -2541,19 +3303,90 @@ index 315ca24..807b539 100644
  			customRustBinariesDir: config.tools.customRustBinariesDir,
  			showDiffWhenCollapsed: config.ui.compactTools === "off",
  		});
-@@ -79,6 +84,10 @@ export function registerCodexTools(
+@@ -77,11 +82,14 @@ export function registerCodexTools(
+ 			...renderOptions(config),
+ 		});
  	};
- 	if (!runtime.state.config.voiceFeaturesOnly)
- 		registerCore(runtime.state.config);
+-	if (!runtime.state.config.voiceFeaturesOnly)
++	registerCore(runtime.state.config);
 +	// All entry factories have completed by session_start, regardless of order.
 +	pi.on("session_start", () => {
-+		if (!runtime.state.config.voiceFeaturesOnly) registerCore(runtime.state.config);
+ 		registerCore(runtime.state.config);
 +	});
  	return {
  		applyConfig(config) {
- 			if (!config.voiceFeaturesOnly) registerCore(config);
+-			if (!config.voiceFeaturesOnly) registerCore(config);
++			registerCore(config);
+ 			runtime.sessions.setBaseEnv(runtime.execEnv(config));
+ 		},
+ 		shutdown() {
+diff --git a/src/extension/ui.ts b/src/extension/ui.ts
+index e8aacee..012c700 100644
+--- a/src/extension/ui.ts
++++ b/src/extension/ui.ts
+@@ -46,14 +46,14 @@ export function registerCodexUi(pi: ExtensionAPI, runtime: CodexExtensionRuntime
+ 		if (generation !== backgroundWidgetGeneration) return;
+ 		const ctx = runtime.backgroundWidget.ctx;
+ 		if (!ctx) return;
+-		if (runtime.state.config.voiceFeaturesOnly || !runtime.state.config.ui.backgroundShellWidget) {
++		if (!runtime.state.config.ui.backgroundShellWidget) {
+ 			clearBackgroundWidget();
+ 			return;
+ 		}
+ 		renderBackgroundBashWidget(ctx, runtime.backgroundWidget, runtime.sessions);
+ 	};
+ 
+-	registerBackgroundBashWidgetShortcuts(pi, runtime.backgroundWidget, runtime.sessions, runtime.state.config.ui, () => !runtime.state.config.voiceFeaturesOnly && runtime.state.config.ui.backgroundShellWidget);
++	registerBackgroundBashWidgetShortcuts(pi, runtime.backgroundWidget, runtime.sessions, runtime.state.config.ui, () => runtime.state.config.ui.backgroundShellWidget);
+ 	const renderNativeCompaction = (
+ 		content: string,
+ 		kind: NativeCompactionDisplayEntry["kind"],
+@@ -92,7 +92,7 @@ export function registerCodexUi(pi: ExtensionAPI, runtime: CodexExtensionRuntime
+ 		);
+ 	});
+ 	runtime.sessions.onSessionChange((reason) => {
+-		if (!runtime.backgroundWidget.ctx || runtime.state.config.voiceFeaturesOnly || !runtime.state.config.ui.backgroundShellWidget) return;
++		if (!runtime.backgroundWidget.ctx || !runtime.state.config.ui.backgroundShellWidget) return;
+ 		if (reason === "output") {
+ 			if (renderTimer) return;
+ 			const generation = backgroundWidgetGeneration;
+@@ -111,7 +111,7 @@ export function registerCodexUi(pi: ExtensionAPI, runtime: CodexExtensionRuntime
+ 	};
+ 	const refreshUsageStatus = async (ctx: ExtensionContext) => {
+ 		const generation = ++usageGeneration;
+-		if (!ctx.hasUI || runtime.state.config.voiceFeaturesOnly || !runtime.state.config.ui.statusLine) {
++		if (!ctx.hasUI || !runtime.state.config.ui.statusLine) {
+ 			runtime.state.weeklyUsageLeft = undefined;
+ 			return;
+ 		}
+@@ -121,7 +121,6 @@ export function registerCodexUi(pi: ExtensionAPI, runtime: CodexExtensionRuntime
+ 		if (
+ 			generation !== usageGeneration ||
+ 			!ctx.hasUI ||
+-			runtime.state.config.voiceFeaturesOnly ||
+ 			!runtime.state.config.ui.statusLine ||
+ 			!isAdapterRuntime(plan)
+ 		) return;
+@@ -136,15 +135,14 @@ export function registerCodexUi(pi: ExtensionAPI, runtime: CodexExtensionRuntime
+ 		invalidateUsageStatus,
+ 		refreshUsageStatus,
+ 		applyConfig(config, ctx, previousConfig) {
+-			if (config.voiceFeaturesOnly || !config.ui.statusLine) {
++			if (!config.ui.statusLine) {
+ 				invalidateUsageStatus();
+ 			} else if (
+-				previousConfig.voiceFeaturesOnly ||
+ 				!previousConfig.ui.statusLine
+ 			) {
+ 				void refreshUsageStatus(ctx);
+ 			}
+-			if (config.voiceFeaturesOnly || !config.ui.backgroundShellWidget) clearBackgroundWidget();
++			if (!config.ui.backgroundShellWidget) clearBackgroundWidget();
+ 			else renderBackgroundWidget();
+ 		},
+ 	};
 diff --git a/src/providers/code-mode-proxy-provider.ts b/src/providers/code-mode-proxy-provider.ts
-index b1e1cb2..762a3dd 100644
+index b1e1cb2..86a817a 100644
 --- a/src/providers/code-mode-proxy-provider.ts
 +++ b/src/providers/code-mode-proxy-provider.ts
 @@ -8,6 +8,7 @@ import {
@@ -2573,6 +3406,14 @@ index b1e1cb2..762a3dd 100644
  			const effectiveOptions = { ...options, grammarToolInputProperties };
  			let headers = mergeHeaders(model.headers, options?.headers);
  			let body: ResponsesBody = buildRequestBody(model, context, effectiveOptions);
+@@ -183,7 +184,6 @@ function resolveProviderApis(
+ 		const mode = executionMode ?? config.executionMode;
+ 		const configuredResponsesLite =
+ 			model.api === "openai-responses" &&
+-			!config.voiceFeaturesOnly &&
+ 			(mode === "code" || mode === "notebook") &&
+ 			config.openai.proxyResponsesLite &&
+ 			config.scope.additionalProviders.includes(
 diff --git a/src/providers/openai-codex/model-catalog.ts b/src/providers/openai-codex/model-catalog.ts
 index dff3dc5..01e79d8 100644
 --- a/src/providers/openai-codex/model-catalog.ts
@@ -3380,7 +4221,7 @@ index dc12154..17c9799 100644
  					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
 diff --git a/src/providers/transcript.ts b/src/providers/transcript.ts
 new file mode 100644
-index 0000000..e5dae54
+index 0000000..7a2acfe
 --- /dev/null
 +++ b/src/providers/transcript.ts
 @@ -0,0 +1,233 @@
@@ -3486,7 +4327,7 @@ index 0000000..e5dae54
 +
 +/**
 + * Context for host APIs that consume a normalized transcript (Pi 0.86 `streamSimple`
-+ * entry points). Internal callers that bypass the model registry (voice context, remote
++ * entry points). Internal callers that bypass the model registry (remote
 + * compaction v2, portable summaries) build plain `Context` objects, so fold them here.
 + * The transcript brand exists only in the host type; the runtime value is the folded
 + * `{ messages }` shape the host produces itself.
@@ -5563,6 +6404,142 @@ index dcb9847..a215fd1 100644
  		},
  	});
  	pi.registerShortcut(config.backgroundShellPrevShortcut as "alt+q", {
+diff --git a/src/ui/settings/command.ts b/src/ui/settings/command.ts
+index d0c8e67..6b0041d 100644
+--- a/src/ui/settings/command.ts
++++ b/src/ui/settings/command.ts
+@@ -16,21 +16,15 @@ import {
+ } from "../../adapter/activation/config-store.ts";
+ import { syncAdapter } from "../../adapter/activation/activation.ts";
+ import type { AdapterState } from "../../adapter/activation/state.ts";
+-import type { CodexVoiceController } from "../../voice/controller.ts";
+-import { createCodexVoiceControls } from "../../voice/controls.ts";
+-import type { CodexLanVoiceServerController } from "../../voice/lan/controller.ts";
+ import { ROUTABLE_SETTINGS_TABS, parseSettingsTab, type SettingsTab } from "./tabs.ts";
+ import { openCodexSettingsScreen } from "./screen.ts";
+ 
+-const VOICE_ACTIONS = ["voice realtime", "voice mute", "voice dictation", "voice stop", "voice server", "voice setup"] as const;
+-const CODEX_COMMAND_COMPLETIONS = [...ROUTABLE_SETTINGS_TABS.map(({ id }) => id), ...VOICE_ACTIONS];
+-const CODEX_USAGE = "Usage: /codex [context|tools|openai|display|voice [realtime|mute|dictation|stop|server|setup]|usage|about]";
++const CODEX_COMMAND_COMPLETIONS = ROUTABLE_SETTINGS_TABS.map(({ id }) => id);
++const CODEX_USAGE = "Usage: /codex [context|tools|openai|display|usage|about]";
+ 
+ export function registerCodexCommand(
+ 	pi: ExtensionAPI,
+ 	state: AdapterState,
+-	voice: CodexVoiceController,
+-	lanVoice: CodexLanVoiceServerController,
+ 	onConfigApplied?: (config: CodexConversionConfig, ctx: ExtensionContext, previousConfig: CodexConversionConfig) => void,
+ ): void {
+ 	function effectiveConfig(ctx: ExtensionContext): CodexConversionConfig {
+@@ -66,8 +60,6 @@ export function registerCodexCommand(
+ 		return true;
+ 	}
+ 
+-	const voiceControls = createCodexVoiceControls({ pi, state, voice, lanVoice });
+-
+ 	async function openSettings(ctx: ExtensionContext, tab: SettingsTab): Promise<void> {
+ 		if (!ctx.hasUI) {
+ 			if (tab === "usage") {
+@@ -155,10 +147,6 @@ export function registerCodexCommand(
+ 					return readSelectedConfig();
+ 				},
+ 			},
+-			lanVoiceServer: {
+-				status: () => lanVoice.status(),
+-				setEnabled: (enabled) => setLanVoiceServerEnabled(lanVoice, enabled, ctx),
+-			},
+ 		});
+ 	}
+ 
+@@ -170,40 +158,6 @@ export function registerCodexCommand(
+ 			state.config = effectiveConfig(ctx);
+ 			const arg = args.trim().toLowerCase();
+ 
+-			if (arg === "voice setup") {
+-				await ctx.waitForIdle();
+-				await voiceControls.setup(ctx);
+-				return;
+-			}
+-
+-			if (arg === "voice realtime" || arg === "voice dictation") {
+-				if (ctx.mode !== "tui") { ctx.ui.notify("Codex voice requires interactive TUI mode", "error"); return; }
+-				await ctx.waitForIdle();
+-				await voiceControls.start(arg === "voice dictation" ? "dictation" : "realtime", ctx);
+-				return;
+-			}
+-			if (arg === "voice stop") {
+-				if (ctx.mode !== "tui") { ctx.ui.notify("Codex voice requires interactive TUI mode", "error"); return; }
+-				await voiceControls.stop(ctx);
+-				return;
+-			}
+-			if (arg === "voice mute") {
+-				if (ctx.mode !== "tui") { ctx.ui.notify("Codex voice requires interactive TUI mode", "error"); return; }
+-				voiceControls.toggleInputMute(ctx);
+-				return;
+-			}
+-			if (arg === "voice server") {
+-				if (ctx.mode !== "tui") { ctx.ui.notify("LAN voice server requires interactive TUI mode", "error"); return; }
+-				const enabled = !lanVoice.status().running;
+-				try {
+-					await lanVoice.setEnabled(enabled, ctx);
+-					if (!enabled) ctx.ui.notify("LAN voice server stopped", "info");
+-				} catch (error) {
+-					ctx.ui.notify(`Could not ${enabled ? "start" : "stop"} LAN voice: ${error instanceof Error ? error.message : String(error)}`, "error");
+-				}
+-				return;
+-			}
+-
+ 			const tab = arg ? parseSettingsTab(arg) : "adapter";
+ 			if (tab) {
+ 				await openSettings(ctx, tab);
+@@ -214,19 +168,10 @@ export function registerCodexCommand(
+ 	});
+ }
+ 
+-async function setLanVoiceServerEnabled(lanVoice: CodexLanVoiceServerController, enabled: boolean, ctx: ExtensionContext) {
+-	try {
+-		return await lanVoice.setEnabled(enabled, ctx);
+-	} catch (error) {
+-		ctx.ui.notify(`Could not ${enabled ? "start" : "stop"} LAN voice: ${error instanceof Error ? error.message : String(error)}`, "error");
+-		throw error;
+-	}
+-}
+-
+ function formatAllProvidersMode(value: CodexConversionConfig["scope"]["allProviders"]): string {
+ 	return value === "extras" ? "only extras" : value;
+ }
+ 
+ function formatCodexSettings(config: CodexConversionConfig): string {
+-	return `Codex settings: extension ${config.voiceFeaturesOnly ? "voice only" : "adapter and voice"}, execution ${config.executionMode}, providers ${formatAllProvidersMode(config.scope.allProviders)}, Rust binaries ${config.tools.customRustBinariesDir || "bundled"}, heavy prompt overwrite ${config.prompt.heavySystemPromptOverwrite ? "on" : "off"}, harness identifier ${config.openai.harnessIdentifierHeader ? "on" : "off"}, Proxy Responses Lite ${config.openai.proxyResponsesLite ? "on" : "off"}, context management ${config.compaction.contextManagement}, compaction ${config.compaction.hybridCompaction ? "hybrid (V2 where supported, Pi elsewhere)" : config.compaction.contextManagement !== "off" ? "notes only" : config.compaction.responsesCompaction ? "V2" : "Pi"}, portable summary ${config.compaction.portableSummary ? "on" : "off"}, Luna cache keepalive ${config.openai.lunaCacheKeepaliveMinutes === 0 ? "off" : `${config.openai.lunaCacheKeepaliveMinutes} mins`}, Sol/Terra cache keepalive ${config.openai.cacheKeepalive ? "25 mins" : "off"}, cache diagnostics ${config.openai.cacheDiagnostics}, fast ${config.openai.fast ? "on" : "off"}, verbosity ${config.openai.verbosity}`;
++	return `Codex settings: execution ${config.executionMode}, providers ${formatAllProvidersMode(config.scope.allProviders)}, Rust binaries ${config.tools.customRustBinariesDir || "bundled"}, heavy prompt overwrite ${config.prompt.heavySystemPromptOverwrite ? "on" : "off"}, harness identifier ${config.openai.harnessIdentifierHeader ? "on" : "off"}, Proxy Responses Lite ${config.openai.proxyResponsesLite ? "on" : "off"}, context management ${config.compaction.contextManagement}, compaction ${config.compaction.hybridCompaction ? "hybrid (V2 where supported, Pi elsewhere)" : config.compaction.contextManagement !== "off" ? "notes only" : config.compaction.responsesCompaction ? "V2" : "Pi"}, portable summary ${config.compaction.portableSummary ? "on" : "off"}, Luna cache keepalive ${config.openai.lunaCacheKeepaliveMinutes === 0 ? "off" : `${config.openai.lunaCacheKeepaliveMinutes} mins`}, Sol/Terra cache keepalive ${config.openai.cacheKeepalive ? "25 mins" : "off"}, cache diagnostics ${config.openai.cacheDiagnostics}, fast ${config.openai.fast ? "on" : "off"}, verbosity ${config.openai.verbosity}`;
+ }
+diff --git a/src/ui/settings/config-items-adapter.ts b/src/ui/settings/config-items-adapter.ts
+index 4879c14..7aa469c 100644
+--- a/src/ui/settings/config-items-adapter.ts
++++ b/src/ui/settings/config-items-adapter.ts
+@@ -15,21 +15,6 @@ export function buildAdapterSettings(
+ 	theme: Theme,
+ ): ConfigSetting[] {
+ 	return [
+-		setting(
+-			{
+-				id: "extensionMode",
+-				description: "Voice only disables the prompt and tool adapter. Standalone tools remain controlled by Provider scope.",
+-				label: "Extension mode",
+-				currentValue: config.voiceFeaturesOnly
+-					? "voice only"
+-					: "adapter and voice",
+-				values: ["adapter and voice", "voice only"],
+-			},
+-			(value, current) => ({
+-				...current,
+-				voiceFeaturesOnly: value === "voice only",
+-			}),
+-		),
+ 		setting(
+ 			{
+ 				id: "allProviders",
 diff --git a/src/ui/settings/config-items-display.ts b/src/ui/settings/config-items-display.ts
 index 7f10408..c0b216b 100644
 --- a/src/ui/settings/config-items-display.ts
@@ -5689,14 +6666,14 @@ index 2900d82..39a4ca5 100644
  			{
  				id: "harnessIdentifierHeader",
 diff --git a/src/ui/settings/config-items-shared.ts b/src/ui/settings/config-items-shared.ts
-index 3bbe6ec..7ec12e4 100644
+index 3bbe6ec..7fa77ca 100644
 --- a/src/ui/settings/config-items-shared.ts
 +++ b/src/ui/settings/config-items-shared.ts
 @@ -78,6 +78,19 @@ export function toggle(
  	);
  }
  
-+type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
++type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode">;
 +type BooleanKey<T> = { [K in keyof T]-?: T[K] extends boolean ? K : never }[keyof T] & string;
 +
 +/** A single-field toggle reads the displayed snapshot but updates the latest draft. */
@@ -5784,80 +6761,253 @@ index 08ed340..825a24a 100644
 +			"Expose view_image without the full adapter. Text-only models also need Image descriptions fallback."),
  	];
  }
-diff --git a/src/ui/settings/config-items-voice.ts b/src/ui/settings/config-items-voice.ts
-index 66f14b4..a371a63 100644
---- a/src/ui/settings/config-items-voice.ts
-+++ b/src/ui/settings/config-items-voice.ts
-@@ -6,7 +6,7 @@ import {
- 	VOICE_CONTEXT_REASONING_LEVELS,
- 	type VoiceContextModel,
- } from "../../adapter/activation/config.ts";
--import { type ConfigSetting, setting } from "./config-items-shared.ts";
-+import { type ConfigSetting, configToggle, setting } from "./config-items-shared.ts";
+diff --git a/src/ui/settings/config-items.ts b/src/ui/settings/config-items.ts
+index b0ddccc..ed38a91 100644
+--- a/src/ui/settings/config-items.ts
++++ b/src/ui/settings/config-items.ts
+@@ -1,15 +1,11 @@
+ import type { Theme } from "@earendil-works/pi-coding-agent";
+-import type {
+-	CodexConversionConfig,
+-	VoiceContextModel,
+-} from "../../adapter/activation/config.ts";
++import type { CodexConversionConfig } from "../../adapter/activation/config.ts";
+ import { buildAdapterSettings } from "./config-items-adapter.ts";
+ import { buildContextSettings } from "./config-items-context.ts";
+ import { buildDisplaySettings } from "./config-items-display.ts";
+ import { buildOpenAISettings } from "./config-items-openai.ts";
+ import type { ConfigSetting } from "./config-items-shared.ts";
+ import { buildToolsSettings } from "./config-items-tools.ts";
+-import { buildVoiceSettings } from "./config-items-voice.ts";
+ import type { SettingsTab } from "./tabs.ts";
  
- export function buildVoiceSettings(
+ export type { ConfigSetting } from "./config-items-shared.ts";
+@@ -18,14 +14,11 @@ export function buildConfigSettings(
+ 	tab: SettingsTab,
  	config: CodexConversionConfig,
-@@ -38,54 +38,12 @@ export function buildVoiceSettings(
- 				},
- 			}),
- 		),
--		setting(
--			{
--				id: "autoResumeRealtime",
--				description: "Reconnect automatically if an active realtime voice call drops.",
--				label: "Auto-resume realtime voice",
--				currentValue: config.voice.autoResumeRealtime ? "on" : "off",
--				values: ["off", "on"],
--			},
--			(value, current) => ({
--				...current,
--				voice: {
--					...current.voice,
--					autoResumeRealtime: value === "on",
--				},
--			}),
+ 	theme: Theme,
+-	availableContextModels: VoiceContextModel[] = [],
+ ): ConfigSetting[] {
+ 	if (tab === "adapter") return buildAdapterSettings(config, theme);
+ 	if (tab === "context") return buildContextSettings(config);
+ 	if (tab === "tools") return buildToolsSettings(config);
+ 	if (tab === "openai") return buildOpenAISettings(config);
+ 	if (tab === "display") return buildDisplaySettings(config);
+-	if (tab === "voice")
+-		return buildVoiceSettings(config, availableContextModels);
+ 	return [];
+ }
+diff --git a/src/ui/settings/screen.ts b/src/ui/settings/screen.ts
+index aff8931..0627170 100644
+--- a/src/ui/settings/screen.ts
++++ b/src/ui/settings/screen.ts
+@@ -1,5 +1,4 @@
+ import {
+-	CONFIG_DIR_NAME,
+ 	type ExtensionContext,
+ 	getSettingsListTheme,
+ 	type Theme,
+@@ -13,13 +12,6 @@ import {
+ import type { CodexConversionConfig, LunaCacheKeepaliveMinutes } from "../../adapter/activation/config.ts";
+ import type { CodexConversionConfigScope } from "../../adapter/activation/config-store.ts";
+ import type { ExecutionMode } from "../../adapter/activation/execution-mode.ts";
+-import type { CodexLanVoiceServerStatus } from "../../voice/lan/controller.ts";
+-import { formatVoiceShortcut } from "../../voice/setup.ts";
+-import {
+-	getCodexVoiceSystemPromptChangelogPath,
+-	getCodexVoiceSystemPromptPath,
+-	REALTIME_SYSTEM_PROMPT_BASENAME,
+-} from "../../voice/system-prompt.ts";
+ import { handleAboutTabInput, renderAboutTab } from "./about-tab.ts";
+ import { openCodexConfigInExternalEditor } from "./config-editor.ts";
+ import { buildConfigSettings, type ConfigSetting } from "./config-items.ts";
+@@ -39,12 +31,6 @@ export interface CodexSettingsScreenOptions extends UsageTabOptions {
+ 		reload: () => CodexConversionConfig;
+ 		set: (scope: CodexConversionConfigScope) => CodexConversionConfig | undefined;
+ 	};
+-	lanVoiceServer?:
+-		| {
+-				status: () => CodexLanVoiceServerStatus;
+-				setEnabled: (enabled: boolean) => Promise<CodexLanVoiceServerStatus>;
+-		  }
+-		| undefined;
+ }
+ 
+ export async function openCodexSettingsScreen(
+@@ -53,11 +39,6 @@ export async function openCodexSettingsScreen(
+ ): Promise<void> {
+ 	let draft = options.initialConfig;
+ 	let activeTab: SettingsTab = options.initialTab ?? "adapter";
+-	const availableContextModels = ctx.modelRegistry
+-		.getAvailable()
+-		.filter((model) => model.input.includes("text"))
+-		.map((model) => ({ provider: model.provider, modelId: model.id }));
+-
+ 	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+ 		const usageTab = createUsageTab(ctx, options, () => tui.requestRender());
+ 		let settingsList: SettingsList;
+@@ -116,26 +97,10 @@ export async function openCodexSettingsScreen(
+ 							}),
+ 						}]
+ 					: []),
+-				...(activeTab === "voice" && options.lanVoiceServer
+-					? [
+-							{
+-								item: {
+-									id: "lanVoiceServer",
+-									description: "Serve this session\u0027s voice interface to a browser on your local network. Stops when the session changes.",
+-									label: "LAN voice server",
+-									currentValue: options.lanVoiceServer.status().running
+-										? "on"
+-										: "off",
+-									values: ["off", "on"],
+-								},
+-							},
+-						]
+-					: []),
+ 				...buildConfigSettings(
+ 					activeTab,
+ 					draft,
+ 					theme,
+-					availableContextModels,
+ 				),
+ 			];
+ 			list = new SettingsList(
+@@ -183,22 +148,6 @@ export async function openCodexSettingsScreen(
+ 						tui.requestRender(true);
+ 						return;
+ 					}
+-					if (id === "lanVoiceServer" && options.lanVoiceServer) {
+-						const previousValue = options.lanVoiceServer.status().running
+-							? "on"
+-							: "off";
+-						void options.lanVoiceServer
+-							.setEnabled(value === "on")
+-							.then((status) => {
+-								list.updateValue(id, status.running ? "on" : "off");
+-								tui.requestRender();
+-							})
+-							.catch(() => {
+-								list.updateValue(id, previousValue);
+-								tui.requestRender();
+-							});
+-						return;
+-					}
+ 					if (!definition?.update) return;
+ 					const previousValue = definition.item.currentValue;
+ 					const nextDraft = definition.update(value, draft);
+@@ -252,20 +201,12 @@ export async function openCodexSettingsScreen(
+ 						settingsLines,
+ 						formatToolsDetails(theme, options.configScope.path()),
+ 					);
+-				if (activeTab === "voice")
+-					settingsLines = withSettingsDetails(
+-						settingsLines,
+-						formatVoiceDetails(theme, draft, options.configScope.path()),
+-					);
+ 				return [
+ 					rule(width, theme, "accent"),
+ 					formatTabs(activeTab, theme),
+ 					rule(width, theme, "borderMuted"),
+ 					...(activeTab === "usage" ? usageTab.render(theme) : []),
+ 					...(activeTab === "about" ? renderAboutTab(theme) : []),
+-					...(activeTab === "voice"
+-						? formatVoiceStatus(theme, options.lanVoiceServer?.status())
+-						: []),
+ 					"",
+ 					...(hasSettingsList
+ 						? withSettingsFooter(settingsLines, theme)
+@@ -317,78 +258,6 @@ function formatTabs(activeTab: SettingsTab, theme: Theme): string {
+ 	return `  ${SETTINGS_TABS.map(({ id, label }) => (id === activeTab ? theme.bold(label) : theme.fg("dim", label))).join(`  ${theme.fg("dim", "/")}  `)}`;
+ }
+ 
+-function formatVoiceStatus(
+-	theme: Theme,
+-	lanVoice?: CodexLanVoiceServerStatus,
+-): string[] {
+-	return [
+-		...(lanVoice?.running
+-			? [
+-					theme.fg("accent", "  LAN voice is running"),
+-					...lanVoice.urls.map((url) => theme.fg("dim", `  ${url}`)),
+-					theme.fg("dim", "  First visit: accept the local HTTPS certificate"),
+-				]
+-			: [
+-					theme.fg(
+-						"dim",
+-						"  LAN voice serves this session only and stops when the session changes",
+-					),
+-				]),
+-	];
+-}
+-
+-function formatVoiceDetails(
+-	theme: Theme,
+-	config: CodexConversionConfig,
+-	configPath: string,
+-): string[] {
+-	return [
+-		theme.fg(
+-			"dim",
+-			`  Audio input: ${config.voice.inputDevice ?? "system default"}`,
 -		),
--		setting(
--			{
--				id: "delegationAcknowledgements",
--				description: "Let the voice model speak a brief acknowledgement when handing a task to the coding agent.",
--				label: "Speak delegation acknowledgements",
--				currentValue: config.voice.delegationAcknowledgements ? "on" : "off",
--				values: ["off", "on"],
--			},
--			(value, current) => ({
--				...current,
--				voice: {
--					...current.voice,
--					delegationAcknowledgements: value === "on",
--				},
--			}),
+-		theme.fg(
+-			"dim",
+-			`  Audio output: ${config.voice.outputDevice ?? "system default"}`,
 -		),
--		setting(
--			{
--				id: "forwardReasoningSummaries",
--				description: "Let voice relay reasoning summaries as progress when the coding agent has no spoken text update.",
--				label: "Speak reasoning summaries",
--				currentValue: config.voice.forwardReasoningSummaries ? "on" : "off",
--				values: ["off", "on"],
--			},
--			(value, current) => ({
--				...current,
--				voice: {
--					...current.voice,
--					forwardReasoningSummaries: value === "on",
--				},
--			}),
+-		theme.fg(
+-			"dim",
+-			`  Realtime voice: ${formatVoiceShortcut(config.voice.realtimeShortcut)}`,
 -		),
-+		configToggle(config, "voice", "autoResumeRealtime", "Auto-resume realtime voice",
-+			"Reconnect automatically if an active realtime voice call drops."),
-+		configToggle(config, "voice", "delegationAcknowledgements", "Speak delegation acknowledgements",
-+			"Let the voice model speak a brief acknowledgement when handing a task to the coding agent."),
-+		configToggle(config, "voice", "forwardReasoningSummaries", "Speak reasoning summaries",
-+			"Let voice relay reasoning summaries as progress when the coding agent has no spoken text update."),
- 		setting(
- 			{
- 				id: "dictationShortcutMode",
+-		theme.fg(
+-			"dim",
+-			`  Mute microphone: ${formatVoiceShortcut(config.voice.muteShortcut)}`,
+-		),
+-		theme.fg(
+-			"dim",
+-			`  Dictation: ${formatVoiceShortcut(config.voice.dictationShortcut)}`,
+-		),
+-		theme.fg(
+-			"dim",
+-			`  LAN server: ${formatVoiceShortcut(config.voice.serverShortcut)}`,
+-		),
+-		theme.fg(
+-			"dim",
+-			`  Change keybinds: ${configPath} (/reload to apply)`,
+-		),
+-		theme.fg(
+-			"dim",
+-			"  Voice context refresh uses the selected summarisation model",
+-		),
+-		"",
+-		theme.fg(
+-			"dim",
+-			`  Realtime system prompt: ${getCodexVoiceSystemPromptPath()}`,
+-		),
+-		theme.fg(
+-			"dim",
+-			`  Folder-level: create ${CONFIG_DIR_NAME}/${REALTIME_SYSTEM_PROMPT_BASENAME} (appends to global)`,
+-		),
+-		theme.fg("dim", "  Realtime system prompt changelog:"),
+-		theme.fg("dim", `  ${getCodexVoiceSystemPromptChangelogPath()}`),
+-	];
+-}
+-
+ function formatFooter(activeTab: SettingsTab): string {
+ 	if (activeTab === "usage")
+ 		return "  Tab/Shift+Tab to switch sections · R to refresh · Ctrl+R to use reset";
+diff --git a/src/ui/settings/tabs.ts b/src/ui/settings/tabs.ts
+index 87ba31d..10404c4 100644
+--- a/src/ui/settings/tabs.ts
++++ b/src/ui/settings/tabs.ts
+@@ -4,7 +4,6 @@ export const SETTINGS_TABS = [
+ 	{ id: "tools", label: "Tools" },
+ 	{ id: "openai", label: "OpenAI" },
+ 	{ id: "display", label: "Display" },
+-	{ id: "voice", label: "Voice" },
+ 	{ id: "usage", label: "Usage" },
+ 	{ id: "about", label: "About" },
+ ] as const;
 diff --git a/src/ui/tool-rendering/codex-rendering.ts b/src/ui/tool-rendering/codex-rendering.ts
 index 94d04e5..22ba7f8 100644
 --- a/src/ui/tool-rendering/codex-rendering.ts
@@ -5909,41 +7059,3 @@ index 94d04e5..22ba7f8 100644
  	}
  	return text;
  }
-diff --git a/src/voice/context.ts b/src/voice/context.ts
-index 174753c..7df7724 100644
---- a/src/voice/context.ts
-+++ b/src/voice/context.ts
-@@ -1,4 +1,5 @@
- import { type Context, type Model, uuidv7 } from "@earendil-works/pi-ai";
-+import { toProviderTranscript } from "../providers/transcript.ts";
- import {
- 	buildSessionContext,
- 	type ExtensionContext,
-@@ -218,7 +219,7 @@ async function completeWithSelectedModel(
- 	let completed:
- 		| { content: Array<{ type: string; text?: string }> }
- 		| undefined;
--	for await (const event of provider.streamSimple(requestModel, context, {
-+	for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
- 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
- 		...(auth.headers ? { headers: auth.headers } : {}),
- 		...(auth.env ? { env: auth.env } : {}),
-diff --git a/src/voice/native-context.ts b/src/voice/native-context.ts
-index 65bd0d2..af4d906 100644
---- a/src/voice/native-context.ts
-+++ b/src/voice/native-context.ts
-@@ -1,4 +1,5 @@
- import { type Context, type Model, uuidv7 } from "@earendil-works/pi-ai";
-+import { toProviderTranscript } from "../providers/transcript.ts";
- import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
- import {
- 	DEFAULT_VOICE_CONTEXT_REASONING,
-@@ -80,7 +81,7 @@ export async function createNativeVoiceContextSummary(
- 	let completed:
- 		| { content: Array<{ type: string; text?: string }>; errorMessage?: string }
- 		| undefined;
--	for await (const event of provider.streamSimple(requestModel, context, {
-+	for await (const event of provider.streamSimple(requestModel, toProviderTranscript(context), {
- 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
- 		...(auth.headers ? { headers: auth.headers } : {}),
- 		...(auth.env ? { env: auth.env } : {}),

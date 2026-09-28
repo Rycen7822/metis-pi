@@ -12,24 +12,19 @@ import {
 	normalizeCompactToolsMode,
 	normalizeContextManagementMode,
 	normalizeCustomRustBinariesDir,
-	normalizeDictationShortcutMode,
 	normalizeLunaCacheKeepaliveMinutes,
 	normalizeProviderList,
-	normalizeRealtimeV3Voice,
 	normalizeV2UserMessageRetention,
-	normalizeVoiceContextReasoning,
 } from "./config-normalizers.ts";
 import {
 	normalizeBoolean,
 	normalizeIntegerInRange,
 	normalizeNotebookProfile,
-	normalizeOptionalString,
 	normalizeString,
-	normalizeVoiceContextModel,
 } from "./config-values.ts";
 import { normalizeExecutionMode } from "./execution-mode.ts";
 
-type Section = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
+type Section = Exclude<keyof CodexConversionConfig, "executionMode">;
 type BooleanFields<T> = { [K in keyof T as T[K] extends boolean ? K : never]: T[K] };
 
 // Default booleans have one rule. Enum/string/optional fields and dependencies stay explicit below.
@@ -51,11 +46,7 @@ export function normalizeCodexConversionConfig(
 	if (typeof ui["toolRenaming"] !== "boolean") ui["toolRenaming"] = ui["toolRendering"];
 	const compaction = isObject(value["compaction"]) ? value["compaction"] : {};
 	const notebook = isObject(value["notebook"]) ? value["notebook"] : {};
-	const voice = isObject(value["voice"]) ? value["voice"] : {};
 	const openai = isObject(value["openai"]) ? value["openai"] : {};
-	const inputDevice = normalizeOptionalString(voice["inputDevice"]);
-	const outputDevice = normalizeOptionalString(voice["outputDevice"]);
-	const contextModel = normalizeVoiceContextModel(voice["contextModel"]);
 	const notebookProfile = normalizeNotebookProfile(notebook["profile"]);
 	const executionMode =
 		normalizeExecutionMode(value["executionMode"]) ??
@@ -65,10 +56,6 @@ export function normalizeCodexConversionConfig(
 		defaults.compaction.contextManagement;
 	const config: CodexConversionConfig = {
 		executionMode,
-		voiceFeaturesOnly: normalizeBoolean(
-			value["voiceFeaturesOnly"],
-			defaults.voiceFeaturesOnly,
-		),
 		prompt: {
 			...booleans("prompt", prompt),
 		},
@@ -122,37 +109,6 @@ export function normalizeCodexConversionConfig(
 			),
 			...(notebookProfile ? { profile: notebookProfile } : {}),
 		},
-		voice: {
-			...booleans("voice", voice),
-			v3Voice:
-				normalizeRealtimeV3Voice(voice["v3Voice"]) ??
-				defaults.voice.v3Voice,
-			dictationShortcut: normalizeString(
-				voice["dictationShortcut"],
-				defaults.voice.dictationShortcut,
-			),
-			realtimeShortcut: normalizeString(
-				voice["realtimeShortcut"],
-				defaults.voice.realtimeShortcut,
-			),
-			muteShortcut: normalizeString(
-				voice["muteShortcut"],
-				defaults.voice.muteShortcut,
-			),
-			serverShortcut: normalizeString(
-				voice["serverShortcut"],
-				defaults.voice.serverShortcut,
-			),
-			dictationShortcutMode:
-				normalizeDictationShortcutMode(voice["dictationShortcutMode"]) ??
-				defaults.voice.dictationShortcutMode,
-			...(contextModel ? { contextModel } : {}),
-			contextReasoning: normalizeVoiceContextReasoning(
-				voice["contextReasoning"],
-			),
-			...(inputDevice ? { inputDevice } : {}),
-			...(outputDevice ? { outputDevice } : {}),
-		},
 		openai: {
 			...booleans("openai", openai),
 			verbosity:
@@ -171,6 +127,5 @@ export function normalizeCodexConversionConfig(
 	config.compaction.hybridCompaction &&= contextManagement !== "off";
 	config.compaction.responsesCompaction &&= contextManagement === "off";
 	config.compaction.portableSummary &&= config.compaction.responsesCompaction;
-	config.voice.refreshRealtimeAfterCompaction &&= contextModel !== undefined;
 	return config;
 }

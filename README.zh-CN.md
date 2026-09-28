@@ -41,7 +41,7 @@ pi install .
 - 精确复制依赖 fullscreen 应用选区；Markdown 表格、未知 token、图片等保留原生回退。终端原生选区不受此插件控制。
 - 5,000 行是保留窗口上限；单个超大组件仍可能完整排版一次，原生搜索仅覆盖已加载窗口。
 - 本包的主界面外观与其它替换 editor/footer/Working 的插件可能冲突。`pi-copy-soft-wrap` 的启发式复制由本包精确路径接管，建议只保留一套。
-- vendored 原生工具仅包含 linux-x64 载荷，语音 helper 已裁剪。跨平台与语音限制见[转换层说明](docs/vendor-codex-conversion.md)。
+- vendored 原生工具仅包含 linux-x64 载荷；上游语音实现已完整移除，详见[转换层说明](docs/vendor-codex-conversion.md)。
 
 [兼容性说明](docs/compatibility.md)记录宿主契约；[VALIDATION.md](VALIDATION.md)记录当前验证与未覆盖边界，不能据此保证任意插件组合完全兼容。
 

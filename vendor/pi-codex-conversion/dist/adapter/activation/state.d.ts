@@ -25,7 +25,6 @@ export interface AdapterState {
     promptSkills: PromptSkill[];
     activeProviderSystemPrompt?: string | undefined;
     pendingActiveProviderPromptCapture?: boolean | undefined;
-    voiceSystemPromptOverride?: string | undefined;
     weeklyUsageLeft?: number | undefined;
     config: CodexConversionConfig;
     executionMode: ExecutionMode;

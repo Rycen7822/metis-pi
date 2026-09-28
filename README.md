@@ -41,7 +41,7 @@ Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid f
 - Exact copying depends on application-managed selections in fullscreen mode. Markdown tables, unknown tokens, images, and similar content retain native fallbacks. Native terminal selections are outside this plugin's control.
 - The 5,000-line limit applies to the retained display window. A single oversized component may still be fully laid out once, and native search only covers the loaded window.
 - The main UI may conflict with other plugins that replace the editor, footer, or Working indicator. This package's exact copy path takes over the heuristic copying provided by `pi-copy-soft-wrap`; use only one implementation.
-- Vendored native tools include only linux-x64 binaries, and the voice helper has been removed. See the [conversion guide](docs/vendor-codex-conversion.md) for platform and voice limitations.
+- Vendored native tools include only linux-x64 binaries. The upstream voice implementation has been removed; see the [conversion guide](docs/vendor-codex-conversion.md).
 
 The [compatibility guide](docs/compatibility.md) documents host contracts. [VALIDATION.md](VALIDATION.md) records current checks and coverage gaps; it does not guarantee compatibility with every plugin combination.
 

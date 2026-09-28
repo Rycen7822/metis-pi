@@ -74,13 +74,10 @@ export function resolveCodexRuntimePlan(ctx, config, executionMode) {
     };
     const extras = hasExtras(config)
         && (config.scope.allProviders === "extras"
-            || (config.voiceFeaturesOnly && config.scope.allProviders === "on")
             || (config.scope.allProviders === "off" && (isConfigured || isCodexLikeModel(ctx.model))));
     if (extras) {
         return { ...base, kind: "extras", toolNames: extraToolNames(ctx, config), prompt: undefined, transport: "responses" };
     }
-    if (config.voiceFeaturesOnly)
-        return { ...base, kind: "inactive", toolNames: [], prompt: undefined, transport: undefined };
     const active = config.scope.allProviders === "on" || isConfigured || isCodexLikeModel(ctx.model);
     if (!active)
         return { ...base, kind: "inactive", toolNames: [], prompt: undefined, transport: undefined };

@@ -32,13 +32,13 @@ export function registerCodexUi(pi, runtime) {
         const ctx = runtime.backgroundWidget.ctx;
         if (!ctx)
             return;
-        if (runtime.state.config.voiceFeaturesOnly || !runtime.state.config.ui.backgroundShellWidget) {
+        if (!runtime.state.config.ui.backgroundShellWidget) {
             clearBackgroundWidget();
             return;
         }
         renderBackgroundBashWidget(ctx, runtime.backgroundWidget, runtime.sessions);
     };
-    registerBackgroundBashWidgetShortcuts(pi, runtime.backgroundWidget, runtime.sessions, runtime.state.config.ui, () => !runtime.state.config.voiceFeaturesOnly && runtime.state.config.ui.backgroundShellWidget);
+    registerBackgroundBashWidgetShortcuts(pi, runtime.backgroundWidget, runtime.sessions, runtime.state.config.ui, () => runtime.state.config.ui.backgroundShellWidget);
     const renderNativeCompaction = (content, kind, theme) => {
         if (kind === "usage")
             return new Text(theme.fg("dim", `  ${content}`), 0, 0);
@@ -65,7 +65,7 @@ export function registerCodexUi(pi, runtime) {
         return renderNativeCompaction(typeof entry.data?.content === "string" ? entry.data.content : NATIVE_COMPACTION_DISPLAY_TEXT, entry.data?.kind, theme);
     });
     runtime.sessions.onSessionChange((reason) => {
-        if (!runtime.backgroundWidget.ctx || runtime.state.config.voiceFeaturesOnly || !runtime.state.config.ui.backgroundShellWidget)
+        if (!runtime.backgroundWidget.ctx || !runtime.state.config.ui.backgroundShellWidget)
             return;
         if (reason === "output") {
             if (renderTimer)
@@ -86,7 +86,7 @@ export function registerCodexUi(pi, runtime) {
     };
     const refreshUsageStatus = async (ctx) => {
         const generation = ++usageGeneration;
-        if (!ctx.hasUI || runtime.state.config.voiceFeaturesOnly || !runtime.state.config.ui.statusLine) {
+        if (!ctx.hasUI || !runtime.state.config.ui.statusLine) {
             runtime.state.weeklyUsageLeft = undefined;
             return;
         }
@@ -96,7 +96,6 @@ export function registerCodexUi(pi, runtime) {
         const plan = resolveCodexRuntimePlanForState(ctx, runtime.state);
         if (generation !== usageGeneration ||
             !ctx.hasUI ||
-            runtime.state.config.voiceFeaturesOnly ||
             !runtime.state.config.ui.statusLine ||
             !isAdapterRuntime(plan))
             return;
@@ -110,14 +109,13 @@ export function registerCodexUi(pi, runtime) {
         invalidateUsageStatus,
         refreshUsageStatus,
         applyConfig(config, ctx, previousConfig) {
-            if (config.voiceFeaturesOnly || !config.ui.statusLine) {
+            if (!config.ui.statusLine) {
                 invalidateUsageStatus();
             }
-            else if (previousConfig.voiceFeaturesOnly ||
-                !previousConfig.ui.statusLine) {
+            else if (!previousConfig.ui.statusLine) {
                 void refreshUsageStatus(ctx);
             }
-            if (config.voiceFeaturesOnly || !config.ui.backgroundShellWidget)
+            if (!config.ui.backgroundShellWidget)
                 clearBackgroundWidget();
             else
                 renderBackgroundWidget();

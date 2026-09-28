@@ -372,8 +372,6 @@ export default function (pi: ExtensionAPI) {
       // or rapid turn-ends don't result in double-summarization.
       pendingBatches.length = 0;
 
-      isFlushing = true;
-
       const appendSummaryMessage = (content: string, details: unknown) =>
         sessionManager!.appendCustomMessageEntry(CUSTOM_TYPE_SUMMARY, content, false, details);
 
@@ -824,13 +822,7 @@ export default function (pi: ExtensionAPI) {
       outcome = flushOutcome;
 
       const returnReason: "flushed" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped" =
-        actuallyFlushedCount > 0
-          ? "flushed"
-          : oversizedBatches.length > 0
-            ? "skipped-oversized"
-            : dedupedBatches.length > 0
-              ? "skipped-deduped"
-              : "skipped-trivial";
+        flushOutcome === "summarized" ? "flushed" : flushOutcome;
 
       return {
         ok: true,

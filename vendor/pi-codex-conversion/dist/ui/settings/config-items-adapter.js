@@ -4,18 +4,6 @@ import { setting, TextSettingSubmenu, } from "./config-items-shared.js";
 export function buildAdapterSettings(config, theme) {
     return [
         setting({
-            id: "extensionMode",
-            description: "Voice only disables the prompt and tool adapter. Standalone tools remain controlled by Provider scope.",
-            label: "Extension mode",
-            currentValue: config.voiceFeaturesOnly
-                ? "voice only"
-                : "adapter and voice",
-            values: ["adapter and voice", "voice only"],
-        }, (value, current) => ({
-            ...current,
-            voiceFeaturesOnly: value === "voice only",
-        })),
-        setting({
             id: "allProviders",
             description: "Choose which models use the adapter. Extra tools only exposes standalone tools without replacing the prompt.",
             label: "Provider scope",

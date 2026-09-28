@@ -41,7 +41,7 @@ function enableExtraTools(
 		pi,
 		mergeToolNames(state.previousToolNames ?? DEFAULT_TOOL_NAMES, plan.toolNames),
 	);
-	if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, !state.config.voiceFeaturesOnly && state.config.ui.statusLine ? buildExtraToolsOnlyStatusText(plan.toolNames, ctx.ui.theme) : undefined);
+	if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, state.config.ui.statusLine ? buildExtraToolsOnlyStatusText(plan.toolNames, ctx.ui.theme) : undefined);
 }
 
 function enableAdapter(

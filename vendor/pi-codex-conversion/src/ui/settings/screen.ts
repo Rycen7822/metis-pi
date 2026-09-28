@@ -1,5 +1,4 @@
 import {
-	CONFIG_DIR_NAME,
 	type ExtensionContext,
 	getSettingsListTheme,
 	type Theme,
@@ -13,13 +12,6 @@ import {
 import type { CodexConversionConfig, LunaCacheKeepaliveMinutes } from "../../adapter/activation/config.ts";
 import type { CodexConversionConfigScope } from "../../adapter/activation/config-store.ts";
 import type { ExecutionMode } from "../../adapter/activation/execution-mode.ts";
-import type { CodexLanVoiceServerStatus } from "../../voice/lan/controller.ts";
-import { formatVoiceShortcut } from "../../voice/setup.ts";
-import {
-	getCodexVoiceSystemPromptChangelogPath,
-	getCodexVoiceSystemPromptPath,
-	REALTIME_SYSTEM_PROMPT_BASENAME,
-} from "../../voice/system-prompt.ts";
 import { handleAboutTabInput, renderAboutTab } from "./about-tab.ts";
 import { openCodexConfigInExternalEditor } from "./config-editor.ts";
 import { buildConfigSettings, type ConfigSetting } from "./config-items.ts";
@@ -39,12 +31,6 @@ export interface CodexSettingsScreenOptions extends UsageTabOptions {
 		reload: () => CodexConversionConfig;
 		set: (scope: CodexConversionConfigScope) => CodexConversionConfig | undefined;
 	};
-	lanVoiceServer?:
-		| {
-				status: () => CodexLanVoiceServerStatus;
-				setEnabled: (enabled: boolean) => Promise<CodexLanVoiceServerStatus>;
-		  }
-		| undefined;
 }
 
 export async function openCodexSettingsScreen(
@@ -53,11 +39,6 @@ export async function openCodexSettingsScreen(
 ): Promise<void> {
 	let draft = options.initialConfig;
 	let activeTab: SettingsTab = options.initialTab ?? "adapter";
-	const availableContextModels = ctx.modelRegistry
-		.getAvailable()
-		.filter((model) => model.input.includes("text"))
-		.map((model) => ({ provider: model.provider, modelId: model.id }));
-
 	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
 		const usageTab = createUsageTab(ctx, options, () => tui.requestRender());
 		let settingsList: SettingsList;
@@ -116,26 +97,10 @@ export async function openCodexSettingsScreen(
 							}),
 						}]
 					: []),
-				...(activeTab === "voice" && options.lanVoiceServer
-					? [
-							{
-								item: {
-									id: "lanVoiceServer",
-									description: "Serve this session\u0027s voice interface to a browser on your local network. Stops when the session changes.",
-									label: "LAN voice server",
-									currentValue: options.lanVoiceServer.status().running
-										? "on"
-										: "off",
-									values: ["off", "on"],
-								},
-							},
-						]
-					: []),
 				...buildConfigSettings(
 					activeTab,
 					draft,
 					theme,
-					availableContextModels,
 				),
 			];
 			list = new SettingsList(
@@ -181,22 +146,6 @@ export async function openCodexSettingsScreen(
 							list.updateValue(id, previousValue);
 						}
 						tui.requestRender(true);
-						return;
-					}
-					if (id === "lanVoiceServer" && options.lanVoiceServer) {
-						const previousValue = options.lanVoiceServer.status().running
-							? "on"
-							: "off";
-						void options.lanVoiceServer
-							.setEnabled(value === "on")
-							.then((status) => {
-								list.updateValue(id, status.running ? "on" : "off");
-								tui.requestRender();
-							})
-							.catch(() => {
-								list.updateValue(id, previousValue);
-								tui.requestRender();
-							});
 						return;
 					}
 					if (!definition?.update) return;
@@ -252,20 +201,12 @@ export async function openCodexSettingsScreen(
 						settingsLines,
 						formatToolsDetails(theme, options.configScope.path()),
 					);
-				if (activeTab === "voice")
-					settingsLines = withSettingsDetails(
-						settingsLines,
-						formatVoiceDetails(theme, draft, options.configScope.path()),
-					);
 				return [
 					rule(width, theme, "accent"),
 					formatTabs(activeTab, theme),
 					rule(width, theme, "borderMuted"),
 					...(activeTab === "usage" ? usageTab.render(theme) : []),
 					...(activeTab === "about" ? renderAboutTab(theme) : []),
-					...(activeTab === "voice"
-						? formatVoiceStatus(theme, options.lanVoiceServer?.status())
-						: []),
 					"",
 					...(hasSettingsList
 						? withSettingsFooter(settingsLines, theme)
@@ -315,78 +256,6 @@ function rule(
 
 function formatTabs(activeTab: SettingsTab, theme: Theme): string {
 	return `  ${SETTINGS_TABS.map(({ id, label }) => (id === activeTab ? theme.bold(label) : theme.fg("dim", label))).join(`  ${theme.fg("dim", "/")}  `)}`;
-}
-
-function formatVoiceStatus(
-	theme: Theme,
-	lanVoice?: CodexLanVoiceServerStatus,
-): string[] {
-	return [
-		...(lanVoice?.running
-			? [
-					theme.fg("accent", "  LAN voice is running"),
-					...lanVoice.urls.map((url) => theme.fg("dim", `  ${url}`)),
-					theme.fg("dim", "  First visit: accept the local HTTPS certificate"),
-				]
-			: [
-					theme.fg(
-						"dim",
-						"  LAN voice serves this session only and stops when the session changes",
-					),
-				]),
-	];
-}
-
-function formatVoiceDetails(
-	theme: Theme,
-	config: CodexConversionConfig,
-	configPath: string,
-): string[] {
-	return [
-		theme.fg(
-			"dim",
-			`  Audio input: ${config.voice.inputDevice ?? "system default"}`,
-		),
-		theme.fg(
-			"dim",
-			`  Audio output: ${config.voice.outputDevice ?? "system default"}`,
-		),
-		theme.fg(
-			"dim",
-			`  Realtime voice: ${formatVoiceShortcut(config.voice.realtimeShortcut)}`,
-		),
-		theme.fg(
-			"dim",
-			`  Mute microphone: ${formatVoiceShortcut(config.voice.muteShortcut)}`,
-		),
-		theme.fg(
-			"dim",
-			`  Dictation: ${formatVoiceShortcut(config.voice.dictationShortcut)}`,
-		),
-		theme.fg(
-			"dim",
-			`  LAN server: ${formatVoiceShortcut(config.voice.serverShortcut)}`,
-		),
-		theme.fg(
-			"dim",
-			`  Change keybinds: ${configPath} (/reload to apply)`,
-		),
-		theme.fg(
-			"dim",
-			"  Voice context refresh uses the selected summarisation model",
-		),
-		"",
-		theme.fg(
-			"dim",
-			`  Realtime system prompt: ${getCodexVoiceSystemPromptPath()}`,
-		),
-		theme.fg(
-			"dim",
-			`  Folder-level: create ${CONFIG_DIR_NAME}/${REALTIME_SYSTEM_PROMPT_BASENAME} (appends to global)`,
-		),
-		theme.fg("dim", "  Realtime system prompt changelog:"),
-		theme.fg("dim", `  ${getCodexVoiceSystemPromptChangelogPath()}`),
-	];
 }
 
 function formatFooter(activeTab: SettingsTab): string {

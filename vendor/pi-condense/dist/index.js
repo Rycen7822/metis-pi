@@ -323,7 +323,6 @@ export default function (pi) {
             // We drain BEFORE the await so concurrent calls (though guarded by isFlushing)
             // or rapid turn-ends don't result in double-summarization.
             pendingBatches.length = 0;
-            isFlushing = true;
             const appendSummaryMessage = (content, details) => sessionManager.appendCustomMessageEntry(CUSTOM_TYPE_SUMMARY, content, false, details);
             // Routes alias persistence through whichever delivery is active so the
             // dedup pre-flush pass writes CUSTOM_TYPE_DEDUP_ALIAS entries via the
@@ -720,13 +719,7 @@ export default function (pi) {
             // must not eat this entry — the summarization phase already succeeded.
             processedCount = processedBatches.length;
             outcome = flushOutcome;
-            const returnReason = actuallyFlushedCount > 0
-                ? "flushed"
-                : oversizedBatches.length > 0
-                    ? "skipped-oversized"
-                    : dedupedBatches.length > 0
-                        ? "skipped-deduped"
-                        : "skipped-trivial";
+            const returnReason = flushOutcome === "summarized" ? "flushed" : flushOutcome;
             return {
                 ok: true,
                 reason: returnReason,

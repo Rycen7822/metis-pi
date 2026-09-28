@@ -79,7 +79,6 @@ function fixture(options = {}) {
 	}], true, model);
 	const state = {
 		config, executionMode: options.executionMode ?? "normal",
-		voiceSystemPromptOverride: "VOICE_INSTRUCTIONS",
 		activeProviderSystemPrompt: "BEFORE_CAPTURE", pendingActiveProviderPromptCapture: true,
 		developerMessages: bridge,
 		contextWindows: {
@@ -106,7 +105,7 @@ for (const scenario of cases) {
 		const live = await rewriteCodexProviderRequest(payload, ctx, state);
 		assert.deepEqual(live, prewarm);
 		assert.deepEqual(payload, original, "preparation must not mutate the original payload");
-		assert.equal(state.activeProviderSystemPrompt, "VOICE_INSTRUCTIONS");
+		assert.equal(state.activeProviderSystemPrompt, "ORIGINAL_INSTRUCTIONS");
 		assert.equal(live.text.verbosity, "high");
 		assert.deepEqual(live.text.format, { type: "text" });
 		assert.equal(live.service_tier, scenario.provider === "openai" ? undefined : "priority");
@@ -134,10 +133,10 @@ for (const scenario of cases) {
 			assert.equal(live.instructions, undefined);
 			assert.equal(live.tools, undefined);
 			assert.equal(live.input[0].type, "additional_tools");
-			assert.deepEqual(live.input[1], { type: "message", role: "developer", content: [{ type: "input_text", text: "VOICE_INSTRUCTIONS" }] });
+			assert.deepEqual(live.input[1], { type: "message", role: "developer", content: [{ type: "input_text", text: "ORIGINAL_INSTRUCTIONS" }] });
 			assert.equal(live.parallel_tool_calls, false);
 			assert.equal(live.reasoning.context, "all_turns");
-		} else assert.equal(live.instructions, "VOICE_INSTRUCTIONS");
+		} else assert.equal(live.instructions, "ORIGINAL_INSTRUCTIONS");
 		if (scenario.label.includes("mismatch")) {
 			assert.equal(resolveCodexRuntimePlanForState(ctx, state).codexTransport, true);
 			assert.equal(ctx.model.api, "openai-responses", "ordinary namespace rewriting must not use the broader compaction predicate");
@@ -146,9 +145,8 @@ for (const scenario of cases) {
 }
 
 test("inactive and unsupported requests do no preparation or final work", async () => {
-	for (const reason of ["voice-only", "missing-tools", "unconfigured", "unsupported-api", "extras"]) {
+	for (const reason of ["missing-tools", "unconfigured", "unsupported-api", "extras"]) {
 		const { ctx, state, payload } = fixture();
-		if (reason === "voice-only") state.config.voiceFeaturesOnly = true;
 		if (reason === "missing-tools") state.availableToolNames = [];
 		if (reason === "unconfigured") ctx.model = { ...ctx.model, provider: "unconfigured", api: "other-api", id: "other-model" };
 		if (reason === "unsupported-api") {

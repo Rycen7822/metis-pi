@@ -44,7 +44,7 @@
 | context-management | `tool-contract.ts` 统一 history/notes 操作字段、必填与加密规则，声明与执行各自消费。Local/Tree/Remote/Hybrid 的持久化、窗口和 wire schema 差异仍显式保留。 |
 | Notebook | `capture-bindings-source.ts` 共享内核捕获；调用方拥有清单/事务。project/profile 共用哈希载荷读取，checkpoint/metadata 共用布局检查；布局校验不能替代哈希验证。 |
 | code-mode/exec/native | 保留惰性加载、delegate 生命周期、PTY 字节解析、会话保留与原生 ABI；公开 facade 和运行时载荷并非静态导入图中的死代码。 |
-| voice/LAN/diagnostics/settings | 保留世代与取消、peer 所有权、HTTP 读体前后状态检查、诊断停止顺序及显式设置写入。 |
+| diagnostics/settings | 保留诊断停止顺序及显式设置写入；语音/LAN 功能已移除。 |
 
 宿主 render fallback、第三方所有权守卫、锁/提交顺序和原生资源布局承担真实兼容职责；不为缩短文件而删除这些边界。上游差异及同步只在 [PATCHES](../vendor/pi-codex-conversion/PATCHES.md) / [UPSTREAM](../vendor/pi-codex-conversion/UPSTREAM.md) 维护。
 

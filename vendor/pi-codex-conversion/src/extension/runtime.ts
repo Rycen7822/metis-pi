@@ -20,8 +20,6 @@ import { createExecCommandTracker } from "../tools/exec/command-state.ts";
 import { createExecSessionManager } from "../tools/exec/session-manager.ts";
 import { getBundledToolBinaryPath } from "../tools/native/binary.ts";
 import type { BackgroundBashWidgetState } from "../ui/background-bash-widget.ts";
-import { CodexVoiceController } from "../voice/controller.ts";
-import { CodexLanVoiceServerController } from "../voice/lan/controller.ts";
 import { getActiveToolsInActiveOrder } from "../adapter/active-tools.ts";
 import { createLazyCodexDiagnostics } from "../diagnostics/lazy.ts";
 import type { CodexDiagnosticsSink } from "../providers/openai-codex/types.ts";
@@ -48,8 +46,6 @@ export interface CodexExtensionRuntime {
 	tracker: ReturnType<typeof createExecCommandTracker>;
 	sessions: ReturnType<typeof createExecSessionManager>;
 	backgroundWidget: BackgroundBashWidgetState;
-	voice: CodexVoiceController;
-	lanVoice: CodexLanVoiceServerController;
 	projectContextMessages(ctx: CodexContext, messages?: readonly AgentMessage[]): AgentMessage[];
 	execEnv(config?: CodexConversionConfig): NodeJS.ProcessEnv;
 	codexSystemPrompt(basePrompt: string, ctx: CodexContext, skills?: AdapterState["promptSkills"], systemPromptOptions?: PiSystemPromptOptions): string;
@@ -84,18 +80,8 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 		console.warn(`[pi-codex-conversion] ${warning}`);
 	}
 	const initialConfig = readEffectiveCodexConversionConfig({ cwd: process.cwd(), projectTrusted: false });
-	const voice = new CodexVoiceController(pi);
-	const contextWindows = new CodexContextWindowManager(undefined, async (ctx, options) => {
-		voice.announceContextTransition("rollover");
-		await voice.refreshRealtimeContext(ctx, state.config, options);
-	});
-	const contextKickoff = new CodexContextWindowKickoff(contextWindows, (input) => {
-		// Extension kickoffs bypass ordinary voice input routing, including after call replacement.
-		const text = typeof input === "string" ? input : input
-			.flatMap((part) => part.type === "text" ? [part.text] : [])
-			.join("\n");
-		voice.piInput(text.trim() ? text : "Continue.");
-	});
+	const contextWindows = new CodexContextWindowManager();
+	const contextKickoff = new CodexContextWindowKickoff(contextWindows);
 	const state: AdapterState = {
 		enabled: false,
 		cwd: process.cwd(),
@@ -399,16 +385,6 @@ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRun
 		tracker,
 		sessions,
 		backgroundWidget: { folded: true },
-		voice,
-		lanVoice: new CodexLanVoiceServerController(
-			voice,
-			() => state.config,
-			(text, ctx) => {
-				if (ctx.isIdle()) pi.sendUserMessage(text);
-				else pi.sendUserMessage(text, { deliverAs: "steer" });
-			},
-			dirname(getCodexConversionConfigPath()),
-		),
 		execEnv(_config = state.config) {
 			return { ...process.env };
 		},

@@ -1,4 +1,3 @@
-import { isVoiceContextExcludedMessage } from "../../voice/context-visibility.js";
 import { NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE } from "../compaction/types.js";
 import { EXECUTION_MODE_SESSION_ENTRY } from "../activation/execution-mode.js";
 import { NOTEBOOK_TREE_EPOCH_ENTRY } from "../../tools/notebook-mode/session-identity.js";
@@ -10,7 +9,10 @@ const ADAPTER_CONTEXT_EXCLUDED_CUSTOM_MESSAGE_TYPES = new Set([
 ]);
 export function isProviderContextExcludedMessage(message) {
     return (message.role === "compactionSummary" && message.summary === CONTEXT_WINDOW_COMPACTION_SUMMARY)
-        || isVoiceContextExcludedMessage(message)
+        // Retired session entries can still appear when an older conversation is reopened.
+        || (message.role === "custom" && (message.customType === "codex-realtime-voice"
+            || (message.customType === "codex-voice-mode"
+                && (typeof message.content !== "string" || !message.content.startsWith('<realtime_voice_session state="')))))
         || (message.role === "custom" && typeof message.customType === "string" && ADAPTER_CONTEXT_EXCLUDED_CUSTOM_MESSAGE_TYPES.has(message.customType));
 }
 export function isProviderContextExcludedCustomMessageEntry(entry) {

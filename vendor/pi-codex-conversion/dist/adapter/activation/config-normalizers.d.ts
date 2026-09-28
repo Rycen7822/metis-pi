@@ -1,4 +1,4 @@
-import { type AllProvidersMode, type CacheDiagnosticsMode, type CodexVerbosity, type CompactToolsMode, type ContextManagementMode, type DictationShortcutMode, type LunaCacheKeepaliveMinutes, type RealtimeV3Voice, type V2UserMessageRetention, type VoiceContextReasoning } from "./config-contract.ts";
+import { type AllProvidersMode, type CacheDiagnosticsMode, type CodexVerbosity, type CompactToolsMode, type ContextManagementMode, type LunaCacheKeepaliveMinutes, type V2UserMessageRetention } from "./config-contract.ts";
 export { isObject } from "./config-values.ts";
 export declare function normalizeAllProvidersMode(value: unknown): AllProvidersMode | undefined;
 export declare function normalizeCompactToolsMode(value: unknown): CompactToolsMode | undefined;
@@ -7,8 +7,5 @@ export declare function normalizeCodexVerbosity(value: unknown): CodexVerbosity 
 export declare function normalizeCacheDiagnosticsMode(value: unknown): CacheDiagnosticsMode | undefined;
 export declare function normalizeLunaCacheKeepaliveMinutes(value: unknown): LunaCacheKeepaliveMinutes | undefined;
 export declare function normalizeV2UserMessageRetention(value: unknown): V2UserMessageRetention | undefined;
-export declare function normalizeDictationShortcutMode(value: unknown): DictationShortcutMode | undefined;
-export declare function normalizeRealtimeV3Voice(value: unknown): RealtimeV3Voice | undefined;
 export declare function normalizeProviderList(value: unknown): string[];
-export declare function normalizeVoiceContextReasoning(value: unknown): VoiceContextReasoning;
 export declare function normalizeCustomRustBinariesDir(value: unknown): string;

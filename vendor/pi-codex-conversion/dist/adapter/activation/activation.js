@@ -27,7 +27,7 @@ function enableExtraTools(pi, ctx, state, plan, extensionTools) {
     state.adapterOwnedToolNames = plan.toolNames;
     setActiveTools(pi, mergeToolNames(state.previousToolNames ?? DEFAULT_TOOL_NAMES, plan.toolNames));
     if (ctx.hasUI)
-        ctx.ui.setStatus(STATUS_KEY, !state.config.voiceFeaturesOnly && state.config.ui.statusLine ? buildExtraToolsOnlyStatusText(plan.toolNames, ctx.ui.theme) : undefined);
+        ctx.ui.setStatus(STATUS_KEY, state.config.ui.statusLine ? buildExtraToolsOnlyStatusText(plan.toolNames, ctx.ui.theme) : undefined);
 }
 function enableAdapter(pi, ctx, state, plan, extensionTools) {
     const owned = state.enabled ? mergeToolNames(state.adapterOwnedToolNames ?? plan.ownedToolNames, plan.ownedToolNames) : plan.ownedToolNames;

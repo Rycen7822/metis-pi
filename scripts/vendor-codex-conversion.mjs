@@ -27,9 +27,11 @@ const PATCH_FILE = join(VENDOR, "patches", "local.patch");
 
 /** Paths copied from upstream. `src` carries the patched sources; the rest are runtime assets. */
 const VENDORED_PATHS = ["src", "vendor", "code-mode", "types", "changelog.ts", "CHANGELOG.md", "LICENSE"];
-/** Payload trimming (see UPSTREAM.md): no voice helper binaries, native tools for linux-x64 only. */
+/** Payload trimming (see UPSTREAM.md): no voice implementation, native tools for linux-x64 only. */
 const EXCLUDES = [
-  /^src[/\\]voice[/\\]bin([/\\]|$)/,
+  /^src[/\\]voice([/\\]|$)/,
+  /^src[/\\]realtime-voice\.ts$/,
+  /^src[/\\]ui[/\\]settings[/\\]config-items-voice\.ts$/,
   /^src[/\\]tools[/\\][^/\\]+[/\\]bin[/\\](?!linux-x64([/\\]|$))/,
 ];
 

@@ -14,9 +14,6 @@ export declare const SETTINGS_TABS: readonly [{
     readonly id: "display";
     readonly label: "Display";
 }, {
-    readonly id: "voice";
-    readonly label: "Voice";
-}, {
     readonly id: "usage";
     readonly label: "Usage";
 }, {
@@ -39,9 +36,6 @@ export declare const ROUTABLE_SETTINGS_TABS: ({
 } | {
     readonly id: "display";
     readonly label: "Display";
-} | {
-    readonly id: "voice";
-    readonly label: "Voice";
 } | {
     readonly id: "usage";
     readonly label: "Usage";

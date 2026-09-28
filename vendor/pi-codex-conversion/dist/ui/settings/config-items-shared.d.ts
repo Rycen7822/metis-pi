@@ -17,7 +17,7 @@ export declare class TextSettingSubmenu extends Container implements Focusable {
 }
 export declare function setting(item: ConfigSetting["item"], update?: ConfigSetting["update"]): ConfigSetting;
 export declare function toggle(id: string, label: string, current: boolean, update: (enabled: boolean, config: CodexConversionConfig) => CodexConversionConfig, description: string): ConfigSetting;
-type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
+type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode">;
 type BooleanKey<T> = {
     [K in keyof T]-?: T[K] extends boolean ? K : never;
 }[keyof T] & string;

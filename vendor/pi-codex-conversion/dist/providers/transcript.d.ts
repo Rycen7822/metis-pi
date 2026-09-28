@@ -50,7 +50,7 @@ export declare function createInitialSystemMessage(systemPrompt: string | undefi
 export declare function normalizeProviderContext(context: Context): ResolvedTranscript;
 /**
  * Context for host APIs that consume a normalized transcript (Pi 0.86 `streamSimple`
- * entry points). Internal callers that bypass the model registry (voice context, remote
+ * entry points). Internal callers that bypass the model registry (remote
  * compaction v2, portable summaries) build plain `Context` objects, so fold them here.
  * The transcript brand exists only in the host type; the runtime value is the folded
  * `{ messages }` shape the host produces itself.

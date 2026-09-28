@@ -23,13 +23,6 @@ export function normalizeIntegerInRange(value, fallback, minimum, maximum) {
         ? value
         : fallback;
 }
-export function normalizeVoiceContextModel(value) {
-    if (!isObject(value))
-        return undefined;
-    const provider = normalizeOptionalString(value["provider"]);
-    const modelId = normalizeOptionalString(value["modelId"]);
-    return provider && modelId ? { provider, modelId } : undefined;
-}
 export function normalizeNotebookProfile(value) {
     const name = normalizeOptionalString(value);
     return name && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)

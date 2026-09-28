@@ -129,7 +129,6 @@ function resolveProviderApis(config, executionMode, modelRegistry) {
         const plan = resolveCodexRuntimePlan({ model }, config, executionMode);
         const mode = executionMode ?? config.executionMode;
         const configuredResponsesLite = model.api === "openai-responses" &&
-            !config.voiceFeaturesOnly &&
             (mode === "code" || mode === "notebook") &&
             config.openai.proxyResponsesLite &&
             config.scope.additionalProviders.includes(model.provider.trim().toLowerCase());

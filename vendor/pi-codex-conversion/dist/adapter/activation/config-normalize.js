@@ -1,6 +1,6 @@
 import { DEFAULT_CODEX_CONVERSION_CONFIG, MAX_NOTEBOOK_HEAP_MIB, MIN_NOTEBOOK_HEAP_MIB, } from "./config-contract.js";
-import { isObject, normalizeAllProvidersMode, normalizeCacheDiagnosticsMode, normalizeCodexVerbosity, normalizeCompactToolsMode, normalizeContextManagementMode, normalizeCustomRustBinariesDir, normalizeDictationShortcutMode, normalizeLunaCacheKeepaliveMinutes, normalizeProviderList, normalizeRealtimeV3Voice, normalizeV2UserMessageRetention, normalizeVoiceContextReasoning, } from "./config-normalizers.js";
-import { normalizeBoolean, normalizeIntegerInRange, normalizeNotebookProfile, normalizeOptionalString, normalizeString, normalizeVoiceContextModel, } from "./config-values.js";
+import { isObject, normalizeAllProvidersMode, normalizeCacheDiagnosticsMode, normalizeCodexVerbosity, normalizeCompactToolsMode, normalizeContextManagementMode, normalizeCustomRustBinariesDir, normalizeLunaCacheKeepaliveMinutes, normalizeProviderList, normalizeV2UserMessageRetention, } from "./config-normalizers.js";
+import { normalizeBoolean, normalizeIntegerInRange, normalizeNotebookProfile, normalizeString, } from "./config-values.js";
 import { normalizeExecutionMode } from "./execution-mode.js";
 // Default booleans have one rule. Enum/string/optional fields and dependencies stay explicit below.
 function booleans(section, values) {
@@ -20,11 +20,7 @@ export function normalizeCodexConversionConfig(value) {
         ui["toolRenaming"] = ui["toolRendering"];
     const compaction = isObject(value["compaction"]) ? value["compaction"] : {};
     const notebook = isObject(value["notebook"]) ? value["notebook"] : {};
-    const voice = isObject(value["voice"]) ? value["voice"] : {};
     const openai = isObject(value["openai"]) ? value["openai"] : {};
-    const inputDevice = normalizeOptionalString(voice["inputDevice"]);
-    const outputDevice = normalizeOptionalString(voice["outputDevice"]);
-    const contextModel = normalizeVoiceContextModel(voice["contextModel"]);
     const notebookProfile = normalizeNotebookProfile(notebook["profile"]);
     const executionMode = normalizeExecutionMode(value["executionMode"]) ??
         defaults.executionMode;
@@ -32,7 +28,6 @@ export function normalizeCodexConversionConfig(value) {
         defaults.compaction.contextManagement;
     const config = {
         executionMode,
-        voiceFeaturesOnly: normalizeBoolean(value["voiceFeaturesOnly"], defaults.voiceFeaturesOnly),
         prompt: {
             ...booleans("prompt", prompt),
         },
@@ -65,21 +60,6 @@ export function normalizeCodexConversionConfig(value) {
             maxHeapMiB: normalizeIntegerInRange(notebook["maxHeapMiB"], defaults.notebook.maxHeapMiB, MIN_NOTEBOOK_HEAP_MIB, MAX_NOTEBOOK_HEAP_MIB),
             ...(notebookProfile ? { profile: notebookProfile } : {}),
         },
-        voice: {
-            ...booleans("voice", voice),
-            v3Voice: normalizeRealtimeV3Voice(voice["v3Voice"]) ??
-                defaults.voice.v3Voice,
-            dictationShortcut: normalizeString(voice["dictationShortcut"], defaults.voice.dictationShortcut),
-            realtimeShortcut: normalizeString(voice["realtimeShortcut"], defaults.voice.realtimeShortcut),
-            muteShortcut: normalizeString(voice["muteShortcut"], defaults.voice.muteShortcut),
-            serverShortcut: normalizeString(voice["serverShortcut"], defaults.voice.serverShortcut),
-            dictationShortcutMode: normalizeDictationShortcutMode(voice["dictationShortcutMode"]) ??
-                defaults.voice.dictationShortcutMode,
-            ...(contextModel ? { contextModel } : {}),
-            contextReasoning: normalizeVoiceContextReasoning(voice["contextReasoning"]),
-            ...(inputDevice ? { inputDevice } : {}),
-            ...(outputDevice ? { outputDevice } : {}),
-        },
         openai: {
             ...booleans("openai", openai),
             verbosity: normalizeCodexVerbosity(openai["verbosity"]) ??
@@ -93,6 +73,5 @@ export function normalizeCodexConversionConfig(value) {
     config.compaction.hybridCompaction &&= contextManagement !== "off";
     config.compaction.responsesCompaction &&= contextManagement === "off";
     config.compaction.portableSummary &&= config.compaction.responsesCompaction;
-    config.voice.refreshRealtimeAfterCompaction &&= contextModel !== undefined;
     return config;
 }

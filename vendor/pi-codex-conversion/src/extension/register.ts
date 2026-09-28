@@ -8,13 +8,11 @@ import { prepareCodeModeHost, registerCodexEvents } from "./events.ts";
 import { createCodexExtensionRuntime } from "./runtime.ts";
 import { registerCodexTools } from "./tools.ts";
 import { registerCodexUi } from "./ui.ts";
-import { registerCodexVoiceRenderer } from "../voice/ui.ts";
 import { resolveCodexRuntimePlanForState } from "../adapter/activation/runtime-plan.ts";
 import { captureActiveProviderSystemPrompt } from "../adapter/provider-request.ts";
 import { hasCodexCacheKeepalivePlanChanged } from "../adapter/activation/cache-keepalive.ts";
 
 export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
-	registerCodexVoiceRenderer(pi);
 	registerApplyPatchDisplayBroker(pi);
 	const runtime = createCodexExtensionRuntime(pi);
 	runtime.state.contextTree.register(pi);
@@ -36,7 +34,7 @@ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
 		cleanupProxyProvider = proxyProvider;
 		const tools = registerCodexTools(pi, runtime);
 		const ui = registerCodexUi(pi, runtime);
-		registerCodexCommand(pi, runtime.state, runtime.voice, runtime.lanVoice, (config, ctx, previousConfig) => {
+		registerCodexCommand(pi, runtime.state, (config, ctx, previousConfig) => {
 			const executionModeChanged = config.executionMode !== previousConfig.executionMode;
 			const contextManagementChanged =
 				config.compaction.contextManagement !==
@@ -73,8 +71,7 @@ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
 				runtime.cancelCacheKeepalive();
 			}
 			if (
-				config.voiceFeaturesOnly !== previousConfig.voiceFeaturesOnly
-				|| executionModeChanged
+				executionModeChanged
 				|| config.prompt.heavySystemPromptOverwrite !== previousConfig.prompt.heavySystemPromptOverwrite
 				|| config.openai.fast !== previousConfig.openai.fast
 				|| config.openai.harnessIdentifierHeader !== previousConfig.openai.harnessIdentifierHeader
@@ -84,11 +81,7 @@ export async function registerCodexConversion(pi: ExtensionAPI): Promise<void> {
 			) {
 				runtime.resetTransport(ctx.sessionManager.getSessionId());
 			}
-			if (config.voiceFeaturesOnly && !previousConfig.voiceFeaturesOnly) {
-				void codeMode.shutdownHost().catch((error: unknown) => {
-					ctx.ui.notify(`Could not stop Code Mode host: ${error instanceof Error ? error.message : String(error)}`, "warning");
-				});
-			} else if (executionModeChanged) {
+			if (executionModeChanged) {
 				void codeMode.shutdownHost()
 					.then(() => prepareCodeModeHost(codeMode, ctx))
 					.catch((error: unknown) => {

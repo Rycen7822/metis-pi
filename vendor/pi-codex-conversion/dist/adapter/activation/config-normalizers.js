@@ -1,4 +1,4 @@
-import { DEFAULT_VOICE_CONTEXT_REASONING, LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS, REALTIME_V3_VOICES, VOICE_CONTEXT_REASONING_LEVELS, } from "./config-contract.js";
+import { LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS, } from "./config-contract.js";
 import { normalizeOptionalString } from "./config-values.js";
 export { isObject } from "./config-values.js";
 export function normalizeAllProvidersMode(value) {
@@ -50,14 +50,6 @@ export function normalizeLunaCacheKeepaliveMinutes(value) {
 export function normalizeV2UserMessageRetention(value) {
     return value === 16 || value === 32 || value === 64 ? value : undefined;
 }
-export function normalizeDictationShortcutMode(value) {
-    return value === "push" || value === "toggle" ? value : undefined;
-}
-export function normalizeRealtimeV3Voice(value) {
-    return typeof value === "string"
-        ? REALTIME_V3_VOICES.find((voice) => voice === value)
-        : undefined;
-}
 export function normalizeProviderList(value) {
     if (!Array.isArray(value))
         return [];
@@ -67,12 +59,6 @@ export function normalizeProviderList(value) {
             .map((entry) => entry.trim().toLowerCase())
             .filter(Boolean)),
     ];
-}
-export function normalizeVoiceContextReasoning(value) {
-    return typeof value === "string" &&
-        VOICE_CONTEXT_REASONING_LEVELS.includes(value)
-        ? value
-        : DEFAULT_VOICE_CONTEXT_REASONING;
 }
 export function normalizeCustomRustBinariesDir(value) {
     return normalizeOptionalString(value) ?? "";

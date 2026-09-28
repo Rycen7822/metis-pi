@@ -20,11 +20,9 @@ maintainer action and must preserve all applicable local patches.
 
 ## What is here
 
-- `src/**` — the locally maintained upstream-derived TypeScript sources. **This is where patches are made.**
+- `src/**` — the locally maintained upstream-derived TypeScript sources, excluding the retired voice implementation. **This is where patches are made.**
 - `dist/**` — build output (`tsc -p tsconfig.build.json`), **committed** so pi can load the
   extension with no build step at install time.
-- `changelog.ts` / `changelog.js` — the "what's new" payload the entry imports dynamically;
-  `changelog.js` is generated from `changelog.ts` by `npm run vendor:build`.
 - `vendor/**` — runtime assets: `tree-sitter-bash.wasm`, `js-tiktoken` ranks.
 - `code-mode/**` — code-mode host assets and upstream notices.
 - `types/**` — public type declarations.
@@ -43,17 +41,17 @@ maintainer action and must preserve all applicable local patches.
 
 ## Deliberate omissions (payload scope)
 
-Upstream ships 73 MB (43 MB of it voice helper binaries). This copy is **11.7 MB of real file bytes**:
-`dist/` 1.8 MB, `src/` 5.9 MB (of which the linux-x64 native tools are 3.7 MB), runtime assets `vendor/`
-3.5 MB, `code-mode/` 0.4 MB. Excluded, by decision:
+The vendored copy excludes upstream voice and keeps only the native tool binaries
+needed on linux-x64. Excluded, by decision:
 
-- `src/voice/bin/**` — the 43 MB of per-platform voice helper binaries. Voice features therefore
-  fail at use time (not at load time).
+- `src/voice/**`, `src/realtime-voice.ts`, `src/ui/settings/config-items-voice.ts` —
+  the complete upstream voice implementation, including its native helper source and binaries.
 - `src/tools/{exec,apply-patch,view-image}/bin/{darwin,win32}-*` and `linux-arm64` — only
   **linux-x64** native tools are vendored (this machine's platform).
 
-Re-vendoring for another platform: rerun the copy with a wider `--exclude` set (see
-`scripts/vendor-codex-conversion.mjs`, `sync` action).
+Re-vendoring for another platform: adjust the native-tool exclusions in
+`scripts/vendor-codex-conversion.mjs` before running `sync`. The voice exclusions
+remain in place.
 
 Runtime asset lookups are relative to the package root (the code computes it as four levels up from
 `dist/tools/native/binary.js`), so the directory structure above is not free-form: `dist/`,

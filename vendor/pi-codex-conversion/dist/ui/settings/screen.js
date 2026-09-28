@@ -1,7 +1,5 @@
-import { CONFIG_DIR_NAME, getSettingsListTheme, } from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme, } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, SettingsList, truncateToWidth, } from "@earendil-works/pi-tui";
-import { formatVoiceShortcut } from "../../voice/setup.js";
-import { getCodexVoiceSystemPromptChangelogPath, getCodexVoiceSystemPromptPath, REALTIME_SYSTEM_PROMPT_BASENAME, } from "../../voice/system-prompt.js";
 import { handleAboutTabInput, renderAboutTab } from "./about-tab.js";
 import { openCodexConfigInExternalEditor } from "./config-editor.js";
 import { buildConfigSettings } from "./config-items.js";
@@ -10,10 +8,6 @@ import { createUsageTab } from "./usage-tab.js";
 export async function openCodexSettingsScreen(ctx, options) {
     let draft = options.initialConfig;
     let activeTab = options.initialTab ?? "adapter";
-    const availableContextModels = ctx.modelRegistry
-        .getAvailable()
-        .filter((model) => model.input.includes("text"))
-        .map((model) => ({ provider: model.provider, modelId: model.id }));
     await ctx.ui.custom((tui, theme, _kb, done) => {
         const usageTab = createUsageTab(ctx, options, () => tui.requestRender());
         let settingsList;
@@ -61,22 +55,7 @@ export async function openCodexSettingsScreen(ctx, options) {
                             }),
                         }]
                     : []),
-                ...(activeTab === "voice" && options.lanVoiceServer
-                    ? [
-                        {
-                            item: {
-                                id: "lanVoiceServer",
-                                description: "Serve this session\u0027s voice interface to a browser on your local network. Stops when the session changes.",
-                                label: "LAN voice server",
-                                currentValue: options.lanVoiceServer.status().running
-                                    ? "on"
-                                    : "off",
-                                values: ["off", "on"],
-                            },
-                        },
-                    ]
-                    : []),
-                ...buildConfigSettings(activeTab, draft, theme, availableContextModels),
+                ...buildConfigSettings(activeTab, draft, theme),
             ];
             list = new SettingsList(buildSettings().map(({ item }) => item), 8, getSettingsListTheme(), (id, value) => {
                 const definition = buildSettings().find(({ item }) => item.id === id);
@@ -122,22 +101,6 @@ export async function openCodexSettingsScreen(ctx, options) {
                         list.updateValue(id, previousValue);
                     }
                     tui.requestRender(true);
-                    return;
-                }
-                if (id === "lanVoiceServer" && options.lanVoiceServer) {
-                    const previousValue = options.lanVoiceServer.status().running
-                        ? "on"
-                        : "off";
-                    void options.lanVoiceServer
-                        .setEnabled(value === "on")
-                        .then((status) => {
-                        list.updateValue(id, status.running ? "on" : "off");
-                        tui.requestRender();
-                    })
-                        .catch(() => {
-                        list.updateValue(id, previousValue);
-                        tui.requestRender();
-                    });
                     return;
                 }
                 if (!definition?.update)
@@ -186,17 +149,12 @@ export async function openCodexSettingsScreen(ctx, options) {
                     ]);
                 if (activeTab === "tools")
                     settingsLines = withSettingsDetails(settingsLines, formatToolsDetails(theme, options.configScope.path()));
-                if (activeTab === "voice")
-                    settingsLines = withSettingsDetails(settingsLines, formatVoiceDetails(theme, draft, options.configScope.path()));
                 return [
                     rule(width, theme, "accent"),
                     formatTabs(activeTab, theme),
                     rule(width, theme, "borderMuted"),
                     ...(activeTab === "usage" ? usageTab.render(theme) : []),
                     ...(activeTab === "about" ? renderAboutTab(theme) : []),
-                    ...(activeTab === "voice"
-                        ? formatVoiceStatus(theme, options.lanVoiceServer?.status())
-                        : []),
                     "",
                     ...(hasSettingsList
                         ? withSettingsFooter(settingsLines, theme)
@@ -232,36 +190,6 @@ function rule(width, theme, color) {
 }
 function formatTabs(activeTab, theme) {
     return `  ${SETTINGS_TABS.map(({ id, label }) => (id === activeTab ? theme.bold(label) : theme.fg("dim", label))).join(`  ${theme.fg("dim", "/")}  `)}`;
-}
-function formatVoiceStatus(theme, lanVoice) {
-    return [
-        ...(lanVoice?.running
-            ? [
-                theme.fg("accent", "  LAN voice is running"),
-                ...lanVoice.urls.map((url) => theme.fg("dim", `  ${url}`)),
-                theme.fg("dim", "  First visit: accept the local HTTPS certificate"),
-            ]
-            : [
-                theme.fg("dim", "  LAN voice serves this session only and stops when the session changes"),
-            ]),
-    ];
-}
-function formatVoiceDetails(theme, config, configPath) {
-    return [
-        theme.fg("dim", `  Audio input: ${config.voice.inputDevice ?? "system default"}`),
-        theme.fg("dim", `  Audio output: ${config.voice.outputDevice ?? "system default"}`),
-        theme.fg("dim", `  Realtime voice: ${formatVoiceShortcut(config.voice.realtimeShortcut)}`),
-        theme.fg("dim", `  Mute microphone: ${formatVoiceShortcut(config.voice.muteShortcut)}`),
-        theme.fg("dim", `  Dictation: ${formatVoiceShortcut(config.voice.dictationShortcut)}`),
-        theme.fg("dim", `  LAN server: ${formatVoiceShortcut(config.voice.serverShortcut)}`),
-        theme.fg("dim", `  Change keybinds: ${configPath} (/reload to apply)`),
-        theme.fg("dim", "  Voice context refresh uses the selected summarisation model"),
-        "",
-        theme.fg("dim", `  Realtime system prompt: ${getCodexVoiceSystemPromptPath()}`),
-        theme.fg("dim", `  Folder-level: create ${CONFIG_DIR_NAME}/${REALTIME_SYSTEM_PROMPT_BASENAME} (appends to global)`),
-        theme.fg("dim", "  Realtime system prompt changelog:"),
-        theme.fg("dim", `  ${getCodexVoiceSystemPromptChangelogPath()}`),
-    ];
 }
 function formatFooter(activeTab) {
     if (activeTab === "usage")

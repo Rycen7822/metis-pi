@@ -78,7 +78,7 @@ export function toggle(
 	);
 }
 
-type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode" | "voiceFeaturesOnly">;
+type ConfigSection = Exclude<keyof CodexConversionConfig, "executionMode">;
 type BooleanKey<T> = { [K in keyof T]-?: T[K] extends boolean ? K : never }[keyof T] & string;
 
 /** A single-field toggle reads the displayed snapshot but updates the latest draft. */

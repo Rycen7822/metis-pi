@@ -1,1 +1,0 @@
-export const MAX_REALTIME_SDP_BYTES = 256 * 1024;

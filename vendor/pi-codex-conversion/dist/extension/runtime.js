@@ -14,8 +14,6 @@ import { createCodexTurnState } from "../providers/openai-codex/turn-state.js";
 import { createExecCommandTracker } from "../tools/exec/command-state.js";
 import { createExecSessionManager } from "../tools/exec/session-manager.js";
 import { getBundledToolBinaryPath } from "../tools/native/binary.js";
-import { CodexVoiceController } from "../voice/controller.js";
-import { CodexLanVoiceServerController } from "../voice/lan/controller.js";
 import { getActiveToolsInActiveOrder } from "../adapter/active-tools.js";
 import { createLazyCodexDiagnostics } from "../diagnostics/lazy.js";
 import { CodexDeveloperMessageBridge } from "../adapter/developer-messages.js";
@@ -40,18 +38,8 @@ export function createCodexExtensionRuntime(pi) {
         console.warn(`[pi-codex-conversion] ${warning}`);
     }
     const initialConfig = readEffectiveCodexConversionConfig({ cwd: process.cwd(), projectTrusted: false });
-    const voice = new CodexVoiceController(pi);
-    const contextWindows = new CodexContextWindowManager(undefined, async (ctx, options) => {
-        voice.announceContextTransition("rollover");
-        await voice.refreshRealtimeContext(ctx, state.config, options);
-    });
-    const contextKickoff = new CodexContextWindowKickoff(contextWindows, (input) => {
-        // Extension kickoffs bypass ordinary voice input routing, including after call replacement.
-        const text = typeof input === "string" ? input : input
-            .flatMap((part) => part.type === "text" ? [part.text] : [])
-            .join("\n");
-        voice.piInput(text.trim() ? text : "Continue.");
-    });
+    const contextWindows = new CodexContextWindowManager();
+    const contextKickoff = new CodexContextWindowKickoff(contextWindows);
     const state = {
         enabled: false,
         cwd: process.cwd(),
@@ -321,13 +309,6 @@ export function createCodexExtensionRuntime(pi) {
         tracker,
         sessions,
         backgroundWidget: { folded: true },
-        voice,
-        lanVoice: new CodexLanVoiceServerController(voice, () => state.config, (text, ctx) => {
-            if (ctx.isIdle())
-                pi.sendUserMessage(text);
-            else
-                pi.sendUserMessage(text, { deliverAs: "steer" });
-        }, dirname(getCodexConversionConfigPath())),
         execEnv(_config = state.config) {
             return { ...process.env };
         },
