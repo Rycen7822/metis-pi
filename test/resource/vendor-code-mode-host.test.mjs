@@ -13,7 +13,7 @@ import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 test("host downloads use the metis release only on compatible Linux x64", () => {
 	const own = resolveCodeModeHostAsset("linux", "x64", "2.34");
 	assert.equal(own.repository, "Rycen7822/metis-pi");
-	assert.match(hostAssetUrl(own), /code-mode-host-rust-v0\.145\.0-metis\.1/);
+	assert.match(hostAssetUrl(own), /code-mode-host-rust-v0\.145\.0-metis\.2/);
 	assert.equal(resolveCodeModeHostAsset("linux", "x64", "2.33").repository, "openai/codex");
 	assert.equal(resolveCodeModeHostAsset("linux", "x64", "").repository, "openai/codex");
 	assert.equal(resolveCodeModeHostAsset("darwin", "arm64", "2.40").repository, "openai/codex");
