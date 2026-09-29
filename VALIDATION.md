@@ -1,5 +1,12 @@
 # Validation
 
+## 2026-09-30 — Pi-owned authentication and provider helpers
+
+- Codex browser/device-code login and refresh now inherit Pi authentication; the extra connector scopes and two local OAuth files are retired. Tool conversion and partial JSON parsing reuse the host's public APIs through one export resolver. The unused Skills path scanner/export and direct partial-json dependencies are retired; Code Mode's Skills bridge remains.
+- Production TS decreased **405 lines** (30,410 → 30,005), including the new shared host API bridge. One assertion was added to the existing provider-registration test; maintenance source decreased **404 lines**. No new permanent test files or test cases.
+- `npm run verify` passed: production/test/vendor types, **440/440 tests**, and package dry run. Focused registration/transcript/preparation checks passed **26/26**. Temporary before/after comparisons preserved four transcript cases and eleven complete stream traces; 24 tool-conversion combinations matched and six JSON inputs followed native parsing.
+- An offline production-only package install outside the repository loaded via installed Pi **0.87.1** without a local pi-ai or partial-json package. Its registered provider passed fabricated device-code login/refresh/auth, an exec grammar request/result and malformed-JSON repair through mocked SSE, with no extension errors. No real OAuth login, model request or V8 execution was performed for this change.
+
 ## 2026-09-29 — Published and activated Code Mode host metis.3
 
 - Source `d6de2cb9fe7605e78365324b77e3e2918598f928` includes the observation/termination corrections and the preceding Rust remote-client removal. Both jobs passed in source CI [36590320288](https://github.com/Rycen7822/metis-pi/actions/runs/36590320288), including the new cold Rust/V8 build and actual-host smoke.

@@ -3,28 +3,14 @@ import type { ResponseStreamEvent } from "openai/resources/responses/responses.j
 import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
 	appendGrammarToolInputJsonDelta,
+	parseStreamingJson,
 	type GrammarToolInputJsonBuffer,
-} from "../constrained-sampling.ts";
+} from "../host-api.ts";
 import { encodeTextSignatureV1 } from "./signatures.ts";
 import { sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
 import type { OpenAIResponsesStreamOptions } from "./shared.ts";
 
 type InternalAssistantContent = AssistantMessage["content"][number] | ImageGenerationCallBlock | WebSearchCallBlock;
-
-type PartialJsonParser = (value: string) => unknown;
-
-function parseStreamingJson(partialJson: string, partialParse: PartialJsonParser): JsonObject {
-	if (!partialJson || partialJson.trim() === "") return {};
-	try {
-		return JSON.parse(partialJson) as JsonObject;
-	} catch {
-		try {
-			return (partialParse(partialJson) ?? {}) as JsonObject;
-		} catch {
-			return {};
-		}
-	}
-}
 
 export async function processResponsesStream<TApi extends Api>(
 	openaiStream: AsyncIterable<ResponseStreamEvent>,
@@ -33,7 +19,6 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
-	const { parse: partialParse } = await import("partial-json");
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 	type ThinkingBlock = Extract<AssistantMessage["content"][number], { type: "thinking" }>;
@@ -250,7 +235,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const state = outputStates.get(event.output_index);
 			if (state?.kind === "function_call") {
 				state.block.partialJson = (state.block.partialJson ?? "") + event.delta;
-				state.block.arguments = parseStreamingJson(state.block.partialJson ?? "", partialParse);
+				state.block.arguments = parseStreamingJson<JsonObject>(state.block.partialJson ?? "");
 				stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta: event.delta, partial: output });
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
@@ -258,7 +243,7 @@ export async function processResponsesStream<TApi extends Api>(
 			if (state?.kind === "function_call") {
 				const previousPartialJson = state.block.partialJson ?? "";
 				state.block.partialJson = event.arguments;
-				state.block.arguments = parseStreamingJson(state.block.partialJson ?? "", partialParse);
+				state.block.arguments = parseStreamingJson<JsonObject>(state.block.partialJson ?? "");
 				if (event.arguments.startsWith(previousPartialJson)) {
 					const delta = event.arguments.slice(previousPartialJson.length);
 					if (delta.length > 0) {
@@ -331,8 +316,8 @@ export async function processResponsesStream<TApi extends Api>(
 				const state = outputStates.get(event.output_index);
 				const namespace = (item as unknown as { namespace?: string }).namespace;
 				const args = state?.kind === "function_call" && state.block.partialJson
-					? parseStreamingJson(state.block.partialJson, partialParse)
-					: parseStreamingJson(item.arguments || "{}", partialParse);
+					? parseStreamingJson<JsonObject>(state.block.partialJson)
+					: parseStreamingJson<JsonObject>(item.arguments || "{}");
 				let toolCall: ToolCallBlock;
 				if (state?.kind === "function_call") {
 					state.block.arguments = args;

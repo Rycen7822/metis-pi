@@ -40,7 +40,6 @@
   "dependencies": {
     "marked": "18.0.11",
     "openai": "^7.10.0",
-    "partial-json": "^0.1.7",
     "proxy-from-env": "^2.1.0",
     "smol-toml": "^1.8.0",
     "undici": "^8.10.2",

@@ -6,6 +6,8 @@
 
 通过 `/codex [tab]` 管理转换层设置，配置存于 `pi-codex-conversion.json`，独立于 `metis-pi.json`。已有独立 codex-conversion 安装应先禁用或移除，避免同名工具和命令重复注册。
 
+Codex 浏览器/设备码登录与凭据刷新由 Pi 原生 provider 管理；转换层不再额外申请 connector 权限。模型目录同样跟随 Pi，转换层保留自己的请求适配与执行工具。
+
 | 执行模式 | 主要工具 |
 | --- | --- |
 | normal | `exec_command`、`write_stdin`、`apply_patch`、`view_image` 等原生工具。 |

@@ -21,7 +21,7 @@ Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{se
 
 ## 2. Grammar and namespace tools
 
-`providers/constrained-sampling.ts` delegates to the running host's public sampling API. Pi aliases the root package to compat, so the bridge uses SDK `getPackageDir`, Node `findPackageJSON` and the package's declared export target; it does not guess private paths or install another pi-ai. The minimum host is Pi 0.87.0. Responses text/refusal deltas share one branch while retaining part types and item-done callbacks.
+`providers/host-api.ts` delegates sampling, Responses tool conversion and partial JSON parsing to the running host's public APIs. Pi aliases the root package to compat, so one bridge resolves the package's declared exports using SDK `getPackageDir` and Node `findPackageJSON`; it does not guess private paths or install another pi-ai. The minimum host is Pi 0.87.0. Tool search uses Pi's `toolSearchResult` option. Native JSON repair replaces the local parser and direct `partial-json` dependency. Responses text/refusal deltas retain part types and item-done callbacks.
 
 `providers/openai-codex-custom-provider.ts`, `providers/openai-responses/stream.ts`, `providers/openai-codex/transport-recovery.ts`, `providers/code-mode-proxy-provider.ts` and `context-management/namespace-tools.ts` resolve tools from the transcript. Grammar mapping and namespace routing retain their distinct responsibilities; blindly replacing every `context.tools` read is insufficient.
 
@@ -47,9 +47,11 @@ tool rewriting. Offline contracts and failure boundaries are covered in
 
 Provider and model-related patches use the tightened JSON object contract and omit undefined diagnostic properties. Preserve runtime values and error classification.
 
-## 5. Pi-owned Codex model catalog
+## 5. Pi-owned Codex model catalog and authentication
 
 `openai-codex-custom-provider.ts` initially registers only its request stream, leaving Pi's current `openai-codex` models intact. At session start, its native provider delegates model lookup and refresh to that Pi-backed provider and adds only the hidden Luna Reserve model. Do not restore a vendored snapshot of ordinary Codex models: it masks models added by newer Pi releases.
+
+Authentication also delegates to that provider: Pi owns browser/device-code login and credential refresh. The local OAuth implementation and extra connector scopes are retired. Skills discovery remains Pi-owned; the unused `getCodexSkillPaths` export is retired, while Code Mode's prompt bridge still exposes skills when only exec/wait are active.
 
 ## Selective upstream fixes through 3.0.39
 

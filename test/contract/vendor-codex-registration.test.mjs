@@ -75,6 +75,7 @@ test("built vendor entry follows Pi's catalog and wires lifecycle, final request
     assert.equal(original.thinkingLevelMap.off, "none", "host-owned model metadata remains untouched");
   }
   assert.equal(provider.refreshModels, catalogProvider.refreshModels, "catalog refresh delegates to the host");
+  assert.equal(provider.auth, catalogProvider.auth, "login and credential refresh delegate to the host");
   assert.ok(provider.getModels().some(({ id }) => id === "gpt-reserve"));
   assert.ok(!provider.filterModels(provider.getModels(), {}).some(({ id }) => id === "gpt-reserve"));
   const capture = await captureRegistration(provider);

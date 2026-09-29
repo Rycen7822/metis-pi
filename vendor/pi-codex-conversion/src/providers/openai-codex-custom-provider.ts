@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
-import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
+import { createGrammarToolInputProperties } from "./host-api.ts";
 import { declaredToolsOf } from "./transcript.ts";
 import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexWebSocketUrl } from "./openai-codex/headers.ts";
 import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";
@@ -15,7 +15,6 @@ import type { CodexDiagnosticsSink, CodexPrewarmDiagnostics, CodexPrewarmResult,
 import { closeOpenAICodexWebSocketSessions, recordWebSocketSseFallback } from "./openai-codex/websocket.ts";
 import { isWebSocketMessageTooBigError, isWebSocketUpgradeRequiredError } from "./openai-codex/websocket-connection.ts";
 import { codexCacheKeepaliveSocketSessionId, prewarmWebSocket } from "./openai-codex/websocket-stream.ts";
-import { openaiCodexNativeOAuthProvider } from "./openai-codex/oauth.ts";
 import { type CodexTurnState, withCodexTurnState } from "./openai-codex/turn-state.ts";
 import { withRemoteCompactionV2Feature } from "./openai-responses/compaction-v2-feature.ts";
 import { normalizeResponsesToolHistory } from "./openai-responses/tool-history.ts";
@@ -149,7 +148,7 @@ export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: {
 			id: "openai-codex",
 			name: "OpenAI Codex",
 			baseUrl: DEFAULT_CODEX_BASE_URL,
-			auth: { oauth: openaiCodexNativeOAuthProvider },
+			auth: baseProvider.auth,
 			getModels: () => withCodexReserveModel(baseProvider.getModels() as Model<"openai-codex-responses">[]),
 			...(baseProvider.refreshModels ? { refreshModels: baseProvider.refreshModels } : {}),
 			filterModels: (available) => available.filter(({ id }) => id !== CODEX_RESERVE_MODEL),

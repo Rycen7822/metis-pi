@@ -11,7 +11,7 @@ import {
 	type Transport,
 } from "@earendil-works/pi-ai";
 import type { CodexConversionConfig } from "../../adapter/activation/config.ts";
-import { createGrammarToolInputProperties } from "../constrained-sampling.ts";
+import { createGrammarToolInputProperties } from "../host-api.ts";
 import { declaredToolsOf } from "../transcript.ts";
 import { DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_SSE_HEADER_TIMEOUT_MS, DEFAULT_STREAM_IDLE_TIMEOUT_MS, DEFAULT_STREAM_MAX_RETRIES, INITIAL_STREAM_RETRY_DELAY_MS, MAX_SSE_REQUEST_RETRIES, MAX_STREAM_MAX_RETRIES } from "./constants.ts";
 import { createErrorMessage, isRetryableRequestStatus, isRetryableStreamStatus, NonRetryableProviderError, parseErrorResponse } from "./errors.ts";

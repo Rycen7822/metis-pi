@@ -4,14 +4,9 @@ import type {
 	ResponseInput,
 	ResponseInputItem,
 	ResponseToolSearchOutputItemParam,
-	Tool as OpenAITool,
 } from "openai/resources/responses/responses.js";
-import {
-	getJsonSchemaToolParameters,
-	getGrammarToolInput,
-	resolveGrammarConstrainedSampling,
-	resolveJsonSchemaStrictSampling,
-} from "../constrained-sampling.ts";
+import type { ConvertResponsesToolsOptions } from "@earendil-works/pi-ai/api/openai-responses-shared";
+import { convertResponsesTools, getGrammarToolInput } from "../host-api.ts";
 import { parseTextSignature, shortHash } from "./signatures.ts";
 import { normalizeResponsesToolHistory } from "./tool-history.ts";
 import { normalizeResponsesMessageHistory } from "./message-history.ts";
@@ -52,13 +47,6 @@ interface ConvertResponsesMessagesOptions {
 	/** False for a continuation slice whose first system message is an update. */
 	startsAtTranscriptHead: boolean;
 	toolOptions: ConvertResponsesToolsOptions;
-}
-
-interface ConvertResponsesToolsOptions {
-	strict?: boolean | null | undefined;
-	supportsStrictMode?: boolean | undefined;
-	supportsOpenAIGrammarTools?: boolean | undefined;
-	deferLoading?: boolean | undefined;
 }
 
 export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -313,7 +301,7 @@ function convertResponsesMessages<TApi extends Api>(
 			call_id: searchCallId,
 			execution: "client",
 			status: "completed",
-			tools: convertResponsesTools(tools, { ...options.toolOptions, deferLoading: true }),
+			tools: convertResponsesTools(tools, { ...options.toolOptions, toolSearchResult: true }),
 		} satisfies ResponseToolSearchOutputItemParam);
 	};
 	const compat = model.compat as { supportsDeveloperRole?: boolean | undefined } | undefined;
@@ -467,36 +455,5 @@ function convertResponsesMessages<TApi extends Api>(
 	return normalizeResponsesToolHistory(messages) as ResponseInput;
 }
 
-export function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
-	const defaultStrict = options?.strict === undefined ? false : options.strict;
-	const supportsStrictMode = options?.supportsStrictMode ?? true;
-	const supportsOpenAIGrammarTools = options?.supportsOpenAIGrammarTools ?? false;
-	return tools.map((tool): OpenAITool => {
-		const grammar = resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools);
-		if (grammar) return {
-			type: "custom",
-			name: tool.name,
-			description: tool.description,
-			format: {
-				type: "grammar",
-				syntax: grammar.format,
-				definition: grammar.definition,
-			},
-			...(options?.deferLoading ? { defer_loading: true } : {}),
-		} as OpenAITool;
-		const constrainedStrict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode);
-		const strict = constrainedStrict ?? defaultStrict;
-		const functionTool = {
-			type: "function",
-			name: tool.name,
-			description: tool.description,
-			parameters: getJsonSchemaToolParameters(tool, strict === true) as unknown as Record<string, unknown>,
-			...(options?.deferLoading ? { defer_loading: true } : {}),
-		} as Extract<OpenAITool, { type: "function" }>;
-		if (supportsStrictMode) functionTool.strict = strict;
-		return functionTool;
-	});
-}
-
-
+export { convertResponsesTools };
 export { processResponsesStream } from "./stream.ts";
