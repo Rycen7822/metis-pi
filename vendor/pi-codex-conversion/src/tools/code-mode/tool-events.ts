@@ -9,6 +9,12 @@ export function registerCodeModeEvents(
 	pi: ExtensionAPI,
 	runtime: SharedCodeModeRuntime,
 ): void {
+	// Input handlers run before Pi queues the message. Yield only the observation;
+	// never await host I/O here or consume/replace the submitted input.
+	pi.on("input", (event, ctx) => {
+		if (event.streamingBehavior === "steer" && !ctx.isIdle()) runtime.yieldObservations();
+		return { action: "continue" };
+	});
 	pi.on("session_start", (_event, ctx) => {
 		runtime.resetPromptTools(ctx);
 	});

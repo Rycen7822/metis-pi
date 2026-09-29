@@ -176,6 +176,8 @@ Current results and unverified runtime boundaries live only in the root [VALIDAT
 
 `tools/code-mode/host-client.ts` owns the framed host connection, the session protocol (`session/open`, `session/execute`, `session/wait`, `session/terminate`, `session/shutdown` with its shutdown deadline), request/pending bookkeeping and the delegate/cell reply mapping; `host-connection.ts`, `host-process.ts` and `host-protocol.ts` keep framing, process and wire-schema responsibilities. The former single-purpose forwarding modules (`host-session.ts`, `host-delegation.ts`, `host-cell-operations.ts`) are gone, so do not restore a second layer that only re-exports those calls. This ownership consolidation preserves protocol fields, resource paths and the `exec`/`wait` tool names. `test/resource/vendor-code-mode-host.test.mjs` drives a real client against a stand-in host process over the shipped frame protocol; it proves the adapter protocol, not a real V8 host cell.
 
+Startup has a shared 30-second hello/session-open deadline with per-caller cancellation. Cell execution context is captured before startup; wait only changes the observer and update routing. Explicit steering input can yield an observation on capable hosts without cancelling its cell or nested tools. Optional capability negotiation preserves older hosts; see `code-mode/UPSTREAM_SYNC.md` for the source versus published-asset boundary and actual-host CI coverage.
+
 The unused Rust process-owning remote client and its exports are removed from the maintained workspace. The TS client still owns host startup and framed requests; the Rust host retains its in-process session, delegation and protocol implementation.
 
 ## Code Mode Linux x64 host asset

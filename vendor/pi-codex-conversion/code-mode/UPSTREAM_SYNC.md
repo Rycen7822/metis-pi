@@ -31,6 +31,16 @@ The original source pin stays at 0.145.0. The following changes are backported f
 
 Storage keeps the existing contract: load creates independent JS values; a later commit cannot mutate another cell's snapshot. Ordinary cell errors can commit preceding writes, whereas explicit termination discards uncommitted writes.
 
+## Observation and bridge corrections
+
+The maintained source additionally backports `55543d87724bb66bdd51bde65254feb9b4c9ed10` (per-request observation yield) and `f5ffa4695995bb6664fe8754ecb5ed2973f2801e` (drain queued output before terminating the observer). The stdio protocol negotiates optional `yield-observation`; a yield ends only the current execute/wait observation, preserving the cell, delegated tools and storage transaction. Each later wait gets a fresh signal. Cancellation remains a separate operation.
+
+The TS bridge bounds hello plus session-open startup to 30 seconds and lets an individual caller stop waiting without cancelling another caller's shared startup. Cells retain their initial execution cwd/model/hooks; current observers own update delivery. Explicit steering input yields active observations synchronously and returns `continue`; follow-up and idle input do not. Pi runs input handlers before queue insertion, so this is steering intent, not confirmation that every later handler accepted the message. Hosts without the optional capability retain timed observation behavior.
+
+`scripts/verify-code-mode-host.mjs` exercises a supplied real host binary: tool delegation, undefined input, storage, early observation yield, wait yield, blocking tool survival and termination. CI builds the maintained Rust source through the pinned release builder before running this check. Temporary actor race oracles remain in `.work`.
+
+These source changes are not in the currently selected `.metis.2` asset below. A new immutable host release and activation commit are required to enable observation yield and the termination correction on installed Linux x64 profiles.
+
 ## Linux x64 host release
 
 On Linux x64 with glibc 2.34 or newer, the installer selects our `code-mode-host-rust-v0.145.0-metis.2` release from `Rycen7822/metis-pi`. Its only payload is `codex-code-mode-host-x86_64-unknown-linux-gnu.tar.gz`, built from source `47adbb43711db857d6f401615ec99cd8d5d53eb6` with the selected runtime/V8 updates above and unsupported audio output removed. The archive SHA-256 is pinned in `src/tools/code-mode/host-assets.ts`; the selected release also names the cache directory, so an update fetches a new host instead of reusing an old one. Older glibc or musl Linux x64, Linux arm64, macOS and Windows continue using the pinned upstream `rust-v0.145.0` host. The Pi bridge rejects upstream `input_audio` results on those paths.

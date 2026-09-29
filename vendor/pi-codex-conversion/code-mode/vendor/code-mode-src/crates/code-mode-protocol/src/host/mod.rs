@@ -1,9 +1,10 @@
 //! Messages and local IPC framing for the code-mode host boundary.
 //!
 //! Protocol version 1 multiplexes session operations and delegate callbacks by
-//! request ID over one ordered connection. It defines no optional capabilities
-//! yet; capability names provide an extension point for later versions without
-//! weakening the v1 decoder.
+//! request ID over one ordered connection. Optional capabilities extend the
+//! protocol without weakening the v1 decoder.
+
+pub const YIELD_OBSERVATION_CAPABILITY: &str = "yield-observation";
 
 mod codec;
 mod error;

@@ -1,4 +1,5 @@
 import { ensureCodeModeHostBinary } from "./binary.ts";
+import { waitWithSignal } from "./host-operation.ts";
 import { CodeModeHostClient } from "./host-client.ts";
 import { codeModeGlobalName } from "./tool-identity.ts";
 import { CodeModeNestedRenderStore } from "./trace-render-state.ts";
@@ -18,6 +19,7 @@ export interface CodeModeToolProvider {
 export class SharedCodeModeRuntime {
 	readonly providers = new Map<object, CodeModeToolProvider>();
 	readonly renderStore = new CodeModeNestedRenderStore();
+	private observations = new Set<AbortController>();
 	private clientPromise: Promise<CodeModeHostClient> | undefined;
 	private clientStartupAbort: AbortController | undefined;
 	private customPromptToolsSnapshot: CodeModeToolDefinition[] | undefined;
@@ -88,7 +90,18 @@ export class SharedCodeModeRuntime {
 			?.minimalOutput?.() ?? false;
 	}
 
-	async getClient(): Promise<CodeModeHostClient> {
+	async observe<T>(run: (preempt: AbortSignal) => Promise<T>): Promise<T> {
+		const observation = new AbortController();
+		this.observations.add(observation);
+		try { return await run(observation.signal); }
+		finally { this.observations.delete(observation); }
+	}
+
+	yieldObservations(): void {
+		for (const observation of this.observations) observation.abort();
+	}
+
+	async getClient(signal?: AbortSignal): Promise<CodeModeHostClient> {
 		if (!this.clientPromise) {
 			const startupAbort = new AbortController();
 			const pending = ensureCodeModeHostBinary(startupAbort.signal).then(
@@ -111,7 +124,7 @@ export class SharedCodeModeRuntime {
 				},
 			);
 		}
-		return this.clientPromise;
+		return waitWithSignal(this.clientPromise, signal);
 	}
 
 	prepare(ctx?: unknown): Promise<void> | undefined {

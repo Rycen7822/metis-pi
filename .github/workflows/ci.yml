@@ -16,3 +16,16 @@ jobs:
       - run: sudo apt-get update -qq
       - run: sudo apt-get install -y -qq tmux
       - run: npm run test:pty:strict
+  code-mode-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: rustup toolchain install 1.94.0 --profile minimal && rustup default 1.94.0
+      - run: bash scripts/build-code-mode-host-release.sh .work/host-release
+      - run: tar -xzf .work/host-release/codex-code-mode-host-x86_64-unknown-linux-gnu.tar.gz -C .work/host-release
+      - run: node --experimental-strip-types scripts/verify-code-mode-host.mjs .work/host-release/codex-code-mode-host

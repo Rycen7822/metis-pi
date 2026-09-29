@@ -31,3 +31,14 @@ export function throwIfAborted(signal?: AbortSignal): void {
 export function toError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
 }
+
+/** Stop this caller's wait without cancelling a shared startup or download. */
+export function waitWithSignal<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return pending;
+	return new Promise<T>((resolve, reject) => {
+		const abort = () => reject(abortError());
+		signal.addEventListener("abort", abort, { once: true });
+		void pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+		if (signal.aborted) abort();
+	});
+}

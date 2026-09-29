@@ -134,6 +134,8 @@ pub enum ClientToHost {
     Request { id: RequestId, request: HostRequest },
     #[serde(rename = "operation/cancel")]
     CancelRequest { id: RequestId },
+    #[serde(rename = "operation/yield")]
+    YieldRequest { id: RequestId },
     #[serde(rename = "delegate/response")]
     DelegateResponse {
         id: DelegateRequestId,

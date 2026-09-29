@@ -26,6 +26,7 @@ type SendMessage = (message: unknown) => void;
 export class CodeModeDelegateRuntime {
 	private readonly traceRuntimeGeneration = crypto.randomUUID();
 	private readonly cellContexts = new Map<string, ToolExecutionContext>();
+	private readonly observers = new Map<string, ToolExecutionContext>();
 	private readonly cellTools = new Map<string, Map<string, CodeModeToolDefinition>>();
 	private readonly controllers = new Map<number, AbortController>();
 	private readonly notifications = new Map<string, string[]>();
@@ -53,16 +54,18 @@ export class CodeModeDelegateRuntime {
 		context: ToolExecutionContext,
 		tools?: Map<string, CodeModeToolDefinition>,
 	): void {
-		this.cellContexts.set(cellId, context);
+		if (tools && !this.cellContexts.has(cellId)) this.cellContexts.set(cellId, context);
+		this.updateCellContext(cellId, context);
 		if (tools) this.cellTools.set(cellId, tools);
 	}
 
 	updateCellContext(cellId: string, context: ToolExecutionContext): void {
-		this.cellContexts.set(cellId, context);
+		if (this.cellContexts.has(cellId)) this.observers.set(cellId, context);
 	}
 
 	closeCell(cellId: string): void {
 		this.cellContexts.delete(cellId);
+		this.observers.delete(cellId);
 		this.cellTools.delete(cellId);
 		this.blockers.delete(cellId);
 		this.blockerChanges.get(cellId)?.resolve();
@@ -83,6 +86,7 @@ export class CodeModeDelegateRuntime {
 		for (const controller of this.controllers.values()) controller.abort();
 		this.controllers.clear();
 		this.cellContexts.clear();
+		this.observers.clear();
 		this.cellTools.clear();
 		this.traces.clear();
 		this.fusionEvidence.clear();
@@ -132,7 +136,7 @@ export class CodeModeDelegateRuntime {
 		if (notifications.length > MAX_NOTIFICATIONS_PER_CELL)
 			notifications.splice(0, notifications.length - MAX_NOTIFICATIONS_PER_CELL);
 		this.notifications.set(cellId, notifications);
-		context.onUpdate?.({
+		this.observers.get(cellId)?.onUpdate?.({
 			content: [{ type: "text", text }],
 			details: { cellId, notification: true },
 		});
@@ -206,7 +210,11 @@ export class CodeModeDelegateRuntime {
 		const context = this.cellContexts.get(cellId);
 		if (!tool) throw new Error(`Unknown custom tool: ${toolName}`);
 		if (!context) throw new Error("Code-mode cell context is unavailable");
-		const currentContext = () => this.cellContexts.get(cellId) ?? context;
+		const currentContext = () => ({
+			...context,
+			onUpdate: this.observers.get(cellId)?.onUpdate,
+			toolCallId: this.observers.get(cellId)?.toolCallId ?? context.toolCallId,
+		});
 		const emitTrace = () => this.traces.emitUpdate(cellId, currentContext());
 		const trace = this.traces.start(
 			cellId,
@@ -232,7 +240,7 @@ export class CodeModeDelegateRuntime {
 			},
 			captureResult: (result) => {
 				finalResultCaptured = true;
-				this.fusionEvidence.capture(cellId, trace.id, trace.name, input, result, currentContext());
+				this.fusionEvidence.capture(cellId, trace.id, trace.name, input, result, context);
 				resultSessionId = numericSessionId(result.details);
 				if (captureRendererValues)
 					this.renderStore.captureResult(trace.id, result);

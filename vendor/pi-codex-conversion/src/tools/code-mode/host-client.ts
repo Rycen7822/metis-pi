@@ -7,6 +7,7 @@ import {
 	cancelOperation,
 	throwIfAborted,
 	toError,
+	waitWithSignal,
 } from "./host-operation.ts";
 import {
 	DEFAULT_CODE_MODE_EXEC_YIELD_MS,
@@ -38,6 +39,7 @@ type HostClientOptions = {
 	tools: CodeModeToolDefinition[];
 	renderStore?: CodeModeNestedRenderStore | undefined;
 	shutdownGraceMs?: number | undefined;
+	startupTimeoutMs?: number | undefined;
 };
 
 /**
@@ -52,10 +54,12 @@ export class CodeModeHostClient {
 	private readonly delegate: CodeModeDelegateRuntime;
 	private readonly shutdownGraceMs: number;
 	private ready: Promise<void> | undefined;
+	private readonly startupTimeoutMs: number;
 
 	constructor(options: HostClientOptions) {
 		this.tools = new Map(options.tools.map((tool) => [tool.name, tool]));
 		this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
+		this.startupTimeoutMs = options.startupTimeoutMs ?? 30_000;
 		this.delegate = new CodeModeDelegateRuntime(
 			(message) => this.connection.send(message),
 			options.renderStore,
@@ -70,16 +74,21 @@ export class CodeModeHostClient {
 		});
 	}
 
-	async start(): Promise<void> {
-		if (this.ready) return this.ready;
-		const ready = this.startSession();
-		this.ready = ready;
-		try {
-			await ready;
-		} catch (error) {
-			this.connection.close(toError(error));
-			throw error;
+	async start(signal?: AbortSignal): Promise<void> {
+		throwIfAborted(signal);
+		if (!this.ready) {
+			let timer: ReturnType<typeof setTimeout>;
+			const timeout = new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => reject(new Error("Code-mode host startup timed out")), this.startupTimeoutMs);
+			});
+			const ready = Promise.race([this.startSession(), timeout]).catch((error: unknown) => {
+				// A previous startup failure must not tear down a newer attempt.
+				if (this.ready === ready) this.connection.close(toError(error));
+				throw error;
+			}).finally(() => clearTimeout(timer));
+			this.ready = ready;
 		}
+		return waitWithSignal(this.ready, signal);
 	}
 
 	async execute(
@@ -87,9 +96,12 @@ export class CodeModeHostClient {
 		context: ToolExecutionContext,
 		signal?: AbortSignal,
 		tools: CodeModeToolDefinition[] = [...this.tools.values()],
+		preempt?: AbortSignal,
 	): Promise<RuntimeResponse> {
 		throwIfAborted(signal);
-		await this.start();
+		// Freeze execution getters before asynchronous startup can change the active model.
+		context = { ...context, extensionContext: context.extensionContext ? { ...context.extensionContext } : undefined };
+		await this.start(signal);
 		throwIfAborted(signal);
 		const { code, yieldTimeMs, maxOutputTokens } = parseExecSource(source);
 		const effectiveYieldTimeMs =
@@ -115,6 +127,7 @@ export class CodeModeHostClient {
 			},
 			(value) => this.bindCell(value, context, toolSet),
 		);
+		const stopYield = this.observeYield(id, preempt);
 		let cellId: string | undefined;
 		const abort = () => {
 			cancelOperation(this.connection, id);
@@ -130,13 +143,14 @@ export class CodeModeHostClient {
 			}
 			const response = this.delegate.attach(parseRuntimeResponse(await initial));
 			return {
-				...(await this.waitForBlockers(response, context, effectiveYieldTimeMs, signal)),
+				...(await this.waitForBlockers(response, context, effectiveYieldTimeMs, signal, preempt)),
 				maxOutputTokens: maxOutputTokens ?? 10_000,
 			};
 		} catch (error) {
 			this.connection.rejectOperation(id, toError(error));
 			throw error;
 		} finally {
+			stopYield();
 			signal?.removeEventListener("abort", abort);
 		}
 	}
@@ -146,6 +160,7 @@ export class CodeModeHostClient {
 		yieldTimeMs: number,
 		context: ToolExecutionContext,
 		signal?: AbortSignal,
+		preempt?: AbortSignal,
 	): Promise<RuntimeResponse> {
 		return this.waitForBlockers(
 			await this.cellOperation(
@@ -158,10 +173,12 @@ export class CodeModeHostClient {
 					request: { cell_id: cellId, yield_time_ms: yieldTimeMs },
 				},
 				"Code-mode host returned an invalid wait outcome",
+				preempt,
 			),
 			context,
 			yieldTimeMs,
 			signal,
+			preempt,
 		);
 	}
 
@@ -212,10 +229,19 @@ export class CodeModeHostClient {
 		context: ToolExecutionContext,
 		yieldTimeMs: number,
 		signal?: AbortSignal,
+		preempt?: AbortSignal,
 	): Promise<RuntimeResponse> {
 		let current = response;
+		const yieldSignal = this.connection.supportsYield ? preempt : undefined;
+		const blockerSignal = yieldSignal ? AbortSignal.any(signal ? [signal, yieldSignal] : [yieldSignal]) : signal;
 		while (current.kind === "yielded" && this.delegate.isBlocked(current.cellId)) {
-			await this.delegate.waitUntilUnblocked(current.cellId, signal);
+			throwIfAborted(signal);
+			if (yieldSignal?.aborted) return current;
+			try { await this.delegate.waitUntilUnblocked(current.cellId, blockerSignal); }
+			catch (error) {
+				if (yieldSignal?.aborted && !signal?.aborted) return current;
+				throw error;
+			}
 			current = await this.cellOperation(
 				current.cellId,
 				context,
@@ -226,6 +252,7 @@ export class CodeModeHostClient {
 					request: { cell_id: current.cellId, yield_time_ms: yieldTimeMs },
 				},
 				"Code-mode host returned an invalid wait outcome",
+				preempt,
 			);
 		}
 		return current;
@@ -238,18 +265,22 @@ export class CodeModeHostClient {
 		signal: AbortSignal | undefined,
 		request: Record<string, unknown>,
 		invalidOutcomeMessage: string,
+		preempt?: AbortSignal,
 	): Promise<RuntimeResponse> {
 		throwIfAborted(signal);
-		await this.start();
+		await this.start(signal);
 		throwIfAborted(signal);
 		this.delegate.updateCellContext(cellId, context);
 		const id = this.connection.nextRequestId();
 		const abort = () => { cancelOperation(this.connection, id); };
+		let stopYield = () => {};
 		signal?.addEventListener("abort", abort, { once: true });
 		try {
-			const value = await this.connection.requestWithId(id, request, (response) =>
+			const pending = this.connection.requestWithId(id, request, (response) =>
 				this.bindCell(response, context),
 			);
+			stopYield = this.observeYield(id, preempt);
+			const value = await pending;
 			const wrapped = runtimeOutcome(value);
 			if (!wrapped) throw new Error(invalidOutcomeMessage);
 			return {
@@ -257,8 +288,16 @@ export class CodeModeHostClient {
 				...(isMissingRuntimeOutcome(value) ? { missingCell: true as const } : {}),
 			};
 		} finally {
+			stopYield();
 			signal?.removeEventListener("abort", abort);
 		}
+	}
+
+	private observeYield(id: number, signal?: AbortSignal): () => void {
+		const yieldNow = () => this.connection.yieldObservation(id);
+		if (signal?.aborted) yieldNow();
+		else signal?.addEventListener("abort", yieldNow, { once: true });
+		return () => signal?.removeEventListener("abort", yieldNow);
 	}
 
 	/** Bind a host-reported cell to its execution context before replies arrive. */

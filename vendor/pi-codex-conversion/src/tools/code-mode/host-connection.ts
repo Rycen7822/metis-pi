@@ -21,6 +21,7 @@ export class CodeModeHostConnection {
 	private ready: Promise<void> | undefined;
 	private pending = new Map<number, Pending>();
 	private initial = new Map<number, Pending>();
+	private canYield = false;
 
 	constructor(options: HostConnectionOptions) {
 		this.onMessage = options.onMessage;
@@ -47,7 +48,7 @@ export class CodeModeHostConnection {
 		try {
 			await ready;
 		} catch (error) {
-			this.failAll(error instanceof Error ? error : new Error(String(error)));
+			if (this.ready === ready) this.failAll(error instanceof Error ? error : new Error(String(error)));
 			throw error;
 		}
 	}
@@ -61,7 +62,7 @@ export class CodeModeHostConnection {
 			type: "connection/hello",
 			supportedVersions: [1],
 			requiredCapabilities: [],
-			optionalCapabilities: [],
+			optionalCapabilities: ["yield-observation"],
 		});
 		await handshake;
 	}
@@ -114,6 +115,7 @@ export class CodeModeHostConnection {
 
 	private handleMessage(message: HostMessage): void {
 		if (message.type === "connection/ready") {
+			this.canYield = message.capabilities.includes("yield-observation");
 			const pending = this.pending.get(0);
 			this.pending.delete(0);
 			pending?.resolve(undefined);
@@ -154,7 +156,16 @@ export class CodeModeHostConnection {
 		this.onMessage(message);
 	}
 
+	get supportsYield(): boolean { return this.canYield; }
+
+	yieldObservation(id: number): void {
+		if (!this.canYield || (!this.pending.has(id) && !this.initial.has(id))) return;
+		try { this.send({ type: "operation/yield", id }); }
+		catch (error) { this.failAll(error instanceof Error ? error : new Error(String(error))); }
+	}
+
 	private failAll(error: Error): void {
+		this.canYield = false;
 		for (const pending of [...this.pending.values(), ...this.initial.values()])
 			pending.reject(error);
 		this.pending.clear();

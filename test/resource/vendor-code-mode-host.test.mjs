@@ -51,7 +51,7 @@ process.stdin.on("data", (chunk) => {
 function handle(message) {
   log({ received: message.type, id: message.id, method: message.request?.method });
   if (message.type === "connection/hello") {
-    send({ type: "connection/ready", selectedVersion: 1, capabilities: [] });
+    if (!config.ignoreHello) setTimeout(() => send({ type: "connection/ready", selectedVersion: 1, capabilities: config.capabilities ?? [] }), config.helloDelayMs ?? 0);
     return;
   }
   if (message.type === "delegate/response") {
@@ -64,6 +64,7 @@ function handle(message) {
   if (message.type !== "operation/request") return;
   const method = message.request.method;
   if (method === "session/open") {
+    if (config.ignoreOpen) return;
     send({ type: "operation/response", id: message.id, result: { status: "ok", value: {} } });
     return;
   }
@@ -98,7 +99,7 @@ function handle(message) {
 
 /** Client plus scenario host; the test owns both processes' cleanup. The shutdown
  * hook is registered before the temp directory so cleanup never deletes it first. */
-function startClient(t, config = {}, shutdownGraceMs = 1_000) {
+function startClient(t, config = {}, shutdownGraceMs = 1_000, startupTimeoutMs = 2_000) {
   let client;
   t.after(() => client?.shutdown().catch(() => undefined));
   const dir = temporaryDirectory(t, "metis-code-mode-host-");
@@ -107,8 +108,9 @@ function startClient(t, config = {}, shutdownGraceMs = 1_000) {
   writeFileSync(binary, hostScript(config, logPath));
   chmodSync(binary, 0o755);
   writeFileSync(logPath, "");
-  client = new CodeModeHostClient({ binary, tools: [], shutdownGraceMs });
+  client = new CodeModeHostClient({ binary, tools: [], shutdownGraceMs, startupTimeoutMs });
   const host = {
+    configure: (next) => writeFileSync(binary, hostScript(next, logPath)),
     messages: () => readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)),
   };
   return { host, client, context: { cwd: dir } };
@@ -199,3 +201,71 @@ test("shutdown honours its deadline when the host never answers and drops pendin
   assert.ok(host.messages().some((entry) => entry.method === "session/shutdown"), "the shutdown request was sent");
   await waiting;
 });
+
+for (const phase of ["ignoreHello", "ignoreOpen"]) {
+  test(`startup deadline bounds ${phase} and allows retry`, async (t) => {
+    const { client, host } = startClient(t, { [phase]: true }, 100, 200);
+    await assert.rejects(client.start(), /startup timed out/);
+    host.configure({});
+    await client.start();
+  });
+}
+
+test("aborting one startup caller preserves another caller and shutdown allows restart", async (t) => {
+  const { client, host } = startClient(t, { helloDelayMs: 100 });
+  const controller = new AbortController();
+  const cancelled = assert.rejects(client.start(controller.signal), { name: "AbortError" });
+  const healthy = client.start();
+  controller.abort();
+  await cancelled;
+  await healthy;
+  await client.shutdown();
+  host.configure({ ignoreHello: true });
+  const interrupted = assert.rejects(client.start(), /shut down/);
+  await client.shutdown();
+  host.configure({});
+  await interrupted;
+  await client.start();
+});
+
+test("delegation keeps execution cwd and model while updates reach the current observer", async (t) => {
+  const { client, context } = startClient(t, { delegateOnWait: true });
+  let model = { id: "original" };
+  const updates = [];
+  const hooks = [];
+  const origin = { ...context, toolCallId: "exec-origin", extensionContext: { get model() { return model; } },
+    preflight: async (call) => { hooks.push(call.cwd); },
+    completion: async (call) => { hooks.push(call.cwd); } };
+  const tool = { ...probeTool([]), async invoke(_input, ctx) {
+    assert.equal(ctx.cwd, context.cwd);
+    assert.equal(ctx.extensionContext.model.id, "original");
+    return "origin preserved";
+  } };
+  const executing = client.execute("probe();", origin, undefined, [tool]);
+  model = { id: "changed" };
+  await executing;
+  const result = await client.wait("cell-1", 5, { ...context, cwd: "/different", toolCallId: "wait-observer", onUpdate: (x) => updates.push(x) });
+  assert.equal(result.kind, "result");
+  assert.deepEqual(hooks, [context.cwd, context.cwd]);
+  assert.ok(updates.length > 0);
+});
+
+for (const supported of [false, true]) {
+  test(`steering transport respects capability negotiation (${supported}) and fails safely`, async (t) => {
+    const { client, host, context } = startClient(t, { holdWait: true, capabilities: supported ? ["yield-observation"] : [] });
+    await client.execute("probe();", context);
+    const preempt = new AbortController();
+    const waiting = client.wait("cell-1", 5, context, undefined, preempt.signal);
+    await waitFor(() => host.messages().some((entry) => entry.held !== undefined));
+    // A transport failure during an input event must reject the operation, not escape abort().
+    const send = client.connection.send.bind(client.connection);
+    client.connection.send = (message) => {
+      if (message.type === "operation/yield") throw new Error("transport unavailable");
+      send(message);
+    };
+    const rejected = assert.rejects(waiting, supported ? /transport unavailable/ : /shut down/);
+    preempt.abort();
+    await client.shutdown();
+    await rejected;
+  });
+}

@@ -85,12 +85,15 @@ function createExecTool(
 		async execute(id, params, signal, onUpdate, ctx) {
 			tracker.start(id);
 			try {
-				const response = await (await runtime.getClient()).execute(
+				const origin = { ...ctx };
+				const tools = runtime.collectTools(origin);
+				const response = await runtime.observe(async (preempt) => (await runtime.getClient(signal)).execute(
 					params.code,
-					{ cwd: ctx.cwd, toolCallId: id, extensionContext: ctx, ...hooks, onUpdate },
+					{ cwd: origin.cwd, toolCallId: id, extensionContext: origin, ...hooks, onUpdate },
 					signal,
-					runtime.collectTools(ctx),
-				);
+					tools,
+					preempt,
+				));
 				tracker.finish(
 					id,
 					response.kind === "yielded" ? "yielded" : "done",
@@ -135,17 +138,18 @@ function createWaitTool(
 		async execute(id, params, signal, onUpdate, ctx) {
 			tracker.start(id);
 			try {
-				const client = await runtime.getClient();
+				const client = await runtime.getClient(signal);
 				const context = { cwd: ctx.cwd, toolCallId: id, extensionContext: ctx, ...hooks, onUpdate };
 				const attempt = waitAttempts.get(params.cell_id) ?? 0;
 				const response = params.terminate
 					? await client.terminate(params.cell_id, context, signal)
-					: await client.wait(
+					: await runtime.observe((preempt) => client.wait(
 							params.cell_id,
 							adaptiveWaitMs(params.yield_time_ms ?? DEFAULT_WAIT_MS, attempt),
 							context,
 							signal,
-						);
+							preempt,
+						));
 				const recovered =
 					!params.terminate &&
 					response.missingCell === true

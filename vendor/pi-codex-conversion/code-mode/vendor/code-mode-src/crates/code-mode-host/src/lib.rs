@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_code_mode::InProcessCodeModeSession;
+use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::EncodedFrame;
@@ -25,6 +26,7 @@ use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_protocol::host::YIELD_OBSERVATION_CAPABILITY;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::Semaphore;
@@ -128,6 +130,9 @@ where
                 ClientToHost::CancelRequest { id } => {
                     state.cancel_request(id);
                 }
+                ClientToHost::YieldRequest { id } => {
+                    state.yield_request(id);
+                }
                 ClientToHost::DelegateResponse { id, result } => {
                     peer.complete(id, result.into_result()).await;
                 }
@@ -196,7 +201,10 @@ where
         return Ok(false);
     }
 
-    let host_capabilities = CapabilitySet::empty();
+    let capability = Capability::new(YIELD_OBSERVATION_CAPABILITY)?;
+    let requested = client_hello.required_capabilities().contains(&capability)
+        || client_hello.optional_capabilities().contains(&capability);
+    let host_capabilities = CapabilitySet::try_new(requested.then_some(capability))?;
     if let Some(capability) = client_hello
         .required_capabilities()
         .iter()
@@ -240,7 +248,7 @@ impl HostState {
         request_id: RequestId,
         request: HostRequest,
     ) -> Result<(), anyhow::Error> {
-        let cancellation = self
+        let (cancellation, yield_signal) = self
             .requests
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -257,7 +265,7 @@ impl HostState {
         let request_task = self.request_tasks.spawn(async move {
             let _permit = permit;
             state
-                .handle_request(request_id, request, cancellation)
+                .handle_request(request_id, request, cancellation, yield_signal)
                 .await;
             state.finish_request(request_id);
         });
@@ -279,6 +287,7 @@ impl HostState {
         request_id: RequestId,
         request: HostRequest,
         cancellation: CancellationToken,
+        yield_signal: CancellationToken,
     ) {
         if self.closing.load(Ordering::Acquire) {
             self.respond(
@@ -328,7 +337,7 @@ impl HostState {
                     );
                     return;
                 };
-                let result = session.execute(request).await;
+                let result = session.execute(request, Some(yield_signal)).await;
                 match result {
                     Ok(started) => {
                         let cell_id = started.cell_id.clone();
@@ -360,7 +369,7 @@ impl HostState {
                             _ = cancellation.cancelled() => {
                                 Err("code-mode request cancelled".to_string())
                             }
-                            result = session.wait(request.into()) => result.map(|outcome| {
+                            result = session.wait(request.into(), Some(yield_signal)) => result.map(|outcome| {
                                 HostResponse::WaitCompleted {
                                     outcome: outcome.into(),
                                 }
@@ -466,6 +475,13 @@ impl HostState {
             .cancel(request_id);
     }
 
+    fn yield_request(&self, request_id: RequestId) {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .yield_observation(request_id);
+    }
+
     fn finish_request(&self, request_id: RequestId) {
         self.requests
             .lock()
@@ -522,6 +538,7 @@ impl RequestKind {
 struct ActiveRequest {
     kind: RequestKind,
     cancellation: CancellationToken,
+    yield_signal: CancellationToken,
 }
 
 #[derive(Default)]
@@ -536,19 +553,21 @@ impl RequestRegistry {
         &mut self,
         request_id: RequestId,
         kind: RequestKind,
-    ) -> Result<CancellationToken, anyhow::Error> {
+    ) -> Result<(CancellationToken, CancellationToken), anyhow::Error> {
         if self.active.contains_key(&request_id) || self.recent.contains(&request_id) {
             anyhow::bail!("duplicate code-mode request ID {request_id:?}");
         }
         let cancellation = CancellationToken::new();
+        let yield_signal = CancellationToken::new();
         self.active.insert(
             request_id,
             ActiveRequest {
                 kind,
                 cancellation: cancellation.clone(),
+                yield_signal: yield_signal.clone(),
             },
         );
-        Ok(cancellation)
+        Ok((cancellation, yield_signal))
     }
 
     fn cancel(&self, request_id: RequestId) {
@@ -556,6 +575,14 @@ impl RequestRegistry {
             && request.kind.is_cancellable()
         {
             request.cancellation.cancel();
+        }
+    }
+
+    fn yield_observation(&self, request_id: RequestId) {
+        if let Some(request) = self.active.get(&request_id)
+            && matches!(request.kind, RequestKind::Execute | RequestKind::Wait)
+        {
+            request.yield_signal.cancel();
         }
     }
 
