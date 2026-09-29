@@ -80,7 +80,7 @@ export async function prewarmOpenAICodexWebSocket<TApi extends Api>(
 	if (getEffectiveCodexTransport(options.transport, runtimeConfig?.openai, options.sessionId) === "sse") return;
 	if (!options.apiKey || !options.sessionId) return;
 	const responsesLite = deps.useResponsesLite?.(model)
-		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
+			?? (runtimeConfig?.executionMode === "code"
 			&& supportsResponsesLiteModel(model.id));
 	const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
 	const effectiveOptions = runtimeConfig?.compaction?.responsesCompaction

@@ -33,7 +33,6 @@ const PI_CANONICAL_TOOL_LINES = new Set([
 	"- find: Find files by glob pattern (respects .gitignore)",
 	"- exec: Compose tools with JavaScript",
 	"- wait: Resume or terminate an exec cell",
-	"- notebook: Inspect or control notebook lifecycle",
 ]);
 const PI_DEFAULT_GUIDELINES = new Set([
 	"Use bash for file operations like ls, rg, find",
@@ -62,20 +61,6 @@ const CODE_MODE_GUIDELINES = [
 	"Return concise exec output with text()",
 ];
 
-const NOTEBOOK_MODE_GUIDELINES = [
-	"exec is a persistent Deno/TypeScript Jupyter notebook; project globals may come from earlier agents and sessions",
-	"Check notebook status and reuse matching retained globals; inspect description/usage before creating reusable ones",
-	"Keep one-offs block-local; retain reusable analysis and helpers as named globals with concise description/usage; pin valuable state before pruning",
-	...CODE_MODE_GUIDELINES,
-	"Diagnose state or helper failures; repair or prune failed state and verify recovery",
-	"Filter retained data inside exec and return the needed findings",
-	"Keep canonical project artifacts in files; carry shell state across tools.exec_command calls through files or arguments",
-	"Keep retained helpers self-contained; recreate imports, closures, and live handles after restart",
-	"Notebook reports memory warnings; release/prune before pressure becomes critical",
-	"exec calls run sequentially; use wait to observe or terminate the currently yielded call",
-	"Treat Notebook as a persistent Deno REPL: build small programs on retained state across cells",
-];
-
 const CODE_MODE_REPLACED_GUIDELINES = new Set([
 	"Reserve tty=true for input or persistent processes",
 	"Use apply_patch for text-file changes, including creates/deletes/moves; split oversized patches",
@@ -90,7 +75,6 @@ const ALL_STATIC_CODEX_GUIDELINES = [
 	FOLLOW_THROUGH_GUIDELINE,
 	...NORMAL_CODEX_GUIDELINES,
 	...CODE_MODE_GUIDELINES,
-	...NOTEBOOK_MODE_GUIDELINES,
 ];
 
 function withoutCosmeticTerminalPeriod(value: string): string {
@@ -113,14 +97,10 @@ function canonicalizeGuidelineLine(line: string): string {
 	return canonical ? `${match[1]}${canonical}` : line;
 }
 
-type CodexPromptMode = "normal" | "code" | "notebook";
+type CodexPromptMode = "normal" | "code";
 
 function buildCodexGuidelines(mode: CodexPromptMode = "normal", piPackageRoot?: string): string[] {
-	const guidelines = mode === "normal"
-		? [...NORMAL_CODEX_GUIDELINES]
-		: mode === "notebook"
-			? [...NOTEBOOK_MODE_GUIDELINES]
-			: [...CODE_MODE_GUIDELINES];
+	const guidelines = mode === "normal" ? [...NORMAL_CODEX_GUIDELINES] : [...CODE_MODE_GUIDELINES];
 	guidelines.unshift(FOLLOW_THROUGH_GUIDELINE);
 	if (piPackageRoot) {
 		guidelines.push(`When work depends on Pi APIs or runtime behavior not established in the current repository, consult the relevant README.md, docs/, or examples/ files under ${piPackageRoot} and follow their references before implementing`);

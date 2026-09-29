@@ -184,7 +184,7 @@ function resolveProviderApis(
 		const mode = executionMode ?? config.executionMode;
 		const configuredResponsesLite =
 			model.api === "openai-responses" &&
-			(mode === "code" || mode === "notebook") &&
+			mode === "code" &&
 			config.openai.proxyResponsesLite &&
 			config.scope.additionalProviders.includes(
 				model.provider.trim().toLowerCase(),

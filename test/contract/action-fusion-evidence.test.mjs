@@ -48,13 +48,25 @@ async function recover(indexer, ctx, id) {
 
 test("nested receipts survive trace eviction, incremental publication, reload and repeated archive import", async (t) => {
   const f = fixture(t), path = join(f.dir, "command.log"); writeFileSync(path, full);
-  const runtime = new CodeModeDelegateRuntime(() => {}); t.after(() => runtime.clear());
+  const pending = new Map();
+  const runtime = new CodeModeDelegateRuntime(({ id, result }) => pending.get(id)?.(result));
+  t.after(() => runtime.clear());
   const result = receipt(path);
   runtime.bindCell("cell", { cwd: f.dir, extensionContext: f.ctx }, new Map([["apply_patch_then_run", {
     kind: "function", name: "apply_patch_then_run", description: "fuse", inputSchema: {},
     async invoke(_input, ctx) { ctx.captureResult(result); return "done"; },
   }]]));
-  const invoke = id => runtime.invokeDirect("cell", id, "apply_patch_then_run", { input: "patch", then_run: { command: "npm test" } });
+  const invoke = id => new Promise((resolve, reject) => {
+    pending.set(id, (result) => {
+      pending.delete(id);
+      if (result.status === "ok") resolve(result.value);
+      else reject(new Error(result.message));
+    });
+    runtime.handleRequest({ id, request: { type: "tool/invoke", invocation: {
+      cell_id: "cell", runtime_tool_call_id: String(id), tool_name: { name: "apply_patch_then_run" },
+      input: { input: "patch", then_run: { command: "npm test" } },
+    } } });
+  });
   for (let id = 0; id < 65; id++) await invoke(id);
   const first = runtime.attach({ kind: "yielded", cellId: "cell", contentItems: [{ type: "input_text", text: "x".repeat(5000) }] });
   assert.ok(first.traces.length < 65, "the proof must actually exceed the UI trace budget");

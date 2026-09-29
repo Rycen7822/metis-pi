@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 const load = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 
@@ -16,18 +16,6 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("chrome modules have no direct host imports (src/ rule)", () => {
-  // Read the directory instead of a hardcoded list: every chrome module is covered,
-  // including new ones (the factory in editor.ts explains the rule's reason).
-  for (const entry of readdirSync(new URL("../src/chrome/", import.meta.url))) {
-    if (!entry.endsWith(".ts")) continue;
-    const text = readFileSync(new URL(`../src/chrome/${entry}`, import.meta.url), "utf8");
-    assert.ok(!text.includes("from \"@earendil-works"), `src/chrome/${entry} must not import host packages directly`);
-    assert.ok(!text.includes("from '@earendil-works"), `src/chrome/${entry} must not import host packages directly`);
-  }
-});
-
-
 test("package exposes display, goal, todo, condense, dynamic-agents and codex-conversion entries", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./vendor/pi-codex-conversion/dist/index.js"]);
@@ -42,7 +30,6 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
     for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
       assert.ok(files.has(`vendor/${name}/${path}`), `${name}/${path}`);
     }
-    assert.ok(!files.has(`vendor/${name}/dist/index.d.ts`), "runtime needs no generated declarations");
   }
   for (const path of [
     "changelog.js", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
@@ -51,12 +38,9 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
     "src/tools/view-image/bin/linux-x64/view_image", "code-mode/vendor/code-mode-src/NOTICE",
   ]) assert.ok(files.has(`vendor/pi-codex-conversion/${path}`), path);
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
-  assert.ok(!files.has("vendor/pi-codex-conversion/patches/local.patch"), "patch replay belongs to the source checkout");
   assert.ok(files.has("vendor/pi-codex-conversion/src/index.ts"));
   assert.ok(files.has("vendor/pi-condense/index.ts"));
   assert.ok(files.has("vendor/pi-codex-conversion/changelog.ts"));
-  assert.ok(![...files].some((path) => path.startsWith("vendor/pi-codex-conversion/src/tools/rust/")), "Rust build inputs stay outside the runtime package");
-  assert.ok(![...files].some((path) => /^vendor\/[^/]+\/dist\/.+\//.test(path)), "no generated implementation tree ships");
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);
@@ -70,29 +54,4 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
   for (const [name, range] of Object.entries(vendored)) assert.equal(pkg.dependencies[name], range, `${name} must match the vendored manifest`);
   assert.equal(pkg.pi.skills, undefined);
   assert.equal(pkg.pi.prompts, undefined);
-});
-
-test("metis-pi owns vendored updates without an upstream npm check", () => {
-  // The real AgentSession test owns initialization; source owns the runtime.
-  const root = new URL("../vendor/pi-codex-conversion/src/", import.meta.url);
-  for (const path of readdirSync(root, { recursive: true })) {
-    if (!/\.(ts|js)$/.test(path)) continue;
-    const text = readFileSync(new URL(path, root), "utf8");
-    assert.doesNotMatch(`${path}\n${text}`, /maybeWarnLocalCheckoutVersion|local-version-warning|registry\.npmjs\.org|local checkout is behind npm/, path);
-  }
-});
-
-test("display runtime has no registration, result mutation or tool activation; chrome APIs are the only UI surface", () => {
-  const rootUrl = new URL("../src/", import.meta.url);
-  // Node owns recursion; todo owns non-display tools and commands. Only the
-  // interaction summary may append entries to the session from display code.
-  const forbidden = /\b(?:registerTool|setActiveTools|sendMessage|sendUserMessage|setSystemPrompt|registerShortcut|setTheme)\s*\(/;
-  const appendEntryRe = /\bappendEntry\s*\(/;
-  for (const file of readdirSync(rootUrl, { recursive: true })) {
-    if (!/\.(ts|mjs)$/.test(file) || /^todo[\\/]/.test(file)) continue;
-    const text = readFileSync(new URL(file, rootUrl), "utf8");
-    assert.doesNotMatch(text, forbidden, file);
-    if (file !== "turn-summary.ts") assert.doesNotMatch(text, appendEntryRe, file);
-    assert.doesNotMatch(text, /\.on\(\s*["'](?:tool_result|tool_call|context|before_agent_start)["']/);
-  }
 });

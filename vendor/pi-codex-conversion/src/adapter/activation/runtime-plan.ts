@@ -10,7 +10,6 @@ import {
 	APPLY_PATCH_TOOL_NAME,
 	CODE_MODE_TOOL_NAMES,
 	CORE_ADAPTER_TOOL_NAMES,
-	NOTEBOOK_MODE_TOOL_NAMES,
 	SHELL_ADAPTER_TOOL_NAMES,
 	VIEW_IMAGE_TOOL_NAME,
 	CONTEXT_DIRECT_TOOL_NAMES,
@@ -20,7 +19,7 @@ import {
 type RuntimeContext = Pick<ExtensionContext, "model">;
 
 interface RuntimePlanBase {
-	kind: "inactive" | "extras" | "normal" | "code" | "notebook";
+	kind: "inactive" | "extras" | "normal" | "code";
 	toolNames: string[];
 	ownedToolNames: string[];
 	configuredProvider: boolean;
@@ -60,18 +59,12 @@ export interface CodeRuntimePlan extends RuntimePlanBase {
 	transport: "responses" | "responses-lite";
 }
 
-export interface NotebookRuntimePlan extends RuntimePlanBase {
-	kind: "notebook";
-	prompt: "notebook";
-	transport: "responses" | "responses-lite";
-}
-
-export type CodexRuntimePlan = InactiveRuntimePlan | ExtrasRuntimePlan | NormalRuntimePlan | CodeRuntimePlan | NotebookRuntimePlan;
+export type CodexRuntimePlan = InactiveRuntimePlan | ExtrasRuntimePlan | NormalRuntimePlan | CodeRuntimePlan;
 
 const ALL_ADAPTER_TOOL_NAMES = [
 	"change_reasoning",
 	...CORE_ADAPTER_TOOL_NAMES,
-	...NOTEBOOK_MODE_TOOL_NAMES,
+	...CODE_MODE_TOOL_NAMES,
 	VIEW_IMAGE_TOOL_NAME,
 	...CONTEXT_MANAGEMENT_TOOL_NAMES,
 ];
@@ -125,7 +118,7 @@ export function resolveCodexRuntimePlan(
 	const ownedToolNames = [
 		"change_reasoning",
 		...SHELL_ADAPTER_TOOL_NAMES,
-		...NOTEBOOK_MODE_TOOL_NAMES,
+		...CODE_MODE_TOOL_NAMES,
 		APPLY_PATCH_TOOL_NAME,
 		VIEW_IMAGE_TOOL_NAME,
 		...CONTEXT_MANAGEMENT_TOOL_NAMES,
@@ -165,31 +158,10 @@ export function resolveCodexRuntimePlan(
 		(base.contextManagementHybrid || (config.compaction.responsesCompaction && configuredContextManagementMode === "off"));
 	base.autoReasoning = config.tools.autoReasoning && supportsCodexReasoningUpdates(ctx.model);
 	const configuredExecutionMode = executionMode ?? config.executionMode;
-	const requestedCodeMode = configuredExecutionMode === "code" || configuredExecutionMode === "notebook"
-		? configuredExecutionMode
-		: configuredExecutionMode === "normal"
-			? undefined
-			: undefined;
-	if (requestedCodeMode) {
+	if (configuredExecutionMode === "code") {
 		const transport = usesResponsesLite(ctx, config)
 			? "responses-lite"
 			: "responses";
-		if (requestedCodeMode === "notebook") {
-			return {
-				...base,
-				kind: "notebook",
-				toolNames: [
-					...NOTEBOOK_MODE_TOOL_NAMES,
-					...(contextManagement ? CONTEXT_DIRECT_TOOL_NAMES : []),
-				],
-				prompt: "notebook",
-				transport,
-				nativeCompaction,
-				contextManagement,
-				contextManagementMode,
-				contextManagementRemote,
-			};
-		}
 		return {
 			...base,
 			kind: "code",
@@ -243,12 +215,12 @@ export function resolveCodexRuntimePlanForState(
 	};
 }
 
-export function isAdapterRuntime(plan: CodexRuntimePlan): plan is NormalRuntimePlan | CodeRuntimePlan | NotebookRuntimePlan {
-	return plan.kind === "normal" || plan.kind === "code" || plan.kind === "notebook";
+export function isAdapterRuntime(plan: CodexRuntimePlan): plan is NormalRuntimePlan | CodeRuntimePlan {
+	return plan.kind === "normal" || plan.kind === "code";
 }
 
-export function isCodeModeRuntime(plan: CodexRuntimePlan): plan is CodeRuntimePlan | NotebookRuntimePlan {
-	return plan.kind === "code" || plan.kind === "notebook";
+export function isCodeModeRuntime(plan: CodexRuntimePlan): plan is CodeRuntimePlan {
+	return plan.kind === "code";
 }
 
 export const ALL_CODEX_ADAPTER_TOOL_NAMES = ALL_ADAPTER_TOOL_NAMES;

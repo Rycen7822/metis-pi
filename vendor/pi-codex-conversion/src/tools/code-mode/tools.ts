@@ -32,7 +32,6 @@ export interface RegisterCodeModeToolsOptions extends CodeModeToolProvider {}
 export interface CodeModeRegistration {
 	prepare(ctx?: unknown): Promise<void> | undefined;
 	refreshPromptTools(systemPrompt: string, ctx?: unknown): string;
-	checkpointNotebook(): Promise<void>;
 	shutdownHost(): Promise<void>;
 	shutdown(): Promise<void>;
 }
@@ -107,7 +106,7 @@ export async function registerCodeModeTools(
 	pi: ExtensionAPI,
 	options: RegisterCodeModeToolsOptions,
 ): Promise<CodeModeRegistration> {
-	const runtime = await getOrCreateRuntime(pi);
+	const runtime = getOrCreateRuntime(pi);
 	const providerId = runtime.addProvider(options);
 	let active = true;
 	return {
@@ -128,7 +127,6 @@ export async function registerCodeModeTools(
 			runtime.setPromptSection(replacement.section);
 			return replacement.systemPrompt;
 		},
-		checkpointNotebook: () => runtime.checkpointNotebook(),
 		shutdownHost: () => runtime.shutdownHost(),
 		async shutdown() {
 			if (!active) return;
@@ -139,14 +137,14 @@ export async function registerCodeModeTools(
 	};
 }
 
-async function getOrCreateRuntime(pi: ExtensionAPI): Promise<SharedCodeModeRuntime> {
+function getOrCreateRuntime(pi: ExtensionAPI): SharedCodeModeRuntime {
 	const state = pi.events as typeof pi.events & {
-		[REGISTRATION_KEY]?: CodeModeProcessState | SharedCodeModeRuntime;
+		[REGISTRATION_KEY]?: CodeModeProcessState;
 	};
 	const existing = state[REGISTRATION_KEY];
 	const processState = isProcessState(existing)
 		? existing
-		: await replaceLegacyState(existing);
+		: { runtime: new SharedCodeModeRuntime(), boundApis: new WeakSet<ExtensionAPI>() };
 	state[REGISTRATION_KEY] = processState;
 	if (!processState.boundApis.has(pi)) {
 		processState.boundApis.add(pi);
@@ -165,14 +163,6 @@ function isProcessState(value: unknown): value is CodeModeProcessState {
 		"boundApis" in value &&
 		value.boundApis instanceof WeakSet,
 	);
-}
-
-async function replaceLegacyState(
-	legacy: unknown,
-): Promise<CodeModeProcessState> {
-	// 2.2.0 stored the runtime directly and retained stale providers across reloads.
-	if (isSharedRuntime(legacy)) await legacy.shutdownHost();
-	return { runtime: new SharedCodeModeRuntime(), boundApis: new WeakSet() };
 }
 
 function isSharedRuntime(value: unknown): value is SharedCodeModeRuntime {

@@ -7,8 +7,6 @@ export type LunaCacheKeepaliveMinutes = 0 | 5 | 10 | 15;
 export type AllProvidersMode = "off" | "on" | "extras";
 export type ContextManagementMode = "off" | "local" | "tree" | "remote";
 export type V2UserMessageRetention = 16 | 32 | 64;
-export const MIN_NOTEBOOK_HEAP_MIB = 256;
-export const MAX_NOTEBOOK_HEAP_MIB = 65_536;
 export const V2_USER_MESSAGE_RETENTION_OPTIONS: readonly V2UserMessageRetention[] =
 	[16, 32, 64];
 export const LUNA_CACHE_KEEPALIVE_MINUTES_OPTIONS: readonly LunaCacheKeepaliveMinutes[] =
@@ -24,6 +22,7 @@ export interface CodexConversionConfig {
 		viewImageFallback: boolean;
 		applyPatchOnly: boolean;
 		viewImageOnly: boolean;
+		plainCommandOutput: boolean;
 	};
 	ui: {
 		statusLine: boolean;
@@ -42,11 +41,6 @@ export interface CodexConversionConfig {
 		responsesCompaction: boolean;
 		portableSummary: boolean;
 		v2UserMessageRetention: V2UserMessageRetention;
-	};
-	notebook: {
-		maxHeapMiB: number;
-		plainCommandOutput: boolean;
-		profile?: string | undefined;
 	};
 	openai: {
 		fast: boolean;
@@ -70,6 +64,7 @@ export const DEFAULT_CODEX_CONVERSION_CONFIG: CodexConversionConfig = {
 		viewImageFallback: false,
 		applyPatchOnly: false,
 		viewImageOnly: false,
+		plainCommandOutput: false,
 	},
 	ui: {
 		statusLine: true,
@@ -89,7 +84,6 @@ export const DEFAULT_CODEX_CONVERSION_CONFIG: CodexConversionConfig = {
 		portableSummary: false,
 		v2UserMessageRetention: 64,
 	},
-	notebook: { maxHeapMiB: 4_096, plainCommandOutput: false },
 	openai: {
 		fast: false,
 		verbosity: "low",

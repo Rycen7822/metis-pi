@@ -17,24 +17,3 @@ export function normalizeOptionalString(value: unknown): string | undefined {
 		? normalized
 		: undefined;
 }
-
-export function normalizeIntegerInRange(
-	value: unknown,
-	fallback: number,
-	minimum: number,
-	maximum: number,
-): number {
-	return typeof value === "number" &&
-		Number.isSafeInteger(value) &&
-		value >= minimum &&
-		value <= maximum
-		? value
-		: fallback;
-}
-
-export function normalizeNotebookProfile(value: unknown): string | undefined {
-	const name = normalizeOptionalString(value);
-	return name && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)
-		? name
-		: undefined;
-}

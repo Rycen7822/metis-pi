@@ -16,11 +16,6 @@ const MAX_TRACE_ERROR_CHARS = 16_384;
 const MAX_NOTIFICATION_CHARS = 16_384;
 const MAX_NOTIFICATIONS_PER_CELL = 100;
 
-interface DelegateController {
-	cellId?: string | undefined;
-	controller: AbortController;
-}
-
 interface Deferred {
 	promise: Promise<void>;
 	resolve(): void;
@@ -32,7 +27,7 @@ export class CodeModeDelegateRuntime {
 	private readonly traceRuntimeGeneration = crypto.randomUUID();
 	private readonly cellContexts = new Map<string, ToolExecutionContext>();
 	private readonly cellTools = new Map<string, Map<string, CodeModeToolDefinition>>();
-	private readonly controllers = new Map<string, DelegateController>();
+	private readonly controllers = new Map<number, AbortController>();
 	private readonly notifications = new Map<string, string[]>();
 	// Continuation routing must survive bounded display traces.
 	private readonly execSessions = new Map<string, Set<number>>();
@@ -85,7 +80,7 @@ export class CodeModeDelegateRuntime {
 	}
 
 	clear(): void {
-		for (const { controller } of this.controllers.values()) controller.abort();
+		for (const controller of this.controllers.values()) controller.abort();
 		this.controllers.clear();
 		this.cellContexts.clear();
 		this.cellTools.clear();
@@ -115,51 +110,20 @@ export class CodeModeDelegateRuntime {
 	}
 
 	cancel(id: number): void {
-		const key = hostControllerKey(id);
-		const pending = this.controllers.get(key);
-		this.controllers.delete(key);
-		pending?.controller.abort();
-	}
-
-	cancelCell(cellId: string): void {
-		for (const [key, pending] of this.controllers) {
-			if (pending.cellId !== cellId) continue;
-			this.controllers.delete(key);
-			pending.controller.abort();
-		}
+		const controller = this.controllers.get(id);
+		this.controllers.delete(id);
+		controller?.abort();
 	}
 
 	handleRequest(message: DelegateRequestMessage): void {
-		const key = hostControllerKey(message.id);
-		if (this.controllers.has(key))
+		if (this.controllers.has(message.id))
 			throw new Error(`Duplicate code-mode delegate request: ${message.id}`);
 		const controller = new AbortController();
-		const cellId = message.request.type === "notification/send"
-			? message.request.cellId
-			: message.request.invocation.cell_id;
-		this.controllers.set(key, { cellId, controller });
-		void this.invoke(message, key, controller);
+		this.controllers.set(message.id, controller);
+		void this.invoke(message, controller);
 	}
 
-	async invokeDirect(
-		cellId: string,
-		requestId: number,
-		toolName: string,
-		input: unknown,
-	): Promise<unknown> {
-		const key = directControllerKey(cellId, requestId);
-		if (this.controllers.has(key))
-			throw new Error(`Duplicate code-mode delegate request: ${requestId}`);
-		const controller = new AbortController();
-		this.controllers.set(key, { cellId, controller });
-		try {
-			return await this.invokeTool(cellId, toolName, input, String(requestId), controller);
-		} finally {
-			this.controllers.delete(key);
-		}
-	}
-
-	notifyDirect(cellId: string, value: string): void {
+	private notifyCell(cellId: string, value: string): void {
 		const context = this.cellContexts.get(cellId);
 		if (!context) throw new Error("Code-mode notification cell is unavailable");
 		const notifications = this.notifications.get(cellId) ?? [];
@@ -198,12 +162,11 @@ export class CodeModeDelegateRuntime {
 
 	private async invoke(
 		message: DelegateRequestMessage,
-		key: string,
 		controller: AbortController,
 	): Promise<void> {
 		const request = message.request;
 		if (request.type === "notification/send") {
-			this.handleNotification(message.id, key, request);
+			this.handleNotification(message.id, request);
 			return;
 		}
 		const invocation = request.invocation;
@@ -228,7 +191,7 @@ export class CodeModeDelegateRuntime {
 				message: error instanceof Error ? error.message : String(error),
 			});
 		} finally {
-			this.controllers.delete(key);
+			this.controllers.delete(message.id);
 		}
 	}
 
@@ -381,32 +344,30 @@ export class CodeModeDelegateRuntime {
 		if (!changed) return;
 		if (blockers.size === 0) this.blockers.delete(cellId);
 		else this.blockers.set(cellId, blockers);
-		this.cellContexts.get(cellId)?.setBlocked?.(blockerId, active);
 		this.blockerChanges.get(cellId)?.resolve();
 		this.blockerChanges.set(cellId, deferred());
 	}
 
 	private handleNotification(
 		id: number,
-		key: string,
 		request: Extract<DelegateRequestMessage["request"], { type: "notification/send" }>,
 	): void {
 		const cellId = request.cellId;
 		try {
-			this.notifyDirect(cellId, request.text);
+			this.notifyCell(cellId, request.text);
 		} catch (error) {
 			this.respond(id, {
 				status: "error",
 				message: error instanceof Error ? error.message : String(error),
 			});
-			this.controllers.delete(key);
+			this.controllers.delete(id);
 			return;
 		}
 		this.respond(id, {
 			status: "ok",
 			value: { type: "notification/delivered" },
 		});
-		this.controllers.delete(key);
+		this.controllers.delete(id);
 	}
 
 	private respond(id: number, result: Record<string, unknown>): void {
@@ -433,14 +394,6 @@ function numericSessionId(value: unknown): number | undefined {
 	return value && typeof value === "object" && "session_id" in value && typeof value.session_id === "number"
 		? value.session_id
 		: undefined;
-}
-
-function hostControllerKey(id: number): string {
-	return `host:${id}`;
-}
-
-function directControllerKey(cellId: string, requestId: number): string {
-	return `direct:${cellId}:${requestId}`;
 }
 
 function deferred(): Deferred {

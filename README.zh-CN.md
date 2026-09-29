@@ -28,9 +28,9 @@ pi install .
 | [todo](docs/features/todo.md) | 工作区持久任务列表、层级编号、依赖和可折叠面板；`/todos` 查看或恢复面板。 |
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
-| [Codex 转换层](docs/vendor-codex-conversion.md) | 内置 provider、原生工具与 code/notebook 模式，源码补丁随本仓库维护。 |
+| [Codex 转换层](docs/vendor-codex-conversion.md) | 内置 provider、原生工具与 Code Mode，源码补丁随本仓库维护。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
-| [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 与 apply_patch 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，覆盖 Code/Notebook 嵌套入口；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
+| [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 与 apply_patch 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，覆盖 Code Mode 嵌套入口；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，沿用配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
 
 显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/condense/vendor 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。

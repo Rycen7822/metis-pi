@@ -2,7 +2,7 @@ import {
 	DEFAULT_CODE_MODE_OUTPUT_TOKENS,
 	MAX_CODE_MODE_OUTPUT_TOKENS,
 } from "./host-protocol.ts";
-import type { NotebookMemoryUsage, RuntimeContentItem, RuntimeResponse } from "./types.ts";
+import type { RuntimeContentItem, RuntimeResponse } from "./types.ts";
 
 const MAX_OUTPUT_IMAGE_COUNT = 4;
 const MAX_OUTPUT_IMAGE_CHARS = 16 * 1024 * 1024;
@@ -11,8 +11,7 @@ export function toCodeModeToolResult(
 	response: RuntimeResponse,
 	maxTokens?: number,
 ) {
-	const scriptError =
-		response.kind === "result" ? withScriptErrorRecovery(response.errorText) : undefined;
+	const scriptError = response.kind === "result" ? response.errorText : undefined;
 	const status = scriptError
 		? `Script error: ${scriptError}`
 		: response.kind === "yielded"
@@ -39,7 +38,6 @@ export function toCodeModeToolResult(
 			return content;
 		})
 		.filter((item): item is NonNullable<typeof item> => Boolean(item));
-	const memoryWarning = response.notebookMemory && formatNotebookMemoryWarning(response.notebookMemory);
 	if (omittedImages > 0)
 		output.push({
 			type: "text",
@@ -57,7 +55,6 @@ export function toCodeModeToolResult(
 			{ type: "text" as const, text: status },
 			...(response.fusionEvidence ? [{ type: "text" as const, text: `Fused tool evidence: ${response.fusionEvidence.path} (bytes ${response.fusionEvidence.offsetBytes}..${response.fusionEvidence.offsetBytes + response.fusionEvidence.bytes}); contains mutation outcomes and exact command log paths.` }] : []),
 			...(response.fusionEvidenceError ? [{ type: "text" as const, text: response.fusionEvidenceError }] : []),
-			...(memoryWarning ? [{ type: "text" as const, text: memoryWarning }] : []),
 			...(response.execSessionIds ?? []).map((sessionId) => ({
 				type: "text" as const,
 				text: formatRunningExecSessionGuidance(sessionId),
@@ -74,33 +71,9 @@ export function toCodeModeToolResult(
 			...(response.droppedTraceCount
 				? { droppedTraceCount: response.droppedTraceCount }
 				: {}),
-			...(response.notebookMemory ? { notebookMemory: response.notebookMemory } : {}),
 			...(scriptError ? { scriptError } : {}),
 		},
 	};
-}
-
-function withScriptErrorRecovery(errorText: string | undefined): string | undefined {
-	if (!errorText || !/Identifier ['"][^'"]+['"] has already been declared/.test(errorText)) return errorText;
-	return `${errorText}\nRecovery: reuse the existing binding, choose a new name, or retry one-off code inside { ... }; restart only if the binding itself is unusable`;
-}
-
-export function formatNotebookMemoryWarning(memory: NotebookMemoryUsage): string | undefined {
-	const ratio = memory.heapLimitBytes > 0 ? memory.heapUsedBytes / memory.heapLimitBytes : 0;
-	const pressure = ratio >= 0.9
-		? " · CRITICAL: finish essential work and release unneeded notebook state"
-		: ratio >= 0.8
-			? " · WARNING: release unneeded notebook state"
-			: "";
-	if (!pressure) return undefined;
-	return `Notebook memory: heap ${formatBinaryBytes(memory.heapUsedBytes)} / ${formatBinaryBytes(memory.heapLimitBytes)} · RSS ${formatBinaryBytes(memory.rssBytes)}${pressure}`;
-}
-
-function formatBinaryBytes(bytes: number): string {
-	const mib = bytes / (1024 * 1024);
-	if (mib < 1024) return `${mib.toFixed(mib < 10 ? 1 : 0)} MiB`;
-	const gib = mib / 1024;
-	return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;
 }
 
 export function formatRunningExecSessionGuidance(sessionId: number): string {

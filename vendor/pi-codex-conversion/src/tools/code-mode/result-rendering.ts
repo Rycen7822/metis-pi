@@ -1,8 +1,6 @@
 import {
 	type Component,
 	Container,
-	Spacer,
-	Text,
 } from "@earendil-works/pi-tui";
 import {
 	imagesByMimeType,
@@ -11,7 +9,6 @@ import {
 	type RenderedToolContent,
 } from "./render-content.ts";
 import type { CodeModeRenderTracker } from "./render-tracker.ts";
-import { formatNotebookMemoryWarning } from "./tool-result.ts";
 import {
 	type CodeModeNestedRenderStore,
 	renderTraceAndOutput,
@@ -20,7 +17,6 @@ import type {
 	CodeModeRenderContext,
 	CodeModeRenderTheme,
 	CodeModeToolDefinition,
-	NotebookMemoryUsage,
 	RuntimeToolTrace,
 } from "./types.ts";
 
@@ -31,7 +27,6 @@ interface CodeModeResultDetails {
 	traces?: RuntimeToolTrace[] | undefined;
 	droppedTraceCount?: number | undefined;
 	scriptError?: string | undefined;
-	notebookMemory?: NotebookMemoryUsage | undefined;
 }
 
 export function renderTrackedCodeModeResult(
@@ -73,13 +68,7 @@ function renderCodeModeResult(
 ): Component {
 	const details = asDetails(result.details);
 	const content = details.notification || details.status === undefined ? result.content : result.content.slice(1);
-	const notebookMemoryText = details.notebookMemory ? formatNotebookMemoryWarning(details.notebookMemory) : undefined;
-	const renderedContent = notebookMemoryText
-		&& content[0]?.type === "text"
-		&& content[0].text === notebookMemoryText
-		? content.slice(1)
-		: content;
-	const text = renderedContent
+	const text = content
 		.filter((item) => item.type === "text" && typeof item.text === "string")
 		.map((item) => item.text)
 		.join("\n");
@@ -91,7 +80,7 @@ function renderCodeModeResult(
 	const outputText = [text, status].filter(Boolean).join("\n");
 	const tone = context?.isError ? "error" : details.status === "yielded" ? "accent" : "dim";
 	const renderedText = outputText ? theme.fg(tone, outputText) : "";
-	const images = renderedContent.filter(
+	const images = content.filter(
 		(item): item is RenderedToolContent & { data: string; mimeType: string } =>
 			item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string",
 	);
@@ -121,23 +110,7 @@ function renderCodeModeResult(
 		emittedImages,
 		renderStore,
 	);
-	if (!details.notebookMemory || !notebookMemoryText) return body;
-	const container = new Container();
-	const ratio = details.notebookMemory.heapLimitBytes > 0
-		? details.notebookMemory.heapUsedBytes / details.notebookMemory.heapLimitBytes
-		: 0;
-	container.addChild(
-		new Text(
-			theme.fg(ratio >= 0.9 ? "error" : ratio >= 0.8 ? "accent" : "muted", notebookMemoryText),
-			0,
-			0,
-		),
-	);
-	if (details.traces?.length || details.droppedTraceCount || renderedText || images.length) {
-		container.addChild(new Spacer(1));
-		container.addChild(body);
-	}
-	return container;
+	return body;
 }
 
 function asDetails(value: unknown): CodeModeResultDetails {

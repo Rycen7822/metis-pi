@@ -1,7 +1,7 @@
 import { fusionFailed } from "../tools/action-fusion.ts";
 import { isActionFusionEnabled } from "../tools/action-fusion-availability.ts";
 import { runExecFusionCommand } from "../tools/action-fusion-command.ts";
-import { getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CodexExtensionRuntime } from "../extension/runtime.ts";
 import { getCodeModeExtensionTools } from "../code-mode-extension-tools.ts";
 import {
@@ -39,15 +39,6 @@ export async function registerCodexCodeMode(
 			];
 		},
 		isActive,
-		executionKind: (ctx) =>
-			resolveCodexRuntimePlanForState(ctx as ExtensionContext, runtime.state).kind === "notebook"
-				? "notebook"
-				: "code",
-		notebookOptions: () => ({
-			maxHeapMiB: runtime.state.config.notebook.maxHeapMiB,
-			agentDir: getAgentDir(),
-			...(runtime.state.config.notebook.profile ? { profile: runtime.state.config.notebook.profile } : {}),
-		}),
 		providesRenderers: true,
 		richRendering: () => runtime.state.config.ui.codeModeDetails,
 		minimalOutput: () => runtime.state.config.ui.compactTools === "minimal",
@@ -56,7 +47,6 @@ export async function registerCodexCodeMode(
 		prepare: (ctx) => programmaticRuntime.prepare(ctx),
 		refreshPromptTools: (systemPrompt, ctx) =>
 			programmaticRuntime.refreshPromptTools(systemPrompt, ctx),
-		checkpointNotebook: () => programmaticRuntime.checkpointNotebook(),
 		shutdownHost: () => programmaticRuntime.shutdownHost(),
 		async shutdown() {
 			await programmaticRuntime.shutdown();
@@ -80,7 +70,7 @@ export function createNestedTools(
 		...options,
 		waitForNonInteractiveExit: true,
 	};
-	const textOutput = runtime.state.config.notebook.plainCommandOutput
+	const textOutput = runtime.state.config.tools.plainCommandOutput
 		? { textOutput: "plain-command" as const }
 		: {};
 	const fusionEnabled = isActionFusionEnabled(pi);

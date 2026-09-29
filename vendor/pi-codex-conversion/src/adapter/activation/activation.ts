@@ -48,7 +48,7 @@ function enableAdapter(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	state: AdapterState,
-	plan: Extract<CodexRuntimePlan, { kind: "normal" | "code" | "notebook" }>,
+	plan: Extract<CodexRuntimePlan, { kind: "normal" | "code" }>,
 	extensionTools: ExtensionToolSnapshot,
 ): void {
 	const owned = state.enabled ? mergeToolNames(state.adapterOwnedToolNames ?? plan.ownedToolNames, plan.ownedToolNames) : plan.ownedToolNames;

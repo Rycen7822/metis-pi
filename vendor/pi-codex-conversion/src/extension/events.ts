@@ -13,7 +13,6 @@ import type { CodeModeProxyProviderRegistration } from "../providers/code-mode-p
 import { clearApplyPatchRenderState } from "../tools/apply-patch/tool.ts";
 import type { CodeModeRegistration } from "../tools/code-mode/tools.ts";
 import { initializeBashParser } from "../shell/bash.ts";
-import { appendNotebookTreeEpoch } from "../tools/notebook-mode/session-identity.ts";
 import { formatCompactionCacheDiagnostic } from "../adapter/compaction/diagnostics.ts";
 import type { CodexExtensionRuntime } from "./runtime.ts";
 import type { CodexToolRegistration } from "./tools.ts";
@@ -178,11 +177,9 @@ export function registerCodexEvents(
 		turnPrewarm = undefined;
 		activeContext = ctx;
 		pendingExtensionToolRefresh = false;
-		const previousMode = state.executionMode;
 		state.activeProviderSystemPrompt = undefined;
 		runtime.resetTransport(ctx.sessionManager.getSessionId());
 		if (state.contextTree.handleSessionTree(event)) return;
-		if (previousMode === "notebook" || state.executionMode === "notebook") appendNotebookTreeEpoch(pi);
 		await codeMode.shutdownHost();
 		proxyProvider.applyConfig(state.config, ctx.modelRegistry);
 		const plan = syncAdapter(pi, ctx, state);
@@ -192,9 +189,6 @@ export function registerCodexEvents(
 			plan.contextManagement,
 		);
 		prepareCodeModeHost(codeMode, ctx);
-		if (previousMode === "notebook" || state.executionMode === "notebook") {
-			ctx.ui.notify("Notebook state reset after conversation-tree navigation", "info");
-		}
 	});
 
 	pi.on("message_start", async (event) => {
@@ -367,12 +361,6 @@ export function registerCodexEvents(
 		if (contextManagementResult && "cancel" in contextManagementResult)
 			return contextManagementResult;
 		const nativeCompaction = plan.nativeCompaction;
-		try {
-			await codeMode.checkpointNotebook();
-		} catch (error) {
-			ctx.ui.notify(`Notebook checkpoint before compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
-			return { cancel: true };
-		}
 		if (contextManagementResult) return contextManagementResult;
 		if (!nativeCompaction) {
 			const request: { event: typeof event; ctx: typeof ctx; promise?: Promise<any> } = { event, ctx };

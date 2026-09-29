@@ -5,7 +5,7 @@ const PREFER_STRICT_TOOL_SAMPLING = {
 	strict: "prefer",
 } as const satisfies ConstrainedSamplingConfig;
 
-const STRICT_FUNCTION_TOOLS = new Set(["exec_command", "apply_patch", "wait", "notebook"]);
+const STRICT_FUNCTION_TOOLS = new Set(["exec_command", "apply_patch", "wait"]);
 
 export function getExperimentalToolSampling(
 	toolName: string,

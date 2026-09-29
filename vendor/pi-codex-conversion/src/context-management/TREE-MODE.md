@@ -10,7 +10,7 @@ With Hybrid compaction off, Tree preserves the no-summary window flow:
 
 - the next model window does not automatically receive a conversation summary
 - the model receives the current window marker, previous window ID, recent note paths and bounded history IDs
-- shell, workspace and Notebook runtime state survive rollover
+- shell, workspace and Code Mode host state survive rollover
 - prior summaries and raw work are available only through history and notes
 - Pi JSONL remains append-only and is never rewritten
 
@@ -267,10 +267,10 @@ No work may be deferred through a timer.
 
 ### `session_tree` interaction
 
-Our current generic `session_tree` handler resets Notebook tree epochs and shuts down the Code/Notebook host. An internal context rollover must be distinguished from user tree navigation:
+The generic `session_tree` handler shuts down the Code Mode host. An internal context rollover must be distinguished from user tree navigation:
 
-- internal rollover preserves shell and Notebook runtime state
-- ordinary user navigation keeps the existing Notebook reset behavior
+- internal rollover preserves shell and Code Mode host state
+- ordinary user navigation shuts down the Code Mode host
 - internal navigation must not auto-create a boundary before the manifest and note snapshot exist
 
 Pi emits `session_tree` before command-context navigation returns. Its interactive wrapper may then flush input queued during summarization. The coordinator appends the manifest, note snapshot and non-triggering boundary before admitting one successor user kickoff. Manual compaction does not admit that kickoff inside `session_compact`; intercepted input is restored to the editor instead.
@@ -305,7 +305,7 @@ With Tree mode disabled, tagged summaries remain ordinary persisted Pi summaries
 
 In notes-only mode, `/compact` cancels compaction and asks the agent to save the current state in notes unless it has just done so, then call `new_context` immediately. The request starts after Pi clears its manual compaction state. It does not generate a portable summary or make disabling Tree safe.
 
-User navigation into an archived branch is ordinary tree navigation, not an internal rollover. It resets Notebook state as it does today, rebuilds indexes for the selected branch and initializes a fresh context boundary if required.
+User navigation into an archived branch is ordinary tree navigation, not an internal rollover. It shuts down the Code Mode host, rebuilds indexes for the selected branch and initializes a fresh context boundary if required.
 
 ## Cache and accounting
 
@@ -366,8 +366,8 @@ The focused lifecycle proof against Pi 0.85.0 must cover:
 6. only the final continuation starts a turn
 7. editor text survives
 8. input submitted during summarization lands after the new boundary
-9. internal rollover preserves Notebook state
-10. ordinary user tree navigation still resets Notebook state
+9. internal rollover preserves Code Mode host state
+10. ordinary user tree navigation shuts down the Code Mode host
 
 Then protect the independent contracts:
 

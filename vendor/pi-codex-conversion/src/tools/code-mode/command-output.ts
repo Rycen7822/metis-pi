@@ -1,8 +1,8 @@
 import { codeModeGlobalName } from "./tool-identity.ts";
 import type { CodeModeToolDefinition } from "./types.ts";
 
-// Inject the same formatter into V8 and Deno without changing returned objects.
-export const plainCommandOutputFormatterSource = `(value) => {
+// Format nested command output in the V8 host without changing returned objects.
+const plainCommandOutputFormatterSource = `(value) => {
   const metadata = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "output"));
   let prefix = "";
   if (Object.keys(metadata).length > 0) {

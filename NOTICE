@@ -49,9 +49,6 @@ Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-c
 Upstream copyright: the IgorWarzocha/howaboua-pi-stuff authors.
 
 Modifications: Copyright (c) 2026 Rycen7822. MIT License.
-- The notebook tool's parameter schema is a top-level object instead of a top-level
-  Type.Union, which strict providers (DeepSeek) reject outright. See
-  vendor/pi-codex-conversion/PATCHES.md.
 - Vendored for linux-x64 only: the per-platform voice helper binaries and the
   darwin/win32/linux-arm64 native tools are not redistributed here.
 

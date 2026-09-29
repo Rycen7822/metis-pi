@@ -2,11 +2,7 @@
 
 Edit `src/**` and run `npm run vendor:check`. Runtime and tests consume TS directly; `dist/` contains only hand-written re-exports preserving the old entry and public API paths. Git history owns implementation changes; upstream updates are selectively ported using [UPSTREAM.md](UPSTREAM.md). There is no generated implementation tree, cumulative patch or whole-tree sync command.
 
-## 1. Notebook parameters are a top-level object
-
-`tools/code-mode/notebook-tool.ts`: replace the top-level union with an object containing all action variants and optional fields. Strict providers reject a union with no top-level `type`. Keep `additionalProperties: false` and runtime normalization; all previously valid inputs remain accepted.
-
-## 2. Pi 0.86/0.87 transcript, tool placement and compaction/replay
+## 1. Pi 0.86/0.87 transcript, tool placement and compaction/replay
 
 `providers/transcript.ts` reuses public Pi 0.87+ transcript helpers. Thin wrappers preserve continuing-slice heads, unbranded internal transcripts and old addedToolNames records. Provider boundaries still accept legacy Context, needed by direct registry callers and old sessions.
 
@@ -23,7 +19,7 @@ Edit `src/**` and run `npm run vendor:check`. Runtime and tests consume TS direc
 
 Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{serializer,compaction,remote-v2-client}.ts`, `adapter/replay/{context-edits,native-replay-segments,payload-rewrite}.ts`. Built-provider cases in `test/vendor-codex-{transcript,compaction-replay,compaction-request}.test.mjs` plus the 0.87 `test/vendor-codex-context-edits.test.mjs` protect normal, replay and final rewritten requests.
 
-## 3. Grammar and namespace tools
+## 2. Grammar and namespace tools
 
 `providers/constrained-sampling.ts` delegates to the running host's public sampling API. Pi aliases the root package to compat, so the bridge uses SDK `getPackageDir`, Node `findPackageJSON` and the package's declared export target; it does not guess private paths or install another pi-ai. The minimum host is Pi 0.87.0. Responses text/refusal deltas share one branch while retaining part types and item-done callbacks.
 
@@ -36,7 +32,7 @@ fields distinct from optional flat-router fields, nonnullable `read_item.window_
 empty note writes, and Remote's omitted bounds/additionalProperties. Namespace
 requests clone their schemas rather than mutating the shared contract.
 
-## 4. Direct provider calls
+## 3. Direct provider calls
 
 `extension/runtime.ts` and `adapter/compaction/portable-summary.ts` normalize legacy Context at direct-call boundaries. Preserve prewarm/keepalive and summary semantics; do not add a second system/tool injection to an already normalized transcript.
 
@@ -47,11 +43,11 @@ retains its transport predicate; it is not the API predicate used for live conte
 tool rewriting. Offline contracts and failure boundaries are covered in
 `test/vendor-context-contracts.test.mjs` and `test/vendor-provider-preparation.test.mjs`.
 
-## 5. Pi 0.86 JSON types
+## 4. Pi 0.86 JSON types
 
 Provider and model-related patches use the tightened JSON object contract and omit undefined diagnostic properties. Preserve runtime values and error classification.
 
-## 6. Pi-owned Codex model catalog
+## 5. Pi-owned Codex model catalog
 
 `openai-codex-custom-provider.ts` initially registers only its request stream, leaving Pi's current `openai-codex` models intact. At session start, its native provider delegates model lookup and refresh to that Pi-backed provider and adds only the hidden Luna Reserve model. Do not restore a vendored snapshot of ordinary Codex models: it masks models added by newer Pi releases.
 
@@ -63,27 +59,20 @@ Provider and model-related patches use the tightened JSON object contract and om
 
 `550b6b5`: `context-management/saved-notes.ts` derives reusable notes from Pi's current branch projection, replacing the window manager's process-local write ledger. Failed/incomplete writes, later input/tool work and edited-away receipts cannot grant reuse. Local/Tree/Remote keep the existing persistence, compaction thresholds and kickoff path. `adapter/history-insertion.ts` preserves a leading system message at index zero when inserting reconstructed messages.
 
-## 7. Notebook capture and payload validation
+## 6. Configuration and settings ownership
 
-`tools/notebook-mode/{capture-bindings-source,checkpoint-runtime,checkpoint,project-state-runtime,project-state-format,project-state-metadata,profile-state-format}.ts` share lexical-binding capture, hashed project/profile payload reads and checkpoint/metadata layout validation. `candidate-transaction.ts` owns the Node-side candidate allocation/capture/verification/cleanup and the payload+manifest atomic publish; `notebook-state-lock.ts` owns the store lease. Project keeps generation merge, pins and conflict records; profile keeps naming, by-value load and collision rules; the injected checkpoint protocol keeps publishing its own files. `session-runtime.ts` owns kernel, startup, session identity and checkpoint state and constructs the execution runtime, which keeps active-cell, cancellation and trace state. Lifecycle, recovery and profile operations are functions of that session owner; the duplicate controller objects, host interfaces and forwarding callbacks are removed. Startup and recovery share `notebookCheckpointIdentity`; store-specific commit and restore rules remain explicit.
+`adapter/activation/config-normalize.ts` normalizes common boolean fields from their defaults, then applies dependent switches once. Enum readers, optional fields, invalid-root defaults and input immutability retain their existing behavior. Old flat and beta configuration migration and the `toolRendering` alias were removed; the public config facade remains unchanged.
 
-Preserve partial writes, close/commit order, function metadata, byte limits, scope-specific error text and checkpoint-only invalid-name entries. Callers retain schemas, restores, locks and transactions. Layout checks intentionally do not hash content. Generated-code tests use Node V8 with a Deno file-API substitute, not a live kernel; session lifecycle tests drive a controlled kernel and the real bridge, not a real Jupyter kernel.
+`ui/settings/config-items-shared.ts` owns simple boolean controls used by display/tools/OpenAI tabs: read the displayed config, update the latest draft without mutating it. Custom controls, action markers and coupled compaction updates remain explicit. `test/core/vendor-config.test.mjs` covers alias/dependency/optional-field semantics and the current controls.
 
-## 8. Configuration and settings ownership
-
-`adapter/activation/config-normalize.ts` normalizes common boolean fields from their defaults, then applies dependent switches once. Enum readers, legacy `toolRendering`, optional fields, invalid-root defaults and input immutability retain their existing behavior. The public config facade remains unchanged.
-
-`ui/settings/config-items-shared.ts` owns simple boolean controls used by display/tools/OpenAI tabs: read the displayed config, update the latest draft without mutating it. Custom controls, action markers and coupled compaction updates remain explicit. `test/vendor-config.test.mjs` covers alias/dependency/optional-field semantics and the 12 remaining controls.
-
-## 9. metis-pi-owned update lifecycle
+## 7. metis-pi-owned update lifecycle
 
 `extension/events.ts` no longer checks the upstream npm version at session startup.
 `adapter/local-version-warning.ts` is deleted, including its registry request, version
 comparison and checkout-path detection. metis-pi owns releases and updates; the vendored
 manifest retains upstream provenance only. Do not restore this check during manual sync.
-`test/package.test.mjs` guards both source and shipped output against its return.
 
-## 10. Shared apply_patch diff display
+## 8. Shared apply_patch diff display
 
 `tools/apply-patch/render-state.ts` owns a single structured pre-execution file
 preview, exposed read-only by `getApplyPatchRenderSnapshot`. Native text views
@@ -103,7 +92,7 @@ Existing clear/shutdown paths still own cleanup, and separate installs stay isol
 `test/transcript/apply-patch-module-context.test.mjs` checks isolated contexts,
 failure updates, compact policy and cleanup.
 
-## 11. Shared command layout and syntax colors
+## 9. Shared command layout and syntax colors
 
 `ui/tool-rendering/codex-rendering.ts` accepts an optional `highlightCommandLines`
 theme callback for raw command rows (including expanded exploration commands).
@@ -121,7 +110,7 @@ and the real host smoke cover ownership, color capability, multiline previews,
 background-session status, failure output, terminal resizing and folded/expanded
 single-line chains without the legacy 100-character cutoff.
 
-## 12. Background shell mouse toggle
+## 10. Background shell mouse toggle
 
 `ui/background-bash-widget.ts` installs its above-editor content as a component
 factory wrapped in Pi's native `MouseRegion`, just like tool cards. Only a left
@@ -173,7 +162,7 @@ Current results and unverified runtime boundaries live only in the root [VALIDAT
 
 ## Action Fusion availability
 
-`extensions/action-fusion.ts` owns fusion availability through the session event bus. Without that entry, ordinary apply_patch omits then_run and rejects stale fusion arguments before mutation; Code/Notebook omit apply_patch_then_run. Registration synchronizes at session_start so extension load order does not change availability; reload removes the old entry listener. Ordinary patching, command tools, and historical evidence remain available.
+`extensions/action-fusion.ts` owns fusion availability through the session event bus. Without that entry, ordinary apply_patch omits then_run and rejects stale fusion arguments before mutation; Code Mode omits apply_patch_then_run. Registration synchronizes at session_start so extension load order does not change availability; reload removes the old entry listener. Ordinary patching, command tools, and historical evidence remain available.
 
 ## Dynamic global instructions
 
@@ -181,7 +170,7 @@ Current results and unverified runtime boundaries live only in the root [VALIDAT
 
 ## Shared history insertion and directory lease
 
-`adapter/history-insertion.ts` performs stable insertion for reasoning bookkeeping and tree checkpoints; their message identities and eligibility rules remain with each caller. `tools/code-mode/directory-lock.ts` owns one cross-process lease for Code Mode installation and Notebook persistence/install paths; `tools/notebook-mode/notebook-state-lock.ts` wraps that lease for the notebook state stores (project, profile, npm inventory, session checkpoints). Code Mode keeps its download and checksum flow, but releases only the acquired owner instead of recursively removing the lock directory.
+`adapter/history-insertion.ts` performs stable insertion for reasoning bookkeeping and tree checkpoints; their message identities and eligibility rules remain with each caller. `tools/code-mode/directory-lock.ts` owns the cross-process lease for Code Mode installation. Code Mode keeps its download and checksum flow, but releases only the acquired owner instead of recursively removing the lock directory.
 
 ## Code Mode host client ownership
 

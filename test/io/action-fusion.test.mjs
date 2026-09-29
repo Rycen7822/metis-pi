@@ -67,12 +67,12 @@ test("patch parameter aliases preserve then_run; partial patch skips follow-up",
   assert.equal(readFileSync(join(ctx.cwd, "second"), "utf8"), "saved\n");
 });
 
-for (const executionMode of ["code", "notebook"]) test(`${executionMode} nested entry retains string patch and captures fused failure before throwing`, async (t) => {
+test("code nested entry retains string patch and captures fused failure before throwing", async (t) => {
   const ctx = fixture(t);
   const binary = fileURLToPath(new URL("../../vendor/pi-codex-conversion/src/tools/exec/bin/linux-x64/exec_bridge", import.meta.url));
   const sessions = createExecSessionManager({ bridgeBinaryPath: () => binary });
   t.after(() => sessions.shutdown());
-  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode, availableToolNames: [] }, sessions, tracker: createExecCommandTracker() };
+  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode: "code", availableToolNames: [] }, sessions, tracker: createExecCommandTracker() };
   const pi = { events: createEventBus(), on() {} };
   actionFusion(pi);
   const tools = createNestedTools(pi, runtime, ctx);
@@ -81,9 +81,6 @@ for (const executionMode of ["code", "notebook"]) test(`${executionMode} nested 
   assert.equal(toWireToolDefinition(patch).kind, "freeform");
   assert.equal(toWireToolDefinition(fused).kind, "function");
   assert.ok(toWireToolDefinition(fused).input_schema.properties.then_run);
-  const wire = tools.map(toWireToolDefinition);
-  runtime.state.executionMode = executionMode === "code" ? "notebook" : "code";
-  assert.deepEqual(createNestedTools(pi, runtime, ctx).map(toWireToolDefinition), wire, "mode switches retain the shared declaration and order");
   const results = [];
   const context = { extensionContext: ctx, toolCallId: "nested", captureResult: result => results.push(result) };
   const signal = new AbortController().signal;
@@ -97,9 +94,9 @@ for (const executionMode of ["code", "notebook"]) test(`${executionMode} nested 
   assert.equal(readFileSync(join(ctx.cwd, "new"), "utf8"), "new interface\n");
 });
 
-for (const executionMode of ["code", "notebook"]) test(`${executionMode} without fusion keeps ordinary patch and omits the fused entry`, async t => {
+test("code without fusion keeps ordinary patch and omits the fused entry", async t => {
   const ctx = fixture(t);
-  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode, availableToolNames: [] }, sessions: {}, tracker: createExecCommandTracker() };
+  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode: "code", availableToolNames: [] }, sessions: {}, tracker: createExecCommandTracker() };
   const tools = createNestedTools({ events: createEventBus() }, runtime, ctx);
   assert.equal(tools.some(tool => tool.name === "apply_patch_then_run"), false);
   const patch = tools.find(tool => tool.name === "apply_patch");

@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { migrateCodexConversionConfigIfNeeded } from "./config-migration.ts";
 import { DEFAULT_CODEX_CONVERSION_CONFIG, normalizeCodexConversionConfig, type CodexConversionConfig, type LunaCacheKeepaliveMinutes } from "./config.ts";
 import { readCodexCacheEnvironment } from "./cache-environment.ts";
 
@@ -19,7 +18,6 @@ export interface EffectiveCodexConversionConfigOptions {
 export type CodexConversionConfigScope = "global" | "folder";
 
 const OWNED_CONFIG_KEYS = Object.keys(DEFAULT_CODEX_CONVERSION_CONFIG);
-const LEGACY_OWNED_CONFIG_KEYS = ["beta"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
@@ -109,8 +107,7 @@ function readConfigDocument(configPath: string, scope: "global" | "trusted proje
 export function readCodexConversionConfig(configPath: string = getCodexConversionConfigPath()): CodexConversionConfig {
 	const parsed = readConfigDocument(configPath, "global");
 	if (parsed === undefined) return structuredClone(DEFAULT_CODEX_CONVERSION_CONFIG);
-	const migration = migrateCodexConversionConfigIfNeeded(parsed);
-	const config = withoutProjectOnlyConfig(normalizeCodexConversionConfig(migration.config));
+	const config = withoutProjectOnlyConfig(normalizeCodexConversionConfig(parsed));
 	return config;
 }
 
@@ -119,14 +116,13 @@ export function readProjectCodexConversionDocument(cwd: string, projectTrusted: 
 	const path = getProjectCodexConversionConfigPath(cwd);
 	const parsed = readConfigDocument(path, "trusted project");
 	if (!isRecord(parsed)) return undefined;
-	const migration = migrateCodexConversionConfigIfNeeded(parsed);
-	return isRecord(migration.config) ? withoutGlobalOnlyDocument(migration.config) : undefined;
+	return withoutGlobalOnlyDocument(parsed);
 }
 
 export function hasFolderCodexConversionConfig(cwd: string, projectTrusted: boolean): boolean {
 	const project = readProjectCodexConversionDocument(cwd, projectTrusted);
 	if (!project) return false;
-	return [...OWNED_CONFIG_KEYS, ...LEGACY_OWNED_CONFIG_KEYS].some((key) => {
+	return OWNED_CONFIG_KEYS.some((key) => {
 		if (key !== "openai") return key in project;
 		const openai = isRecord(project["openai"]) ? project["openai"] : undefined;
 		return !!openai && Object.keys(openai).some((option) => option !== "cacheKeepalive");
@@ -228,7 +224,7 @@ export function clearFolderCodexConversionConfig(
 	const path = getProjectCodexConversionConfigPath(cwd);
 	const project = readProjectCodexConversionDocument(cwd, true);
 	if (!project) return { ok: true };
-	for (const key of [...OWNED_CONFIG_KEYS, ...LEGACY_OWNED_CONFIG_KEYS]) {
+	for (const key of OWNED_CONFIG_KEYS) {
 		if (key === "openai" && isRecord(project[key])) {
 			const keepalive = project[key]["cacheKeepalive"];
 			const nextOpenAI = keepalive === true ? { cacheKeepalive: true } : {};
@@ -271,7 +267,6 @@ export function writeCodexConversionConfig(
 		document = folderScope
 			? withoutDisabledProjectCacheKeepalive(withoutGlobalOnlyDocument(document))
 			: withoutProjectOnlyDocument(document);
-		for (const key of LEGACY_OWNED_CONFIG_KEYS) delete document[key];
 		writeConfigDocumentAtomic(configPath, document);
 		return { ok: true };
 	} catch (error) {

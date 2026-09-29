@@ -26,7 +26,7 @@ for (const fusionEnabled of [true, false]) test(`native and patch schemas retain
   ];
   const tools = definitions.map(({ name, description, parameters }) => ({ type: "function", name, description, parameters }));
   const original = JSON.stringify(tools);
-  for (const executionMode of ["normal", "code", "notebook", "normal"]) {
+  for (const executionMode of ["normal", "code", "normal"]) {
     const { ctx, state, payload } = fixture({ executionMode });
     payload.tools = tools; payload.input = [{ role: "user", content: "Apply and check" }];
     const warm = rewriteCodexPrewarmProviderRequest(payload, ctx, state);
@@ -62,7 +62,7 @@ const cases = [
 	{ label: "Remote provider/API mismatch", mode: "remote", api: "openai-responses", namespace: true },
 	{ label: "Remote custom Codex API", mode: "remote", provider: "custom-codex", namespace: true, remote: true },
 	{ label: "Responses Lite Local", mode: "local", executionMode: "code", lite: true, namespace: false },
-	{ label: "Responses Lite Tree Sol", modelId: "gpt-6-sol", mode: "tree", executionMode: "notebook", lite: true, namespace: false },
+	{ label: "Responses Lite Tree Sol", modelId: "gpt-6-sol", mode: "tree", executionMode: "code", lite: true, namespace: false },
 	{ label: "Responses Lite Remote Luna", modelId: "gpt-6-luna", mode: "remote", executionMode: "code", lite: true, namespace: true, remote: true },
 ];
 

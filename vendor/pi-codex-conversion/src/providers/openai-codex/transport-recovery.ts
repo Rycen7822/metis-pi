@@ -180,7 +180,7 @@ export function createCodexTransportStream<TApi extends Api>(
 ): AssistantMessageEventStream {
 	const runtimeConfig = deps.getConfig?.();
 	const responsesLite = deps.useResponsesLite?.(model)
-		?? ((runtimeConfig?.executionMode === "code" || runtimeConfig?.executionMode === "notebook")
+		?? (runtimeConfig?.executionMode === "code"
 			&& supportsResponsesLiteModel(model.id));
 	const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
 	const preferredTransport = getEffectiveCodexTransport(options?.transport, runtimeConfig?.openai);

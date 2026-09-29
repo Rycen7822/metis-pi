@@ -48,7 +48,7 @@ export function buildOpenAISettings(
 			}),
 		),
 		configToggle(config, "openai", "proxyResponsesLite", "Proxy Responses Lite",
-			"Use Responses Lite for supported models on configured proxies in Code or Notebook mode. Requires proxy support.", "responsesLite"),
+			"Use Responses Lite for supported models on configured proxies in Code mode. Requires proxy support.", "responsesLite"),
 		configToggle(config, "openai", "forceCachedWebSockets", "Cached WebSocket upgrade",
 			"Upgrade explicit WebSocket transport to reuse connections between requests. Leaves SSE unchanged."),
 		setting(

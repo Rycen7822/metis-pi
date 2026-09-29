@@ -42,7 +42,7 @@ flowchart LR
     Pi[Pi 事件与会话] --> Display[appearance / chrome / 转录]
     Pi --> Features[goal / todo / dynamic-agents]
     Pi --> Conversion[Codex conversion]
-    Conversion --> Execution[exec / Code / Notebook]
+    Conversion --> Execution[原生工具 / Code Mode]
     Execution --> Archive[归档与融合回执]
     Archive --> Condense[condense 投影与 OCC]
     Condense --> Request[最终 provider 请求]
@@ -57,8 +57,6 @@ flowchart LR
 | compaction/replay | 切片沿用完整历史的工具决策；压缩 input 和顶层 tools 同步更新，canonical 请求保留基线。Local/Tree/Remote/Hybrid 的持久化、窗口和 wire 差异分别保留。 |
 | history/notes | `context-management/tool-contract.ts` 共享字段规则；`adapter/history-insertion.ts` 只负责稳定插入，筛选仍由调用方决定。 |
 | V8 Code Mode | `host-client.ts` 独占 framed connection、session/open 协议和 delegate 回应；安装和持久化路径使用跨进程 lease。 |
-| Notebook | `session-runtime.ts` 唯一拥有 kernel/startup/身份/checkpoint 并构造 execution runtime；生命周期、恢复和 profile 操作使用该 owner，保持按需加载。 |
-| Notebook 候选发布 | `candidate-transaction.ts` 共享捕获和原子发布；generation/merge、pin、profile 名称与 checkpoint 身份由各调用方持有。共享载荷读取仍核验哈希，布局检查不能替代内容校验。 |
 | Action Fusion | vendor `tools/action-fusion.ts` 共享流程和按路径排队，command adapter 分别连接原生 bash 与 exec manager；`src/fusion-view.ts` 只组合修改和命令显示。嵌套 delegate 的 journal 独立于显示 trace。 |
 | condense 批次 | 同一批次记录持有去重、准备和摘要结果，调度与提交共同消费；原文、候选和已发布表示分开，失败恢复顺序保持。`spill.ts` 统一归档/backfill，调用方决定何时允许隐藏。 |
 | condense 设置/恢复 | `setting-fields.ts` 持有字段规则；overlay 和命令保留各自非法值策略。session_start/tree 共用分支恢复，配置加载和启动提示只在 start 执行。 |

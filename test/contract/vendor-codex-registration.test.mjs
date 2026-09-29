@@ -85,7 +85,7 @@ test("built vendor entry follows Pi's catalog and wires lifecycle, final request
   assert.equal(capture.bodies[0].instructions, "ENTRY_PROMPT");
   assert.match(JSON.stringify(capture.bodies[0].input), /ENTRY_INPUT/);
   const names = tools.map(({ name }) => name);
-  for (const name of ["notebook", "apply_patch", "view_image"]) {
+  for (const name of ["exec", "wait", "apply_patch", "view_image"]) {
     assert.ok(names.includes(name), `missing shipped tool ${name}`);
   }
   for (const { name, parameters } of tools) {

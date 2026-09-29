@@ -75,7 +75,6 @@ export interface ToolExecutionContext {
 	onUpdate?: ((result: AgentToolResult<unknown>) => void) | undefined;
 	captureResult?: ((result: RuntimeToolResult) => void) | undefined;
 	refreshTrace?: (() => void) | undefined;
-	setBlocked?: ((blockerId: string, active: boolean) => void) | undefined;
 }
 
 export interface CodeModeRenderTheme {
@@ -128,33 +127,6 @@ export interface RuntimeContentItem {
 	detail?: "auto" | "low" | "high" | "original" | null;
 }
 
-export interface NotebookMemoryUsage {
-	heapUsedBytes: number;
-	heapTotalBytes: number;
-	rssBytes: number;
-	externalBytes: number;
-	heapLimitBytes: number;
-}
-
-export type NotebookControlRequest =
-	| { action: "status"; query?: string | undefined }
-	| { action: "list"; query?: string | undefined }
-	| { action: "checkpoint" }
-	| { action: "save"; name: string }
-	| { action: "load"; name: string }
-	| { action: "pin"; names: string[] }
-	| { action: "unpin"; names: string[] }
-	| { action: "release"; names: string[] }
-	| { action: "prune"; query: string }
-	| { action: "restart" }
-	| { action: "diagnostics" }
-	| { action: "reset" };
-
-export interface NotebookControlResult {
-	message: string;
-	details: Record<string, unknown>;
-}
-
 export type RuntimeResponse = (
 	| { kind: "yielded"; cellId: string; contentItems: RuntimeContentItem[] }
 	| { kind: "terminated"; cellId: string; contentItems: RuntimeContentItem[] }
@@ -172,5 +144,4 @@ export type RuntimeResponse = (
 	execSessionIds?: number[] | undefined;
 	traces?: RuntimeToolTrace[] | undefined;
 	droppedTraceCount?: number | undefined;
-	notebookMemory?: NotebookMemoryUsage | undefined;
 };

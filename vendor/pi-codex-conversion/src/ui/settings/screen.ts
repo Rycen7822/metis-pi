@@ -86,10 +86,10 @@ export async function openCodexSettingsScreen(
 					? [{
 							item: {
 								id: "executionMode",
-								description: "Structured: standard JSON schemas. Code: JavaScript. Notebook: persistent Deno shell with checkpoints.",
+								description: "Structured: standard JSON schemas. Code: JavaScript execution.",
 								label: "Execution mode",
 								currentValue: formatExecutionMode(draft.executionMode),
-								values: ["Structured", "Code", "Notebook (recommended)"],
+								values: ["Structured", "Code"],
 							},
 							update: (value: string, current: CodexConversionConfig) => ({
 								...current,
@@ -321,13 +321,11 @@ function formatToolsDetails(theme: Theme, configPath: string): string[] {
 
 function formatExecutionMode(mode: ExecutionMode): string {
 	if (mode === "code") return "Code";
-	if (mode === "notebook") return "Notebook (recommended)";
 	return "Structured";
 }
 
 function parseExecutionMode(value: string): ExecutionMode {
 	if (value === "Code") return "code";
-	if (value === "Notebook (recommended)") return "notebook";
 	return "normal";
 }
 

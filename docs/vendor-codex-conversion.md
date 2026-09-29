@@ -10,9 +10,8 @@
 | --- | --- |
 | normal | `exec_command`、`write_stdin`、`apply_patch`、`view_image` 等原生工具。 |
 | code | 通过 `exec` / `wait` 执行程序，并在程序中调用工具。 |
-| notebook | 在 code 工具基础上提供持久 Notebook 能力与 `notebook`。 |
 
-具体注册集合受 provider 和模式配置影响。history/notes、上下文窗口及压缩组合另有设置；与自动精简的配合见 [condense](features/condense.md)，修改后执行命令见 [Action Fusion](features/action-fusion.md)。Code/Notebook 运行时保持按需加载。
+具体注册集合受 provider 和模式配置影响。history/notes、上下文窗口及压缩组合另有设置；与自动精简的配合见 [condense](features/condense.md)，修改后执行命令见 [Action Fusion](features/action-fusion.md)。Code Mode 的 V8 运行时按需加载。
 
 后台 shell 面板使用可配置的 `alt+w` / `alt+q` / `alt+e` / `alt+r`。fullscreen 下单击展开/折叠与快捷键共享状态，拖动和滚轮不切换；regular 模式使用快捷键。默认 `alt+q` 可能与 Pi 冲突，可调整 `ui.backgroundShellPrevShortcut`。
 

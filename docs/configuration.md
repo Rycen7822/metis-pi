@@ -186,7 +186,7 @@
 | dynamic-agents | `-extensions/dynamic-agents.ts`；运行中恢复原生规则建议先在独立 JSON 设置 `enabled: false`，详见功能页 |
 | condense 整体 | `-extensions/condense.ts` |
 | skill 输入 | 同时排除 `-extensions/skill-entry.ts`、`-extensions/skill-mux.ts` |
-| 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、转换层 apply_patch、Code/Notebook 的融合入口 |
+| 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、转换层 apply_patch、Code Mode 的融合入口 |
 | 整个 Codex 转换层 | `-vendor/pi-codex-conversion/dist/index.js` |
 
 显示子项仍在 `metis-pi.json` 设置；压缩的 `contextPrune.enabled` 和 OCC 的 `contextPrune.opportunisticCompaction` 在 Pi `settings.json` 设置。`/pruner off` 关闭压缩但保留历史回读工具，排除 condense 入口才是完全禁用。Action Fusion 的开关与 condense 独立，细节见 [Action Fusion](features/action-fusion.md)。

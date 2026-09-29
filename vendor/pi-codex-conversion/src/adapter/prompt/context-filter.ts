@@ -1,13 +1,11 @@
 import type { CustomMessageEntry } from "@earendil-works/pi-coding-agent";
 import { NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE } from "../compaction/types.ts";
 import { EXECUTION_MODE_SESSION_ENTRY } from "../activation/execution-mode.ts";
-import { NOTEBOOK_TREE_EPOCH_ENTRY } from "../../tools/notebook-mode/session-identity.ts";
 import { CONTEXT_WINDOW_COMPACTION_SUMMARY } from "../../context-management/messages.ts";
 
 const ADAPTER_CONTEXT_EXCLUDED_CUSTOM_MESSAGE_TYPES = new Set([
 	NATIVE_COMPACTION_DISPLAY_MESSAGE_TYPE,
 	EXECUTION_MODE_SESSION_ENTRY,
-	NOTEBOOK_TREE_EPOCH_ENTRY,
 ]);
 
 export function isProviderContextExcludedMessage(message: {

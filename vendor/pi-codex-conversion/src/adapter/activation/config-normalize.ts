@@ -1,8 +1,6 @@
 import {
 	type CodexConversionConfig,
 	DEFAULT_CODEX_CONVERSION_CONFIG,
-	MAX_NOTEBOOK_HEAP_MIB,
-	MIN_NOTEBOOK_HEAP_MIB,
 } from "./config-contract.ts";
 import {
 	isObject,
@@ -18,8 +16,6 @@ import {
 } from "./config-normalizers.ts";
 import {
 	normalizeBoolean,
-	normalizeIntegerInRange,
-	normalizeNotebookProfile,
 	normalizeString,
 } from "./config-values.ts";
 import { normalizeExecutionMode } from "./execution-mode.ts";
@@ -42,12 +38,9 @@ export function normalizeCodexConversionConfig(
 	const prompt = isObject(value["prompt"]) ? value["prompt"] : {};
 	const scope = isObject(value["scope"]) ? value["scope"] : {};
 	const tools = isObject(value["tools"]) ? value["tools"] : {};
-	const ui = { ...(isObject(value["ui"]) ? value["ui"] : {}) };
-	if (typeof ui["toolRenaming"] !== "boolean") ui["toolRenaming"] = ui["toolRendering"];
+	const ui = isObject(value["ui"]) ? value["ui"] : {};
 	const compaction = isObject(value["compaction"]) ? value["compaction"] : {};
-	const notebook = isObject(value["notebook"]) ? value["notebook"] : {};
 	const openai = isObject(value["openai"]) ? value["openai"] : {};
-	const notebookProfile = normalizeNotebookProfile(notebook["profile"]);
 	const executionMode =
 		normalizeExecutionMode(value["executionMode"]) ??
 		defaults.executionMode;
@@ -98,16 +91,6 @@ export function normalizeCodexConversionConfig(
 			v2UserMessageRetention:
 				normalizeV2UserMessageRetention(compaction["v2UserMessageRetention"]) ??
 				defaults.compaction.v2UserMessageRetention,
-		},
-		notebook: {
-			...booleans("notebook", notebook),
-			maxHeapMiB: normalizeIntegerInRange(
-				notebook["maxHeapMiB"],
-				defaults.notebook.maxHeapMiB,
-				MIN_NOTEBOOK_HEAP_MIB,
-				MAX_NOTEBOOK_HEAP_MIB,
-			),
-			...(notebookProfile ? { profile: notebookProfile } : {}),
 		},
 		openai: {
 			...booleans("openai", openai),

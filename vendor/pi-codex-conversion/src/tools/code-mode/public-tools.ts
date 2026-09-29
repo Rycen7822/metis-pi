@@ -30,7 +30,6 @@ import {
 	registerCodeModePreflightBroker,
 } from "./nested-tool-preflight.ts";
 import { runCodeModeToolWithHooks } from "./nested-tool-completion.ts";
-import { registerNotebookTool } from "./notebook-tool.ts";
 
 const DEFAULT_WAIT_MS = 10_000;
 const MIN_ADAPTIVE_WAIT_MS = 5_000;
@@ -68,7 +67,6 @@ export function registerPublicCodeModeTools(
 	const hooks = { preflight: broker.run, completion: broker.complete };
 	pi.registerTool(createExecTool(runtime, tracker, renderResult, hooks));
 	pi.registerTool(createWaitTool(runtime, tracker, renderResult, waitAttempts, hooks));
-	registerNotebookTool(pi, runtime);
 }
 
 function createExecTool(
@@ -87,7 +85,7 @@ function createExecTool(
 		async execute(id, params, signal, onUpdate, ctx) {
 			tracker.start(id);
 			try {
-				const response = await (await runtime.getClient(ctx)).execute(
+				const response = await (await runtime.getClient()).execute(
 					params.code,
 					{ cwd: ctx.cwd, toolCallId: id, extensionContext: ctx, ...hooks, onUpdate },
 					signal,
@@ -137,7 +135,7 @@ function createWaitTool(
 		async execute(id, params, signal, onUpdate, ctx) {
 			tracker.start(id);
 			try {
-				const client = await runtime.getClient(ctx);
+				const client = await runtime.getClient();
 				const context = { cwd: ctx.cwd, toolCallId: id, extensionContext: ctx, ...hooks, onUpdate };
 				const attempt = waitAttempts.get(params.cell_id) ?? 0;
 				const response = params.terminate

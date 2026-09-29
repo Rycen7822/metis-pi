@@ -1,25 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCodexConversionConfig as normalize } from "../../vendor/pi-codex-conversion/src/adapter/activation/config.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG, normalizeCodexConversionConfig as normalize } from "../../vendor/pi-codex-conversion/src/adapter/activation/config.ts";
 import { buildDisplaySettings } from "../../vendor/pi-codex-conversion/src/ui/settings/config-items-display.ts";
 import { buildToolsSettings } from "../../vendor/pi-codex-conversion/src/ui/settings/config-items-tools.ts";
 import { buildOpenAISettings } from "../../vendor/pi-codex-conversion/src/ui/settings/config-items-openai.ts";
 
-test("vendor config retains legacy aliases, optional fields and dependent switches", () => {
+test("vendor config normalizes optional fields and dependent switches", () => {
   const config = normalize({
-    ui: { toolRenaming: "invalid", toolRendering: false, backgroundShellPrevShortcut: " alt+u " },
+    ui: { toolRenaming: "invalid", backgroundShellPrevShortcut: " alt+u " },
     compaction: { contextManagement: "local", hybridCompaction: true, responsesCompaction: true, portableSummary: true },
-    notebook: { maxHeapMiB: 255, plainCommandOutput: true, profile: "valid-name" },
-    voice: { audioSetupCompleted: true },
-    voiceFeaturesOnly: true,
+    tools: { plainCommandOutput: true },
   });
-  assert.equal(config.ui.toolRenaming, false);
+  assert.equal(config.ui.toolRenaming, DEFAULT_CODEX_CONVERSION_CONFIG.ui.toolRenaming);
   assert.equal(config.ui.backgroundShellPrevShortcut, "alt+u");
   assert.deepEqual(config.compaction, { contextManagement: "local", hybridCompaction: true, responsesCompaction: false, portableSummary: false, v2UserMessageRetention: 64 });
-  assert.equal(config.notebook.maxHeapMiB, normalize(null).notebook.maxHeapMiB);
-  assert.equal(config.notebook.profile, "valid-name");
-  assert.equal(Object.hasOwn(config, "voice"), false, "retired voice configuration has no runtime effect");
-  assert.equal(Object.hasOwn(config, "voiceFeaturesOnly"), false);
+  assert.equal(config.tools.plainCommandOutput, true);
   assert.equal(normalize({ compaction: { portableSummary: true } }).compaction.portableSummary, false);
   const other = normalize(null);
   other.scope.additionalProviders.push("mutation");
@@ -34,7 +29,7 @@ test("settings toggles preserve latest-draft siblings and do not mutate either s
     statusLine: ["ui", "statusLine"], toolRenaming: ["ui", "toolRenaming"],
     codeModeDetails: ["ui", "codeModeDetails"], backgroundShellWidget: ["ui", "backgroundShellWidget"],
     autoReasoning: ["tools", "autoReasoning"], viewImageFallback: ["tools", "viewImageFallback"],
-    notebookPlainCommandOutput: ["notebook", "plainCommandOutput"], applyPatchOnly: ["tools", "applyPatchOnly"],
+    plainCommandOutput: ["tools", "plainCommandOutput"], applyPatchOnly: ["tools", "applyPatchOnly"],
     viewImageOnly: ["tools", "viewImageOnly"], fast: ["openai", "fast"], responsesLite: ["openai", "proxyResponsesLite"],
     forceCachedWebSockets: ["openai", "forceCachedWebSockets"],
   };
