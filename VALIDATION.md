@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-09-29 — Published and activated Code Mode host metis.3
+
+- Source `d6de2cb9fe7605e78365324b77e3e2918598f928` includes the observation/termination corrections and the preceding Rust remote-client removal. Both jobs passed in source CI [36590320288](https://github.com/Rycen7822/metis-pi/actions/runs/36590320288), including the new cold Rust/V8 build and actual-host smoke.
+- Published immutable [`.metis.3`](https://github.com/Rycen7822/metis-pi/releases/tag/code-mode-host-rust-v0.145.0-metis.3) after verifying its annotated source tag, draft download and public download. Rebuilding from the clean source commit reproduced the validated archive bytes: SHA-256 `311f99645dda093d6019305ca032f3c9351ea0a9bd89657e0badfcfccd1f4d70`; executable SHA-256 `974546e4f8e3c8c7009ba91b680deb71012a5aa5ce7edcb26bf9366808dad599`. Linux x64 glibc >= 2.34 only; other platform fallbacks are unchanged.
+- Installer tag and archive checksum now select `.metis.3`. Actual public downloads passed empty-cache installation, old-cache coexistence, cache reuse and corrupt-download rejection. Activation `npm run verify` passed **440/440**, type checks and the **406-file** package check.
+- A freshly installed npm package plus Pi 0.87.1 (126 dependencies installed with lifecycle scripts disabled) ran in isolated HOME/agentDir/cwd. The shipped installer fetched the public host into each profile without binary injection. Real Pi RPC checks passed steering during exec/wait with the same cell completing afterward, plus followUp/idle controls; the local mock provider received both steering messages. Executable hashes matched the release. A temporary harness initially attempted native Node stripping of TS inside node_modules; using the same jiti mechanism as Pi resolved that harness error without production changes.
+- Evidence is under `.work/code-mode-gap-fixes/release/`: immutable release notes, source rebuild, draft/public downloads, installation and activation logs. No personal profile or paid model was used.
+
 ## 2026-09-29 — Code Mode startup, context and observation corrections
 
 - Hello plus session-open startup now has a shared 30-second deadline; individual callers can cancel their wait without cancelling another caller's startup. Execution cwd/model/hooks are captured before binary acquisition and remain independent of subsequent observers. Explicit steering input yields only the current observation on hosts negotiating `yield-observation`; follow-up/idle inputs and old hosts keep prior timing behavior. Transport failure in a yield listener rejects pending calls safely.

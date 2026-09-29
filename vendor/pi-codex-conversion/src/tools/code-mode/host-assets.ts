@@ -1,5 +1,5 @@
 const UPSTREAM_HOST_RELEASE = "rust-v0.145.0";
-const METIS_HOST_RELEASE = "code-mode-host-rust-v0.145.0-metis.2";
+const METIS_HOST_RELEASE = "code-mode-host-rust-v0.145.0-metis.3";
 
 interface CodeModeHostAsset {
 	name: string;
@@ -10,7 +10,7 @@ interface CodeModeHostAsset {
 
 const METIS_LINUX_X64: CodeModeHostAsset = {
 	name: "codex-code-mode-host-x86_64-unknown-linux-gnu.tar.gz",
-	sha256: "f9090f9513b1449f87eb4b906aab6ca504ab412e56fdefda3722149535aa5744",
+	sha256: "311f99645dda093d6019305ca032f3c9351ea0a9bd89657e0badfcfccd1f4d70",
 	release: METIS_HOST_RELEASE,
 	repository: "Rycen7822/metis-pi",
 };
