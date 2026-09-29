@@ -1,5 +1,11 @@
 # Validation
 
+## 2026-09-29 — Unused Rust remote client removed
+
+- Removed the 12-file Rust remote client (3,017 lines) plus three module/export declarations. AST symbol/import queries and source reads confirmed that the host constructs `InProcessCodeModeSession` directly; the plugin uses the TS host client. Removed the runtime crate's unused Tokio process/io-util features; Cargo.lock pruned mio, signal-hook-registry and wasi without upgrading retained dependencies.
+- The formal sandbox V8 release build passed with GLIBC_2.34. The extracted candidate passed real TS-client/host checks for text/image, delegation success/failure, undefined input, JS errors, timer callbacks, load isolation, concurrent snapshots, error commit, termination discard, notify, yield/wait and shutdown. Five existing stand-in-host protocol tests passed. No permanent tests were added or changed; evidence is under `.work/remote-client-removal/`.
+- This follow-up changes maintained source only. The public installer remains pinned to `.metis.2`; no new release, package activation or real model validation was performed.
+
 ## 2026-09-29 — Runtime fixes and sandbox V8 upgrade
 
 - R1–R4 first passed real-host checks on V8 149.2.0. The V8 150.4.0 candidate then passed undefined/omitted/object delegation, store/load isolation, concurrent snapshots, ordinary-error commit, explicit-termination discard, timer callbacks, delegated errors, text/image and process shutdown. The same probes passed against the final extracted archive.

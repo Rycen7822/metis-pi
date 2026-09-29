@@ -10,7 +10,7 @@ Source copied from upstream:
 - `codex-rs/protocol/src/tool_name.rs`
 - upstream `LICENSE` and `NOTICE`
 
-Upstream test modules are omitted. The unsupported `audio()` output helper, its Rust output variants and its model-facing audio type are also removed locally. Pi-owned TypeScript, TOML discovery, command execution, package manifests, installer scripts, and minimal Cargo packaging stay outside upstream source trees. Keep conversion-specific activation and nested tool adapters in `src/adapter/`.
+Upstream test modules and the unused Rust `remote_session` client are omitted. The two `ProcessOwnedCodeModeSession*` exports are removed: the only shipped Rust consumer is the stdio host, which constructs `InProcessCodeModeSession` directly, while the Pi-facing client lives in TypeScript. The runtime crate no longer enables Tokio process/I/O features; host and protocol crates retain their own stdio dependencies. The unsupported `audio()` output helper, its Rust output variants and its model-facing audio type are also removed locally. Pi-owned TypeScript, TOML discovery, command execution, package manifests, installer scripts, and minimal Cargo packaging stay outside upstream source trees. Keep conversion-specific activation and nested tool adapters in `src/adapter/`.
 
 The Pi bridge requires the standalone stdio host and never falls back to in-process V8. Unqualified `exec` waits 30 seconds initially; explicit pragmas, custom-tool overrides, and adaptive `wait` backoff remain authoritative.
 
