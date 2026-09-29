@@ -31,6 +31,8 @@ selectively ported in an isolated branch, preserving the behavior in `PATCHES.md
 
 The root package ships TS, public facades and runtime assets, with no development compiler or install-time build. `npm run vendor:build` and `vendor:fresh` remain aliases of the source checks. Generated `.d.ts` or deep dist JS are not runtime inputs.
 
+Pi 0.87.0 or newer supplies the shared transcript and constrained-sampling helpers. Local wrappers retain historical-session compatibility and resolve the sampling API through the running host's public package exports; no second pi-ai copy is bundled.
+
 ## Published package
 
 The root `package.json` publishes TypeScript, small compatibility re-exports, runtime tokenizer/WASM assets,

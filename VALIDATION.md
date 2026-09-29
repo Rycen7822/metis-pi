@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-09-29 — Host helper reuse and renderer dependency cleanup
+
+- Constrained sampling delegates to the running Pi's public API export; transcript delegates to root helpers while retaining slice-head, legacy Context and saved-session compatibility. Pi peers now require >=0.87.0; Node remains >=22.19.0. Responses text/refusal deltas share a branch, and the diff component no longer imports renderer assembly.
+- Maintenance source decreased **468 lines**: sampling **274**, transcript **182**, stream **12**, renderer **0**. No permanent tests, scripts, dependencies or generated output were added. Rust, native/runtime assets and the ten public JS facades are unchanged.
+- Root/test/vendor types and all **451 existing tests** passed; the nearest provider/transcript/compaction/diff/fusion checks passed **55/55**. Temporary Node 22.19.0 baseline comparisons passed 58 sampling and 135 transcript checks plus mixed text/refusal events, including ignored mismatches and independent final text assertions. The 379-module static graph has no value-dependency cycle.
+- Real Pi CLI installations outside the repository passed local loading, Git initial installation/update, and npm production tarball loading; all nine commands loaded on Pi 0.87.1 and the npm installation also loaded on Pi 0.87.0, using Node 22.19.0. The sampling bridge uses the host's package metadata because direct subpath imports conflict with Pi's compat alias. Production installations have no development compiler or generated deep dist tree.
+- The installed Git candidate passed strict PTY **E1–E6**, including **161 exact clipboard characters**. An initial run stopped at zsh's first-user setup before Pi started; adding an empty `.zshrc` in the owned temporary HOME fixed the environment. Product code and driver assertions were unchanged; the temporary driver-only pi-tui link was removed afterward.
+- Evidence: `.work/host-reuse/`. Verification used isolated profiles, existing tests and local mock responses, with no paid model requests or personal configuration changes. Independent Bun/SEA distributions and future Pi versions were not exercised.
+
 ## Direct TypeScript runtime migration (2026-09-29)
 
 - Both vendor implementations run from TS. Ten small re-export files retain the old conversion discovery/filter path and public entry paths; no generated implementation tree or declaration build is required. Rust, native binaries, tokenizer/WASM, dependencies and persistent formats are unchanged.

@@ -24,7 +24,7 @@
 | 领域 | 所有者与边界 |
 | --- | --- |
 | 装配与适配 | `src/extension.ts` 装配；`host-data.ts` 归一化公开数据；`adapter.ts` 校验工具来源和 renderer 所有权；`config.ts` 校验显示配置。 |
-| 工具显示 | `renderers.ts` 装配 call/result；`shell.ts` 按物理行预算；`diff.ts` / `diff-component.ts` 共享 diff；`explore.ts` 管探索显示。 |
+| 工具显示 | `renderers.ts` 装配 call/result；`tool-names.ts` 提供类型和路径语言映射，diff component 不反向依赖装配层；`shell.ts` 按物理行预算，`diff.ts` / `diff-component.ts` 共享 diff，`explore.ts` 管探索显示。 |
 | 写入快照 | `write-tracker.ts` 捕获真实 pre/post image，`write-preview.ts` 展示；`apply-patch-view.ts` 读取转换层的执行前快照。`native-tool-path.ts` 与 Action Fusion 共用路径规则。 |
 | 转录与思考 | `transcript-state.ts` 持有稳定消息身份、语义 run、计时和控制器；一次解析的 AssistantView 供阶段策略和装饰共享，交互形态由 `thinking-view.ts` 处理。 |
 | chrome | `chrome/install.ts` 捕获宿主；editor/header/footer/working 各自拥有组件。`fullscreen-layout.ts` 统一协调留白与 history-window，只有一个布局根拦截器。 |
@@ -53,7 +53,7 @@ flowchart LR
 | 领域 | 所有者与不可合并的责任 |
 | --- | --- |
 | 模式与设置 | conversion `adapter/activation/runtime-plan.ts` 决定模式；字段规范化、信任范围、原子写入与设置 UI 各守自己的边界。 |
-| provider 请求 | `prepareResponsesTranscript` 统一 transcript/system/工具放置；`adapter/provider-request.ts` 共享 live/prewarm 准备，最终请求才消费待处理窗口和捕获 prompt。工具调用/结果配对由 `normalizeResponsesToolHistory` 负责。 |
+| provider 请求 | `prepareResponsesTranscript` 统一 transcript/system/工具放置；transcript 与 sampling 复用宿主 helper，保留本地切片和旧会话包装；`adapter/provider-request.ts` 共享 live/prewarm 准备，最终请求才消费待处理窗口和捕获 prompt。工具调用/结果配对由 `normalizeResponsesToolHistory` 负责。 |
 | compaction/replay | 切片沿用完整历史的工具决策；压缩 input 和顶层 tools 同步更新，canonical 请求保留基线。Local/Tree/Remote/Hybrid 的持久化、窗口和 wire 差异分别保留。 |
 | history/notes | `context-management/tool-contract.ts` 共享字段规则；`adapter/history-insertion.ts` 只负责稳定插入，筛选仍由调用方决定。 |
 | V8 Code Mode | `host-client.ts` 独占 framed connection、session/open 协议和 delegate 回应；安装和持久化路径使用跨进程 lease。 |

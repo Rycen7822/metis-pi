@@ -8,7 +8,7 @@ Edit `src/**` and run `npm run vendor:check`. Runtime and tests consume TS direc
 
 ## 2. Pi 0.86/0.87 transcript, tool placement and compaction/replay
 
-`providers/transcript.ts` implements the required 0.86.1/0.87.0 semantic subset without importing 0.87-only host helpers. Provider boundaries still accept legacy Context, needed by direct registry callers and old sessions.
+`providers/transcript.ts` reuses public Pi 0.87+ transcript helpers. Thin wrappers preserve continuing-slice heads, unbranded internal transcripts and old addedToolNames records. Provider boundaries still accept legacy Context, needed by direct registry callers and old sessions.
 
 `providers/openai-responses/shared.ts` owns preparation once: normalize Context, resolve model system-message capability, place tools, convert wire items. Request bodies, compaction serializers and native replay consume this same preparation. The tool placement object is authoritative:
 
@@ -24,6 +24,8 @@ Edit `src/**` and run `npm run vendor:check`. Runtime and tests consume TS direc
 Related files: `providers/openai-codex/request-body.ts`, `adapter/compaction/{serializer,compaction,remote-v2-client}.ts`, `adapter/replay/{context-edits,native-replay-segments,payload-rewrite}.ts`. Built-provider cases in `test/vendor-codex-{transcript,compaction-replay,compaction-request}.test.mjs` plus the 0.87 `test/vendor-codex-context-edits.test.mjs` protect normal, replay and final rewritten requests.
 
 ## 3. Grammar and namespace tools
+
+`providers/constrained-sampling.ts` delegates to the running host's public sampling API. Pi aliases the root package to compat, so the bridge uses SDK `getPackageDir`, Node `findPackageJSON` and the package's declared export target; it does not guess private paths or install another pi-ai. The minimum host is Pi 0.87.0. Responses text/refusal deltas share one branch while retaining part types and item-done callbacks.
 
 `providers/openai-codex-custom-provider.ts`, `providers/openai-responses/stream.ts`, `providers/openai-codex/transport-recovery.ts`, `providers/code-mode-proxy-provider.ts` and `context-management/namespace-tools.ts` resolve tools from the transcript. Grammar mapping and namespace routing retain their distinct responsibilities; blindly replacing every `context.tools` read is insufficient.
 

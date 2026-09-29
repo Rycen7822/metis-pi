@@ -6,7 +6,7 @@ A compact, Codex-style transcript UI for Pi, with separate extensions for goals,
 
 ## Installation
 
-Requires Node.js >=22.19.0. From a local checkout, run:
+Requires Node.js >=22.19.0 and Pi >=0.87.0. From a local checkout, run:
 
 ```bash
 pi install .

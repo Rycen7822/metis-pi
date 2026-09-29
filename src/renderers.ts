@@ -3,12 +3,12 @@
 import { renderCodexDiffComponent } from "./diff-component.ts";
 import { renderExplorationHeader, renderExplorationMember, renderExplorationImages, renderExplorationLines, explorationVerb, type ExplorationRow } from "./explore.ts";
 import type { ExplorationPlan, TranscriptState } from "./transcript-state.ts";
-import { asRecord, safeText, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
+import { asRecord, safeText, languageForPath, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
 import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffStats } from "./diff.ts";
 import type { WriteDiff } from "./write-tracker.ts";
 import { resolveWriteStage, type WriteStage } from "./write-preview.ts";
 
-export { asRecord, safeText, TOOL_NAMES } from "./tool-names.ts";
+export { asRecord, safeText, languageForPath, TOOL_NAMES } from "./tool-names.ts";
 export type {
   ToolName, RecordValue, Palette, ViewContext, ViewOptions, Component, TextComponent,
   TextFactory, Highlight, Renderers, DiffComponentInput, DiffFactory, DiffLayoutOps,
@@ -64,18 +64,6 @@ function highlight(text: string, language: string, theme: Palette, paint?: Highl
   return theme.fg("toolTitle", text);
 }
 
-export function languageForPath(filePath: string): string | undefined {
-  const match = /\.([A-Za-z0-9]+)$/.exec(filePath);
-  if (!match) return undefined;
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
-    py: "python", rs: "rust", go: "go", md: "markdown", json: "json",
-    sh: "bash", bash: "bash", ps1: "powershell", yaml: "yaml", yml: "yaml",
-    toml: "toml", css: "css", html: "html", rb: "ruby", java: "java", c: "c",
-    h: "c", cpp: "cpp", hpp: "cpp", sql: "sql",
-  };
-  return map[match[1]!.toLowerCase()];
-}
 
 /** Exploration title (call region): the FIRST grouped member owns the group header; later members render only their own row. */
 export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palette, colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" }): string {

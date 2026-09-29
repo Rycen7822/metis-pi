@@ -2,7 +2,7 @@
 
 ## 版本与验证范围
 
-开发类型和组件契约固定于 Pi **0.87.0**；最近实际 CLI 安装、Git 更新和严格 PTY 使用 **0.87.1**。具体环境、成功结果及未覆盖项见 [VALIDATION](../VALIDATION.md)。版本号表示已验证范围，不保证所有未来内部 UI 改动都兼容。
+最低支持 Pi **0.87.0**、Node **22.19.0**；开发类型和组件契约固定于 Pi 0.87.0，最近实际 CLI 安装、Git 更新和严格 PTY 使用 **0.87.1**。transcript 和 constrained sampling 复用宿主实现；旧 Context、切片与旧会话记录仍受兼容包装保护。具体环境、成功结果及未覆盖项见 [VALIDATION](../VALIDATION.md)，不保证所有未来内部 UI 改动都兼容。
 
 本包包含显示适配以及独立的任务、输入、上下文和执行功能。各入口的副作用见 [架构](architecture.md)；`metis-pi.json.enabled` 只控制显示层，禁用其他入口见 [配置参考](configuration.md)。
 

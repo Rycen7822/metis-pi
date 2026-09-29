@@ -232,24 +232,12 @@ export async function processResponsesStream<TApi extends Api>(
 					text: event.part.type === "output_text" ? event.part.text : event.part.refusal,
 				});
 			}
-		} else if (event.type === "response.output_text.delta") {
+		} else if (event.type === "response.output_text.delta" || event.type === "response.refusal.delta") {
 			const state = outputStates.get(event.output_index);
+			const partType = event.type === "response.output_text.delta" ? "output_text" : "refusal";
 			if (state?.kind === "message") {
-				const messagePart = state.parts.get(event.content_index) ?? { type: "output_text" as const, text: "" };
-				if (messagePart.type === "output_text") {
-					messagePart.text += event.delta;
-					state.parts.set(event.content_index, messagePart);
-					const previousText = state.block.text;
-					const nextText = renderMessageText(state.parts);
-					state.block.text = nextText;
-					emitAppendedDelta("text_delta", state.blockIndex, previousText, nextText);
-				}
-			}
-		} else if (event.type === "response.refusal.delta") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "message") {
-				const messagePart = state.parts.get(event.content_index) ?? { type: "refusal" as const, text: "" };
-				if (messagePart.type === "refusal") {
+				const messagePart = state.parts.get(event.content_index) ?? { type: partType, text: "" };
+				if (messagePart.type === partType) {
 					messagePart.text += event.delta;
 					state.parts.set(event.content_index, messagePart);
 					const previousText = state.block.text;

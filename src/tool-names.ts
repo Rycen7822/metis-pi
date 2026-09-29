@@ -80,3 +80,16 @@ export function safeText(text: string): string {
     .replace(/\x1b[@-_]/g, "")
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
 }
+
+export function languageForPath(filePath: string): string | undefined {
+  const match = /\.([A-Za-z0-9]+)$/.exec(filePath);
+  if (!match) return undefined;
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    py: "python", rs: "rust", go: "go", md: "markdown", json: "json",
+    sh: "bash", bash: "bash", ps1: "powershell", yaml: "yaml", yml: "yaml",
+    toml: "toml", css: "css", html: "html", rb: "ruby", java: "java", c: "c",
+    h: "c", cpp: "cpp", hpp: "cpp", sql: "sql",
+  };
+  return map[match[1]!.toLowerCase()];
+}
