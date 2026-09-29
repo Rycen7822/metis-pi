@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { codeModeHostBinaryName, HOST_RELEASE } from "./host-assets.ts";
+import { codeModeHostBinaryName, resolveCodeModeHostAsset } from "./host-assets.ts";
 import { installCodeModeHost, type InstallCodeModeHostOptions } from "./install-host.ts";
 
 interface CodeModeHostBinaryRuntime {
@@ -77,7 +77,7 @@ function codeModeHostCachePath(name: string, runtime: CodeModeHostBinaryRuntime)
 		"cache",
 		"pi-codex-conversion",
 		"code-mode",
-		HOST_RELEASE,
+		resolveCodeModeHostAsset(runtime.platform, runtime.arch).release,
 		`${runtime.platform}-${runtime.arch}`,
 		name,
 	);

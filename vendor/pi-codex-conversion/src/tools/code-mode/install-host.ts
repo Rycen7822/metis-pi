@@ -27,11 +27,12 @@ export interface InstallCodeModeHostOptions {
 	platform: string;
 	arch: string;
 	signal?: AbortSignal | undefined;
+	fetch?: typeof import("undici").fetch;
 }
 
 export async function installCodeModeHost(options: InstallCodeModeHostOptions): Promise<void> {
 	const { destination: destinationInput, platform, arch, signal } = options;
-	const [assetName, expectedSha256] = resolveCodeModeHostAsset(platform, arch);
+	const asset = resolveCodeModeHostAsset(platform, arch);
 	const binaryName = codeModeHostBinaryName(platform);
 	const destination = resolve(destinationInput);
 	if (basename(destination) !== binaryName) {
@@ -59,29 +60,35 @@ export async function installCodeModeHost(options: InstallCodeModeHostOptions): 
 	const staged = `${destination}.${process.pid}.tmp`;
 	try {
 		temporary = mkdtempSync(join(tmpdir(), "pi-codex-code-mode-"));
-		const assetUrl = hostAssetUrl(assetName);
+		const assetUrl = hostAssetUrl(asset);
 		let bytes: Buffer;
 		try {
 			const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
 			const { getProxyForUrl } = await dynamicImport("proxy-from-env") as { getProxyForUrl(url: string): string };
 			const proxy = getProxyForUrl(assetUrl);
-			const response = await globalThis.fetch(assetUrl, {
-				redirect: "follow",
-				signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
-				...(proxy ? { proxy } : {}),
-			} as RequestInit & { proxy?: string });
-			if (!response.ok) throw new Error(`download failed: ${response.status} ${response.statusText}`);
-			bytes = Buffer.from(await response.arrayBuffer());
+			const { ProxyAgent, fetch: undiciFetch } = await dynamicImport("undici") as typeof import("undici");
+			const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
+			try {
+				const response = await (options.fetch ?? undiciFetch)(assetUrl, {
+					redirect: "follow",
+					signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+					...(dispatcher ? { dispatcher } : {}),
+				});
+				if (!response.ok) throw new Error(`download failed: ${response.status} ${response.statusText}`);
+				bytes = Buffer.from(await response.arrayBuffer());
+			} finally {
+				await dispatcher?.close();
+			}
 		} catch (error) {
 			throw new Error(`failed to download ${assetUrl}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 		}
-		if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) {
-			throw new Error(`checksum mismatch for ${assetName}`);
+		if (createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
+			throw new Error(`checksum mismatch for ${asset.name}`);
 		}
 		if (platform === "win32") {
 			writeFileSync(staged, bytes);
 		} else {
-			const archive = join(temporary, basename(assetName));
+			const archive = join(temporary, basename(asset.name));
 			writeFileSync(archive, bytes);
 			const extracted = join(temporary, "extracted");
 			mkdirSync(extracted);

@@ -11,14 +11,9 @@ const ADAPTER_CONTEXT_EXCLUDED_CUSTOM_MESSAGE_TYPES = new Set([
 export function isProviderContextExcludedMessage(message: {
 	role: string;
 	customType?: string | undefined;
-	content?: unknown;
 	summary?: unknown;
 }): boolean {
 	return (message.role === "compactionSummary" && message.summary === CONTEXT_WINDOW_COMPACTION_SUMMARY)
-		// Retired session entries can still appear when an older conversation is reopened.
-		|| (message.role === "custom" && (message.customType === "codex-realtime-voice"
-			|| (message.customType === "codex-voice-mode"
-				&& (typeof message.content !== "string" || !message.content.startsWith('<realtime_voice_session state="')))))
 		|| (message.role === "custom" && typeof message.customType === "string" && ADAPTER_CONTEXT_EXCLUDED_CUSTOM_MESSAGE_TYPES.has(message.customType));
 }
 
@@ -26,6 +21,5 @@ export function isProviderContextExcludedCustomMessageEntry(entry: CustomMessage
 	return isProviderContextExcludedMessage({
 		role: "custom",
 		customType: entry.customType,
-		content: entry.content,
 	});
 }

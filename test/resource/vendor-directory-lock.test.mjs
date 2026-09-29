@@ -79,13 +79,7 @@ test("abort, timeout and destination completion leave a contended lock alone", a
 test("code-mode installer releases its lease after download failure", async (t) => {
 	const dir = temporaryDirectory(t, "metis-directory-lock-");
 	const destination = join(dir, "codex-code-mode-host");
-	const originalFetch = globalThis.fetch;
-	globalThis.fetch = async () => { throw new Error("offline test"); };
-	try {
-		await assert.rejects(installCodeModeHost({ destination, platform: "linux", arch: "x64" }), /failed to download/);
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
+	await assert.rejects(installCodeModeHost({ destination, platform: "linux", arch: "x64", fetch: async () => { throw new Error("offline test"); } }), /failed to download/);
 	assert.equal(existsSync(`${destination}.lock`), false);
 	assert.equal(existsSync(destination), false);
 });

@@ -27,7 +27,7 @@ selectively ported in an isolated branch, preserving the behavior in `PATCHES.md
 - `src/**` — locally maintained, directly executed TypeScript; edit implementation here.
 - `dist/*.js` — eight small hand-written public/entry re-exports to `src/*.ts`. Keeping `dist/index.js` preserves Pi's existing extension filters and tool ownership path; internal consumers share canonical TS URLs.
 - `vendor/**` — runtime tokenizer ranks and tree-sitter WASM.
-- `code-mode/**` and `src/tools/**/rust` — unchanged native source, build inputs and notices; native binaries retain their existing paths.
+- `code-mode/**` and `src/tools/**/rust` — native source, build inputs and notices; Linux x64 with glibc 2.34 or newer uses our audio-free Code Mode host release, while other host targets retain pinned upstream assets and the other native binaries retain their existing paths.
 - `types/**` — source declarations.
 - `changelog.ts` — the dynamically loaded changelog program; `changelog.js` preserves its former default-export path. `CHANGELOG.md` remains required.
 - `tsconfig.json` / `tsconfig.base.json` — standalone no-emit, erasable-syntax type checks.

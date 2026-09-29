@@ -7,7 +7,17 @@ import assert from "node:assert/strict";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CodeModeHostClient } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-client.ts";
+import { hostAssetUrl, resolveCodeModeHostAsset } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-assets.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
+
+test("host downloads use the metis release only on compatible Linux x64", () => {
+	const own = resolveCodeModeHostAsset("linux", "x64", "2.34");
+	assert.equal(own.repository, "Rycen7822/metis-pi");
+	assert.match(hostAssetUrl(own), /code-mode-host-rust-v0\.145\.0-metis\.1/);
+	assert.equal(resolveCodeModeHostAsset("linux", "x64", "2.33").repository, "openai/codex");
+	assert.equal(resolveCodeModeHostAsset("linux", "x64", "").repository, "openai/codex");
+	assert.equal(resolveCodeModeHostAsset("darwin", "arm64", "2.40").repository, "openai/codex");
+});
 
 // Speaks the host wire protocol (4-byte LE length + JSON) and follows the scenario
 // flags in its embedded config, appending every received message to its log path.

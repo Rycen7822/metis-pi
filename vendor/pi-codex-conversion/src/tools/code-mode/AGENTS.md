@@ -1,6 +1,6 @@
 - Keep this runtime self-contained; do not add a dependency on `pi-dynamic-tools`.
 - Conversion-specific activation and nested tool definitions stay outside this directory.
-- Codex host source stays pinned under `vendor/code-mode-src/`; keep Pi-owned changes outside its upstream source tree.
+- Codex host source stays based on the pin under `vendor/code-mode-src/`; its unsupported audio output removal is documented in `code-mode/UPSTREAM_SYNC.md`. Keep other Pi-owned changes outside its upstream source tree.
 - Keep model-native `exec`/`wait`; never rename, configure, or add collision fallbacks.
 - Low-context custom tools belong to Code Mode: promoted tools get one usage line, deferred tools none; never mimic this in Structured mode.
 - `src/code-mode-preflight.ts` is the lightweight public guard API; keep its shared protocol dependency free of the extension graph.

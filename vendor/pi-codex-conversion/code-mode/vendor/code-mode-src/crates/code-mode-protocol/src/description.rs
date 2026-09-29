@@ -25,7 +25,6 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
 - `text(value: string | number | boolean | undefined | null)`: Appends a text item. Non-string values are stringified with `JSON.stringify(...)` when possible.
 - `image(imageUrlOrItem: string | { image_url: string; detail?: "auto" | "low" | "high" | "original" | null } | ImageContent, detail?: "auto" | "low" | "high" | "original" | null)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument.
-- `audio(audioUrlOrItem: string | { audio_url: string } | AudioContent)`: Appends an audio item. `audio_url` should be a base64-encoded `data:` URL. To forward an MCP tool audio block, pass an individual `AudioContent` block from `result.content`, for example `audio(result.content[0])`.
 - `generatedImage(result: { image_url: string; output_hint?: string })`: Appends an image-generation result and its optional output hint. HTTP(S) URLs are not supported.
 - `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
 - `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
@@ -81,13 +80,6 @@ type ImageContent = {
   annotations?: Annotations;
   _meta?: MetaObject;
 };
-type AudioContent = {
-  type: "audio";
-  data: string;
-  mimeType: string;
-  annotations?: Annotations;
-  _meta?: MetaObject;
-};
 type ResourceLink = {
   icons?: Icon[];
   name: string;
@@ -109,7 +101,6 @@ type EmbeddedResource = {
 type ContentBlock =
   | TextContent
   | ImageContent
-  | AudioContent
   | ResourceLink
   | EmbeddedResource;
 type CallToolResult<TStructured = { [key: string]: unknown }> = {
@@ -891,7 +882,6 @@ bar"
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ false,
         );
-        assert!(description.contains("`audio(audioUrlOrItem:"));
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
     }

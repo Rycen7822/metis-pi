@@ -1,4 +1,19 @@
-export const HOST_RELEASE = "rust-v0.145.0";
+const UPSTREAM_HOST_RELEASE = "rust-v0.145.0";
+const METIS_HOST_RELEASE = "code-mode-host-rust-v0.145.0-metis.1";
+
+interface CodeModeHostAsset {
+	name: string;
+	sha256: string;
+	release: string;
+	repository: string;
+}
+
+const METIS_LINUX_X64: CodeModeHostAsset = {
+	name: "codex-code-mode-host-x86_64-unknown-linux-gnu.tar.gz",
+	sha256: "c2e4c3ccc8329a861f12fcdb8b0ec1493d892d354c2118d98ae0192102d714a1",
+	release: METIS_HOST_RELEASE,
+	repository: "Rycen7822/metis-pi",
+};
 
 export const HOST_ASSETS = {
 	"darwin-arm64": [
@@ -31,12 +46,19 @@ export function codeModeHostBinaryName(platform: string): string {
 	return platform === "win32" ? "codex-code-mode-host.exe" : "codex-code-mode-host";
 }
 
-export function resolveCodeModeHostAsset(platform: string, arch: string): readonly [string, string] {
+export function resolveCodeModeHostAsset(platform: string, arch: string, glibcVersion?: string): CodeModeHostAsset {
 	const asset = (HOST_ASSETS as Record<string, readonly [string, string]>)[`${platform}-${arch}`];
 	if (!asset) throw new Error(`Unsupported code-mode platform: ${platform}-${arch}`);
-	return asset;
+	if (platform === "linux" && arch === "x64") {
+		const version = glibcVersion ?? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } }).header?.glibcVersionRuntime;
+		const match = /^(\d+)\.(\d+)/.exec(version ?? "");
+		if (match && (Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 34))) {
+			return METIS_LINUX_X64;
+		}
+	}
+	return { name: asset[0], sha256: asset[1], release: UPSTREAM_HOST_RELEASE, repository: "openai/codex" };
 }
 
-export function hostAssetUrl(assetName: string): string {
-	return `https://github.com/openai/codex/releases/download/${HOST_RELEASE}/${assetName}`;
+export function hostAssetUrl(asset: CodeModeHostAsset): string {
+	return `https://github.com/${asset.repository}/releases/download/${asset.release}/${asset.name}`;
 }
