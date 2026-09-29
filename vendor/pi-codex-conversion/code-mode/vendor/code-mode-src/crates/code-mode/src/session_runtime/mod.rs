@@ -42,7 +42,8 @@ pub(crate) struct SessionRuntime<D: SessionRuntimeDelegate> {
 }
 
 struct Inner<D: SessionRuntimeDelegate> {
-    stored_values: Mutex<HashMap<String, JsonValue>>,
+    // Cells snapshot keys and share immutable payloads; later commits cannot change their view.
+    stored_values: Mutex<HashMap<String, Arc<JsonValue>>>,
     cells: Mutex<HashMap<CellId, CellHandle>>,
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
@@ -272,7 +273,7 @@ impl<D: SessionRuntimeDelegate> CellHost for RuntimeCellHost<D> {
 
     async fn commit_completion(
         &self,
-        stored_value_writes: HashMap<String, JsonValue>,
+        stored_value_writes: HashMap<String, Arc<JsonValue>>,
         event: CellEvent,
         pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,

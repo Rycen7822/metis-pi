@@ -1,5 +1,12 @@
 # Validation
 
+## 2026-09-29 — Runtime fixes and sandbox V8 upgrade
+
+- R1–R4 first passed real-host checks on V8 149.2.0. The V8 150.4.0 candidate then passed undefined/omitted/object delegation, store/load isolation, concurrent snapshots, ordinary-error commit, explicit-termination discard, timer callbacks, delegated errors, text/image and process shutdown. The same probes passed against the final extracted archive.
+- Temporary Rust probes using candidate source and the authenticated release inputs confirmed linked sandbox support, live/discarded tool-result GC, exact Tokio task release after timer clear/completion/termination, and the upstream optimized mixed-element sort case plus ordinary sorting. Process thread totals vary with V8 workers and are observations only; the direct task metric establishes timer cleanup. No internal probes or source-removal assertions were added to permanent tests.
+- Only V8 changed in Cargo.lock. GNU x64 output requires GLIBC_2.34. Corrupt manifest/archive/binding fixtures and ambient V8 override probes fail before Cargo; valid inputs rebuild offline and repeated packaging is byte-identical. Candidate archive SHA-256: `f9090f9513b1449f87eb4b906aab6ca504ab412e56fdefda3722149535aa5744`. Five existing TS client/stand-in-host tests pass; they are distinct from the real V8 checks.
+- Evidence: `.work/code-mode-update/` build logs, `v8-internals.log`, `v8-sort.log`, `archive-runtime.log`, `input-checks.json`, `repack.log` and source/input/artifact hashes. Publication, fresh public installation and final Node/PTY gates follow in the activation change. No paid model or personal profile was used.
+
 ## 2026-09-29 — Old configuration migration removed
 
 - Deleted `config-migration.ts` and removed its global/project read hooks and the old `beta` key handling. Old flat fields, `beta` options, boolean enum aliases and `ui.toolRendering` are now ignored; current `normal`/`code`, scope, UI and tool settings continue to use the current schema. The Code Mode 2.2.0 runtime replacement branch was also removed; current process-state reuse remains.

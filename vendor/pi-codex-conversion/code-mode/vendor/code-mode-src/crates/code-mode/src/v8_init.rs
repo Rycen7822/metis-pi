@@ -42,6 +42,8 @@ pub(crate) fn ensure_v8_initialized() -> Result<(), String> {
 fn initialize_v8_with_mode(jit_mode: V8JitMode) -> Result<V8Initialization, String> {
     v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA)
         .map_err(|error_code| format!("failed to initialize ICU data: {error_code}"))?;
+    // Avoid sort paths that can retain stale array element-kind assumptions.
+    v8::V8::set_flags_from_string("--no-maglev --no-turbolev --no-turbo-inline-array-builtins");
     match jit_mode {
         V8JitMode::Enabled => {}
         V8JitMode::Disabled => v8::V8::set_flags_from_string("--jitless"),
