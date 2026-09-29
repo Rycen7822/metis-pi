@@ -1,5 +1,12 @@
 # Validation
 
+## 2026-09-29 — Selective upstream compatibility fixes
+
+- Ported GPT-6 Sol/Luna capability gates and unsupported-off handling, Fast Mode identity preservation, persisted branch-based notes reuse, and leading-system history ordering from upstream `6accb42`, `e74d6cf` and `550b6b5`. The source baseline stays 3.0.34; the host catalog, Reserve, TS runtime, condense policy, replay ownership and Notebook runtime remain local owners.
+- Existing provider preparation and real extension registration checks now cover Sol/Luna and host metadata preservation. Existing transport checks capture SSE/WebSocket/fallback headers; history insertion retains the original system object first. One new case in the existing context-contract suite uses real in-memory Pi sessions across Local/Tree/Remote, including restore, subsequent work, failure and context-edit removal. No test files, frameworks or dependencies were added.
+- Focused checks passed **27/27**; full `npm run verify` passed **452/452**, including production/test/vendor types and a 455-file package check. Strict PTY **E1–E6** passed with 161 exact clipboard characters. Evidence: `.work/selective-upstream/` and `.work/selective-upstream-plan.md`.
+- Verification used existing local mocks and isolated profiles; no paid or real remote model calls. Notebook persistent hooks, Deno upgrades, image-description default changes and voice were not imported.
+
 ## 2026-09-29 — Host helper reuse and renderer dependency cleanup
 
 - Constrained sampling delegates to the running Pi's public API export; transcript delegates to root helpers while retaining slice-head, legacy Context and saved-session compatibility. Pi peers now require >=0.87.0; Node remains >=22.19.0. Responses text/refusal deltas share a branch, and the diff component no longer imports renderer assembly.

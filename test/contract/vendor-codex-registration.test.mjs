@@ -63,8 +63,17 @@ test("built vendor entry follows Pi's catalog and wires lifecycle, final request
   assert.equal(registrations(), 1, "another session_start must reuse the provider");
   const hostModels = catalogProvider.getModels();
   assert.deepEqual(hostModels, builtinModels, "the initial overlay must inherit the complete Pi catalog");
-  t.mock.method(catalogProvider, "getModels", () => [...hostModels, { ...modelNamed("gpt-6-astra"), id: "future-codex-model" }]);
+  const additions = ["gpt-6-sol", "gpt-6-luna", "future-codex-model"].map((id) => ({
+    ...modelNamed("gpt-6-astra"), id, thinkingLevelMap: { off: "none", low: "low", high: "high" },
+  }));
+  t.mock.method(catalogProvider, "getModels", () => [...hostModels, ...additions]);
   assert.ok(provider.getModels().some(({ id }) => id === "future-codex-model"), "catalog updates remain visible through the real host overlay");
+  for (const original of additions) {
+    const actual = provider.getModels().find(({ id }) => id === original.id);
+    assert.deepEqual(actual, { ...original, thinkingLevelMap: { ...original.thinkingLevelMap,
+      off: original.id === "future-codex-model" ? "none" : null } });
+    assert.equal(original.thinkingLevelMap.off, "none", "host-owned model metadata remains untouched");
+  }
   assert.equal(provider.refreshModels, catalogProvider.refreshModels, "catalog refresh delegates to the host");
   assert.ok(provider.getModels().some(({ id }) => id === "gpt-reserve"));
   assert.ok(!provider.filterModels(provider.getModels(), {}).some(({ id }) => id === "gpt-reserve"));

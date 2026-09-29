@@ -5,8 +5,8 @@ export function buildToolsSettings(
 	config: CodexConversionConfig,
 ): ConfigSetting[] {
 	return [
-		configToggle(config, "tools", "autoReasoning", "Auto reasoning (Astra only)",
-			"Let Astra adjust reasoning during a task, never below your starting level, then restore it when finished."),
+		configToggle(config, "tools", "autoReasoning", "Auto reasoning (GPT-6)",
+			"Let GPT-6 adjust reasoning during a task, never below your starting level, then restore it when finished."),
 		configToggle(config, "tools", "viewImageFallback", "Image descriptions fallback",
 			"Use a vision model to describe images for text-only models instead of rejecting image requests."),
 		configToggle(config, "notebook", "plainCommandOutput", "Plain command output",

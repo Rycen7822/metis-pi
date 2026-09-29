@@ -27,4 +27,9 @@ test("reconstruction skips unselected additions even without a surviving anchor"
 		(value) => value === selected), [selected, kept]);
 	assert.deepEqual(insertReconstructedMessages([], [ignored, selected], key,
 		(value) => value === selected), [selected]);
+	const system = { ...message("system"), role: "system" };
+	assert.deepEqual(insertReconstructedMessages([system, kept], [selected, system, kept], key,
+		(value) => value === selected), [system, selected, kept]);
+	assert.deepEqual(insertReconstructedMessages([system], [selected], key,
+		(value) => value === selected), [system, selected]);
 });

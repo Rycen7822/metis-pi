@@ -18,9 +18,12 @@ export function withCodexReserveModel(models: readonly Model<"openai-codex-respo
 	if (luna && !models.some(({ id }) => id === CODEX_RESERVE_MODEL)) {
 		result.push({ ...luna, id: CODEX_RESERVE_MODEL, name: "Luna Reserve", cost: UNKNOWN_SUBSCRIPTION_COST, contextWindow: GPT_56_PRODUCTION_CONTEXT_WINDOW });
 	}
-	return result.map((model) =>
-		/^gpt-5\.6-(?:luna|terra|sol)$/i.test(model.id) && model.contextWindow > GPT_56_PRODUCTION_CONTEXT_WINDOW
+	return result.map((model) => {
+		if (/^gpt-6-(?:sol|luna)$/i.test(model.id)) {
+			return { ...model, thinkingLevelMap: { ...model.thinkingLevelMap, off: null } };
+		}
+		return /^gpt-5\.6-(?:luna|terra|sol)$/i.test(model.id) && model.contextWindow > GPT_56_PRODUCTION_CONTEXT_WINDOW
 			? { ...model, contextWindow: GPT_56_PRODUCTION_CONTEXT_WINDOW }
-			: model,
-	);
+			: model;
+	});
 }

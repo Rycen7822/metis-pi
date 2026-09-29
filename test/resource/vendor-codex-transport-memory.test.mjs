@@ -16,7 +16,7 @@ for (const transport of ["websocket", "sse", "fallback"]) {
     let serializations = 0;
     let fetches = 0;
     let wsRequests = 0;
-    const expected = { model: model.id, input: [{ role: "user", content: "hello 中文" }], stream: true, store: false };
+    const expected = { model: model.id, input: [{ role: "user", content: "hello 中文" }], stream: true, store: false, service_tier: "priority" };
     const body = structuredClone(expected);
     Object.defineProperty(body, "toJSON", { value() { serializations++; return { ...body }; } });
     const builtin = process.getBuiltinModule.bind(process);
@@ -28,8 +28,11 @@ for (const transport of ["websocket", "sse", "fallback"]) {
     const previousWebSocket = globalThis.WebSocket;
     globalThis.WebSocket = class extends EventTarget {
       readyState = 0;
-      constructor() {
+      constructor(_url, { headers }) {
         super();
+        assert.equal(new Headers(headers).get("originator"), "pi-codex-conversion");
+        assert.equal(new Headers(headers).get("x-codex-routing-hint"), null);
+        assert.equal(new Headers(headers).get("x-monitor"), "preserved");
         if (transport === "fallback") throw new Error("Unexpected server response: 426");
         setImmediate(() => { this.readyState = 1; this.dispatchEvent(new Event("open")); });
       }
@@ -44,14 +47,18 @@ for (const transport of ["websocket", "sse", "fallback"]) {
     t.mock.method(globalThis, "fetch", async (_url, options) => {
       fetches++;
       assert.equal(new Headers(options.headers).get("content-encoding"), "zstd");
+      assert.equal(new Headers(options.headers).get("originator"), "pi-codex-conversion");
+      assert.equal(new Headers(options.headers).get("x-codex-routing-hint"), null);
+      assert.equal(new Headers(options.headers).get("x-monitor"), "preserved");
       assert.deepEqual(JSON.parse(zlib.zstdDecompressSync(options.body).toString()), expected);
       return new Response(`data: ${JSON.stringify(completed)}\n\n`, { headers: { "content-type": "text/event-stream" } });
     });
 
     const stream = createCodexTransportStream(model, { messages: [], tools: [] }, {
       apiKey: FAKE_API_KEY, transport: transport === "sse" ? "sse" : "websocket", env: { NO_PROXY: "*" },
+      headers: { "x-monitor": "preserved" },
       maxRetries: 0, timeoutMs: 1000, websocketConnectTimeoutMs: 1000,
-    }, { prepareRequestBody: async () => body });
+    }, { prepareRequestBody: async () => body, getConfig: () => ({ openai: { fast: true, harnessIdentifierHeader: true } }) });
     const result = await stream.result();
     assert.equal(result.stopReason, "stop", result.errorMessage);
     assert.equal(compressions, transport === "websocket" ? 0 : 1);

@@ -55,6 +55,14 @@ Provider and model-related patches use the tightened JSON object contract and om
 
 `openai-codex-custom-provider.ts` initially registers only its request stream, leaving Pi's current `openai-codex` models intact. At session start, its native provider delegates model lookup and refresh to that Pi-backed provider and adds only the hidden Luna Reserve model. Do not restore a vendored snapshot of ordinary Codex models: it masks models added by newer Pi releases.
 
+## Selective upstream fixes through 3.0.39
+
+`6accb42`: the existing capability gate recognizes GPT-6 Astra/Sol/Luna for Responses Lite and reasoning updates, including configured proxies; settings describe GPT-6 consistently. The Pi-owned catalog remains authoritative: only Sol/Luna's unsupported `off` thinking map is corrected in copied model objects, without changing host prices, context limits or other metadata (`550b6b5`).
+
+`e74d6cf`: Fast Mode still requests priority service tier; SSE, WebSocket and prewarm use the configured harness identity without automatically injecting a routing hint. Explicit additional headers remain intact; retry and continuation owners are unchanged.
+
+`550b6b5`: `context-management/saved-notes.ts` derives reusable notes from Pi's current branch projection, replacing the window manager's process-local write ledger. Failed/incomplete writes, later input/tool work and edited-away receipts cannot grant reuse. Local/Tree/Remote keep the existing persistence, compaction thresholds and kickoff path. `adapter/history-insertion.ts` preserves a leading system message at index zero when inserting reconstructed messages.
+
 ## 7. Notebook capture and payload validation
 
 `tools/notebook-mode/{capture-bindings-source,checkpoint-runtime,checkpoint,project-state-runtime,project-state-format,project-state-metadata,profile-state-format}.ts` share lexical-binding capture, hashed project/profile payload reads and checkpoint/metadata layout validation. `candidate-transaction.ts` owns the Node-side candidate allocation/capture/verification/cleanup and the payload+manifest atomic publish; `notebook-state-lock.ts` owns the store lease. Project keeps generation merge, pins and conflict records; profile keeps naming, by-value load and collision rules; the injected checkpoint protocol keeps publishing its own files. `session-runtime.ts` owns kernel, startup, session identity and checkpoint state and constructs the execution runtime, which keeps active-cell, cancellation and trace state. Lifecycle, recovery and profile operations are functions of that session owner; the duplicate controller objects, host interfaces and forwarding callbacks are removed. Startup and recovery share `notebookCheckpointIdentity`; store-specific commit and restore rules remain explicit.

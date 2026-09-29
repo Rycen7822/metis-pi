@@ -13,7 +13,11 @@ Git history own local changes; `pi update` updates metis-pi as a whole.
 | License | MIT — see `LICENSE` (upstream copyright, unchanged) |
 | Pristine checkout | `references/howaboua-pi-stuff/` (local-only, gitignored) |
 
-This copy deliberately stays on the 3.0.34 baseline + the patches in `PATCHES.md`.
+This copy retains the 3.0.34 source baseline plus the patches in `PATCHES.md`.
+Selected fixes from upstream through 3.0.39 (`61b493c`) are ported: GPT-6 Sol/Luna
+capabilities, Fast Mode identity preservation, branch-based saved-note reuse and
+leading-system history ordering (`6accb42`, `e74d6cf`, `550b6b5`). This is not a
+whole-package 3.0.39 upgrade; Notebook hooks, Deno changes and voice are excluded.
 metis-pi owns its release and update lifecycle: the upstream npm version query and
 local-checkout warning are removed, not muted. Upstream changes are compared and
 selectively ported in an isolated branch, preserving the behavior in `PATCHES.md`.

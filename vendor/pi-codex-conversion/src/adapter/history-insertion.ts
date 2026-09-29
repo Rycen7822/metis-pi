@@ -16,17 +16,23 @@ export function insertReconstructedMessages(
 	});
 	const insertions = new Map<number, AgentMessage[]>();
 	let pending: AgentMessage[] = [];
+	const insertPending = (index: number) => {
+		if (!pending.length) return;
+		// Pi reads the initial prompt and tools from the leading system entry.
+		const position = messages[0]?.role === "system" && index === 0 ? 1 : index;
+		insertions.set(position, [...(insertions.get(position) ?? []), ...pending]);
+		pending = [];
+	};
 	let last = -1;
 	for (const message of reconstructed) {
 		const key = messageKey(message);
 		const index = positions.get(key)?.shift();
 		if (index !== undefined) {
-			if (pending.length) insertions.set(index, [...(insertions.get(index) ?? []), ...pending]);
-			pending = [];
+			insertPending(index);
 			last = index;
 		} else if (shouldInsert(message, key)) pending.push(message);
 	}
-	if (pending.length) insertions.set(last + 1, [...(insertions.get(last + 1) ?? []), ...pending]);
+	insertPending(last + 1);
 	return messages.flatMap((message, index) => [...(insertions.get(index) ?? []), message])
 		.concat(insertions.get(messages.length) ?? []);
 }

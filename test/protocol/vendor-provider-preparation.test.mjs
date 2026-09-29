@@ -14,6 +14,7 @@ import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/src/co
 import { rewriteWindowPayload } from "../../vendor/pi-codex-conversion/src/context-management/window-request.ts";
 import { createNativeFusionTool } from "../../extensions/action-fusion.ts";
 import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts";
+import { normalizeCodexConfigurationUpdates, supportsCodexReasoningUpdates } from "../../vendor/pi-codex-conversion/src/adapter/reasoning-updates.ts";
 
 test.beforeEach(disableNetwork);
 
@@ -61,12 +62,12 @@ const cases = [
 	{ label: "Remote provider/API mismatch", mode: "remote", api: "openai-responses", namespace: true },
 	{ label: "Remote custom Codex API", mode: "remote", provider: "custom-codex", namespace: true, remote: true },
 	{ label: "Responses Lite Local", mode: "local", executionMode: "code", lite: true, namespace: false },
-	{ label: "Responses Lite Tree", mode: "tree", executionMode: "notebook", lite: true, namespace: false },
-	{ label: "Responses Lite Remote", mode: "remote", executionMode: "code", lite: true, namespace: true, remote: true },
+	{ label: "Responses Lite Tree Sol", modelId: "gpt-6-sol", mode: "tree", executionMode: "notebook", lite: true, namespace: false },
+	{ label: "Responses Lite Remote Luna", modelId: "gpt-6-luna", mode: "remote", executionMode: "code", lite: true, namespace: true, remote: true },
 ];
 
 function fixture(options = {}) {
-	const model = { ...modelNamed("gpt-6-astra"), ...(options.provider ? { provider: options.provider } : {}), ...(options.api ? { api: options.api } : {}) };
+	const model = { ...modelNamed("gpt-6-astra"), ...(options.modelId ? { id: options.modelId } : {}), ...(options.provider ? { provider: options.provider } : {}), ...(options.api ? { api: options.api } : {}) };
 	const config = structuredClone(DEFAULT_CODEX_CONVERSION_CONFIG);
 	config.compaction.contextManagement = options.mode ?? "off";
 	config.openai.fast = true;
@@ -130,6 +131,15 @@ for (const scenario of cases) {
 			});
 		} else assert.deepEqual(live.client_metadata, { retained: "metadata" });
 		if (scenario.lite) {
+			assert.equal(supportsCodexReasoningUpdates(ctx.model), true);
+			const update = { type: "configuration_update", reasoning: { effort: "high" } };
+			assert.deepEqual(normalizeCodexConfigurationUpdates({ model: ctx.model.id, input: [update] }).input, [update]);
+			const proxyState = { ...state, config: structuredClone(state.config) };
+			proxyState.config.scope.additionalProviders = ["monitored"];
+			proxyState.config.openai.proxyResponsesLite = true;
+			assert.equal(resolveCodexRuntimePlanForState({ ...ctx, model: {
+				...ctx.model, api: "openai-responses", provider: "monitored",
+			} }, proxyState).transport, "responses-lite");
 			assert.equal(live.instructions, undefined);
 			assert.equal(live.tools, undefined);
 			assert.equal(live.input[0].type, "additional_tools");

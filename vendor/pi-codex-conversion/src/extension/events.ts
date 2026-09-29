@@ -226,7 +226,7 @@ export function registerCodexEvents(
 		state.contextWindows.recordBudget(
 			pi,
 			ctx,
-			plan.contextManagement,
+			plan.contextManagement ? plan.contextManagementMode : "off",
 		);
 	});
 	pi.on("tool_execution_start", async (event) => {
@@ -279,7 +279,6 @@ export function registerCodexEvents(
 		}
 	});
 	pi.on("before_agent_start", async (event, ctx) => {
-		state.contextWindows.clearTurnNotes();
 		state.contextTree.handoff.preparing(event.prompt);
 		await reserve.beforeTurn(ctx);
 		// Resolve the final run model before rendering or warming its prompt.
@@ -308,21 +307,19 @@ export function registerCodexEvents(
 		};
 	});
 	pi.on("agent_start", async (_event, ctx) => {
-		state.contextWindows.beginTurn(ctx);
 		updateCodexPreparedIdleKickoff(pi, "agent_start");
 		state.contextTree.handoff.started(ctx);
 		runtime.autoReasoning.begin(ctx);
 		runtime.cancelCacheKeepalive();
 	});
 	pi.on("agent_settled", async (_event, ctx) => {
-		state.contextWindows.settleTurn(ctx);
 		updateCodexPreparedIdleKickoff(pi, "agent_settled");
 		flushCodexReasoningUpdates(pi, ctx);
 		// Hybrid's asynchronous compact() aborts this run before its successor exists.
 		const continuingWork = state.contextWindows.isHybridCompactionRunning()
 			|| state.contextTree.rolloverPending || state.contextKickoff.pending;
 		if (!continuingWork) runtime.autoReasoning.settle(ctx);
-		// Reserve must capture the user's restored level, never a temporary Astra override.
+		// Reserve must capture the user's restored level, never a temporary reasoning override.
 		const quotaExhausted = !continuingWork && await reserve.settled(ctx);
 		let rolled = false;
 		let continued = false;

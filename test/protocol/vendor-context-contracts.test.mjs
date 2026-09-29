@@ -3,6 +3,9 @@ import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { disableNetwork, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
 import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/src/context-management/history-notes.ts";
+import { session, assistantToolCall, toolResult, userMessage } from "../helpers/vendor-codex-sessions.mjs";
+import { CodexContextWindowManager } from "../../vendor/pi-codex-conversion/src/context-management/window-manager.ts";
+import { hasFreshContextNotes } from "../../vendor/pi-codex-conversion/src/context-management/saved-notes.ts";
 import {
 	rewriteContextNamespaceTools,
 	routeContextNamespaceToolStream,
@@ -10,6 +13,50 @@ import {
 } from "../../vendor/pi-codex-conversion/src/context-management/namespace-tools.ts";
 
 test.beforeEach(disableNetwork);
+
+test("persisted notes reuse follows the selected branch and expires on further work", () => {
+	const model = { id: "gpt-6-sol", provider: "openai-codex", api: "openai-codex-responses" };
+	for (const mode of ["local", "tree", "remote"]) {
+		const { sm } = session();
+		const boundary = sm.appendCustomMessageEntry("codex-context-window", "window", false, {
+			protocol: 1, id: "window-message", contextManagement: {
+				protocol: 1, kind: "window", firstWindowId: "w", currentWindowId: "w", windowNumber: 0,
+			},
+		});
+		const write = assistantToolCall(model, "write", "notes", { action: "write_file", path: "state.md", text: "saved" });
+		const result = { ...toolResult("write", "notes", "saved"), details: {
+			codexHistoryNotes: mode === "remote" ? { encrypted_output: "sealed" } : { source: "pi-session" },
+		} };
+		const final = { ...write, content: [{ type: "text", text: "done" }], stopReason: "stop" };
+		for (const [tail, reusable] of [
+			[[write, result, final], true],
+			[[write, { ...result, isError: true }, final], false],
+			[[write, result, final, userMessage("new task")], false],
+			[[write, result, assistantToolCall(model, "next", "exec"), toolResult("next", "exec", "work"), final], false],
+			[[write], false],
+			[[write, { ...result, details: {} }, final], false],
+		]) {
+			sm.branch(boundary);
+			for (const message of tail) sm.appendMessage(message);
+			const manager = new CodexContextWindowManager();
+			manager.restore(sm.getBranch()); // A fresh owner models reload/resume, without any in-memory write ledger.
+			const reminders = [];
+			const ctx = { sessionManager: sm, isIdle: () => true, ui: {} };
+			const pi = { sendMessage: (message) => reminders.push(message), sendUserMessage() {}, events: { emit() {} } };
+			manager.prepareCompaction({ reason: "manual", signal: new AbortController().signal }, mode);
+			assert.equal(manager.finishManualCheckpointRequest(pi, ctx, { reason: "manual", aborted: true }, true), reusable, mode);
+			assert.equal(reminders.length, reusable ? 0 : 1, mode);
+		}
+		sm.branch(boundary);
+		sm.appendMessage(write);
+		const resultId = sm.appendMessage(result);
+		assert.equal(hasFreshContextNotes(sm.getBranch(), "w", mode, false), true, "active run can reuse its successful write");
+		assert.equal(hasFreshContextNotes(sm.getBranch(), "w", mode, true), false, "manual reuse waits for the final reply");
+		assert.equal(hasFreshContextNotes(sm.getBranch(), "other-window", mode, false), false);
+		sm.appendContextEdit(resultId, null);
+		assert.equal(hasFreshContextNotes(sm.getBranch(), "w", mode, false), false, "deleted write receipts do not survive projection");
+	}
+});
 
 // Independent wire/argument goldens, established against 312bc5d before changing
 // the contract owner. Each example lists the operation's complete legal fields;
