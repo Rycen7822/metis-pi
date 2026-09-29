@@ -23,14 +23,11 @@ function loadModule(group: "api" | "utils", name: string): unknown {
 
 export const {
 	getGrammarToolInput,
-	appendGrammarToolInputJsonDelta,
 	createGrammarToolInputProperties,
 } = loadModule("api", "constrained-sampling") as
 	typeof import("@earendil-works/pi-ai/api/constrained-sampling");
 
-export const { convertResponsesTools } = loadModule("api", "openai-responses-shared") as
+export const { convertResponsesTools, processResponsesStream } = loadModule("api", "openai-responses-shared") as
 	typeof import("@earendil-works/pi-ai/api/openai-responses-shared");
 export const { parseStreamingJson } = loadModule("utils", "json-parse") as
 	typeof import("@earendil-works/pi-ai/utils/json-parse");
-
-export type { GrammarToolInputJsonBuffer } from "@earendil-works/pi-ai/api/constrained-sampling";

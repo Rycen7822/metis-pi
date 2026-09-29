@@ -1,436 +1,199 @@
-import { calculateCost, type Api, type AssistantMessage, type JsonObject, type Model } from "@earendil-works/pi-ai";
-import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import type { Api, AssistantMessage, Model, ToolCall } from "@earendil-works/pi-ai";
 import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
-import {
-	appendGrammarToolInputJsonDelta,
-	parseStreamingJson,
-	type GrammarToolInputJsonBuffer,
-} from "../host-api.ts";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import { parseStreamingJson, processResponsesStream as processNativeStream } from "../host-api.ts";
 import { encodeTextSignatureV1 } from "./signatures.ts";
-import { sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem, type ImageGenerationCallBlock, type WebSearchCallBlock } from "./native-items.ts";
+import { sanitizeImageGenerationCallItem, sanitizeWebSearchCallItem } from "./native-items.ts";
 import type { OpenAIResponsesStreamOptions } from "./shared.ts";
 
-type InternalAssistantContent = AssistantMessage["content"][number] | ImageGenerationCallBlock | WebSearchCallBlock;
+type ProseBlock = Extract<AssistantMessage["content"][number], { type: "text" | "thinking" }>;
+type Prose = { index: number; block: ProseBlock; parts: Map<number, { type: string; text: string }> };
+type PendingTool = { index: number; type: "function_call" | "custom_tool_call"; input: string };
 
 export async function processResponsesStream<TApi extends Api>(
-	openaiStream: AsyncIterable<ResponseStreamEvent>,
+	input: AsyncIterable<ResponseStreamEvent>,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
-	const blocks = output.content;
-	const blockIndex = () => blocks.length - 1;
-	type ThinkingBlock = Extract<AssistantMessage["content"][number], { type: "thinking" }>;
-	type TextBlock = Extract<AssistantMessage["content"][number], { type: "text" }>;
-	type ToolCallBlock = Extract<AssistantMessage["content"][number], { type: "toolCall" }> & { partialJson?: string | undefined };
-
-	type ReasoningState = {
-		kind: "reasoning";
-		blockIndex: number;
-		block: ThinkingBlock;
-		summaryParts: Map<number, { text: string }>;
+	// Indexed prose and raw history are local; Pi owns streamed tool arguments and usage.
+	const prose = new Map<number, Prose>();
+	const pending = new Map<number, PendingTool>();
+	let exhausted = false;
+	let terminal = false;
+	const startProse = (index: number, type: "message" | "reasoning"): Prose => {
+		const block: ProseBlock = type === "message" ? { type: "text", text: "" } : { type: "thinking", thinking: "" };
+		const state = { index: output.content.length, block, parts: new Map() };
+		output.content.push(block);
+		prose.set(index, state);
+		stream.push({
+			type: type === "message" ? "text_start" : "thinking_start", contentIndex: state.index, partial: output,
+		});
+		return state;
 	};
-	type MessageState = {
-		kind: "message";
-		blockIndex: number;
-		block: TextBlock;
-		parts: Map<number, { type: "output_text" | "refusal"; text: string }>;
-	};
-	type FunctionCallState = {
-		kind: "function_call";
-		blockIndex: number;
-		block: ToolCallBlock;
-	};
-	type CustomToolCallState = {
-		kind: "custom_tool_call";
-		blockIndex: number;
-		block: ToolCallBlock;
-		input: string;
-		property: string;
-		jsonBuffer: GrammarToolInputJsonBuffer;
-	};
-	type OutputState = ReasoningState | MessageState | FunctionCallState | CustomToolCallState;
-
-	const outputStates = new Map<number, OutputState>();
-	const appendCustomInput = (
-		state: CustomToolCallState,
-		nextInput: string,
-		close: boolean,
-	): string | undefined => {
-		const delta = appendGrammarToolInputJsonDelta(
-			state.jsonBuffer,
-			state.property,
-			nextInput,
-			close,
-		);
-		state.input = nextInput;
-		state.block.arguments = { [state.property]: nextInput };
-		return delta;
-	};
-
-	const renderReasoningSummary = (summaryParts: Map<number, { text: string }>): string =>
-		Array.from(summaryParts.entries())
-			.sort(([a], [b]) => a - b)
-			.map(([, part]) => part.text)
-			.join("\n\n");
-
-	const renderMessageText = (parts: Map<number, { type: "output_text" | "refusal"; text: string }>): string =>
-		Array.from(parts.entries())
-			.sort(([a], [b]) => a - b)
-			.map(([, part]) => part.text)
-			.join("");
-
-	const emitAppendedDelta = (
-		eventType: "thinking_delta" | "text_delta",
-		contentIndex: number,
-		previous: string,
-		next: string,
-	) => {
-		if (next.startsWith(previous)) {
-			const delta = next.slice(previous.length);
-			if (delta.length > 0) {
-				stream.push({ type: eventType, contentIndex, delta, partial: output });
-			}
+	const updateProse = (state: Prose, notify: boolean) => {
+		const { block } = state;
+		const previous = block.type === "text" ? block.text : block.thinking;
+		const next = [...state.parts].sort(([a], [b]) => a - b)
+			.map(([, p]) => p.text).join(block.type === "text" ? "" : "\n\n");
+		if (block.type === "text") block.text = next;
+		else block.thinking = next;
+		if (notify && next.startsWith(previous) && next.length > previous.length) {
+			stream.push({
+				type: block.type === "text" ? "text_delta" : "thinking_delta", contentIndex: state.index,
+				delta: next.slice(previous.length), partial: output,
+			});
 		}
 	};
-
-	const cleanedStream = async function* () {
+	async function* adapt(): AsyncGenerator<ResponseStreamEvent> {
 		try {
-			yield* openaiStream;
-		} finally {
-			const incompleteToolCallIndexes = [...outputStates.values()]
-				.filter((state) => state.kind === "function_call" || state.kind === "custom_tool_call")
-				.map((state) => state.blockIndex)
-				.sort((left, right) => right - left);
-			for (const index of incompleteToolCallIndexes) output.content.splice(index, 1);
-		}
-	}();
-
-	for await (const event of cleanedStream) {
-		if (event.type === "response.custom_tool_call_input.delta") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "custom_tool_call") {
-				const delta = appendCustomInput(state, state.input + event.delta, false);
-				if (delta !== undefined) stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
-			}
-			continue;
-		}
-		if (event.type === "response.custom_tool_call_input.done") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "custom_tool_call") {
-				const delta = appendCustomInput(state, event.input, true);
-				if (delta !== undefined) stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
-			}
-			continue;
-		}
-		if (event.type === "response.created") {
-			output.responseId = event.response.id;
-		} else if (event.type === "response.output_item.added") {
-			const item = event.item;
-			if ((item as unknown as { type?: string }).type === "custom_tool_call") {
-				const customItem = item as unknown as { id?: string; call_id: string; name: string; input?: string; namespace?: string };
-				const input = customItem.input ?? "";
-				const property = options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
-				const currentBlock: ToolCallBlock = {
-					type: "toolCall",
-					id: `${customItem.call_id}|${customItem.id ?? ""}`,
-					name: customItem.name,
-					arguments: { [property]: input },
-					...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}),
-				};
-				output.content.push(currentBlock);
-				outputStates.set(event.output_index, {
-					kind: "custom_tool_call",
-					blockIndex: blockIndex(),
-					block: currentBlock,
-					input,
-					property,
-					jsonBuffer: { input: "", started: false, closed: false },
-				});
-				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-			} else if (item.type === "reasoning") {
-				const currentBlock: ThinkingBlock = { type: "thinking", thinking: "" };
-				output.content.push(currentBlock);
-				outputStates.set(event.output_index, {
-					kind: "reasoning",
-					blockIndex: blockIndex(),
-					block: currentBlock,
-					summaryParts: new Map(),
-				});
-				stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-			} else if (item.type === "message") {
-				const currentBlock: TextBlock = { type: "text", text: "" };
-				output.content.push(currentBlock);
-				outputStates.set(event.output_index, {
-					kind: "message",
-					blockIndex: blockIndex(),
-					block: currentBlock,
-					parts: new Map(),
-				});
-				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-			} else if (item.type === "function_call") {
-				const namespace = (item as unknown as { namespace?: string }).namespace;
-				const currentBlock: ToolCallBlock = {
-					type: "toolCall",
-					id: `${item.call_id}|${item.id}`,
-					name: item.name,
-					arguments: {},
-					...(namespace !== undefined ? { namespace } : {}),
-					partialJson: item.arguments || "",
-				};
-				output.content.push(currentBlock);
-				outputStates.set(event.output_index, {
-					kind: "function_call",
-					blockIndex: blockIndex(),
-					block: currentBlock,
-				});
-				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-			}
-		} else if (event.type === "response.reasoning_summary_part.added") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "reasoning") {
-				state.summaryParts.set(event.summary_index, { text: event.part.text });
-			}
-		} else if (event.type === "response.reasoning_summary_text.delta") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "reasoning") {
-				const summaryPart = state.summaryParts.get(event.summary_index) ?? { text: "" };
-				summaryPart.text += event.delta;
-				state.summaryParts.set(event.summary_index, summaryPart);
-				const previousThinking = state.block.thinking;
-				const nextThinking = renderReasoningSummary(state.summaryParts);
-				state.block.thinking = nextThinking;
-				emitAppendedDelta("thinking_delta", state.blockIndex, previousThinking, nextThinking);
-			}
-		} else if (event.type === "response.reasoning_summary_part.done") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "reasoning") {
-				state.summaryParts.set(event.summary_index, { text: event.part.text });
-				state.block.thinking = renderReasoningSummary(state.summaryParts);
-			}
-		} else if (event.type === "response.content_part.added") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "message" && (event.part.type === "output_text" || event.part.type === "refusal")) {
-				state.parts.set(event.content_index, {
-					type: event.part.type,
-					text: event.part.type === "output_text" ? event.part.text : event.part.refusal,
-				});
-			}
-		} else if (event.type === "response.output_text.delta" || event.type === "response.refusal.delta") {
-			const state = outputStates.get(event.output_index);
-			const partType = event.type === "response.output_text.delta" ? "output_text" : "refusal";
-			if (state?.kind === "message") {
-				const messagePart = state.parts.get(event.content_index) ?? { type: partType, text: "" };
-				if (messagePart.type === partType) {
-					messagePart.text += event.delta;
-					state.parts.set(event.content_index, messagePart);
-					const previousText = state.block.text;
-					const nextText = renderMessageText(state.parts);
-					state.block.text = nextText;
-					emitAppendedDelta("text_delta", state.blockIndex, previousText, nextText);
-				}
-			}
-		} else if (event.type === "response.function_call_arguments.delta") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "function_call") {
-				state.block.partialJson = (state.block.partialJson ?? "") + event.delta;
-				state.block.arguments = parseStreamingJson<JsonObject>(state.block.partialJson ?? "");
-				stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta: event.delta, partial: output });
-			}
-		} else if (event.type === "response.function_call_arguments.done") {
-			const state = outputStates.get(event.output_index);
-			if (state?.kind === "function_call") {
-				const previousPartialJson = state.block.partialJson ?? "";
-				state.block.partialJson = event.arguments;
-				state.block.arguments = parseStreamingJson<JsonObject>(state.block.partialJson ?? "");
-				if (event.arguments.startsWith(previousPartialJson)) {
-					const delta = event.arguments.slice(previousPartialJson.length);
-					if (delta.length > 0) {
-						stream.push({ type: "toolcall_delta", contentIndex: state.blockIndex, delta, partial: output });
+			for await (const event of input) {
+				const state = "output_index" in event ? prose.get(event.output_index) : undefined;
+				const tool = "output_index" in event ? pending.get(event.output_index) : undefined;
+				if (event.type === "response.output_item.added") {
+					const item = event.item;
+					if (item.type === "message" || item.type === "reasoning") {
+						startProse(event.output_index, item.type);
+						continue;
 					}
+					if (item.type === "function_call" || item.type === "custom_tool_call") {
+						pending.set(event.output_index, {
+							index: output.content.length, type: item.type,
+							input: item.type === "function_call" ? item.arguments || "" : item.input ?? "",
+						});
+						if (item.type === "custom_tool_call") {
+							yield { ...event, item: { ...item, id: item.id ?? "" } };
+							continue;
+						}
+					}
+				} else if (event.type === "response.content_part.added") {
+					if (state?.block.type === "text" && (event.part.type === "output_text" || event.part.type === "refusal")) {
+						state.parts.set(event.content_index, {
+							type: event.part.type, text: event.part.type === "output_text" ? event.part.text : event.part.refusal,
+						});
+					}
+					continue;
+				} else if (
+					event.type === "response.reasoning_summary_part.added" || event.type === "response.reasoning_summary_part.done"
+				) {
+					if (state?.block.type === "thinking") {
+						state.parts.set(event.summary_index, { type: "summary_text", text: event.part.text });
+						if (event.type.endsWith(".done")) updateProse(state, false);
+					}
+					continue;
+				} else if (
+					event.type === "response.output_text.delta" || event.type === "response.refusal.delta" ||
+					event.type === "response.reasoning_summary_text.delta"
+				) {
+					const type = event.type === "response.reasoning_summary_text.delta" ? "summary_text"
+						: event.type === "response.output_text.delta" ? "output_text" : "refusal";
+					if (state && (state.block.type === "thinking") === (type === "summary_text")) {
+						const index = "summary_index" in event ? event.summary_index : event.content_index;
+						const part = state.parts.get(index) ?? { type, text: "" };
+						if (part.type === type) {
+							part.text += event.delta;
+							state.parts.set(index, part);
+							updateProse(state, true);
+						}
+					}
+					continue;
+				} else if (
+					event.type === "response.function_call_arguments.delta" || event.type === "response.custom_tool_call_input.delta"
+				) {
+					const type = event.type === "response.function_call_arguments.delta" ? "function_call" : "custom_tool_call";
+					if (tool?.type === type) tool.input += event.delta;
+				} else if (event.type === "response.function_call_arguments.done") {
+					if (tool?.type === "function_call") tool.input = event.arguments;
+				} else if (event.type === "response.custom_tool_call_input.done") {
+					if (tool?.type === "custom_tool_call") tool.input = event.input;
+				} else if (event.type === "response.output_item.done") {
+					let item = event.item;
+					if (item.type === "custom_tool_call") {
+						item = { ...item, input: item.input ?? (tool?.type === "custom_tool_call" ? tool.input : "") };
+					}
+					options?.onOutputItemDone?.(item);
+					if (item.type === "message" || item.type === "reasoning") {
+						const current = state?.block.type === (item.type === "message" ? "text" : "thinking")
+							? state : startProse(event.output_index, item.type);
+						if (item.type === "message" && current.block.type === "text") {
+							current.block.text = item.content.map(c => c.type === "output_text" ? c.text : c.refusal).join("");
+							current.block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+							stream.push({
+								type: "text_end", contentIndex: current.index, content: current.block.text, partial: output,
+							});
+						} else if (item.type === "reasoning" && current.block.type === "thinking") {
+							current.block.thinking = item.summary?.map(s => s.text).join("\n\n") || "";
+							current.block.thinkingSignature = JSON.stringify(item);
+							stream.push({
+								type: "thinking_end", contentIndex: current.index, content: current.block.thinking, partial: output,
+							});
+						}
+						prose.delete(event.output_index);
+						continue;
+					}
+					if ((item.type === "function_call" || item.type === "custom_tool_call") && !tool) {
+						// Completion-only items start with final arguments and have no synthetic delta.
+						const block: ToolCall = {
+							type: "toolCall", id: `${item.call_id}|${item.id ?? ""}`, name: item.name,
+							arguments: item.type === "function_call" ? parseStreamingJson(item.arguments || "{}")
+								: { [options?.grammarToolInputProperties?.get(item.name) ?? "input"]: item.input ?? "" },
+							...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
+						};
+						const contentIndex = output.content.length;
+						output.content.push(block);
+						stream.push({ type: "toolcall_start", contentIndex, partial: output });
+						stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+					} else if (item.type === "image_generation_call" || item.type === "web_search_call") {
+						const clean = item.type === "image_generation_call"
+							? sanitizeImageGenerationCallItem(item) : sanitizeWebSearchCallItem(item);
+						if (clean) (output.content as unknown[]).push({ type: item.type, item: clean });
+					} else {
+						if (item.type === "function_call" && tool?.type === "function_call") {
+							item = { ...item, arguments: tool.input || item.arguments };
+						}
+						if (item.type === "custom_tool_call") item = { ...item, id: item.id ?? "" };
+						yield { ...event, item };
+					}
+					pending.delete(event.output_index);
+					continue;
+				} else if (event.type === "response.completed" || event.type === "response.incomplete") {
+					terminal = true;
+					const previousRaw = output.rawStopReason;
+					yield { ...event, response: event.response ?? {} } as ResponseStreamEvent;
+					if (!event.response?.status || event.response.status === "in_progress" || event.response.status === "queued") {
+						output.stopReason = "pending";
+					}
+					if (output.rawStopReason === undefined) {
+						if (previousRaw === undefined) delete output.rawStopReason;
+						else output.rawStopReason = previousRaw;
+					}
+					continue;
+				} else if (event.type === "error") {
+					throw new Error([event.code, event.message].filter(Boolean).join(": ") || "Unknown error");
+				} else if (event.type === "response.failed") {
+					const error = event.response?.error;
+					const reason = event.response?.incomplete_details?.reason;
+					throw new Error(error ? `${error.code || "unknown"}: ${error.message || "no message"}`
+						: reason ? `incomplete: ${reason}` : "Unknown error (no error details in response)");
 				}
+				yield event;
 			}
-		} else if (event.type === "response.output_item.done") {
-			const item = event.item;
-			const customItem = (item as unknown as { type?: string }).type === "custom_tool_call"
-				? item as unknown as { type: "custom_tool_call"; id?: string; call_id: string; name: string; input?: string; namespace?: string }
-				: undefined;
-			const customState = customItem ? outputStates.get(event.output_index) : undefined;
-			const customInput = customItem
-				? customItem.input ?? (customState?.kind === "custom_tool_call" ? customState.input : "")
-				: undefined;
-			options?.onOutputItemDone?.(customItem ? { ...customItem, input: customInput } : item);
-			if (customItem) {
-				const state = customState;
-				if (state?.kind === "custom_tool_call") {
-					const delta = appendCustomInput(state, customInput ?? "", true);
-					if (delta !== undefined) stream.push({
-						type: "toolcall_delta",
-						contentIndex: state.blockIndex,
-						delta,
-						partial: output,
-					});
-				}
-				const property = state?.kind === "custom_tool_call"
-					? state.property
-					: options?.grammarToolInputProperties?.get(customItem.name) ?? "input";
-				const toolCallArguments = customInput === undefined ? {} : { [property]: customInput };
-				const toolCall: ToolCallBlock = state?.kind === "custom_tool_call"
-					? { ...state.block, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) }
-					: { type: "toolCall", id: `${customItem.call_id}|${customItem.id ?? ""}`, name: customItem.name, arguments: toolCallArguments, ...(customItem.namespace !== undefined ? { namespace: customItem.namespace } : {}) };
-				if (state?.kind !== "custom_tool_call") {
-					output.content.push(toolCall);
-					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-				} else output.content[state.blockIndex] = toolCall;
-				const toolCallIndex = state?.kind === "custom_tool_call" ? state.blockIndex : blockIndex();
-				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
-				outputStates.delete(event.output_index);
-			} else if (item.type === "reasoning") {
-				let state = outputStates.get(event.output_index);
-				if (!state || state.kind !== "reasoning") {
-					const currentBlock: ThinkingBlock = { type: "thinking", thinking: "" };
-					output.content.push(currentBlock);
-					state = { kind: "reasoning", blockIndex: blockIndex(), block: currentBlock, summaryParts: new Map() };
-					outputStates.set(event.output_index, state);
-					stream.push({ type: "thinking_start", contentIndex: state.blockIndex, partial: output });
-				}
-				state.block.thinking = item.summary?.map((summary) => summary.text).join("\n\n") || "";
-				state.block.thinkingSignature = JSON.stringify(item);
-				stream.push({ type: "thinking_end", contentIndex: state.blockIndex, content: state.block.thinking, partial: output });
-				outputStates.delete(event.output_index);
-			} else if (item.type === "message") {
-				let state = outputStates.get(event.output_index);
-				if (!state || state.kind !== "message") {
-					const currentBlock: TextBlock = { type: "text", text: "" };
-					output.content.push(currentBlock);
-					state = { kind: "message", blockIndex: blockIndex(), block: currentBlock, parts: new Map() };
-					outputStates.set(event.output_index, state);
-					stream.push({ type: "text_start", contentIndex: state.blockIndex, partial: output });
-				}
-				state.block.text = item.content.map((content) => (content.type === "output_text" ? content.text : content.refusal)).join("");
-				state.block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-				stream.push({ type: "text_end", contentIndex: state.blockIndex, content: state.block.text, partial: output });
-				outputStates.delete(event.output_index);
-			} else if (item.type === "function_call") {
-				const state = outputStates.get(event.output_index);
-				const namespace = (item as unknown as { namespace?: string }).namespace;
-				const args = state?.kind === "function_call" && state.block.partialJson
-					? parseStreamingJson<JsonObject>(state.block.partialJson)
-					: parseStreamingJson<JsonObject>(item.arguments || "{}");
-				let toolCall: ToolCallBlock;
-				if (state?.kind === "function_call") {
-					state.block.arguments = args;
-					if (namespace !== undefined) state.block.namespace = namespace;
-					delete state.block.partialJson;
-					toolCall = state.block;
-				} else {
-					toolCall = {
-						type: "toolCall",
-						id: `${item.call_id}|${item.id}`,
-						name: item.name,
-						arguments: args,
-						...(namespace !== undefined ? { namespace } : {}),
-					};
-					output.content.push(toolCall);
-					stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-				}
-				const toolCallIndex = state?.kind === "function_call" ? state.blockIndex : blockIndex();
-				stream.push({ type: "toolcall_end", contentIndex: toolCallIndex, toolCall, partial: output });
-				outputStates.delete(event.output_index);
-			} else if (item.type === "image_generation_call") {
-				const imageGenerationCall = sanitizeImageGenerationCallItem(item);
-				if (imageGenerationCall) {
-					(output.content as InternalAssistantContent[]).push({
-						type: "image_generation_call",
-						item: imageGenerationCall,
-					});
-				}
-				outputStates.delete(event.output_index);
-			} else if (item.type === "web_search_call") {
-				const webSearchCall = sanitizeWebSearchCallItem(item);
-				if (webSearchCall) {
-					(output.content as InternalAssistantContent[]).push({
-						type: "web_search_call",
-						item: webSearchCall,
-					});
-				}
-				outputStates.delete(event.output_index);
-			}
-		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
-			const response = event.response;
-			if (response?.id) output.responseId = response.id;
-			if (response?.usage) {
-				const inputDetails = response.usage.input_tokens_details as { cached_tokens?: number; cache_write_tokens?: number } | undefined;
-				const cachedTokens = inputDetails?.cached_tokens || 0;
-				const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
-				output.usage = {
-					input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
-					output: response.usage.output_tokens || 0,
-					cacheRead: cachedTokens,
-					cacheWrite: cacheWriteTokens,
-					totalTokens: response.usage.total_tokens || 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				};
-				(output.usage as { reasoning?: number }).reasoning = response.usage.output_tokens_details?.reasoning_tokens || 0;
-			}
-			calculateCost(model, output.usage);
-			if (options?.applyServiceTierPricing) {
-				const serviceTier = options.resolveServiceTier
-					? options.resolveServiceTier(response?.service_tier, options.serviceTier)
-					: (response?.service_tier ?? options.serviceTier);
-				options.applyServiceTierPricing(output.usage, serviceTier);
-			}
-			const incompleteDetails = response?.incomplete_details as { reason?: unknown } | null | undefined;
-			const incompleteReason = typeof incompleteDetails?.reason === "string" ? incompleteDetails.reason : undefined;
-			const rawStopReason = incompleteReason ? `${response?.status}.${incompleteReason}` : response?.status;
-			if (rawStopReason !== undefined) output.rawStopReason = rawStopReason;
-			const mappedStop = mapStopReason(response?.status, incompleteReason);
-			output.stopReason = mappedStop.stopReason;
-			if (mappedStop.errorMessage === undefined) delete output.errorMessage;
-			else output.errorMessage = mappedStop.errorMessage;
-			if (output.content.some((block) => block.type === "toolCall") && output.stopReason === "stop") {
-				output.stopReason = "toolUse";
-			}
-		} else if (event.type === "error") {
-			const details = [event.code, event.message].filter(Boolean).join(": ");
-			throw new Error(details || "Unknown error");
-		} else if (event.type === "response.failed") {
-			const error = event.response?.error;
-			const details = (event.response as { incomplete_details?: { reason?: string | undefined } | undefined } | undefined)?.incomplete_details;
-			const msg = error
-				? `${error.code || "unknown"}: ${error.message || "no message"}`
-				: details?.reason
-					? `incomplete: ${details.reason}`
-					: "Unknown error (no error details in response)";
-			throw new Error(msg);
+		} finally {
+			// Only completed calls can survive EOF, cancellation or a consumer/source error.
+			for (const { index } of [...pending.values()].sort((a, b) => b.index - a.index)) output.content.splice(index, 1);
 		}
+		exhausted = true;
 	}
-}
-
-function mapStopReason(
-	status: string | undefined,
-	incompleteReason?: string,
-): { stopReason: AssistantMessage["stopReason"]; errorMessage?: string } {
-	if (!status) return { stopReason: "pending" };
-	switch (status) {
-		case "completed":
-			return { stopReason: "stop" };
-		case "incomplete":
-			if (incompleteReason === "max_output_tokens") return { stopReason: "length" };
-			return {
-				stopReason: "error",
-				errorMessage: incompleteReason
-					? `Response incomplete: ${incompleteReason}`
-					: "Response incomplete without a provider reason",
-			};
-		case "failed":
-		case "cancelled":
-			return { stopReason: "error" };
-		case "in_progress":
-		case "queued":
-			return { stopReason: "pending" };
-		default:
-			throw new Error(`Unhandled stop reason: ${status}`);
+	try {
+		// The two OpenAI SDK versions type error codes/service tiers differently;
+		// the native parser forwards those fields without narrowing their values.
+		await processNativeStream(
+			adapt() as Parameters<typeof processNativeStream>[0], output, stream, model,
+			options as Parameters<typeof processNativeStream>[4],
+		);
+	} catch (error) {
+		// At a clean EOF the caller owns pending/retry classification. Source or callback failures propagate.
+		if (!exhausted || terminal) throw error;
 	}
 }

@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-09-30 — Shared Responses stream processing
+
+- The Responses parser delegates streamed tools, grammar deltas, usage and normal terminal mapping to Pi, retaining indexed prose, raw callbacks, image/search items and interruption cleanup. Production source decreased **240 lines**: parser 436 → 199, host API bridge 36 → 33. Permanent tests are unchanged.
+- **76** temporary differential scenarios compare the old and new public event traces, raw items, final output and errors, including independent expectations for indexed parts, completion-only calls, parameter precedence, pending-call cleanup, pricing and callback/source failures. Parser scratch fields are excluded only from intermediate tool blocks. These probes remain under `.work/stream-sharing`.
+- `npm run verify` passed production/test/vendor types, **440/440 tests** and the package dry run; the focused protocol suite passed **55/55**. A fresh offline production-only install loaded via Pi **0.87.1**, with no local pi-ai or partial-json package and no extension errors. Eight mocked Codex SSE requests covered completion-only/streamed grammar and function calls, raw callback input, malformed JSON, exhausted retry budget, API errors and successful retry after truncation. Three OpenAI SDK proxy requests covered completion, truncation and API failure with Responses Lite input.
+- Three independent reviews found no actionable introduced regressions: 14 semantic cases, 20 lifecycle/fault cases, and—on each of Pi 0.87.0 and 0.87.1—8 parser comparisons, 5 Codex mapping cases and 3 mocked SDK proxy calls passed. A separate parent probe passed 8 asynchronous consumer/namespace-routing cases. Production hashes stayed unchanged; no production fixes or permanent tests were added. Review records are under `.work/stream-sharing/review*`.
+- Network responses were mocked; no paid model request or V8 execution was performed. Request conversion, canonical history ownership and transport retry policy were not refactored.
+
 ## 2026-09-30 — Pi-owned authentication and provider helpers
 
 - Codex browser/device-code login and refresh now inherit Pi authentication; the extra connector scopes and two local OAuth files are retired. Tool conversion and partial JSON parsing reuse the host's public APIs through one export resolver. The unused Skills path scanner/export and direct partial-json dependencies are retired; Code Mode's Skills bridge remains.
