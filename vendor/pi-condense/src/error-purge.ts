@@ -1,4 +1,5 @@
 import type { ErrorPurgeConfig } from "./types.ts";
+import { hasProtectedNestedResults } from "./protected.ts";
 
 /**
  * Replaces the `arguments` body of failed toolCall blocks with a compact stub
@@ -30,7 +31,7 @@ export function purgeErroredArgs(messages: any[], config: ErrorPurgeConfig): any
     if (msg.role === "assistant") {
       // Count each assistant turn; toolResults referencing the turn come next.
       turnCount++;
-    } else if (msg.role === "toolResult" && msg.isError === true) {
+    } else if (msg.role === "toolResult" && msg.isError === true && !hasProtectedNestedResults(msg.details)) {
       // Record the turn this errored call belongs to for cooldown comparison.
       erroredAtTurn.set(msg.toolCallId, turnCount);
     }

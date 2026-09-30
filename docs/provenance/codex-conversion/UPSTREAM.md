@@ -1,6 +1,6 @@
 # Codex module provenance: `@howaboua/pi-codex-conversion`
 
-The implementation is maintained in `src/codex/` as a metis-pi module. This directory
+The implementation is maintained in `src/execution/ and src/code-mode/` as a metis-pi module. This directory
 preserves its origin, license and local differences. The root manifest owns the
 product version and dependencies; `pi update` updates metis-pi as a whole.
 
@@ -25,28 +25,28 @@ selectively ported in an isolated branch, preserving the behavior in `PATCHES.md
 
 ## Repository layout
 
-- `src/codex/` — local TypeScript; `extension.ts` is the sole Pi entry. Config, execution, context and providers have their own directories; extension/runtime still owns lifecycle state.
-- `vendor/js-tiktoken/` and `vendor/tree-sitter-bash/` — pinned tokenizer and WASM with their licenses and provenance.
+- `src/execution/` and `src/code-mode/` — retained local TypeScript execution tools and V8 runtime. `extensions/execution.ts` composes their lifecycle; Pi owns providers, authentication, tool selection and ordinary context management.
+- `vendor/tree-sitter-bash/` — pinned shell-parser WASM with its license and provenance.
 - `native/code-mode-host/` and `native/tools/` — independent Rust workspaces and build inputs. Linux x64 with glibc 2.34 or newer uses our Code Mode host release; other host targets retain pinned upstream assets.
 - `assets/native-tools/` — executable Linux x64 tools. An optional `code-mode/<platform>-<arch>/` payload takes precedence over development builds and the versioned host cache.
 - `src/changelog.ts` — dynamically loaded product notices using root `package.json` and `CHANGELOG.md`.
-- `tsconfig.codex.json` — strict no-emit, erasable-syntax checks, included in `npm run check`.
+- `tsconfig.execution.json` — strict no-emit, erasable-syntax checks, included in `npm run check`.
 - This provenance directory — unchanged MIT license, source baseline, local differences and `UPSTREAM_CHANGELOG.md` for historical upstream releases.
 
 The root package ships TS and runtime assets, with no development compiler or install-time build. Old conversion entry/facade paths and the inner manifest have been removed. Extension filters and external imports must use the new TS paths. `vendor:check` now checks pi-condense only.
 
-Pi 0.87.0 or newer supplies the shared transcript and constrained-sampling helpers. Local wrappers retain historical-session compatibility and resolve the sampling API through the running host's public package exports; no second pi-ai copy is bundled.
+Pi 0.99.1 supplies providers, authentication, transcript conversion and constrained-sampling helpers. No second pi-ai copy is bundled.
 
 ## Published package
 
-The root `package.json` publishes TypeScript, runtime tokenizer/WASM assets,
+The root `package.json` publishes TypeScript, runtime WASM assets,
 `assets/native-tools` payloads, `CUSTOM-TOOLS.md`, the product changelog and notices.
 TypeScript is shipped and executed directly; Rust sources and development configuration remain in Git. No generated declarations are required. There is no cumulative patch or whole-tree sync command. Local/Git/npm installs require no build step. Runtime asset
 paths and native executable permissions are preserved in packed releases.
 
 ## Deliberate omissions (payload scope)
 
-The vendored copy excludes upstream voice and keeps only the native tool binaries
+The retained execution module excludes upstream voice and keeps only the native tool binaries
 needed on linux-x64. Excluded, by decision:
 
 - `src/voice/**`, `src/realtime-voice.ts`, `src/ui/settings/config-items-voice.ts` —
@@ -59,9 +59,10 @@ required native payload, including its provenance, license and executable mode.
 The retired voice implementation and unrelated platform payloads remain excluded.
 
 Resource loaders use the canonical module URL to resolve root vendor/assets directories.
-Code Mode custom-tool documentation stays beside its TS loader. User configuration,
-the versioned `pi-codex-conversion` host cache and persisted session/event IDs are
-unchanged by the repository layout.
+Code Mode custom-tool documentation stays beside its TS loader. Execution settings use
+`metis-pi.json.execution`; the old conversion configuration is no longer read. The
+versioned `pi-codex-conversion` host cache and retained execution event IDs preserve
+their identities; this is a binary-cache namespace, not a compatibility configuration reader.
 
 ## Upgrading upstream
 
@@ -69,7 +70,7 @@ unchanged by the repository layout.
 2. Compare the intended upstream revision with the pinned baseline above. Selectively port
    source/assets while preserving `PATCHES.md`, the payload scope and runtime paths;
    do not overwrite this tree wholesale. `references/` is an optional comparison input.
-3. Run `npm run check:codex` and `npm run verify` from a clean candidate, then verify
+3. Run `npm run check:execution` and `npm run verify` from a clean candidate, then verify
    local/Git/package loading and strict PTY for affected behavior. Commit source and reviewed
    module changes; there is no generated implementation output.
 4. Update the reviewed upstream version/commit here and relevant `PATCHES.md`/CHANGELOG
@@ -83,7 +84,9 @@ unchanged by the repository layout.
   that, since the block shifts the layout its coordinate-based stages assert on).
 - **Shortcuts.** The default `backgroundShellPrevShortcut` is `alt+q`, which collides with pi's built-in
   `app.message.dequeue`; pi then shows an "Extension issues" banner. Real installs set their own key in
-  `pi-codex-conversion.json` (this machine uses `ui.backgroundShellPrevShortcut = "alt+u"`). The vendored
+  `metis-pi.json.execution` (for example `ui.backgroundShellPrevShortcut = "alt+u"`). The retained
   defaults are left untouched on purpose.
 
 See `PATCHES.md` for what we change relative to upstream and why.
+
+Pi 0.99.1 handoff retires providers, special context, Reserve, prewarm and tokenizer payload. Retained execution/V8 code and native binaries keep their original license and host pins.

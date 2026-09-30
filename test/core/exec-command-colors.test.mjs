@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { stripVTControlCharacters as plain } from "node:util";
 import { highlightBashScript } from "../../src/bash-lexer.ts";
-import { renderExecCommandCall, renderGroupedExecCommandCall } from "../../src/codex/ui/tool-rendering/codex-rendering.ts";
+import { renderExecCommandCall, renderGroupedExecCommandCall } from "../../src/execution/ui/rendering.ts";
 
 const theme = { fg: (_role, text) => text, bold: text => text };
 const colored = { ...theme, highlightCommandLines: lines => highlightBashScript(lines, { kind: "truecolor" }) };

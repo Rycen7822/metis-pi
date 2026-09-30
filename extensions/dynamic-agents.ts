@@ -1,14 +1,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DYNAMIC_AGENTS, DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
+import { DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "../src/dynamic-agents.ts";
 
 type Options = { contextFiles: AgentFile[]; forceSystemPrompt?: string };
 type Snapshot = { model: string; policy: Policy; replacement?: AgentFile };
-type Request = { kind: "prepare"; options: Options; ctx: ExtensionContext }
-  | { kind: "project"; messages: any[] }
-  | { kind: "prewarm"; model?: ModelIdentity; allowed: boolean };
 const identity = (model?: ModelIdentity) => model ? JSON.stringify([model.provider, model.id]) : "";
 
 export default function dynamicAgents(pi: ExtensionAPI): void {
@@ -25,8 +22,7 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
 
   const prepare = (options: Options, ctx: ExtensionContext) => {
     if (!managed && !existsSync(configPath)) return;
-    // Read globals once for this run. A converter may repeat preparation after
-    // selecting its final model; tool steps still keep the same file snapshot.
+    // Read globals once for this run; tool steps keep the same file snapshot.
     if (lastOptions !== options) {
       const global = loadGlobal(getAgentDir());
       nativeGlobal = global.file;
@@ -80,15 +76,6 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
   pi.on("context_with_system", event => snapshot
     ? { messages: projectMessages(event.messages, sources, snapshot.replacement) } : undefined);
 
-  const unsubscribe = pi.events.on(DYNAMIC_AGENTS, raw => {
-    const request = raw as Request;
-    if (request.kind === "prepare") prepare(request.options, request.ctx);
-    else if (request.kind === "project" && snapshot) request.messages = projectMessages(request.messages, sources, snapshot.replacement);
-    else if (request.kind === "prewarm" && (managed || existsSync(configPath))) {
-      request.allowed = request.allowed && !dirty && snapshot?.model === identity(request.model);
-    }
-  });
-  pi.on("session_shutdown", () => { unsubscribe(); });
   pi.registerCommand("dynamic-agents", {
     description: "Show active global policy; reload schedules a refresh for the next agent run",
     handler: async (args, ctx) => {

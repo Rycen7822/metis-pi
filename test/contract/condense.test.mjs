@@ -11,7 +11,7 @@ import { pruneMessages } from "../../vendor/pi-condense/src/pruner.ts";
 import { findSuperseded } from "../../vendor/pi-condense/src/supersede.ts";
 import { hashToolResult } from "../../vendor/pi-condense/src/content-hash.ts";
 import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
-import { disableNetwork, captureRegistration, modelNamed, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
+import { disableNetwork, captureRegistration, modelNamed, FAKE_API_KEY } from "../helpers/native-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
 
 test.beforeEach(disableNetwork);
@@ -146,7 +146,7 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
     writeFileSync(externalPath, 'export default function(pi) { pi.registerTool({name:"context_tree_query",label:"external",description:"external",parameters:{type:"object",properties:{}},async execute(){return {content:[{type:"text",text:"external"}],details:{}}}}); }');
     paths.push(externalPath);
   }
-  if (codex) paths.push(fileURLToPath(new URL("src/codex/extension.ts", root)));
+  if (codex) paths.push(fileURLToPath(new URL("extensions/execution.ts", root)));
   const eventBus = createEventBus();
   const resourceLoader = new DefaultResourceLoader({ eventBus, cwd: dir, agentDir: dir, settingsManager, additionalExtensionPaths: paths, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "CONDENSE_TEST" });
   await resourceLoader.reload();
@@ -199,7 +199,7 @@ test("external owner is detected after discovery, before built-in handlers regis
   assert.ok(h.notices.some((text) => text.includes("built-in condense is inactive")));
 });
 
-test("Codex's real context handlers and final provider payload retain recovery tools and projected results", async (t) => {
+test("Pi native context handlers and final provider payload retain recovery tools and projected results", async (t) => {
   const model = modelNamed("gpt-6-astra");
   const raw = "ORIGINAL_LONG_RESULT_".repeat(5000);
   const call = assistantToolCall(model, "archived", "read");

@@ -5,15 +5,15 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, symlinkSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { executeFusion, validateThenRun } from "../../src/codex/execution/action-fusion.ts";
-import { runNativeFusionCommand, runExecFusionCommand } from "../../src/codex/execution/action-fusion-command.ts";
-import { createExecSessionManager } from "../../src/codex/execution/exec/session-manager.ts";
+import { executeFusion, validateThenRun } from "../../src/execution/action-fusion.ts";
+import { runNativeFusionCommand, runExecFusionCommand } from "../../src/execution/action-fusion-command.ts";
+import { createExecSessionManager } from "../../src/execution/exec/session-manager.ts";
 import actionFusion, { createNativeFusionTool } from "../../extensions/action-fusion.ts";
-import { createApplyPatchTool } from "../../src/codex/execution/apply-patch/tool.ts";
-import { createNestedTools } from "../../src/codex/adapter/code-mode.ts";
-import { normalizeCodexConversionConfig } from "../../src/codex/config/config.ts";
-import { createExecCommandTracker } from "../../src/codex/execution/exec/command-state.ts";
-import { toWireToolDefinition } from "../../src/codex/execution/code-mode/host-protocol.ts";
+import { createApplyPatchTool } from "../../src/execution/apply-patch/tool.ts";
+import { createNestedTools } from "../../src/execution/code-mode.ts";
+import { EXECUTION_DEFAULTS } from "../../src/execution/config.ts";
+import { createExecCommandTracker } from "../../src/execution/exec/command-state.ts";
+import { toWireToolDefinition } from "../../src/code-mode/host-protocol.ts";
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-"));
@@ -72,7 +72,7 @@ test("code nested entry retains string patch and captures fused failure before t
   const binary = fileURLToPath(new URL("../../assets/native-tools/exec/linux-x64/exec_bridge", import.meta.url));
   const sessions = createExecSessionManager({ bridgeBinaryPath: () => binary });
   t.after(() => sessions.shutdown());
-  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode: "code", availableToolNames: [] }, sessions, tracker: createExecCommandTracker() };
+  const runtime = { config: structuredClone(EXECUTION_DEFAULTS), sessions, tracker: createExecCommandTracker() };
   const pi = { events: createEventBus(), on() {} };
   actionFusion(pi);
   const tools = createNestedTools(pi, runtime, ctx);
@@ -96,7 +96,7 @@ test("code nested entry retains string patch and captures fused failure before t
 
 test("code without fusion keeps ordinary patch and omits the fused entry", async t => {
   const ctx = fixture(t);
-  const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode: "code", availableToolNames: [] }, sessions: {}, tracker: createExecCommandTracker() };
+  const runtime = { config: structuredClone(EXECUTION_DEFAULTS), sessions: {}, tracker: createExecCommandTracker() };
   const tools = createNestedTools({ events: createEventBus() }, runtime, ctx);
   assert.equal(tools.some(tool => tool.name === "apply_patch_then_run"), false);
   const patch = tools.find(tool => tool.name === "apply_patch");

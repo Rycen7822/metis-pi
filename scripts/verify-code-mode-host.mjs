@@ -2,7 +2,7 @@
 // Pass a freshly built binary explicitly; this script never downloads a host.
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { CodeModeHostClient } from "../src/codex/execution/code-mode/host-client.ts";
+import { CodeModeHostClient } from "../src/code-mode/host-client.ts";
 
 assert.ok(process.argv[2], "usage: node --experimental-strip-types scripts/verify-code-mode-host.mjs HOST");
 const client = new CodeModeHostClient({ binary: process.argv[2], tools: [], shutdownGraceMs: 1_000 });

@@ -603,6 +603,9 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
 
 /** A single tool call + its result as captured from turn_end */
 export interface CapturedToolCall {
+	parentToolCallId?: string;
+	nestedProtected?: boolean;
+	nestedRootToolCallId?: string;
 	/** Immutable mutation/status prefix; command body may live in an external archive. */
 	resultPrefix?: string;
 	fusionCommand?: { command: string; output: string };
@@ -659,6 +662,9 @@ export interface CapturedBatch {
  * Contains the full original tool output for context_tree_query recovery.
  */
 export interface ToolCallRecord {
+	parentToolCallId?: string;
+	nestedProtected?: boolean;
+	nestedRootToolCallId?: string;
   /** Durable recovery only; archiving alone must never change model-visible history. */
   archiveOnly?: boolean;
   /** Legacy dedup entry whose own execution metadata could not be recovered. */

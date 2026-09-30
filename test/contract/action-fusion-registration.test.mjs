@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { disableNetwork } from "../helpers/vendor-codex-provider.mjs";
+import { disableNetwork } from "../helpers/native-provider.mjs";
 
 test.beforeEach(disableNetwork);
 const fusionEntry = fileURLToPath(new URL("../../extensions/action-fusion.ts", import.meta.url));
-const vendorEntry = fileURLToPath(new URL("../../src/codex/extension.ts", import.meta.url));
+const vendorEntry = fileURLToPath(new URL("../../extensions/execution.ts", import.meta.url));
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 for (const reverseOrder of [false, true]) test(`fusion entry controls native and conversion schemas with reverse load order=${reverseOrder}`, async t => {
@@ -23,7 +23,7 @@ for (const reverseOrder of [false, true]) test(`fusion entry controls native and
     finally { session?.dispose(); if (prior === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = prior; rmSync(cwd, { recursive: true, force: true }); }
     assert.deepEqual(errors, []);
   });
-  const packages = disabled => [{ source: packageRoot, extensions: ["extensions/action-fusion.ts", "src/codex/extension.ts", ...(disabled ? ["-extensions/action-fusion.ts"] : [])] }];
+  const packages = disabled => [{ source: packageRoot, extensions: ["extensions/action-fusion.ts", "extensions/execution.ts", ...(disabled ? ["-extensions/action-fusion.ts"] : [])] }];
   const settingsManager = SettingsManager.inMemory({ packages: reverseOrder ? [] : packages(false) });
   const events = createEventBus();
   const resourceLoader = new DefaultResourceLoader({ cwd, agentDir: cwd, settingsManager, eventBus: events,

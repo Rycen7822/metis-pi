@@ -173,8 +173,8 @@ fs.writeFileSync(path.join(AGENT_DIR, "settings.json"), JSON.stringify({
   packages: [],
 }));
 // Avoid the vendor alt+q/Pi built-in collision, which adds an extension-issues banner.
-fs.writeFileSync(path.join(AGENT_DIR, "pi-codex-conversion.json"), JSON.stringify({
-  ui: { backgroundShellPrevShortcut: "alt+u" },
+fs.writeFileSync(path.join(AGENT_DIR, "metis-pi.json"), JSON.stringify({
+  execution: { ui: { backgroundShellPrevShortcut: "alt+u" } },
 }));
 // Suppress the vendor first-run notice so mouse coordinates target the tested rows.
 fs.writeFileSync(path.join(AGENT_DIR, "howaboua-pi-stuff-changelog.json"), JSON.stringify({ suppress: true }));

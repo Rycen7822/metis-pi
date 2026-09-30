@@ -4,13 +4,13 @@ Action Fusion 让模型在一次工具调用中提交文件修改和明确的后
 
 ## 开关
 
-`extensions/action-fusion.ts` 统一控制 Pi 原生 edit/write、转换层 apply_patch，以及 Code Mode 的融合调用。默认加载；在现有包安装项添加 `-extensions/action-fusion.ts` 并 `/reload` 或重启即可关闭，完整配置形式见 [配置](../configuration.md)。`metis-pi.json` 的显示总开关不控制它。
+`extensions/action-fusion.ts` 统一控制 Pi 原生 edit/write、执行模块 apply_patch，以及 Code Mode 的融合调用。默认加载；在现有包安装项添加 `-extensions/action-fusion.ts` 并 `/reload` 或重启即可关闭，完整配置形式见 [配置](../configuration.md)。`metis-pi.json` 的显示总开关不控制它。
 
-关闭后，原生 edit/write 恢复普通工具，转换层 apply_patch 不再声明 `then_run`，Code Mode 不再提供 `apply_patch_then_run`。普通修改和命令工具继续可用；转换层收到旧的 `then_run` 会在修改前拒绝。历史融合回执和归档仍可读取。
+关闭后，原生 edit/write 恢复普通工具，执行模块 apply_patch 不再声明 `then_run`，Code Mode 不再提供 `apply_patch_then_run`。普通修改和命令工具继续可用；执行模块收到旧的 `then_run` 会在修改前拒绝。历史融合回执和归档仍可读取。
 
 ## 调用方式
 
-Pi 原生 `edit`、`write` 和普通模式 `apply_patch` 的原有参数保持不变，可追加：
+Pi 原生 `edit`、`write` 和直接调用的 `apply_patch` 的原有参数保持不变，可追加：
 
 ```json
 {"then_run": {"command": "npm test", "timeout": 60}}
@@ -18,7 +18,7 @@ Pi 原生 `edit`、`write` 和普通模式 `apply_patch` 的原有参数保持�
 
 `timeout` 单位为秒，可省略；显式超时会终止命令，不是轮询等待时间。不传 `then_run` 时仍执行普通修改。原生入口只包装 Pi 内建工具，第三方同名工具保留自身行为。
 
-Code Mode 保留 `tools.apply_patch(patch)` 字符串接口，并提供：
+Pi 原生 `codemode` 使用 `tools.apply_patch({input: patch, then_run: {...}})`。独立 V8 保留 `tools.apply_patch(patch)` 字符串接口，并提供：
 
 ```js
 const result = await tools.apply_patch_then_run({
@@ -28,7 +28,7 @@ const result = await tools.apply_patch_then_run({
 text(result);
 ```
 
-融合沿用外层 `exec`/`wait` 生命周期，必要时 yield/wait。嵌套命令失败会抛错，但此前先保存修改回执和日志；捕获异常不撤销修改。
+V8 融合沿用外层 `exec`/`wait` 生命周期，必要时 yield/wait。嵌套命令失败会抛错，但此前先保存修改回执和日志；捕获异常不撤销修改。
 
 ## 结果与并发
 

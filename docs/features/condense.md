@@ -61,6 +61,7 @@
 | 参数或结果 | 语义 |
 | --- | --- |
 | `toolCallIds` | 接受原始调用 ID 或短引用；重复原始 ID 的各次出现分别返回 |
+| `parentToolCallId` | 回读该父工具的归档子调用；与其他两个 ID 选择器互斥 |
 | `sourceEntryIds` | 查询历史来源条目；与 `toolCallIds` 互斥，只能读取 output |
 | `component` | `output` 或 `arguments`；读取 arguments 必须指定 `toolCallIds` |
 | `maxBytes` | 2048–32768，默认 32768；限制整个 JSON 响应，包含正文、元数据和 cursor |

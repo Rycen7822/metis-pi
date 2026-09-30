@@ -7,7 +7,7 @@
 | appearance 显示 | `<agentDir>/metis-pi.json` | 启动激活时读取，插件不改写；改后重启 Pi。 |
 | condense / OCC | Pi `settings.json` 的 `contextPrune` | `/pruner settings` 可写入设置，见 [condense](features/condense.md)。 |
 | dynamic-agents | `<agentDir>/dynamic-agents.json` | 下一次正式 run 读取；配置缺失时不激活，见 [动态指令](features/dynamic-agents.md)。 |
-| Codex 转换层 | `pi-codex-conversion.json` | 通过 `/codex` 管理所选范围，见 [转换层](codex.md)。 |
+| 执行工具 | `metis-pi.json.execution` | 全局 → 受信任项目；`/execution` / `/execution project`，见 [执行模块](codex.md)。 |
 | goal / todo / skill / Action Fusion 等独立入口 | Pi 包安装项的 `extensions` 过滤 | `/reload` 或重启后生效，见本页“独立功能开关”。 |
 
 `metis-pi.json` 的 `enabled` 只控制显示层。各功能的持久数据与写入行为见 [命令与路径](commands.md)。
@@ -186,10 +186,10 @@
 | dynamic-agents | `-extensions/dynamic-agents.ts`；运行中恢复原生规则建议先在独立 JSON 设置 `enabled: false`，详见功能页 |
 | condense 整体 | `-extensions/condense.ts` |
 | skill 输入 | 同时排除 `-extensions/skill-entry.ts`、`-extensions/skill-mux.ts` |
-| 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、转换层 apply_patch、Code Mode 的融合入口 |
-| 整个 Codex 转换层 | `-src/codex/extension.ts` |
+| 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、执行模块 apply_patch、Code Mode 的融合入口 |
+| 执行模块（含 V8） | `-extensions/execution.ts` |
 
-旧 conversion 入口已移除。已有配置中的入口白名单或排除规则，以及外部直接导入，应改用 `src/codex/extension.ts`；配置文件内容和 host 缓存无需迁移。
+旧 `src/codex/extension.ts` 入口过滤改为 `extensions/execution.ts`。执行配置需按[字段映射](codex.md)放到 `metis-pi.json.execution`；旧文件不自动迁移。
 
 显示子项仍在 `metis-pi.json` 设置；压缩的 `contextPrune.enabled` 和 OCC 的 `contextPrune.opportunisticCompaction` 在 Pi `settings.json` 设置。`/pruner off` 关闭压缩但保留历史回读工具，排除 condense 入口才是完全禁用。Action Fusion 的开关与 condense 独立，细节见 [Action Fusion](features/action-fusion.md)。
 

@@ -4,6 +4,24 @@ export interface ProtectionConfig {
   protectedPaths: readonly string[];
 }
 
+/** Keep a parent's evidence if a child was protected, failed or was not durably captured. */
+export function hasProtectedNestedResults(details: any): boolean {
+  const nested = details?.metisNested;
+  return !!(nested?.protected || nested?.hasError || nested?.archiveFailed || nested?.unfinished);
+}
+
+/** Latest persisted cell observation supersedes an earlier yielded snapshot. */
+export function hasUnavailableNestedEvidence(messages: readonly any[]): boolean {
+  const roots = new Map<string, { archiveFailed: boolean; unfinished: boolean }>();
+  for (const message of messages) {
+    if (message.role !== "toolResult" || !message.details?.metisNested) continue;
+    const details = message.details, root = details.cellParentToolCallId ?? message.toolCallId;
+    const prior = roots.get(root);
+    roots.set(root, { archiveFailed: !!(prior?.archiveFailed || details.metisNested.archiveFailed), unfinished: !!details.metisNested.unfinished });
+  }
+  return [...roots.values()].some(root => root.archiveFailed || root.unfinished);
+}
+
 // Compile-once: pattern -> RegExp is pure, so the cache never needs
 // invalidation. Patterns only come from config arrays, so growth is bounded.
 const patternCache = new Map<string, RegExp>();

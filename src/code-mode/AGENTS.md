@@ -1,0 +1,8 @@
+- Keep this runtime self-contained; do not add a dependency on `pi-dynamic-tools`.
+- Pi entry composition and execution-specific nested tool definitions stay in `extensions/execution.ts` and `src/execution/`.
+- Codex host source stays based on the pin under `native/code-mode-host/`; its unsupported audio output removal is documented in `native/code-mode-host/UPSTREAM_SYNC.md`. Keep other Pi-owned changes outside its upstream source tree.
+- Keep model-native `exec`/`wait`; never rename, configure, or add collision fallbacks.
+- V8 custom tools advertise one usage line when promoted and none when deferred; their loading belongs to this runtime.
+- `preflight.ts` and `hooks.ts` are the lightweight public guard/completion APIs; keep their shared protocol dependency free of the extension graph.
+- `shared-runtime.ts` owns the V8 host client lifecycle.
+- `directory-lock.ts` owns the cross-process lease for Code Mode installation; release only the observed owner file.

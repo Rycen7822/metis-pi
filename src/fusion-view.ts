@@ -1,4 +1,4 @@
-import { fusionReceipt } from "./codex/execution/action-fusion.ts";
+import { fusionReceipt } from "./execution/action-fusion.ts";
 import { asRecord, type Component, type Renderers, type ViewContext } from "./tool-names.ts";
 import { productFor, publishRows, registerProduct, type CopyRow } from "./selection-copy/model.ts";
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createOwnedApplyPatchView } from "../../src/apply-patch-view.ts";
-import { clearApplyPatchRenderState, markApplyPatchFailure, setApplyPatchRenderState } from "../../src/codex/execution/apply-patch/render-state.ts";
+import { clearApplyPatchRenderState, markApplyPatchFailure, setApplyPatchRenderState } from "../../src/execution/apply-patch/render-state.ts";
 import { bindings, theme } from "../helpers.mjs";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";

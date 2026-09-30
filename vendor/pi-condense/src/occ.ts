@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { calculateContextTokens, compact, estimateTokens, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
-import { isProtected } from "./protected.ts";
+import { hasUnavailableNestedEvidence, isProtected } from "./protected.ts";
 import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
 import { ARGUMENT_HISTORY } from "./argument-history.ts";
@@ -78,9 +78,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     } catch { return undefined; }
   }
   const capability = (ctx: ExtensionContext) => {
-    const request = { ctx, supported: false };
-    pi.events.emit("metis:occ-capability", request);
-    return request.supported;
+    const request = { busy: false };
+    pi.events.emit("metis:execution-status", request);
+    return !!ctx.model && !request.busy;
   };
   const rewrite = (ctx: ExtensionContext) => {
     if (!enabled()) return;
@@ -117,7 +117,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     }
     const window = ctx.model?.contextWindow;
     const fraction = tokens != null && window && window > 0 ? tokens / window : undefined;
-    if (fraction === undefined || !capability(ctx)) { ready = false; return false; }
+    const cost = ctx.model?.cost;
+    if (fraction === undefined || !capability(ctx) || !cost || cost.input <= 0 || cost.cacheRead <= 0 || cost.output < 0) { ready = false; return false; }
     if (state.phase === "waiting" && fraction < EXIT) {
       state.phase = "normal"; state.waitExhaustedRequest = state.request; ready = false; persist(); return false;
     }
@@ -126,7 +127,6 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     }
     // Occupancy alone does not justify economic OCC. Require known cached-input
     // prices and real tool-work observations; the candidate checks break-even.
-    const cost = ctx.model?.cost;
     ready = state.phase === "waiting" && fraction >= READY && state.work - state.atWork >= 1
       && state.work >= HOLD_WORK && !spent()
       && !!cost && cost.input > 0 && cost.cacheRead > 0 && cost.output >= 0;
@@ -184,16 +184,18 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const request = { sessionId, messages: discardedMessages, api: ctx.model.api, busy: false, maintenance: true };
       pi.events.emit("metis:condense-project", request);
       if (request.busy) return reject("projection-busy");
+      if (hasUnavailableNestedEvidence(projected.entries.flatMap(entry => entry.messages))) return reject("nested-evidence-unavailable");
       const goal = { snapshot: undefined as unknown };
       pi.events.emit("metis:goal-snapshot", goal);
       const obligations = captureUnindexedBatchesFromSession(discarded.flatMap(e => e.messages.map(message => ({ ...e.sourceEntry, type: "message", message }))), { isSummarized: () => false })
-        .flatMap(batch => batch.toolCalls).filter(call => call.isError || call.toolName === "context_tree_query" || isProtected(call.toolName, call.args, config.value))
+        .flatMap(batch => batch.toolCalls).filter(call => call.nestedProtected || call.isError || call.toolName === "context_tree_query" || isProtected(call.toolName, call.args, config.value))
         .map((call): Obligation => {
           const recalled = call.toolName === "context_tree_query" && !call.isError && !config.value.protectedTools.includes(call.toolName);
           const key = call.resultTimestamp === undefined ? call.toolCallId : `${call.toolCallId}@${call.resultTimestamp}`;
           return { id: call.toolCallId, timestamp: call.resultTimestamp, tool: call.toolName, args: call.args, isError: call.isError,
             ...(recalled ? { transient: true } : {}),
-            text: recalled ? `Historical recovery page archived. Read context_tree_query with toolCallIds=[${JSON.stringify(key)}].` : call.resultText };
+            text: recalled ? `Historical recovery page archived. Read context_tree_query with toolCallIds=[${JSON.stringify(key)}].`
+              : call.resultText + (call.nestedProtected ? `\nNested evidence: context_tree_query with parentToolCallId=${JSON.stringify(call.nestedRootToolCallId ?? call.toolCallId)}.` : "") };
         });
       const protectedSources = retainSources(discarded, request.messages, requirements, obligations, goal.snapshot);
       // Legacy manual chain projections are derived, including their preserved
@@ -325,6 +327,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     requestTokens = undefined; localTokensSaved = 0;
     rewrite(ctx);
   });
+  pi.on("session_before_compact", (event, ctx) => {
+    compactionSignal = event.signal;
+    return enabled() ? prepare(event, ctx) : undefined;
+  });
   pi.on("session_compact_failed", (event, ctx) => {
     if (enabled()) {
       // Pi also reports extension safety rejections as aborted. Prefer the
@@ -363,14 +369,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     }
   });
   const off = [
-    pi.events.on("metis:occ-compaction-start", (data: any) => { compactionSignal = data.signal; }),
     pi.events.on("metis:occ-status", (data: any) => {
       // Let native post-run capacity handling finish before issuing the owed
       // continuation. Settled immediately releases it when no compaction runs.
       data.deferGoal = ready || running || !!state.capacityWaiting; data.running = running;
-    }),
-    pi.events.on("metis:occ-prepare", (data: any) => {
-      if (enabled()) data.promise = prepare(data.event, data.ctx);
     }),
   ];
   pi.on("session_shutdown", (_event, ctx) => { showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined; });

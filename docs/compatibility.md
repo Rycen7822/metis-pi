@@ -2,7 +2,7 @@
 
 ## 版本与验证范围
 
-最低支持 Pi **0.87.0**、Node **22.19.0**；开发类型和组件契约固定于 Pi 0.87.0，最近实际 CLI 安装、Git 更新和严格 PTY 使用 **0.87.1**。transcript 和 constrained sampling 复用宿主实现；旧 Context、切片与旧会话记录仍受兼容包装保护。具体环境、成功结果及未覆盖项见 [VALIDATION](../VALIDATION.md)，不保证所有未来内部 UI 改动都兼容。
+最低支持 Pi **0.99.1**、Node **22.19.0**；开发类型和当前交接验证固定于 Pi 0.99.1。provider、transcript 和 constrained sampling 使用 Pi 原生实现；特殊上下文已退役。安装、CLI 与终端交互的实际覆盖见 [VALIDATION](../VALIDATION.md)，不保证所有未来内部 UI 改动都兼容。
 
 本包包含显示适配以及独立的任务、输入、上下文和执行功能。各入口的副作用见 [架构](architecture.md)；`metis-pi.json.enabled` 只控制显示层，禁用其他入口见 [配置参考](configuration.md)。
 
@@ -13,7 +13,7 @@
 | 守卫 | 行为 |
 | --- | --- |
 | 宿主形状 | selector 源码与 render 关键标记必须匹配；不匹配时退避并报告原因。 |
-| 工具来源 | Pi 内建工具使用 builtin 身份；本包 apply_patch/exec_command 使用 conversion 的精确入口路径。未知或第三方来源不接管。 |
+| 工具来源 | Pi 内建工具使用 builtin 身份；本包 apply_patch/exec_command 使用 execution 的精确入口路径。未知或第三方来源不接管。 |
 | 安装身份 | 原型标记防止重复安装，每次使用核对包装器仍归本扩展。 |
 | 恢复 | 保留构造时的 stock 子树；卸载恢复自己仍拥有的方法，不覆盖后来者。 |
 | 渲染失败 | 单行回退原生显示；图片顺序、高度和原生鼠标路径保留。 |
@@ -32,12 +32,12 @@
 
 | 宿主契约 | 本地处理 |
 | --- | --- |
-| Pi 0.86.1 transcript | prompt 和工具定义进入 transcript 的 system 消息；conversion 的 `providers/transcript.ts` 保持正常请求、预热与回放的共同语义。 |
-| Pi 0.86.1 skill MouseRegion | fold/label 跟随有界组件结构；认领 press 后处理 click，保留宿主渲染和正文。 |
-| Pi 0.87 context_edit | 从 SessionManager 的有效投影重建；checkpoint 之前已吸收的编辑与之后改写保留内容的编辑分别判断。失效窗口明确拒绝，新的压缩从编辑后的内容重建。 |
-| retain-none checkpoint | 兼容旧宿主的 null 和 0.87 的 checkpoint 自身 ID；未知 ID、缺失字段等不当作空窗口。 |
+| Pi 0.99.1 transcript / provider | 使用 Pi 原生目录、认证、请求和工具配对；没有转换层回放。 |
+| Pi 原生 codemode | metis 普通工具按 exposure 注册；执行、权限和 nested 事件由 Pi 管道负责。 |
+| Pi context_edit / ordinary compaction | condense 使用有效投影保留来源索引、精简保护与回读；OCC 由 condense 在 before_compact 准备。 |
+| 旧特殊窗口 / opaque checkpoint | 不再解释；需要保留的用户文件先备份，使用升级前版本导出可读基线，见[旧数据说明](codex.md)。 |
 
-无法解析 `firstKeptEntryId` 时，replay 报错，native compaction 在摘要请求前取消，避免发送旧 opaque 窗口。Pi <0.87 的会话没有 context_edit 时保留原请求前缀。具体保护与主动 OCC 的后端范围见 [condense](features/condense.md)。
+扩展不自动改写用户设置或旧会话。嵌套证据未完成或归档失败时 OCC 取消，保留源历史。V8 的长期 cell 使用独立原始上下文和 preflight/completion；通用权限管道使用原生 codemode。
 
 ## 平台与实测限制
 
@@ -48,6 +48,6 @@
 
 ## 来源定位
 
-最初的双槽工具组件契约来自 `earendil-works/pi` v0.85.1 的 `tool-execution.ts`（blob `5355a3637aad9df5871ac907b680378ffd67b677`）、`source-info.ts` 与 TUI `text.ts`。后续核对使用 v0.86.1 (`13cbf77df2396303013a41646bcfa77b4271ae56`) 和 v0.87.0 (`16787ad5`)。
+最初的双槽工具组件契约来自 `earendil-works/pi` v0.85.1 的 `tool-execution.ts`（blob `5355a3637aad9df5871ac907b680378ffd67b677`）、`source-info.ts` 与 TUI `text.ts`。后续核对使用 v0.86.1 (`13cbf77df2396303013a41646bcfa77b4271ae56`) 和 v0.99.1 (`16787ad5`)。
 
 工具行视觉参考包括 `openai/codex` 的 exec snapshot（blob `eb47a610cc5d54ede53f8e5faee8dd5fb27578b4`）以及提交 `94697375cb9d2aa8ae74d61957c6b396819bec94` 的 `diff_render.rs`；本地格式化器以 TypeScript 实现。vendor 的精确来源和本地分歧见 [转换层说明](codex.md)。

@@ -1,4 +1,5 @@
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
+import { hasProtectedNestedResults } from "./protected.ts";
 import type { ChainRange } from "./types.ts";
 
 /** Prefix that identifies a synthetic chain-compression user message. */
@@ -110,7 +111,7 @@ export function detectChains(
         middleKeys.add(occKey(msg.toolCallId, resultTimestampOf(msg.timestamp)));
         // toolResult fallback — results carry no args; name-only by design,
         // the assistant block always precedes its result so no protection is lost
-        if (isProtected(msg.toolName, undefined)) protectedIds.add(msg.toolCallId);
+        if (isProtected(msg.toolName, undefined) || hasProtectedNestedResults(msg.details)) protectedIds.add(msg.toolCallId);
       }
       continue;
     }

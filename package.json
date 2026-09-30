@@ -10,8 +10,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/*.ts",
-      "./src/codex/extension.ts"
+      "./extensions/*.ts"
     ],
     "themes": [
       "./themes/metis-pi.json"
@@ -25,7 +24,7 @@
     "test:io": "node scripts/test.mjs io",
     "test:resource": "node scripts/test.mjs resource",
     "test:chrome": "node scripts/test.mjs chrome",
-    "check": "npm run check:core && npm run check:codex",
+    "check": "npm run check:core && npm run check:execution",
     "check:core": "tsc -p tsconfig.core.json",
     "check:test": "tsc -p tsconfig.test.json",
     "verify": "npm run check && npm run check:test && npm run vendor:check && npm test && npm pack --dry-run --ignore-scripts",
@@ -34,26 +33,23 @@
     "test:pty:strict": "node --experimental-strip-types scripts/pty-verify.mjs --strict",
     "vendor:build": "npm run vendor:check",
     "vendor:check": "tsc -p vendor/pi-condense/tsconfig.json",
-    "vendor:smoke": "node --experimental-strip-types --test test/contract/vendor-codex-registration.test.mjs",
+    "vendor:smoke": "node --experimental-strip-types --test test/contract/execution-registration.test.mjs",
     "vendor:fresh": "npm run vendor:check",
-    "check:codex": "tsc -p tsconfig.codex.json"
+    "check:execution": "tsc -p tsconfig.execution.json"
   },
   "dependencies": {
     "marked": "18.0.11",
-    "openai": "^7.10.0",
     "proxy-from-env": "^2.1.0",
     "smol-toml": "^1.8.0",
     "undici": "^8.10.2",
-    "web-tree-sitter": "^0.27.0",
-    "ws": "^8.21.3"
+    "web-tree-sitter": "^0.27.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.87.0",
-    "@earendil-works/pi-ai": "0.87.0",
-    "@earendil-works/pi-coding-agent": "0.87.0",
-    "@earendil-works/pi-tui": "0.87.0",
+    "@earendil-works/pi-agent-core": "0.99.1",
+    "@earendil-works/pi-ai": "0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
+    "@earendil-works/pi-tui": "0.99.1",
     "@types/node": "^22.20.2",
-    "@types/ws": "^8.18.1",
     "typebox": "1.3.27",
     "typescript": "5.9.3"
   },
@@ -69,7 +65,6 @@
     "LICENSE-APACHE-2.0",
     "NOTICE",
     "docs",
-    "vendor/js-tiktoken",
     "vendor/tree-sitter-bash",
     "assets/native-tools",
     "native/code-mode-host/{LICENSE,NOTICE,UPSTREAM}",
@@ -89,9 +84,9 @@
     "appearance"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.87.0",
-    "@earendil-works/pi-tui": "*",
-    "@earendil-works/pi-ai": ">=0.87.0",
+    "@earendil-works/pi-ai": ">=0.99.1",
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "@earendil-works/pi-tui": ">=0.99.1",
     "typebox": "*"
   },
   "peerDependenciesMeta": {

@@ -3,7 +3,7 @@ import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduc
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";
 
-export const OWNED_CONVERSION_ENTRY = fileURLToPath(new URL("./codex/extension.ts", import.meta.url));
+export const OWNED_EXECUTION_ENTRY = fileURLToPath(new URL("../extensions/execution.ts", import.meta.url));
 export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fusion.ts", import.meta.url));
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.
@@ -87,7 +87,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if ((name === "edit" || name === "write") && typeof source.source === "string" && source.path === OWNED_FUSION_ENTRY) {
       return fusionRenderers(options.renderers[name], options.renderers.bash, () => current.result);
     }
-    if (name === "exec_command" && options.highlightOwnedCommand && typeof source.source === "string" && source.path === OWNED_CONVERSION_ENTRY) {
+    if (name === "exec_command" && options.highlightOwnedCommand && typeof source.source === "string" && source.path === OWNED_EXECUTION_ENTRY) {
       const call = definition.renderCall;
       const result = definition.renderResult;
       if (typeof call !== "function" || typeof result !== "function") return;

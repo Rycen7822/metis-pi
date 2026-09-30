@@ -8,7 +8,7 @@
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
-Pi 开发类型依赖固定为 0.87.0；升级时同步更新相关包和锁文件。当前锁文件由 npm 12.0.2 生成，也经过 CI 的 npm 10.9.8 安装验证。使用 npm 12 生成锁文件需要 Node.js >=22.22.2；应保留宿主与扩展共享的依赖布局，避免重新求解上游 shrinkwrap 后出现重复 TUI 实例、破坏组件身份和原型适配。
+Pi 开发类型依赖固定为 0.99.1；升级时同步更新相关包和锁文件。当前锁文件由 npm 12.0.2 生成，也经过 CI 的 npm 10.9.8 安装验证。使用 npm 12 生成锁文件需要 Node.js >=22.22.2；应保留宿主与扩展共享的依赖布局，避免重新求解上游 shrinkwrap 后出现重复 TUI 实例、破坏组件身份和原型适配。
 
 Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件、在开发环境运行测试、加载真实打包产物是不同的验证范围。
 
@@ -72,25 +72,25 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 
 可用 `npm run test:pty:strict -- --journey=E3` 单跑一段。缺依赖、设置 `PCX_PTY_SKIP_WHEEL=1` 或等待稳定帧超时均失败。驱动清除 `NO_COLOR` 并启用 truecolor；颜色断言不能被环境变量削弱。检查当前可见帧，不能用旧 scrollback 证明显示成功。provider 的意外请求或未消费响应也会失败。
 
-## Codex 模块与第三方来源
+## 执行模块与第三方来源
 
-Codex 实现在 `src/codex/`，入口为 `src/codex/extension.ts`；根扩展、测试与共享状态消费者使用同一 TS 源码路径。pi-condense 保留自己的来源目录和单行入口。不要重新引入编译副本或重复包清单。
+执行工具在 `src/execution/`，V8 在 `src/code-mode/`，入口为 `extensions/execution.ts`；根扩展、测试与共享状态消费者使用同一 TS 源码路径。pi-condense 保留自己的来源目录和单行入口。不要重新引入编译副本或重复包清单。
 
-- `check` 同时执行 `check:core` 与 `check:codex`；后者保留原 Codex 的严格和可擦除语法检查。`vendor:check` 只检查 pi-condense；`vendor:build` / `vendor:fresh` 是该检查的别名，不生成 JS 或声明。
-- 项目与测试检查直接消费源码，不依赖本地残留的 `.d.ts`。condense 与 conversion 使用可擦除 TS 语法，本地模块导入显式写 `.ts`。
+- `check` 同时执行 `check:core` 与 `check:execution`；后者覆盖执行模块和 V8，保留严格及可擦除语法检查。`vendor:check` 只检查 pi-condense；`vendor:build` / `vendor:fresh` 是该检查的别名，不生成 JS 或声明。
+- 项目与测试检查直接消费源码，不依赖本地残留的 `.d.ts`。condense 与执行模块 使用可擦除 TS 语法，本地模块导入显式写 `.ts`。
 - 累计 `local.patch`、`vendor:patch` 和覆盖式 `vendor:sync` 已退休。上游更新在独立分支比较并选择性移植，源码与 Git 历史保存实际分歧。
 
 精确来源、许可、载荷范围与升级步骤见 [conversion UPSTREAM](provenance/codex-conversion/UPSTREAM.md) / [PATCHES](provenance/codex-conversion/PATCHES.md) 和 [condense UPSTREAM](../vendor/pi-condense/UPSTREAM.md) / [PATCHES](../vendor/pi-condense/PATCHES.md)。
 
 ## 发布与安装验证
 
-发布包携带运行 TS、condense 入口、tokenizer/WASM、本地二进制、提示文档、changelog、根 manifest 与许可/来源说明。Rust 来源和开发配置留在 Git。宿主现有 TS 加载器负责运行，本地/Git/npm 安装不增加编译步骤，不依赖开发 TypeScript 或 npm lifecycle。
+发布包携带运行 TS、condense 入口、shell parser WASM、本地二进制、提示文档、changelog、根 manifest 与许可/来源说明。Rust 来源和开发配置留在 Git。宿主现有 TS 加载器负责运行，本地/Git/npm 安装不增加编译步骤，不依赖开发 TypeScript 或 npm lifecycle。
 
 `native/tools` 和 `native/code-mode-host` 分别维护 Cargo workspace。固定 V8 的 host 发布构建仍使用 `scripts/build-code-mode-host-release.sh`；运行期优先解析 `assets/native-tools/code-mode/<platform>-<arch>`，随后查 `native/code-mode-host/target/release` 和原版本缓存。构建临时文件不进入发布包。
 
 `test/package.test.mjs` 检查实际 `npm pack --dry-run` 文件集合。变更交付范围时还需真实打包、解包并验证入口、动态资源、二进制内容及执行权限；本地路径、Git 初装/更新应分别在隔离 profile 验证。Git 更新会清理 ignored 文件，真实 npm 安装目录不能链接共享 node_modules。
 
-本地安装命令为 `pi install .`；Pi 0.87.1 更新扩展使用 `pi update --extensions`。重新加载后检查实际入口；不以源码直接导入替代安装证明。
+本地安装命令为 `pi install .`；Pi 0.99.1 更新扩展使用 `pi update --extensions`。重新加载后检查实际入口；不以源码直接导入替代安装证明。
 
 ## 代码与文档约定
 

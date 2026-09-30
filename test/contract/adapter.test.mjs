@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installAdapter, OWNED_CONVERSION_ENTRY } from "../../src/adapter.ts";
+import { installAdapter, OWNED_EXECUTION_ENTRY } from "../../src/adapter.ts";
 import { makeRenderers, TOOL_NAMES } from "../../src/renderers.ts";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
@@ -80,7 +80,7 @@ for (const [owner, names, builtin] of [
 }
 
 test("packaged patch and command rows share ownership boundaries while preserving native results and theme", (t) => {
-  let sourceInfo = { source: "git:metis", path: OWNED_CONVERSION_ENTRY };
+  let sourceInfo = { source: "git:metis", path: OWNED_EXECUTION_ENTRY };
   let enabled = true;
   let patchReady = true;
   let receivedTheme;
@@ -97,7 +97,7 @@ test("packaged patch and command rows share ownership boundaries while preservin
   const { Host, handle } = setup(t, [], {
     getTools: () => ["apply_patch", "exec_command"].map((name) => ({ name, sourceInfo })),
     enabled: () => enabled,
-    ownedApplyPatch: { sourcePath: OWNED_CONVERSION_ENTRY,
+    ownedApplyPatch: { sourcePath: OWNED_EXECUTION_ENTRY,
       renderCall: () => patchReady ? bindings.makeText("owned diff") : undefined },
     highlightOwnedCommand: (lines) => lines.map((line) => `colored:${line}`),
     renderOwnedCommand: (command, state, expanded, originalTheme) => {
@@ -130,12 +130,12 @@ test("packaged patch and command rows share ownership boundaries while preservin
   for (const source of [
     { source: "npm:other", path: "/other/dist/index.js" },
     { source: "builtin", path: "<builtin:exec_command>" },
-    { path: OWNED_CONVERSION_ENTRY },
+    { path: OWNED_EXECUTION_ENTRY },
   ]) {
     sourceInfo = source;
     for (const row of [patch, command]) assertNative(row);
   }
-  sourceInfo = { source: "git:metis", path: OWNED_CONVERSION_ENTRY };
+  sourceInfo = { source: "git:metis", path: OWNED_EXECUTION_ENTRY };
   handle.dispose();
   for (const row of [patch, command]) assertNative(row);
 });

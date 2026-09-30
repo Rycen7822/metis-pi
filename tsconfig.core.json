@@ -1,10 +1,26 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
-    "strict": true, "noUnusedLocals": true, "noUnusedParameters": true,
-    "noEmit": true, "allowImportingTsExtensions": true,
-    "skipLibCheck": true, "lib": ["ES2022"], "types": ["node"]
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "lib": [
+      "ES2024"
+    ],
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/codex/**"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/code-mode/**",
+    "src/execution/**"
+  ]
 }

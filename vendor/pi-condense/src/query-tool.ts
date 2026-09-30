@@ -74,6 +74,7 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
     promptGuidelines: ["Use context_tree_query to recover evidence omitted from pruner summaries. Follow nextCursor until the needed range or eof; incomplete pages and archive errors are not complete original outputs."],
     parameters: Type.Object({
       toolCallIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),
+      parentToolCallId: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "Recover the nested calls of this parent, including calls omitted from Pi's bounded nestedCalls." })),
       component: Type.Optional(Type.Union([Type.Literal("output"), Type.Literal("arguments")])),
       sourceEntryIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),
       cursor: Type.Optional(Type.String({ maxLength: 2048, description: "The previous response's nextCursor; keep toolCallIds unchanged." })),
@@ -84,8 +85,9 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
       const budget = params.maxBytes ?? MAX_BYTES;
       if (!Number.isSafeInteger(budget) || budget < 2048 || budget > MAX_BYTES) throw new Error("maxBytes must be between 2048 and 32768.");
       const component = params.component ?? "output";
-      if (params.sourceEntryIds && (params.toolCallIds || component !== "output")) throw new Error("Choose sourceEntryIds or toolCallIds, not both; arguments requires toolCallIds.");
-      if (component === "arguments" && !params.toolCallIds) throw new Error("Arguments requires toolCallIds.");
+      if ([params.sourceEntryIds, params.toolCallIds, params.parentToolCallId].filter(Boolean).length > 1) throw new Error("Choose sourceEntryIds, toolCallIds, or parentToolCallId, not multiple selectors.");
+      if (params.sourceEntryIds && component !== "output") throw new Error("Arguments requires toolCallIds or parentToolCallId.");
+      if (component === "arguments" && !params.toolCallIds && !params.parentToolCallId) throw new Error("Arguments requires toolCallIds or parentToolCallId.");
       const selected: Selection[] = params.sourceEntryIds ? params.sourceEntryIds.map(ref => {
         const entry = ctx.sessionManager.getBranch().find(entry => entry.id === ref);
         const allowed = entry && (entry.type === "message" || entry.type === "compaction"
@@ -94,13 +96,17 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
           toolCallId: ref, toolName: "historical-source", args: {}, isError: false, turnIndex: -1, timestamp: 0,
           resultText: JSON.stringify(entry),
         } : undefined };
-      }) : params.toolCallIds ? params.toolCallIds.flatMap((ref) => {
+      }) : params.parentToolCallId ? (() => {
+        const records = [...indexer.getIndex()].filter(([, r]) => r.parentToolCallId === params.parentToolCallId);
+        return records.length ? records.map(([ref, record]) => ({ ref, record })) : [{ ref: params.parentToolCallId }];
+      })() : params.toolCallIds ? params.toolCallIds.flatMap((ref) => {
         const records = indexer.getRecordsForId(ref);
         return records.length ? records.map((record) => ({ ref, record })) : [{ ref }];
       }) : [{ ref: "directory", record: {
         toolCallId: "directory", toolName: "evidence-directory", args: {}, isError: false, turnIndex: -1, timestamp: 0,
         resultText: [...indexer.getIndex()].map(([key, r]) => JSON.stringify({
           ref: indexer.getShortRefForToolCallId(key) ?? key, occurrence: key, tool: r.toolName,
+          parentToolCallId: r.parentToolCallId,
           status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
           argsPreview: JSON.stringify(r.args).slice(0, 256), archive: r.spillPath,
           archiveComplete: r.archiveComplete, source: r.archiveSource ?? "tool-result",

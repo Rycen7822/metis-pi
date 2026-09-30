@@ -1,9 +1,9 @@
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type TProperties, type TObject, type Static } from "typebox";
 import { createEditToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { executeFusion, fusionFailed, THEN_RUN_SCHEMA } from "../src/codex/execution/action-fusion.ts";
-import { runNativeFusionCommand } from "../src/codex/execution/action-fusion-command.ts";
-import { ACTION_FUSION_AVAILABILITY } from "../src/codex/execution/action-fusion-availability.ts";
+import { executeFusion, fusionFailed, THEN_RUN_SCHEMA } from "../src/execution/action-fusion.ts";
+import { runNativeFusionCommand } from "../src/execution/action-fusion-command.ts";
+import { ACTION_FUSION_AVAILABILITY } from "../src/execution/action-fusion-availability.ts";
 import { snapshotFile, computeWriteDiff } from "../src/write-tracker.ts";
 import { resolveNativeMutationPath } from "../src/native-tool-path.ts";
 export { resolveNativeMutationPath } from "../src/native-tool-path.ts";
@@ -58,7 +58,7 @@ export default function actionFusion(pi: ExtensionAPI): void {
     for (const name of ["edit", "write"] as const) {
       if (owned.has(name)) continue;
       const tool = pi.getAllTools().find(tool => tool.name === name);
-      if (tool?.sourceInfo?.source !== "builtin" || tool.sourceInfo.path !== `<builtin:${name}>`) continue;
+      if (tool?.sourceInfo?.source !== "builtin" || tool.sourceInfo.path !== `builtin:${name}`) continue;
       const definition = createNativeFusionTool(name, ctx.cwd);
       pi.registerTool({ ...definition, async execute(id, input, signal, update, context) {
         const controller = new AbortController();

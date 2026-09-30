@@ -465,6 +465,8 @@ export class ToolCallIndexer {
     for (const tc of batch.toolCalls) {
       const record: ToolCallRecord = {
         ...(archiveOnly ? { archiveOnly: true } : {}),
+        ...(tc.parentToolCallId ? { parentToolCallId: tc.parentToolCallId } : {}),
+        ...(tc.nestedProtected ? { nestedProtected: true } : {}),
         toolCallId: tc.toolCallId,
         toolName: tc.toolName,
         args: tc.args,

@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { captureBody, disableNetwork, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
-import { createCodexExtensionRuntime } from "../../src/codex/extension/runtime.ts";
+import { captureBody, disableNetwork, FAKE_API_KEY } from "../helpers/native-provider.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -34,7 +33,7 @@ async function host(t, converted, reverse = false, wholePackage = false) {
     baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
   await modelRuntime.setRuntimeApiKey(provider, converted ? FAKE_API_KEY : "offline");
-  const paths = [join(root, "extensions/dynamic-agents.ts"), ...(converted ? [join(root, "src/codex/extension.ts")] : [])];
+  const paths = [join(root, "extensions/dynamic-agents.ts"), ...(converted ? [join(root, "extensions/execution.ts")] : [])];
   const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, eventBus: bus,
     additionalExtensionPaths: wholePackage ? [] : reverse ? paths.reverse() : paths,
     noSkills: true, noThemes: true, noPromptTemplates: true, systemPrompt: "DYNAMIC_TEST" });
@@ -65,18 +64,14 @@ async function host(t, converted, reverse = false, wholePackage = false) {
 for (const [converted, reverse] of [[false, false], [true, false], [true, true]]) test(`run-boundary replacement preserves sources and project rules, converted=${converted}, reverse=${reverse}`, async t => {
   const h = await host(t, converted, reverse);
   const stateEntries = () => h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-dynamic-agents");
-  const warm = () => { const request = { kind: "prewarm", model: h.session.model, allowed: true }; h.bus.emit("metis:dynamic-agents", request); return request.allowed; };
-  assert.equal(warm(), false);
   await h.session.setModel(h.model("b")); await h.session.setModel(h.model("a"));
   assert.equal(stateEntries().length, 0); assert.equal(h.calls.length, 0);
   const first = await h.run();
   assert.match(JSON.stringify(first.context), /POLICY_A_SENTINEL/);
   assert.doesNotMatch(JSON.stringify(first.context), /NATIVE_GLOBAL_SENTINEL|POLICY_B_SENTINEL/);
-  assert.equal(warm(), true);
   const oldEntries = h.sm.getEntries().map(e => ({ id: e.id, text: JSON.stringify(e) }));
   const diskPrefix = readFileSync(h.sm.getSessionFile(), "utf8");
   await h.session.setModel(h.model("b"));
-  assert.equal(warm(), false);
   const second = await h.run();
   assert.match(JSON.stringify(second.context), /POLICY_B_SENTINEL/);
   assert.doesNotMatch(JSON.stringify(second.context), /POLICY_A_SENTINEL|NATIVE_GLOBAL_SENTINEL/);
@@ -186,18 +181,4 @@ test("whole package retains tools and applies dynamic policy", async t => {
   assert.doesNotMatch(body, /NATIVE_GLOBAL_SENTINEL/);
   const names = h.session.getActiveToolNames();
   for (const name of ["read", "write", "create_goal", "context_tree_query"]) assert.ok(names.includes(name), name);
-});
-
-test("actual prewarm entry defers unresolved models and uses the same history projection", async t => {
-  const h = await host(t, false);
-  const runtime = createCodexExtensionRuntime({ events: h.bus });
-  t.after(async () => { runtime.shutdownTransport(); await runtime.sessions.shutdown(); await runtime.shutdownDiagnostics(); });
-  let accesses = 0;
-  const pending = { get model() { if (++accesses > 1) throw new Error("Unresolved policy reached prewarm planning"); return h.model("a"); } };
-  assert.equal(runtime.startPrewarm(pending, "OLD_PROMPT"), undefined);
-  assert.equal(accesses, 1);
-  await h.run(); await h.session.setModel(h.model("b")); await h.run();
-  const messages = runtime.projectContextMessages({ model: h.session.model, cwd: h.cwd, sessionManager: h.sm });
-  const system = JSON.stringify(messages.filter(m => m.role === "system"));
-  assert.match(system, /POLICY_B_SENTINEL/); assert.doesNotMatch(system, /POLICY_A_SENTINEL/);
 });

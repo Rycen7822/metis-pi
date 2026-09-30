@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const hostRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
 const { createJiti } = hostRequire("jiti");
-const statePath = fileURLToPath(new URL("../../src/codex/execution/apply-patch/render-state.ts", import.meta.url));
+const statePath = fileURLToPath(new URL("../../src/execution/apply-patch/render-state.ts", import.meta.url));
 
 test("independent extension modules share patch state, compact policy and cleanup", async (t) => {
   const tool = createJiti(import.meta.url, { moduleCache: false, tryNative: false });
   const appearance = createJiti(import.meta.url, { moduleCache: false, tryNative: false });
   const toolState = await tool.import(statePath);
   const viewState = await appearance.import(statePath);
-  const brokerPath = fileURLToPath(new URL("../../src/codex/execution/apply-patch/display-broker.ts", import.meta.url));
+  const brokerPath = fileURLToPath(new URL("../../src/execution/apply-patch/display-broker.ts", import.meta.url));
   const toolBroker = await tool.import(brokerPath);
   const viewBroker = await appearance.import(brokerPath);
   assert.notEqual(toolState.setApplyPatchRenderState, viewState.setApplyPatchRenderState);

@@ -1,49 +1,52 @@
-# Codex 模块
+# 执行模块与 Pi 原生交接
 
-`src/codex/` 是 metis-pi 直接维护的模块，来源基于 `@howaboua/pi-codex-conversion` **3.0.34**。Pi 从 `src/codex/extension.ts` 加载 provider、执行工具和上下文能力；显示层只对明确属于本包的工具行做适配。
+需要 **Pi >=0.99.1**。入口为 `extensions/execution.ts`，执行工具在 `src/execution/`，独立 V8 编排在 `src/code-mode/`。模型目录、OAuth 登录、provider 请求、普通 compaction 和通用 Code Mode 由 Pi 负责。
 
-## 使用与配置
+## 选择工具
 
-通过 `/codex [tab]` 管理转换层设置，配置存于 `pi-codex-conversion.json`，独立于 `metis-pi.json`。已有独立 codex-conversion 安装应先禁用或移除，避免同名工具和命令重复注册。
+安装后沿用 Pi 的默认工具集合，不按模型名覆盖。metis 的 `exec_command`、`write_stdin`、`apply_patch`、`view_image` 注册为可供原生 `codemode` 调用的工具，不会自动替换 `bash/read/write/edit`。
 
-Codex 浏览器/设备码登录与凭据刷新由 Pi 原生 provider 管理；转换层不再额外申请 connector 权限。模型目录同样跟随 Pi，转换层保留自己的请求适配与执行工具。
+- 图片脚本用法：`image(await tools.view_image({path:"image.png"}))`；文本回退返回 `{description}`，可用 `text(result.description)`。
+- 原生编排：通过 Pi 的 `--tools` 或 `settings.json.defaultTools` 选择 `codemode`，可使用 Pi 的普通工具和 metis 执行工具。Pi CLI 自带该扩展；SDK 使用者需要加入 Pi 的 `createCodemodeExtension()`。
+- 长时间 V8 单元格：同时选择 `exec` 和 `wait`。例如 `pi --tools exec,wait`。`exec` 支持共享单元格 JSON 存储、长工具等待、主动让出及插话后继续观察；`wait` 续读或终止单元格。
+- 直接调用 metis 执行工具：把相应工具名加入自己的 Pi 工具集合。
+- 需要 goal、todo、回读等直接工具时，也将其保留在工具集合中；`--tools` 的选择范围由 Pi 决定。
 
-| 执行模式 | 主要工具 |
-| --- | --- |
-| normal | `exec_command`、`write_stdin`、`apply_patch`、`view_image` 等原生工具。 |
-| code | 通过 `exec` / `wait` 执行程序，并在程序中调用工具。 |
+启用 V8 时隐藏原生 `codemode` 声明及 V8 已适配的执行工具声明。未适配的直接工具仍可单独调用。V8 保留已有单元格专用适配和自定义 TOML 工具，不裸执行任意 Pi callable 工具：Pi 0.99.1 公开接口不能同时提供长期 cell 的原始上下文与完整原生权限管道。通用工具的权限/结果钩子通过原生 `codemode` 运行；V8 的嵌套拦截使用独立 preflight/completion 接口。
 
-具体注册集合受 provider 和模式配置影响。history/notes、上下文窗口及压缩组合另有设置；与自动精简的配合见 [condense](features/condense.md)，修改后执行命令见 [Action Fusion](features/action-fusion.md)。Code Mode 的 V8 运行时按需加载。
+## 执行配置
 
-后台 shell 面板使用可配置的 `alt+w` / `alt+q` / `alt+e` / `alt+r`。fullscreen 下单击展开/折叠与快捷键共享状态，拖动和滚轮不切换；regular 模式使用快捷键。默认 `alt+q` 可能与 Pi 冲突，可调整 `ui.backgroundShellPrevShortcut`。
+配置归入 `<agentDir>/metis-pi.json.execution`，受信任项目可在 `<cwd>/.pi/metis-pi.json.execution` 覆盖。显示配置继续仅使用全局文件。
 
-## 输出与资源保留
+```json
+{
+  "execution": {
+    "tools": { "autoReasoning": false, "customRustBinariesDir": "", "viewImageFallback": false, "plainCommandOutput": false },
+    "ui": { "toolRenaming": true, "compactTools": "off", "codeModeDetails": false, "backgroundShellWidget": true,
+      "backgroundShellToggleShortcut": "alt+w", "backgroundShellPrevShortcut": "alt+q", "backgroundShellNextShortcut": "alt+e", "backgroundShellCloseShortcut": "alt+r" }
+  }
+}
+```
 
-| 行为 | 边界 |
-| --- | --- |
-| exec 输出预算 | 非 TTY 默认 256 Mi 字符、TTY 默认 1 Mi 字符；超过 1 Mi 字符的缓冲转入私有临时 UTF-16 环形文件，磁盘仍受同一额度限制。 |
-| 结果读取 | 只读取本次所需尾部；观察退出并交付结果后释放完整缓冲，保留有界完成回放。未读退出结果留待后续 write_stdin 或关闭。 |
-| 取消 | 取消等待不会误杀进程或吞掉未读输出；取消执行/关闭会清理相关资源。 |
-| 存储失败 | 创建/写入失败退回原内存额度；不可恢复的读取错误明确失败。大结果请求仍可能造成瞬时内存峰值，tmpfs 仍占系统 RAM，强制杀进程可能留下临时文件。 |
-| 原文证据 | 执行归档、融合 journal 和 condense blobs 的寿命独立于显示环形缓冲；恢复与清理边界见功能页。 |
+`compactTools` 可选 `off`、`compact`、`minimal`。`/execution` 写全局配置，`/execution project` 写受信任项目配置，原子更新并保留其他 section/未知字段。快捷键改动需要重启；默认 `alt+q` 可能与宿主冲突，可设置上一项为 `alt+u`。
 
-WebSocket 成功路径不预先生成无用的 SSE 请求体；实际使用 SSE 或回退时才准备。请求快照避免重复持有同源历史，真实 replay 仍返回独立副本。该行为不缩减既有输出保留额度。
+`autoReasoning` 是小型工具策略：仅在有 reasoning 能力的模型上生效，以用户开始时的 thinking level 为下限，run 结束恢复仍由该策略持有的级别。它不更换模型、目录或 provider。
 
-## 请求契约
+`viewImageFallback` 默认关闭。开启后，文本模型的图片描述通过 Pi 注册表中已认证的 OpenAI Codex 图片模型生成；优先 mini，否则使用已可用的 gpt-5.6-luna。没有可用模型时明确报错，不虚构模型或另建登录。
 
-- live/prewarm 共用公共准备；普通预热不消费待处理窗口、不执行最终 replay 注入或 prompt 捕获。
-- history/notes 的字段规则共享，Remote、Tree 等模式的 wire 与持久化差异分别保留，每个请求使用自己的 schema 副本。
-- 正常请求、预热、压缩、回放和代理传输共同接受兼容性验证。模块所有权见 [架构](architecture.md)，Pi 会话变化见 [兼容性](compatibility.md)。
+## 输出与资源
 
-## 安装、平台与维护
+- `exec_command` / `write_stdin` 同时保留显示文本和稳定结构化结果；大输出继续放在会话旁 `<sessionId>-blobs/`，返回原文路径及完整性标志。
+- 非 TTY 默认返回可续读 session；TTY 保留输入/中断，结束结果与显示缓冲寿命分开。
+- Action Fusion 保留修改结果、命令状态、差异与完整日志；见 [融合调用](features/action-fusion.md)。
+- 原生 nested 调用及 V8 completion 归档复用 condense 的 indexer/spill。`context_tree_query({parentToolCallId})` 可回读父调用的子工具，包含 Pi 有界 UI 记录之外的结果；受保护、失败、未完成或归档失败的父结果不能自动精简掉。
+- Responses 图片请求按工具调用和图片序号恢复 detail。显式 original 的原始字节保存在会话 sidecar；不全局关闭 Pi 图片缩放。分叉沿用来源会话的图片归档；复制会话时应同时保留来源 blobs。原生输出 helper 无法保留同字节图片的不同 detail 身份，这种含混组合会明确报错，需分成独立 codemode 调用。
+- 默认原生路径不准备 V8 host。显式 V8 使用原有按需准备与缓存，host pin/协议不变。仅 Linux x64 提供随包原生工具；host 平台范围和来源见 [provenance](provenance/codex-conversion/UPSTREAM.md)。
 
-运行实现直接采用 TS，本地/Git/npm 安装免构建。根 manifest 统一版本和依赖；第三方 tokenizer/WASM 在 `vendor/`，Rust 源码在 `native/`，随包执行文件在 `assets/native-tools/`。旧 conversion 目录和转导出入口已移除；配置中旧入口的白名单和排除规则应使用新路径（排除项为 `-src/codex/extension.ts`），外部直接导入也需更新。配置文件和 host 缓存路径保持不变。
+## 旧安装与旧会话
 
-当前只内置 **linux-x64** 原生工具，语音功能及其源码已移除。其他平台需补齐并验证载荷。转换层不在启动时查询上游 npm 版本，随 metis-pi 一起更新；Pi 0.87.1 的扩展更新命令为 `pi update --extensions`。
+旧入口 `src/codex/extension.ts` 和 `/codex` 退出。Pi 包入口过滤应改为 `extensions/execution.ts`，外部执行接口导入改为 `src/code-mode/` 中的真实入口，不留旧路径转导出。
 
-上游更新采用独立分支选择性移植，源码/Git 历史保存实现分歧，累计 patch 与覆盖式 sync 已退休：
+旧 `pi-codex-conversion.json` 不再读取。将需要保留的 `tools` 四项和 `ui` 上述字段手工放入 `metis-pi.json.execution`；`executionMode` 改用 Pi 的工具选择。provider、scope、heavy prompt、prewarm/keepalive、Lite、Reserve、特殊 compaction/context 配置退出。更新不自动改写个人文件。
 
-- [UPSTREAM](provenance/codex-conversion/UPSTREAM.md)：固定来源、许可、载荷范围与升级步骤。
-- [PATCHES](provenance/codex-conversion/PATCHES.md)：本地行为修改。
-- [开发说明](development.md)：类型、安装与发布检查。
-- [VALIDATION](../VALIDATION.md)：真实后端、下载器与服务端的已测/未测范围。
+普通 Pi JSONL、普通 compaction 和 condense 归档继续使用。Local/Tree/Remote/Hybrid/V2 专有窗口与回放已退役：如需恢复，先备份指定会话和 sidecar，用升级前版本在隔离目录导出可读摘要/必要历史，再创建普通 Pi 会话。`[OpenAI native compaction checkpoint]` 是占位文字；opaque checkpoint 不能在本地解密，不代表已有可读摘要。保留原始文件与 Git 历史用于回退，不自动扫描或转换用户会话。

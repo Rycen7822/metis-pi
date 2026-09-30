@@ -67,6 +67,6 @@
 
 历史 session 只追加程序拥有的来源路径元数据，以便 reload 识别旧策略。请求投影按来源处理 system 的全局指令块，不把普通用户、assistant、工具结果或摘要正文当作策略。旧输出已经受到的语义影响不会消除，opaque 压缩状态也不会被解密改写。
 
-原生请求和 Codex conversion 使用同一策略，conversion 在 Reserve 确认最终模型后再核对。预热/keepalive 没有当前模型快照时跳过，有快照后使用相同投影。由主会话模型决定分组，辅助摘要模型不重新选组；正式 run 准备前的 Pi 容量压缩使用此前已生效的指令。condense、OCC、goal 的开关、额度和持久状态不改变。
+Pi 原生请求使用同一 run 策略快照；由主会话模型决定分组，辅助摘要模型不重新选组。正式 run 前的普通 compaction 使用此前已生效的指令。condense、OCC、goal 的开关、额度和持久状态不改变。
 
 相同策略不注入时间戳或计数；实际换策略会改变请求前缀，可能降低缓存命中。验证使用真实 Pi AgentSession、完整扩展加载及离线 provider payload，未证明付费服务端缓存效果，见 [VALIDATION](../../VALIDATION.md)。

@@ -6,8 +6,8 @@ import {
   BACKGROUND_BASH_WIDGET_ID,
   renderBackgroundBashWidget,
   registerBackgroundBashWidgetShortcuts,
-} from "../../src/codex/ui/background-bash-widget.ts";
-import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../src/codex/config/config-contract.ts";
+} from "../../src/execution/ui/background-shell-widget.ts";
+import { EXECUTION_DEFAULTS } from "../../src/execution/config.ts";
 
 function mouseEvent(type = "click", button = "left", y = 0) {
   return { type, button, x: 3, y, screenX: 3, screenY: y, width: 80, height: 20,
@@ -43,7 +43,7 @@ test("native widget gestures and shortcuts preserve selection, folding and clean
     assert.equal(host.extensionWidgetsBelow.size, 0, "background sessions occupy only the above-editor slot");
   } } };
   const render = () => renderBackgroundBashWidget(ctx, state, sessions);
-  registerBackgroundBashWidgetShortcuts({ registerShortcut: (key, handler) => shortcuts.set(key, handler) }, state, sessions, DEFAULT_CODEX_CONVERSION_CONFIG.ui, () => enabled);
+  registerBackgroundBashWidgetShortcuts({ registerShortcut: (key, handler) => shortcuts.set(key, handler) }, state, sessions, EXECUTION_DEFAULTS.ui, () => enabled);
   const frame = (width = 80) => host.widgetContainerAbove.render(width).join("\n");
   const click = () => host.widgetContainerAbove.handleMouse(mouseEvent("click", "left", 1));
   const key = key => shortcuts.get(key).handler(ctx);

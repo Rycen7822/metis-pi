@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-export const DYNAMIC_AGENTS = "metis:dynamic-agents";
 export const DYNAMIC_AGENTS_STATE = "metis-dynamic-agents";
 const GLOBAL_NAMES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 export type AgentFile = { path: string; content: string };

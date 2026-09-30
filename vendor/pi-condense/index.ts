@@ -25,6 +25,7 @@ import { FallbackController } from "./src/summarizer-fallback.ts";
 import { ToolCallIndexer } from "./src/indexer.ts";
 import { pruneMessages, toolResultStub } from "./src/pruner.ts";
 import { isProtected } from "./src/protected.ts";
+import { registerNestedCapture } from "./src/nested-capture.ts";
 import { registerQueryTool } from "./src/query-tool.ts";
 import { registerCommands, setPruneStatusWidget } from "./src/commands.ts";
 import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./src/summary-refs.ts";
@@ -72,6 +73,7 @@ export default function (pi: ExtensionAPI) {
 
   // Shared indexer — rebuilt from session on every session_start / session_tree
   const indexer = new ToolCallIndexer();
+  registerNestedCapture(pi, indexer, protectionPredicate);
   const occ = registerOcc(pi, indexer, currentConfig);
   let argumentHistory: ArgumentHistory[] = [];
   const restoreArguments = (ctx: ExtensionContext) => {
@@ -602,7 +604,7 @@ export default function (pi: ExtensionAPI) {
         const proposed = visible.map((message: any) => {
           if (message.role !== "toolResult") return message;
           const candidate = replacements.get(occKey(message.toolCallId, message.timestamp));
-          if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args)) return message;
+          if (!candidate || candidate.call.nestedProtected || protectionPredicate(candidate.call.toolName, candidate.call.args)) return message;
           replaced++;
           return toolResultStub(message, { ...candidate.call, turnIndex: archivedBatch.turnIndex, timestamp: archivedBatch.timestamp }, candidate.ref);
         });
@@ -949,7 +951,7 @@ export default function (pi: ExtensionAPI) {
       // CapturedBatch is pruned, which is exactly what we want.
       const filtered = {
         ...capturedBatch,
-        toolCalls: capturedBatch.toolCalls.filter((tc) => !protectionPredicate(tc.toolName, tc.args)),
+        toolCalls: capturedBatch.toolCalls.filter((tc) => !tc.nestedProtected && !protectionPredicate(tc.toolName, tc.args)),
       };
 
       // Eager spill: offload oversized single results to sidecar files before they

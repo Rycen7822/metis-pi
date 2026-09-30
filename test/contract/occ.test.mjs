@@ -100,7 +100,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   beforeLoad?.(sm, model);
   const eventBus = createEventBus();
   const resourceLoader = new DefaultResourceLoader({ eventBus, cwd: dir, agentDir: dir, settingsManager,
-    additionalExtensionPaths: installed ? [] : [join(root, "extensions/condense.ts"), join(root, "src/codex/extension.ts"), ...(goal ? [join(root, "extensions/goal.ts")] : [])],
+    additionalExtensionPaths: installed ? [] : [join(root, "extensions/condense.ts"), join(root, "extensions/execution.ts"), ...(goal ? [join(root, "extensions/goal.ts")] : [])],
     noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "OCC_TEST" });
   await resourceLoader.reload();
   const loaded = await createAgentSession({ cwd: dir, agentDir: dir, settingsManager, modelRuntime, resourceLoader, sessionManager: sm, model });
@@ -143,6 +143,28 @@ test("real AgentSession automatically commits OCC once, protects source requirem
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
   assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 1);
   assert.deepEqual(h.sm.buildSessionProjection().messages[0], JSON.parse(snapshot)[0]);
+  assert.deepEqual(h.errors, []);
+});
+
+for (const blocked of ["archiveFailed", "unfinished", "resolved"]) test(`OCC preserves unavailable nested evidence and accepts completed cells: ${blocked}`, async t => {
+  const h = await host(t, { beforeLoad(sm, model) {
+    const result = sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message;
+    sm.appendMessage({ role: "assistant", ...model, model: model.id, timestamp: 5, stopReason: "toolUse", usage,
+      content: [{ type: "toolCall", id: "cell-exec", name: "exec", arguments: { code: "text(1)" } }] });
+    sm.appendMessage({ ...result, toolCallId: "cell-exec", toolName: "exec", timestamp: 6,
+      content: [{ type: "text", text: "Cell yielded" }], details: { metisNested: { [blocked === "resolved" ? "unfinished" : blocked]: true } } });
+    if (blocked === "resolved") {
+      sm.appendMessage({ role: "assistant", ...model, model: model.id, timestamp: 8, stopReason: "toolUse", usage,
+        content: [{ type: "toolCall", id: "completed-wait", name: "wait", arguments: { cell_id: "cell" } }] });
+      sm.appendMessage({ ...result, toolCallId: "completed-wait", toolName: "wait", timestamp: 9,
+        content: [{ type: "text", text: "Cell completed" }],
+        details: { cellParentToolCallId: "cell-exec", metisNested: { unfinished: false } } });
+    }
+  } });
+  await h.session.prompt("Continue inspecting; preserve evidence."); await h.session.waitForIdle();
+  assert.equal(h.calls.filter(c => c.summarizing).length, blocked === "resolved" ? 1 : 0, JSON.stringify({ notices: h.notices,
+    state: h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1)?.data }));
+  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, blocked === "resolved" ? 1 : 0);
   assert.deepEqual(h.errors, []);
 });
 

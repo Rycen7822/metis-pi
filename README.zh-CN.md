@@ -2,17 +2,17 @@
 
 [English](README.md) | **简体中文**
 
-为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、todo、skill 输入、condense 和 Codex 模块。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 0.87.0**。
+为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、todo、skill 输入、condense 和执行工具。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 0.99.1**。
 
 ## 安装
 
-需要 Node.js >=22.19.0 和 Pi >=0.87.0。在本地检出目录运行：
+需要 Node.js >=22.19.0 和 Pi >=0.99.1。在本地检出目录运行：
 
 ```bash
 pi install .
 ```
 
-重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包已经包含 codex-conversion，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
+重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包保留独立执行工具，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
 
 可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-extensions/goal.ts"]`。详细用法见[功能手册](docs/README.md)。
 
@@ -28,12 +28,12 @@ pi install .
 | [todo](docs/features/todo.md) | 工作区持久任务列表、层级编号、依赖和可折叠面板；`/todos` 查看或恢复面板。 |
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
-| [Codex 模块](docs/codex.md) | 内置 provider、原生工具与 Code Mode，源码随本仓库维护。 |
+| [执行工具](docs/codex.md) | PTY、补丁、原图与可选 V8 `exec/wait`；provider、登录和默认 Code Mode 由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 与 apply_patch 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，覆盖 Code Mode 嵌套入口；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，沿用配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
 
-显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/condense/Codex 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。
+显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/todo/condense/execution 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。
 
 ## 兼容边界
 

@@ -1,6 +1,6 @@
 # Local patches: pi-codex-conversion 3.0.34
 
-Edit `src/codex/**` and run `npm run check:codex`. Paths below are relative to that module unless prefixed with a repository directory. Runtime and tests consume the canonical TS directly; the public entry is `src/codex/extension.ts`. Git history owns implementation changes; upstream updates are selectively ported using [UPSTREAM.md](UPSTREAM.md). There is no generated implementation tree, cumulative patch or whole-tree sync command.
+Edit retained `src/execution/**` and `src/code-mode/**`; run `npm run check:execution`. Public composition is `extensions/execution.ts`. Pi 0.99.1 owns providers/auth/catalog/native codemode and ordinary compaction. Special context/provider/prewarm/Reserve code and tokenizer payload have retired. Historical change notes below describe provenance, not current product features.
 
 ## 1. Pi 0.86/0.87 transcript, tool placement and compaction/replay
 

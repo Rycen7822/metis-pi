@@ -12,8 +12,7 @@ import { spillOversizedBatch } from "../../vendor/pi-condense/src/spill.ts";
 import { ToolCallIndexer } from "../../vendor/pi-condense/src/indexer.ts";
 import { registerQueryTool } from "../../vendor/pi-condense/src/query-tool.ts";
 import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
-import { ExecOutputArchive } from "../../src/codex/execution/exec/output-archive.ts";
-import { createCodexExtensionRuntime } from "../../src/codex/extension/runtime.ts";
+import { ExecOutputArchive } from "../../src/execution/exec/output-archive.ts";
 import goalExtension from "../../extensions/goal.ts";
 
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -107,16 +106,13 @@ test("packing precedes the 5000-char gate, archives exact output, and never re-c
   f.events.emit("metis:condense-project", request);
   const live = (await f.emit("context", { messages: projectBranchMessages(f.sm.getBranch()) })).messages;
   assert.deepEqual(request.messages, live, "projection bus and live use the same projection");
-  const runtime = createCodexExtensionRuntime(f.pi);
-  t.after(async () => { runtime.shutdownTransport(f.sm.getSessionId()); await runtime.sessions.shutdown(); await runtime.shutdownDiagnostics(); });
-  assert.deepEqual(runtime.projectContextMessages(f.ctx), live, "actual Codex runtime consumes the settled condense projection");
   assert.deepEqual(live.slice(0, before.length), before, "later final replies do not rewrite old settled blocks");
   assert.equal(f.calls.length, 0);
   assert.equal(f.sm.getBranch().filter(e => e.type === "custom_message" && e.details?.representation === "packed").length, 1);
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0);
 });
 
-test("one model decision at the final boundary retains code-owned refs and blocks speculative prewarm", async (t) => {
+test("one model decision at the final boundary retains code-owned refs and reports an unsettled projection", async (t) => {
   const f = await fixture(t, { reply: "A short useful summary with no reference labels.", defer: true });
   const call = f.add("important detail\n".repeat(700), "inspect-unknown-tool");
   const pending = f.finish();
@@ -125,11 +121,6 @@ test("one model decision at the final boundary retains code-owned refs and block
   const request = { sessionId: f.sm.getSessionId(), messages: projectBranchMessages(f.sm.getBranch()) };
   f.events.emit("metis:condense-project", request);
   assert.equal(request.busy, true);
-  const runtime = createCodexExtensionRuntime(f.pi);
-  t.after(async () => { runtime.shutdownTransport(f.sm.getSessionId()); await runtime.sessions.shutdown(); await runtime.shutdownDiagnostics(); });
-  const warming = { ...f.ctx, getSystemPrompt: () => { throw new Error("busy projection must stop prewarm before preparing a request"); } };
-  assert.equal(runtime.startCompactionPrewarm(warming), undefined);
-  assert.equal(runtime.waitForPrewarm(warming, "FIXED"), undefined);
   f.release(); await pending;
   const summary = f.sm.getBranch().find(e => e.type === "custom_message" && e.details?.representation === "summary");
   assert.ok(summary);
@@ -181,6 +172,33 @@ test("session restore drops the previous queue while a tree switch keeps its own
   assert.equal(f.calls.length, 2, "the tree probe re-arms only this branch's unindexed work");
   assert.equal(f.widgets.filter(([id]) => id === "pruner-boot").length, 1);
   assert.match(f.statuses.get("context-prune"), /prune: ON/, "session_tree keeps the loaded config");
+});
+
+test("nested results retain prepared arguments, structured output and denied evidence across reload", async t => {
+  const f = await fixture(t), body = "exact child output\n".repeat(350);
+  const parent = f.add("native presentation", "", "nested-parent");
+  parent.assistant.content[0].name = parent.result.toolName = "codemode";
+  await f.emit("tool_execution_start", { toolCallId: "nested-read", parentToolCallId: parent.id, toolName: "read", args: { path: "draft" } });
+  await f.emit("tool_call", { toolCallId: "nested-read", toolName: "read", input: { path: "skills/example/SKILL.md" } });
+  await f.emit("tool_execution_end", { toolCallId: "nested-read", parentToolCallId: parent.id, toolName: "read", isError: false,
+    result: { content: [{ type: "text", text: body }], structuredContent: { complete: true }, details: {} } });
+  await f.emit("tool_execution_start", { toolCallId: "nested-denied", parentToolCallId: parent.id, toolName: "bash", args: { command: "denied" } });
+  await f.emit("tool_execution_end", { toolCallId: "nested-denied", parentToolCallId: parent.id, toolName: "bash", isError: true,
+    result: { content: [{ type: "text", text: "Permission denied" }], details: {} } });
+  Object.assign(parent.result, await f.emit("tool_result", parent.result));
+  assert.equal(parent.result.details.metisNested.protected, true);
+  assert.equal(parent.result.details.metisNested.hasError, true);
+  assert.equal(parent.result.details.metisNested.archiveFailed, false);
+  await f.emit("tool_execution_end", { toolCallId: parent.id, result: parent.result });
+  await f.finish();
+  assert.equal(f.calls.length, 0, "protected child evidence keeps its parent out of local summaries");
+  await f.emit("session_start");
+  const query = params => f.tools.get("context_tree_query").execute("q", { parentToolCallId: parent.id, maxBytes: 32768, ...params }, undefined, undefined, f.ctx);
+  const recalled = (await query({})).details.results;
+  assert.equal(recalled.length, 2);
+  assert.equal(recalled.find(r => r.tool === "read").text, body + '\n\n[Structured content]\n{"complete":true}');
+  assert.equal(recalled.find(r => r.tool === "bash").status, "ERROR");
+  assert.match(JSON.stringify((await query({ component: "arguments" })).details), /skills\/example\/SKILL.md/);
 });
 
 test("execution archives survive display eviction, and recall pins append-only snapshots across growth", async (t) => {

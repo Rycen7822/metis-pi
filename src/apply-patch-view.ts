@@ -1,16 +1,16 @@
 // Read the conversion layer's pre-execution snapshot; never rebuild a diff from
 // files that the tool has already changed. Painting is shared with edit/write.
-import { getApplyPatchRenderSnapshot } from "./codex/execution/apply-patch/render-state.ts";
-import { shouldCompactApplyPatchDisplay } from "./codex/execution/apply-patch/display-broker.ts";
-import { formatPatchTarget } from "./codex/execution/apply-patch/rendering.ts";
-import { OWNED_CONVERSION_ENTRY, type AdapterOptions } from "./adapter.ts";
+import { getApplyPatchRenderSnapshot } from "./execution/apply-patch/render-state.ts";
+import { shouldCompactApplyPatchDisplay } from "./execution/apply-patch/display-broker.ts";
+import { formatPatchTarget } from "./execution/apply-patch/rendering.ts";
+import { OWNED_EXECUTION_ENTRY, type AdapterOptions } from "./adapter.ts";
 import type { DiffRow } from "./diff.ts";
 import { productFor, publishRows, registerProduct, type CopyRow } from "./selection-copy/model.ts";
 import { safeText, type Component, type DiffFactory, type TextFactory } from "./tool-names.ts";
 
 export function createOwnedApplyPatchView(makeText: TextFactory, makeDiff: DiffFactory, expandHint: () => string): NonNullable<AdapterOptions["ownedApplyPatch"]> {
   return {
-    sourcePath: OWNED_CONVERSION_ENTRY,
+    sourcePath: OWNED_EXECUTION_ENTRY,
     renderCall(_args, theme, context) {
       const snapshot = context.toolCallId ? getApplyPatchRenderSnapshot(context.toolCallId) : undefined;
       // Streaming, replay without a snapshot, and failures keep the native

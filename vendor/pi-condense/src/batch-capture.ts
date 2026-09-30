@@ -3,6 +3,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { isChainAnchorCustom } from "./chain-detector.ts";
+import { hasProtectedNestedResults } from "./protected.ts";
 
 /**
  * Unwraps a SessionEntry[] branch into AgentMessage-like objects, including
@@ -54,6 +55,22 @@ export function extractToolResultText(msg: any): string {
     .join("\n");
 }
 
+export function captureToolResult(toolCallId: string, toolName: string, args: Record<string, unknown>, match: any): CapturedToolCall {
+  const resultTimestamp = match ? resultTimestampOf(match.timestamp) : undefined;
+  return {
+    toolCallId, toolName, args, resultText: match ? extractToolResultText(match) : "(no result)",
+    isError: (match?.isError ?? false) || match?.details?.metisNested?.hasError === true,
+    ...(hasProtectedNestedResults(match?.details) ? { nestedProtected: true, nestedRootToolCallId: match?.details?.cellParentToolCallId ?? toolCallId } : {}),
+    ...(toolName === "exec_command" && typeof match?.details?.exit_code === "number" ? { exitCode: match.details.exit_code } : {}),
+    ...(["bash", "exec_command", "write_stdin"].includes(toolName) && typeof match?.details?.fullOutputPath === "string"
+      ? { outputArchive: { path: match.details.fullOutputPath,
+          ...(typeof match.details.fullOutputBytes === "number" ? { bytes: match.details.fullOutputBytes } : {}),
+          complete: match.details.fullOutputComplete !== false, appendOnly: match.details.fullOutputAppendOnly === true } } : {}),
+    ...(resultTimestamp !== undefined ? { resultTimestamp } : {}),
+    ...captureFusionResult(match), ...captureFusionJournal(match),
+  };
+}
+
 /**
  * Converts turn_end event data into a CapturedBatch.
  * @param message      AssistantMessage (content: Array of TextContent|ThinkingContent|ToolCall)
@@ -80,33 +97,7 @@ export function captureBatch(
     .map((block: any) => {
       const match = toolResults.find((result: any) => result.toolCallId === block.id);
 
-      let resultText = "(no result)";
-      let isError = false;
-      const resultTimestamp = match ? resultTimestampOf(match.timestamp) : undefined;
-
-      if (match) {
-        resultText = extractToolResultText(match);
-        isError = match.isError ?? false;
-      }
-
-      return {
-        toolCallId: block.id,
-        toolName: block.name,
-        args: block.input ?? block.args ?? block.arguments ?? {},
-        resultText,
-        isError,
-        ...(block.name === "exec_command" && typeof match?.details?.exit_code === "number" ? { exitCode: match.details.exit_code } : {}),
-        ...(["bash", "exec_command", "write_stdin"].includes(block.name) && typeof match?.details?.fullOutputPath === "string"
-          ? { outputArchive: {
-              path: match.details.fullOutputPath,
-              ...(typeof match.details.fullOutputBytes === "number" ? { bytes: match.details.fullOutputBytes } : {}),
-              complete: match.details.fullOutputComplete !== false,
-              appendOnly: match.details.fullOutputAppendOnly === true,
-            } } : {}),
-        ...(resultTimestamp !== undefined ? { resultTimestamp } : {}),
-        ...captureFusionResult(match),
-        ...captureFusionJournal(match),
-      } satisfies CapturedToolCall;
+      return captureToolResult(block.id, block.name, block.input ?? block.args ?? block.arguments ?? {}, match);
     });
 
   return { turnIndex, timestamp, assistantText, toolCalls };
@@ -123,7 +114,7 @@ export function captureBatch(
 export function captureUnindexedBatchesFromSession(
   branch: any[],
   indexer: { isSummarized(id: string): boolean },
-  exclude: (toolName: string, args: unknown) => boolean = () => false,
+  exclude?: (toolName: string, args: unknown) => boolean,
   sourceTurnIndices?: ReadonlyMap<string, number>,
 ): CapturedBatch[] {
   // Keep the SessionEntry wrapper alongside each projected message so the
@@ -187,8 +178,9 @@ export function captureUnindexedBatchesFromSession(
       if (!id) return false;
       const result = turnResults.get(id);
       if (!result) return false;
+      if (hasProtectedNestedResults(result.details) && exclude) return false;
       if (indexer.isSummarized(occKey(id, resultTimestampOf(result.timestamp)))) return false;
-      if (exclude(tc.name, tc.input ?? tc.arguments)) return false;
+      if (exclude?.(tc.name, tc.input ?? tc.arguments)) return false;
       return true;
     });
 

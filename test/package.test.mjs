@@ -16,9 +16,9 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("package exposes display, goal, todo, condense, dynamic-agents and codex entries", () => {
+test("package exposes display, goal, todo, condense, dynamic-agents and execution entries", () => {
   const pkg = load("package.json");
-  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./src/codex/extension.ts"]);
+  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
   const packed = Object.values(JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
@@ -31,14 +31,14 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex en
   }
   for (const path of [
     "src/changelog.ts", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
-    "vendor/js-tiktoken/ranks/o200k_base.js", "src/codex/execution/code-mode/CUSTOM-TOOLS.md",
+    "src/code-mode/CUSTOM-TOOLS.md",
     "assets/native-tools/exec/linux-x64/exec_bridge", "assets/native-tools/apply-patch/linux-x64/apply_patch",
     "assets/native-tools/view-image/linux-x64/view_image", "native/code-mode-host/NOTICE",
     "docs/provenance/codex-conversion/LICENSE", "docs/provenance/codex-conversion/UPSTREAM.md",
     "docs/provenance/codex-conversion/PATCHES.md",
   ]) assert.ok(files.has(path), path);
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
-  assert.ok(files.has("src/codex/extension.ts"));
+  assert.ok(files.has("extensions/execution.ts"));
   assert.ok(files.has("vendor/pi-condense/index.ts"));
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
