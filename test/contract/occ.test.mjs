@@ -146,25 +146,19 @@ test("real AgentSession automatically commits OCC once, protects source requirem
   assert.deepEqual(h.errors, []);
 });
 
-for (const blocked of ["archiveFailed", "unfinished", "resolved"]) test(`OCC preserves unavailable nested evidence and accepts completed cells: ${blocked}`, async t => {
+for (const blocked of ["archiveFailed", "unfinished"]) test(`OCC preserves unavailable native nested evidence: ${blocked}`, async t => {
   const h = await host(t, { beforeLoad(sm, model) {
     const result = sm.getBranch().find(e => e.type === "message" && e.message.role === "toolResult").message;
     sm.appendMessage({ role: "assistant", ...model, model: model.id, timestamp: 5, stopReason: "toolUse", usage,
-      content: [{ type: "toolCall", id: "cell-exec", name: "exec", arguments: { code: "text(1)" } }] });
-    sm.appendMessage({ ...result, toolCallId: "cell-exec", toolName: "exec", timestamp: 6,
-      content: [{ type: "text", text: "Cell yielded" }], details: { metisNested: { [blocked === "resolved" ? "unfinished" : blocked]: true } } });
-    if (blocked === "resolved") {
-      sm.appendMessage({ role: "assistant", ...model, model: model.id, timestamp: 8, stopReason: "toolUse", usage,
-        content: [{ type: "toolCall", id: "completed-wait", name: "wait", arguments: { cell_id: "cell" } }] });
-      sm.appendMessage({ ...result, toolCallId: "completed-wait", toolName: "wait", timestamp: 9,
-        content: [{ type: "text", text: "Cell completed" }],
-        details: { cellParentToolCallId: "cell-exec", metisNested: { unfinished: false } } });
-    }
+      content: [{ type: "toolCall", id: "native-parent", name: "codemode", arguments: { code: "text(1)" } }] });
+    sm.appendMessage({ ...result, toolCallId: "native-parent", toolName: "codemode", timestamp: 6,
+      content: [{ type: "text", text: "Nested evidence unavailable" }], details: { metisNested: { [blocked]: true } } });
+
   } });
   await h.session.prompt("Continue inspecting; preserve evidence."); await h.session.waitForIdle();
-  assert.equal(h.calls.filter(c => c.summarizing).length, blocked === "resolved" ? 1 : 0, JSON.stringify({ notices: h.notices,
+  assert.equal(h.calls.filter(c => c.summarizing).length, 0, JSON.stringify({ notices: h.notices,
     state: h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1)?.data }));
-  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, blocked === "resolved" ? 1 : 0);
+  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 0);
   assert.deepEqual(h.errors, []);
 });
 

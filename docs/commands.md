@@ -25,7 +25,7 @@
 | `create_goal` / `get_goal` / `update_goal` | 显式授权、预算、完成与阻塞规则见 [goal](features/goal.md)。 |
 | `context_tree_query` | 证据目录、工具输出/参数及历史消息分页恢复，见 [condense](features/condense.md)。 |
 | `exec_command` / `write_stdin` / `exec` / `wait` 等 | 工具由 Pi 集合选择，见 [执行模块](codex.md)。 |
-| `edit` / `write` / `apply_patch` 的 `then_run` | 启用 Action Fusion 时可在修改后执行显式命令，见 [融合调用](features/action-fusion.md)。 |
+| `edit` / `write` 的 `then_run` | 启用 Action Fusion 时可在修改后执行显式命令，见 [融合调用](features/action-fusion.md)。 |
 
 显示适配只认领明确的 Pi 内建来源及本包执行模块的指定工具。第三方同名工具保留自身 renderer；独立安装同名 todo/condense/execution 扩展仍需按各功能页处理冲突。
 

@@ -3,8 +3,8 @@ import { dirname, join } from "node:path";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const EXECUTION_DEFAULTS = {
-  tools: { autoReasoning: false, customRustBinariesDir: "", viewImageFallback: false, plainCommandOutput: false },
-  ui: { toolRenaming: true, compactTools: "off" as "off" | "compact" | "minimal", codeModeDetails: false,
+  tools: { autoReasoning: false, customRustBinariesDir: "", viewImageFallback: false },
+  ui: { toolRenaming: true,
     backgroundShellWidget: true, backgroundShellToggleShortcut: "alt+w", backgroundShellPrevShortcut: "alt+q",
     backgroundShellNextShortcut: "alt+e", backgroundShellCloseShortcut: "alt+r" },
 };
@@ -23,7 +23,6 @@ function merge(config: ExecutionConfig, section: any): ExecutionConfig {
       const value = section?.[group]?.[key];
       const target = result[group] as Record<string, unknown>;
       if (typeof value !== typeof target[key]) continue;
-      if (key === "compactTools" && !["off", "compact", "minimal"].includes(value)) continue;
       target[key] = value;
     }
   }

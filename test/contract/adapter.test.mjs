@@ -69,7 +69,7 @@ test("one native row survives install, duplicate install, disable and disposal w
 for (const [owner, names, builtin] of [
   ["FFF overrides", ["grep", "find"], false],
   ["other extensions", ["read", "write", "edit", "bash", "ls"], false],
-  ["outside takeover list", ["web_search", "get_search_content", "fetch_content", "mcp", "mcp_search", "session_search", "fffind", "ffgrep", "exec_command", "apply_patch", "subagent", "lsp", "ask_user_question"], true],
+  ["outside takeover list", ["web_search", "get_search_content", "fetch_content", "mcp", "mcp_search", "session_search", "fffind", "ffgrep", "exec_command", "subagent", "lsp", "ask_user_question"], true],
 ]) {
   test(`${owner}: both native renderers remain unchanged`, (t) => {
     const { Host, handle } = setup(t, names.map((name) => toolInfo(name, builtin)));
@@ -79,14 +79,10 @@ for (const [owner, names, builtin] of [
   });
 }
 
-test("packaged patch and command rows share ownership boundaries while preserving native results and theme", (t) => {
+test("packaged command rows preserve ownership boundaries, native results and theme", (t) => {
   let sourceInfo = { source: "git:metis", path: OWNED_EXECUTION_ENTRY };
   let enabled = true;
-  let patchReady = true;
   let receivedTheme;
-  const patchDefinition = {
-    renderCall: () => bindings.makeText("native patch"), renderResult: () => bindings.makeText("native result"),
-  };
   const commandDefinition = {
     renderCall(_args, theme) {
       receivedTheme = theme;
@@ -95,19 +91,15 @@ test("packaged patch and command rows share ownership boundaries while preservin
     renderResult: () => bindings.makeText("native result"),
   };
   const { Host, handle } = setup(t, [], {
-    getTools: () => ["apply_patch", "exec_command"].map((name) => ({ name, sourceInfo })),
+    getTools: () => [{ name: "exec_command", sourceInfo }],
     enabled: () => enabled,
-    ownedApplyPatch: { sourcePath: OWNED_EXECUTION_ENTRY,
-      renderCall: () => patchReady ? bindings.makeText("owned diff") : undefined },
     highlightOwnedCommand: (lines) => lines.map((line) => `colored:${line}`),
     renderOwnedCommand: (command, state, expanded, originalTheme) => {
       assert.equal(originalTheme, theme);
       return bindings.makeText(`${state}:${expanded}:${command}`);
     },
   });
-  const patch = new Host("apply_patch", patchDefinition);
   const command = new Host("exec_command", commandDefinition);
-  assert.match(plain(patch), /owned diff/);
   assert.match(plain(command), /colored:printf hi/);
   assert.equal(command.getRenderShell(), "default");
   command.getCallRenderer()({}, theme, {});
@@ -115,17 +107,11 @@ test("packaged patch and command rows share ownership boundaries while preservin
   assert.equal(theme.highlightCommandLines, undefined);
   assert.equal(theme.renderCommandCall, undefined);
   assert.deepEqual(receivedTheme.renderCommandCall("raw command", "done", true).render(80), ["done:true:raw command"]);
-  for (const row of [patch, command]) {
-    row.updateResult({ content: [] });
-    assert.match(plain(row), /native result/);
-  }
-  assert.equal(patch.toolDefinition, patchDefinition);
+  command.updateResult({ content: [] });
+  assert.match(plain(command), /native result/);
   assert.equal(command.toolDefinition, commandDefinition);
-  patchReady = false;
-  patch.updateDisplay();
-  assert.match(plain(patch), /native patch/, "unavailable owned diff falls back");
   enabled = false;
-  for (const row of [patch, command]) assertNative(row);
+  assertNative(command);
   enabled = true;
   for (const source of [
     { source: "npm:other", path: "/other/dist/index.js" },
@@ -133,11 +119,11 @@ test("packaged patch and command rows share ownership boundaries while preservin
     { path: OWNED_EXECUTION_ENTRY },
   ]) {
     sourceInfo = source;
-    for (const row of [patch, command]) assertNative(row);
+    assertNative(command);
   }
   sourceInfo = { source: "git:metis", path: OWNED_EXECUTION_ENTRY };
   handle.dispose();
-  for (const row of [patch, command]) assertNative(row);
+  assertNative(command);
 });
 
 test("an earlier patch on ANY intercepted method prevents installation, atomically", (t) => {

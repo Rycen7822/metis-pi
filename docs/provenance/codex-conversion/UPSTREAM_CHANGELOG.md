@@ -1,3 +1,5 @@
+> Archived upstream release history; this is not the current metis-pi feature list.
+
 # Changelog
 
 ## 3.0.34

@@ -36,7 +36,7 @@ export function argumentCandidates(entries: Array<{ sourceEntry: any; messages: 
       || results.some(result => result.isError !== false || typeof result.timestamp !== "number")
       || calls.some(call => results.filter(result => result.toolCallId === call.id).length !== 1)) continue;
     const batch = captureBatch(start.message, results, -1, start.message.timestamp);
-    if (batch.toolCalls.some(call => !["write", "edit", "apply_patch"].includes(call.toolName)
+    if (batch.toolCalls.some(call => !["write", "edit"].includes(call.toolName)
       || call.isError || call.archiveComplete === false || call.outputArchive?.complete === false
       || isProtected(call.toolName, call.args, protection))) continue;
     if (batch.toolCalls.reduce((sum, call) => sum + JSON.stringify(call.args).length, 0) < 5000) continue;

@@ -39,21 +39,11 @@ for (const reverseOrder of [false, true]) test(`fusion entry controls native and
   for (const disabled of reverseOrder ? [false] : [false, true, false]) {
     if (!reverseOrder) { settingsManager.setPackages(packages(disabled)); await session.reload(); }
     const tools = session.extensionRunner.getAllRegisteredTools().map(tool => tool.definition);
-    const patch = tools.find(tool => tool.name === "apply_patch");
-    assert.ok(patch, "conversion remains loaded when fusion is disabled");
-    assert.equal(Boolean(patch.parameters.properties.then_run), !disabled);
+    assert.ok(tools.find(tool => tool.name === "exec_command"), "terminal remains available when fusion is disabled");
     for (const name of ["edit", "write"]) assert.equal(Boolean(tools.find(tool => tool.name === name)?.parameters.properties.then_run), !disabled);
     const availability = { enabled: false };
     events.emit("metis:action-fusion-availability", availability);
     assert.equal(availability.enabled, !disabled, "reload must not retain the previous entry's availability");
-    if (disabled) {
-      const input = "*** Begin Patch\n*** Add File: disabled-patch\n+ordinary patch still works\n*** End Patch";
-      const ctx = { cwd, sessionManager: session.sessionManager };
-      await assert.rejects(patch.execute("disabled", { input, then_run: { command: "exit 0" } }, undefined, undefined, ctx), /Action Fusion is disabled/);
-      assert.equal(existsSync(join(cwd, "disabled-patch")), false);
-      await patch.execute("plain", { input }, undefined, undefined, ctx);
-      assert.equal(readFileSync(join(cwd, "disabled-patch"), "utf8"), "ordinary patch still works\n");
-    }
   }
   assert.deepEqual(errors, []);
 });

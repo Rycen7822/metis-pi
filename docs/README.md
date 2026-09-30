@@ -20,7 +20,7 @@
 | 复制与文字 | [逻辑选区复制](features/selection-copy.md) · [字形呈现](features/glyphs.md) · [多 skill 输入](features/skills.md) |
 | 任务管理 | [todo](features/todo.md) · [goal](features/goal.md) |
 | 上下文与执行 | [历史压缩、原文恢复与 OCC](features/condense.md) · [动态全局指令](features/dynamic-agents.md) · [修改后执行命令](features/action-fusion.md) |
-| 执行模块 | [Pi 原生交接、V8 与执行资源](codex.md) |
+| 执行模块 | [Pi 原生 codemode 与执行补充](codex.md) |
 
 ## 开发与维护
 

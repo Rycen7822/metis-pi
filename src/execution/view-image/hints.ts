@@ -16,7 +16,7 @@ export function registerImageHints(pi: ExtensionAPI): void {
   const clear = () => { requestHints.clear(); nested.clear(); };
   pi.on("session_start", clear); pi.on("session_tree", clear); pi.on("session_shutdown", clear);
   pi.on("tool_result", async (event, ctx) => {
-    if (!["exec", "wait", "view_image", "codemode"].includes(event.toolName)) return;
+    if (!["view_image", "codemode"].includes(event.toolName)) return;
     const inherited = nested.get(event.toolCallId);
     const hints: Hint[] = [];
     for (const item of event.content) {

@@ -10,11 +10,12 @@ export function hasProtectedNestedResults(details: any): boolean {
   return !!(nested?.protected || nested?.hasError || nested?.archiveFailed || nested?.unfinished);
 }
 
-/** Latest persisted cell observation supersedes an earlier yielded snapshot. */
+/** Keep archive failures and the latest pending state for each parent call. */
 export function hasUnavailableNestedEvidence(messages: readonly any[]): boolean {
   const roots = new Map<string, { archiveFailed: boolean; unfinished: boolean }>();
   for (const message of messages) {
     if (message.role !== "toolResult" || !message.details?.metisNested) continue;
+    // Persisted cell results share a parent ID even when their outer call IDs differ.
     const details = message.details, root = details.cellParentToolCallId ?? message.toolCallId;
     const prior = roots.get(root);
     roots.set(root, { archiveFailed: !!(prior?.archiveFailed || details.metisNested.archiveFailed), unfinished: !!details.metisNested.unfinished });

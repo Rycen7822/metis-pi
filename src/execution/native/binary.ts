@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TOOL_DIRS: Record<string, string> = {
-	apply_patch: "apply-patch",
 	exec_bridge: "exec",
 	view_image: "view-image",
 };

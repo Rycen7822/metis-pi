@@ -43,7 +43,6 @@ test("Pi owns the provider and tool selection while native codemode calls struct
   assert.equal(modelRuntime.getRegisteredNativeProvider("openai"), native);
   const initial = loaded.session.getActiveToolNames();
   for (const name of ["read", "bash", "write"]) assert.ok(initial.includes(name), name);
-  assert.ok(!initial.includes("exec"));
   loaded.session.setActiveToolsByName([...initial, "codemode"]);
   await loaded.session.prompt("Run the proof"); await loaded.session.waitForIdle();
   assert.deepEqual(errors, []);
@@ -55,12 +54,4 @@ test("Pi owns the provider and tool selection while native codemode calls struct
   const child = children.find(call => call.toolName === "exec_command");
   assert.equal(child.result.structuredContent.output, "native-proof");
   assert.equal(child.result.structuredContent.exit_code, 0);
-  loaded.session.setActiveToolsByName(["read", "codemode", "exec", "wait"]);
-  // Loadout hides the second orchestrator and direct callable declarations on the wire.
-  calls.length = 1;
-  await loaded.session.prompt("Inspect the loadout"); await loaded.session.waitForIdle();
-  const declared = calls.at(-1).messages.flatMap(message => message.role === "system" ? message.toolsAdded ?? [] : []).map(tool => tool.name);
-  assert.ok(declared.includes("exec") && declared.includes("wait"), JSON.stringify(calls.at(-1).messages.filter(message => message.role === "system")));
-  assert.ok(!declared.includes("codemode"));
-  assert.ok(declared.includes("read"), "unadapted callable declarations stay available");
 });

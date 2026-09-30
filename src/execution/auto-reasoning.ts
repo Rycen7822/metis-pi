@@ -1,8 +1,5 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-
-
-
 import { auxiliaryToolRenderers, displayRecord } from "./ui/auxiliary-tool.ts";
 
 type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -38,7 +35,7 @@ export function createAutoReasoning(pi: ExtensionAPI, enabled: () => boolean): A
 		},
 		tool: {
 			name: "change_reasoning",
-			exposure: "codemode",
+			exposure: "hidden",
 			label: "Change Reasoning",
 			description: "Adjust effort by work phase, not per tool call; user starting level is the floor, restored when the run settles",
 			parameters: PARAMETERS,

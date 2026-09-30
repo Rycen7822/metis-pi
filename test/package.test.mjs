@@ -31,9 +31,8 @@ test("package exposes display, goal, todo, condense, dynamic-agents and executio
   }
   for (const path of [
     "src/changelog.ts", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
-    "src/code-mode/CUSTOM-TOOLS.md",
-    "assets/native-tools/exec/linux-x64/exec_bridge", "assets/native-tools/apply-patch/linux-x64/apply_patch",
-    "assets/native-tools/view-image/linux-x64/view_image", "native/code-mode-host/NOTICE",
+    "assets/native-tools/exec/linux-x64/exec_bridge",
+    "assets/native-tools/view-image/linux-x64/view_image",
     "docs/provenance/codex-conversion/LICENSE", "docs/provenance/codex-conversion/UPSTREAM.md",
     "docs/provenance/codex-conversion/PATCHES.md",
   ]) assert.ok(files.has(path), path);

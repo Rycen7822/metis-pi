@@ -74,9 +74,9 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 
 ## 执行模块与第三方来源
 
-执行工具在 `src/execution/`，V8 在 `src/code-mode/`，入口为 `extensions/execution.ts`；根扩展、测试与共享状态消费者使用同一 TS 源码路径。pi-condense 保留自己的来源目录和单行入口。不要重新引入编译副本或重复包清单。
+进程与图片补充在 `src/execution/`，入口为 `extensions/execution.ts`；根扩展、测试与共享状态消费者使用同一 TS 源码路径。pi-condense 保留自己的来源目录和单行入口。不要重新引入编译副本或重复包清单。
 
-- `check` 同时执行 `check:core` 与 `check:execution`；后者覆盖执行模块和 V8，保留严格及可擦除语法检查。`vendor:check` 只检查 pi-condense；`vendor:build` / `vendor:fresh` 是该检查的别名，不生成 JS 或声明。
+- `check` 同时执行 `check:core` 与 `check:execution`；后者覆盖执行补充模块，保留严格及可擦除语法检查。`vendor:check` 只检查 pi-condense；`vendor:build` / `vendor:fresh` 是该检查的别名，不生成 JS 或声明。
 - 项目与测试检查直接消费源码，不依赖本地残留的 `.d.ts`。condense 与执行模块 使用可擦除 TS 语法，本地模块导入显式写 `.ts`。
 - 累计 `local.patch`、`vendor:patch` 和覆盖式 `vendor:sync` 已退休。上游更新在独立分支比较并选择性移植，源码与 Git 历史保存实际分歧。
 
@@ -86,7 +86,7 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 
 发布包携带运行 TS、condense 入口、shell parser WASM、本地二进制、提示文档、changelog、根 manifest 与许可/来源说明。Rust 来源和开发配置留在 Git。宿主现有 TS 加载器负责运行，本地/Git/npm 安装不增加编译步骤，不依赖开发 TypeScript 或 npm lifecycle。
 
-`native/tools` 和 `native/code-mode-host` 分别维护 Cargo workspace。固定 V8 的 host 发布构建仍使用 `scripts/build-code-mode-host-release.sh`；运行期优先解析 `assets/native-tools/code-mode/<platform>-<arch>`，随后查 `native/code-mode-host/target/release` 和原版本缓存。构建临时文件不进入发布包。
+`native/tools` 维护 PTY 与图片 helper 的 Cargo workspace。可执行资产按绝对路径解析，安装和启动不下载 JS host。源码验证使用 `cargo test --manifest-path native/tools/Cargo.toml --locked --workspace`；构建临时文件不进入发布包。
 
 `test/package.test.mjs` 检查实际 `npm pack --dry-run` 文件集合。变更交付范围时还需真实打包、解包并验证入口、动态资源、二进制内容及执行权限；本地路径、Git 初装/更新应分别在隔离 profile 验证。Git 更新会清理 ignored 文件，真实 npm 安装目录不能链接共享 node_modules。
 

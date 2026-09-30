@@ -16,7 +16,6 @@ references/
 
 # Local native build outputs; packaged binaries are tracked under assets.
 native/tools/target/
-assets/native-tools/code-mode/
 
 # Condense retains its public entry; runtime sources are TS.
 vendor/pi-condense/dist/**/*.d.ts

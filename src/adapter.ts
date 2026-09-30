@@ -22,11 +22,6 @@ export interface AdapterOptions {
   getTools(): readonly unknown[];
   enabled(): boolean;
   renderers: Record<ToolName, Renderers>;
-  /** Only the conversion layer shipped by this package, never another plugin. */
-  ownedApplyPatch?: {
-    sourcePath: string;
-    renderCall: (...args: Parameters<Renderers["renderCall"]>) => ReturnType<Renderers["renderCall"]> | undefined;
-  };
   /** Paint only command text; the owned tool retains grouping and execution state. */
   highlightOwnedCommand?: (lines: readonly string[]) => string[];
   renderOwnedCommand?: (command: string, state: "running" | "done", expanded: boolean, theme: Palette, context: ViewContext) => Component;
@@ -102,17 +97,6 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         }, context),
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
       };
-    }
-    const patch = options.ownedApplyPatch;
-    if (name === "apply_patch" && patch && typeof source.source === "string" && source.path === patch.sourcePath) {
-      const call = definition.renderCall;
-      const result = definition.renderResult;
-      if (typeof call !== "function" || typeof result !== "function") return;
-      return fusionRenderers({
-        renderCall: (args, theme, context) => patch.renderCall(args, theme, context) ?? call(args, theme, context),
-        // Preserve the conversion layer's success/error/partial-failure protocol.
-        renderResult: (value, options, theme, context) => result(value, options, theme, context),
-      }, options.renderers.bash, () => current.result);
     }
     if (!TOOL_NAMES.includes(name as ToolName)) return;
     if (source.source !== "builtin" || source.path !== `<builtin:${name}>`) return;

@@ -186,8 +186,8 @@
 | dynamic-agents | `-extensions/dynamic-agents.ts`；运行中恢复原生规则建议先在独立 JSON 设置 `enabled: false`，详见功能页 |
 | condense 整体 | `-extensions/condense.ts` |
 | skill 输入 | 同时排除 `-extensions/skill-entry.ts`、`-extensions/skill-mux.ts` |
-| 全部 Action Fusion | `-extensions/action-fusion.ts`，同时关闭原生 edit/write、执行模块 apply_patch、Code Mode 的融合入口 |
-| 执行模块（含 V8） | `-extensions/execution.ts` |
+| 全部 Action Fusion | `-extensions/action-fusion.ts`，关闭原生 edit/write 的融合增强 |
+| 进程与图片补充 | `-extensions/execution.ts` |
 
 旧 `src/codex/extension.ts` 入口过滤改为 `extensions/execution.ts`。执行配置需按[字段映射](codex.md)放到 `metis-pi.json.execution`；旧文件不自动迁移。
 

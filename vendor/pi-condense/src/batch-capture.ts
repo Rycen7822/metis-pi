@@ -1,4 +1,4 @@
-import { captureFusionResult, captureFusionJournal } from "./fusion.ts";
+import { captureFusionResult } from "./fusion.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
@@ -67,7 +67,7 @@ export function captureToolResult(toolCallId: string, toolName: string, args: Re
           ...(typeof match.details.fullOutputBytes === "number" ? { bytes: match.details.fullOutputBytes } : {}),
           complete: match.details.fullOutputComplete !== false, appendOnly: match.details.fullOutputAppendOnly === true } } : {}),
     ...(resultTimestamp !== undefined ? { resultTimestamp } : {}),
-    ...captureFusionResult(match), ...captureFusionJournal(match),
+    ...captureFusionResult(match),
   };
 }
 

@@ -16,13 +16,13 @@ test("execution overlays honor trust and writing one scope does not copy inherit
   const context = trusted => ({ cwd, isProjectTrusted: () => trusted });
   assert.equal(readExecutionConfig(context(false)).tools.customRustBinariesDir, "/global/bin");
   assert.equal(readExecutionConfig(context(true)).tools.customRustBinariesDir, "/project/bin");
-  writeExecutionConfig({ ui: { codeModeDetails: true } });
+  writeExecutionConfig({ ui: { toolRenaming: true } });
   const saved = JSON.parse(readFileSync(global, "utf8"));
   assert.equal(saved.execution.tools.customRustBinariesDir, "/global/bin");
   assert.equal(saved.execution.tools.future, "keep");
-  assert.equal(saved.execution.ui.codeModeDetails, true);
+  assert.equal(saved.execution.ui.toolRenaming, true);
   assert.equal(saved.enabled, false); assert.equal(saved.extensionOption, 7);
-  writeExecutionConfig({ tools: { plainCommandOutput: true } }, cwd);
-  assert.equal(readExecutionConfig(context(true)).tools.plainCommandOutput, true);
-  assert.equal(readExecutionConfig(context(false)).tools.plainCommandOutput, false);
+  writeExecutionConfig({ tools: { viewImageFallback: true } }, cwd);
+  assert.equal(readExecutionConfig(context(true)).tools.viewImageFallback, true);
+  assert.equal(readExecutionConfig(context(false)).tools.viewImageFallback, false);
 });

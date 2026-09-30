@@ -23,10 +23,3 @@ export function captureFusionResult(result: any): Partial<CapturedToolCall> {
     } } : {}),
   };
 }
-
-export function captureFusionJournal(result: any): Partial<CapturedToolCall> {
-  const journal = result?.details?.fusionEvidence;
-  if (!journal || typeof journal.path !== "string" || !Number.isSafeInteger(journal.offsetBytes) || journal.offsetBytes < 0
-    || !Number.isSafeInteger(journal.bytes) || journal.bytes < 1) return {};
-  return { outputArchive: { ...journal, complete: !result.details.fusionEvidenceError, source: "fusion-journal" } };
-}

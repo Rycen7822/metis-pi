@@ -32,7 +32,6 @@
     "allowImportingTsExtensions": true
   },
   "include": [
-    "src/code-mode/**/*.ts",
     "src/execution/**/*.ts",
     "src/changelog.ts",
     "extensions/execution.ts"

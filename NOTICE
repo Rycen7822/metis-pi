@@ -40,7 +40,7 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
   upstream fires no goal event in between. Goal state/accounting now lives in
   src/goal-state.ts, while the extension retains host I/O and the existing wire format.
 
-The execution and V8 modules (src/execution and src/code-mode) is locally maintained code derived from:
+The execution supplement (src/execution) is locally maintained code derived from:
 Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-conversion)
   npm: @howaboua/pi-codex-conversion 3.0.34 (MIT, full text in
   docs/provenance/codex-conversion/LICENSE). Pristine upstream sources are kept outside the
@@ -58,3 +58,7 @@ Commit: 1bdbba695305419e97be179b412b1fb267298d7f
 Copyright (c) 2025 championswimmer (original pi-context-prune).
 Copyright (c) 2026 Jacek Juraszek (pi-condense).
 MIT License (see vendor/pi-condense/LICENSE).
+
+Bundled PTY and image helpers and their retained native/tools utility sources are
+derived from OpenAI Codex, copyright OpenAI and its contributors, Apache-2.0
+(see LICENSE-APACHE-2.0). V8 host and apply-patch are no longer redistributed.

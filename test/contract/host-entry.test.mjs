@@ -190,60 +190,6 @@ test("streamed write executes through the entry and real padded edits reach the 
   }
 });
 
-test("shipped apply_patch executes add/move/delete and retains pre-image in folded real rows", async (t) => {
-  const h = entry(t);
-  const cwd = temporaryDirectory(t, "metis-entry-patch-");
-  const { createApplyPatchTool } = await import("../../src/execution/apply-patch/tool.ts");
-  const tool = createApplyPatchTool({ showDiffWhenCollapsed: true });
-  const root = resolve(import.meta.dirname, "../..");
-  h.definitions.push({ name: "apply_patch", sourceInfo: {
-    source: root, path: join(root, "extensions/execution.ts"),
-  } });
-  writeFileSync(join(cwd, "before.txt"), "原来的中文内容\n");
-  writeFileSync(join(cwd, "deleted.txt"), Array.from({ length: 30 }, (_, i) => `deleted line ${i + 1}`).join("\n") + "\n");
-  const args = { input: `*** Begin Patch
-*** Update File: before.txt
-*** Move to: after.txt
-@@
--原来的中文内容
-+新的中文内容，需要在窄终端里正确换行
-*** Add File: created.ts
-+export const added = true;
-*** Delete File: deleted.txt
-*** End Patch` };
-  const row = h.row("apply_patch", "patch-entry", args, tool, cwd);
-  row.setArgsComplete();
-  row.markExecutionStarted();
-  const result = await tool.execute("patch-entry", args, undefined, undefined, { cwd });
-  assert.equal(result.details.status, "success");
-  row.updateResult({ ...result, isError: false });
-  const rows = row.render(32);
-  const text = plain(rows);
-  assert.ok(rows.every((line) => visibleWidth(line) <= 32));
-  assert.match(rows.join("\n"), /\x1b\[48;2;74;34;29m/);
-  assert.match(rows.join("\n"), /\x1b\[48;2;33;58;43m/);
-  assert.match(text, /1 -原来的中文内容/, "deleted pre-image remains visible after execution");
-  assert.match(text, /1 \+新的中文内容/);
-  assert.match(text, /created.ts/);
-  assert.doesNotMatch(text, /deleted line 30/);
-  assert.match(text, /more rows/);
-  row.setExpanded(true);
-  assert.match(plain(row.render(32)), /deleted line 30/, "expansion restores the deleted file's full pre-image");
-  assert.equal(existsSync(join(cwd, "before.txt")), false);
-  assert.equal(existsSync(join(cwd, "deleted.txt")), false);
-  assert.match(readFileSync(join(cwd, "after.txt"), "utf8"), /新的中文内容/);
-  assert.match(readFileSync(join(cwd, "created.ts"), "utf8"), /added = true/);
-
-  const failedArgs = { input: "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch" };
-  const failed = h.row("apply_patch", "patch-failed-entry", failedArgs, tool, cwd);
-  failed.setArgsComplete();
-  failed.markExecutionStarted();
-  await assert.rejects(tool.execute("patch-failed-entry", failedArgs, undefined, undefined, { cwd }));
-  failed.updateResult({ content: [{ type: "text", text: "apply_patch failed" }], isError: true });
-  assert.match(plain(failed.render(80)), /failed/i);
-  assert.doesNotMatch(failed.render(80).join("\n"), /\x1b\[48;2;33;58;43m/);
-});
-
 test("appearance entry registers diagnostics", (t) => {
   const h = entry(t);
   const command = h.commands.find(({ name }) => name === "codex-ui");

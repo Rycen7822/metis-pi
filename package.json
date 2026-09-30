@@ -39,9 +39,6 @@
   },
   "dependencies": {
     "marked": "18.0.11",
-    "proxy-from-env": "^2.1.0",
-    "smol-toml": "^1.8.0",
-    "undici": "^8.10.2",
     "web-tree-sitter": "^0.27.0"
   },
   "devDependencies": {
@@ -67,7 +64,6 @@
     "docs",
     "vendor/tree-sitter-bash",
     "assets/native-tools",
-    "native/code-mode-host/{LICENSE,NOTICE,UPSTREAM}",
     "vendor/pi-condense/{package.json,LICENSE,PATCHES.md,UPSTREAM.md}",
     "vendor/pi-condense/dist/index.js",
     "vendor/pi-condense/index.ts",
