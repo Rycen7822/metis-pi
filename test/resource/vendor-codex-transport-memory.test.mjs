@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as zlib from "node:zlib";
 import { FAKE_API_KEY, modelNamed } from "../helpers/vendor-codex-provider.mjs";
-import { createCodexTransportStream } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/transport-recovery.ts";
+import { createCodexTransportStream } from "../../src/codex/providers/openai-codex/transport-recovery.ts";
 
 const model = { ...modelNamed("gpt-6-astra"), baseUrl: "http://127.0.0.1:1" };
 const completed = { type: "response.completed", response: {

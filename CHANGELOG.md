@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Codex 实现迁入 `src/codex`，入口统一为 `src/codex/extension.ts`；第三方资源、Rust 源码和执行文件分别归入根 `vendor`、`native`、`assets/native-tools`。移除内层 manifest 和旧转导出，版本与更新提示统一到 metis-pi。旧入口过滤规则和外部导入需更新；用户配置与 host 缓存不变。
+
 - Code Mode 安装与 Notebook 共用带 owner 的目录 lease，失败和超时时仅释放自身锁；历史消息重建与 condense 归档批次各统一一处实现，原生 write 前镜像按 Pi 路径规则解析。
 
 - dynamic-agents 每次新 run 重新读取原生全局指令，支持全局/策略 Markdown 修改后免 reload 生效，并处理全局候选文件新增、删除及优先级变化；同一 run 内保持快照不变。
@@ -57,7 +59,7 @@
 - 适配 Pi 0.86.1：Codex provider 同时接受旧式 Context 与 transcript；skill 标签适配 MouseRegion 嵌套；开发依赖与 marked 对齐宿主。
 - 工具放置统一决策：删除/同名重声明使用完整当前工具表，纯新增保持就地锚点，新旧路径不重复声明或复活删除项。
 - 压缩/回放共享模型能力和放置决策，切片保留中途 system 更新，tool-search ID 跨切片稳定；重建压缩请求同步顶层 tools。canonical 请求保留自身基线。
-- 真实 provider 请求的协议、回放与最终压缩请求回归覆盖上述行为。维护说明见 [vendor 补丁](vendor/pi-codex-conversion/PATCHES.md)。
+- 真实 provider 请求的协议、回放与最终压缩请求回归覆盖上述行为。维护说明见 [vendor 补丁](docs/provenance/codex-conversion/PATCHES.md)。
 
 ## 0.19.0–0.19.5
 

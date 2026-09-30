@@ -100,7 +100,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   beforeLoad?.(sm, model);
   const eventBus = createEventBus();
   const resourceLoader = new DefaultResourceLoader({ eventBus, cwd: dir, agentDir: dir, settingsManager,
-    additionalExtensionPaths: installed ? [] : [join(root, "extensions/condense.ts"), join(root, "vendor/pi-codex-conversion/dist/index.js"), ...(goal ? [join(root, "extensions/goal.ts")] : [])],
+    additionalExtensionPaths: installed ? [] : [join(root, "extensions/condense.ts"), join(root, "src/codex/extension.ts"), ...(goal ? [join(root, "extensions/goal.ts")] : [])],
     noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "OCC_TEST" });
   await resourceLoader.reload();
   const loaded = await createAgentSession({ cwd: dir, agentDir: dir, settingsManager, modelRuntime, resourceLoader, sessionManager: sm, model });

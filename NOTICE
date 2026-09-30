@@ -40,12 +40,12 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
   upstream fires no goal event in between. Goal state/accounting now lives in
   src/goal-state.ts, while the extension retains host I/O and the existing wire format.
 
-The codex-conversion runtime (vendor/pi-codex-conversion) is vendored third-party code:
+The Codex module (src/codex) is locally maintained code derived from:
 Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-conversion)
   npm: @howaboua/pi-codex-conversion 3.0.34 (MIT, full text in
-  vendor/pi-codex-conversion/LICENSE). Pristine upstream sources are kept outside the
+  docs/provenance/codex-conversion/LICENSE). Pristine upstream sources are kept outside the
   repository; provenance and the upgrade procedure are in
-  vendor/pi-codex-conversion/UPSTREAM.md.
+  docs/provenance/codex-conversion/UPSTREAM.md.
 Upstream copyright: the IgorWarzocha/howaboua-pi-stuff authors.
 
 Modifications: Copyright (c) 2026 Rycen7822. MIT License.

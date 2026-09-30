@@ -5,7 +5,7 @@ import test from "node:test";
 const Mi = 1024 * 1024;
 
 test("64 Mi characters of unread output do not remain resident on the JS heap", { timeout: 15_000 }, () => {
-	const moduleUrl = new URL("../../vendor/pi-codex-conversion/src/tools/exec/output-buffer.ts", import.meta.url).href;
+	const moduleUrl = new URL("../../src/codex/execution/exec/output-buffer.ts", import.meta.url).href;
 	const script = `
 		import { randomBytes } from "node:crypto";
 		import { ExecOutputBuffer } from ${JSON.stringify(moduleUrl)};

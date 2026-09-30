@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { captureBody, disableNetwork, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
-import { createCodexExtensionRuntime } from "../../vendor/pi-codex-conversion/src/extension/runtime.ts";
+import { createCodexExtensionRuntime } from "../../src/codex/extension/runtime.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -34,7 +34,7 @@ async function host(t, converted, reverse = false, wholePackage = false) {
     baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
   await modelRuntime.setRuntimeApiKey(provider, converted ? FAKE_API_KEY : "offline");
-  const paths = [join(root, "extensions/dynamic-agents.ts"), ...(converted ? [join(root, "vendor/pi-codex-conversion/dist/index.js")] : [])];
+  const paths = [join(root, "extensions/dynamic-agents.ts"), ...(converted ? [join(root, "src/codex/extension.ts")] : [])];
   const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, eventBus: bus,
     additionalExtensionPaths: wholePackage ? [] : reverse ? paths.reverse() : paths,
     noSkills: true, noThemes: true, noPromptTemplates: true, systemPrompt: "DYNAMIC_TEST" });

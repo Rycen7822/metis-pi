@@ -50,4 +50,4 @@
 
 最初的双槽工具组件契约来自 `earendil-works/pi` v0.85.1 的 `tool-execution.ts`（blob `5355a3637aad9df5871ac907b680378ffd67b677`）、`source-info.ts` 与 TUI `text.ts`。后续核对使用 v0.86.1 (`13cbf77df2396303013a41646bcfa77b4271ae56`) 和 v0.87.0 (`16787ad5`)。
 
-工具行视觉参考包括 `openai/codex` 的 exec snapshot（blob `eb47a610cc5d54ede53f8e5faee8dd5fb27578b4`）以及提交 `94697375cb9d2aa8ae74d61957c6b396819bec94` 的 `diff_render.rs`；本地格式化器以 TypeScript 实现。vendor 的精确来源和本地分歧见 [转换层说明](vendor-codex-conversion.md)。
+工具行视觉参考包括 `openai/codex` 的 exec snapshot（blob `eb47a610cc5d54ede53f8e5faee8dd5fb27578b4`）以及提交 `94697375cb9d2aa8ae74d61957c6b396819bec94` 的 `diff_render.rs`；本地格式化器以 TypeScript 实现。vendor 的精确来源和本地分歧见 [转换层说明](codex.md)。

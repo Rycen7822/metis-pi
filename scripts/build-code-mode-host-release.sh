@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-source_dir="$root/vendor/pi-codex-conversion/code-mode/vendor/code-mode-src"
+source_dir="$root/native/code-mode-host"
 output_dir="${1:-$root/.work/host-release}"
 target_dir="${CARGO_TARGET_DIR:-$root/.work/host-build}"
 target=x86_64-unknown-linux-gnu
@@ -29,7 +29,7 @@ manifest="rusty_v8_${profile}_${target}.sha256"
 v8_archive="librusty_v8_${profile}_${target}.a.gz"
 binding="src_binding_${profile}_${target}.rs"
 base_url="https://github.com/openai/codex/releases/download/rusty-v8-v$version"
-pin_file="$root/vendor/pi-codex-conversion/code-mode/v8-release-manifests.sha256"
+pin_file="$root/native/code-mode-host/v8-release-manifests.sha256"
 manifest_hash=$(awk -v name="$manifest" '$2 == name { print $1 }' "$pin_file")
 [[ $manifest_hash =~ ^[0-9a-f]{64}$ ]] || { echo "Missing unique V8 manifest pin" >&2; exit 1; }
 mkdir -p -- "$inputs"

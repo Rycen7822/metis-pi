@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { disableNetwork, FAKE_API_KEY } from "../helpers/vendor-codex-provider.mjs";
-import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/src/context-management/history-notes.ts";
+import { createHistoryNotesTools } from "../../src/codex/context/history-notes.ts";
 import { session, assistantToolCall, toolResult, userMessage } from "../helpers/vendor-codex-sessions.mjs";
-import { CodexContextWindowManager } from "../../vendor/pi-codex-conversion/src/context-management/window-manager.ts";
-import { hasFreshContextNotes } from "../../vendor/pi-codex-conversion/src/context-management/saved-notes.ts";
+import { CodexContextWindowManager } from "../../src/codex/context/window-manager.ts";
+import { hasFreshContextNotes } from "../../src/codex/context/saved-notes.ts";
 import {
 	rewriteContextNamespaceTools,
 	routeContextNamespaceToolStream,
 	unrouteContextNamespaceToolCall,
-} from "../../vendor/pi-codex-conversion/src/context-management/namespace-tools.ts";
+} from "../../src/codex/context/namespace-tools.ts";
 
 test.beforeEach(disableNetwork);
 

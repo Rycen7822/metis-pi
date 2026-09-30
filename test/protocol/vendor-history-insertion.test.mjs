@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { insertReconstructedMessages } from "../../vendor/pi-codex-conversion/src/adapter/history-insertion.ts";
+import { insertReconstructedMessages } from "../../src/codex/context/history-insertion.ts";
 
 const message = (id) => ({ role: "user", timestamp: 1, content: id });
 const key = (value) => value.content.startsWith("same") ? "same" : value.content;

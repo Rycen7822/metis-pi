@@ -9,7 +9,7 @@ import { FAKE_API_KEY, captureRegistration, disableNetwork, modelNamed } from ".
 
 test.beforeEach(disableNetwork);
 
-const ENTRY = fileURLToPath(new URL("../../vendor/pi-codex-conversion/dist/index.js", import.meta.url));
+const ENTRY = fileURLToPath(new URL("../../src/codex/extension.ts", import.meta.url));
 test("built vendor entry follows Pi's catalog and wires lifecycle, final requests and shipped tool schemas", async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "metis-vendor-entry-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

@@ -3,18 +3,18 @@ import test from "node:test";
 import { createEditToolDefinition, createWriteToolDefinition } from "@earendil-works/pi-coding-agent";
 import { disableNetwork, modelNamed } from "../helpers/vendor-codex-provider.mjs";
 import { SEALED_WINDOW_ITEM } from "../helpers/vendor-codex-sessions.mjs";
-import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/src/adapter/activation/config-contract.ts";
-import { resolveCodexRuntimePlanForState } from "../../vendor/pi-codex-conversion/src/adapter/activation/runtime-plan.ts";
-import { CodexDeveloperMessageBridge } from "../../vendor/pi-codex-conversion/src/adapter/developer-messages.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../src/codex/config/config-contract.ts";
+import { resolveCodexRuntimePlanForState } from "../../src/codex/config/runtime-plan.ts";
+import { CodexDeveloperMessageBridge } from "../../src/codex/adapter/developer-messages.ts";
 import {
 	rewriteCodexProviderRequest,
 	rewriteCodexPrewarmProviderRequest,
-} from "../../vendor/pi-codex-conversion/src/adapter/provider-request.ts";
-import { createHistoryNotesTools } from "../../vendor/pi-codex-conversion/src/context-management/history-notes.ts";
-import { rewriteWindowPayload } from "../../vendor/pi-codex-conversion/src/context-management/window-request.ts";
+} from "../../src/codex/adapter/provider-request.ts";
+import { createHistoryNotesTools } from "../../src/codex/context/history-notes.ts";
+import { rewriteWindowPayload } from "../../src/codex/context/window-request.ts";
 import { createNativeFusionTool } from "../../extensions/action-fusion.ts";
-import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts";
-import { normalizeCodexConfigurationUpdates, supportsCodexReasoningUpdates } from "../../vendor/pi-codex-conversion/src/adapter/reasoning-updates.ts";
+import { createApplyPatchTool } from "../../src/codex/execution/apply-patch/tool.ts";
+import { normalizeCodexConfigurationUpdates, supportsCodexReasoningUpdates } from "../../src/codex/providers/reasoning-updates.ts";
 
 test.beforeEach(disableNetwork);
 

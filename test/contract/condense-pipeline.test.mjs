@@ -12,8 +12,8 @@ import { spillOversizedBatch } from "../../vendor/pi-condense/src/spill.ts";
 import { ToolCallIndexer } from "../../vendor/pi-condense/src/indexer.ts";
 import { registerQueryTool } from "../../vendor/pi-condense/src/query-tool.ts";
 import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
-import { ExecOutputArchive } from "../../vendor/pi-codex-conversion/src/tools/exec/output-archive.ts";
-import { createCodexExtensionRuntime } from "../../vendor/pi-codex-conversion/src/extension/runtime.ts";
+import { ExecOutputArchive } from "../../src/codex/execution/exec/output-archive.ts";
+import { createCodexExtensionRuntime } from "../../src/codex/extension/runtime.ts";
 import goalExtension from "../../extensions/goal.ts";
 
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };

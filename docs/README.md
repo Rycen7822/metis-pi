@@ -20,12 +20,12 @@
 | 复制与文字 | [逻辑选区复制](features/selection-copy.md) · [字形呈现](features/glyphs.md) · [多 skill 输入](features/skills.md) |
 | 任务管理 | [todo](features/todo.md) · [goal](features/goal.md) |
 | 上下文与执行 | [历史压缩、原文恢复与 OCC](features/condense.md) · [动态全局指令](features/dynamic-agents.md) · [修改后执行命令](features/action-fusion.md) |
-| Codex 集成 | [内置转换层、运行模式与资源限制](vendor-codex-conversion.md) |
+| Codex 集成 | [内置转换层、运行模式与资源限制](codex.md) |
 
 ## 开发与维护
 
 - [架构](architecture.md)：入口、模块所有权、数据流和生命周期约束。
-- [开发说明](development.md)：环境、构建、测试职责、发布和 vendor 更新。
-- vendor 的精确来源与本地分歧分别由各自的 `UPSTREAM.md` / `PATCHES.md` 维护，开发说明提供入口。
+- [开发说明](development.md)：环境、构建、测试职责、发布和来源维护。
+- Codex 的来源和差异在 `docs/provenance/codex-conversion/`，condense 的在自身 vendor 目录；开发说明提供入口。
 
 每项事实在所属页面维护：默认值放配置页，使用方法和限制放功能页，模块职责放架构页，实测结果放 VALIDATION。更新时改写对应段落；逐轮实施过程由 Git 历史保留。`preview.html`、`transcript.ansi`、`transcript.txt` 是 `npm run preview` 的生成输出。

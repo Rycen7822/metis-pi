@@ -320,7 +320,7 @@ try {
     // E1: real idle footer and editor placement.
     const idle = await startJourney("E1");
     // Extension issues also catch missing vendor assets and shortcut collisions.
-    assert.ok(!/Could not read the @howaboua\/pi-codex-conversion changelog/.test(idle), "vendored CHANGELOG.md is present");
+    assert.ok(!/Could not read the @rycen7822\/metis-pi changelog/.test(idle), "product CHANGELOG.md is present");
     assert.match(idle, /pcx-mock-model · high · pcx-mock/, "footer: model/effort/provider");
     assert.match(idle, /ctx 0\/1\.0M · 0%/, "footer: context usage");
     assert.match(idle, /Ask anything\.\.\./, "composer placeholder on the gray surface");

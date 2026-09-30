@@ -5,7 +5,7 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 
-import { registerOpenAICodexCustomProvider } from "../../vendor/pi-codex-conversion/src/providers/openai-codex-custom-provider.ts";
+import { registerOpenAICodexCustomProvider } from "../../src/codex/providers/openai-codex-custom-provider.ts";
 
 export const FAKE_API_KEY = "x." + Buffer.from(
 	JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "offline-test" } }),

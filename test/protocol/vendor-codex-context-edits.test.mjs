@@ -11,14 +11,14 @@ import { SEALED_WINDOW_ITEM, assistantToolCall, checkpointDetails, checkpointSes
 import {
 	buildNativeCompactionInput, handleCodexSessionBeforeCompact, injectNativeWindowIntoPiCompactionRequest,
 	resolveCanonicalCompactionReplay, resolveOpaqueNativeCompactionFallbackEntry,
-} from "../../vendor/pi-codex-conversion/src/adapter/compaction/compaction.ts";
-import { buildNativeReplaySegments } from "../../vendor/pi-codex-conversion/src/adapter/replay/payload-rewrite.ts";
-import { extractAccountId, resolveCodexWebSocketUrl } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/headers.ts";
-import { clearCanonicalSessions, recordCanonicalSessionResponse } from "../../vendor/pi-codex-conversion/src/providers/openai-codex/session-continuity.ts";
-import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../vendor/pi-codex-conversion/src/adapter/activation/config-contract.ts";
-import { CodexDeveloperMessageBridge } from "../../vendor/pi-codex-conversion/src/adapter/developer-messages.ts";
-import { resolveCodexRuntimePlanForState } from "../../vendor/pi-codex-conversion/src/adapter/activation/runtime-plan.ts";
-import { rewriteCodexProviderRequest, rewriteCodexPrewarmProviderRequest } from "../../vendor/pi-codex-conversion/src/adapter/provider-request.ts";
+} from "../../src/codex/context/compaction/compaction.ts";
+import { buildNativeReplaySegments } from "../../src/codex/context/replay/payload-rewrite.ts";
+import { extractAccountId, resolveCodexWebSocketUrl } from "../../src/codex/providers/openai-codex/headers.ts";
+import { clearCanonicalSessions, recordCanonicalSessionResponse } from "../../src/codex/providers/openai-codex/session-continuity.ts";
+import { DEFAULT_CODEX_CONVERSION_CONFIG } from "../../src/codex/config/config-contract.ts";
+import { CodexDeveloperMessageBridge } from "../../src/codex/adapter/developer-messages.ts";
+import { resolveCodexRuntimePlanForState } from "../../src/codex/config/runtime-plan.ts";
+import { rewriteCodexProviderRequest, rewriteCodexPrewarmProviderRequest } from "../../src/codex/adapter/provider-request.ts";
 
 test.beforeEach(disableNetwork);
 

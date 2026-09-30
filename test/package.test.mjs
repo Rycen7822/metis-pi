@@ -16,9 +16,9 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("package exposes display, goal, todo, condense, dynamic-agents and codex-conversion entries", () => {
+test("package exposes display, goal, todo, condense, dynamic-agents and codex entries", () => {
   const pkg = load("package.json");
-  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./vendor/pi-codex-conversion/dist/index.js"]);
+  assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts", "./src/codex/extension.ts"]);
   const packed = Object.values(JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
@@ -26,32 +26,25 @@ test("package exposes display, goal, todo, condense, dynamic-agents and codex-co
   for (const name of ["appearance", "goal", "todo", "condense", "dynamic-agents"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
-  for (const name of ["pi-codex-conversion", "pi-condense"]) {
-    for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
-      assert.ok(files.has(`vendor/${name}/${path}`), `${name}/${path}`);
-    }
+  for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
+    assert.ok(files.has(`vendor/pi-condense/${path}`), `pi-condense/${path}`);
   }
   for (const path of [
-    "changelog.js", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
-    "vendor/js-tiktoken/ranks/o200k_base.js", "src/tools/code-mode/CUSTOM-TOOLS.md",
-    "src/tools/exec/bin/linux-x64/exec_bridge", "src/tools/apply-patch/bin/linux-x64/apply_patch",
-    "src/tools/view-image/bin/linux-x64/view_image", "code-mode/vendor/code-mode-src/NOTICE",
-  ]) assert.ok(files.has(`vendor/pi-codex-conversion/${path}`), path);
+    "src/changelog.ts", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
+    "vendor/js-tiktoken/ranks/o200k_base.js", "src/codex/execution/code-mode/CUSTOM-TOOLS.md",
+    "assets/native-tools/exec/linux-x64/exec_bridge", "assets/native-tools/apply-patch/linux-x64/apply_patch",
+    "assets/native-tools/view-image/linux-x64/view_image", "native/code-mode-host/NOTICE",
+    "docs/provenance/codex-conversion/LICENSE", "docs/provenance/codex-conversion/UPSTREAM.md",
+    "docs/provenance/codex-conversion/PATCHES.md",
+  ]) assert.ok(files.has(path), path);
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
-  assert.ok(files.has("vendor/pi-codex-conversion/src/index.ts"));
+  assert.ok(files.has("src/codex/extension.ts"));
   assert.ok(files.has("vendor/pi-condense/index.ts"));
-  assert.ok(files.has("vendor/pi-codex-conversion/changelog.ts"));
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);
-  // Runtime dependencies are exactly: marked (the copy-provenance lexer must see the
-  // host's token stream, pinned to the version pi-tui uses) plus the vendored
-  // codex-conversion's own runtime deps, declared so pi installs them for the git
-  // clone (see vendor/pi-codex-conversion/package.json).
+  // The copy-provenance lexer must see the same token stream as the host.
   assert.equal(pkg.dependencies.marked, load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked);
-  const vendored = load("vendor/pi-codex-conversion/package.json").dependencies;
-  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ["marked", ...Object.keys(vendored)].sort());
-  for (const [name, range] of Object.entries(vendored)) assert.equal(pkg.dependencies[name], range, `${name} must match the vendored manifest`);
   assert.equal(pkg.pi.skills, undefined);
   assert.equal(pkg.pi.prompts, undefined);
 });

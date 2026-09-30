@@ -4,7 +4,7 @@
 
 ## 扩展入口
 
-`package.json` 加载 `extensions/*.ts` 和 `vendor/pi-codex-conversion/dist/index.js`；主题单独位于 `themes/metis-pi.json`。
+`package.json` 加载 `extensions/*.ts` 和 `src/codex/extension.ts`；主题单独位于 `themes/metis-pi.json`。
 
 | 入口 | 负责内容 |
 | --- | --- |
@@ -15,7 +15,7 @@
 | `dynamic-agents.ts` → `src/dynamic-agents.ts` | 每次 run 的全局策略快照、来源恢复和请求投影；conversion 通过事件总线共享结果。 |
 | `condense.ts` → `vendor/pi-condense/index.ts` | 重复安装检测、单一加载入口和摘要用量展示；vendor 负责归档、精简/摘要和恢复。 |
 | `action-fusion.ts` | 融合修改/命令的统一开关、原生 edit/write 适配、修改快照和取消。 |
-| conversion `dist/index.js` | 转导出 `src/index.ts`，由 `src/extension/register.ts` 接线：provider、执行工具、上下文与设置。 |
+| `src/codex/extension.ts` | 直接加载 Codex 模块，由 `src/codex/extension/register.ts` 接线：provider、执行工具、上下文与设置。 |
 
 `metis-pi.json.enabled` 控制 appearance。其他入口的配置与禁用方法见 [配置参考](configuration.md)。
 
@@ -41,7 +41,7 @@ chrome 使用结构类型和注入能力，不直接导入宿主包。动画帧�
 flowchart LR
     Pi[Pi 事件与会话] --> Display[appearance / chrome / 转录]
     Pi --> Features[goal / todo / dynamic-agents]
-    Pi --> Conversion[Codex conversion]
+    Pi --> Conversion[Codex 模块]
     Conversion --> Execution[原生工具 / Code Mode]
     Execution --> Archive[归档与融合回执]
     Archive --> Condense[condense 投影与 OCC]
@@ -52,12 +52,12 @@ flowchart LR
 
 | 领域 | 所有者与不可合并的责任 |
 | --- | --- |
-| 模式与设置 | conversion `adapter/activation/runtime-plan.ts` 决定模式；字段规范化、信任范围、原子写入与设置 UI 各守自己的边界。 |
+| 模式与设置 | `src/codex/config/runtime-plan.ts` 决定模式；字段规范化、信任范围、原子写入与设置 UI 各守自己的边界。 |
 | provider 请求 | `prepareResponsesTranscript` 统一 transcript/system/工具放置；transcript 与 sampling 复用宿主 helper，保留本地切片和旧会话包装；`adapter/provider-request.ts` 共享 live/prewarm 准备，最终请求才消费待处理窗口和捕获 prompt。工具调用/结果配对由 `normalizeResponsesToolHistory` 负责。 |
 | compaction/replay | 切片沿用完整历史的工具决策；压缩 input 和顶层 tools 同步更新，canonical 请求保留基线。Local/Tree/Remote/Hybrid 的持久化、窗口和 wire 差异分别保留。 |
-| history/notes | `context-management/tool-contract.ts` 共享字段规则；`adapter/history-insertion.ts` 只负责稳定插入，筛选仍由调用方决定。 |
+| history/notes | `src/codex/context/tool-contract.ts` 共享字段规则；`context/history-insertion.ts` 只负责稳定插入，筛选仍由调用方决定。 |
 | V8 Code Mode | `host-client.ts` 独占 framed connection、session/open 协议和 delegate 回应；启动握手有共享超时和调用者取消边界，cell 固定初始执行上下文，观察者单独路由更新；输入可请求支持该能力的 host 提前结束观察，cell 继续运行。安装和持久化路径使用跨进程 lease。 |
-| Action Fusion | vendor `tools/action-fusion.ts` 共享流程和按路径排队，command adapter 分别连接原生 bash 与 exec manager；`src/fusion-view.ts` 只组合修改和命令显示。嵌套 delegate 的 journal 独立于显示 trace。 |
+| Action Fusion | `src/codex/execution/action-fusion.ts` 共享流程和按路径排队，command adapter 分别连接原生 bash 与 exec manager；`src/fusion-view.ts` 只组合修改和命令显示。嵌套 delegate 的 journal 独立于显示 trace。 |
 | condense 批次 | 同一批次记录持有去重、准备和摘要结果，调度与提交共同消费；原文、候选和已发布表示分开，失败恢复顺序保持。`spill.ts` 统一归档/backfill，调用方决定何时允许隐藏。 |
 | condense 设置/恢复 | `setting-fields.ts` 持有字段规则；overlay 和命令保留各自非法值策略。session_start/tree 共用分支恢复，配置加载和启动提示只在 start 执行。 |
 | OCC | condense 持有等待、工作计数、保持期和尝试额度；conversion 独占 before_compact，通过 promise broker 等候受保护候选。goal 暂存已有续跑，维护后执行时再次核实；归档准备与发布授权分开。 |
@@ -74,6 +74,15 @@ OCC 使用宿主 `context_edit` 后的有效投影，frontier 仍使用原始 as
 
 ## 源码与生成物
 
-源码和 Git 历史保存本地实现；vendor `UPSTREAM.md` / `PATCHES.md` 说明来源和差异。运行实现直接采用 TS；`dist/` 仅保留旧入口和公开 API 的转导出，开发检查不生成 JS/声明。本地资产及相对位置继续保留；累计 patch 和覆盖式同步已退休。
+metis-pi 是一个 npm 产品，根 manifest 统一依赖、版本、扩展入口和发布载荷。Codex 模块直接运行 TS，源码、测试与根显示扩展共用同一个模块 URL。旧 conversion 包目录与 JS 转导出已移除；工具来源守卫匹配新入口。
 
-旧入口路径仍参与工具来源认领，部分共享状态 key 包含模块 URL，资源也依赖相对路径。公开 facade、原生 ABI 和惰性加载不能仅凭静态导入图判断为可删代码。实际验证范围见 [VALIDATION](../VALIDATION.md)。
+| 位置 | 归属 |
+| --- | --- |
+| `src/codex/config`、`execution`、`context`、`providers` | 本地维护的领域代码；`adapter` 保留 Pi 接线，`extension/runtime.ts` 保留生命周期状态。 |
+| `vendor/js-tiktoken`、`vendor/tree-sitter-bash` | 有固定来源的第三方资源，tokenizer 与 shell parser 保持原加载时机。 |
+| `native/code-mode-host`、`native/tools` | 两个独立 Cargo workspace；源码和锁文件在 Git，安装不编译。 |
+| `assets/native-tools` | 随包工具的执行文件；绝对路径定位，保留可执行位。 |
+| `docs/provenance/codex-conversion` | 原始许可、上游来源和本地差异；运行版本来自根 manifest。 |
+| `vendor/pi-condense` | 继续保留独立来源树与既有入口。 |
+
+Code Mode 依次查找随包 host、开发构建、按 release 区分的缓存；用户配置、缓存键和协议未因目录调整改变。发布包不携带 Rust 构建产物和源码，但保留必要的许可证/NOTICE。更新提示读取根 CHANGELOG，继续尊重已有抑制设置。实际验证范围见 [VALIDATION](../VALIDATION.md)。

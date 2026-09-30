@@ -6,8 +6,8 @@ import { mkdir, readdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { acquireDirectoryLock } from "../../vendor/pi-codex-conversion/src/tools/code-mode/directory-lock.ts";
-import { installCodeModeHost } from "../../vendor/pi-codex-conversion/src/tools/code-mode/install-host.ts";
+import { acquireDirectoryLock } from "../../src/codex/execution/code-mode/directory-lock.ts";
+import { installCodeModeHost } from "../../src/codex/execution/code-mode/install-host.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 
 const options = { waitMs: 150, staleMs: 60, pollMs: 5 };
@@ -41,7 +41,7 @@ test("a dead owner is reclaimed while an active child owner blocks contenders", 
 	const recovered = await acquireDirectoryLock(path, options);
 	assert.ok(recovered);
 	recovered.release();
-	const modulePath = fileURLToPath(new URL("../../vendor/pi-codex-conversion/src/tools/code-mode/directory-lock.ts", import.meta.url));
+	const modulePath = fileURLToPath(new URL("../../src/codex/execution/code-mode/directory-lock.ts", import.meta.url));
 	const child = spawn(process.execPath, ["--input-type=module", "-e", `
 		import { acquireDirectoryLock } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 		const lock = await acquireDirectoryLock(process.argv[1], ${JSON.stringify(options)});

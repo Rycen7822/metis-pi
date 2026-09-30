@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-09-30 — Codex module ownership and layout
+
+- Codex now loads directly from `src/codex/extension.ts` after the root extensions. The old conversion package/facades are removed; config, execution, context and provider helpers follow their owners. Third-party resources live under root `vendor`, two Rust workspaces under `native`, and bundled tools under `assets/native-tools`. The root manifest and changelog own the product identity. Existing config/cache/session identifiers and suppression preferences are retained; old extension filter/import paths must be updated.
+- Temporary AST token comparisons verified that **213 TS files** changed only their module/resource paths; the three native/documentation locators and product support links were separately reviewed. **78 Rust files**, **17 resource/binary payloads**, both Cargo locks and host/V8 pins are byte-identical. All **361 moved files** retain their permissions. Moving files is excluded from reduction accounting: runtime TS/JS decreased 20 lines, obsolete declarations 39, and existing tests 7; Rust and scripts did not decrease. No permanent test cases were added.
+- `npm run verify` passed all source/test types, **440/440 tests**, and the package dry run (**408 files**). The focused entry/package/shared-state checks passed **9/9**; strict PTY passed **E1–E6**, including 161 exact clipboard characters. Both Cargo workspaces passed locked metadata; the tools workspace passed `cargo check --workspace --locked` after fetching an uncached pinned dependency through the proxy.
+- The relocated release script built V8 **150.4.0** with the existing authenticated pins and **GLIBC_2.34** ceiling. The new binary passed the real-host smoke: undefined delegation, shared storage, early/wait yielding, blocking-tool survival and termination. This validation build is not a new published Release; installer pins remain unchanged.
+- An unpacked package with a fresh production-only dependency install loaded through real Pi **0.87.1**, without a local pi-ai or TypeScript compiler. Full manifest loading ran real normal-mode exec, apply_patch and view_image. Code Mode stayed lazy until its first exec, downloaded the existing metis.3 host through the installer/proxy into its original versioned cache, and ran a nested command and cross-cell storage. Filtering `-src/codex/extension.ts` disabled Codex while retaining other features. Installed compaction tokenization and shell WASM parsing passed; the loaded changelog handler read root metadata, showed the notice once, skipped reload and retained suppression/state. Eight mocked SSE requests also passed, with no extension errors.
+- No personal profile changes or paid model requests. Migration maps, temporary probes, build logs and accounting are under `.work/codex-module-migration/`; constraints and steps are in `.work/codex-module-migration-plan.md`.
+
 ## 2026-09-30 — Shared Responses stream processing
 
 - The Responses parser delegates streamed tools, grammar deltas, usage and normal terminal mapping to Pi, retaining indexed prose, raw callbacks, image/search items and interruption cleanup. Production source decreased **240 lines**: parser 436 → 199, host API bridge 36 → 33. Permanent tests are unchanged.
@@ -334,4 +343,4 @@ The former real-host smoke covered tool titles, write states, mouse folding, ski
 - No real OS clipboard or image-terminal validation. Mouse selection and Ctrl+C reach a local sink installed through the real host clipboard method; the selected text is compared byte for byte there.
 - No user configuration, credentials, default model, plugin sources or installed Pi were changed. Running Pi processes need a restart to load rebuilt vendor code.
 
-Vendor baseline, retained payload exclusions and patch maintenance are documented in [UPSTREAM.md](vendor/pi-codex-conversion/UPSTREAM.md) and [PATCHES.md](vendor/pi-codex-conversion/PATCHES.md).
+Vendor baseline, retained payload exclusions and patch maintenance are documented in [UPSTREAM.md](docs/provenance/codex-conversion/UPSTREAM.md) and [PATCHES.md](docs/provenance/codex-conversion/PATCHES.md).

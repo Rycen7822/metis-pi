@@ -114,14 +114,14 @@ test("shipped entry owns grouped read rows and images without changing the nativ
 
 test("built exec_command delegates its real Pi row to the shell display", async (t) => {
   const h = entry(t);
-  const { createExecCommandTool } = await import("../../vendor/pi-codex-conversion/src/tools/exec/command-tool.ts");
-  const { createExecCommandTracker } = await import("../../vendor/pi-codex-conversion/src/tools/exec/command-state.ts");
+  const { createExecCommandTool } = await import("../../src/codex/execution/exec/command-tool.ts");
+  const { createExecCommandTracker } = await import("../../src/codex/execution/exec/command-state.ts");
   const { highlightBashScript } = await import("../../src/bash-lexer.ts");
   const { detectColorLevel } = await import("../../src/palette.ts");
   const tracker = createExecCommandTracker();
   const tool = createExecCommandTool(tracker, {}, { showOutputWhenCollapsed: true });
   h.definitions.push({ name: "exec_command", sourceInfo: {
-    source: "local", path: resolve(import.meta.dirname, "../../vendor/pi-codex-conversion/dist/index.js"),
+    source: "local", path: resolve(import.meta.dirname, "../../src/codex/extension.ts"),
   } });
   const args = { cmd: "node --version && printf '%s' 中文" };
   tracker.recordStart("exec-entry", args.cmd);
@@ -193,11 +193,11 @@ test("streamed write executes through the entry and real padded edits reach the 
 test("shipped apply_patch executes add/move/delete and retains pre-image in folded real rows", async (t) => {
   const h = entry(t);
   const cwd = temporaryDirectory(t, "metis-entry-patch-");
-  const { createApplyPatchTool } = await import("../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts");
+  const { createApplyPatchTool } = await import("../../src/codex/execution/apply-patch/tool.ts");
   const tool = createApplyPatchTool({ showDiffWhenCollapsed: true });
   const root = resolve(import.meta.dirname, "../..");
   h.definitions.push({ name: "apply_patch", sourceInfo: {
-    source: root, path: join(root, "vendor/pi-codex-conversion/dist/index.js"),
+    source: root, path: join(root, "src/codex/extension.ts"),
   } });
   writeFileSync(join(cwd, "before.txt"), "原来的中文内容\n");
   writeFileSync(join(cwd, "deleted.txt"), Array.from({ length: 30 }, (_, i) => `deleted line ${i + 1}`).join("\n") + "\n");

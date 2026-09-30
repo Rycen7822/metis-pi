@@ -1,0 +1,161 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
+import { createGrammarToolInputProperties } from "./host-api.ts";
+import { declaredToolsOf } from "./transcript.ts";
+import { extractAccountId, buildWebSocketHeaders, PI_CODEX_CONVERSION_ORIGINATOR, resolveCodexWebSocketUrl } from "./openai-codex/headers.ts";
+import { noThrowCodexDiagnosticsSink } from "./openai-codex/diagnostic-failure.ts";
+import { buildRequestBody } from "./openai-codex/request-body.ts";
+import { normalizeCodexConfigurationUpdates } from "./reasoning-updates.ts";
+import { withCodexReserveModel } from "./openai-codex/model-catalog.ts";
+import { CODEX_RESERVE_MODEL } from "../codex-usage/reserve-policy.ts";
+import { DEFAULT_CODEX_BASE_URL } from "./openai-codex/constants.ts";
+import { supportsResponsesLiteModel } from "./openai-codex/responses-lite-model.ts";
+import { applyResponsesLiteRequest, applyResponsesLiteWebSocketMetadata, isResponsesLiteRequest, namespaceExistingResponsesLiteRequest, prepareResponsesLiteRequestImages } from "./openai-codex/responses-lite.ts";
+import type { CodexDiagnosticsSink, CodexPrewarmDiagnostics, CodexPrewarmResult, CodexProviderStreamOptions, OpenAICodexStreamOptions, ResponsesBody } from "./openai-codex/types.ts";
+import { closeOpenAICodexWebSocketSessions, recordWebSocketSseFallback } from "./openai-codex/websocket.ts";
+import { isWebSocketMessageTooBigError, isWebSocketUpgradeRequiredError } from "./openai-codex/websocket-connection.ts";
+import { codexCacheKeepaliveSocketSessionId, prewarmWebSocket } from "./openai-codex/websocket-stream.ts";
+import { type CodexTurnState, withCodexTurnState } from "./openai-codex/turn-state.ts";
+import { withRemoteCompactionV2Feature } from "./openai-responses/compaction-v2-feature.ts";
+import { normalizeResponsesToolHistory } from "./openai-responses/tool-history.ts";
+import {
+	createCodexTransportStream,
+	getEffectiveCodexTransport,
+	type CodexProviderRuntimeConfig,
+} from "./openai-codex/transport-recovery.ts";
+import {
+	hasContextNamespaceRouters,
+	routeContextNamespaceToolStream,
+} from "../context/namespace-tools.ts";
+
+export { buildRequestBody } from "./openai-codex/request-body.ts";
+export { parseSSE } from "./openai-codex/sse.ts";
+export { buildCachedWebSocketRequestBody } from "./openai-codex/websocket-continuation.ts";
+export { closeOpenAICodexWebSocketSessions };
+export type { ResponsesBody } from "./openai-codex/types.ts";
+
+export function closeOpenAICodexKeepaliveWebSocketSession(sessionId: string): void {
+	closeOpenAICodexWebSocketSessions(codexCacheKeepaliveSocketSessionId(sessionId));
+}
+
+async function prepareCodexRequestBody<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options: OpenAICodexStreamOptions | undefined,
+	responsesLite: boolean,
+): Promise<ResponsesBody> {
+	let body = buildRequestBody(model, context, options);
+	const nextBody = await options?.onPayload?.(body, model);
+	if (nextBody !== undefined) body = nextBody as ResponsesBody;
+	if (responsesLite) {
+		body = isResponsesLiteRequest(body)
+			? namespaceExistingResponsesLiteRequest({ ...body, parallel_tool_calls: false })
+			: applyResponsesLiteRequest(body);
+		body = await prepareResponsesLiteRequestImages(body);
+	}
+	if (!body.previous_response_id) {
+		const input = normalizeResponsesToolHistory(body.input ?? []);
+		if (input !== body.input) body = { ...body, input };
+	}
+	return normalizeCodexConfigurationUpdates(body);
+}
+
+export async function prewarmOpenAICodexWebSocket<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options: OpenAICodexStreamOptions,
+	deps: {
+		getConfig?: () => CodexProviderRuntimeConfig | undefined;
+		useResponsesLite?: (model: Model<Api>) => boolean;
+		turnState?: CodexTurnState | undefined;
+		getDiagnostics?: (() => CodexDiagnosticsSink | undefined) | undefined;
+		preserveContinuation?: boolean | undefined;
+		retainSocket?: boolean | undefined;
+		generate?: boolean | undefined;
+		prewarmDiagnostics?: CodexPrewarmDiagnostics | undefined;
+	},
+): Promise<CodexPrewarmResult | undefined> {
+	const runtimeConfig = deps.getConfig?.();
+	if (getEffectiveCodexTransport(options.transport, runtimeConfig?.openai, options.sessionId) === "sse") return;
+	if (!options.apiKey || !options.sessionId) return;
+	const responsesLite = deps.useResponsesLite?.(model)
+			?? (runtimeConfig?.executionMode === "code"
+			&& supportsResponsesLiteModel(model.id));
+	const grammarToolInputProperties = createGrammarToolInputProperties(declaredToolsOf(context), responsesLite);
+	const effectiveOptions = runtimeConfig?.compaction?.responsesCompaction
+		? { ...options, grammarToolInputProperties, headers: withRemoteCompactionV2Feature(options.headers) }
+		: { ...options, grammarToolInputProperties };
+	const body = await prepareCodexRequestBody(model, context, effectiveOptions, responsesLite);
+	const accountId = extractAccountId(options.apiKey);
+	const originator = runtimeConfig?.openai.harnessIdentifierHeader ? PI_CODEX_CONVERSION_ORIGINATOR : "pi";
+	const headers = buildWebSocketHeaders(model.headers, effectiveOptions.headers, accountId, options.apiKey, options.sessionId, originator);
+	const turnState = deps.preserveContinuation ? undefined : deps.turnState;
+	const websocketBody = withCodexTurnState(responsesLite ? applyResponsesLiteWebSocketMetadata(body) : body, turnState);
+	const diagnostics = noThrowCodexDiagnosticsSink(deps.getDiagnostics?.());
+	try {
+		return await prewarmWebSocket(
+			resolveCodexWebSocketUrl(model.baseUrl),
+			websocketBody,
+			headers,
+			accountId,
+			effectiveOptions,
+			turnState,
+			diagnostics,
+			deps.preserveContinuation,
+			deps.prewarmDiagnostics,
+			deps.generate,
+			deps.retainSocket,
+		);
+	} catch (error) {
+		if (!options.signal?.aborted && (isWebSocketUpgradeRequiredError(error) || isWebSocketMessageTooBigError(error))) {
+			recordWebSocketSseFallback(options.sessionId);
+			return;
+		}
+		throw error;
+	}
+}
+
+export function registerOpenAICodexCustomProvider(pi: ExtensionAPI, options: {
+	getConfig?: () => CodexProviderRuntimeConfig | undefined;
+	useResponsesLite?: (model: Model<Api>) => boolean;
+	turnState?: CodexTurnState | undefined;
+	onPreparedPayload?: ((payload: ResponsesBody) => void) | undefined;
+	getDiagnostics?: (() => CodexDiagnosticsSink | undefined) | undefined;
+}): void {
+	const streamSimple = (model: Model<Api>, context: Context, streamOptions?: CodexProviderStreamOptions) => {
+		const stream = createCodexTransportStream(model, context, streamOptions, {
+			prepareRequestBody: prepareCodexRequestBody,
+			...(options.getConfig ? { getConfig: options.getConfig } : {}),
+			...(options.useResponsesLite ? { useResponsesLite: options.useResponsesLite } : {}),
+			...(options.turnState ? { turnState: options.turnState } : {}),
+			...(options.onPreparedPayload ? { onPreparedPayload: options.onPreparedPayload } : {}),
+			...(options.getDiagnostics ? { getDiagnostics: options.getDiagnostics } : {}),
+		});
+		return hasContextNamespaceRouters(context)
+			? routeContextNamespaceToolStream(stream)
+			: stream;
+	};
+	// Keep Pi's live catalog and custom transport during startup and --list-models.
+	pi.registerProvider("openai-codex", { api: "openai-codex-responses", streamSimple });
+	let nativeProviderInstalled = false;
+	pi.on("session_start", function installNativeCodexProvider(_event, ctx) {
+		if (nativeProviderInstalled) return;
+		const baseProvider = ctx.modelRegistry.getProvider("openai-codex");
+		if (!baseProvider) return;
+		// Capture the Pi-backed provider before registering the native overlay. Its
+		// getModels follows Pi catalog refreshes; only Luna Reserve is added here.
+		const provider: Provider<"openai-codex-responses"> = {
+			id: "openai-codex",
+			name: "OpenAI Codex",
+			baseUrl: DEFAULT_CODEX_BASE_URL,
+			auth: baseProvider.auth,
+			getModels: () => withCodexReserveModel(baseProvider.getModels() as Model<"openai-codex-responses">[]),
+			...(baseProvider.refreshModels ? { refreshModels: baseProvider.refreshModels } : {}),
+			filterModels: (available) => available.filter(({ id }) => id !== CODEX_RESERVE_MODEL),
+			stream: streamSimple,
+			streamSimple,
+		};
+		pi.registerProvider(provider);
+		nativeProviderInstalled = true;
+	});
+}

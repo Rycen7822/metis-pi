@@ -146,7 +146,7 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
     writeFileSync(externalPath, 'export default function(pi) { pi.registerTool({name:"context_tree_query",label:"external",description:"external",parameters:{type:"object",properties:{}},async execute(){return {content:[{type:"text",text:"external"}],details:{}}}}); }');
     paths.push(externalPath);
   }
-  if (codex) paths.push(fileURLToPath(new URL("vendor/pi-codex-conversion/dist/index.js", root)));
+  if (codex) paths.push(fileURLToPath(new URL("src/codex/extension.ts", root)));
   const eventBus = createEventBus();
   const resourceLoader = new DefaultResourceLoader({ eventBus, cwd: dir, agentDir: dir, settingsManager, additionalExtensionPaths: paths, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "CONDENSE_TEST" });
   await resourceLoader.reload();

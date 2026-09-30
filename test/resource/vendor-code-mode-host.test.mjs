@@ -6,8 +6,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CodeModeHostClient } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-client.ts";
-import { hostAssetUrl, resolveCodeModeHostAsset } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-assets.ts";
+import { CodeModeHostClient } from "../../src/codex/execution/code-mode/host-client.ts";
+import { hostAssetUrl, resolveCodeModeHostAsset } from "../../src/codex/execution/code-mode/host-assets.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 
 test("host downloads use the metis release only on compatible Linux x64", () => {

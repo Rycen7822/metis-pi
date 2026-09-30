@@ -3,7 +3,7 @@ import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduc
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";
 
-export const OWNED_CONVERSION_ENTRY = fileURLToPath(new URL("../vendor/pi-codex-conversion/dist/index.js", import.meta.url));
+export const OWNED_CONVERSION_ENTRY = fileURLToPath(new URL("./codex/extension.ts", import.meta.url));
 export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fusion.ts", import.meta.url));
 
 // Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.

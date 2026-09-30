@@ -11,7 +11,7 @@
   "pi": {
     "extensions": [
       "./extensions/*.ts",
-      "./vendor/pi-codex-conversion/dist/index.js"
+      "./src/codex/extension.ts"
     ],
     "themes": [
       "./themes/metis-pi.json"
@@ -25,7 +25,7 @@
     "test:io": "node scripts/test.mjs io",
     "test:resource": "node scripts/test.mjs resource",
     "test:chrome": "node scripts/test.mjs chrome",
-    "check": "tsc -p tsconfig.json",
+    "check": "npm run check:core && npm run check:codex",
     "check:core": "tsc -p tsconfig.core.json",
     "check:test": "tsc -p tsconfig.test.json",
     "verify": "npm run check && npm run check:test && npm run vendor:check && npm test && npm pack --dry-run --ignore-scripts",
@@ -33,9 +33,10 @@
     "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs",
     "test:pty:strict": "node --experimental-strip-types scripts/pty-verify.mjs --strict",
     "vendor:build": "npm run vendor:check",
-    "vendor:check": "tsc -p vendor/pi-codex-conversion/tsconfig.json && tsc -p vendor/pi-condense/tsconfig.json",
+    "vendor:check": "tsc -p vendor/pi-condense/tsconfig.json",
     "vendor:smoke": "node --experimental-strip-types --test test/contract/vendor-codex-registration.test.mjs",
-    "vendor:fresh": "npm run vendor:check"
+    "vendor:fresh": "npm run vendor:check",
+    "check:codex": "tsc -p tsconfig.codex.json"
   },
   "dependencies": {
     "marked": "18.0.11",
@@ -68,16 +69,10 @@
     "LICENSE-APACHE-2.0",
     "NOTICE",
     "docs",
-    "vendor/pi-codex-conversion/{package.json,changelog.js,CHANGELOG.md,LICENSE,PATCHES.md,UPSTREAM.md}",
-    "vendor/pi-codex-conversion/dist/*.js",
-    "vendor/pi-codex-conversion/src/**/*.ts",
-    "!vendor/pi-codex-conversion/src/tools/rust/**",
-    "vendor/pi-codex-conversion/changelog.ts",
-    "vendor/pi-codex-conversion/vendor",
-    "vendor/pi-codex-conversion/src/tools/*/bin/**",
-    "vendor/pi-codex-conversion/src/tools/code-mode/CUSTOM-TOOLS.md",
-    "vendor/pi-codex-conversion/code-mode/bin",
-    "vendor/pi-codex-conversion/code-mode/vendor/code-mode-src/{LICENSE,NOTICE,UPSTREAM}",
+    "vendor/js-tiktoken",
+    "vendor/tree-sitter-bash",
+    "assets/native-tools",
+    "native/code-mode-host/{LICENSE,NOTICE,UPSTREAM}",
     "vendor/pi-condense/{package.json,LICENSE,PATCHES.md,UPSTREAM.md}",
     "vendor/pi-condense/dist/index.js",
     "vendor/pi-condense/index.ts",

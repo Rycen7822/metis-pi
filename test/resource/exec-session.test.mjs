@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
-import { createExecSessionManager } from "../../vendor/pi-codex-conversion/src/tools/exec/session-manager.ts";
-import { createExecCommandTool } from "../../vendor/pi-codex-conversion/src/tools/exec/command-tool.ts";
-import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/src/tools/exec/command-state.ts";
+import { createExecSessionManager } from "../../src/codex/execution/exec/session-manager.ts";
+import { createExecCommandTool } from "../../src/codex/execution/exec/command-tool.ts";
+import { createExecCommandTracker } from "../../src/codex/execution/exec/command-state.ts";
 import { captureBatch } from "../../vendor/pi-condense/src/batch-capture.ts";
 import { packToolResult } from "../../vendor/pi-condense/src/packing.ts";
-import { waitForExitOrInactivity } from "../../vendor/pi-codex-conversion/src/tools/exec/wait.ts";
+import { waitForExitOrInactivity } from "../../src/codex/execution/exec/wait.ts";
 import { trackExecSpools } from "../helpers/exec.mjs";
 
 const Mi = 1024 * 1024;
-const binary = fileURLToPath(new URL("../../vendor/pi-codex-conversion/src/tools/exec/bin/linux-x64/exec_bridge", import.meta.url));
+const binary = fileURLToPath(new URL("../../assets/native-tools/exec/linux-x64/exec_bridge", import.meta.url));
 const nativeTest = process.platform === "linux" && process.arch === "x64" && fs.existsSync(binary);
 
 test("a failed snapshot rejects and releases its wait callback without declaring the process exited", async () => {

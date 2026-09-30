@@ -5,15 +5,15 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, symlinkSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { executeFusion, validateThenRun } from "../../vendor/pi-codex-conversion/src/tools/action-fusion.ts";
-import { runNativeFusionCommand, runExecFusionCommand } from "../../vendor/pi-codex-conversion/src/tools/action-fusion-command.ts";
-import { createExecSessionManager } from "../../vendor/pi-codex-conversion/src/tools/exec/session-manager.ts";
+import { executeFusion, validateThenRun } from "../../src/codex/execution/action-fusion.ts";
+import { runNativeFusionCommand, runExecFusionCommand } from "../../src/codex/execution/action-fusion-command.ts";
+import { createExecSessionManager } from "../../src/codex/execution/exec/session-manager.ts";
 import actionFusion, { createNativeFusionTool } from "../../extensions/action-fusion.ts";
-import { createApplyPatchTool } from "../../vendor/pi-codex-conversion/src/tools/apply-patch/tool.ts";
-import { createNestedTools } from "../../vendor/pi-codex-conversion/src/adapter/code-mode.ts";
-import { normalizeCodexConversionConfig } from "../../vendor/pi-codex-conversion/src/adapter/activation/config.ts";
-import { createExecCommandTracker } from "../../vendor/pi-codex-conversion/src/tools/exec/command-state.ts";
-import { toWireToolDefinition } from "../../vendor/pi-codex-conversion/src/tools/code-mode/host-protocol.ts";
+import { createApplyPatchTool } from "../../src/codex/execution/apply-patch/tool.ts";
+import { createNestedTools } from "../../src/codex/adapter/code-mode.ts";
+import { normalizeCodexConversionConfig } from "../../src/codex/config/config.ts";
+import { createExecCommandTracker } from "../../src/codex/execution/exec/command-state.ts";
+import { toWireToolDefinition } from "../../src/codex/execution/code-mode/host-protocol.ts";
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-"));
@@ -69,7 +69,7 @@ test("patch parameter aliases preserve then_run; partial patch skips follow-up",
 
 test("code nested entry retains string patch and captures fused failure before throwing", async (t) => {
   const ctx = fixture(t);
-  const binary = fileURLToPath(new URL("../../vendor/pi-codex-conversion/src/tools/exec/bin/linux-x64/exec_bridge", import.meta.url));
+  const binary = fileURLToPath(new URL("../../assets/native-tools/exec/linux-x64/exec_bridge", import.meta.url));
   const sessions = createExecSessionManager({ bridgeBinaryPath: () => binary });
   t.after(() => sessions.shutdown());
   const runtime = { state: { config: normalizeCodexConversionConfig(null), executionMode: "code", availableToolNames: [] }, sessions, tracker: createExecCommandTracker() };
@@ -222,7 +222,7 @@ test("overlapping mutations wait through command; queued cancellation performs n
 
 test("conversion command archives output on exit, timeout and cancellation and leaves no running process", { timeout: 15000 }, async (t) => {
   const ctx = fixture(t);
-  const binary = fileURLToPath(new URL("../../vendor/pi-codex-conversion/src/tools/exec/bin/linux-x64/exec_bridge", import.meta.url));
+  const binary = fileURLToPath(new URL("../../assets/native-tools/exec/linux-x64/exec_bridge", import.meta.url));
   const sessions = createExecSessionManager({ bridgeBinaryPath: () => binary, minNonInteractiveExecYieldTimeMs: 250 });
   t.after(() => sessions.shutdown());
   writeFileSync(join(ctx.cwd, "emit.mjs"), 'process.stdout.write("original🙂\\n"); process.exitCode=3;');
