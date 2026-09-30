@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readExecutionConfig, writeExecutionConfig } from "../src/execution/config.ts";
 import { createExecSessionManager } from "../src/execution/exec/session-manager.ts";
-import { createExecCommandTracker } from "../src/execution/exec/command-state.ts";
 import { getBundledToolBinaryPath } from "../src/execution/native/binary.ts";
 import { createExecCommandTool } from "../src/execution/exec/command-tool.ts";
 import { createWriteStdinTool } from "../src/execution/exec/write-stdin-tool.ts";
@@ -11,12 +10,12 @@ import { createAutoReasoning } from "../src/execution/auto-reasoning.ts";
 import { registerBackgroundShellUi } from "../src/execution/ui/background-shell.ts";
 
 export default function execution(pi: ExtensionAPI): void {
-  const runtime: import("../src/execution/runtime.ts").ExecutionRuntime = { config: readExecutionConfig(), tracker: createExecCommandTracker(),
+  const runtime: import("../src/execution/runtime.ts").ExecutionRuntime = { config: readExecutionConfig(),
     sessions: createExecSessionManager({ bridgeBinaryPath: () => getBundledToolBinaryPath("exec_bridge", {}, runtime.config.tools.customRustBinariesDir) }) };
   const register = (tool: ToolDefinition) => pi.registerTool({ ...tool, exposure: "deferred" });
   const registerCore = () => {
     const config = runtime.config;
-    register(createExecCommandTool(runtime.tracker, runtime.sessions, { customRendering: config.ui.toolRenaming, showOutputWhenCollapsed: true }));
+    register(createExecCommandTool(runtime.sessions, { customRendering: config.ui.toolRenaming, showOutputWhenCollapsed: true }));
     register(createWriteStdinTool(runtime.sessions, { showOutputWhenCollapsed: true }));
     register(createViewImageTool({ customRustBinariesDir: config.tools.customRustBinariesDir,
       describeForTextModels: config.tools.viewImageFallback, customRendering: config.ui.toolRenaming }));
@@ -25,7 +24,6 @@ export default function execution(pi: ExtensionAPI): void {
   const reasoning = createAutoReasoning(pi, () => runtime.config.tools.autoReasoning);
   pi.registerTool(reasoning.tool);
 
-  const offExit = runtime.sessions.onSessionExit(sessionId => runtime.tracker.recordSessionFinished(sessionId));
   const offBusy = pi.events.on("metis:execution-status", (request: any) => { request.busy ||= runtime.sessions.listSessions(0).some(session => session.running); });
   const refresh = (_event: unknown, ctx: ExtensionContext) => {
     const config = readExecutionConfig(ctx);
@@ -38,7 +36,7 @@ export default function execution(pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event, ctx) => { refresh(event, ctx); reasoning.begin(ctx); });
   pi.on("agent_end", (_event, ctx) => reasoning.settle(ctx));
   pi.on("session_shutdown", async (_event, ctx) => {
-    reasoning.settle(ctx); widget.shutdown(); offExit(); offBusy();
+    reasoning.settle(ctx); widget.shutdown(); offBusy();
     await runtime.sessions.shutdown();
   });
   pi.registerCommand("execution", { description: "Configure metis execution tools", async handler(args, ctx) {

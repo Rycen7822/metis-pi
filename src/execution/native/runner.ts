@@ -90,12 +90,3 @@ export function runBundledTool({ binary, args, stdin, cwd, env, maxBuffer, signa
 		}
 	});
 }
-
-export function parseSingleJsonLine<T>(stdout: string, label: string): T {
-	const jsonLine = stdout
-		.trimEnd()
-		.split("\n")
-		.findLast((line) => line.trimStart().startsWith("{"));
-	if (!jsonLine) throw new Error(`${label} did not return structured JSON output`);
-	return JSON.parse(jsonLine) as T;
-}

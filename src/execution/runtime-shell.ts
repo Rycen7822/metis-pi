@@ -40,18 +40,6 @@ export function getDefaultCodexRuntimeShell(configuredShellPath?: string): strin
 	return getCodexRuntimeShell(process.env["SHELL"]);
 }
 
-export function getPiCodexRuntimeShell(
-	ctx: Pick<ExtensionContext, "cwd" | "isProjectTrusted">,
-	agentDir: string = getAgentDir(),
-): string {
-	const configuredShellPath = getPiConfiguredShellPath(ctx, agentDir);
-	try {
-		return getDefaultCodexRuntimeShell(configuredShellPath);
-	} catch {
-		return getCodexRuntimeShell(configuredShellPath ?? process.env["SHELL"]);
-	}
-}
-
 export function getPiConfiguredShellPath(
 	ctx: Pick<ExtensionContext, "cwd" | "isProjectTrusted">,
 	agentDir: string = getAgentDir(),

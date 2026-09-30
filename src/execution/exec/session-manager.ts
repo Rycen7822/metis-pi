@@ -7,7 +7,6 @@ import { makeExecResult, makeSnapshotResult, makeSnapshotSince, snapshotSession 
 import { ExecOutputBuffer } from "./output-buffer.ts";
 
 export interface UnifiedExecResult {
-	interrupted?: boolean | undefined;
 	fullOutputPath?: string | undefined;
 	fullOutputError?: string | undefined;
 	fullOutputBytes?: number | undefined;
@@ -37,9 +36,6 @@ export type ExecSessionChangeReason = "start" | "output" | "exit" | "terminate";
 export interface ExecCommandInput {
 	/** Host-owned archive directory, never a model argument. */
 	archiveDirectory?: string | undefined;
-	/** Host-only evidence options for compound tools awaiting command completion. */
-	archiveAllOutput?: boolean | undefined;
-	captureInterruptedResult?: boolean | undefined;
 	cmd: string;
 	workdir?: string | undefined;
 	shell?: string | undefined;
@@ -50,7 +46,6 @@ export interface ExecCommandInput {
 	max_yield_time_ms?: number | undefined;
 	max_output_tokens?: number | undefined;
 	login?: boolean | undefined;
-	wait_until_exit?: boolean | undefined;
 }
 
 export interface WriteStdinInput {
@@ -65,7 +60,6 @@ type ExecSession = BridgeExecSession;
 export type ExecSessionUpdateCallback = (result: UnifiedExecResult) => void;
 
 export interface ExecSessionManager {
-	setBaseEnv(env: NodeJS.ProcessEnv): void;
 	exec(input: ExecCommandInput, cwd: string, signal?: AbortSignal, onUpdate?: ExecSessionUpdateCallback): Promise<UnifiedExecResult>;
 	write(input: WriteStdinInput, signal?: AbortSignal, onUpdate?: ExecSessionUpdateCallback): Promise<UnifiedExecResult>;
 	hasSession(sessionId: number): boolean;
@@ -106,7 +100,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 	const bridgeSessions = createBridgeSessionRuntime(options.bridgeBinaryPath);
 	let shuttingDown = false;
 	let shutdownPromise: Promise<void> | undefined;
-	let baseEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
+	const baseEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
 	const defaultExecYieldTimeMs = options.defaultExecYieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS;
 	const defaultWriteYieldTimeMs = options.defaultWriteYieldTimeMs ?? DEFAULT_WRITE_YIELD_TIME_MS;
 	const minNonInteractiveExecYieldTimeMs = normalizeMinNonInteractiveExecYieldTime(options.minNonInteractiveExecYieldTimeMs);
@@ -207,10 +201,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 		notify(session);
 	}
 
-	function setBaseEnv(env: NodeJS.ProcessEnv): void {
-		baseEnv = { ...env };
-	}
-
 	const bridgeHooks: BridgeSessionHooks = {
 		isOwned: (session) => !shuttingDown && sessions.get(session.id) === session,
 		onOutput: (session, text) => appendOutput(session, text),
@@ -218,7 +208,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 	};
 
 	return {
-		setBaseEnv,
 		exec: async (input, cwd, signal, onUpdate) => {
 			if (shuttingDown) throw new Error("exec manager is shut down");
 			const requestedShell = input.shell ?? input.defaultShell;
@@ -227,7 +216,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 			const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
 			const session = bridgeSessions.create({
 				id: nextSessionId++,
-				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS), input.archiveDirectory ? new ExecOutputArchive(input.archiveDirectory, input.archiveAllOutput ? 0 : Math.min(32768, Math.max(256, (input.max_output_tokens ?? 10000) * 4))) : undefined),
+				buffer: new ExecOutputBuffer(configuredMaxSessionBufferChars ?? (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS), input.archiveDirectory ? new ExecOutputArchive(input.archiveDirectory, Math.min(32768, Math.max(256, (input.max_output_tokens ?? 10000) * 4))) : undefined),
 				input: {
 					command: input.cmd,
 					executionCommand: execution.command,
@@ -252,22 +241,15 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 				onUpdate?.(makeSnapshotResult(session, 0, input.max_output_tokens, true));
 				const execYieldMs = clampExecYieldTime(input.yield_time_ms, defaultExecYieldTimeMs, session.interactive, minNonInteractiveExecYieldTimeMs, input.max_yield_time_ms);
 				const maxExecWaitMs = Math.max(execYieldMs, input.max_yield_time_ms ?? execYieldMs);
-				let waitedMs = 0;
-				let idleTimeMs = execYieldMs;
-				for (;;) {
-					const elapsedMs = await waitForExitOrInactivity(
-						session,
-						idleTimeMs,
-						maxExecWaitMs,
-						signal,
-						onUpdate ? (elapsed) => onUpdate(makeSnapshotResult(session, waitedMs + elapsed, input.max_output_tokens)) : undefined,
-					);
-					waitedMs += elapsedMs;
-					if (signal?.aborted) {
-						throw signal.reason instanceof Error ? signal.reason : new Error("exec aborted");
-					}
-					if (!input.wait_until_exit || (session.exitCode !== undefined && session.exitCode !== null)) break;
-					idleTimeMs = Math.min(maxExecWaitMs, idleTimeMs * 2);
+				const waitedMs = await waitForExitOrInactivity(
+					session,
+					execYieldMs,
+					maxExecWaitMs,
+					signal,
+					onUpdate ? (elapsed) => onUpdate(makeSnapshotResult(session, elapsed, input.max_output_tokens)) : undefined,
+				);
+				if (signal?.aborted) {
+					throw signal.reason instanceof Error ? signal.reason : new Error("exec aborted");
 				}
 				await bridgeSessions.waitForStartup(session, signal);
 				if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
@@ -275,32 +257,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 					session.nextEmptyPollYieldMs = growEmptyPollYield(Math.max(execYieldMs, waitedMs), maxEmptyWriteYieldTimeMs);
 				return finishResult(session, waitedMs, input.max_output_tokens);
 			} catch (error) {
-				if (signal?.aborted && input.captureInterruptedResult) {
-					// Collect the terminated process's final bytes before disposal. Ordinary
-					// exec cancellation keeps its existing throwing contract.
-					try {
-						await session.startup;
-						await bridgeSessions.terminate(session);
-						const deadline = Date.now() + 5_000;
-						while (!session.finalized && Date.now() < deadline) await bridgeSessions.poll(session, bridgeHooks, 100);
-						session.buffer.archive?.preserve();
-						const result = makeSnapshotResult(session, Date.now() - session.startedAt, input.max_output_tokens);
-						if (!session.finalized) {
-							result.fullOutputComplete = false;
-							result.fullOutputError = "Command termination was not confirmed; output may be incomplete";
-							exposeSession(session);
-						} else {
-							deleteSession(session);
-							Object.assign(result, session.buffer.archive?.info());
-						}
-						return { ...result, interrupted: true };
-					} catch {
-						session.buffer.archive?.preserve();
-						const result = makeSnapshotResult(session, Date.now() - session.startedAt, input.max_output_tokens);
-						deleteSession(session);
-						return { ...result, interrupted: true, fullOutputComplete: false, fullOutputError: "Interrupted command cleanup or output capture failed" };
-					}
-				}
 				if (signal?.aborted) deleteSession(session);
 				throw error;
 			} finally {

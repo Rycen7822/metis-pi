@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCall, formatResult, makeRenderers, parseDisplayDiff, renderDiffLines } from "../../src/renderers.ts";
+import { formatResult, makeRenderers, parseDisplayDiff, renderDiffLines } from "../../src/renderers.ts";
+import { stripVTControlCharacters } from "node:util";
 import { theme, FakeText, deepFreeze, sessionStub } from "../helpers.mjs";
 import { layout } from "../helpers/layout.mjs";
 import { fusionRenderers } from "../../src/fusion-view.ts";
 
 const result = (text) => ({ content: [{ type: "text", text }] });
+const renderers = makeRenderers(text => new FakeText(text), () => "expand");
+const call = (name, args, ctx) => renderers[name].renderCall(args, theme, ctx).render(80).join("\n");
 
 test("fusion display retains successful write diff while the following command fails", () => {
   const renderers = makeRenderers(text => new FakeText(text), () => "expand");
@@ -29,9 +32,9 @@ test("fusion display retains successful write diff while the following command f
 
 test("completion and error labels do not rely on mutating shared renderer state", () => {
   const args = deepFreeze({ command: "printf hello" });
-  assert.match(formatCall("bash", args, theme, { isPartial: true }), /• Running printf hello/);
-  assert.match(formatCall("bash", args, theme, { isPartial: false }), /• Ran printf hello/);
-  assert.match(formatCall("bash", args, theme, { isError: true, isPartial: false }), /• Ran/);
+  assert.match(call("bash", args, { isPartial: true }), /• Running printf hello/);
+  assert.match(call("bash", args, { isPartial: false }), /• Ran printf hello/);
+  assert.match(call("bash", args, { isError: true, isPartial: false }), /• Ran/);
 });
 
 test("failure output is visible even when collapsed", () => {
@@ -52,7 +55,7 @@ test("edit diffs use line-number-first Codex ordering and are not arbitrarily tr
     ...Array.from({ length: 30 }, (_, i) => `  ${2031 + i} context-${i}`),
   ].join("\n");
   const input = { content: [], details: { diff } };
-  const text = formatResult("edit", input, {}, theme, {});
+  const text = stripVTControlCharacters(renderers.edit.renderResult(input, { expanded: true }, theme, { args: { path: "file" } }).render(100).join("\n"));
   assert.match(text, /2030 -old value/);
   assert.match(text, /2030 \+new value/);
   assert.match(text, /2060  context-29/);
@@ -119,7 +122,7 @@ test("owned renderer components reuse safely and refresh diff counts without hos
 });
 
 test("successful exploration content folds by default, errors and full expansion do not", () => {
-  assert.deepEqual(formatCall("read", { path: "README.md" }, theme, { isPartial: false, colorLevel: { kind: "truecolor" } }).split("\n"), [
+  assert.deepEqual(call("read", { path: "README.md" }, { isPartial: false, colorLevel: { kind: "truecolor" } }).split("\n"), [
     "• Explored",
     "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;58;150;221mRead\x1B[39m README.md",
   ], "the completed read owns the two-line color format");
@@ -132,13 +135,16 @@ test("successful exploration content folds by default, errors and full expansion
 
 test("written content is previewed without claiming an unknown old-file deletion count", () => {
   const ctx = deepFreeze({ args: { path: "a.ts", content: "alpha\nbeta\n" }, isPartial: false });
-  assert.match(formatResult("write", result("wrote file"), {}, theme, ctx), /Written content \(2 lines\)/);
-  assert.doesNotMatch(formatCall("write", ctx.args, theme, ctx), /-0/);
+  const body = renderers.write.renderResult(result("wrote file"), {}, theme, ctx).render(80).join("\n");
+  assert.match(body, /alpha/);
+  assert.match(body, /beta/);
+  assert.doesNotMatch(call("write", ctx.args, ctx), /-0/);
 });
 
 test("syntax highlighting failures fall back without suppressing the command", () => {
   const paint = () => { throw new Error("unsupported language"); };
-  assert.match(formatCall("bash", { command: "echo hello" }, theme, { isPartial: false }, undefined, paint), /echo hello/);
+  const r = makeRenderers(text => new FakeText(text), () => "expand", paint);
+  assert.match(r.bash.renderCall({ command: "echo hello" }, theme, { isPartial: false }).render(80).join("\n"), /echo hello/);
   // Native PowerShell commands receive the same compact execution view.
-  assert.match(formatCall("powershell", { command: "Get-Location" }, theme, { isPartial: false }), /• Ran Get-Location/);
+  assert.match(call("powershell", { command: "Get-Location" }, { isPartial: false }), /• Ran Get-Location/);
 });

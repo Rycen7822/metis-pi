@@ -26,6 +26,8 @@
 
 输入和显示入口不受 `metis-pi.json` 总开关控制；补全触发依赖 composer 的安装。彻底关闭这组入口应同时过滤 `-extensions/skill-mux.ts` 和 `-extensions/skill-entry.ts`，见 [配置](../configuration.md)。
 
+技能来源、目录、启用规则和优先级由 Pi 的已加载资源决定；多技能展开与补全读取同一份列表，也适用于 `PI_CODING_AGENT_DIR` 指定的配置目录。插件不再单独扫描包目录或读取 `settings.local.json` 来增加技能。资源重载后读取更新的列表，技能正文仍在展开时读取。
+
 两个显示补丁分别包装宿主 `SkillInvocationMessageComponent` 的 `handleMouse` 与 `updateDisplay`，在模块加载时安装。守卫按 `(prototype, method)` 区分，重复安装不会叠加；类或方法缺失时退避，不阻塞启动。宿主结构变动仍需重新验证显示效果，见 [兼容性](../compatibility.md)。
 
-令牌解析和守卫集中在 `src/skill-tokens.ts`；`src/skill-input.ts` / `src/skill-mux.ts` 管展开与发现，`src/skill-fold.ts` / `src/skill-label.ts` 管显示。纯输入、真实宿主组件及 PTY E6 分层验证，运行范围见 [VALIDATION](../../VALIDATION.md)。
+令牌解析和守卫集中在 `src/skill-tokens.ts`；`src/skill-input.ts` / `src/skill-mux.ts` 管展开与宿主资源查询，`src/skill-fold.ts` / `src/skill-label.ts` 管显示。纯输入、真实宿主组件及 PTY E6 分层验证，运行范围见 [VALIDATION](../../VALIDATION.md)。

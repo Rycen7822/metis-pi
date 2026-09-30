@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { stripVTControlCharacters as plain } from "node:util";
 import { highlightBashScript } from "../../src/bash-lexer.ts";
-import { renderExecCommandCall, renderGroupedExecCommandCall } from "../../src/execution/ui/rendering.ts";
+import { renderExecCommandCall } from "../../src/execution/ui/rendering.ts";
 
 const theme = { fg: (_role, text) => text, bold: text => text };
 const colored = { ...theme, highlightCommandLines: lines => highlightBashScript(lines, { kind: "truecolor" }) };
@@ -27,9 +27,7 @@ test("the component hook receives the original multiline command; exploration by
   }, true);
   assert.equal(rendered, component);
   const delegated = { ...colored, renderCommandCall() { assert.fail("exploration must keep its native grouping"); } };
-  const groups = [[{ kind: "read", path: "example.ts", command: "cat example.ts" }]];
   for (const expanded of [false, true]) {
     assert.equal(renderExecCommandCall("cat example.ts", "done", delegated, expanded), renderExecCommandCall("cat example.ts", "done", colored, expanded));
-    assert.equal(renderGroupedExecCommandCall(groups, "done", delegated, expanded, ["cat example.ts"]), renderGroupedExecCommandCall(groups, "done", colored, expanded, ["cat example.ts"]));
   }
 });

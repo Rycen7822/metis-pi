@@ -33,6 +33,26 @@ export function parseCommandTokens(command: string[]): ParsedShellCommand[] {
 	return deduped;
 }
 
+function summarizeParts(parts: string[][]): ParsedShellCommand[] {
+	const commands: ParsedShellCommand[] = [];
+	let cwd: string | undefined;
+	for (const tokens of parts) {
+		if (tokens[0] === "cd") {
+			const target = cdTarget(tokens.slice(1));
+			if (target) cwd = cwd ? joinPaths(cwd, target) : target;
+			continue;
+		}
+
+		const parsed = summarizeMainTokens(tokens);
+		if (parsed.kind === "read" && cwd) {
+			commands.push({ ...parsed, path: joinPaths(cwd, parsed.path) });
+		} else {
+			commands.push(parsed);
+		}
+	}
+	return commands;
+}
+
 function parseCommandImpl(command: string[]): ParsedShellCommand[] {
 	const shellCommands = parseShellLcCommands(command);
 	if (shellCommands) return shellCommands;
@@ -54,22 +74,7 @@ function parseCommandImpl(command: string[]): ParsedShellCommand[] {
 		return [{ kind: "unknown", command: joinCommandTokens(command) }];
 	}
 
-	const commands: ParsedShellCommand[] = [];
-	let cwd: string | undefined;
-	for (const tokens of effectiveParts) {
-		if (tokens[0] === "cd") {
-			const target = cdTarget(tokens.slice(1));
-			if (target) cwd = cwd ? joinPaths(cwd, target) : target;
-			continue;
-		}
-
-		const parsed = summarizeMainTokens(tokens);
-		if (parsed.kind === "read" && cwd) {
-			commands.push({ ...parsed, path: joinPaths(cwd, parsed.path) });
-		} else {
-			commands.push(parsed);
-		}
-	}
+	const commands = summarizeParts(effectiveParts);
 
 	let simplified = commands;
 	while (true) {
@@ -142,22 +147,7 @@ function parseShellLcCommands(
 		return [{ kind: "unknown", command: script }];
 	}
 
-	let commands: ParsedShellCommand[] = [];
-	let cwd: string | undefined;
-	for (const tokens of filteredCommands) {
-		if (tokens[0] === "cd") {
-			const target = cdTarget(tokens.slice(1));
-			if (target) cwd = cwd ? joinPaths(cwd, target) : target;
-			continue;
-		}
-
-		const parsed = summarizeMainTokens(tokens);
-		if (parsed.kind === "read" && cwd) {
-			commands.push({ ...parsed, path: joinPaths(cwd, parsed.path) });
-		} else {
-			commands.push(parsed);
-		}
-	}
+	let commands = summarizeParts(filteredCommands);
 
 	if (commands.length > 1) {
 		commands = commands.filter(

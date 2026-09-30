@@ -176,8 +176,6 @@ fs.writeFileSync(path.join(AGENT_DIR, "settings.json"), JSON.stringify({
 fs.writeFileSync(path.join(AGENT_DIR, "metis-pi.json"), JSON.stringify({
   execution: { ui: { backgroundShellPrevShortcut: "alt+u" } },
 }));
-// Suppress the vendor first-run notice so mouse coordinates target the tested rows.
-fs.writeFileSync(path.join(AGENT_DIR, "howaboua-pi-stuff-changelog.json"), JSON.stringify({ suppress: true }));
 // Install THIS repo (the code under test), not the published one.
 execFileSync(PI_BIN, ["install", path.resolve(new URL("..", import.meta.url).pathname)], {
   env: ISOLATED_ENV,

@@ -30,7 +30,7 @@ test("package exposes display, goal, condense, dynamic-agents and execution entr
     assert.ok(files.has(`vendor/pi-condense/${path}`), `pi-condense/${path}`);
   }
   for (const path of [
-    "src/changelog.ts", "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
+    "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/view-image/linux-x64/view_image",
     "docs/provenance/codex-conversion/LICENSE", "docs/provenance/codex-conversion/UPSTREAM.md",

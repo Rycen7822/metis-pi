@@ -636,68 +636,25 @@ export function registerCommands(
         // interactively (pre-filled with the current value).  Argument form
         // accepts a comma- and/or whitespace-separated list, or the sentinels
         // `none` / `clear` to empty the list.
-        case "protected-tools": {
-          const raw = subArgs.join(" ").trim();
-          let nextList: string[] | undefined;
-
-          if (!raw) {
-            const currentDisplay =
-              currentConfig.value.protectedTools.length === 0
-                ? ""
-                : currentConfig.value.protectedTools.join(", ");
-            const entered = await ctx.ui.input(
-              "Protected tools (comma-separated tool names; empty or 'none' to clear)",
-              currentDisplay,
-            );
-            if (entered === undefined) return; // user cancelled
-            const trimmed = entered.trim();
-            if (trimmed === "" || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "clear") {
-              nextList = [];
-            } else {
-              nextList = trimmed.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-            }
-          } else if (raw.toLowerCase() === "none" || raw.toLowerCase() === "clear") {
-            nextList = [];
-          } else {
-            nextList = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-          }
-
-          currentConfig.value = { ...currentConfig.value, protectedTools: nextList };
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(`Protected tools: ${protectedToolsDisplay(nextList)}`);
-          break;
-        }
-
-        // ── /pruner protected-paths [list] ──
+        case "protected-tools":
         case "protected-paths": {
-          const raw = subArgs.join(" ").trim();
-          let nextList: string[] | undefined;
-
+          const tools = subcommand === "protected-tools";
+          const field = tools ? "protectedTools" : "protectedPaths";
+          const label = tools ? "tools" : "paths";
+          let raw = subArgs.join(" ").trim();
           if (!raw) {
-            const currentDisplay =
-              currentConfig.value.protectedPaths.length === 0
-                ? ""
-                : currentConfig.value.protectedPaths.join(", ");
             const entered = await ctx.ui.input(
-              "Protected paths (comma-separated globs; empty or 'none' to clear)",
-              currentDisplay,
+              `Protected ${label} (comma-separated ${tools ? "tool names" : "globs"}; empty or 'none' to clear)`,
+              currentConfig.value[field].join(", "),
             );
             if (entered === undefined) return; // user cancelled
-            const trimmed = entered.trim();
-            if (trimmed === "" || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "clear") {
-              nextList = [];
-            } else {
-              nextList = trimmed.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-            }
-          } else if (raw.toLowerCase() === "none" || raw.toLowerCase() === "clear") {
-            nextList = [];
-          } else {
-            nextList = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+            raw = entered.trim();
           }
-
-          currentConfig.value = { ...currentConfig.value, protectedPaths: nextList };
+          const nextList = raw === "" || /^(none|clear)$/i.test(raw)
+            ? [] : raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+          currentConfig.value = { ...currentConfig.value, [field]: nextList };
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(`Protected paths: ${protectedToolsDisplay(nextList)}`);
+          ctx.ui.notify(`Protected ${label}: ${protectedToolsDisplay(nextList)}`);
           break;
         }
 

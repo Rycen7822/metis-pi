@@ -35,94 +35,42 @@ function isSummarizerThinking(value: unknown): value is SummarizerThinking {
   return typeof value === "string" && SUMMARIZER_THINKING_LEVELS.some((level) => level.value === value);
 }
 
+const booleanOrDefault = (value: unknown, fallback: boolean): boolean =>
+  typeof value === "boolean" ? value : fallback;
+
+// Validate before flooring to preserve fractional input behavior.
+const integerOrDefault = <T extends number | null>(
+  value: unknown, fallback: T, minimum = 0, positive = false,
+): number | T =>
+  typeof value === "number" && Number.isFinite(value) && (positive ? value > minimum : value >= minimum)
+    ? Math.floor(value)
+    : fallback;
+
+const fractionOrDefault = <T extends number | null>(value: unknown, fallback: T): number | T =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1 ? value : fallback;
+
 function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
   const merged = { ...DEFAULT_CONFIG, ...existing };
   return {
     ...merged,
     opportunisticCompaction: merged.opportunisticCompaction === true,
-    enabled: typeof merged.enabled === "boolean" ? merged.enabled : DEFAULT_CONFIG.enabled,
-    showPruneStatusLine:
-      typeof merged.showPruneStatusLine === "boolean"
-        ? merged.showPruneStatusLine
-        : DEFAULT_CONFIG.showPruneStatusLine,
-    showOccStatusLine:
-      typeof merged.showOccStatusLine === "boolean"
-        ? merged.showOccStatusLine
-        : DEFAULT_CONFIG.showOccStatusLine,
+    enabled: booleanOrDefault(merged.enabled, DEFAULT_CONFIG.enabled),
+    showPruneStatusLine: booleanOrDefault(merged.showPruneStatusLine, DEFAULT_CONFIG.showPruneStatusLine),
+    showOccStatusLine: booleanOrDefault(merged.showOccStatusLine, DEFAULT_CONFIG.showOccStatusLine),
     pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : DEFAULT_CONFIG.pruneOn,
-    summarizerThinking: isSummarizerThinking(merged.summarizerThinking)
-      ? merged.summarizerThinking
-      : DEFAULT_CONFIG.summarizerThinking,
-    quietOversizedSkips:
-      typeof merged.quietOversizedSkips === "boolean"
-        ? merged.quietOversizedSkips
-        : DEFAULT_CONFIG.quietOversizedSkips,
-    minBatchChars:
-      typeof merged.minBatchChars === "number" &&
-      Number.isFinite(merged.minBatchChars) &&
-      merged.minBatchChars >= 0
-        ? Math.floor(merged.minBatchChars)
-        : DEFAULT_CONFIG.minBatchChars,
-    summarizerIdleTimeoutMs:
-      typeof merged.summarizerIdleTimeoutMs === "number" &&
-      Number.isFinite(merged.summarizerIdleTimeoutMs) &&
-      merged.summarizerIdleTimeoutMs >= 0
-        ? Math.floor(merged.summarizerIdleTimeoutMs)
-        : DEFAULT_CONFIG.summarizerIdleTimeoutMs,
-    summarizerMaxTimeoutMs:
-      typeof merged.summarizerMaxTimeoutMs === "number" &&
-      Number.isFinite(merged.summarizerMaxTimeoutMs) &&
-      merged.summarizerMaxTimeoutMs >= 0
-        ? Math.floor(merged.summarizerMaxTimeoutMs)
-        : DEFAULT_CONFIG.summarizerMaxTimeoutMs,
-    recoveryGraceTurns:
-      typeof merged.recoveryGraceTurns === "number" &&
-      Number.isFinite(merged.recoveryGraceTurns) &&
-      merged.recoveryGraceTurns >= 0
-        ? Math.floor(merged.recoveryGraceTurns)
-        : DEFAULT_CONFIG.recoveryGraceTurns,
-    dedupByContentHash:
-      typeof merged.dedupByContentHash === "boolean"
-        ? merged.dedupByContentHash
-        : DEFAULT_CONFIG.dedupByContentHash,
-    autoBudgetThreshold:
-      typeof merged.autoBudgetThreshold === "number" &&
-      Number.isFinite(merged.autoBudgetThreshold) &&
-      merged.autoBudgetThreshold > 0 &&
-      merged.autoBudgetThreshold <= 1
-        ? merged.autoBudgetThreshold
-        : DEFAULT_CONFIG.autoBudgetThreshold,
-    spillThreshold:
-      typeof merged.spillThreshold === "number" &&
-      Number.isFinite(merged.spillThreshold) &&
-      merged.spillThreshold > 0
-        ? Math.floor(merged.spillThreshold)
-        : DEFAULT_CONFIG.spillThreshold,
-    spillPreviewBytes:
-      typeof merged.spillPreviewBytes === "number" &&
-      Number.isFinite(merged.spillPreviewBytes) &&
-      merged.spillPreviewBytes >= 0
-        ? Math.floor(merged.spillPreviewBytes)
-        : DEFAULT_CONFIG.spillPreviewBytes,
-    budgetTurnDelta:
-      typeof merged.budgetTurnDelta === "number" &&
-      Number.isFinite(merged.budgetTurnDelta) &&
-      merged.budgetTurnDelta > 0 &&
-      merged.budgetTurnDelta <= 1
-        ? merged.budgetTurnDelta
-        : DEFAULT_CONFIG.budgetTurnDelta,
-    frontierGapThresholdTokens:
-      typeof merged.frontierGapThresholdTokens === "number" &&
-      Number.isFinite(merged.frontierGapThresholdTokens) &&
-      merged.frontierGapThresholdTokens > 0
-        ? Math.floor(merged.frontierGapThresholdTokens)
-        : DEFAULT_CONFIG.frontierGapThresholdTokens,
-    maxImagesPerRequest:
-      typeof merged.maxImagesPerRequest === "number" &&
-      Number.isFinite(merged.maxImagesPerRequest) &&
-      merged.maxImagesPerRequest >= 1
-        ? Math.floor(merged.maxImagesPerRequest)
-        : DEFAULT_CONFIG.maxImagesPerRequest,
+    summarizerThinking: isSummarizerThinking(merged.summarizerThinking) ? merged.summarizerThinking : DEFAULT_CONFIG.summarizerThinking,
+    quietOversizedSkips: booleanOrDefault(merged.quietOversizedSkips, DEFAULT_CONFIG.quietOversizedSkips),
+    minBatchChars: integerOrDefault(merged.minBatchChars, DEFAULT_CONFIG.minBatchChars),
+    summarizerIdleTimeoutMs: integerOrDefault(merged.summarizerIdleTimeoutMs, DEFAULT_CONFIG.summarizerIdleTimeoutMs),
+    summarizerMaxTimeoutMs: integerOrDefault(merged.summarizerMaxTimeoutMs, DEFAULT_CONFIG.summarizerMaxTimeoutMs),
+    recoveryGraceTurns: integerOrDefault(merged.recoveryGraceTurns, DEFAULT_CONFIG.recoveryGraceTurns),
+    dedupByContentHash: booleanOrDefault(merged.dedupByContentHash, DEFAULT_CONFIG.dedupByContentHash),
+    autoBudgetThreshold: fractionOrDefault(merged.autoBudgetThreshold, DEFAULT_CONFIG.autoBudgetThreshold),
+    spillThreshold: integerOrDefault(merged.spillThreshold, DEFAULT_CONFIG.spillThreshold, 0, true),
+    spillPreviewBytes: integerOrDefault(merged.spillPreviewBytes, DEFAULT_CONFIG.spillPreviewBytes),
+    budgetTurnDelta: fractionOrDefault(merged.budgetTurnDelta, DEFAULT_CONFIG.budgetTurnDelta),
+    frontierGapThresholdTokens: integerOrDefault(merged.frontierGapThresholdTokens, DEFAULT_CONFIG.frontierGapThresholdTokens, 0, true),
+    maxImagesPerRequest: integerOrDefault(merged.maxImagesPerRequest, DEFAULT_CONFIG.maxImagesPerRequest, 1),
   };
 }
 

@@ -9,7 +9,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSkillAutocompleteWrapper, createSkillMux } from "../src/skill-mux.ts";
 
 export default function skillMuxExtension(pi: ExtensionAPI): void {
-  const mux = createSkillMux();
+  const mux = createSkillMux(pi);
   pi.on("input", (event) => mux.onInput(event));
   pi.on("session_start", (_event, ctx) => {
     // Fill the completion gap the host leaves: second-and-later skill tokens

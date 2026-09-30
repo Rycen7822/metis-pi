@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
 import { createExecSessionManager } from "../../src/execution/exec/session-manager.ts";
 import { createExecCommandTool } from "../../src/execution/exec/command-tool.ts";
-import { createExecCommandTracker } from "../../src/execution/exec/command-state.ts";
 import { captureBatch } from "../../vendor/pi-condense/src/batch-capture.ts";
 import { packToolResult } from "../../vendor/pi-condense/src/packing.ts";
 import { waitForExitOrInactivity } from "../../src/execution/exec/wait.ts";
@@ -51,7 +50,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 		const { manager, exec } = nativeExec(t, { maxSessionBufferChars: 1024 });
 		const expected = "FIRST\r\n" + "x".repeat(100000) + "\u001b[31mLAST\r\n";
-		const result = await exec(`process.stdout.write(${JSON.stringify(expected)})`, { archiveDirectory: directory, wait_until_exit: true, max_output_tokens: 64 });
+		const result = await exec(`process.stdout.write(${JSON.stringify(expected)})`, { archiveDirectory: directory, yield_time_ms: 10_000, max_output_tokens: 64 });
 		assert.equal(result.exit_code, 0);
 		assert.ok(result.output.length <= 256);
 		assert.equal(result.fullOutputComplete, true);
@@ -69,7 +68,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		const expected = "FIRST\r\n" + "x".repeat(8000) + "LAST";
 		let result, sessionId;
 		if (smallerRing) {
-			result = await exec(`process.stdout.write(${JSON.stringify(expected)})`, { archiveDirectory: directory, wait_until_exit: true });
+			result = await exec(`process.stdout.write(${JSON.stringify(expected)})`, { archiveDirectory: directory, yield_time_ms: 10_000 });
 			sessionId = 1;
 		} else {
 			const release = join(directory, "release");
@@ -97,8 +96,8 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		for (const status of [7, "running", 0]) {
 			fs.writeFileSync(join(directory, "build.cjs"), `process.stdout.write(${JSON.stringify(log)});` + (status === "running" ? "setInterval(()=>{},1000)" : `process.exitCode=${status}`));
 			fs.writeFileSync(join(directory, "package.json"), JSON.stringify({ scripts: { build: "node build.cjs" } }));
-			const tool = createExecCommandTool(createExecCommandTracker(), manager, { waitForNonInteractiveExit: status !== "running" });
-			const args = { cmd: "npm run build", workdir: directory, shell: "/bin/sh", login: false, yield_time_ms: 250 };
+			const tool = createExecCommandTool(manager);
+			const args = { cmd: "npm run build", workdir: directory, shell: "/bin/sh", login: false, yield_time_ms: status === "running" ? 250 : 10_000 };
 			const returned = await tool.execute(`status-${status}`, args, undefined, undefined, { cwd: directory });
 			assert.equal(returned.details.exit_code, status === "running" ? undefined : status);
 			const batch = captureBatch({ content: [{ type: "toolCall", id: `status-${status}`, name: "exec_command", arguments: args }] }, [{ ...returned, toolCallId: `status-${status}`, timestamp: 1 }], 1, 1);
@@ -107,7 +106,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 			else assert.equal(packed, undefined, `${status} exec must preserve its diagnostics`);
 			if (returned.details.session_id) manager.terminateSession(returned.details.session_id);
 		}
-		const small = await manager.exec(command("process.stdout.write('small')", { archiveDirectory: directory, wait_until_exit: true }), directory);
+		const small = await manager.exec(command("process.stdout.write('small')", { archiveDirectory: directory, yield_time_ms: 10_000 }), directory);
 		assert.equal(small.output, "small");
 		assert.equal(small.fullOutputPath, undefined, "untruncated small results remain inline");
 	});
@@ -121,7 +120,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 	]) test(`exit observation: ${scenario.name}`, { timeout: 15_000 }, async (t) => {
 		const { manager, directories, exec } = nativeExec(t, scenario.options);
 		const result = await exec(`process.stdout.write("first\\n" + "x".repeat(${2 * Mi}) + "🙂last\\n")`, {
-			wait_until_exit: true, max_output_tokens: Mi,
+			yield_time_ms: 10_000, max_output_tokens: Mi,
 		});
 		assert.equal(result.exit_code, 0);
 		assert.equal(result.session_id, undefined);
@@ -181,7 +180,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		});
 		t.after(() => { for (const path of directories) remove(path, { recursive: true, force: true }); });
 		await assert.rejects(exec(`process.stdout.write("x".repeat(${2 * Mi}))`, {
-			wait_until_exit: true,
+			yield_time_ms: 10_000,
 		}), /cleanup EIO injected/);
 		assert.equal(failed, true);
 		assert.equal(manager.hasSession(1), false);
@@ -192,7 +191,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		const { manager, directories, exec } = nativeExec(t);
 		const controller = new AbortController();
 		await assert.rejects(exec(`process.stdout.write("a".repeat(${2 * Mi})); setInterval(() => {}, 1000)`, {
-			wait_until_exit: true,
+			yield_time_ms: 10_000,
 		}, controller.signal, () => {
 			if (directories.length) controller.abort(new Error("cancel test"));
 		}), /cancel test/);
@@ -212,7 +211,7 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 	test("incremental byte decoding and TTY stdin continuation survive the buffer change", { timeout: 15_000 }, async (t) => {
 		const { manager, exec } = nativeExec(t);
 		const script = `process.stdout.write(Buffer.from([0xf0, 0x9f])); setTimeout(() => process.stdout.write(Buffer.from([0x99, 0x82])), 50)`;
-		const decoded = await exec(script, { wait_until_exit: true });
+		const decoded = await exec(script, { yield_time_ms: 10_000 });
 		assert.equal(decoded.output, "🙂");
 		const waiting = await manager.exec({ cmd: "read line; printf 'reply:%s\\n' \"$line\"", shell: "/bin/sh", login: false, tty: true, yield_time_ms: 250 }, process.cwd());
 		assert.equal(typeof waiting.session_id, "number");

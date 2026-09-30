@@ -207,50 +207,11 @@ export function readPathFromHeadTail(
 	tool: "head" | "tail",
 ): string | undefined {
 	if (args.length === 1 && !args[0]!.startsWith("-")) return args[0]!;
-	if (tool === "head") {
-		const hasValidN =
-			args[0] === "-n"
-				? /^[0-9]+$/.test(args[1] ?? "")
-				: (args[0]?.startsWith("-n") ?? false) &&
-					/^[0-9]+$/.test(args[0]!.slice(2));
-		if (hasValidN) {
-			const candidates: string[] = [];
-			for (let index = 0; index < args.length; index++) {
-				if (
-					index === 0 &&
-					args[index] === "-n" &&
-					/^[0-9]+$/.test(args[index + 1] ?? "")
-				) {
-					index += 1;
-					continue;
-				}
-				candidates.push(args[index]!);
-			}
-			return candidates.find((candidate) => !candidate.startsWith("-"));
-		}
-		return undefined;
-	}
-	const hasValidN =
-		args[0] === "-n"
-			? /^\+?[0-9]+$/.test(args[1] ?? "")
-			: (args[0]?.startsWith("-n") ?? false) &&
-				/^\+?[0-9]+$/.test(args[0]!.slice(2));
-	if (hasValidN) {
-		const candidates: string[] = [];
-		for (let index = 0; index < args.length; index++) {
-			if (
-				index === 0 &&
-				args[index] === "-n" &&
-				/^\+?[0-9]+$/.test(args[index + 1] ?? "")
-			) {
-				index += 1;
-				continue;
-			}
-			candidates.push(args[index]!);
-		}
-		return candidates.find((candidate) => !candidate.startsWith("-"));
-	}
-	return undefined;
+	const numeric = tool === "head" ? /^[0-9]+$/ : /^\+?[0-9]+$/;
+	const first = args[0] ?? "";
+	const count = first === "-n" ? args[1] : first.startsWith("-n") ? first.slice(2) : undefined;
+	if (!numeric.test(count ?? "")) return undefined;
+	return args.slice(first === "-n" ? 2 : 0).find((candidate) => !candidate.startsWith("-"));
 }
 
 function isValidSedRange(value: string | undefined): boolean {

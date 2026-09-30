@@ -9,7 +9,7 @@
 | 入口 | 负责内容 |
 | --- | --- |
 | `appearance.ts` → `src/extension.ts` | 显示装配、宿主能力、转录、chrome、复制和诊断。 |
-| `skill-mux.ts` / `skill-entry.ts` | skill 正文展开与发现、标签和折叠；补全接线使用 composer。 |
+| `skill-mux.ts` / `skill-entry.ts` | 使用 Pi 已加载的 skill 资源展开正文、补全、标签和折叠；补全接线使用 composer。 |
 | `goal.ts` → `src/goal-state.ts` | 入口处理宿主 I/O、提示和工具；状态核心处理目标、计时、分支恢复和回合用量。 |
 | `dynamic-agents.ts` → `src/dynamic-agents.ts` | 每次 run 的全局策略快照、来源恢复和请求投影；使用 Pi 原生请求投影。 |
 | `condense.ts` → `vendor/pi-condense/index.ts` | 重复安装检测、单一加载入口和摘要用量展示；vendor 负责归档、精简/摘要和恢复。 |

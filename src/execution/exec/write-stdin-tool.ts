@@ -134,7 +134,3 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 	};
 	return tool;
 }
-
-export function registerWriteStdinTool(pi: ExtensionAPI, sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {}): void {
-	pi.registerTool(createWriteStdinTool(sessions, options) as any);
-}

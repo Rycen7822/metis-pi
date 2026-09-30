@@ -115,24 +115,18 @@ test("shipped entry owns grouped read rows and images without changing the nativ
 test("built exec_command delegates its real Pi row to the shell display", async (t) => {
   const h = entry(t);
   const { createExecCommandTool } = await import("../../src/execution/exec/command-tool.ts");
-  const { createExecCommandTracker } = await import("../../src/execution/exec/command-state.ts");
   const { highlightBashScript } = await import("../../src/bash-lexer.ts");
   const { detectColorLevel } = await import("../../src/palette.ts");
-  const tracker = createExecCommandTracker();
-  const tool = createExecCommandTool(tracker, {}, { showOutputWhenCollapsed: true });
+  const tool = createExecCommandTool({}, { showOutputWhenCollapsed: true });
   h.definitions.push({ name: "exec_command", sourceInfo: {
     source: "local", path: resolve(import.meta.dirname, "../../extensions/execution.ts"),
   } });
   const args = { cmd: "node --version && printf '%s' 中文" };
-  tracker.recordStart("exec-entry", args.cmd);
   const row = h.row("exec_command", "exec-entry", args, tool);
   row.setArgsComplete();
   row.markExecutionStarted();
-  tracker.recordPersistentSession("exec-entry", 123);
-  tracker.recordEnd("exec-entry");
   row.updateResult({ content: [{ type: "text", text: "output" }], details: { output: "output", session_id: 123 }, isError: false });
   assert.match(plain(row.render(80)), /Session 123 still running/);
-  tracker.recordSessionFinished(123);
   row.updateResult({ content: [{ type: "text", text: "output" }], details: { output: "output", exit_code: 1 }, isError: true });
   const rendered = row.render(80);
   assert.ok(rendered.join("\n").includes(highlightBashScript([args.cmd], detectColorLevel())[0]));

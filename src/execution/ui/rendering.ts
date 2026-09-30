@@ -1,5 +1,5 @@
 import { summarizeShellCommand, type ShellAction } from "../shell/summary.ts";
-import type { ExecCommandStatus } from "../exec/command-state.ts";
+export type ExecCommandStatus = "running" | "done";
 
 export interface RenderTheme {
 	fg(role: string, text: string): string;
@@ -15,10 +15,6 @@ export function renderExecCommandCall(command: string, state: ExecCommandStatus,
 	return summary.maskAsExplored
 		? renderExplorationText([summary.actions], state, theme, expanded ? [command] : undefined)
 		: theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded);
-}
-
-export function renderGroupedExecCommandCall(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme, expanded = false, commands: string[] = []): string {
-	return renderExplorationText(actionGroups, state, theme, expanded ? commands : undefined);
 }
 
 export function renderWriteStdinCall(

@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-10-01 — Production TS simplification and Pi skill resource ownership
+
+- Retired the unregistered changelog coordinator and unwired command-display tracker; removed unused execution wrappers/options and duplicate dispatcher branches. Condense scalar normalization/protected-list commands and Shell traversal now share local implementations. Skill expansion and completion query Pi's loaded resource registry lazily; parsing, nested blocks, images, labels and folding remain local.
+- `npm run verify`: exit 0, **321/321**, zero skipped; core/execution/test/vendor type checks and package dry-run pass (**200 payload files**). `npm run test:pty:strict`: **E1, E2, E3, E4, E6** pass; isolated clipboard sink receives **161 exact characters**. Obsolete changelog suppression setup was removed from the PTY fixture afterward; shipped runtime code is unchanged by that fixture cleanup.
+- Fresh tarball `npm install --ignore-scripts` with Pi peers pinned to **0.99.1**, then actual `DefaultResourceLoader`/`AgentSession` binding in an isolated HOME and `PI_CODING_AGENT_DIR`: **8 extensions, zero errors**. Actual input events preserve multi-skill blocks, relative directories, image bytes, native single-skill handoff and unknown tokens; transport is blocked and zero model/network requests occur. All **151 production TS files** and bundled Linux executables match the installed copy byte-for-byte; executable modes match.
+- Temporary `.work` differential probes compare actual old/new implementations: **483 normalize inputs**, **456 head/tail operands**, **27 Shell commands**, **44 protected-list operations**, zero differences. Vendor checking caught nullable numeric defaults in the new helper signature; local generic return types now preserve `number | null`. No permanent source-removal tests or new test files were added.
+- Physical Git-tracked source: production TS **27,993 → 27,014** (−979); test/helper source −9; PTY fixture −2; total source including Rust/Shell **42,129 → 41,139** (−990). Analysis, accounting and temporary evidence are in `.work/production-ts-review/`; extracted installation/profile/cache artifacts were removed. No personal configuration changes or paid model requests.
+
 ## 2026-10-01 — Todo feature retirement
 
 - Removed the todo extension and its five production modules together: tool, commands, task panel, session hooks, workspace store/locks/settings and environment override. Existing user data is not deleted or migrated; current configuration and feature documentation no longer expose the retired feature.

@@ -155,22 +155,6 @@ export function shellCallText(bullet: string, title: string, args: Record<string
     + rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("");
 }
 
-// Legacy string formatters for non-component hosts and tests.
-
-export function formatDisplayDiff(diffText: string, theme: Palette): string {
-  const rows = parseDisplayDiff(diffText);
-  const width = Math.max(1, ...rows.map((row) => row.lineNumber === undefined ? 0 : String(row.lineNumber).length));
-  return rows.map((row) => {
-    if (row.kind === "separator") return theme.fg("dim", `${" ".repeat(width + 4)}…`);
-    if (row.kind === "metadata") return theme.fg("dim", `  ${row.content}`);
-    const number = row.lineNumber === undefined ? " ".repeat(width) : String(row.lineNumber).padStart(width);
-    const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
-    const signColor = row.kind === "add" ? "toolDiffAdded" : row.kind === "remove" ? "toolDiffRemoved" : "dim";
-    const contentColor = row.kind === "remove" ? "muted" : row.kind === "add" ? "toolTitle" : "toolDiffContext";
-    return `  ${theme.fg("dim", number)} ${theme.fg(signColor, sign)}${theme.fg(contentColor, row.content)}`.trimEnd();
-  }).join("\n");
-}
-
 export function formatResult(name: ToolName, value: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext, hint = "expand tool output"): string {
   const result = asRecord(value);
   const blocks = Array.isArray(result.content) ? result.content.map(asRecord) : [];
@@ -178,20 +162,9 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   const lines = cleanLines(text);
   const expanded = options.expanded === true;
   const error = ctx.isError === true || result.isError === true;
-  const details = asRecord(result.details);
   const sections: string[] = [];
-  const isDiff = name === "edit" && !error && typeof details.diff === "string";
-  if (isDiff) {
-    sections.push(formatDisplayDiff(details.diff as string, theme));
-  }
-  if (name === "write" && !error && !options.isPartial && typeof asRecord(ctx.args).content === "string") {
-    const written = cleanLines(asRecord(ctx.args).content as string);
-    sections.push(gutter([`Written content (${written.length} lines)`], theme, "muted"));
-    const code = numberedLines(written);
-    sections.push(gutter(preview(code, 12, expanded, hint), theme));
-  }
   const foldedExploration = EXPLORATION.has(name) && !expanded && !error && !options.isPartial;
-  if (lines.length && !foldedExploration && (!isDiff || expanded || !/^(Successfully replaced text|Successfully wrote)/.test(text.trim()))) {
+  if (lines.length && !foldedExploration) {
     sections.push(gutter(preview(lines, PREVIEW_LINES, expanded, hint,
       SHELL.has(name) ? (options.isPartial ? "tail" : "both") : "head"), theme, error ? "error" : "toolOutput"));
   }
@@ -207,20 +180,13 @@ export function formatResult(name: ToolName, value: unknown, options: ViewOption
   return sections.filter(Boolean).join("\n");
 }
 
-export function formatCall(name: ToolName, input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats, paint?: Highlight): string {
+function editCall(input: unknown, theme: Palette, ctx: ViewContext, stats?: DiffStats): string {
   const args = asRecord(input);
   const done = ctx.isPartial === false;
-  if (EXPLORATION.has(name)) {
-    return explorationTitle(name, { ...ctx, args: input }, theme);
-  }
-  if (SHELL.has(name)) {
-    const { bullet, title } = shellTitle(ctx, theme);
-    return shellCallText(bullet, title, args, ctx, theme, paint);
-  }
   const marker = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
-  const label = ctx.isError ? "Failed" : name === "edit" ? (done ? "Edited" : "Editing") : (done ? "Wrote" : "Writing");
+  const label = ctx.isError ? "Failed" : done ? "Edited" : "Editing";
   let suffix = "";
-  if (name === "edit" && stats && ctx.isError !== true) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
+  if (stats && ctx.isError !== true) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
   return `${marker} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
 }
 
@@ -397,7 +363,7 @@ export function makeRenderers(
         return component(explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)), ctx);
       }
       const state = view(ctx);
-      const call = component(formatCall(name, args, theme, merged, state?.stats, paint), ctx);
+      const call = component(editCall(args, theme, merged, state?.stats), ctx);
       if (state) state.call = call;
       return call;
     },
@@ -406,7 +372,7 @@ export function makeRenderers(
         const state = view(ctx);
         if (state) {
           state.stats = diffStats(result);
-          state.call?.setText(formatCall(name, ctx.args, theme, ctx, state.stats, paint));
+          state.call?.setText(editCall(ctx.args, theme, ctx, state.stats));
         }
       }
       if (name === "edit" && ctx.isError !== true) {

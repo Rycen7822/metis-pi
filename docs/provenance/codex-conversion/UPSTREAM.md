@@ -40,5 +40,5 @@ separate reviewed asset and source change.
 4. Record reviewed source/asset changes here and in PATCHES.md. Git preserves
    implementation differences; there is no accumulated patch or generated TS copy.
 
-`src/changelog.ts` reads the root product changelog. Execution settings use
+Product history is recorded in the root `CHANGELOG.md`. Execution settings use
 `metis-pi.json.execution`; a shortcut change requires restarting Pi.

@@ -5,9 +5,8 @@ import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent"
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getPiConfiguredShellPath } from "../runtime-shell.ts";
-import { renderExecCommandCall, renderGroupedExecCommandCall } from "../ui/rendering.ts";
+import { renderExecCommandCall } from "../ui/rendering.ts";
 import { getExperimentalToolSampling } from "../tool-sampling.ts";
-import type { ExecCommandTracker } from "./command-state.ts";
 import { formatUnifiedExecResult } from "./format.ts";
 import { renderTerminalOutput } from "./output.ts";
 import type { ExecCommandInput, ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
@@ -37,14 +36,10 @@ interface ExecCommandToolOptions {
 	customRendering?: boolean | undefined;
 	promptSnippet?: boolean | undefined;
 	showOutputWhenCollapsed?: boolean | undefined;
-	waitForNonInteractiveExit?: boolean | undefined;
 }
 
 interface ExecCommandRenderContextLike {
-	toolCallId?: string | undefined;
 	expanded?: boolean | undefined;
-	args?: { cmd?: unknown } | undefined;
-	invalidate?: () => void | undefined;
 }
 
 function prepareExecCommandArguments(args: unknown): ExecCommandParams {
@@ -134,16 +129,9 @@ function renderCall(
 	args: { cmd?: unknown },
 	theme: { fg(role: string, text: string): string; bold(text: string): string },
 	context: ExecCommandRenderContextLike | undefined,
-	tracker: ExecCommandTracker,
 ) {
 	const command = typeof args.cmd === "string" ? args.cmd : "";
-	tracker.registerRenderContext(context?.toolCallId, context?.invalidate ?? (() => {}));
-	const info = tracker.getRenderInfo(context?.toolCallId, command);
-	if (info.hidden) return new Text("", 0, 0);
-	const expanded = context?.expanded === true;
-	const text = info.actionGroups
-		? renderGroupedExecCommandCall(info.actionGroups, info.status, theme, expanded, info.commands ?? [command])
-		: renderExecCommandCall(command, info.status, theme, expanded);
+	const text = renderExecCommandCall(command, "done", theme, context?.expanded === true);
 	return typeof text === "string" ? new Text(text, 0, 0) : text;
 }
 
@@ -151,12 +139,8 @@ function renderResult(
 	result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown | undefined },
 	renderOptions: { expanded: boolean; isPartial: boolean },
 	theme: { fg(role: string, text: string): string },
-	context: ExecCommandRenderContextLike | undefined,
-	tracker: ExecCommandTracker,
 	options: ExecCommandToolOptions,
 ) {
-	const command = typeof context?.args?.cmd === "string" ? context.args.cmd : "";
-	if (tracker.getRenderInfo(context?.toolCallId, command).hidden) return new Container();
 	const details = isUnifiedExecResult(result.details) ? result.details : undefined;
 	const textContent = result.content.find((item) => item.type === "text");
 	const plainText = textContent?.text ?? "";
@@ -170,7 +154,7 @@ function renderResult(
 	return new Text(text, 4, 0);
 }
 
-export function createExecCommandTool(tracker: ExecCommandTracker, sessions: ExecSessionManager, options: ExecCommandToolOptions = {}) {
+export function createExecCommandTool(sessions: ExecSessionManager, options: ExecCommandToolOptions = {}) {
 	const constrainedSampling = getExperimentalToolSampling("exec_command");
 	const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
 		name: "exec_command",
@@ -181,7 +165,7 @@ export function createExecCommandTool(tracker: ExecCommandTracker, sessions: Exe
 		outputSchema: EXEC_OUTPUT_SCHEMA,
 		...(constrainedSampling ? { constrainedSampling } : {}),
 		prepareArguments: prepareExecCommandArguments,
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("exec_command aborted");
 			const parsedInput = parseExecCommandParams(params);
 			const input: ExecCommandInput = parsedInput.shell === undefined
@@ -197,22 +181,16 @@ export function createExecCommandTool(tracker: ExecCommandTracker, sessions: Exe
 				: {
 						...input,
 						max_yield_time_ms: MAX_EXEC_YIELD_TIME_MS,
-						...(options.waitForNonInteractiveExit ? { wait_until_exit: true } : {}),
 					};
 			const sessionDir = ctx.sessionManager?.getSessionDir?.();
 			const archiveDirectory = sessionDir ? join(sessionDir, `${ctx.sessionManager.getSessionId()}-blobs`) : undefined;
 			const result = await sessions.exec({ ...execInput, ...(archiveDirectory ? { archiveDirectory } : {}) }, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
-			if (result.session_id !== undefined) tracker.recordPersistentSession(toolCallId, result.session_id);
 			return toToolResult(result);
 		},
 		...(options.customRendering === false ? {} : {
-			renderCall: ((args: { cmd?: unknown }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ExecCommandRenderContextLike) => renderCall(args, theme, context, tracker)) as never,
-			renderResult: ((result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown }, renderOptions: { expanded: boolean; isPartial: boolean }, theme: { fg(role: string, text: string): string }, context?: ExecCommandRenderContextLike) => renderResult(result, renderOptions, theme, context, tracker, options)) as never,
+			renderCall: ((args: { cmd?: unknown }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ExecCommandRenderContextLike) => renderCall(args, theme, context)) as never,
+			renderResult: ((result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown }, renderOptions: { expanded: boolean; isPartial: boolean }, theme: { fg(role: string, text: string): string }) => renderResult(result, renderOptions, theme, options)) as never,
 		}),
 	};
 	return tool;
-}
-
-export function registerExecCommandTool(pi: ExtensionAPI, tracker: ExecCommandTracker, sessions: ExecSessionManager, options: ExecCommandToolOptions = {}): void {
-	pi.registerTool(createExecCommandTool(tracker, sessions, options) as never);
 }
