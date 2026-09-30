@@ -33,8 +33,7 @@ test("package exposes display, goal, condense, dynamic-agents and execution entr
     "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/view-image/linux-x64/view_image",
-    "docs/provenance/codex-conversion/LICENSE", "docs/provenance/codex-conversion/UPSTREAM.md",
-    "docs/provenance/codex-conversion/PATCHES.md",
+    "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md",
   ]) assert.ok(files.has(path), path);
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
   assert.ok(files.has("extensions/execution.ts"));

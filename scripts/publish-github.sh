@@ -36,7 +36,7 @@ git add -- \
   test/contract/host-entry.test.mjs scripts/publish-github.sh scripts/preview.mjs \
   package.json tsconfig.json tsconfig.core.json \
   README.md LICENSE NOTICE VALIDATION.md CHANGELOG.md .gitignore .github/workflows/ci.yml \
-  docs/compatibility.md docs/preview.html docs/preview.png docs/transcript.ansi docs/transcript.txt
+  docs/compatibility.md
 id="$(gh api user --jq .id)"
 git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \
   commit -m 'feat: enable Codex-style compact tool transcript by default'

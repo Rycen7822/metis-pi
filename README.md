@@ -20,14 +20,14 @@ Individual features can be disabled through Pi's package entry filters, for exam
 
 | Feature | Behavior |
 | --- | --- |
-| [Tool transcripts](docs/features/transcript.md) | Compact headers for built-in tools, grouped exploration, streaming write previews, and edit/write diffs. Third-party tools retain their own renderers. |
-| [Thinking display](docs/features/thinking.md) | Shows the latest 6 lines while streaming, then collapses. Single-click toggles collapsed/peek; double-click toggles peek/expanded. Ctrl+T retains the host behavior. |
-| [Composer and status](docs/features/composer.md) | Gray input area with model and context information. The [Working indicator and footer](docs/features/working-footer.md) show the execution phase, measured output speed, usage, and the amount of uncommitted changes. |
+| [Tool transcripts](docs/features/display.md) | Compact headers for built-in tools, grouped exploration, streaming write previews, and edit/write diffs. Third-party tools retain their own renderers. |
+| [Thinking display](docs/features/display.md#思考块) | Shows the latest 6 lines while streaming, then collapses. Single-click toggles collapsed/peek; double-click toggles peek/expanded. Ctrl+T retains the host behavior. |
+| [Composer and status](docs/features/interface.md#输入区) | Gray input area with model and context information. The [Working indicator and footer](docs/features/interface.md#统计口径) show the execution phase, measured output speed, usage, and the amount of uncommitted changes. |
 | [Selection copy](docs/features/selection-copy.md) | In fullscreen mode, maps selected display content back to logical source text. Falls back to native extraction for lines that cannot be verified. |
-| [Long histories](docs/features/fullscreen-layout.md) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
+| [Long histories](docs/features/interface.md#全屏历史与留白) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
 | [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
-| [Execution tools](docs/codex.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
+| [Execution tools](docs/execution.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
 | [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from an external JSON file, applied at the next agent run. Replaces request context only; preserves project rules and source files. |
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
 | [Condense](docs/features/condense.md) | Bundles pi-condense 2.11.0 and uses its existing configuration. After each final reply, simplifies history before applying threshold-based summarization. Persists large outputs and supports paginated retrieval and summary usage display. |
@@ -40,7 +40,7 @@ Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid f
 - Exact copying depends on application-managed selections in fullscreen mode. Markdown tables, unknown tokens, images, and similar content retain native fallbacks. Native terminal selections are outside this plugin's control.
 - The 5,000-line limit applies to the retained display window. A single oversized component may still be fully laid out once, and native search only covers the loaded window.
 - The main UI may conflict with other plugins that replace the editor, footer, or Working indicator. This package's exact copy path takes over the heuristic copying provided by `pi-copy-soft-wrap`; use only one implementation.
-- Bundled native tools include only linux-x64 binaries. The upstream voice implementation has been removed; see the [Codex guide](docs/codex.md).
+- Bundled native tools include only linux-x64 binaries. See the [execution guide](docs/execution.md) for the retained tools.
 
 The [compatibility guide](docs/compatibility.md) documents host contracts. [VALIDATION.md](VALIDATION.md) records current checks and coverage gaps; it does not guarantee compatibility with every plugin combination.
 

@@ -61,7 +61,7 @@
 - 适配 Pi 0.86.1：Codex provider 同时接受旧式 Context 与 transcript；skill 标签适配 MouseRegion 嵌套；开发依赖与 marked 对齐宿主。
 - 工具放置统一决策：删除/同名重声明使用完整当前工具表，纯新增保持就地锚点，新旧路径不重复声明或复活删除项。
 - 压缩/回放共享模型能力和放置决策，切片保留中途 system 更新，tool-search ID 跨切片稳定；重建压缩请求同步顶层 tools。canonical 请求保留自身基线。
-- 真实 provider 请求的协议、回放与最终压缩请求回归覆盖上述行为。维护说明见 [vendor 补丁](docs/provenance/codex-conversion/PATCHES.md)。
+- 真实 provider 请求的协议、回放与最终压缩请求回归覆盖上述行为。维护说明见 [执行模块来源](docs/provenance/execution/README.md)。
 
 ## 0.19.0–0.19.5
 

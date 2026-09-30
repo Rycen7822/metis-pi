@@ -20,14 +20,14 @@ pi install .
 
 | 功能 | 行为与说明 |
 | --- | --- |
-| [工具转录](docs/features/transcript.md) | 内建工具的紧凑标题、探索分组、流式 write 预览与 edit/write diff；第三方工具保留自己的 renderer。 |
-| [思考显示](docs/features/thinking.md) | 流式显示最新 6 行，结束后折叠；单击折叠/窥视，双击窥视/全展开，Ctrl+T 保留宿主行为。 |
-| [输入与状态](docs/features/composer.md) | 灰色输入面、模型/上下文信息；[Working/footer](docs/features/working-footer.md) 显示运行阶段、实测输出速度、用量和未提交改动量。 |
+| [工具转录](docs/features/display.md) | 内建工具的紧凑标题、探索分组、流式 write 预览与 edit/write diff；第三方工具保留自己的 renderer。 |
+| [思考显示](docs/features/display.md#思考块) | 流式显示最新 6 行，结束后折叠；单击折叠/窥视，双击窥视/全展开，Ctrl+T 保留宿主行为。 |
+| [输入与状态](docs/features/interface.md#输入区) | 灰色输入面、模型/上下文信息；[Working/footer](docs/features/interface.md#统计口径) 显示运行阶段、实测输出速度、用量和未提交改动量。 |
 | [选区复制](docs/features/selection-copy.md) | fullscreen 下将所选显示内容按来源映射还原为逻辑文本；无法验证的行回退原生提取。 |
-| [长历史](docs/features/fullscreen-layout.md) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
+| [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
-| [执行工具](docs/codex.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 与原图工具；provider 和登录由 Pi 提供。 |
+| [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 与原图工具；provider 和登录由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，沿用配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
@@ -40,7 +40,7 @@ pi install .
 - 精确复制依赖 fullscreen 应用选区；Markdown 表格、未知 token、图片等保留原生回退。终端原生选区不受此插件控制。
 - 5,000 行是保留窗口上限；单个超大组件仍可能完整排版一次，原生搜索仅覆盖已加载窗口。
 - 本包的主界面外观与其它替换 editor/footer/Working 的插件可能冲突。`pi-copy-soft-wrap` 的启发式复制由本包精确路径接管，建议只保留一套。
-- 随包原生工具仅包含 linux-x64 载荷；上游语音实现已完整移除，详见[Codex 模块说明](docs/codex.md)。
+- 随包原生工具仅包含 linux-x64 载荷，详见[执行工具](docs/execution.md)。
 
 [兼容性说明](docs/compatibility.md)记录宿主契约；[VALIDATION.md](VALIDATION.md)记录当前验证与未覆盖边界，不能据此保证任意插件组合完全兼容。
 

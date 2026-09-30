@@ -10,7 +10,7 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
 - Replaced tool re-registration with a guarded, display-only selector adapter.
 - Removed all search-result rewriting and cross-call grouping.
 - Preserved compact headers, gutters, previews and diff display concepts.
-- Default installation enables the compact transcript via index.ts, plus a selectable theme.
+- Default installation enables the compact transcript via extensions/appearance.ts, plus a selectable theme.
 - Deferred self-shell activation preserves the stock constructor child tree.
 - Added lifecycle cleanup and compatibility tests.
 
@@ -26,8 +26,8 @@ This project is not an OpenAI or Earendil product.
 Codex diff visual/behavior reference additionally inspected for 0.3.0:
   openai/codex commit 94697375cb9d2aa8ae74d61957c6b396819bec94
   codex-rs/tui/src/diff_render.rs
-The implementation here is an independent TypeScript renderer. No Codex Rust
-source is embedded or redistributed by this package.
+The visual renderer here is an independent TypeScript implementation. Native
+helper attribution is listed separately below.
 
 The goal extension (extensions/goal.ts and src/goal-state.ts) derives from third-party code:
 Upstream: https://github.com/mitsuhiko/agent-stuff (extensions/goal.ts @ 122e299)
@@ -43,9 +43,9 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
 The execution supplement (src/execution) is locally maintained code derived from:
 Upstream: https://github.com/IgorWarzocha/howaboua-pi-stuff (packages/pi-codex-conversion)
   npm: @howaboua/pi-codex-conversion 3.0.34 (MIT, full text in
-  docs/provenance/codex-conversion/LICENSE). Pristine upstream sources are kept outside the
+  docs/provenance/execution/LICENSE). Pristine upstream sources are kept outside the
   repository; provenance and the upgrade procedure are in
-  docs/provenance/codex-conversion/UPSTREAM.md.
+  docs/provenance/execution/README.md.
 Upstream copyright: the IgorWarzocha/howaboua-pi-stuff authors.
 
 Modifications: Copyright (c) 2026 Rycen7822. MIT License.
