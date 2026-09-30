@@ -1,6 +1,6 @@
 # 诊断与排查
 
-显示问题先运行 `/codex-ui`；任务持久化问题使用 `/todos-doctor`。两者的副作用不同：前者报告当前显示状态，后者读取任务 store，读取损坏存档可能触发恢复归档，显式 `gc` 会写回清理结果。
+显示问题先运行 `/codex-ui`，查看当前组件安装、配置与运行状态。
 
 ## 常见问题入口
 
@@ -11,7 +11,6 @@
 | token、cache 或 Git 数字不一致 | 各行的 `scope` 与数据来源，见 [统计口径](working-footer.md)。 |
 | 复制换行或缩进不正确 | `selection-copy`、`copy-stats` 的模式、失败原因和外来包装，见 [复制](selection-copy.md)。 |
 | 旧历史暂时不可见 | `history-window` 的页边界和行预算，继续向相应方向滚动加载。 |
-| 任务列表缺失、锁或坏档 | `/todos-doctor status`，再按 [todo](todo.md) 的存储规则处理。 |
 | 动态指令或压缩状态不符 | `/dynamic-agents` 或 `/pruner status`，它们不属于显示配置。 |
 
 ## `/codex-ui` 字段
@@ -35,15 +34,6 @@
 
 没有活动会话时返回 `no active session`；宿主没有命令注册能力时不注册。诊断并不验证所有外部插件或服务是否正常。
 
-## `/todos-doctor` 的读取与清理
-
-| 调用 | 行为 |
-| --- | --- |
-| `/todos-doctor` 或 `/todos-doctor status` | 报告目录、状态文件、任务数、gcDays、锁和归档文件；不主动执行 GC 或解除锁。 |
-| `/todos-doctor gc` | 在上述报告后执行 `store.collect()`，按 gcDays 清理已完成任务；有变化时写回。 |
-
-`store.status()` 会走正常读取路径：JSON/结构损坏时尝试将任务文件归档为 `tasks.json.bak-<时间>` 并返回空状态，因此不能承诺零文件写入。权限或 I/O 错误不会被当作损坏归档。过期锁的回收发生在写操作获取锁时；doctor 的 status 只报告是否过期及既有归档。
-
 ## 实现与验证
 
-显示诊断由 `src/diagnostics.ts` 装配；任务命令与存储分别在 `src/todo/commands.ts`、`src/todo/store.ts`。现有 appearance/host-surface、todo-store 与 PTY 覆盖相应行为；执行范围见 [VALIDATION](../../VALIDATION.md)。
+显示诊断由 `src/diagnostics.ts` 装配。现有 appearance/host-surface 与 PTY 覆盖相应行为；执行范围见 [VALIDATION](../../VALIDATION.md)。

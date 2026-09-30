@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-10-01 — Todo feature retirement
+
+- Removed the todo extension and its five production modules together: tool, commands, task panel, session hooks, workspace store/locks/settings and environment override. Existing user data is not deleted or migrated; current configuration and feature documentation no longer expose the retired feature.
+- Removed six feature-specific test files, their helper and the todo-only PTY E5 journey. Existing package, dynamic-agents and installed-profile OCC expectations now match the eight remaining extensions; policy, tool and OCC behavior assertions are retained. No permanent tests or source-deletion checks were added.
+- Final `npm run verify`: **321/321** tests passed, including production/execution/test/condense type checks and a **202-file** package dry run. The first run found one stale nine-extension expectation; it was adapted and verified again. Strict PTY with actual Pi 0.99.1 passed **E1–E4 and E6**, including exact 161-character clipboard output.
+- The actual tarball loaded through Pi SDK in isolated HOME/profile/project directories using existing development dependencies: eight metis extensions, native codemode and remaining goal/condense/execution registrations were present, todo tool/commands were absent, and a sentinel legacy data file was untouched. This is packaged runtime registration proof, not a fresh npm dependency installation or real model/network execution.
+- Physical source, limited to Git-tracked paths: production TS **29,657 → 27,993** (−1,664); test/helper source −663; PTY script −67; full source including Rust and Shell **44,523 → 42,129** (−2,394). Dependencies, Rust, assets and generated bridges are unchanged. Evidence and plan are in `.work/todo-removal/` and `.work/todo-removal-plan.md`.
+
 ## 2026-09-30 — Pi native codemode supplements; V8 and patch retirement
 
 - Baseline `e90ef2f16ccd183abd0ed2935316d156e2625507`. Pi native codemode is the sole JavaScript execution owner. Deferred `exec_command`, `write_stdin`, and `view_image` retain PTY/image behavior; optional reasoning is hidden by default and deferred only when configured and supported. Native edit/write Fusion, condense/OCC and transcript behavior remain. The V8 host, cell API, downloader, dedicated Rust workspace and standalone patch TS/Rust/binary are retired together.

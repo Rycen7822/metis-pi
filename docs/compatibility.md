@@ -25,7 +25,7 @@
 - composer、footer、Working 和 header 使用宿主 UI 能力；自定义 editor 已被占用或能力缺失时按组件规则退避。
 - fullscreen 的布局/历史窗口、选区复制和 skill 显示仍依赖内部组件结构。守卫只能覆盖已知契约，任意后装插件若改写同一实例或方法，需要查看 `/codex-ui` 的实际状态。
 - 第三方工具定义、执行结果与 renderer 保持；用户主动选择本包主题时，主题颜色仍可能影响第三方输出。
-- 独立 todo、condense 或 conversion 包可能产生同名入口；按功能页迁移或过滤，不能把显示层来源守卫当作工具注册去重。
+- 独立 condense 或 conversion 包可能产生同名入口；按功能页迁移或过滤，不能把显示层来源守卫当作工具注册去重。
 - 复制与鼠标能力随 fullscreen/regular 模式、终端协议和字体变化，分别见 [复制](features/selection-copy.md) 与 [全屏布局](features/fullscreen-layout.md)。本包不实现 Codex 审批语义。
 
 ## 请求与会话兼容

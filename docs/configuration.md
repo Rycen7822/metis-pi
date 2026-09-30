@@ -8,7 +8,7 @@
 | condense / OCC | Pi `settings.json` 的 `contextPrune` | `/pruner settings` 可写入设置，见 [condense](features/condense.md)。 |
 | dynamic-agents | `<agentDir>/dynamic-agents.json` | 下一次正式 run 读取；配置缺失时不激活，见 [动态指令](features/dynamic-agents.md)。 |
 | 执行工具 | `metis-pi.json.execution` | 全局 → 受信任项目；`/execution` / `/execution project`，见 [执行模块](codex.md)。 |
-| goal / todo / skill / Action Fusion 等独立入口 | Pi 包安装项的 `extensions` 过滤 | `/reload` 或重启后生效，见本页“独立功能开关”。 |
+| goal / skill / Action Fusion 等独立入口 | Pi 包安装项的 `extensions` 过滤 | `/reload` 或重启后生效，见本页“独立功能开关”。 |
 
 `metis-pi.json` 的 `enabled` 只控制显示层。各功能的持久数据与写入行为见 [命令与路径](commands.md)。
 
@@ -158,7 +158,6 @@
 | --- | --- |
 | `PI_AGENT_DIR` | 本显示入口的配置目录覆盖。 |
 | `PI_CODING_AGENT_DIR` | Pi 宿主 agent 目录；独立功能按各自说明跟随该目录。 |
-| `PI_CODEX_TODO_PATH` | 搬迁 todo 存储目录。 |
 | `NO_COLOR` / `FORCE_COLOR` / `COLORTERM` / `WT_SESSION` / `TERM_PROGRAM` / `TERM` | 影响上面的颜色能力判定。 |
 
 ## 独立功能开关
@@ -182,7 +181,6 @@
 | --- | --- |
 | 整个显示层 | `-extensions/appearance.ts` |
 | goal | `-extensions/goal.ts` |
-| todo | `-extensions/todo.ts` |
 | dynamic-agents | `-extensions/dynamic-agents.ts`；运行中恢复原生规则建议先在独立 JSON 设置 `enabled: false`，详见功能页 |
 | condense 整体 | `-extensions/condense.ts` |
 | skill 输入 | 同时排除 `-extensions/skill-entry.ts`、`-extensions/skill-mux.ts` |

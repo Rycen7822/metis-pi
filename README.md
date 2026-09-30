@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A compact, Codex-style transcript UI for Pi, with separate extensions for goals, todos, skill input, condense, and execution tools. Current version: **0.19.6**. Development and host checks target **Pi 0.99.1**.
+A compact, Codex-style transcript UI for Pi, with separate extensions for goals, skill input, condense, and execution tools. Current version: **0.19.6**. Development and host checks target **Pi 0.99.1**.
 
 ## Installation
 
@@ -25,7 +25,6 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Composer and status](docs/features/composer.md) | Gray input area with model and context information. The [Working indicator and footer](docs/features/working-footer.md) show the execution phase, measured output speed, usage, and the amount of uncommitted changes. |
 | [Selection copy](docs/features/selection-copy.md) | In fullscreen mode, maps selected display content back to logical source text. Falls back to native extraction for lines that cannot be verified. |
 | [Long histories](docs/features/fullscreen-layout.md) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
-| [Todos](docs/features/todo.md) | Persistent workspace task lists with hierarchical numbering, dependencies, and a collapsible panel. Use `/todos` to view or restore the panel. |
 | [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
 | [Execution tools](docs/codex.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
@@ -33,7 +32,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
 | [Condense](docs/features/condense.md) | Bundles pi-condense 2.11.0 and uses its existing configuration. After each final reply, simplifies history before applying threshold-based summarization. Persists large outputs and supports paginated retrieval and summary usage display. |
 
-Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid fields fall back according to the configuration rules; the display layer does not rewrite user files. Set `enabled: false` to disable the display layer; filter the separate goal/todo/condense/execution entries individually. Display options and defaults are maintained in the [configuration reference](docs/configuration.md). Condense uses `contextPrune` in Pi's `settings.json`.
+Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid fields fall back according to the configuration rules; the display layer does not rewrite user files. Set `enabled: false` to disable the display layer; filter the separate goal/condense/execution entries individually. Display options and defaults are maintained in the [configuration reference](docs/configuration.md). Condense uses `contextPrune` in Pi's `settings.json`.
 
 ## Compatibility boundaries
 

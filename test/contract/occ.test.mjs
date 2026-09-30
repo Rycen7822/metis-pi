@@ -110,7 +110,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   });
   assert.deepEqual(loaded.extensionsResult.errors, []);
   if (installed) {
-    assert.equal(loaded.extensionsResult.extensions.length, 9);
+    assert.equal(loaded.extensionsResult.extensions.length, 8);
     assert.ok(loaded.extensionsResult.extensions.every(extension => extension.path.startsWith(root)));
   }
   await loaded.session.bindExtensions({ onError: e => errors.push(e) });

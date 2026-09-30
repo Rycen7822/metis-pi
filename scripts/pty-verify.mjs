@@ -14,7 +14,7 @@ execFileSync(PI_BIN, ["--version"], { stdio: "ignore" });
 execFileSync("tmux", ["-V"], { stdio: "ignore" });
 
 // --strict remains accepted; the default invocation now has the same requirements.
-const JOURNEYS = ["E1", "E2", "E3", "E4", "E5", "E6"];
+const JOURNEYS = ["E1", "E2", "E3", "E4", "E6"];
 const requested = process.argv.find((arg) => arg.startsWith("--journey="))?.slice("--journey=".length);
 if (requested && !JOURNEYS.includes(requested)) throw new Error(`Unknown PTY journey: ${requested}`);
 const selected = new Set(requested ? [requested] : JOURNEYS);
@@ -281,7 +281,7 @@ const waitForVisible = (pattern, timeoutMs, label) =>
   waitUntil((frame) => pattern.test(visibleRows(frame).join("\n")) ? frame : undefined,
     timeoutMs, `${label} (visible rows only)`);
 
-/** (Re)start the TUI in the same tmux session — the restart stage uses this. */
+/** Start a fresh TUI for each journey using one isolated tmux session. */
 const bootPi = () => {
   try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* not running */ }
   tmux(["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
@@ -296,7 +296,7 @@ const bootPi = () => {
 const startJourney = async (name) => {
   assert.equal(responses.length, 0, `${name}: the preceding journey consumed its planned responses`);
   retryResponse = undefined;
-  // Distinct names isolate journeys; reusing E5 restarts its real persisted workspace.
+  // Distinct names isolate each journey in its own workspace.
   WORKSPACE = path.join(ROOT, name);
   fs.mkdirSync(WORKSPACE, { recursive: true });
   if (name === "E1") {
@@ -476,73 +476,6 @@ try {
     submit("PCX_APP_STILL_ALIVE");
     await waitForAfter(/Worked for/, "PCX_AFTER_CLEAR_ACK", 30_000, "the request after clear settles");
     assert.equal(lastUserText(), "PCX_APP_STILL_ALIVE", "Pi sends the new draft after clearing without a selection");
-
-  }
-  if (selected.has("E5")) {
-    await startJourney("E5");
-    responses.push(
-      { calls: [toolCall("call_pcx3", "todo", { action: "add", tasks: [1, 2, 3, 4, 5].map((id) => ({ title: `pty task ${id}` })) })] },
-      { text: "PCX_TODO_ACK" },
-      { calls: [1, 2, 3, 4, 5].map((id, index) => toolCall(`call_pcxd${id}`, "todo", { action: "complete", id, evidence: `pty completion ${id}` }, index)) },
-      { text: "PCX_TODO_DONE_ACK" },
-      { text: "PCX_FOLD_ACK" },
-    );
-    // E5: a real todo tool call installs the persistent panel.
-    submit("please PCX_TODO now");
-    const todoFrame = await waitForVisible(/Todos 0\/5 done ▾ · click to expand/, 60_000, "collapsed todo panel");
-    assert.equal(lastUserText(), "please PCX_TODO now");
-    assert.ok(todoFrame.includes("pty task 1"), "widget shows the task row");
-    assert.ok(fs.existsSync(path.join(WORKSPACE, ".pi", "codex-todos", "tasks.json")), "store persisted in the workspace");
-
-    const collapsedTodoRow = rowOf(/Todos 0\/5 done/);
-    assert.ok(collapsedTodoRow >= 0, "todo header is visible before one click");
-    clickRow(collapsedTodoRow + 2, 12);
-    await waitForVisible(/click to collapse/, 15_000, "left click expands the panel");
-    assert.match(visibleText(), /pty task 5/, "one click exposes the tail task");
-    const header = rowOf(/Todos 0\/5 done/);
-    sendKeys(["-H", ...sgrSeq(2, 12, header + 3)]);
-    await waitGone(/Todos 0\/5 done/, 15_000, "right press hides the panel");
-    sendKeys(["-H", ...sgrSeq(2, 12, header + 3, true)]);
-    submit("/todos");
-    await waitForVisible(/Todos 0\/5 done ▴/, 30_000, "/todos restores the expanded panel");
-    const restored = rowOf(/Todos 0\/5 done/);
-    clickRow(restored + 2, 12);
-    await waitForVisible(/Todos 0\/5 done ▾ · click to expand/, 15_000,
-      "left click still reaches the panel after the unclaimed right press");
-
-    // A real input advances the turn; completed rows fold on the next prompt.
-    submit("please PCX_TODO_DONE now");
-    const allDone = await waitForVisible(/Todos 5\/5 done/, 60_000, "the panel reports every task complete");
-    assert.equal(lastUserText(), "please PCX_TODO_DONE now");
-    assert.ok(allDone.includes("pty task 5"), "the ✓ rows are still listed on the turn that completed them");
-
-    submit("PCX_FOLD_NOW");
-    await waitGone(/Todos \d+\/\d+ done/, 30_000, "the finished panel folds away on the next prompt");
-    assert.ok(!visibleText().includes("Todos 5/5 done"), "no history is left on screen");
-    await waitForAfter(/Worked for/, "PCX_FOLD_ACK", 30_000, "fold prompt finishes before restart");
-
-    // Restart with the real completed store; the panel must stay folded.
-    const storePath = path.join(WORKSPACE, ".pi", "codex-todos", "tasks.json");
-    const stored = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    assert.equal(stored.tasks.length, 5, "the real todo tool persisted the five tasks");
-    assert.ok(stored.tasks.every((task) => task.status === "complete" && task.completedAt != null),
-      "the restart reads real completed tasks, not a rewritten fixture");
-    const finishedCount = stored.tasks.length;
-
-    await startJourney("E5");
-    await waitStableFrame();
-    const restartFrame = visibleText();
-    assert.ok(/Ask anything\.\.\./.test(restartFrame), "the restarted TUI is up (composer placeholder visible)");
-    assert.ok(
-      !/Todos \d+\/\d+ done/.test(restartFrame),
-      `no todo panel on restart for ${finishedCount} tasks finished in an earlier session:\n${restartFrame.slice(-800)}`,
-    );
-    assert.ok(!/task\(s\) pending from the previous session/.test(restartFrame), "no pending-tasks reminder for finished work");
-    // Positive control: the list is still on disk, the panel simply folded —
-    // /todos lists the tasks as text without resurrecting the panel.
-    submit("/todos");
-    await waitFor(new RegExp(`Todos: ${finishedCount}/${finishedCount} done`), 30_000, "/todos lists the finished tasks after the restart");
-    assert.ok(!/Todos \d+\/\d+ done/.test(visibleText()), "/todos does not resurrect the folded panel");
 
   }
   if (selected.has("E6")) {

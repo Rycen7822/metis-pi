@@ -6,7 +6,7 @@
 
 沿用 Pi 默认工具集合。通过 Pi `--tools` 或 `settings.json.defaultTools` 选择 `codemode`；CLI 自带该扩展，SDK 使用者需加入 `createCodemodeExtension()`。
 
-`exec_command`、`write_stdin`、`view_image` 注册为 **deferred**：原生脚本可以调用，Pi 工具发现可找到；默认不列进顶层和 codemode 的内联工具说明。它们仍是额外工具。需要直接调用时，将相应名字加入自己的 Pi 工具集合；goal、todo、历史回读等工具也由 Pi 的工具选择管理。
+`exec_command`、`write_stdin`、`view_image` 注册为 **deferred**：原生脚本可以调用，Pi 工具发现可找到；默认不列进顶层和 codemode 的内联工具说明。它们仍是额外工具。需要直接调用时，将相应名字加入自己的 Pi 工具集合；goal、历史回读等工具也由 Pi 的工具选择管理。
 
 - 普通命令使用 Pi `bash`，普通修改使用 Pi `edit/write`。
 - 长期或交互进程使用 `exec_command` 建立会话；后续脚本用返回的 `session_id` 调用 `write_stdin`，输入文字或继续读取输出。

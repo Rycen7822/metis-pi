@@ -23,11 +23,11 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 | `npm run test:fast` | `test/core/` 的规则、状态机和渲染原语。 |
 | `npm run test:host` | `test/contract/` 的真实宿主接口与扩展接线，加实际包内容检查。 |
 | `npm run test:protocol` | 请求准备、转录、compaction/replay 和 context operation 协议。 |
-| `npm run test:io` | Git、文件、todo 持久化、写入前后镜像与日志归档。 |
+| `npm run test:io` | Git、文件、写入前后镜像与日志归档。 |
 | `npm run test:resource` | 进程、计时器、锁、缓存/heap、剪贴板传输和状态存储。 |
 | `npm run test:chrome` | 跨上述层级选取界面、布局、复制与相关资源测试。 |
 | `npm run verify` | 项目/测试/vendor 类型、全部 Node 测试及 `npm pack --dry-run`。 |
-| `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E6；`test:pty` 采用相同必执行规则。 |
+| `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 采用相同必执行规则。 |
 | `npm run vendor:smoke` | 单独运行真实 Pi 的 vendor 注册契约；已包含在完整测试中。 |
 | `npm run preview` | 从生产渲染器生成 `docs/preview.html`、`transcript.ansi`、`transcript.txt`。 |
 | `node scripts/copy-perf.mjs` | 成对测量渲染与文本提取成本，不测系统剪贴板写入延迟。 |
@@ -50,7 +50,6 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 几个跨层边界需要特别保持：
 
 - Git 的 parser、受控采样/定时器和真实仓库分别归 core/resource/io；真实运行中 footer 更新归 PTY E1。定时器测试不能主动刷新来制造成功。
-- todo 的领域规则、工具映射、磁盘 store 和 UI 会话交接分别验证；重启后的面板可见性归 PTY E5。
 - write 的前后镜像与交错写入归 IO，真实工具执行和 patch 快照接线归 host-entry，布局预算归 core renderer。
 - provider 的 wire 预期独立于夹具；SessionManager 负责真实分支/entry 语义，完整入口负责注册、生命周期和最终请求。
 - 复制测试保留精确空白、原生回退、当前帧身份及 heap/进程释放，PTY E4 核对实际 Ctrl+C 文本与草稿行为。
@@ -67,7 +66,6 @@ Pi 的生产安装不会提供全部测试依赖。直接安装并启动插件�
 | E2 | bash 调用、实际执行结果及 provider 后续请求。 |
 | E3 | 思考块单击、滚轮、双击和可见内容。 |
 | E4 | 滚动/留白下的精确复制、草稿保留与无选区清空，随后实际提交。 |
-| E5 | todo 面板交互、完成后收起及真实重启。 |
 | E6 | 多 skill 触发/补全、完整输入 payload 和点击折叠。 |
 
 可用 `npm run test:pty:strict -- --journey=E3` 单跑一段。缺依赖、设置 `PCX_PTY_SKIP_WHEEL=1` 或等待稳定帧超时均失败。驱动清除 `NO_COLOR` 并启用 truecolor；颜色断言不能被环境变量削弱。检查当前可见帧，不能用旧 scrollback 证明显示成功。provider 的意外请求或未消费响应也会失败。

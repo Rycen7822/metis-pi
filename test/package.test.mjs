@@ -16,14 +16,14 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("package exposes display, goal, todo, condense, dynamic-agents and execution entries", () => {
+test("package exposes display, goal, condense, dynamic-agents and execution entries", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
   const packed = Object.values(JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["appearance", "goal", "todo", "condense", "dynamic-agents"]) {
+  for (const name of ["appearance", "goal", "condense", "dynamic-agents"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {

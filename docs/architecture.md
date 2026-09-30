@@ -10,7 +10,6 @@
 | --- | --- |
 | `appearance.ts` → `src/extension.ts` | 显示装配、宿主能力、转录、chrome、复制和诊断。 |
 | `skill-mux.ts` / `skill-entry.ts` | skill 正文展开与发现、标签和折叠；补全接线使用 composer。 |
-| `todo.ts` → `src/todo/` | 工具/命令、持久化列表、任务面板及会话交接。 |
 | `goal.ts` → `src/goal-state.ts` | 入口处理宿主 I/O、提示和工具；状态核心处理目标、计时、分支恢复和回合用量。 |
 | `dynamic-agents.ts` → `src/dynamic-agents.ts` | 每次 run 的全局策略快照、来源恢复和请求投影；使用 Pi 原生请求投影。 |
 | `condense.ts` → `vendor/pi-condense/index.ts` | 重复安装检测、单一加载入口和摘要用量展示；vendor 负责归档、精简/摘要和恢复。 |
@@ -40,7 +39,7 @@ chrome 使用结构类型和注入能力，不直接导入宿主包。动画帧�
 ```mermaid
 flowchart LR
     Pi[Pi 模型目录 / OAuth / provider / 普通 compaction] --> Display[appearance / chrome]
-    Pi --> Features[goal / todo / dynamic-agents]
+    Pi --> Features[goal / dynamic-agents]
     Pi --> Native[原生 codemode 工具管道]
     Native --> Execution[metis PTY / view_image]
     Execution --> Archive[输出 / Fusion 回执 / nested 归档]
@@ -63,7 +62,6 @@ OCC 使用宿主 `context_edit` 后的有效投影，frontier 使用原始 assis
 
 - 会话切换先失效化旧 generation，再恢复旧 UI、释放资源和绑定新上下文；晚到结果不得重新安装旧组件。
 - 原型/组件租约只恢复自己仍拥有的方法，保留第三方后来安装的包装。部分安装失败和重复关闭也走清理路径。
-- todo model 验证领域规则并生成任务行；store 拥有锁和磁盘；tools 解析路径/通知；widget 持有显示状态，入口负责 UI 与 store 的会话交接。
 - GoalState 的读取不累计时间；状态切换与回合结算记账，用量归属于启动该回合的目标，持久化使用 session custom entry v2。
 - 原文 blobs、融合命令日志与显示缓冲寿命不同；显示淘汰不授权删除恢复证据。锁、提交顺序、取消与部分失败结果保留在各执行 owner 中。
 

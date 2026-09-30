@@ -9,7 +9,7 @@ coverage/
 CODEX_STATE.md
 references/
 
-# Session-local agent state (todo tool task lists etc.).
+# Project-local Pi state and configuration.
 .pi/
 
 .worktree/

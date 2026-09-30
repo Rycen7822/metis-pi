@@ -18,7 +18,7 @@
 | 工具与正文显示 | [转录、命令输出、diff 和 write 预览](features/transcript.md) · [思考块](features/thinking.md) |
 | 输入与界面 | [输入区](features/composer.md) · [Working、Footer 与统计](features/working-footer.md) · [全屏布局与历史窗口](features/fullscreen-layout.md) |
 | 复制与文字 | [逻辑选区复制](features/selection-copy.md) · [字形呈现](features/glyphs.md) · [多 skill 输入](features/skills.md) |
-| 任务管理 | [todo](features/todo.md) · [goal](features/goal.md) |
+| 目标管理 | [goal](features/goal.md) |
 | 上下文与执行 | [历史压缩、原文恢复与 OCC](features/condense.md) · [动态全局指令](features/dynamic-agents.md) · [修改后执行命令](features/action-fusion.md) |
 | 执行模块 | [Pi 原生 codemode 与执行补充](codex.md) |
 
