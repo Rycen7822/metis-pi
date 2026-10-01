@@ -1,3 +1,4 @@
+import type { Usage } from "@earendil-works/pi-ai";
 /**
  * Shared types for the context-prune extension.
  *
@@ -958,18 +959,5 @@ export interface SummarizeBatchesOptions {
 export interface SummarizeResult {
   summaryText: string;
   /** Usage data from the LLM response (tokens + cost) */
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    cost: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      total: number;
-    };
-  };
+  usage: Usage;
 }

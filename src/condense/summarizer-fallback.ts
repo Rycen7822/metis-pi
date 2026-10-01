@@ -40,11 +40,6 @@ export class FallbackController {
   constructor(now: () => number = Date.now) {
     this.now = now;}
 
-  reset(): void {
-    this.inFallback = false;
-    this.lastProbeAt = 0;
-    this.owedEnterWarning = false;
-  }
 
   /**
    * True when primary and the session model are genuinely different. When

@@ -18,7 +18,6 @@ references/
 native/tools/target/
 
 # Condense retains its public entry; runtime sources are TS.
-vendor/pi-condense/dist/**/*.d.ts
 
 # Reproducible renderer previews; generate with npm run preview.
 docs/preview.html

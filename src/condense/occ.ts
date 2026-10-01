@@ -32,6 +32,7 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 
 /** One owner for local/global rewrite decisions; plain custom entries never enter the prompt. */
 export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: { value: ContextPruneConfig }) {
+  let lifecycle = 0;
   let state = fresh();
   const spentRequests = new Set<string>();
   const spent = () => state.spentRequest === state.request || (state.request !== undefined && spentRequests.has(state.request));
@@ -142,9 +143,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   async function prepare(event: SessionBeforeCompactEvent, ctx: ExtensionContext) {
     // This handler returns a cancellation on every failure: throwing would let
     // Pi's extension runner fall through to an unprotected default summary.
+    const version = lifecycle;
     compactionSignal = event.signal;
     let metrics: Record<string, unknown> = { trigger: running ? "occ" : event.reason };
-    const reject = (reason: string) => { decision(reason, metrics); return { cancel: true as const }; };
+    const reject = (reason: string) => { if (version === lifecycle) decision(reason, metrics); return { cancel: true as const }; };
     try {
       if (!capability(ctx) || !ctx.model) return reject("unsupported-or-busy");
       // A local publication can make the last provider usage stale. Keep its
@@ -249,9 +251,13 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
         { isSummarized: key => !!indexer.getRecord(key) }), { indexer,
         spillThreshold: config.value.spillThreshold, spillPreviewBytes: config.value.spillPreviewBytes,
         sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
-        appendEntry: (type, data) => pi.appendEntry(type, data),
+        appendEntry: (type, data) => {
+          if (version !== lifecycle) throw new Error("OCC source changed");
+          pi.appendEntry(type, data);
+        },
       });
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+      if (version !== lifecycle || event.signal.aborted) return reject("cancelled-or-source-changed");
       if (!auth.ok) return reject("authentication-unavailable");
       const model = auth.baseUrl ? { ...ctx.model, baseUrl: auth.baseUrl } : ctx.model;
       const result = await compact({ ...p, messagesToSummarize: modelMessages, turnPrefixMessages: [],
@@ -259,7 +265,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
         event.customInstructions, event.signal, undefined,
         (m, c, o) => ctx.modelRegistry.streamSimple(m, c, o), auth.env, undefined, undefined, sessionId);
       metrics.usage = result.usage;
-      if (event.signal.aborted || signature(ctx) !== source) return reject("cancelled-or-source-changed");
+      if (version !== lifecycle || event.signal.aborted || signature(ctx) !== source) return reject("cancelled-or-source-changed");
       const summary = `[Program-retained sources]\n${protection}\n[Derived summary; non-authoritative]\n${result.summary}`;
       metrics.afterChars = summary.length;
       if (!result.summary.trim() || summary.length >= before * 0.8) return reject("insufficient-actual-savings");
@@ -268,14 +274,14 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       return { compaction: { ...result, summary, firstKeptEntryId: p.firstKeptEntryId,
         details: { ...result.details as object, metisOcc: { source, requirements, protectedChars: protection.length, protection: protectedSources } } } };
     } catch (error) {
+      if (version !== lifecycle) return { cancel: true as const };
       try { ctx.ui.notify(`OCC kept original context: ${error instanceof Error ? error.message : String(error)}`, "warning"); } catch { /* UI is optional. */ }
       return reject("preparation-failed");
     }
   }
 
-  pi.on("session_start", (_event, ctx) => restore(ctx));
-  pi.on("session_tree", (_event, ctx) => restore(ctx));
   function restore(ctx: ExtensionContext) {
+    lifecycle++;
     sessionId = ctx.sessionManager.getSessionId();
     const last = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === STATE).at(-1);
     spentRequests.clear();
@@ -353,11 +359,13 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       return;
     }
     running = true; cancelled = false; ready = false; compactionSignal = undefined;
+    const version = lifecycle;
     let completed = false;
     try {
       showStatus(ctx, "compacting…");
       await new Promise<void>(resolve => ctx.compact({ onComplete: () => { completed = true; resolve(); }, onError: () => resolve() }));
     } finally {
+      if (version !== lifecycle) return;
       state.lastOutcome = completed ? "compacted" : cancelled ? "cancelled" : "not compacted";
       showStatus(ctx, state.lastOutcome);
       state.spentRequest = state.request;
@@ -375,8 +383,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       data.deferGoal = ready || running || !!state.capacityWaiting; data.running = running;
     }),
   ];
-  pi.on("session_shutdown", (_event, ctx) => { showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined; });
   return {
+    restore,
+    shutdown(ctx: ExtensionContext) { lifecycle++; showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined; },
     enabled, deferLocal: decide, isRunning: () => running,
     isCapacityWaiting: () => !!state.capacityWaiting,
     refreshStatus(ctx: ExtensionContext) { showStatus(ctx, running ? "compacting…" : state.lastOutcome); },

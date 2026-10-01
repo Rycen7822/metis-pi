@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-10-01 — Native condense ownership and lifecycle
+
+- Moved the complete condense implementation into `src/condense`, retaining `extensions/condense.ts` as its sole Pi entry. Removed the inner package, generated facade and vendor build aliases; root checks and packaging own the module. Exact provenance remains in NOTICE and the unchanged MIT license is shipped under `docs/provenance/condense/LICENSE`.
+- Three independent native Astra max review rounds identified and closed six defects: late nested/manual/eager archive commits crossing branches, effective edits with OCC disabled, summary-before-index failure, and edited summaries reappearing after chain compaction. Fault probes also verify queued delivery, dropped delivery and summary-append failure without hiding uncommitted evidence or generating duplicate summaries. Probe scripts and source-removal audits remain only in `.work/`.
+- `npm run verify`: exit 0, **324/324**, zero skipped; root production/test checks and **186-file** package dry-run pass. Final type-only deduplication passes `check:condense`; the nearest runtime suite passes **24/24**. `test:pty:strict`: **E1, E2, E3, E4, E6**, including **161 exact clipboard characters**.
+- Actual tarball installed with independent Pi **0.99.1** peers in isolated HOME/agentDir/cwd, then registered by the normal Pi CLI. Actual installed `DefaultResourceLoader`/`AgentSession` proof has zero extension errors, keeps default pruning disabled, captures native nested reads and recalls **18,400 exact bytes across 14 pages**, and restores old persistent records. Installed condense/OCC/goal contracts pass **42/42**, zero skipped; local providers and blocked transport make no paid requests.
+- Physical source accounting against `ea5d00e`: production TS **27,014 → 27,007** (−7); tests/helpers **7,131 → 7,112** (−19); the generated JS facade loses one line. Pure/query/IO behavior moved into the existing test layers; test failures and distinct safety oracles remain covered. Relocation is not counted as a reduction. Temporary installation/profile/dependency/tarball artifacts are removed after byte/mode/license verification.
+
 ## 2026-10-01 — Production TS simplification and Pi skill resource ownership
 
 - Retired the unregistered changelog coordinator and unwired command-display tracker; removed unused execution wrappers/options and duplicate dispatcher branches. Condense scalar normalization/protected-list commands and Shell traversal now share local implementations. Skill expansion and completion query Pi's loaded resource registry lazily; parsing, nested blocks, images, labels and folding remain local.

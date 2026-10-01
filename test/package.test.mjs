@@ -26,18 +26,15 @@ test("package exposes display, goal, condense, dynamic-agents and execution entr
   for (const name of ["appearance", "goal", "condense", "dynamic-agents"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
-  for (const path of ["package.json", "dist/index.js", "LICENSE", "UPSTREAM.md", "PATCHES.md"]) {
-    assert.ok(files.has(`vendor/pi-condense/${path}`), `pi-condense/${path}`);
-  }
   for (const path of [
     "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/view-image/linux-x64/view_image",
-    "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md",
+    "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
   ]) assert.ok(files.has(path), path);
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
   assert.ok(files.has("extensions/execution.ts"));
-  assert.ok(files.has("vendor/pi-condense/index.ts"));
+  assert.ok(files.has("src/condense/runtime.ts"));
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /agent-stuff/);
   assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /howaboua/);
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);

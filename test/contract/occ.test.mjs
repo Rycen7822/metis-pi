@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { registerOcc } from "../../vendor/pi-condense/src/occ.ts";
-import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
+import { registerOcc } from "../../src/condense/occ.ts";
+import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -105,13 +105,14 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   await resourceLoader.reload();
   const loaded = await createAgentSession({ cwd: dir, agentDir: dir, settingsManager, modelRuntime, resourceLoader, sessionManager: sm, model });
   t.after(async () => {
-    try { await loaded.session.extensionRunner.emit({ type: "session_shutdown" }); }
+    try { await loaded.session.extensionRunner.emit({ type: "session_shutdown" }); assert.deepEqual(errors, []); }
     finally { loaded.session.dispose(); if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); }
   });
   assert.deepEqual(loaded.extensionsResult.errors, []);
   if (installed) {
-    assert.equal(loaded.extensionsResult.extensions.length, 8);
-    assert.ok(loaded.extensionsResult.extensions.every(extension => extension.path.startsWith(root)));
+    const expectedRoot = resolve(installedSettings.packages[0]);
+    assert.ok(loaded.extensionsResult.extensions.some(extension => extension.path === join(expectedRoot, "extensions/condense.ts")));
+    assert.ok(loaded.extensionsResult.extensions.every(extension => extension.path.startsWith(expectedRoot + "/")));
   }
   await loaded.session.bindExtensions({ onError: e => errors.push(e) });
   const events = [];
@@ -143,7 +144,6 @@ test("real AgentSession automatically commits OCC once, protects source requirem
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
   assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 1);
   assert.deepEqual(h.sm.buildSessionProjection().messages[0], JSON.parse(snapshot)[0]);
-  assert.deepEqual(h.errors, []);
 });
 
 for (const blocked of ["archiveFailed", "unfinished"]) test(`OCC preserves unavailable native nested evidence: ${blocked}`, async t => {
@@ -159,7 +159,6 @@ for (const blocked of ["archiveFailed", "unfinished"]) test(`OCC preserves unava
   assert.equal(h.calls.filter(c => c.summarizing).length, 0, JSON.stringify({ notices: h.notices,
     state: h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1)?.data }));
   assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 0);
-  assert.deepEqual(h.errors, []);
 });
 
 test("a rejected growing summary never commits and consumes the OCC attempt across reload", async t => {
@@ -172,7 +171,6 @@ test("a rejected growing summary never commits and consumes the OCC attempt acro
   await h.session.prompt("Continue again.");
   await h.session.waitForIdle();
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
-  assert.deepEqual(h.errors, []);
 });
 
 
@@ -186,7 +184,6 @@ test("effective context edits replace source requirements before OCC and in the 
   assert.doesNotMatch(entry.summary, /ORIGINAL_GOAL/);
   await h.session.prompt("Continue.");
   assert.doesNotMatch(JSON.stringify(h.calls.at(-1).context), /ORIGINAL_GOAL/);
-  assert.deepEqual(h.errors, []);
 });
 
 test("accepted source mutation during summary invalidates the candidate before native commit", async t => {
@@ -198,53 +195,27 @@ test("accepted source mutation during summary invalidates the candidate before n
   await h.session.waitForIdle();
   assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 0);
   assert.match(JSON.stringify(h.sm.buildSessionProjection().messages), /CHANGED_DURING_SUMMARY/);
-  assert.deepEqual(h.errors, []);
 });
 
-test("active goal yields for OCC and resumes exactly once with its existing continuation", async t => {
-  const h = await host(t, { goal: true });
-  await h.session.prompt("Start bounded work.");
-  await h.session.waitForIdle();
-  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 1);
-  assert.equal(h.calls.filter(c => !c.summarizing).length, 2);
-  assert.equal(h.sm.getBranch().filter(e => e.type === "custom_message" && e.customType === "goal-continuation").length, 1);
-  assert.equal(h.sm.getBranch().filter(e => e.type === "message" && e.message.role === "user").some(e => JSON.stringify(e.message).includes("__continue_")), false);
-  assert.deepEqual(h.errors, []);
-});
-
-test("pause queued during OCC wins over the old goal continuation ticket", async t => {
+for (const outcome of ["accepted", "paused", "aborted", "growing"]) test(`goal continuation observes OCC outcome: ${outcome}`, async t => {
   let h;
-  h = await host(t, { goal: true, onSummary: () => h.session.prompt("/goal pause") });
+  h = await host(t, { goal: true,
+    summary: outcome === "growing" ? "too large ".repeat(25000) : "Derived progress: investigation continues.",
+    onSummary: () => outcome === "paused" ? h.session.prompt("/goal pause")
+      : outcome === "aborted" ? h.session.abortCompaction() : undefined,
+  });
   await h.session.prompt("Start bounded work.");
   await h.session.waitForIdle();
-  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 1);
-  assert.equal(h.calls.filter(c => !c.summarizing).length, 1);
-  const goal = h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "goal").at(-1).data.goal;
-  assert.equal(goal.status, "paused");
-  assert.deepEqual(h.errors, []);
-});
-
-test("user abort during OCC drops the owed goal continuation and preserves raw context", async t => {
-  let h;
-  h = await host(t, { goal: true, onSummary: () => h.session.abortCompaction() });
-  await h.session.prompt("Start bounded work.");
-  await h.session.waitForIdle();
-  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 0);
-  assert.equal(h.calls.filter(c => !c.summarizing).length, 1);
-  assert.deepEqual(h.errors, []);
-});
-
-
-test("safe OCC rejection resumes an active goal instead of treating it as user cancellation", async t => {
-  const h = await host(t, { goal: true, summary: "too large ".repeat(25000) });
-  await h.session.prompt("Start bounded work.");
-  await h.session.waitForIdle();
-  assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 0);
-  assert.equal(h.calls.filter(c => !c.summarizing).length, 2);
+  const entries = h.sm.getBranch();
+  const continues = outcome === "accepted" || outcome === "growing";
+  assert.equal(entries.filter(e => e.type === "compaction").length, outcome === "accepted" || outcome === "paused" ? 1 : 0);
+  assert.equal(h.calls.filter(c => !c.summarizing).length, continues ? 2 : 1);
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
-  assert.deepEqual(h.errors, []);
+  assert.equal(entries.filter(e => e.type === "custom_message" && e.customType === "goal-continuation").length, continues ? 1 : 0);
+  assert.equal(entries.some(e => e.type === "message" && e.message.role === "user" && JSON.stringify(e.message).includes("__continue_")), false);
+  if (outcome === "paused") assert.equal(entries.filter(e => e.type === "custom" && e.customType === "goal").at(-1).data.goal.status, "paused");
+  if (outcome === "aborted") assert.match(JSON.stringify(h.sm.buildSessionProjection().messages), /EXACT_EVIDENCE/);
 });
-
 
 test("fresh automatic mode earns its buffer from real tool requests before one global rewrite", async t => {
   const h = await host(t, { workTurns: 4 });
@@ -256,7 +227,6 @@ test("fresh automatic mode earns its buffer from real tool requests before one g
   const state = h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data;
   assert.equal(state.work, 4);
   assert.equal(state.phase, "hold");
-  assert.deepEqual(h.errors, []);
 });
 
 test("held outgoing provider prefix preserves a recovery page after its old grace expires", async t => {
@@ -315,7 +285,6 @@ test("edits to indexed evidence reject in-flight OCC and remain visible in the n
   assert.match(JSON.stringify(h.sm.buildSessionProjection().messages), /CORRECTED_CURRENT_EVIDENCE/);
   await h.session.prompt("Use the corrected evidence.");
   assert.match(JSON.stringify(h.calls.filter(c => !c.summarizing).at(-1).context), /CORRECTED_CURRENT_EVIDENCE/);
-  assert.deepEqual(h.errors, []);
   assert.equal(compactions.length, 0, "an accepted tool source edit must reject the frozen candidate");
 });
 
@@ -332,7 +301,6 @@ test("branch navigation cannot replenish the same external request OCC quota", a
   const currentRequest = h.sm.getBranch().filter(e => e.type === "message" && e.message.role === "user").at(-1).id;
   assert.equal(firstRequest, currentRequest);
   assert.equal(h.sm.getEntries().filter(e => e.type === "compaction").length, 1);
-  assert.deepEqual(h.errors, []);
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
 });
 
@@ -362,7 +330,6 @@ test("edited archived evidence removes its stale derived summary and preserves t
   assert.match(payload, /PARTNER_EXACT_BODY/);
   assert.doesNotMatch(payload, /STALE_DERIVED_CLAIM/);
   assert.equal(h.calls.filter(c => c.summarizing).length, 0);
-  assert.deepEqual(h.errors, []);
 });
 
 

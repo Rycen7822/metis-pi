@@ -100,13 +100,14 @@ export async function archiveBatches(batches: readonly CapturedBatch[], args: {
   indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
   appendEntry: (customType: string, data?: unknown) => void;
   spillThreshold: number; spillPreviewBytes: number;
-}): Promise<void> {
+}) {
   const records: ToolCallRecord[] = [];
   for (const batch of batches) for (const call of batch.toolCalls) {
     await archiveToolOutput(call, batch, args);
-    records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true });
+    records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true,
+      contentHash: call.contentHash ?? hashToolResult(call.toolName, call.resultText) });
   }
-  await args.indexer.backfillChainRecords(records, args);
+  return args.indexer.backfillChainRecords(records, args);
 }
 
 /** Replace anything outside [A-Za-z0-9_-] so the id can't escape the blob dir. */

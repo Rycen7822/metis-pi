@@ -30,7 +30,7 @@ pi install .
 | [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 与原图工具；provider 和登录由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
-| [condense](docs/features/condense.md) | 内置 pi-condense 2.11.0，沿用配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
+| [condense](docs/features/condense.md) | 原生维护历史精简，沿用 contextPrune 配置；最终回复后先精简再按门槛摘要，持久保存大输出，支持分页回读与摘要用量显示。 |
 
 显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/condense/execution 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。
 

@@ -83,4 +83,4 @@ prune 用量统计本次加载以来额外摘要，重复通知覆盖、切分�
 
 即使摘要候选被拒绝也记录用量；决策记录估计/实际大小和净变化。Footer Σ 使用标准 session 用量；Working 到 settled 后收尾，摘要中不预热，goal 提示以追加消息维持系统前缀。
 
-源码来源与差异见 [UPSTREAM](../../vendor/pi-condense/UPSTREAM.md) / [PATCHES](../../vendor/pi-condense/PATCHES.md)，实测见 [VALIDATION](../../VALIDATION.md)。
+来源归属见 [NOTICE](../../NOTICE)，完整许可见 [LICENSE](../provenance/condense/LICENSE)，实测见 [VALIDATION](../../VALIDATION.md)。

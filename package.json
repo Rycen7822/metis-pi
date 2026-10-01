@@ -24,18 +24,15 @@
     "test:io": "node scripts/test.mjs io",
     "test:resource": "node scripts/test.mjs resource",
     "test:chrome": "node scripts/test.mjs chrome",
-    "check": "npm run check:core && npm run check:execution",
+    "check": "npm run check:core && npm run check:execution && npm run check:condense",
     "check:core": "tsc -p tsconfig.core.json",
     "check:test": "tsc -p tsconfig.test.json",
-    "verify": "npm run check && npm run check:test && npm run vendor:check && npm test && npm pack --dry-run --ignore-scripts",
+    "verify": "npm run check && npm run check:test && npm test && npm pack --dry-run --ignore-scripts",
     "preview": "node --experimental-strip-types scripts/preview.mjs",
     "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs",
     "test:pty:strict": "node --experimental-strip-types scripts/pty-verify.mjs --strict",
-    "vendor:build": "npm run vendor:check",
-    "vendor:check": "tsc -p vendor/pi-condense/tsconfig.json",
-    "vendor:smoke": "node --experimental-strip-types --test test/contract/execution-registration.test.mjs",
-    "vendor:fresh": "npm run vendor:check",
-    "check:execution": "tsc -p tsconfig.execution.json"
+    "check:execution": "tsc -p tsconfig.execution.json",
+    "check:condense": "tsc -p tsconfig.condense.json"
   },
   "dependencies": {
     "marked": "18.0.11",
@@ -63,12 +60,9 @@
     "NOTICE",
     "docs/**/*.md",
     "docs/provenance/execution/LICENSE",
+    "docs/provenance/condense/LICENSE",
     "vendor/tree-sitter-bash",
-    "assets/native-tools",
-    "vendor/pi-condense/{package.json,LICENSE,PATCHES.md,UPSTREAM.md}",
-    "vendor/pi-condense/dist/index.js",
-    "vendor/pi-condense/index.ts",
-    "vendor/pi-condense/src/**/*.ts"
+    "assets/native-tools"
   ],
   "engines": {
     "node": ">=22.19.0"

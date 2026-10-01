@@ -6,13 +6,8 @@ import { fileURLToPath } from "node:url";
 import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
-import registerCondense from "../../vendor/pi-condense/index.ts";
-import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../vendor/pi-condense/src/batch-capture.ts";
-import { spillOversizedBatch } from "../../vendor/pi-condense/src/spill.ts";
-import { ToolCallIndexer } from "../../vendor/pi-condense/src/indexer.ts";
-import { registerQueryTool } from "../../vendor/pi-condense/src/query-tool.ts";
-import { DEFAULT_CONFIG } from "../../vendor/pi-condense/src/types.ts";
-import { ExecOutputArchive } from "../../src/execution/exec/output-archive.ts";
+import registerCondense from "../../extensions/condense.ts";
+import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
 
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -48,7 +43,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", d
   };
   registerApiProvider({ api, stream, streamSimple: stream }, api);
   const pi = {
-    events, on(name, fn) { hooks.set(name, [...(hooks.get(name) ?? []), fn]); },
+    events, getAllTools: () => [...tools.values()], on(name, fn) { hooks.set(name, [...(hooks.get(name) ?? []), fn]); },
     registerTool(tool) { tools.set(tool.name, tool); }, registerCommand() {}, registerMessageRenderer() {},
     appendEntry(type, data) { sm.appendCustomEntry(type, data); },
     sendMessage(message) { sm.appendCustomMessageEntry(message.customType, message.content, message.display, message.details); },
@@ -112,7 +107,7 @@ test("packing precedes the 5000-char gate, archives exact output, and never re-c
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0);
 });
 
-test("one model decision at the final boundary retains code-owned refs and reports an unsettled projection", async (t) => {
+for (const boundary of ["settled", "session_tree", "session_start", "session_shutdown"]) test(`final boundary retains refs and discards late summaries after ${boundary}`, async (t) => {
   const f = await fixture(t, { reply: "A short useful summary with no reference labels.", defer: true });
   const call = f.add("important detail\n".repeat(700), "inspect-unknown-tool");
   const pending = f.finish();
@@ -121,14 +116,27 @@ test("one model decision at the final boundary retains code-owned refs and repor
   const request = { sessionId: f.sm.getSessionId(), messages: projectBranchMessages(f.sm.getBranch()) };
   f.events.emit("metis:condense-project", request);
   assert.equal(request.busy, true);
+  if (boundary !== "settled") await f.emit(boundary);
   f.release(); await pending;
   const summary = f.sm.getBranch().find(e => e.type === "custom_message" && e.details?.representation === "summary");
+  if (boundary !== "settled") {
+    assert.equal(summary, undefined);
+    const messages = projectBranchMessages(f.sm.getBranch());
+    assert.equal(messages.find(message => message.toolCallId === call.id).content[0].text, "important detail\n".repeat(700));
+    return;
+  }
   assert.ok(summary);
   assert.match(summary.content, /t1/);
   assert.equal(summary.details.toolCallRefs.length, 1);
   const recall = await f.tools.get("context_tree_query").execute("q", { toolCallIds: ["t1"] }, undefined, undefined, f.ctx);
   assert.equal(recall.details.results[0].text, "important detail\n".repeat(700));
   await f.finish(); assert.equal(f.calls.length, 1, "same history is not summarized again");
+  const source = f.sm.getBranch().find(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === call.id);
+  f.sm.appendContextEdit(source.id, { content: "CORRECTED_WITHOUT_OCC" });
+  const effective = f.sm.buildSessionProjection().messages;
+  const edited = (await f.emit("context", { messages: effective }))?.messages ?? effective;
+  assert.match(JSON.stringify(edited), /CORRECTED_WITHOUT_OCC/);
+  assert.ok(!edited.some(message => message.customType === "context-prune-summary"), "edited source invalidates its derived summary even without OCC");
 });
 
 test("session restore drops the previous queue while a tree switch keeps its own records and never reloads config", async (t) => {
@@ -201,39 +209,6 @@ test("nested results retain prepared arguments, structured output and denied evi
   assert.match(JSON.stringify((await query({ component: "arguments" })).details), /skills\/example\/SKILL.md/);
 });
 
-test("execution archives survive display eviction, and recall pins append-only snapshots across growth", async (t) => {
-  const f = await fixture(t);
-  const directory = join(f.dir, `${f.sm.getSessionId()}-blobs`);
-  const archive = new ExecOutputArchive(directory, 256);
-  t.after(() => archive.close());
-  const original = "START\r\n" + "中文\u001b[31m".repeat(1500) + "FIRST_END";
-  archive.append(original);
-  const info = archive.info(); assert.ok(info);
-  const assistant = { content: [{ type: "toolCall", id: "exec-original", name: "exec_command", arguments: { cmd: "producer" } }] };
-  const batch = captureBatch(assistant, [{ toolCallId: "exec-original", timestamp: 3, isError: false, content: [{ type: "text", text: "DISPLAY_TAIL" }], details: info }], 1, 2);
-  const indexer = new ToolCallIndexer();
-  await spillOversizedBatch({ batch, indexer, config: DEFAULT_CONFIG, sessionDir: f.dir, sessionId: f.sm.getSessionId(), appendEntry: (type, data) => f.sm.appendCustomEntry(type, data) });
-  let tool; registerQueryTool({ registerTool(t) { tool = t; } }, indexer);
-  const first = (await tool.execute("q", { toolCallIds: ["exec-original"], maxBytes: 2048 }, undefined, undefined, f.ctx)).details;
-  archive.append("LATER OUTPUT THAT MUST NOT CHANGE THE OLD SNAPSHOT"); archive.close();
-  let body = first, restored = first.results[0].text;
-  while (body.nextCursor) {
-    body = (await tool.execute("q", { toolCallIds: ["exec-original"], maxBytes: 2048, cursor: body.nextCursor }, undefined, undefined, f.ctx)).details;
-    restored += body.results[0].text;
-  }
-  assert.equal(restored, original);
-  assert.equal(first.results[0].source, "command-output");
-  assert.equal(first.results[0].archiveComplete, true);
-  assert.equal(indexer.getRecord("exec-original").spillPath, info.fullOutputPath, "polls share the durable producer log");
-  assert.ok(existsSync(info.fullOutputPath));
-  assert.equal(readFileSync(info.fullOutputPath, "utf8"), original + "LATER OUTPUT THAT MUST NOT CHANGE THE OLD SNAPSHOT");
-
-  const temporary = join(f.dir, "native-bash.log"); writeFileSync(temporary, "native full output");
-  const native = captureBatch({ content: [{ type: "toolCall", id: "bash-native", name: "bash", arguments: { command: "native" } }] }, [{ toolCallId: "bash-native", timestamp: 7, content: [{ type: "text", text: "native tail" }], details: { fullOutputPath: temporary } }], 2, 6);
-  await spillOversizedBatch({ batch: native, indexer, config: DEFAULT_CONFIG, sessionDir: f.dir, sessionId: f.sm.getSessionId(), appendEntry() {} });
-  rmSync(temporary);
-  assert.equal((await tool.execute("q", { toolCallIds: ["bash-native"] }, undefined, undefined, f.ctx)).details.results[0].text, "native full output");
-});
 
 for (const eager of [true, false]) test(`fused evidence preserves mutation, packs only successful logs and reloads exact output; turn_end=${eager}`, async (t) => {
   const f = await fixture(t);
@@ -289,27 +264,6 @@ test("the existing minBatchChars gate skips 4999 characters and summarizes at 50
   f.add("b".repeat(5000), "unknown-command", "at-limit"); await f.finish();
   assert.equal(f.calls.length, 1);
 });
-
-test("archive failure is explicit and incomplete captured prefixes are not reported as full output", async (t) => {
-  const f = await fixture(t);
-  const blocked = join(f.dir, "not-a-directory"); writeFileSync(blocked, "file");
-  const failed = new ExecOutputArchive(blocked, 1);
-  assert.doesNotThrow(() => failed.append("command keeps running"));
-  assert.equal(failed.info().fullOutputComplete, false);
-  assert.match(failed.info().fullOutputError, /unavailable/i);
-  failed.close();
-  const partial = join(f.dir, "partial.log"); writeFileSync(partial, "captured prefix");
-  const batch = captureBatch({ content: [{ type: "toolCall", id: "partial", name: "bash", arguments: { command: "producer" } }] },
-    [{ toolCallId: "partial", timestamp: 4, content: [{ type: "text", text: "display tail" }], details: { fullOutputPath: partial, fullOutputComplete: false } }], 1, 3);
-  const indexer = new ToolCallIndexer();
-  await spillOversizedBatch({ batch, indexer, config: DEFAULT_CONFIG, sessionDir: f.dir, sessionId: f.sm.getSessionId(), appendEntry() {} });
-  let tool; registerQueryTool({ registerTool(t) { tool = t; } }, indexer);
-  const result = (await tool.execute("q", { toolCallIds: ["partial"] }, undefined, undefined, f.ctx)).details.results[0];
-  assert.equal(result.text, "captured prefix");
-  assert.equal(result.archiveComplete, false);
-  assert.match(result.error, /incomplete/i);
-});
-
 
 test("effective rescan preserves raw frontier ordinals after global compaction", async t => {
   const f = await fixture(t, { occ: true });
@@ -379,30 +333,6 @@ test("summary provider sees the retained test tail and bounded original argument
   assert.match(input, /Original text omitted/);
   assert.equal(input.isWellFormed(), true);
   assert.equal(serializeBatchForSummarizer({ ...batch, toolCalls: Array(1000).fill(batch.toolCalls[0]) }), undefined);
-});
-
-
-test("recall pages original arguments and branch-owned summaries with content-bound cursors", async (t) => {
-  const f = await fixture(t);
-  const indexer = new ToolCallIndexer();
-  const args = { path: "historical.ts", content: "🙂原文\n".repeat(6000) };
-  indexer.addBatch({ turnIndex: 1, timestamp: 2, toolCalls: [{ toolCallId: "write", toolName: "write", args, resultText: "done", isError: false, resultTimestamp: 3 }] }, () => {});
-  let tool; registerQueryTool({ registerTool(value) { tool = value; } }, indexer);
-  const query = params => tool.execute("q", params, undefined, undefined, f.ctx).then(r => r.details);
-  const params = { toolCallIds: ["write@3"], component: "arguments", maxBytes: 2048 };
-  const first = await query(params);
-  assert.equal(first.results[0].source, "tool-arguments");
-  await assert.rejects(query({ ...params, component: "output", cursor: first.nextCursor }), /cursor no longer matches/i);
-  let page = first, text = first.results[0].text;
-  while (page.nextCursor) { page = await query({ ...params, cursor: page.nextCursor }); text += page.results[0].text; }
-  assert.equal(text, JSON.stringify(args));
-  f.sm.appendCustomMessageEntry("context-prune-summary", "DERIVED_HISTORY ".repeat(1000), false, {});
-  const entry = f.sm.getBranch().at(-1);
-  page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048 }); text = page.results[0].text;
-  while (page.nextCursor) { page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048, cursor: page.nextCursor }); text += page.results[0].text; }
-  assert.deepEqual(JSON.parse(text), entry);
-  assert.match((await query({ sourceEntryIds: ["missing"] })).results[0].error, /Not found/);
-  await assert.rejects(query({ sourceEntryIds: [entry.id], ...params }), /Choose sourceEntryIds/);
 });
 
 

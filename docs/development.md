@@ -10,13 +10,13 @@ npm ci --ignore-scripts --no-audit --no-fund
 
 | 命令 | 范围 |
 | --- | --- |
-| `npm run check` | core 与 execution 类型检查，不生成文件。 |
-| `npm run check:test` / `npm run vendor:check` | 测试 TS / pi-condense 类型。 |
+| `npm run check` | core、execution 与 condense 类型检查，不生成文件。 |
+| `npm run check:test` / `npm run check:condense` | 测试 TS / condense 类型。 |
 | `npm test` / `npm run test:fast` | 全部 Node 测试 / core 规则与渲染原语。 |
 | `npm run test:host` / `test:protocol` | 真实宿主接线及包内容 / 请求、回放、压缩和历史编辑。 |
 | `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
 | `npm run test:chrome` | 跨层界面、布局和复制测试。 |
-| `npm run verify` | 项目、测试、vendor 类型 + 全部测试 + pack dry-run。 |
+| `npm run verify` | 项目与测试类型 + 全部测试 + pack dry-run。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
 | `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，均不进 Git。 |
 | `node scripts/copy-perf.mjs` | 测量渲染/提取成本，不测系统剪贴板延迟。 |
@@ -41,7 +41,7 @@ core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接
 
 ## 源码与发布
 
-运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。`vendor:build` / `vendor:fresh` 仅为 condense 检查别名；`vendor:smoke` 的注册契约已纳入完整测试。上游变化选择性移植，维护 [执行来源](provenance/execution/README.md)及 [condense 来源](../vendor/pi-condense/UPSTREAM.md) / [差异](../vendor/pi-condense/PATCHES.md)。
+运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。condense 由根项目统一维护与检查；来源归属见 [NOTICE](../NOTICE)，许可见 [condense LICENSE](provenance/condense/LICENSE) 与 [执行来源](provenance/execution/README.md)。
 
 发布包携带 TS、condense 入口、shell WASM、Linux x64 helper、主题与许可/文档；Rust 来源和开发配置留在 Git。安装依赖宿主 TS 加载器，不新增编译或 npm lifecycle。
 

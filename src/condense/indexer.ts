@@ -44,6 +44,7 @@ export class ToolCallIndexer {
    * `registerSummaryBody` after a successful flush.
    */
   private summaryBodies: Array<{ toolCallIds: string[]; text: string }> = [];
+  private seenSummaryEntries = new Set<string>();
   /** Compressed chains, keyed on startUserTimestamp for O(1) dedup checks. */
   private chainRegistry = new Map<number, ChainCompressionEntry>();
 
@@ -59,6 +60,7 @@ export class ToolCallIndexer {
     this.contentHashToOriginal.clear();
     this.nextShortAliasNumber = 1;
     this.summaryBodies = [];
+    this.seenSummaryEntries.clear();
     this.chainRegistry.clear();
 
     // Two passes so dedup aliases land AFTER the original short refs they
@@ -85,25 +87,6 @@ export class ToolCallIndexer {
           }
         }
         if (backfilled && Array.isArray(data.refs)) this.registerSummaryRefs(data.refs);
-        continue;
-      }
-
-      if (entry.type === "custom_message" && (entry as any).customType === CUSTOM_TYPE_SUMMARY) {
-        const refs = normalizeSummaryToolCallRefs((entry as any).details);
-        this.registerSummaryRefs(refs);
-        const raw = (entry as any).content;
-        const text =
-          typeof raw === "string"
-            ? raw
-            : Array.isArray(raw)
-              ? raw
-                  .filter((c: any) => c.type === "text")
-                  .map((c: any) => c.text as string)
-                  .join("\n")
-              : "";
-        if (text) {
-          this.summaryBodies.push({ toolCallIds: refs.map((r) => occKey(r.toolCallId, r.resultTimestamp)), text });
-        }
         continue;
       }
 
@@ -142,6 +125,7 @@ export class ToolCallIndexer {
       const own = sources.get(key) ?? (original && this.unknownLegacyOccurrence(key, original));
       if (own) this.indexRecord(own);
     }
+    this.syncSummaryEntries(ctx);
   }
 
   /**
@@ -211,12 +195,7 @@ export class ToolCallIndexer {
    * Allocates short aliases for a batch's tool calls and registers them in the
    * runtime alias map.
    */
-  allocateSummaryRefs(batch: CapturedBatch): SummaryToolCallRef[] {
-    const calls = batch.toolCalls.map((tc) => ({ toolCallId: tc.toolCallId, resultTimestamp: tc.resultTimestamp }));
-    const { refs, nextIndex } = buildShortToolCallRefs(calls, this.nextShortAliasNumber);
-    this.nextShortAliasNumber = nextIndex;
-    return refs;
-  }
+
 
   /**
    * Resolve a short alias, a duplicate's occurrence key, or a full occurrence
@@ -355,11 +334,11 @@ export class ToolCallIndexer {
     const original = this.getRecord(originalKey);
     const own = occurrence ?? (original && this.unknownLegacyOccurrence(newKey, original));
     if (!own) return;
-    this.indexRecord(own);
     const { refs, nextIndex } = buildShortToolCallRefs([own], this.nextShortAliasNumber);
-    this.nextShortAliasNumber = nextIndex;
-    this.registerSummaryRefs(refs);
     appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: [own], backfilled: true, refs } satisfies IndexEntryData);
+    this.nextShortAliasNumber = nextIndex;
+    this.indexRecord(own);
+    this.registerSummaryRefs(refs);
   }
 
   private unknownLegacyOccurrence(key: string, original: ToolCallRecord): ToolCallRecord {
@@ -375,9 +354,27 @@ export class ToolCallIndexer {
    * Called after a successful flush so `getPerBatchSummaryTextForToolCallIds`
    * can serve chain summaries without re-scanning session entries.
    */
-  registerSummaryBody(toolCallIds: string[], text: string): void {
-    if (text && toolCallIds.length > 0) {
-      this.summaryBodies.push({ toolCallIds, text });
+  syncSummaryEntries(ctx: ExtensionContext): void {
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "custom_message" || entry.customType !== CUSTOM_TYPE_SUMMARY || this.seenSummaryEntries.has(entry.id)) continue;
+      const refs = normalizeSummaryToolCallRefs(entry.details);
+      this.registerSummaryRefs(refs);
+      const text = typeof entry.content === "string" ? entry.content
+        : entry.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+      this.registerSummaryBody(refs.map(ref => occKey(ref.toolCallId, ref.resultTimestamp)), text);
+      this.seenSummaryEntries.add(entry.id);
+    }
+  }
+
+  private registerSummaryBody(toolCallIds: string[], text: string): void {
+    if (!text || toolCallIds.length === 0) return;
+    this.summaryBodies.push({ toolCallIds, text });
+    for (const key of toolCallIds) {
+      const record = this.index.get(key);
+      if (!record?.archiveOnly) continue;
+      this.index.set(key, { ...record, archiveOnly: false });
+      const hash = record.contentHash ?? (!record.spillPath ? hashToolResult(record.toolName, record.resultText) : undefined);
+      if (hash && !this.contentHashToOriginal.has(hash)) this.contentHashToOriginal.set(hash, key);
     }
   }
 
@@ -482,18 +479,15 @@ export class ToolCallIndexer {
         ...(tc.resultPreview !== undefined ? { resultPreview: tc.resultPreview } : {}),
         ...(tc.contentHash !== undefined ? { contentHash: tc.contentHash } : {}),
       };
-      const key = this.indexRecord(record);
       records.push(record);
-      // Populate the dedup hash map AFTER the record is indexed so a future
-      // flush can dedup against this record. First-seen wins to keep the
-      // canonical id stable across multiple identical entries.
-      const hash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
-      if (!archiveOnly && !this.contentHashToOriginal.has(hash)) {
-        this.contentHashToOriginal.set(hash, key);
-      }
     }
 
     appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: records, ...(archiveOnly ? { backfilled: true } : {}) } as IndexEntryData);
+    for (const record of records) {
+      const key = this.indexRecord(record);
+      const hash = record.contentHash ?? hashToolResult(record.toolName, record.resultText);
+      if (!archiveOnly && !this.contentHashToOriginal.has(hash)) this.contentHashToOriginal.set(hash, key);
+    }
   }
 
   /**

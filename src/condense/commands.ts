@@ -594,6 +594,10 @@ export function registerCommands(
           setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
 
           if (!result.ok) {
+            if (result.reason === "delivery-pending") {
+              ctx.ui.notify("pruner: summary queued — raw results retained until delivery", "info");
+              break;
+            }
             const suffix = "error" in result && result.error ? ` (${result.error})` : "";
             ctx.ui.notify(`pruner: nothing flushed — ${result.reason}${suffix}`, result.reason === "empty" ? "info" : "warning");
             break;

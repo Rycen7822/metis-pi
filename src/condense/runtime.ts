@@ -1,34 +1,19 @@
-/**
- * context-prune — Pi extension entry point
- *
- * Wires together all modules:
- *   config       — load/save <agent-dir>/settings.json `contextPrune` namespace (honors PI_CODING_AGENT_DIR)
- *   batch-capture — serialize turn_end event into CapturedBatch
- *   summarizer   — call LLM to summarize a CapturedBatch
- *   indexer      — maintain Map<occurrenceKey, ToolCallRecord> + session persistence
- *   pruner       — filter context event messages
- *   query-tool   — register context_tree_query tool
- *   commands     — register /pruner command + message renderer
- *
- * Usage:  pi -e .
- */
-
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { registerOcc } from "./src/occ.ts";
-import { loadConfig } from "./src/config.ts";
-import { capImages, imageLimitFor } from "./src/image-cap.ts";
-import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./src/batch-capture.ts";
-import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./src/argument-history.ts";
-import { prepareBatch } from "./src/packing.ts";
-import { summarizeBatch, summarizeBatches, summarizeRange } from "./src/summarizer.ts";
-import { FallbackController } from "./src/summarizer-fallback.ts";
-import { ToolCallIndexer } from "./src/indexer.ts";
-import { pruneMessages, toolResultStub } from "./src/pruner.ts";
-import { isProtected } from "./src/protected.ts";
-import { registerNestedCapture } from "./src/nested-capture.ts";
-import { registerQueryTool } from "./src/query-tool.ts";
-import { registerCommands, setPruneStatusWidget } from "./src/commands.ts";
-import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./src/summary-refs.ts";
+import { registerOcc } from "./occ.ts";
+import { loadConfig } from "./config.ts";
+import { capImages, imageLimitFor } from "./image-cap.ts";
+import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./batch-capture.ts";
+import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
+import { prepareBatch } from "./packing.ts";
+import { summarizeBatch, summarizeBatches, summarizeRange } from "./summarizer.ts";
+import { FallbackController } from "./summarizer-fallback.ts";
+import { ToolCallIndexer } from "./indexer.ts";
+import { pruneMessages, toolResultStub } from "./pruner.ts";
+import { isProtected } from "./protected.ts";
+import { registerNestedCapture } from "./nested-capture.ts";
+import { registerQueryTool } from "./query-tool.ts";
+import { registerCommands, setPruneStatusWidget } from "./commands.ts";
+import { formatSummaryToolCallRefs, makeSummaryDetails, normalizeSummaryToolCallRefs, substituteInlineRefs } from "./summary-refs.ts";
 import type {
   ContextPruneConfig,
   CapturedBatch,
@@ -37,30 +22,31 @@ import type {
   ContextMetricsSnapshot,
   FlushMetricsEntry,
   FlushTrigger,
-} from "./src/types.ts";
+} from "./types.ts";
 import {
   DEFAULT_CONFIG,
   CUSTOM_TYPE_SUMMARY,
   CUSTOM_TYPE_STATS,
   CUSTOM_TYPE_FRONTIER,
   CUSTOM_TYPE_FLUSH_METRICS,
-} from "./src/types.ts";
-import { computeContextMetrics } from "./src/context-metrics.ts";
-import { StatsAccumulator, emitExternalCost } from "./src/stats.ts";
-import { PruneFrontierTracker } from "./src/frontier.ts";
-import { BlockRefIssuer } from "./src/block-refs.ts";
-import { compressEligible } from "./src/chain-compressor.ts";
-import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./src/supersede.ts";
-import { detectChains } from "./src/chain-detector.ts";
-import { inGraceRecoveryToolCallIds } from "./src/recovery-grace.ts";
-import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./src/budget.ts";
-import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./src/spill.ts";
-import { bareToolCallId, occKey } from "./src/occurrence-key.ts";
-import { DiagnosticSink } from "./src/diagnostics.ts";
+  STATUS_WIDGET_ID,
+} from "./types.ts";
+import { computeContextMetrics } from "./context-metrics.ts";
+import { StatsAccumulator, emitExternalCost } from "./stats.ts";
+import { PruneFrontierTracker } from "./frontier.ts";
+import { BlockRefIssuer } from "./block-refs.ts";
+import { compressEligible } from "./chain-compressor.ts";
+import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
+import { detectChains } from "./chain-detector.ts";
+import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
+import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./budget.ts";
+import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./spill.ts";
+import { bareToolCallId, occKey } from "./occurrence-key.ts";
+import { DiagnosticSink } from "./diagnostics.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 
-export default function (pi: ExtensionAPI) {
+export function createCondenseRuntime(pi: ExtensionAPI) {
   // Shared mutable config reference — updated by /pruner commands
   const currentConfig: { value: ContextPruneConfig } = {
     value: { ...DEFAULT_CONFIG },
@@ -73,7 +59,7 @@ export default function (pi: ExtensionAPI) {
 
   // Shared indexer — rebuilt from session on every session_start / session_tree
   const indexer = new ToolCallIndexer();
-  registerNestedCapture(pi, indexer, protectionPredicate);
+  const resetNested = registerNestedCapture(pi, indexer, protectionPredicate);
   const occ = registerOcc(pi, indexer, currentConfig);
   let argumentHistory: ArgumentHistory[] = [];
   const restoreArguments = (ctx: ExtensionContext) => {
@@ -81,14 +67,12 @@ export default function (pi: ExtensionAPI) {
       .map(entry => (entry as any).data as ArgumentHistory)
       .filter(group => group?.version === 1 && Array.isArray(group.sourceIds) && Array.isArray(group.fingerprints) && Array.isArray(group.keys) && typeof group.text === "string");
   };
-  pi.on("session_start", (_event, ctx) => restoreArguments(ctx));
-  pi.on("session_tree", (_event, ctx) => restoreArguments(ctx));
 
   // Shared stats accumulator — tracks cumulative token/cost stats for summarizer calls
   const statsAccum = new StatsAccumulator();
 
   // Session-scoped summarizer outage-fallback controller (in-memory; reset on session_start).
-  const fallbackController = new FallbackController();
+  let fallbackController = new FallbackController();
 
   // Shared prune frontier — tracks the last completed prune attempt boundary
   const frontier = new PruneFrontierTracker();
@@ -107,6 +91,10 @@ export default function (pi: ExtensionAPI) {
 
   // Pending batches — accumulated until the prune trigger fires
   const pendingBatches: CapturedBatch[] = [];
+  let lifecycle = 0;
+  const assertCurrent = (version: number) => {
+    if (version !== lifecycle) throw new Error("This extension ctx is stale: condense lifecycle changed");
+  };
   let isFlushing = false;
   let previousFraction: number | null = null;
   // Set on session_start/session_tree when the branch rescan finds recoverable
@@ -138,7 +126,7 @@ export default function (pi: ExtensionAPI) {
 
   type FlushResult =
     | { ok: true; reason: "flushed" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number }
-    | { ok: false; reason: "empty" | "already-flushing" | "summarizer-failed" | "stale-context" | "failed" | "aborted"; error?: string };
+    | { ok: false; reason: "empty" | "already-flushing" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string };
 
   type SessionAppender = {
     appendCustomEntry(customType: string, data?: unknown): string;
@@ -202,16 +190,18 @@ export default function (pi: ExtensionAPI) {
   // rearmedPending false, per spec. Every other caller (turn_end capture path,
   // flushPending, /pruner commands) keeps the existing swallow-and-fall-back
   // behavior so a transient getBranch failure there never blocks the turn.
+  const queuedSummaryKeys = new Set<string>();
   const capturePendingBatches = (ctx: any, opts?: { rethrow?: boolean }): CapturedBatch[] => {
     let batches: CapturedBatch[] = [];
     try {
+      indexer.syncSummaryEntries(ctx);
       const rawBranch = ctx.sessionManager.getBranch();
       const sourceTurns = new Map<string, number>();
       let turnIndex = 0;
       for (const entry of rawBranch) if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
       const branch = occ.enabled() ? ctx.sessionManager.buildSessionProjection().entries.flatMap((entry: any) =>
         entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message }))) : rawBranch;
-      batches = captureUnindexedBatchesFromSession(branch, indexer, protectionPredicate, sourceTurns);
+      batches = captureUnindexedBatchesFromSession(branch, { isSummarized: key => queuedSummaryKeys.has(key) || indexer.isSummarized(key) }, protectionPredicate, sourceTurns);
     } catch (err) {
       if (opts?.rethrow) throw err;
       batches = pendingBatches.slice();
@@ -235,8 +225,10 @@ export default function (pi: ExtensionAPI) {
   // Each successful fusion folds its usage + bumps the rangesSummarized counter.
   const makeFuseRange = (ctx: any): ((text: string) => Promise<string | null>) | undefined => {
     if (!currentConfig.value.chainCompression.fuseRangeSummary) return undefined;
+    const version = lifecycle;
     return async (text: string) => {
       const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController });
+      assertCurrent(version);
       if (r) {
         statsAccum.add(r.usage);
         statsAccum.addRangesSummarized(1);
@@ -248,6 +240,7 @@ export default function (pi: ExtensionAPI) {
   const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
     if (isFlushing) return { ok: false, reason: "already-flushing" };
     if (options.trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "empty" };
+    const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
 
     // Clear on every non-concurrent invocation, regardless of outcome — the
@@ -288,11 +281,9 @@ export default function (pi: ExtensionAPI) {
         outcome,
         metrics: entryMetrics,
       };
-      const appender: (type: string, data: unknown) => void = appendEntry
-        ? delivery === "runtime" ? (type, data) => pi.appendEntry(type, data) : appendEntry
-        : (type, data) => pi.appendEntry(type, data);
       try {
-        appender(CUSTOM_TYPE_FLUSH_METRICS, entry);
+        assertCurrent(version);
+        (appendEntry ?? pi.appendEntry)(CUSTOM_TYPE_FLUSH_METRICS, entry);
       } catch {
         // non-fatal: observability must never fail the flush
       }
@@ -301,7 +292,7 @@ export default function (pi: ExtensionAPI) {
     type ResultSlot =
       | {
           summaryText: string;
-          usage?: import("./src/types.ts").SummarizeResult["usage"];
+          usage?: import("./types.ts").SummarizeResult["usage"];
           deterministic?: boolean;
         }
       | null
@@ -309,7 +300,6 @@ export default function (pi: ExtensionAPI) {
       | "deduped";
     let batches: CapturedBatch[] = [];
     let sessionManager: SessionAppender | undefined;
-    const persistArgumentEntry = (type: string, data: unknown) => appendEntry ? appendEntry(type, data) : pi.appendEntry(type, data);
     try {
       // Bind the session appender as soon as delivery is known, BEFORE the
       // empty-capture/aborted exits below — so emitFlushMetricsOnce's finally
@@ -318,12 +308,12 @@ export default function (pi: ExtensionAPI) {
       if (delivery === "session") {
         try {
           sessionManager = ctx.sessionManager as unknown as SessionAppender;
-          appendEntry = (customType: string, data?: unknown) => sessionManager!.appendCustomEntry(customType, data);
+          appendEntry = (customType: string, data?: unknown) => { assertCurrent(version); sessionManager!.appendCustomEntry(customType, data); };
         } catch (err) {
           outcome = "error";
           return { ok: false, reason: isStaleContextError(err) ? "stale-context" : "failed", error: errorMessage(err) };
         }
-      }
+      } else appendEntry = (type, data) => { assertCurrent(version); pi.appendEntry(type, data); };
 
       // Use pre-captured batches if provided (avoids double-capture when the
       // caller previewed the queue before opening the progress overlay).
@@ -347,11 +337,11 @@ export default function (pi: ExtensionAPI) {
           await archiveBatches(candidates.map(({ batch }) => batch), { indexer,
             spillThreshold: currentConfig.value.spillThreshold,
             spillPreviewBytes: currentConfig.value.spillPreviewBytes, sessionDir: ctx.sessionManager.getSessionDir(),
-            sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistArgumentEntry });
+            sessionId: ctx.sessionManager.getSessionId(), appendEntry: appendEntry! });
           const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
           if (currentConfig.value.enabled && JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection)
             && JSON.stringify(current) === JSON.stringify(before)) {
-            for (const { group } of candidates) { persistArgumentEntry(ARGUMENT_HISTORY, group); argumentHistory.push(group); }
+            for (const { group } of candidates) { appendEntry!(ARGUMENT_HISTORY, group); argumentHistory.push(group); }
             const keys = new Set(candidates.flatMap(candidate => candidate.group.keys));
             batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !keys.has(occKey(call.toolCallId, call.resultTimestamp))) })).filter(batch => batch.toolCalls.length);
             publishedAliasesOrArchives = true;
@@ -378,16 +368,9 @@ export default function (pi: ExtensionAPI) {
       // or rapid turn-ends don't result in double-summarization.
       pendingBatches.length = 0;
 
-      const appendSummaryMessage = (content: string, details: unknown) =>
-        sessionManager!.appendCustomMessageEntry(CUSTOM_TYPE_SUMMARY, content, false, details);
-
       // Routes alias persistence through whichever delivery is active so the
       // dedup pre-flush pass writes CUSTOM_TYPE_DEDUP_ALIAS entries via the
       // same path the rest of the flush uses.
-      const persistAlias: (customType: string, data?: unknown) => void =
-        delivery === "runtime"
-          ? (type, data) => pi.appendEntry(type, data)
-          : appendEntry!;
 
       // Reload/rescan can reach the final boundary without a turn_end callback.
       // Recover fused evidence before any summary can replace its visible tail.
@@ -396,7 +379,7 @@ export default function (pi: ExtensionAPI) {
         if (toolCalls.length === 0) continue;
         const handled = await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
           config: { spillThreshold: Infinity, spillPreviewBytes: currentConfig.value.spillPreviewBytes, dedupByContentHash: false },
-          sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(), appendEntry: persistAlias });
+          sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(), appendEntry: appendEntry! });
         publishedAliasesOrArchives ||= handled.size > 0;
       }
       batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !indexer.isSummarized(occKey(call.toolCallId, call.resultTimestamp))) }))
@@ -412,7 +395,7 @@ export default function (pi: ExtensionAPI) {
       // an alias of the original (pruneMessages then stub-replaces its
       // ToolResultMessage) and drop it from the batch BEFORE the summarizer /
       // trivial classifier runs, still counting it toward the flush totals.
-      const pendingAliases: Array<[string, string, import("./src/types.ts").ToolCallRecord]> = [];
+      const pendingAliases: Array<[string, string, import("./types.ts").ToolCallRecord]> = [];
       const dedupEnabled = currentConfig.value.dedupByContentHash;
       const minChars = currentConfig.value.minBatchChars;
       // Keep dedup separate from preparation so failed lookups restore the
@@ -420,7 +403,7 @@ export default function (pi: ExtensionAPI) {
       const dedupRecords = batches.map((batch, index) => ({
         index,
         batch,
-        deduped: [] as import("./src/types.ts").CapturedToolCall[],
+        deduped: [] as import("./types.ts").CapturedToolCall[],
         dedupedRawChars: 0,
       }));
       if (dedupEnabled) {
@@ -472,6 +455,7 @@ export default function (pi: ExtensionAPI) {
         setPruneStatusWidget(ctx, currentConfig.value, "prune: summarizing…");
       }
 
+      const source = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
       // Summarize the non-trivial subset. When onProgress is provided
       // (/pruner now overlay) we process sequentially so each row can be
       // checked off as its LLM call completes. Trivial and fully-deduped
@@ -492,6 +476,7 @@ export default function (pi: ExtensionAPI) {
             onTextProgress: (receivedChars) =>
               options.onBatchTextProgress?.(record.index, records.length, record.batch, receivedChars),
           });
+          assertCurrent(version);
           record.result = r;
           options.onProgress(record.index, records.length, record.batch, r ? "done" : "skipped");
         }
@@ -517,6 +502,10 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
+      assertCurrent(version);
+      if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== source) {
+        throw new Error("This extension ctx is stale: summary source changed");
+      }
       // A rejected/oversized model result must not discard a useful local pack.
       // These decisions and alias publication happen after every awaited model call.
       for (const record of records) {
@@ -529,7 +518,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
       for (const [key, originalId, occurrence] of pendingAliases) {
-        indexer.registerDuplicate(key, originalId, persistAlias, occurrence);
+        indexer.registerDuplicate(key, originalId, appendEntry!, occurrence);
         publishedAliasesOrArchives = true;
       }
 
@@ -545,6 +534,7 @@ export default function (pi: ExtensionAPI) {
       const trivialBatches: BatchRecord[] = [];
       const dedupedBatches: BatchRecord[] = [];
       let firstFailureIndex = -1;
+      let deliveryPending = false;
 
       // Every tool call phase 1 will stub on the next render is a floor
       // source for supersession: dedup aliases regardless of batch outcome,
@@ -592,8 +582,16 @@ export default function (pi: ExtensionAPI) {
           continue;
         }
 
+        if (result.usage) statsAccum.add(result.usage);
         const archivedBatch = result.deterministic ? record.prepared.packedBatch : batch;
-        const summaryRefs = indexer.allocateSummaryRefs(archivedBatch);
+        const beforeArchive = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+        const summaryRefs = await archiveBatches([archivedBatch], { indexer, appendEntry: appendEntry!,
+          spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+          sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() });
+        assertCurrent(version);
+        if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== beforeArchive) {
+          throw new Error("This extension ctx is stale: summary source changed during archive");
+        }
         const toolNames = archivedBatch.toolCalls.map((tc) => tc.toolName);
         const decorated = substituteInlineRefs(result.summaryText, summaryRefs, toolNames);
         const summaryText = decorated + formatSummaryToolCallRefs(summaryRefs);
@@ -612,7 +610,6 @@ export default function (pi: ExtensionAPI) {
         const charsSaved = JSON.stringify(visible).length - JSON.stringify(proposed).length;
         const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || charsSaved <= 0;
 
-        if (result.usage) statsAccum.add(result.usage);
         totalRawCharCount += record.rawChars + dedupRawChars;
         totalSummaryCharCount += summaryText.length;
         totalToolCallCount += batch.toolCalls.length + dedupCount;
@@ -620,9 +617,6 @@ export default function (pi: ExtensionAPI) {
 
         try {
           if (!shouldSkipOversized) {
-            publishedCharsSaved += charsSaved;
-            const first = visible.findIndex((message: any, index: number) => JSON.stringify(message) !== JSON.stringify(proposed[index]));
-            firstChangedMessage = firstChangedMessage === undefined ? first : Math.min(firstChangedMessage, first);
             // Write one hidden summary message per turn and index its tool calls.
             // `display: false` keeps the summary in future LLM context (convertToLlm
             // ignores `display`) while suppressing the full markdown block from Pi's
@@ -633,16 +627,24 @@ export default function (pi: ExtensionAPI) {
                 { customType: CUSTOM_TYPE_SUMMARY, content: summaryText, display: false, details: batchDetails },
                 { deliverAs: "steer" }
               );
-              indexer.registerSummaryRefs(summaryRefs);
-              indexer.addBatch(archivedBatch, (type, data) => pi.appendEntry(type, data));
+
             } else {
-              appendSummaryMessage(summaryText, batchDetails);
-              indexer.registerSummaryRefs(summaryRefs);
-              indexer.addBatch(archivedBatch, appendEntry!);
+              sessionManager!.appendCustomMessageEntry(CUSTOM_TYPE_SUMMARY, summaryText, false, batchDetails);
+
             }
-            // Keep the in-memory summary-body registry current so chain compression
-            // can build synthetic chain messages without rescanning session entries.
-            indexer.registerSummaryBody(batchOccurrenceKeys, summaryText);
+            // A runtime send can queue or fail asynchronously. Only a summary
+            // actually persisted in this branch authorizes hiding its raw records.
+            indexer.syncSummaryEntries(ctx);
+            if (!batchOccurrenceKeys.every(key => indexer.isSummarized(key))) {
+              if (ctx.isIdle()) throw new Error("Summary message was not persisted");
+              batchOccurrenceKeys.forEach(key => queuedSummaryKeys.add(key));
+              deliveryPending = true;
+              firstFailureIndex = i;
+              break;
+            }
+            publishedCharsSaved += charsSaved;
+            const first = visible.findIndex((message: any, index: number) => JSON.stringify(message) !== JSON.stringify(proposed[index]));
+            firstChangedMessage = firstChangedMessage === undefined ? first : Math.min(firstChangedMessage, first);
             stubCount += archivedBatch.toolCalls.length + dedupCount;
             floorSources.push(...archivedBatch.toolCalls);
           } else {
@@ -673,7 +675,7 @@ export default function (pi: ExtensionAPI) {
         // Nothing was persisted (all calls failed or first call failed)
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
         outcome = "error";
-        return { ok: false, reason: "summarizer-failed" };
+        return { ok: false, reason: deliveryPending ? "delivery-pending" : "summarizer-failed" };
       }
 
       // Advance frontier to the last batch we actually processed. A fully
@@ -716,18 +718,12 @@ export default function (pi: ExtensionAPI) {
       };
 
       try {
-        if (delivery === "runtime") {
-          frontier.advance(frontierSnapshot);
-          frontier.persist(pi);
-          statsAccum.persist(pi);
-        } else {
-          frontier.advance(frontierSnapshot);
-          appendEntry!(CUSTOM_TYPE_FRONTIER, frontierSnapshot);
-          try {
-            appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats());
-          } catch {
-            // Ignore stats persistence failures; the prune result and frontier are the contract.
-          }
+        frontier.advance(frontierSnapshot);
+        appendEntry!(CUSTOM_TYPE_FRONTIER, frontierSnapshot);
+        try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
+        catch (err) {
+          if (delivery === "runtime") throw err;
+          // Session delivery treats stats as optional, unlike its frontier.
         }
       } catch (err) {
         // Batches were summarized/persisted before the frontier/stats write failed;
@@ -750,41 +746,34 @@ export default function (pi: ExtensionAPI) {
       // are silenced by `quietOversizedSkips`, which acts as a single
       // "quiet all non-error skips" toggle.
       if (!currentConfig.value.quietOversizedSkips) {
+        const notify = (message: string) => safeNotify(ctx, message, "info");
         for (const record of oversizedBatches) {
           const batch = record.batch;
           const slot = record.result;
           const batchSummaryLen = slot && slot !== "trivial" && slot !== "deduped" ? slot.summaryText.length : 0;
-          safeNotify(
-            ctx,
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary was ${batchSummaryLen} chars vs ${record.rawChars} raw chars; frontier advanced past this range`,
-            "info"
+          notify(
+            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary was ${batchSummaryLen} chars vs ${record.rawChars} raw chars; frontier advanced past this range`
           );
         }
         for (const record of trivialBatches) {
           const batch = record.batch;
-          safeNotify(
-            ctx,
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${record.rawChars} raw chars (< minBatchChars=${minChars}); no LLM call made; frontier advanced past this range`,
-            "info"
+          notify(
+            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${record.rawChars} raw chars (< minBatchChars=${minChars}); no LLM call made; frontier advanced past this range`
           );
         }
         for (const record of dedupedBatches) {
           const batch = record.batch;
           const n = record.deduped.length;
-          safeNotify(
-            ctx,
-            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${record.dedupedRawChars} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`,
-            "info"
+          notify(
+            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${record.dedupedRawChars} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`
           );
         }
         if (totalDedupedCount > 0 && dedupedBatches.length === 0) {
           // Partial-dedup case: some tool calls were dedup'd but the rest
           // of the batch went through the summarizer. Surface a single
           // aggregate notification so users see the savings.
-          safeNotify(
-            ctx,
-            `pruner: deduplicated ${totalDedupedCount} tool call${totalDedupedCount === 1 ? "" : "s"} against earlier prunes (no LLM call for those); remaining tool calls were summarized normally.`,
-            "info"
+          notify(
+            `pruner: deduplicated ${totalDedupedCount} tool call${totalDedupedCount === 1 ? "" : "s"} against earlier prunes (no LLM call for those); remaining tool calls were summarized normally.`
           );
         }
       }
@@ -795,12 +784,9 @@ export default function (pi: ExtensionAPI) {
       processedCount = processedBatches.length;
       outcome = flushOutcome;
 
-      const returnReason: "flushed" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped" =
-        flushOutcome === "summarized" ? "flushed" : flushOutcome;
-
       return {
         ok: true,
-        reason: returnReason,
+        reason: flushOutcome === "summarized" ? "flushed" : flushOutcome,
         batchCount: processedBatches.length,
         toolCallCount: totalToolCallCount,
         rawCharCount: totalRawCharCount,
@@ -808,6 +794,10 @@ export default function (pi: ExtensionAPI) {
         dedupedCount: totalDedupedCount,
       };
     } catch (err) {
+      if (version !== lifecycle) {
+        if (projectionContext) rebuildBranchIndex(projectionContext);
+        return { ok: false, reason: "stale-context", error: errorMessage(err) };
+      }
       restoreBatches(batches);
       outcome = "error";
       // When the abort signal fired, summarizeBatch rethrows rather than
@@ -823,7 +813,7 @@ export default function (pi: ExtensionAPI) {
       return { ok: false, reason: "failed", error: errorMessage(err) };
     } finally {
       isFlushing = false;
-      if (stubCount > 0 || publishedAliasesOrArchives || modelAttempted) occ.rewrite(ctx, beforeRewrite);
+      if (version === lifecycle && (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)) occ.rewrite(ctx, beforeRewrite);
       emitFlushMetricsOnce();
     }
   };
@@ -839,6 +829,7 @@ export default function (pi: ExtensionAPI) {
   /** Reset branch-scoped diagnostics/frontier state, drop the old branch's queued
    * batches, then re-probe for recoverable pending work and refresh the footer. */
   const restoreBranchPending = (ctx: ExtensionContext): void => {
+    queuedSummaryKeys.clear();
     diagnostics.reset();
     supersede.activated.clear();
     supersede.floor = 0;
@@ -862,38 +853,46 @@ export default function (pi: ExtensionAPI) {
     setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
   };
 
-  pi.on("session_start", async (_event, ctx) => {
-    // Load config from <agent-dir>/settings.json `contextPrune` key (honors PI_CODING_AGENT_DIR)
-    currentConfig.value = await loadConfig();
-
+  let bootTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearBoot = () => {
+    if (!bootTimer) return;
+    clearTimeout(bootTimer);
+    bootTimer = undefined;
+    try { projectionContext?.ui.setWidget("pruner-boot", undefined); } catch { /* Previous UI may be gone. */ }
+  };
+  const restore = (ctx: ExtensionContext) => {
+    resetNested();
+    occ.restore(ctx);
+    restoreArguments(ctx);
+  };
+  const start = async (ctx: ExtensionContext) => {
+    const version = ++lifecycle;
+    clearBoot();
+    restore(ctx);
+    const config = await loadConfig();
+    if (version !== lifecycle) return;
+    currentConfig.value = config;
     rebuildBranchIndex(ctx);
-    // The fallback controller is per-session runtime state, not branch state.
-    fallbackController.reset();
+    fallbackController = new FallbackController();
     restoreBranchPending(ctx);
-
+    activeSessionId = ctx.sessionManager.getSessionId();
+    projectionContext = ctx;
     if (currentConfig.value.showPruneStatusLine) {
-      ctx.ui.setWidget(
-        "pruner-boot",
-        [
-          `pruner loaded — pruning ${currentConfig.value.enabled ? "ON" : "OFF"} | model: ${currentConfig.value.summarizerModel}`,
-        ],
-        { placement: "belowEditor" },
-      );
-      setTimeout(() => {
-        try {
-          ctx.ui.setWidget("pruner-boot", undefined);
-        } catch {
-          // UI owner may be gone after session replacement.
-        }
-      }, 10000).unref?.();
+      ctx.ui.setWidget("pruner-boot", [
+        `pruner loaded — pruning ${currentConfig.value.enabled ? "ON" : "OFF"} | model: ${currentConfig.value.summarizerModel}`,
+      ], { placement: "belowEditor" });
+      bootTimer = setTimeout(clearBoot, 10000);
+      bootTimer.unref?.();
     }
-  });
-
-  // Rebuild index and stats after tree navigation too (branch may have different history)
-  pi.on("session_tree", async (_event, ctx) => {
+  };
+  const tree = (ctx: ExtensionContext) => {
+    lifecycle++;
+    restore(ctx);
     rebuildBranchIndex(ctx);
     restoreBranchPending(ctx);
-  });
+    activeSessionId = ctx.sessionManager.getSessionId();
+    projectionContext = ctx;
+  };
 
   // Cache is a per-model prefix; these three moments are cold regardless, so
   // activating every pending supersession here costs no extra cache miss.
@@ -909,6 +908,11 @@ export default function (pi: ExtensionAPI) {
 
   // ── turn_end: capture batch, flush immediately or queue ──────────────────
   pi.on("turn_end", async (event, ctx) => {
+    const version = lifecycle;
+    const appendArchive = (type: string, data?: unknown) => {
+      assertCurrent(version);
+      (ctx.sessionManager as unknown as SessionAppender).appendCustomEntry(type, data);
+    };
     if (!currentConfig.value.enabled) return;
 
     const hasToolResults = event.toolResults && event.toolResults.length > 0;
@@ -965,7 +969,7 @@ export default function (pi: ExtensionAPI) {
           for (const call of capturedBatch.toolCalls) {
             if (!call.outputArchive || indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))) continue;
             const archive = { indexer, sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
-              appendEntry: (type: string, data?: unknown) => (ctx.sessionManager as unknown as SessionAppender).appendCustomEntry(type, data) };
+              appendEntry: appendArchive };
             await archiveToolOutput(call, capturedBatch, archive);
             indexer.addBatch({ ...capturedBatch, toolCalls: [call] }, archive.appendEntry, true);
           }
@@ -980,13 +984,15 @@ export default function (pi: ExtensionAPI) {
           },
           sessionDir: ctx.sessionManager.getSessionDir(),
           sessionId: ctx.sessionManager.getSessionId(),
-          appendEntry: (type, data) => (ctx.sessionManager as unknown as SessionAppender).appendCustomEntry(type, data),
+          appendEntry: appendArchive,
         });
+        assertCurrent(version);
         if (handled.size) occ.rewrite(ctx, beforeRewrite);
       } catch {
         // best-effort; never block the turn
       }
 
+      if (version !== lifecycle) return;
       const batch = trimBatchToPendingRange(filtered);
       if (batch) {
         pushedBatch = true;
@@ -1081,6 +1087,11 @@ export default function (pi: ExtensionAPI) {
     );
   });
 
+  pi.on("agent_settled", async (_event, ctx) => {
+    indexer.syncSummaryEntries(ctx);
+    queuedSummaryKeys.clear();
+  });
+
   // ── context: prune summarized tool results from next LLM call ─────────────
   const projectContext = (input: any[], api?: string, ctx?: ExtensionContext) => {
     let messages = input;
@@ -1102,8 +1113,21 @@ export default function (pi: ExtensionAPI) {
     // A context edit changes effective evidence, not the immutable archive. Keep
     // edited sources visible and remove stale summaries of the same source group.
     const editedToolIds = new Set<string>();
-    if (occ.enabled() && ctx) {
-      for (const entry of ctx.sessionManager.buildSessionProjection().entries) {
+    if (ctx) {
+      indexer.syncSummaryEntries(ctx);
+      const projection = ctx.sessionManager.buildSessionProjection();
+      const editedSummaries = new Set<string>();
+      const summaryIdentity = (message: any) => JSON.stringify([message.timestamp, message.content, message.details]);
+      for (const entry of projection.entries) {
+        if (entry.sourceEntry.type === "custom_message" && entry.sourceEntry.customType === CUSTOM_TYPE_SUMMARY) {
+          const original = entry.sourceEntry;
+          const effective = entry.messages[0];
+          if (entry.messages.length === 1 && effective?.role === "custom"
+            && JSON.stringify([effective.content, effective.details]) === JSON.stringify([original.content, original.details])) continue;
+          for (const ref of normalizeSummaryToolCallRefs(original.details)) editedToolIds.add(bareToolCallId(ref.toolCallId));
+          for (const message of entry.messages) editedSummaries.add(summaryIdentity(message));
+          continue;
+        }
         if (entry.sourceEntry.type !== "message") continue;
         const original = entry.sourceEntry.message;
         if (original.role !== "toolResult" && original.role !== "assistant") continue;
@@ -1120,12 +1144,12 @@ export default function (pi: ExtensionAPI) {
       let previousSize = -1;
       while (previousSize !== editedToolIds.size) {
         previousSize = editedToolIds.size;
-        for (const message of ctx.sessionManager.buildSessionProjection().messages) {
+        for (const message of projection.messages) {
           const ids = summaryIds(message);
           if (ids.some(id => editedToolIds.has(id))) ids.forEach(id => editedToolIds.add(id));
         }
       }
-      const filtered = messages.filter(message => !summaryIds(message).some(id => editedToolIds.has(id)));
+      const filtered = messages.filter(message => editedSummaries.has(summaryIdentity(message)) || !summaryIds(message).some(id => editedToolIds.has(id)));
       if (filtered.length !== messages.length) { messages = filtered; changed = true; }
     }
 
@@ -1168,8 +1192,6 @@ export default function (pi: ExtensionAPI) {
     if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
     request.messages = projectContext(request.messages, request.api, projectionContext).messages;
   });
-  pi.on("session_start", (_event, ctx) => { activeSessionId = ctx.sessionManager.getSessionId(); projectionContext = ctx; });
-  pi.on("session_shutdown", () => { activeSessionId = undefined; projectionContext = undefined; unsubscribeProjection(); });
   pi.on("context", async (event, ctx) => {
     const result = projectContext(event.messages, ctx.model?.api, ctx);
     occ.observeRequest(result.messages);
@@ -1183,6 +1205,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Register /pruner command + summary message renderer ────────────
   const compactChains = async (ctx: any) => {
+    const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
     const branchMessages = projectBranchMessages(ctx.sessionManager.getBranch());
     const chains = detectChains(branchMessages, protectionPredicate);
@@ -1193,7 +1216,7 @@ export default function (pi: ExtensionAPI) {
       {
         indexer,
         blockRefs,
-        appendEntry: (type: string, data: unknown) => pi.appendEntry(type, data),
+        appendEntry: (type: string, data: unknown) => { assertCurrent(version); pi.appendEntry(type, data); },
         now: () => Date.now(),
         fuseRange: makeFuseRange(ctx),
         messages: branchMessages,
@@ -1207,6 +1230,7 @@ export default function (pi: ExtensionAPI) {
       },
       inGrace,
     );
+    assertCurrent(version);
     if (result.compressedEntries.length > 0) {
       occ.rewrite(ctx, beforeRewrite);
       lowerFloor(supersede, earliestChainStart(result.compressedEntries));
@@ -1232,4 +1256,19 @@ export default function (pi: ExtensionAPI) {
     undefined,
     (ctx) => occ.refreshStatus(ctx),
   );
+  return {
+    start, tree,
+    shutdown(ctx: ExtensionContext) {
+      lifecycle++;
+      clearBoot();
+      resetNested();
+      occ.shutdown(ctx);
+      activeSessionId = undefined;
+      projectionContext = undefined;
+      pendingBatches.length = 0;
+      queuedSummaryKeys.clear();
+      unsubscribeProjection();
+      try { ctx.ui.setStatus(STATUS_WIDGET_ID, undefined); } catch { /* UI may already be gone. */ }
+    },
+  };
 }

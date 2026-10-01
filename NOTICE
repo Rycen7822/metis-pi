@@ -52,12 +52,12 @@ Modifications: Copyright (c) 2026 Rycen7822. MIT License.
 - Vendored for linux-x64 only: the per-platform voice helper binaries and the
   darwin/win32/linux-arm64 native tools are not redistributed here.
 
-pi-condense 2.11.0 is vendored with local recall and integration changes.
+The metis-pi condense module is derived from pi-condense 2.11.0.
 Upstream: https://github.com/jjuraszek/pi-condense
 Commit: 1bdbba695305419e97be179b412b1fb267298d7f
 Copyright (c) 2025 championswimmer (original pi-context-prune).
 Copyright (c) 2026 Jacek Juraszek (pi-condense).
-MIT License (see vendor/pi-condense/LICENSE).
+MIT License (see docs/provenance/condense/LICENSE).
 
 Bundled PTY and image helpers and their retained native/tools utility sources are
 derived from OpenAI Codex, copyright OpenAI and its contributors, Apache-2.0

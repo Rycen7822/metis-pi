@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
 import { createExecSessionManager } from "../../src/execution/exec/session-manager.ts";
 import { createExecCommandTool } from "../../src/execution/exec/command-tool.ts";
-import { captureBatch } from "../../vendor/pi-condense/src/batch-capture.ts";
-import { packToolResult } from "../../vendor/pi-condense/src/packing.ts";
+import { captureBatch } from "../../src/condense/batch-capture.ts";
+import { packToolResult } from "../../src/condense/packing.ts";
 import { waitForExitOrInactivity } from "../../src/execution/exec/wait.ts";
 import { trackExecSpools } from "../helpers/exec.mjs";
 

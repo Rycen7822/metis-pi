@@ -2,25 +2,7 @@ import type { SummarizerStats, ExternalCostUpdate, LiveReclaim } from "./types.t
 import { CUSTOM_TYPE_STATS, EXTERNAL_COST_CHANNEL, EXTERNAL_COST_SOURCE } from "./types.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-/**
- * Usage shape returned by the LLM `complete()` call.
- * Mirrors the `Usage` interface from `@earendil-works/pi-ai` but declared locally
- * so we don't need a runtime import just for the type.
- */
-interface Usage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
-}
+import type { Usage } from "@earendil-works/pi-ai";
 
 /**
  * Accumulates cumulative token/cost stats for summarizer LLM calls.
@@ -95,11 +77,6 @@ export class StatsAccumulator {
     this.liveReclaim = undefined;
   }
 
-  /** Serialize stats for session persistence. */
-  toJSON(): SummarizerStats {
-    return { ...this.stats };
-  }
-
   /** Restore stats from a previously persisted snapshot. */
   fromJSON(data: SummarizerStats): void {
     this.stats = {
@@ -143,7 +120,7 @@ export class StatsAccumulator {
    * all entries and apply the LAST one (since each entry is a full snapshot).
    */
   persist(pi: ExtensionAPI): void {
-    pi.appendEntry(CUSTOM_TYPE_STATS, this.toJSON());
+    pi.appendEntry(CUSTOM_TYPE_STATS, this.getStats());
   }
 }
 

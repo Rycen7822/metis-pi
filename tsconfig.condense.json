@@ -14,7 +14,7 @@
     "erasableSyntaxOnly": true
   },
   "include": [
-    "index.ts",
-    "src/**/*.ts"
+    "src/condense/**/*.ts",
+    "extensions/condense.ts"
   ]
 }

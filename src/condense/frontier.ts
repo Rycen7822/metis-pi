@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PruneFrontier } from "./types.ts";
 import { CUSTOM_TYPE_FRONTIER } from "./types.ts";
 
@@ -55,8 +55,4 @@ export class PruneFrontierTracker {
     this.frontier = { ...frontier };
   }
 
-  persist(pi: ExtensionAPI): void {
-    if (!this.frontier) return;
-    pi.appendEntry(CUSTOM_TYPE_FRONTIER, this.frontier);
-  }
 }

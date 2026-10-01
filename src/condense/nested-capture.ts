@@ -5,13 +5,10 @@ import type { ToolCallIndexer } from "./indexer.ts";
 
 /** Native nested results are transient: archive them before the parent can be condensed. */
 export function registerNestedCapture(pi: ExtensionAPI, indexer: ToolCallIndexer,
-  protectedCall: (name: string, args: unknown) => boolean): void {
+  protectedCall: (name: string, args: unknown) => boolean): () => void {
   const calls = new Map<string, { root: string; args: Record<string, unknown> }>();
   const roots = new Map<string, { protected: boolean; hasError: boolean; archiveFailed: boolean; pending: number; count: number; ended: boolean }>();
   const clear = () => { calls.clear(); roots.clear(); };
-  pi.on("session_start", clear);
-  pi.on("session_tree", clear);
-  pi.on("session_shutdown", clear);
   const start = (id: string, parent: string, args: any) => {
     const root = calls.get(parent)?.root ?? parent;
     calls.set(id, { root, args: args as Record<string, unknown> });
@@ -44,12 +41,15 @@ export function registerNestedCapture(pi: ExtensionAPI, indexer: ToolCallIndexer
       captured.parentToolCallId = call.root;
       await archiveBatches([{ turnIndex: -1, timestamp, assistantText: "", toolCalls: [captured] }], {
         indexer, sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
-        appendEntry: (type, data) => pi.appendEntry(type, data), spillThreshold: 1, spillPreviewBytes: 2048,
+        appendEntry: (type, data) => {
+          if (roots.get(call.root) !== state) throw new Error("Nested capture source changed");
+          pi.appendEntry(type, data);
+        }, spillThreshold: 1, spillPreviewBytes: 2048,
       });
     } catch { state.archiveFailed = true; }
     finally {
       state.pending--;
-      if (state.ended && !state.pending) roots.delete(call.root);
+      if (state.ended && !state.pending && roots.get(call.root) === state) roots.delete(call.root);
     }
   };
   pi.on("tool_execution_end", async (event, ctx) => {
@@ -66,4 +66,5 @@ export function registerNestedCapture(pi: ExtensionAPI, indexer: ToolCallIndexer
       unfinished: state.pending > 0, count: state.count,
     } } };
   });
+  return clear;
 }
