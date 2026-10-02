@@ -115,26 +115,26 @@ export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff |
     ? theme.fg("toolTitle", rawPath)
     : theme.fg("dim", "(path pending…)");
   if (!done) {
-    return `${theme.fg("dim", "•")} ${theme.bold("Writing")} ${target}`;
+    return `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold("Writing"))} ${target}`;
   }
   if (ctx.isError === true) {
-    return `${theme.fg("error", "•")} ${theme.bold("Failed")} ${target}`;
+    return `${theme.fg("error", "•")} ${theme.fg("toolTitle", theme.bold("Failed"))} ${target}`;
   }
   const bullet = theme.fg("success", "•");
   if (!change || change.kind === "unavailable") {
     const reason = change?.reason ? ` ${theme.fg("muted", `(${change.reason}; diff unavailable)`)}` : "";
-    return `${bullet} ${theme.bold("Wrote")} ${target}${reason}`;
+    return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target}${reason}`;
   }
   if (change.kind === "add") {
-    return `${bullet} ${theme.bold("Added")} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", "-0")}`;
+    return `${bullet} ${theme.fg("toolTitle", theme.bold("Added"))} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", "-0")}`;
   }
   if (change.kind === "update") {
-    return `${bullet} ${theme.bold("Edited")} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", `-${change.removed}`)}`;
+    return `${bullet} ${theme.fg("toolTitle", theme.bold("Edited"))} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", `-${change.removed}`)}`;
   }
   if (change.kind === "unchanged") {
-    return `${bullet} ${theme.bold("Wrote")} ${target} ${theme.fg("muted", "(unchanged)")}`;
+    return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target} ${theme.fg("muted", "(unchanged)")}`;
   }
-  return `${bullet} ${theme.bold("Failed")} ${target}`;
+  return `${bullet} ${theme.fg("toolTitle", theme.bold("Failed"))} ${target}`;
 }
 
 export function diffStats(value: unknown): DiffStats | undefined {
@@ -151,7 +151,7 @@ export function shellCallText(bullet: string, title: string, args: Record<string
   const visible = expanded ? all : all.slice(0, COMMAND_LINES).map(shortened);
   if (!expanded && all.length > COMMAND_LINES) visible.push(`… +${all.length - COMMAND_LINES} command lines`);
   const [head = "…", ...rest] = visible;
-  return `${bullet} ${theme.bold(title)} ${highlight(head, "bash", theme, paint)}`
+  return `${bullet} ${theme.fg("toolTitle", theme.bold(title))} ${highlight(head, "bash", theme, paint)}`
     + rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("");
 }
 
@@ -187,7 +187,7 @@ function editCall(input: unknown, theme: Palette, ctx: ViewContext, stats?: Diff
   const label = ctx.isError ? "Failed" : done ? "Edited" : "Editing";
   let suffix = "";
   if (stats && ctx.isError !== true) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
-  return `${marker} ${theme.bold(label)} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
+  return `${marker} ${theme.fg("toolTitle", theme.bold(label))} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
 }
 
 export interface WritePreviewInput {

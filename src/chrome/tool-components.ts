@@ -47,7 +47,7 @@ export function createShellFactories(layout: LayoutOps): ShellFactories {
         layout,
         colorLevel: input.colorLevel,
         bullet: input.bullet,
-        titlePainter: (title) => title,
+        titlePainter: (title) => input.theme.fg("toolTitle", input.theme.bold(title)),
         copyOut,
       }));
     },

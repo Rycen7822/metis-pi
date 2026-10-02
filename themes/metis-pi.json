@@ -44,7 +44,7 @@
     "toolPendingBg": "",
     "toolSuccessBg": "",
     "toolErrorBg": "",
-    "toolTitle": "",
+    "toolTitle": "#89b4fa",
     "toolOutput": "muted",
     "mdHeading": "headingGold",
     "mdLink": "link",

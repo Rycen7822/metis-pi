@@ -2,6 +2,7 @@ import { getAgentDir, type ExtensionAPI, type ToolDefinition } from "@earendil-w
 import { fileURLToPath } from "node:url";
 import { runtimePackage } from "../src/subagents/client.ts";
 import { SubagentSession } from "../src/subagents/session.ts";
+import { subagentToolRenderers } from "../src/subagents/rendering.ts";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
@@ -16,6 +17,7 @@ export default function subagents(pi: ExtensionAPI) {
   const definitions: ToolDefinition[] = runtime.tools.map(tool => ({
     name: tool.name, label: tool.name, description: tool.description, parameters: tool.inputSchema,
     outputSchema: tool.outputSchema, annotations: tool.annotations, executionMode: "parallel",
+    ...subagentToolRenderers(tool.name),
     execute: async (id, args, signal, _update, ctx) => {
       if (blocked || conflict()) throw new Error("Another subagent provider is enabled; choose one in pi config and reload");
       if (!owner) throw new Error("Subagent parent session is not attached");

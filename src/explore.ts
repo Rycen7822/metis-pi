@@ -33,7 +33,7 @@ export function explorationVerb(name: string): ExplorationVerb {
 export function renderExplorationHeader(render: { running: boolean; isError: boolean }, _colorLevel: ColorLevel, theme: { bold(text: string): string; fg(key: string, text: string): string }): string {
   const title = render.isError ? "Exploration failed" : render.running ? "Exploring" : "Explored";
   const bullet = render.isError ? "error" : render.running ? "dim" : "success";
-  return `${theme.fg(bullet, "•")} ${theme.bold(title)}`;
+  return `${theme.fg(bullet, "•")} ${theme.fg("toolTitle", theme.bold(title))}`;
 }
 
 /** One member row: "  └ " (first) or "    " (later) + cyan verb + target. */

@@ -24,6 +24,10 @@ conversation. With no agents, it shows a short empty-state message.
 answer it. Another enabled subagent provider makes this entry stand down; choose
 one provider with `pi config` and reload.
 
+Subagent tool rows show compact operation, target and status summaries by default.
+Use Ctrl+O or click a tool row to expand its full arguments and result. Errors keep
+a short visible preview; wait timeouts, failed children and pending questions remain visible.
+
 In the TUI, active subagents appear above the input box with their names and
 states, including waiting for input. The list clears when work settles or the
 parent session closes. Up to eight entries are shown, followed by a remaining

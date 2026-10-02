@@ -37,7 +37,7 @@ export function auxiliaryToolRenderers(
 					if (summary) lines.push(theme.fg("muted", summary));
 					if (warning) lines.push(theme.fg("warning", warning));
 					if (expanded || context.isError || (!summary && !warning)) {
-						const preview = expanded ? undefined : truncateToVisualLines(body, 3, Math.max(1, width - 4), 0);
+						const preview = expanded ? undefined : truncateToVisualLines(body, 3, Math.max(1, width - 4), 0, context.isError ? "start" : "end");
 						lines.push(theme.fg(context.isError ? "error" : "dim", preview ? preview.visualLines.join("\n") : body));
 						if (preview && preview.skippedCount > 0) lines.push(theme.fg("muted", `… ${preview.skippedCount} more lines · ${hint}`));
 					} else if (body && body !== summary) lines.push(theme.fg("dim", hint));

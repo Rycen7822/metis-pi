@@ -26,7 +26,7 @@ export function renderWriteStdinCall(
 	const interacted = typeof input === "string" && input.length > 0;
 	const marker = interacted ? "↳ " : "• ";
 	const title = interacted ? "Interacted with background terminal" : "Waited for background terminal";
-	let text = `${theme.fg("dim", marker)}${theme.bold(title)}`;
+	let text = `${theme.fg("dim", marker)}${theme.fg("toolTitle", theme.bold(title))}`;
 	const commandPreview = formatCommandPreview(command);
 	if (commandPreview) {
 		text += `${theme.fg("dim", " · ")}${theme.fg("muted", commandPreview)}`;
@@ -40,7 +40,7 @@ export function renderWriteStdinCall(
 
 function renderExplorationText(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme, commands?: string[]): string {
 	const header = state === "running" ? "Exploring" : "Explored";
-	let text = `${theme.fg("dim", "•")} ${theme.bold(header)}`;
+	let text = `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(header))}`;
 
 	for (const [index, line] of coalesceReadGroups(actionGroups).map(formatActionLine).entries()) {
 		const prefix = index === 0 ? "  └ " : "    ";
@@ -60,7 +60,7 @@ function renderExplorationText(actionGroups: ShellAction[][], state: ExecCommand
 
 function renderCommandText(command: string, state: ExecCommandStatus, theme: RenderTheme, expanded: boolean): string {
 	const verb = state === "running" ? "Running" : "Ran";
-	let text = `${theme.fg("dim", "•")} ${theme.bold(verb)}`;
+	let text = `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(verb))}`;
 	const maxLines = expanded ? Number.POSITIVE_INFINITY : 5;
 	const maxLength = expanded ? Number.POSITIVE_INFINITY : 100;
 	const lines = formatCommandLines(command, maxLines, maxLength);
