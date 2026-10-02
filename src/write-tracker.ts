@@ -89,7 +89,7 @@ function readBounded(absolutePath: string, limit: number): Buffer {
 export function isTrackableWrite(toolName: string, args: unknown, sourceInfo?: unknown): args is { path: string; content: string } {
   if (toolName !== "write") return false;
   const info = (sourceInfo ?? {}) as Record<string, unknown>;
-  if (info.source !== "builtin" || info.path !== "<builtin:write>") return false;
+  if (info.source !== "builtin" || info.path !== "builtin:write") return false;
   const record = args as Record<string, unknown> | null;
   return record !== null
     && typeof record === "object"

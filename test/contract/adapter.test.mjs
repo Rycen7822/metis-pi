@@ -119,7 +119,7 @@ test("packaged command rows preserve ownership boundaries, native results and th
   enabled = true;
   for (const source of [
     { source: "npm:other", path: "/other/dist/index.js" },
-    { source: "builtin", path: "<builtin:exec_command>" },
+    { source: "builtin", path: "builtin:exec_command" },
     { path: OWNED_EXECUTION_ENTRY },
   ]) {
     sourceInfo = source;

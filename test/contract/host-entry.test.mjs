@@ -22,7 +22,7 @@ test.after(() => {
 Core.initTheme("dark", false);
 
 const plain = (rows) => stripVTControlCharacters(rows.join("\n"));
-const source = (name) => ({ name, sourceInfo: { source: "builtin", path: `<builtin:${name}>` } });
+const source = (name) => ({ name, sourceInfo: { source: "builtin", path: `builtin:${name}` } });
 
 function entry(t) {
   const handlers = new Map();

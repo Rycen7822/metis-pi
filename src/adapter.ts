@@ -99,7 +99,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       };
     }
     if (!TOOL_NAMES.includes(name as ToolName)) return;
-    if (source.source !== "builtin" || source.path !== `<builtin:${name}>`) return;
+    if (source.source !== "builtin" || source.path !== `builtin:${name}`) return;
     // An EXACT builtin self-shell (edit renders its own rows) takes the same
     // renderer as every other text tool; third-party self-shells back off above.
     return options.renderers[name as ToolName];

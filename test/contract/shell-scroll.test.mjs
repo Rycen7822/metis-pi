@@ -17,7 +17,7 @@ function shellFixture(t) {
   const renderers = makeRenderers((text) => new Tui.Text(text, 0, 0), () => "expand",
     undefined, undefined, createShellFactories(layout));
   const adapter = installAdapter(Host.prototype, {
-    getTools: () => [{ name: "bash", sourceInfo: { source: "builtin", path: "<builtin:bash>" } }],
+    getTools: () => [{ name: "bash", sourceInfo: { source: "builtin", path: "builtin:bash" } }],
     enabled: () => true,
     renderers,
   });

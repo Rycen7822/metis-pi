@@ -25,7 +25,7 @@ export const sessionStub = {
 };
 export function toolInfo(name, builtin = true) {
   return { name, sourceInfo: { source: builtin ? "builtin" : "npm:other-extension",
-    path: builtin ? `<builtin:${name}>` : `/extensions/${name}.ts` } };
+    path: builtin ? `builtin:${name}` : `/extensions/${name}.ts` } };
 }
 export function deepFreeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {

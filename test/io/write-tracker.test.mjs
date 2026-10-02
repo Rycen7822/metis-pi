@@ -12,7 +12,7 @@ import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { WriteDiffTracker } from "../../src/write-tracker.ts";
 import { resolveNativeMutationPath } from "../../src/native-tool-path.ts";
 
-const BUILTIN = { source: "builtin", path: "<builtin:write>" };
+const BUILTIN = { source: "builtin", path: "builtin:write" };
 const FOREIGN = { source: "npm:compatibility-test", path: "/test/custom.ts" };
 
 function fixture(t) {
