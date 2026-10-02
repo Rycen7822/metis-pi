@@ -67,11 +67,14 @@ export default async function (pi: ExtensionAPI) {
     if (recursive) return { block: true, reason: "Managed children cannot create or control subagents" };
     if (access !== "read") return;
     const safeBuiltin = tool && isBuiltin(tool) && ["read", "grep", "find", "ls", "codemode", "tool_search"].includes(tool.name);
+    const fffSearch = path && /[\\/]@ff-labs[\\/]pi-fff[\\/]src[\\/]index\.(?:ts|js)$/.test(path) &&
+      ["ffgrep", "fffind", "fff-multi-grep", "grep", "find", "multi_grep"].includes(event.toolName);
     const managedQuestion = event.toolName === "ask_parent" && path === "<inline:subagent-pi>";
     const metisImage = event.toolName === "view_image" && Boolean(path?.includes("metis-pi") && path.endsWith("/extensions/execution.ts"));
-    const nativeInfo = tool as (ToolInfo & { namespace?: { name: string }; annotations?: { readOnlyHint?: boolean } }) | undefined;
-    const readonlyMcp = nativeInfo?.namespace?.name.startsWith("mcp_") && nativeInfo.annotations?.readOnlyHint === true;
-    if (!safeBuiltin && !managedQuestion && !metisImage && !readonlyMcp) return { block: true, reason: "Read-only subagent: tool has no approved read capability" };
+    const readonlyMcp = tool?.namespace?.name.startsWith("mcp_") && tool.annotations?.readOnlyHint === true;
+    if (!safeBuiltin && !fffSearch && !managedQuestion && !metisImage && !readonlyMcp) return { block: true,
+      reason: event.toolName === "mcp" ? "Read-only subagent: generic MCP gateway can invoke writes; use an individual MCP tool marked read-only" :
+        "Read-only subagent: tool has no approved read capability" };
   });
 
   const apply = () => {

@@ -13,6 +13,7 @@ interface Attention { notification_id: string; run_id: string; agent_id: string;
 interface Delivery { ticket: Ticket; successful: boolean; parent?: string }
 interface ReceiptProof extends Ticket { sessionId: string; scope: string; digest: string }
 const digest = (content: unknown) => createHash("sha256").update(JSON.stringify(content)).digest("hex");
+const cleanName = (name: string) => stripVTControlCharacters(name).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
 
 /** Owns one frontend lease. The daemon remains the sole owner of agents and runs. */
 export class SubagentSession {
@@ -53,7 +54,7 @@ export class SubagentSession {
     const active = this.agents.filter(agent => ["starting", "running", "needs_input", "stopping"].includes(agent.state));
     const rows = active.slice(0, 8).map(agent => ({
       id: agent.id,
-      text: `${stripVTControlCharacters(agent.name).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim()} · ${agent.state === "needs_input" ? "waiting for input" : agent.state}`,
+      text: `${cleanName(agent.name)} · ${agent.state === "needs_input" ? "waiting for input" : agent.state}`,
       tone: agent.state === "needs_input" ? "warning" as const : "accent" as const,
     }));
     const signature = JSON.stringify([active.length, rows]);
@@ -240,7 +241,8 @@ export class SubagentSession {
     if (operation === "answer" && target) {
       const snapshot = await this.client.call("pi_inspect_agent", { agent_id: target, detail: "full" });
       const run = snapshot.run as { id: string } | undefined;
-      if (!run || !ctx.hasUI) { ctx.ui.notify(JSON.stringify(snapshot), "info"); return; }
+      if (!run) { ctx.ui.notify("No pending subagent question", "info"); return; }
+      if (!ctx.hasUI) { ctx.ui.notify("Answering a subagent question requires an interactive Pi session", "warning"); return; }
       const result = await this.client.call("pi_wait_agent", { run_ids: [run.id], timeout_seconds: 0 });
       const ticket = result._pi_delivery as Ticket | undefined;
       try {
@@ -260,7 +262,14 @@ export class SubagentSession {
       return;
     }
     const snapshot = await this.client.call("pi_list_agents", {}); this.startWatching();
-    this.ctx.ui.notify(JSON.stringify(snapshot), "info");
+    if (!this.valid()) return;
+    const agents = snapshot.agents as typeof this.agents;
+    if (!agents.length) { ctx.ui.notify("No subagents in this session", "info"); return; }
+    const entries = agents.map(agent => `${cleanName(agent.name)} · ${agent.state} · ${agent.id}`);
+    if (ctx.mode !== "tui") { ctx.ui.notify(entries.join("\n"), "info"); return; }
+    const selected = await ctx.ui.select(`Subagents · ${snapshot.total}${snapshot.omitted ? ` · ${snapshot.omitted} more not shown` : ""}`, entries);
+    const agent = agents[entries.indexOf(selected ?? "")];
+    if (agent) await this.openViewer(agent.id);
   }
   async close() {
     if (this.closed) return;

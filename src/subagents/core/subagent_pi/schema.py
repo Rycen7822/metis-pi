@@ -326,7 +326,7 @@ TOOLS = [
     tool(
         "pi_list_agents",
         "list",
-        "List agent identities, task/residency states and unacknowledged runs. Notification details: inspect with detail=full.",
+        "List agent identities, task/residency states and unacknowledged runs. This tool accepts only scope and limit. For notification details, call pi_inspect_agent with agent_id and detail=full.",
         {
             **SCOPE,
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},

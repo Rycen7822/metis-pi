@@ -17,7 +17,9 @@ contains no Codex marketplace installer or standalone runtime npm dependency.
 
 The `extensions/subagents.ts` entry registers the ten `pi_*` daily tools. It keeps
 Pi's current tool set; users can call the same tools through native codemode.
-`/metis-subagents` shows status; `stop <agent>`, `continue <agent> <task>` and
+`/metis-subagents` lists this session's agents; select one to open its read-only
+conversation. With no agents, it shows a short empty-state message.
+`stop <agent>`, `continue <agent> <task>` and
 `answer <agent>` provide explicit controls. Closing a question dialog does not
 answer it. Another enabled subagent provider makes this entry stand down; choose
 one provider with `pi config` and reload.
@@ -35,6 +37,12 @@ Linux/WSL, Python 3.11+, Node 22.19+ and Pi 1.0+ are required. Children use the
 parent's Pi SDK and agent directory. Their default model is the parent's model
 identity; provider definitions existing only in parent memory are unavailable to
 an independent child. A task must contain its own instructions and context.
+
+`access: "read"` permits Pi's built-in read/search tools, the search tools from
+`@ff-labs/pi-fff` (including override names), and individual MCP tools declaring
+`readOnlyHint: true` in an `mcp_*` namespace. Shell, editing, generic MCP gateways
+and nested subagent control are blocked. This is a managed tool policy, not an
+operating-system sandbox; loaded extensions retain their own capabilities.
 
 Git installs and updates prepare the tool schema during `npm install`. For a
 development checkout installed with `--ignore-scripts`, run
