@@ -62,3 +62,11 @@ MIT License (see docs/provenance/condense/LICENSE).
 Bundled PTY and image helpers and their retained native/tools utility sources are
 derived from OpenAI Codex, copyright OpenAI and its contributors, Apache-2.0
 (see LICENSE-APACHE-2.0). V8 host and apply-patch are no longer redistributed.
+
+MCP configuration validation in src/mcp/config.ts is derived from Pi 1.0.0.
+Upstream: https://github.com/earendil-works/pi
+Commit: a13d35a742c6ef8462812a28fbe1d8c8b7431c32 (v1.0.0).
+Copyright (c) 2025 Mario Zechner. MIT License
+(full text in docs/provenance/mcp/LICENSE). Session integration is locally
+maintained; connection/cache ideas reference pi-mcp-adapter 5.0.0 without
+copying its implementation. Pi's public MCP/OAuth packages retain protocol ownership.

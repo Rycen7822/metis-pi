@@ -13,6 +13,7 @@
 | `condense.ts` | 重复安装检测和摘要用量显示；`src/condense` 负责原文、精简、摘要、恢复和 OCC。 |
 | `action-fusion.ts` | Pi edit/write 的 then_run 增强；`src/execution/action-fusion.ts` 负责路径排队、快照、取消和回执。 |
 | `execution.ts` | deferred 进程/图片工具、执行设置、后台 shell 和资源清理。 |
+| `mcp.ts` | 默认关闭；`src/mcp` 持有目录缓存、连接租约和工具装配，协议/OAuth/CLI/codemode/权限由 Pi 提供。 |
 
 `metis-pi.json.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。
 
@@ -44,6 +45,8 @@ flowchart LR
 ```
 
 Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 仅保留进程/图片补充及图片 detail 的窄请求适配，不维护第二套 provider 或 JS 引擎。图片描述使用 Pi ModelRegistry，original 保存到 session blobs。
+
+显式启用 MCP 后，每个服务器由一个 session owner 共享连接；每个工具独立注册，调用经过 Pi 原执行链。目录缓存不授权执行，实时 schema/身份变化会拒绝旧调用；空闲回收、取消和关闭属于该 owner。MCP 协议与 OAuth 复用 Pi 公共包；服务器配置、凭据及 CLI 保持原生格式。切换步骤见 [配置](configuration.md#mcp)。
 
 condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。OCC 由 condense 在 `session_before_compact` 准备，执行模块只提供忙状态，goal 暂存续跑并在完成后复核；没有第二个 compaction owner。
 

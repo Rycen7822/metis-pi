@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 新增默认关闭的 MCP 会话模块：沿用 Pi 1.0.0 的配置、CLI/OAuth 和协议包，独立注册工具供原生 codemode/延迟发现/直接暴露使用；增加身份绑定目录缓存、按需连接、空闲回收与普通资源回读，过滤 MCP Apps UI。切换与回滚见配置参考；最低 Pi 版本提高至 1.0.0。
+
 - 移除 todo 工具、任务面板、`/todos`、`/todos-doctor` 及项目任务存储实现；清理专属测试和使用文档。已有用户数据不自动删除。
 
 - Codex 实现迁入 `src/codex`，入口统一为 `src/codex/extension.ts`；第三方资源、Rust 源码和执行文件分别归入根 `vendor`、`native`、`assets/native-tools`。移除内层 manifest 和旧转导出，版本与更新提示统一到 metis-pi。旧入口过滤规则和外部导入需更新；用户配置与 host 缓存不变。

@@ -17,6 +17,7 @@
 | 按模型切换全局指令 | [动态指令](features/dynamic-agents.md) |
 | 修改后执行命令 | [Action Fusion](features/action-fusion.md) |
 | Pi codemode 的进程与图片补充 | [执行工具](execution.md) |
+| MCP 切换、服务器、认证与连接策略 | [MCP 配置](configuration.md#mcp) |
 | 排查未生效、统计或复制问题 | [诊断](diagnostics.md) · [兼容性](compatibility.md) |
 
 ## 维护

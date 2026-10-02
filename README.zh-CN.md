@@ -2,11 +2,11 @@
 
 [English](README.md) | **简体中文**
 
-为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、skill 输入、condense 和执行工具。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 0.99.1**。
+为 Pi 提供 Codex 风格的紧凑转录界面，并附带独立的 goal、skill 输入、condense 和执行工具。当前版本 **0.19.6**，开发与宿主检查针对 **Pi 1.0.0**。
 
 ## 安装
 
-需要 Node.js >=22.19.0 和 Pi >=0.99.1。在本地检出目录运行：
+需要 Node.js >=22.19.0 和 Pi >=1.0.0。在本地检出目录运行：
 
 ```bash
 pi install .
@@ -27,6 +27,7 @@ pi install .
 | [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
+| [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
 | [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 与原图工具；provider 和登录由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |

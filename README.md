@@ -6,7 +6,7 @@ A compact, Codex-style transcript UI for Pi, with separate extensions for goals,
 
 ## Installation
 
-Requires Node.js >=22.19.0 and Pi >=0.99.1. From a local checkout, run:
+Requires Node.js >=22.19.0 and Pi >=1.0.0. From a local checkout, run:
 
 ```bash
 pi install .
@@ -27,6 +27,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Long histories](docs/features/interface.md#全屏历史与留白) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
 | [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
+| [MCP](docs/configuration.md#mcp) | Optional Pi-native MCP integration: cached directory, lazy connections and idle shutdown; shares native CLI/OAuth and tool permissions. Disabled by default. |
 | [Execution tools](docs/execution.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
 | [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from an external JSON file, applied at the next agent run. Replaces request context only; preserves project rules and source files. |
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
