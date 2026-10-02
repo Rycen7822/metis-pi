@@ -16,3 +16,5 @@ jobs:
       - run: sudo apt-get update -qq
       - run: sudo apt-get install -y -qq tmux
       - run: npm run test:pty:strict
+        env:
+          PI_BIN: ${{ github.workspace }}/node_modules/.bin/pi

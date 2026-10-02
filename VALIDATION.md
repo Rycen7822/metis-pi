@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-02 — Pi 1.0.0 development and CI baseline
+
+- Pinned the four Pi development packages to **1.0.0** and regenerated the lockfile; only Pi-family packages changed. Peer support remains **>=0.99.1**. CI explicitly selects the locked local Pi for strict PTY; README and compatibility/development guides now describe the 1.0.0 baseline, default fullscreen and native codemode member/image rules.
+- Clean `npm ci --ignore-scripts --no-audit --no-fund` on **Node 22.19.0 / npm 10.9.3**, then `npm run verify`: exit 0, **324/324**, zero skipped; production/test type checks and **186-file** package dry-run pass.
+- Strict PTY with actual Pi **1.0.0 / Node 22.19.0** passes **E1, E2, E3, E4, E6**, including **161 exact clipboard characters**.
+- Fresh tarball installed with independent Pi **1.0.0** peers and registered by the normal Pi CLI in an isolated HOME/profile/cwd. Actual installed SDK loads **8 package extensions, zero errors**, keeps default pruning disabled, recalls **18,400 exact bytes across 14 pages**, and restores old persistent records.
+- Actual installed native codemode calls the bundled `view_image` helper and accepts its valid PNG output: **69 original bytes preserved**, zero extension errors. All **151 production TS files**, both Linux helpers and package metadata match the installed copy; helper modes and the condense license match too.
+- Production implementation and permanent tests are unchanged. Temporary probes and logs stay in `.work`; isolated installation/toolchain artifacts are removed after verification. Providers are offline with blocked model transport; no paid requests or personal configuration changes. Live OAuth/external MCP and other platforms are outside this evidence.
+
 ## 2026-10-01 — Native condense ownership and lifecycle
 
 - Moved the complete condense implementation into `src/condense`, retaining `extensions/condense.ts` as its sole Pi entry. Removed the inner package, generated facade and vendor build aliases; root checks and packaging own the module. Exact provenance remains in NOTICE and the unchanged MIT license is shipped under `docs/provenance/condense/LICENSE`.

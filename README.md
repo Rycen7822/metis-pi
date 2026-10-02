@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A compact, Codex-style transcript UI for Pi, with separate extensions for goals, skill input, condense, and execution tools. Current version: **0.19.6**. Development and host checks target **Pi 0.99.1**.
+A compact, Codex-style transcript UI for Pi, with separate extensions for goals, skill input, condense, and execution tools. Current version: **0.19.6**. Development and host checks target **Pi 1.0.0**.
 
 ## Installation
 

@@ -2,7 +2,7 @@
 
 ## 版本与平台
 
-最低支持 **Pi 0.99.1 / Node 22.19.0**；开发类型固定 Pi 0.99.1。随包原生 helper 仅有 **Linux x64**，其他平台需提供对应资产并实际验证。纯 TS 能加载不能证明 helper 可运行。
+最低支持 **Pi 0.99.1 / Node 22.19.0**；开发类型、锁文件与 CI 基线为 **Pi 1.0.0**。随包原生 helper 仅有 **Linux x64**，其他平台需提供对应资产并实际验证。纯 TS 能加载不能证明 helper 可运行。
 
 安装、真实 Pi/tmux 和离线 provider 的覆盖见 [VALIDATION](../VALIDATION.md)，不代表已验证所有在线服务、模型、终端图片协议或插件组合。
 
@@ -23,10 +23,14 @@ editor 已被占用或宿主能力缺失时按组件规则退避。全屏历史�
 
 文字宽度、鼠标和复制受字体、终端及 fullscreen/regular 模式影响，见 [界面](features/interface.md)与[复制](features/selection-copy.md)。本包不实现 Codex 审批语义；主题颜色仍可能影响第三方输出。
 
+Pi 1.0.0 默认 fullscreen；需要终端原生 scrollback 时设置 Pi 的 `tuiMode: "regular"` 或使用 `--tui-mode regular`。`quietStartup: "header"` 也由 Pi 处理。
+
 ## 请求、恢复与旧会话
 
 Pi 持有 provider/OAuth、工具配对、原生 codemode 与普通 compaction。condense 在有效 `context_edit` 投影上工作，并在 `session_before_compact` 准备保护；嵌套证据未完成或归档失败时保留源历史。
 
+Pi 1.0.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in tools` 探测存在性。`image()` 校验 base64 与图片类型，metis 的有效图片结果遵循原生格式。
+
 扩展不自动改写个人设置或旧会话。旧 V8 脚本应改用 Pi codemode 和当前工具；旧 conversion 配置不读取。特殊窗口或 opaque checkpoint 不再解释，需用升级前版本导出可读历史再创建普通 Pi 会话。普通归档、condense 原文与图片 sidecar 仍可读取，复制会话时保留 blobs。
 
-当前核对来源为 Pi v0.99.1（`16787ad5`）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。
+当前核对来源为 Pi v1.0.0（`a13d35a7`）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。

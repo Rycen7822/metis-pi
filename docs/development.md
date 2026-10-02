@@ -2,7 +2,7 @@
 
 ## 环境与常用命令
 
-Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 0.99.1。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
+Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 1.0.0。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
@@ -30,6 +30,8 @@ core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接
 复用现有测试，新增断言须对应具体失败。夹具只准备输入，不能复制业务算法或从结果反推 expected。使用者清理 timer、临时目录、进程和原型包装，网络钩子显式恢复。禁止在正式测试中扫描源码证明旧功能删除；一次性清理核查放 `.work/`。
 
 严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
+
+CI 使用锁文件安装的 Pi 执行严格 PTY。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
 
 | Journey | 验证 |
 | --- | --- |
