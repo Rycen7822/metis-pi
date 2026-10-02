@@ -25,6 +25,7 @@ test("real editor surface, IME glyphs and hardware cursor survive one terminal l
   const cursor = createHardwareCursor();
   t.after(() => cursor.release());
   const surface = makeSurfaceOps({ kind: "truecolor" }, (text) => `\x1b[36m${text}\x1b[39m`, (text) => text);
+  assert.equal(visibleWidth(surface.paintRow("\x1b[31mX\x1b[0m", 40)), 40, "colored rows fill the whole surface");
   const editor = nativeEditor({ surface, hardwareCursor: cursor.acquire, promptPrefix: true, placeholder: "Ask anything..." }, tui);
   const empty = editor.render(80);
   assert.ok(empty.every((row) => row.includes("\x1b[48;2;31;31;31m")));

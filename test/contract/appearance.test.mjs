@@ -92,6 +92,21 @@ const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
 
+test("nested tool activity does not leak image notices into top-level exploration", async (t) => {
+  const { handlers, Host, ctx } = await session(t);
+  const outer = { toolCallId: "native-test", toolName: "read", args: { path: "/tmp/outer" } };
+  const nested = { toolCallId: "nested-read", parentToolCallId: "codemode-parent", toolName: "read", args: {} };
+  handlers.get("tool_execution_start")(nested, ctx);
+  handlers.get("tool_execution_end")({ ...nested, result: { content: [{ type: "image", data: "", mimeType: "image/png" }] }, isError: false }, ctx);
+  handlers.get("tool_execution_start")(outer, ctx);
+  handlers.get("tool_execution_end")({ ...outer, result: { content: [] }, isError: false }, ctx);
+  const row = new Host("read", { name: "read" }, outer.args);
+  row.updateResult({ content: [{ type: "text", text: "outer text" }] }, false);
+  const frame = plain(row.render(80).join("\n"));
+  assert.match(frame, /Explored/);
+  assert.doesNotMatch(frame, /image/);
+});
+
 test("one footer keeps ordered host metadata fresh across frames, events and session replacement", async (t) => {
   let reads = 0;
   let leaf = "first";

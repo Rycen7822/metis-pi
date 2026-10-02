@@ -528,7 +528,7 @@ function resolveMessagePlan(
   // belongs to the STATE (display-order projection), not to the render path.
   const followsTools = input.state.lastNodeKind() === "exploration" || input.state.lastNodeKind() === "other-tool";
   return input.state.registerFinalizedMessage(
-    { role: "assistant", content: contentBlocks, stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined },
+    { ...message, role: "assistant", content: contentBlocks },
     followsTools,
     component,
   );

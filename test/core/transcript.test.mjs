@@ -10,7 +10,7 @@ const IMAGE_NAMES = ["first.png", "second.png", "third.png"];
 test("message identity and thinking controls survive finalization, duplicate ends and late updates", () => {
   let now = 10;
   const state = new TranscriptState(() => now);
-  const source = { role: "assistant", content: [{ type: "thinking", thinking: "working" }] };
+  const source = { role: "assistant", provider: "test", responseId: "r1", timestamp: 10, content: [{ type: "thinking", thinking: "working" }] };
   state.apply({ type: "message_start", message: source }, source);
   state.apply({ type: "message_update", message: source }, source);
   const key = state.identityOf(source);
@@ -50,6 +50,33 @@ test("renderedThinkingRuns: semantic typing, empty runs, barriers and boundaries
     { runIndex: 1, firstContentIndex: 5, endedInContent: true },
     { runIndex: 2, firstContentIndex: 7, endedInContent: false },
   ]);
+});
+
+test("identical response content keeps independent clocks and historical thinking choices", () => {
+  let now = 0;
+  const state = new TranscriptState(() => now);
+  const first = { role: "assistant", timestamp: 1, content: [{ type: "thinking", thinking: "same" }] };
+  const second = { ...first, timestamp: 2 };
+  const observe = (message, duration) => {
+    state.apply({ type: "message_start", message }, message);
+    state.apply({ type: "message_update", message }, message);
+    now += duration;
+    state.apply({ type: "message_end", message }, message);
+    return state.identityOf(message);
+  };
+  const a = observe(first, 10), b = observe(second, 100);
+  for (const [message, key, duration] of [[first, a, 10], [second, b, 100]]) {
+    const restored = state.registerFinalizedMessage(structuredClone(message), false);
+    assert.equal(restored, key);
+    assert.equal(state.thinkingRunPlan(restored, 0).thinkingMs, duration);
+  }
+  observe({ ...second }, 50); // timestamps can collide; clocks then stay unknown
+  const ambiguous = state.registerFinalizedMessage(structuredClone(second), false);
+  assert.equal(state.thinkingRunPlan(ambiguous, 0).thinkingMs, undefined);
+  const cold = new TranscriptState();
+  const coldA = cold.registerFinalizedMessage(first, false), coldB = cold.registerFinalizedMessage(second, false);
+  assert.notEqual(coldA, coldB);
+  assert.notEqual(cold.thinkingViewControl(coldA, 0, () => ({})), cold.thinkingViewControl(coldB, 0, () => ({})));
 });
 
 test("serial read appends update group membership and only the last image notice", () => {

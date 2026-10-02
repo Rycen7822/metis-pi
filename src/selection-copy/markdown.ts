@@ -487,7 +487,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
     return false;
   }
   const original = descriptor.value as (this: INST, width: number) => string[];
-  const cache = new WeakMap<object, { text: string; width: number; product: CopyProduct }>();
+  const cache = new WeakMap<object, { text: string; width: number; rows: readonly string[]; product: CopyProduct }>();
   /** Per-component stream state: the text/width seen on the last miss render
    * and the time of the last build ATTEMPT (success or failure — an
    * always-degrading component must not retry the full mirror per frame). */
@@ -498,7 +498,8 @@ function wrapRenderPrototype<INST extends { text: string }>(
     try {
       publishRows(this, rows);
       const cached = cache.get(this);
-      if (cached && cached.text === this.text && cached.width === width) {
+      if (cached && cached.text === this.text && cached.width === width
+          && (cached.rows === rows || (cached.rows.length === rows.length && rows.every((row, i) => row === cached.rows[i])))) {
         registerProduct(rows, cached.product);
         return rows;
       }
@@ -514,7 +515,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
       const product = build(this, width, rows, deps);
       if (product) {
         registerProduct(rows, product);
-        cache.set(this, { text: this.text, width, product });
+        cache.set(this, { text: this.text, width, rows, product });
         deps.diagnostics[counters.built] += 1;
       } else {
         deps.diagnostics[counters.degraded] += 1;

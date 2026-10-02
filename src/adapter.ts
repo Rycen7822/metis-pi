@@ -6,7 +6,7 @@ import { fusionRenderers } from "./fusion-view.ts";
 export const OWNED_EXECUTION_ENTRY = fileURLToPath(new URL("../extensions/execution.ts", import.meta.url));
 export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fusion.ts", import.meta.url));
 
-// Display-only adapter for the classic Pi 0.85.x ToolExecutionComponent.
+// Display-only adapter for Pi’s native ToolExecutionComponent.
 // No tool registration, execution replacement, context middleware or TUI root patch.
 const SLOT = Symbol.for("Rycen7822.metis-pi.tool-view.v2");
 const SELECTORS = ["getCallRenderer", "getResultRenderer", "getRenderShell"] as const;
@@ -104,7 +104,9 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // renderer as every other text tool; third-party self-shells back off above.
     return options.renderers[name as ToolName];
   }
+  const rendering = new Map<unknown, Renderers | undefined>();
   function select(row: unknown): Renderers | undefined {
+    if (rendering.has(row)) return active && ownsMethods() && options.enabled() ? rendering.get(row) : undefined;
     try { return replacement(row); } catch { return undefined; }
   }
   function remember(row: object): void {
@@ -134,45 +136,52 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
   }
   const originalRender = originals.get("render")!.value as UiMethod;
   wrappers.set("render", function (this: unknown, width: number): unknown {
-    if (typeof this === "object" && this !== null) {
-      const next = select(this) !== undefined;
-      const previous = displayed.get(this) ?? false;
-      if (next !== previous) {
-        displayed.set(this, next);
-        remember(this);
-        const refresh = asRecord(this).updateDisplay;
-        if (typeof refresh === "function") {
-          try { refresh.call(this); } catch {
-            // Fall back to the existing default view on a presentation failure.
-            displayed.set(this, false);
+    const nested = rendering.has(this), previousSelection = rendering.get(this);
+    rendering.set(this, select(this));
+    try {
+      if (typeof this === "object" && this !== null) {
+        const next = rendering.get(this) !== undefined;
+        const previous = displayed.get(this) ?? false;
+        if (next !== previous) {
+          displayed.set(this, next);
+          remember(this);
+          const refresh = asRecord(this).updateDisplay;
+          if (typeof refresh === "function") {
+            try { refresh.call(this); } catch {
+              // Fall back to the existing default view on a presentation failure.
+              displayed.set(this, false);
+            }
           }
         }
       }
-    }
-    const lines = originalRender.call(this, width);
-    // The host's self-shell path bypasses Container.render. Publish its actual
-    // rows so a parent copy-alignment pass need not render the tool a second time.
-    if (typeof this === "object" && this !== null && Array.isArray(lines)) {
-      try {
-        publishRows(this, lines);
-        const row = asRecord(this);
-        if (displayed.get(this) && typeof row.getRenderShell === "function" && row.getRenderShell() === "self") {
-          const content = publishedRowsOf(row.selfRenderContainer);
-          const product = content && productFor(content);
-          // The native self-shell composes a blank prefix, its text subtree,
-          // then image rows. Bind only the verified text region; never re-render
-          // it or pretend that unknown/image rows have text provenance.
-          if (content?.length && product?.width === width && row.selfRenderHeight === content.length
-              && lines[0] === "" && content.every((line, index) => lines[index + 1] === line)) {
-            registerProduct(lines, {
-              componentId: "tool-self-shell", width, rows: [decorationRow(width)],
-              children: [undefined, ...content.map((_, rowIndex) => ({ product, rowIndex, colShift: 0 }))],
-            });
+      const lines = originalRender.call(this, width);
+      // The host's self-shell path bypasses Container.render. Publish its actual
+      // rows so a parent copy-alignment pass need not render the tool a second time.
+      if (typeof this === "object" && this !== null && Array.isArray(lines)) {
+        try {
+          publishRows(this, lines);
+          const row = asRecord(this);
+          if (displayed.get(this) && typeof row.getRenderShell === "function" && row.getRenderShell() === "self") {
+            const content = publishedRowsOf(row.selfRenderContainer);
+            const product = content && productFor(content);
+            // The native self-shell composes a blank prefix, its text subtree,
+            // then image rows. Bind only the verified text region; never re-render
+            // it or pretend that unknown/image rows have text provenance.
+            if (content?.length && product?.width === width && row.selfRenderHeight === content.length
+                && lines[0] === "" && content.every((line, index) => lines[index + 1] === line)) {
+              registerProduct(lines, {
+                componentId: "tool-self-shell", width, rows: [decorationRow(width)],
+                children: [undefined, ...content.map((_, rowIndex) => ({ product, rowIndex, colShift: 0 }))],
+              });
+            }
           }
-        }
-      } catch { /* Copy metadata must not break rendering. */ }
+        } catch { /* Copy metadata must not break rendering. */ }
+      }
+      return lines;
+    } finally {
+      if (nested) rendering.set(this, previousSelection);
+      else rendering.delete(this);
     }
-    return lines;
   });
   const owner = {};
   function restoreOwned(): void {

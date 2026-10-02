@@ -344,8 +344,6 @@ interface PendingWrite {
  */
 export class WriteDiffTracker {
   readonly #pending = new Map<string, PendingWrite>();
-  #clock = 0;
-  readonly #order = new Map<string, number>();
   static readonly MAX_PENDING = 64;
 
   /** Capture the pre-image. Ignores non-builtin write calls by contract. */
@@ -353,20 +351,14 @@ export class WriteDiffTracker {
     if (!isTrackableWrite(toolName, args, sourceInfo)) return;
     if (this.#pending.has(toolCallId)) return; // parallel duplicate id: first wins
     const absolutePath = resolvePath(args.path);
+    this.#pending.delete(toolCallId);
     this.#pending.set(toolCallId, {
       absolutePath,
       pre: snapshotFile(absolutePath),
       expectedContent: args.content,
     });
-    this.#order.set(toolCallId, this.#clock++);
     if (this.#pending.size > WriteDiffTracker.MAX_PENDING) {
-      const oldest = [...this.#order.entries()]
-        .sort(([, a], [, b]) => a - b)
-        .find(([id]) => this.#pending.has(id))?.[0];
-      if (oldest) {
-        this.#pending.delete(oldest);
-        this.#order.delete(oldest);
-      }
+      this.#pending.delete(this.#pending.keys().next().value!);
     }
   }
 
@@ -374,7 +366,6 @@ export class WriteDiffTracker {
   trackEnd(toolCallId: string, toolName: string, sourceInfo: unknown, isError: boolean): WriteDiff | undefined {
     const entry = this.#pending.get(toolCallId);
     this.#pending.delete(toolCallId);
-    this.#order.delete(toolCallId);
     if (!entry || toolName !== "write") return undefined;
     if (!isTrackableWrite(toolName, { path: "x", content: entry.expectedContent }, sourceInfo)) return undefined;
     if (isError) return { kind: "failed", added: 0, removed: 0, reason: "write failed" };

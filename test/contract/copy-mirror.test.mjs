@@ -34,6 +34,14 @@ test("real Markdown copies prose, formatted blocks and hard breaks without mirro
     const { markdownDegraded, lastDegradedReason } = sys.diagnostics().mirrors;
     assert.equal(markdownDegraded, 0, `${name}: ${lastDegradedReason}`);
   }
+  let transformed = "alpha";
+  const changing = new Tui.Markdown("stable source", 0, 0, theme, undefined, { transform: () => transformed });
+  const committed = copyFrame(changing, 40);
+  assert.equal(select(committed).text, "alpha");
+  transformed = "bravo";
+  changing.invalidate();
+  assert.equal(select(copyFrame(changing, 40)).text, "bravo", "copy follows native transform invalidation");
+  assert.equal(select(committed).text, "alpha", "previously committed selection keeps its own frame");
 });
 
 test("exact card copy omits background and bypasses a foreign serializer wrapper", (t) => {
@@ -44,9 +52,8 @@ test("exact card copy omits background and bypasses a foreign serializer wrapper
   box.addChild(new Tui.Markdown(text, 0, 0, theme));
   tui.setLayoutRoot(box);
   tui.doRender();
-  assert.ok(sys.installOnTui(tui));
   assert.ok(tui.previousScreen.some((line) => line.includes("\x1b[48;2;41;41;41m")));
-  // Simulate the old plugin: wrap the PROTOTYPE method with a heuristic
+  // Install a foreign prototype serializer before our receiver lease.
   // normalizer (adds markers around every newline it sees).
   const proto = Object.getPrototypeOf(tui);
   const original = proto.getActiveSelectionText;
@@ -58,6 +65,7 @@ test("exact card copy omits background and bypasses a foreign serializer wrapper
   // The test wrapper is an unknown foreign owner (the real plugin names
   // itself via its normalizer source); both must be detected as foreign.
   assert.ok(detectExternalSerializerPatch(proto) !== undefined, "foreign wrapper detected");
+  assert.ok(sys.installOnTui(tui));
   const screen = screenLines(tui);
   const first = screen.findIndex((line) => line.includes("一行中文"));
   const last = screen.findIndex((line) => line.includes("精确复制"));
@@ -65,7 +73,7 @@ test("exact card copy omits background and bypasses a foreign serializer wrapper
   tui.selectionAnchor = { row: first, col: 0, scrollView: undefined, boundary: false };
   tui.selectionFocus = { row: last, col: Tui.visibleWidth(screen[last]), scrollView: undefined, boundary: false };
   const copied = tui.getActiveSelectionText();
-  assert.ok(!copied.includes("<<HEURISTIC>>"), "instance replacement bypasses the prototype wrapper");
+  assert.ok(!copied.includes("<<HEURISTIC>>"), "receiver lease bypasses the prototype wrapper");
   assert.equal(copied, text, "exact text despite foreign prototype wrapper");
 });
 
@@ -78,7 +86,30 @@ test("repeated selection-copy setup does not stack render wrappers", (t) => {
   assert.deepEqual(names.map((name) => Tui[name].prototype.render), installed);
 
   const sibling = installCopyPrototypes(t, names);
+  let current = altScreen().tui;
+  const live = new Proxy({}, {
+    getPrototypeOf: () => Object.getPrototypeOf(current),
+    get: (_target, key) => typeof current[key] === "function" ? current[key].bind(current) : current[key],
+  });
+  const other = altScreen().tui;
+  assert.ok(system.installOnTui(live));
+  assert.ok(sibling.installOnTui(other));
+  live.getActiveSelectionText();
+  other.getActiveSelectionText();
+  assert.equal(system.diagnostics().telemetry.calls, 1);
+  assert.equal(sibling.diagnostics().telemetry.calls, 1);
   system.dispose();
+  other.getActiveSelectionText();
+  assert.equal(system.diagnostics().telemetry.calls, 1, "released TUI no longer calls its former controller");
+  assert.equal(sibling.diagnostics().telemetry.calls, 2, "concurrent TUI keeps its lease");
+  current = altScreen().tui;
+  assert.ok(sibling.installOnTui(live), "same live facade can switch its native receiver");
+  other.getActiveSelectionText();
+  live.getActiveSelectionText();
+  assert.equal(sibling.diagnostics().telemetry.calls, 3, "only the new receiver is active");
+  sibling.dispose();
+  live.getActiveSelectionText();
+  assert.equal(sibling.diagnostics().telemetry.calls, 3, "final release restores native extraction");
   const retained = sibling.wrapPrototypes();
   assert.equal(retained.installed, true, "a later session adopts the process-owned wrappers");
   assert.match(retained.details, /markdown=self/, "self-owned entries are not blocked");

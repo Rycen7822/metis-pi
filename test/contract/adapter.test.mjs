@@ -36,7 +36,9 @@ test("one native row survives install, duplicate install, disable and disposal w
   assert.equal(row.children[1], row.contentBox);
   assert.equal(row.getRenderShell(), "default");
   let enabled = true;
-  const { handle, renderers, original } = setup(t, undefined, { enabled: () => enabled }, Host);
+  let reads = 0;
+  const catalog = TOOL_NAMES.map((name) => toolInfo(name));
+  const { handle, renderers, original } = setup(t, undefined, { enabled: () => enabled, getTools: () => { reads++; return catalog; } }, Host);
   assert.equal(handle.installed, true);
   assert.equal(row.getCallRenderer(), renderers.bash.renderCall);
   assert.equal(row.getResultRenderer(), renderers.bash.renderResult);
@@ -47,7 +49,9 @@ test("one native row survives install, duplicate install, disable and disposal w
   assert.equal(duplicate.installed, false);
   duplicate.dispose();
   assert.equal(Host.prototype.getCallRenderer, installed);
+  reads = 0;
   assert.match(plain(row), /• Running npm test/);
+  assert.equal(reads, 1, "one catalog read per synchronous native row render");
   assert.equal(row.render(80).length, 2, "compact rows omit native Box padding");
   assert.equal(row.getRenderShell(), "self");
   assert.deepEqual(row.children, children);

@@ -1,7 +1,10 @@
 // Shared segment layout primitives for the chrome blocks (footer, composer
-// metadata): tone-tagged plain-text segments, CJK-aware cell width, and the
-// join-or-wrap row realization. Layout always runs on PLAIN text; painters
+// metadata): tone-tagged plain-text segments and native terminal-cell layout.
+// Layout always runs on PLAIN text; painters
 // are applied afterwards so final ANSI strings are never sliced.
+
+import { visibleWidth as cellWidth, sliceByColumn } from "@earendil-works/pi-tui";
+export { cellWidth };
 
 export type SegmentTone = "normal" | "dim" | "accent" | "warning" | "add" | "del";
 export interface Segment {
@@ -22,38 +25,16 @@ export function joined(parts: Array<Segment | undefined>): Segment[] {
   return out;
 }
 
-export function cellWidth(text: string): number {
-  let w = 0;
-  for (const ch of text) {
-    const code = ch.codePointAt(0) ?? 0;
-    w += (code >= 0x1100 && (code <= 0x115f || (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xff00 && code <= 0xff60) || (code >= 0xffe0 && code <= 0xffe6) || (code >= 0x1f300 && code <= 0x1faff))) ? 2 : 1;
-  }
-  return w;
-}
-
 export function rowWidth(row: Segment[]): number {
   let w = 0;
   for (const seg of row) w += cellWidth(seg.text);
   return w;
 }
 
-/**
- * Hard clip a PLAIN text line to `width` terminal cells: wider-than-ASCII
- * glyphs are counted properly and a surrogate pair is never split. The array
- * `slice(0, width)` it replaces counted UTF-16 units, so a CJK path could run
- * twice as wide as the line budget. ANSI is painted after clipping.
- */
+/** Hard clip plain text without splitting a terminal grapheme. */
 export function clipLine(line: string, width: number): string {
   if (cellWidth(line) <= width) return line;
-  let out = "";
-  let used = 0;
-  for (const ch of line) {
-    const cw = cellWidth(ch);
-    if (used + cw > width) break;
-    out += ch;
-    used += cw;
-  }
-  return out;
+  return sliceByColumn(line, 0, Math.max(0, width), true);
 }
 
 /** Cell-level truncation on plain text (paint afterwards). */
@@ -70,46 +51,12 @@ export function truncateSegments(row: Segment[], width: number): Segment[] {
     }
     const budget = width - used;
     if (budget >= 2) {
-      let text = "";
-      let tw = 0;
-      for (const ch of seg.text) {
-        const cw = cellWidth(ch);
-        if (tw + cw > budget - 1) break;
-        text += ch;
-        tw += cw;
-      }
+      const text = clipLine(seg.text, budget - 1);
       if (text) out.push({ text: `${text}…`, tone: seg.tone });
     }
     break;
   }
   return out;
-}
-
-export interface RowPlan {
-  left: Segment[];
-  right: Segment[] | undefined;
-}
-
-function planWidths(plan: RowPlan): { left: number; right: number } {
-  return { left: rowWidth(plan.left), right: plan.right ? rowWidth(plan.right) : 0 };
-}
-
-/** Realize a plan at `width`: join with a gap when it fits, otherwise wrap
- * left/right onto separate rows (right-side stats keep their priority head
- * and cell-truncate the tail — never silently deleted). */
-export function realizeRow(plan: RowPlan, width: number): Segment[][] {
-  const { left, right } = planWidths(plan);
-  if (plan.right && left + right + 2 <= width) {
-    const gap = width - left - right;
-    const merged = [...plan.left];
-    if (gap > 0) merged.push({ text: " ".repeat(gap), tone: "normal" });
-    merged.push(...plan.right);
-    return [merged];
-  }
-  if (plan.right) {
-    return [truncateSegments(plan.left, width), truncateSegments(plan.right, width)];
-  }
-  return [truncateSegments(plan.left, width)];
 }
 
 /** k/M compact: 172000 → "172k", 1_000_000 → "1.0M" (never 1600k). */

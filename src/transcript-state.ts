@@ -44,12 +44,6 @@ export type MessageViewKey = string;
 
 /** One contiguous run of same-kind content (text or thinking) in a message. */
 export interface TextRunPlan {
-  readonly messageKey: MessageViewKey;
-  /** Index of the text run within the message (0-based, text runs only). */
-  readonly runIndex: number;
-  /** Index of the run's first content block within message.content. */
-  readonly firstContentIndex: number;
-  /** True when real tool activity preceded this message in the segment. */
   readonly separatorBefore: boolean;
 }
 
@@ -57,10 +51,6 @@ export interface TextRunPlan {
  * blocks are ONE run; the runIndex is the host's ordinal of RENDERED runs —
  * an all-empty run consumes no ordinal). */
 export interface ThinkingRunPlan {
-  readonly messageKey: MessageViewKey;
-  readonly runIndex: number;
-  /** Index of the run's first content block within message.content. */
-  readonly firstContentIndex: number;
   /** Wall-clock ms when the run first contained non-empty thinking text. */
   readonly startedAt?: number;
   /** Wall-clock ms when the run closed (later non-thinking block or
@@ -87,6 +77,9 @@ export interface TranscriptEvent {
     role: string;
     content: Array<{ type: string; text?: string; thinking?: string }>;
     stopReason?: string;
+    provider?: unknown;
+    responseId?: unknown;
+    timestamp?: unknown;
   };
   /** Branch/session generation bump (branch switch, reload). */
   generation?: number;
@@ -224,7 +217,6 @@ export function renderedThinkingRuns(
 }
 
 interface ThinkingRunState {
-  firstContentIndex: number;
   startedAt?: number;
   endedAt?: number;
   /** Every non-empty thinking run gets its own view control: which shape it renders in,
@@ -244,17 +236,13 @@ interface MessagePlan {
   thinkingRuns: ThinkingRunState[];
 }
 
-/** Canonical fingerprint of a finalized message's content: the host
- * re-renders finalized transcripts through message clones, so sealed-plan
- * reuse is keyed by normalized content + stopReason (never object identity). */
-function sealedFingerprint(content: Array<{ type: string; text?: string; thinking?: string }>, stopReason?: string): string {
-  return `${stopReason ?? ""}|${JSON.stringify(content)}`;
+/** Only observed responses can supply clocks to a restored message. */
+function responseIdentity(message: NonNullable<TranscriptEvent["message"]>): string | undefined {
+  if (typeof message.responseId === "string" && message.responseId) return JSON.stringify([message.provider, message.responseId]);
+  if (typeof message.timestamp === "number" && Number.isFinite(message.timestamp)) return JSON.stringify([message.provider, message.timestamp]);
+  return undefined;
 }
-
-/** Bounded store for sealed-plan fingerprints (long sessions must not grow
- * the content-JSON map without limit; an evicted entry only costs the honest
- * timing-less fallback if that message is re-rendered later). */
-const MAX_SEALED_FINGERPRINTS = 256;
+const MAX_OBSERVED_RESPONSES = 256;
 
 const EXPLORATION_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
@@ -269,14 +257,8 @@ export class TranscriptState {
   private readonly messagePlans = new Map<MessageViewKey, MessagePlan>();
   private nextMessageSeq = 1;
   private identityByObject = new WeakMap<object, MessageViewKey>();
-  /**
-   * Content fingerprints of sealed plans. The host re-renders FINALIZED
-   * transcripts through a message CLONE (a different object), so the object
-   * anchor cannot match; the fingerprint lets the clone reuse the original
-   * sealed plan — with its real thinking clocks — instead of registering a
-   * timing-less duplicate.
-   */
-  private readonly sealedFingerprints = new Map<string, MessageViewKey>();
+  private readonly observedResponses = new Map<string, MessageViewKey | null>();
+  private openMessageKey: MessageViewKey | undefined;
   private sessionKey = "default";
 
   /** Wall clock is injectable so tests can drive run durations deterministically. */
@@ -299,7 +281,8 @@ export class TranscriptState {
     this.messagePlans.clear();
     this.identityByObject = new WeakMap();
     this.nextMessageSeq = 1;
-    this.sealedFingerprints.clear();
+    this.observedResponses.clear();
+    this.openMessageKey = undefined;
   }
 
   /** Stable key for a streaming assistant message (object identity first). */
@@ -308,13 +291,7 @@ export class TranscriptState {
       const known = this.identityByObject.get(sourceObject);
       if (known) return known;
     }
-    // Without an object anchor the host streaming model re-uses one message
-    // object per turn, so the CURRENT open assistant plan (if any) continues.
-    for (const plan of this.messagePlans.values()) {
-      if (!plan.finalized && plan.blockCount > 0) {
-        return plan.key;
-      }
-    }
+    if (this.openMessageKey) return this.openMessageKey;
     return `${this.generation}:${this.nextMessageSeq++}`;
   }
 
@@ -356,9 +333,7 @@ export class TranscriptState {
         // rendered run — repeated cumulative updates never reset it. End: the
         // first non-thinking block after the run; message_end closes the rest.
         for (const run of renderedThinkingRuns(message.content)) {
-          const state = plan.thinkingRuns[run.runIndex] ??= {
-            firstContentIndex: run.firstContentIndex,
-          };
+          const state = plan.thinkingRuns[run.runIndex] ??= {};
           if (state.startedAt === undefined) state.startedAt = this.now();
           if (state.endedAt === undefined && run.endedInContent) state.endedAt = this.now();
         }
@@ -381,7 +356,8 @@ export class TranscriptState {
           if (plan && !plan.finalized) {
             plan.finalized = true;
             for (const run of plan.thinkingRuns) run.endedAt ??= this.now();
-            this.rememberFinalized(message, key);
+            this.rememberResponse(message, key);
+            if (this.openMessageKey === key) this.openMessageKey = undefined;
           }
         }
         break;
@@ -426,16 +402,20 @@ export class TranscriptState {
     if (!plan) {
       plan = { key, finalized: false, separatorBefore: this.lastNode === "exploration" || this.lastNode === "other-tool", blockCount: 0, thinkingRuns: [] };
       this.messagePlans.set(key, plan);
+      this.openMessageKey = key;
     }
     return plan;
   }
 
-  private rememberFinalized(message: NonNullable<TranscriptEvent["message"]>, key: MessageViewKey): void {
-    const fingerprint = sealedFingerprint(message.content, message.stopReason);
-    if (!this.sealedFingerprints.has(fingerprint) && this.sealedFingerprints.size >= MAX_SEALED_FINGERPRINTS) {
-      this.sealedFingerprints.delete(this.sealedFingerprints.keys().next().value!);
+  private rememberResponse(message: NonNullable<TranscriptEvent["message"]>, key: MessageViewKey): void {
+    const id = responseIdentity(message);
+    if (!id) return;
+    if (!this.observedResponses.has(id) && this.observedResponses.size >= MAX_OBSERVED_RESPONSES) {
+      this.observedResponses.delete(this.observedResponses.keys().next().value!);
     }
-    this.sealedFingerprints.set(fingerprint, key);
+    // A reused timestamp/response id is ambiguous; never borrow another clock.
+    const previous = this.observedResponses.get(id);
+    this.observedResponses.set(id, previous === undefined || previous === key ? key : null);
   }
 
   private applyUserBoundary(): void {
@@ -492,9 +472,6 @@ export class TranscriptState {
     if (!plan) return undefined;
     if (runIndex !== 0) return undefined; // only the first text run of a message carries the boundary
     return {
-      messageKey: plan.key,
-      runIndex,
-      firstContentIndex: 0,
       separatorBefore: plan.separatorBefore,
     };
   }
@@ -505,9 +482,6 @@ export class TranscriptState {
     const state = plan?.thinkingRuns[runIndex];
     if (!plan || !state) return undefined;
     return {
-      messageKey: plan.key,
-      runIndex,
-      firstContentIndex: state.firstContentIndex,
       startedAt: state.startedAt,
       endedAt: state.endedAt,
       thinkingMs: state.startedAt !== undefined
@@ -515,13 +489,6 @@ export class TranscriptState {
         : undefined,
       ended: state.endedAt !== undefined,
     };
-  }
-
-  /** All thinking runs of a message, in host runIndex order. */
-  thinkingRunPlans(messageKey: MessageViewKey): readonly ThinkingRunPlan[] {
-    const plan = this.messagePlans.get(messageKey);
-    if (!plan) return [];
-    return plan.thinkingRuns.map((_, runIndex) => this.thinkingRunPlan(messageKey, runIndex)!);
   }
 
   /**
@@ -552,9 +519,11 @@ export class TranscriptState {
    * re-renders finalized messages through clones) reuses that plan so real
    * thinking clocks survive the re-render. */
   registerFinalizedMessage(message: NonNullable<TranscriptEvent["message"]>, followsTools: boolean, sourceObject?: object): MessageViewKey {
-    const fingerprint = sealedFingerprint(message.content, message.stopReason);
-    const existing = this.sealedFingerprints.get(fingerprint);
+    const known = this.identityOf(message) ?? (sourceObject ? this.identityOf(sourceObject) : undefined);
+    const id = responseIdentity(message);
+    const existing = known ?? (id ? this.observedResponses.get(id) : undefined);
     if (existing && this.messagePlans.has(existing)) {
+      this.identityByObject.set(message, existing);
       if (sourceObject) this.identityByObject.set(sourceObject, existing);
       return existing;
     }
@@ -564,12 +533,9 @@ export class TranscriptState {
       finalized: true,
       separatorBefore: followsTools,
       blockCount: message.content.length,
-      thinkingRuns: renderedThinkingRuns(message.content).map((run) => ({
-        firstContentIndex: run.firstContentIndex,
-        endedAt: this.now(),
-      })),
+      thinkingRuns: renderedThinkingRuns(message.content).map(() => ({ endedAt: this.now() })),
     });
-    this.rememberFinalized(message, key);
+    this.identityByObject.set(message, key);
     if (sourceObject) this.identityByObject.set(sourceObject, key);
     return key;
   }
@@ -585,12 +551,8 @@ export class TranscriptState {
     content: Array<{ type: string; text?: string; thinking?: string }>,
     component: object,
   ): MessageViewKey | undefined {
-    let adopted: MessageViewKey | undefined;
-    for (const plan of this.messagePlans.values()) {
-      if (plan.finalized) continue;
-      if (plan.blockCount < content.length) continue;
-      adopted = plan.key; // keep the LAST match: insertion order = stream order
-    }
+    const plan = this.openMessageKey ? this.messagePlans.get(this.openMessageKey) : undefined;
+    const adopted = plan && !plan.finalized && plan.blockCount >= content.length ? plan.key : undefined;
     if (adopted) this.identityByObject.set(component, adopted);
     return adopted;
   }

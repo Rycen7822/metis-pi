@@ -307,11 +307,6 @@ export class UiMetrics {
     return this.#timer !== undefined;
   }
 
-  /** Test hook: force a synchronous tick emission (the real ticker uses the
-   * wall clock; tests advance a fake clock and call this). */
-  tickNow(): void {
-    this.#emit();
-  }
 }
 
 /** Codex duration grammar: "38s" / "1m 08s" / "1h 02m 03s" (leading-zero

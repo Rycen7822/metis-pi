@@ -5,6 +5,7 @@ import { styleToolOutputLine } from "./output-style.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
 import { stripAnsi } from "./selection-copy/wrap.ts";
+import { truncateToWidth as truncateStyled } from "@earendil-works/pi-tui";
 
 export const COMMAND_CONTINUATION_PREFIX = "  │ ";
 export const OUTPUT_INITIAL_PREFIX = "  └ ";
@@ -120,25 +121,7 @@ export function truncateMiddleRows(
 
 /** Hard-cut a styled string to a visible width, keeping escape sequences. */
 function truncateToWidth(text: string, maxWidth: number): string {
-  let out = "";
-  let cells = 0;
-  let index = 0;
-  while (index < text.length) {
-    const char = text[index]!;
-    if (char === "\x1b") {
-      const match = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(text.slice(index));
-      if (match) {
-        out += match[0];
-        index += match[0].length;
-        continue;
-      }
-    }
-    if (cells + 1 > maxWidth) break;
-    out += char;
-    cells += 1;
-    index += 1;
-  }
-  return out;
+  return truncateStyled(text, maxWidth, "");
 }
 
 function countLogicalLines(rows: readonly VisualRow[]): number {
@@ -434,9 +417,4 @@ export function renderShellResult(input: ShellLayoutInput): string[] {
 
   copy?.push(...keptCopy);
   return kept.map((visual) => visual.text);
-}
-
-/** Full single-component render (call + result) for non-component hosts and tests; the live Pi adapter uses the two slot functions (identical composition). */
-export function renderShellRow(input: ShellLayoutInput): string[] {
-  return [...renderShellCall(input), ...renderShellResult(input)];
 }

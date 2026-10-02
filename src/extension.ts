@@ -1,3 +1,4 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import { installStartupWarningFilter } from "./startup-warning-filter.ts";
@@ -23,17 +24,7 @@ import type { CodexSurfaceOps } from "./chrome/editor.ts";
 import { createSelectionCopySystem, type SelectionCopyHost, type SelectionCopySystem } from "./selection-copy/index.ts";
 import { createFullscreenLayout, type FullscreenLayoutHost } from "./chrome/fullscreen-layout.ts";
 
-export interface AppearanceAPI {
-  on(event: "session_start" | "session_shutdown", handler: (event: unknown, context: {
-    hasUI: boolean; ui: { notify(text: string, level: "warning"): void };
-  }) => void): void;
-  on(event: "tool_execution_start", handler: (event: { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }, context: { cwd: string }) => void): void;
-  on(event: "tool_execution_end", handler: (event: { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }, context: { cwd: string }) => void): void;
-  on(event: "message_start" | "message_update" | "message_end", handler: (event: { type: string; message?: unknown }) => void): void;
-  on(event: "agent_start" | "agent_settled" | "agent_end", handler: (event: { type: string }, context: unknown) => void): void;
-  on(event: "model_select" | "thinking_level_select" | "session_tree" | "session_compact" | "session_compact_failed" | "ui_prompt_start" | "ui_prompt_end" | "input", handler: (event: { type: string; level?: unknown }) => void): void;
-  getAllTools(): readonly unknown[];
-}
+export type AppearanceAPI = Pick<ExtensionAPI, "on" | "getAllTools">;
 // Decoration factories have one contract, owned by the adapter that consumes them.
 export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   "makeSeparator" | "makeSpacer" | "makeRail" | "makeThoughtSummary" |
@@ -99,6 +90,7 @@ function toStateMessage(message: unknown): TranscriptEvent["message"] {
     role,
     content,
     stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
+    provider: record.provider, responseId: record.responseId, timestamp: record.timestamp,
   };
 }
 
@@ -405,13 +397,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     hostData.bump();
     requestRender();
   };
-  for (const event of ["model_select", "thinking_level_select", "session_compact_failed"] as const) pi.on(event, refreshHost);
-  for (const event of ["session_tree", "session_compact"] as const) {
-    pi.on(event, () => {
-      ledger.rebuild(hostData.getSessionEntries());
-      refreshHost();
-    });
-  }
+  pi.on("model_select", refreshHost);
+  pi.on("thinking_level_select", refreshHost);
+  pi.on("session_compact_failed", refreshHost);
+  const rebuildUsage = () => {
+    ledger.rebuild(hostData.getSessionEntries());
+    refreshHost();
+  };
+  pi.on("session_tree", rebuildUsage);
+  pi.on("session_compact", rebuildUsage);
   pi.on("ui_prompt_start", () => {
     if (!chromeEnabled) return;
     metrics.uiPromptStart();
@@ -427,7 +421,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (!enabled) return;
     const info = sourceInfoFor(event.toolName);
     tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveNativeMutationPath(ctx.cwd, path));
-    transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
+    if (!event.parentToolCallId) transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
     if (chromeEnabled) metrics.toolStart(event.toolCallId, event.toolName);
     if (chromeEnabled && event.toolName === "write") metrics.writeStreaming();
   });
@@ -446,7 +440,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     }
     // Image count from the real result content blocks (count only, no copy).
     const images = countImageBlocks(event.result);
-    transcript.apply({ type: "tool_execution_end", toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError === true, imageCount: images });
+    if (!event.parentToolCallId) transcript.apply({ type: "tool_execution_end", toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError === true, imageCount: images });
     if (chromeEnabled) metrics.toolEnd(event.toolCallId);
   });
 

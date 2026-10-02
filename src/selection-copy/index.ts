@@ -1,11 +1,9 @@
 // Selection-copy system: prototype wrapping (provenance generation),
-// instance serializer install, editor Ctrl+C hook and diagnostics. Created
+// receiver serializer leases, editor Ctrl+C hook and diagnostics. Created
 // once per activation; every failure degrades to native extraction.
 //
-// Serializer/controller contract: replaces getActiveSelectionText on the live TuiAltScreen
-// instance (instance property shadows the prototype chain — including any
-// heuristic wrapper installed there by other extensions, e.g.
-// pi-copy-soft-wrap — independent of load order), and gives the composer
+// Serializer/controller contract: leases getActiveSelectionText for the live TuiAltScreen
+// receiver behind Pi’s proxy, with native extraction for other receivers, and gives the composer
 // editor a selection-aware Ctrl+C. Selection geometry stays host-native
 // (getSelectionBounds / getSelectionColumns). Clipboard transport stays behind
 // the host's completion/error handling; local WSL keeps one warmed writer.
@@ -68,6 +66,17 @@ export interface SelectionCopySystem {
   };
 }
 
+// Provenance wrappers and their counters belong to the shared host prototypes.
+const mirrors: MarkdownDiagnostics = {
+  markdownBuilt: 0,
+  markdownDegraded: 0,
+  textBuilt: 0,
+  textDegraded: 0,
+  markdownThrottled: 0,
+  textThrottled: 0,
+  lastDegradedReason: "",
+};
+
 export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch: string | undefined = undefined): SelectionCopySystem {
   const telemetry: CopyTelemetry = {
     exact: 0,
@@ -79,35 +88,20 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
     lastCharCount: 0,
     lastDurationMs: 0,
     lastReason: "",
-  calls: 0,
-  };
-  const mirrors: MarkdownDiagnostics = {
-    markdownBuilt: 0,
-    markdownDegraded: 0,
-    textBuilt: 0,
-    textDegraded: 0,
-    markdownThrottled: 0,
-    textThrottled: 0,
-    lastDegradedReason: "",
+    calls: 0,
   };
   const fns = host.fns;
   let serializerInstalled = false;
   let installBlocker = "not attempted (no live TUI captured)";
   let installedTui: AltScreenLike | undefined;
+  let releaseSerializer: (() => void) | undefined;
   const copyState = { inFlight: false, queued: 0 };
   const clipboard = createSelectionClipboard();
 
   // ONE host-fns adapter per activation: the prototype wrappers (via deps) and
-  // the instance serializer (via controllerDeps) read the same object, so the
+    // the receiver serializer read the same object, so the
   // two install paths can never disagree about the host primitives.
-  const hostFns: AdapterHostFns | undefined = fns
-    ? {
-        visibleWidth: fns.visibleWidth,
-        sliceByColumn: fns.sliceByColumn,
-        stripTerminalSequences: fns.stripTerminalSequences,
-        stripAnsi,
-      }
-    : undefined;
+  const hostFns: AdapterHostFns | undefined = fns ? { ...fns, stripAnsi } : undefined;
   const deps: WrapDeps | undefined = hostFns && fns
     ? { fns: hostFns, lexer: createCopyLexer(), hostWrap: fns.wrapTextWithAnsi, diagnostics: mirrors }
     : undefined;
@@ -144,12 +138,14 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
 
     installOnTui(tui: unknown): boolean {
       if (hostFns) clipboard.install(tui);
-      if (serializerInstalled) return true;
+      if (serializerInstalled && installedTui === tui && serializerIsLive(tui as AltScreenLike)
+          && serializerOwner(tui as AltScreenLike)?.contexts.get(serializerReceiver(tui as AltScreenLike))?.deps.telemetry === telemetry) return true;
       if (!hostFns) { installBlocker = "host bindings unavailable"; return false; }
       if (!tui || typeof tui !== "object") { installBlocker = "invalid tui"; return false; }
       externalPatch ??= detectExternalSerializerPatch(Object.getPrototypeOf(tui));
-      const controllerDeps: CopyControllerDeps = { fns: hostFns, telemetry, prototypePatchedByOther: () => externalPatch };
-      serializerInstalled = installInstanceSerializer(tui as AltScreenLike, controllerDeps);
+      releaseSerializer?.();
+      releaseSerializer = installSerializer(tui as AltScreenLike, { fns: hostFns, telemetry });
+      serializerInstalled = releaseSerializer !== undefined;
       if (serializerInstalled) installedTui = tui as AltScreenLike;
       installBlocker = serializerIsLive(tui as AltScreenLike) ? "live" : installBlocker;
       if (!serializerInstalled) {
@@ -166,6 +162,10 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
     dispose(): void {
       copyState.queued = 0;
       clipboard.dispose();
+      releaseSerializer?.();
+      releaseSerializer = undefined;
+      serializerInstalled = false;
+      installedTui = undefined;
     },
 
     editorHook() {
@@ -219,108 +219,131 @@ export interface AltScreenLike {
   copyTextToClipboard?: (text: string) => Promise<boolean>;
   currentLayout?: LayoutFrameLike | undefined;
   previousScreen?: readonly string[];
-  [key: string]: unknown;
+  [key: string | symbol]: unknown;
 }
 
 export interface CopyControllerDeps {
   fns: SerializeHostFns;
   telemetry: CopyTelemetry;
-  /** pi-copy-soft-wrap / unknown owner detection (diagnostics only). */
-  prototypePatchedByOther(): string | undefined;
 }
 
 const OWNER = Symbol.for("Rycen7822.metis-pi.selection-serializer");
 
-/** Patch the native renderer prototype so internal selection/copy callers and
- * replacement renderers share the serializer. The host's live Proxy forwards
- * assignment, but own property descriptors still belong to its empty target. */
-export function installInstanceSerializer(tui: AltScreenLike, deps: CopyControllerDeps): boolean {
-  const prototype = Object.getPrototypeOf(tui) as Record<string | symbol, unknown>;
-  if (!prototype || typeof prototype !== "object") return false;
-  if (Object.prototype.hasOwnProperty.call(prototype, OWNER)) {
-    return prototype[OWNER] === true;
-  }
-  const descriptor = Object.getOwnPropertyDescriptor(prototype, "getActiveSelectionText");
-  if (!descriptor || typeof descriptor.value !== "function"
-      || typeof prototype.getSelectionBounds !== "function"
-      || typeof prototype.getSelectionColumns !== "function") {
-    return false;
-  }
-  const serializer = new SelectionSerializer(deps.fns);
-  const replacement = function (this: AltScreenLike): string | undefined {
-    deps.telemetry.calls = (deps.telemetry.calls ?? 0) + 1;
-    const started = Date.now();
-    const bounds = this.getSelectionBounds?.();
-    if (!bounds) return undefined;
-    const selection = bounds;
-    const sourceLines = selection.start.scrollView === undefined
-      ? (this.previousScreen ?? [])
-      : scrollContentLinesOf(this, selection.start.scrollView);
-    if (sourceLines === undefined) return undefined;
-    const layout = this.currentLayout;
-    const columnsFor = (row: number): { start: number; end: number } =>
-      this.getSelectionColumns!(sourceLines[row] ?? "", row, selection);
-    try {
-      const result = serializer.serialize(layout as LayoutFrameLike, {
-        scrollView: selection.start.scrollView,
-        startRow: selection.start.row,
-        endRow: selection.end.row,
-        sourceLines,
-        columnsFor,
-      });
-      const telemetry = deps.telemetry;
-      telemetry.lastCharCount = result.text.length;
-      telemetry.lastDurationMs = Date.now() - started;
-      if (result.text.length === 0) {
-        telemetry.emptyDecoration += 1;
-        telemetry.lastMode = "empty-decoration";
-        // Stock parity: empty extraction maps to undefined (hasActiveSelection
-        // false, no clipboard write, host Esc routing unchanged).
-        return undefined;
-      }
-      if (result.nativeRows === 0) {
-        telemetry.exact += 1;
-        telemetry.lastMode = "exact";
-      } else if (result.mappedRows > 0) {
-        telemetry.mixed += 1;
-        telemetry.lastMode = "mixed";
-      } else {
-        telemetry.nativeFallback += 1;
-        telemetry.lastMode = "native-fallback";
-      }
-      return result.text;
-    } catch (error) {
-      deps.telemetry.failed += 1;
-      deps.telemetry.lastMode = "failed";
-      deps.telemetry.lastReason = error instanceof Error ? error.message : "serialize failed";
-      // Native fallback over the same sourceLines — scrollView selections are
-      // content-space; previousScreen is screen-space and would copy wrong rows.
-      const lines: string[] = [];
-      for (let row = selection.start.row; row <= selection.end.row; row++) {
-        const columns = columnsFor(row);
-        const line = sourceLines[row] ?? "";
-        lines.push(deps.fns.stripTerminalSequences(deps.fns.sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true)).trimEnd());
-      }
-      const fallback = lines.join("\n");
-      return fallback.length === 0 ? undefined : fallback;
-    }
-  };
-  Object.defineProperty(prototype, "getActiveSelectionText", {
-    value: replacement,
-    writable: true,
-    configurable: true,
-    enumerable: false,
-  });
-  Object.defineProperty(replacement, "ownerMarker", { value: "metis-pi", enumerable: false });
-  prototype[OWNER] = true;
-  return true;
+interface SerializerOwner {
+  receiver: symbol;
+  contexts: Map<AltScreenLike, { deps: CopyControllerDeps; serializer: SelectionSerializer }>;
+  method: (this: AltScreenLike) => string | undefined;
+  restore(): void;
+}
+function serializerOwner(tui: AltScreenLike): SerializerOwner | undefined {
+  return Object.getPrototypeOf(tui)?.[OWNER];
+}
+function serializerReceiver(tui: AltScreenLike): AltScreenLike {
+  const owner = serializerOwner(tui);
+  return owner ? tui[owner.receiver] as AltScreenLike : tui;
 }
 
-/** True when the prototype's active method carries our marker. */
+/** Lease one native receiver behind Pi's live proxy; unrelated TUI instances
+ * keep native extraction. The final lease restores only methods still ours. */
+function installSerializer(tui: AltScreenLike, deps: CopyControllerDeps): (() => void) | undefined {
+  const prototype = Object.getPrototypeOf(tui) as Record<string | symbol, unknown>;
+  if (!prototype) return;
+  let owner = serializerOwner(tui);
+  if (!owner) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "getActiveSelectionText");
+    if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable
+        || !Object.isExtensible(prototype) || typeof prototype.getSelectionBounds !== "function"
+        || typeof prototype.getSelectionColumns !== "function") return;
+    const native = descriptor.value as (this: AltScreenLike) => string | undefined;
+    const receiver = Symbol("metis-pi selection receiver");
+    const identity = function (this: AltScreenLike) { return this; };
+    const contexts: SerializerOwner["contexts"] = new Map();
+    const replacement = function (this: AltScreenLike): string | undefined {
+      const context = contexts.get(this);
+      if (!context) return native.call(this);
+      const { deps, serializer } = context;
+      deps.telemetry.calls = (deps.telemetry.calls ?? 0) + 1;
+      const started = Date.now();
+      const bounds = this.getSelectionBounds?.();
+      if (!bounds) return undefined;
+      const selection = bounds;
+      const sourceLines = selection.start.scrollView === undefined
+        ? (this.previousScreen ?? [])
+        : scrollContentLinesOf(this, selection.start.scrollView);
+      if (sourceLines === undefined) return undefined;
+      const layout = this.currentLayout;
+      const columnsFor = (row: number): { start: number; end: number } =>
+        this.getSelectionColumns!(sourceLines[row] ?? "", row, selection);
+      try {
+        const result = serializer.serialize(layout as LayoutFrameLike, {
+          scrollView: selection.start.scrollView,
+          startRow: selection.start.row,
+          endRow: selection.end.row,
+          sourceLines,
+          columnsFor,
+        });
+        const telemetry = deps.telemetry;
+        telemetry.lastCharCount = result.text.length;
+        telemetry.lastDurationMs = Date.now() - started;
+        if (result.text.length === 0) {
+          telemetry.emptyDecoration += 1;
+          telemetry.lastMode = "empty-decoration";
+          // Stock parity: empty extraction maps to undefined (hasActiveSelection
+          // false, no clipboard write, host Esc routing unchanged).
+          return undefined;
+        }
+        if (result.nativeRows === 0) {
+          telemetry.exact += 1;
+          telemetry.lastMode = "exact";
+        } else if (result.mappedRows > 0) {
+          telemetry.mixed += 1;
+          telemetry.lastMode = "mixed";
+        } else {
+          telemetry.nativeFallback += 1;
+          telemetry.lastMode = "native-fallback";
+        }
+        return result.text;
+      } catch (error) {
+        deps.telemetry.failed += 1;
+        deps.telemetry.lastMode = "failed";
+        deps.telemetry.lastReason = error instanceof Error ? error.message : "serialize failed";
+        // Native fallback over the same sourceLines — scrollView selections are
+        // content-space; previousScreen is screen-space and would copy wrong rows.
+        const lines: string[] = [];
+        for (let row = selection.start.row; row <= selection.end.row; row++) {
+          const columns = columnsFor(row);
+          const line = sourceLines[row] ?? "";
+          lines.push(deps.fns.stripTerminalSequences(deps.fns.sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true)).trimEnd());
+        }
+        const fallback = lines.join("\n");
+        return fallback.length === 0 ? undefined : fallback;
+      }
+    };
+    Object.defineProperty(prototype, "getActiveSelectionText", { ...descriptor, value: replacement });
+    Object.defineProperty(prototype, receiver, { configurable: true, get: identity });
+    // Retained here so chained successor wrappers safely delegate after release.
+    const restore = () => {
+      if (prototype.getActiveSelectionText === replacement) Object.defineProperty(prototype, "getActiveSelectionText", descriptor);
+      if (Object.getOwnPropertyDescriptor(prototype, receiver)?.get === identity) Reflect.deleteProperty(prototype, receiver);
+      if (prototype[OWNER] === owner) Reflect.deleteProperty(prototype, OWNER);
+    };
+    owner = { receiver, contexts, method: replacement, restore };
+    Object.defineProperty(prototype, OWNER, { configurable: true, value: owner });
+  }
+  if (prototype.getActiveSelectionText !== owner.method) return;
+  const receiver = serializerReceiver(tui);
+  const context = { deps, serializer: new SelectionSerializer(deps.fns) };
+  owner.contexts.set(receiver, context);
+  return () => {
+    if (owner.contexts.get(receiver) === context) owner.contexts.delete(receiver);
+    if (!owner.contexts.size) owner.restore();
+  };
+}
+
 export function serializerIsLive(tui: AltScreenLike): boolean {
-  const prototype = Object.getPrototypeOf(tui) as Record<string, unknown>;
-  const method = prototype?.getActiveSelectionText as { ownerMarker?: string } | undefined;
-  return method?.ownerMarker === "metis-pi";
+  const owner = serializerOwner(tui);
+  return !!owner && Object.getPrototypeOf(tui)?.getActiveSelectionText === owner.method
+    && owner.contexts.has(serializerReceiver(tui));
 }
 
 function scrollContentLinesOf(tui: AltScreenLike, scrollView: unknown): readonly string[] | undefined {
@@ -392,6 +415,7 @@ export function tryConsumeCopyKey(
  * pi-copy-soft-wrap). Returns a short owner label for diagnostics. */
 export function detectExternalSerializerPatch(altScreenPrototype: object | undefined): string | undefined {
   if (!altScreenPrototype) return undefined;
+  if ((altScreenPrototype as Record<symbol, SerializerOwner>)[OWNER]?.method === Reflect.get(altScreenPrototype, "getActiveSelectionText")) return undefined;
   const descriptor = Object.getOwnPropertyDescriptor(altScreenPrototype, "getActiveSelectionText");
   if (!descriptor || typeof descriptor.value !== "function") return undefined;
   let source = "";

@@ -2,6 +2,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { layoutFooter } from "../../src/chrome/footer.ts";
+import { cellWidth, clipLine, truncateSegments } from "../../src/segments.ts";
+
+test("chrome clipping keeps terminal graphemes and excludes ANSI from cell counts", () => {
+  assert.equal(cellWidth("é👩‍🔬"), 3);
+  assert.equal(cellWidth("\x1b[31mX\x1b[0m"), 1);
+  assert.equal(clipLine("éZ", 1), "é");
+  assert.equal(clipLine("👩‍🔬Z", 2), "👩‍🔬");
+  assert.equal(clipLine("👩‍🔬Z", 1), "");
+  assert.equal(clipLine("A中", 2), "A");
+  assert.deepEqual(truncateSegments([{ text: "👩‍🔬XYZ", tone: "dim" }], 3), [{ text: "👩‍🔬…", tone: "dim" }]);
+});
 
 test("footer wraps ordered metadata into literal narrow and wide rows", () => {
   const snapshot = {
