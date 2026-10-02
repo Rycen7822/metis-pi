@@ -36,5 +36,7 @@ parent's Pi SDK and agent directory. Their default model is the parent's model
 identity; provider definitions existing only in parent memory are unavailable to
 an independent child. A task must contain its own instructions and context.
 
-For a Git development checkout, run `npm run prepare:subagents`. `npm pack`
-prepares the schema payload; installed npm packages already contain it.
+Git installs and updates prepare the tool schema during `npm install`. For a
+development checkout installed with `--ignore-scripts`, run
+`npm run prepare:subagents`. `npm pack` also prepares the schema payload;
+installed npm packages already contain it.

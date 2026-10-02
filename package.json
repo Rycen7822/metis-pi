@@ -34,6 +34,7 @@
     "check:execution": "tsc -p tsconfig.execution.json",
     "check:condense": "tsc -p tsconfig.condense.json",
     "prepare:subagents": "python3 scripts/prepare-subagents.py",
+    "prepare": "npm run prepare:subagents",
     "prepack": "npm run prepare:subagents",
     "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/subagents -v"
   },

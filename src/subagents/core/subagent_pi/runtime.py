@@ -481,6 +481,7 @@ class Runtime:
         self.store.execute("UPDATE runs SET state='running',started=? WHERE id=?",(now(),rid))
         self.store.agent_update(w.agent['id'],state='running',current_run=rid)
         self.event(w,'run_started',{'idle_timeout_seconds':w.idle_timeout_seconds})
+        self.notify()
         try:
             return await self.deliver_input(w,'prompt',r['task'],runId=rid)
         except AgentError as e:
