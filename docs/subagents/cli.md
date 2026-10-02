@@ -22,6 +22,15 @@ Pi's current tool set; users can call the same tools through native codemode.
 answer it. Another enabled subagent provider makes this entry stand down; choose
 one provider with `pi config` and reload.
 
+In the TUI, active subagents appear above the input box with their names and
+states, including waiting for input. The list clears when work settles or the
+parent session closes. Up to eight entries are shown, followed by a remaining
+count; the footer keeps its running/total count. Click an entry to open its
+read-only conversation overlay, with current state, tool activity and completed
+messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the
+overlay without stopping the agent or acknowledging its result. History uses
+bounded event previews and does not show token-by-token streaming or images.
+
 Linux/WSL, Python 3.11+, Node 22.19+ and Pi 1.0+ are required. Children use the
 parent's Pi SDK and agent directory. Their default model is the parent's model
 identity; provider definitions existing only in parent memory are unavailable to

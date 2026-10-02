@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
 import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { SubagentClient, type RuntimePackage } from "./client.ts";
+import { SubagentViewer, type AgentInspection } from "./viewer.ts";
 
 const BINDING = "metis-subagent-scope", RECEIPT = "metis-subagent-receipt", ATTENTION = "metis-subagent-attention";
 interface Ticket { id: string; events: string[]; receipts: string[] }
@@ -26,6 +29,8 @@ export class SubagentSession {
   private readonly sessionId: string;
   private ctx: ExtensionContext;
   private uncertain = 0;
+  private widgetText = "";
+  private viewerAbort?: AbortController;
   private observed = new Set<string>();
 
   constructor(pi: ExtensionAPI, runtime: RuntimePackage, ctx: ExtensionContext, agentDir: string) {
@@ -43,6 +48,47 @@ export class SubagentSession {
     const task = this.chain.then(fn); this.chain = task.catch(() => {}); return task;
   }
   private valid() { return !this.closed && this.ctx.sessionManager.getSessionId() === this.sessionId; }
+  private renderWidget() {
+    if (this.ctx.mode !== "tui") return;
+    const active = this.agents.filter(agent => ["starting", "running", "needs_input", "stopping"].includes(agent.state));
+    const rows = active.slice(0, 8).map(agent => ({
+      id: agent.id,
+      text: `${stripVTControlCharacters(agent.name).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim()} · ${agent.state === "needs_input" ? "waiting for input" : agent.state}`,
+      tone: agent.state === "needs_input" ? "warning" as const : "accent" as const,
+    }));
+    const signature = JSON.stringify([active.length, rows]);
+    if (signature === this.widgetText) return;
+    this.widgetText = signature;
+    this.ctx.ui.setWidget("metis-subagents", active.length ? (_tui, theme) => new MouseRegion({
+      render: width => width > 0 ? [
+        theme.fg("muted", `Subagents · ${active.length} active`),
+        ...rows.map(row => `  ${theme.fg(row.tone, row.text)}`),
+        ...(active.length > rows.length ? [theme.fg("muted", `  +${active.length - rows.length} more`)] : []),
+      ].map(line => truncateToWidth(line, width, "…")) : [],
+      invalidate() {},
+    }, event => {
+      if (event.type !== "click" || event.button !== "left") return;
+      const row = rows[event.y - 1];
+      if (!row) return;
+      void this.openViewer(row.id);
+      return { handled: true };
+    }) : undefined, { placement: "aboveEditor" });
+  }
+  private async openViewer(agentId: string) {
+    if (!this.valid() || this.ctx.mode !== "tui" || this.viewerAbort) return;
+    const abort = new AbortController(); this.viewerAbort = abort;
+    let viewer: SubagentViewer | undefined;
+    try {
+      await this.ctx.ui.custom<undefined>((tui, theme, keys, done) => viewer = new SubagentViewer(
+        agentId, theme, tui, keys, done, abort,
+        async after => await this.client.call("pi_inspect_agent", { agent_id: agentId, detail: "full", after, limit: 100, max_bytes: 16384 }, abort.signal) as unknown as AgentInspection,
+      ), { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } });
+    } catch (error) {
+      if (this.valid()) this.ctx.ui.notify(`Subagent view failed: ${String(error)}`, "warning");
+    } finally {
+      viewer?.dispose(); abort.abort(); if (this.viewerAbort === abort) this.viewerAbort = undefined;
+    }
+  }
   private async reconcile() {
     if (!this.valid()) return;
     const receipts = new Set<string>();
@@ -92,6 +138,7 @@ export class SubagentSession {
           cursor = result.cursor; this.pending = result.notifications as Attention[]; this.agents = result.agents as typeof this.agents;
           this.uncertain = (result.parent_notifications as { failed?: number }).failed ?? 0;
           this.ctx.ui.setStatus("metis-subagents", this.agents.length ? `agents ${this.agents.filter(a => a.state === "running").length}/${this.agents.length}${this.uncertain ? ` · uncertain ${this.uncertain}` : ""}` : undefined);
+          this.renderWidget();
           if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.serialize(() => this.deliverIdle());
         }
       } catch (error) {
@@ -218,6 +265,8 @@ export class SubagentSession {
   async close() {
     if (this.closed) return;
     this.closed = true; this.watchAbort.abort(); this.ctx.ui.setStatus("metis-subagents", undefined);
+    this.viewerAbort?.abort();
+    if (this.ctx.mode === "tui") this.ctx.ui.setWidget("metis-subagents", undefined);
     await this.client.close(); await this.watching;
   }
 }

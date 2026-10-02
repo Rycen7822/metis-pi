@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 
 test("metis owns native direct and codemode subagents with one wait receipt and isolated SDK children", { timeout: 45000 }, async t => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -53,10 +54,38 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
     noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true });
   await loader.reload(); assert.deepEqual(loader.getExtensions().errors, []);
   const loaded = await createAgentSession({ cwd: dir, agentDir: dir, modelRuntime, settingsManager, resourceLoader: loader, sessionManager: SessionManager.create(dir, dir), model });
+  const widgets = [];
+  let clickable, popup, popupRows = [], popupsClosed = 0;
+  const uiContext = {
+    notify() {}, setStatus() {},
+    setWidget(key, content, options) {
+      assert.equal(key, "metis-subagents");
+      if (content === undefined) { widgets.push([]); return; }
+      assert.equal(options.placement, "aboveEditor");
+      const widget = content({}, { fg: (_color, text) => text });
+      clickable ??= widget;
+      const rows = widget.render(40);
+      assert.ok(rows.every(row => visibleWidth(row) <= 40));
+      assert.ok(widget.render(1).every(row => visibleWidth(row) <= 1));
+      widgets.push(rows);
+    },
+    custom(factory, options) {
+      assert.equal(options.overlay, true);
+      return new Promise(resolve => {
+        popup = factory({ terminal: { rows: 30 }, requestRender() { if (popup) popupRows = popup.render(60); } },
+          { fg: (_color, text) => text }, getKeybindings(), () => {
+            popup?.dispose(); popup = undefined; popupsClosed++; resolve(undefined);
+          });
+      });
+    },
+  };
   t.after(async () => {
     try {
-      await loaded.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); loaded.session.dispose();
+      await loaded.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      loaded.session.dispose();
       execFileSync("python3", [join(root, "src/subagents/core/bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { timeout: 20000 });
+      assert.deepEqual(widgets.at(-1), [], "session shutdown clears the subagent widget");
+      assert.equal(popupsClosed, 2, "session shutdown also closes the open viewer");
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
       rmSync(dir, { recursive: true, force: true });
@@ -64,7 +93,7 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   });
   const errors = [], nested = [];
   loaded.session.subscribe(event => { if (event.type === "tool_execution_end" && event.parentToolCallId) nested.push(event); });
-  await loaded.session.bindExtensions({ onError: error => errors.push(error) });
+  await loaded.session.bindExtensions({ onError: error => errors.push(error), uiContext, mode: "tui" });
   loaded.session.setActiveToolsByName([...loaded.session.getActiveToolNames(), "codemode"]);
   assert.ok(loaded.session.getActiveToolNames().includes("pi_spawn_agent"));
   assert.ok(loaded.session.getActiveToolNames().includes("bash"), "parent keeps native tools");
@@ -76,6 +105,10 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   const branch = loaded.session.sessionManager.getBranch();
   assert.equal(branch.filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 0, "wait prevents a second automatic notification");
   assert.equal(branch.filter(entry => entry.type === "custom" && entry.customType === "metis-subagent-receipt").length, 2);
+  assert.ok(widgets.some(rows => rows.some(row => row.includes(" · running"))), "real child activity reaches the above-editor widget");
+  const deadlineForWidget = Date.now() + 5000;
+  while (widgets.at(-1)?.length && Date.now() < deadlineForWidget) await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(widgets.at(-1), [], "settled children do not remain in the running list");
   const direct = branch.find(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "pi_wait_agent");
   assert.equal(direct.message.isError, false, JSON.stringify(direct));
   assert.equal(JSON.parse(direct.message.content[0].text).runs[0].state, "completed");
@@ -90,4 +123,17 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   await loaded.session.prompt("Run overlapping wait proof"); await loaded.session.waitForIdle();
   assert.equal(turn, 15); assert.deepEqual(errors, []);
   assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1, "overlapping waits preserve one event receipt");
+  assert.equal(clickable.handleMouse({ type: "click", button: "right", y: 1 }), undefined);
+  assert.equal(clickable.handleMouse({ type: "wheel", button: "none", y: 1 }), undefined);
+  assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 0 }), undefined);
+  assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 1 }).handled, true);
+  const viewDeadline = Date.now() + 5000;
+  while (!popupRows.some(row => row.includes("nested proof")) && Date.now() < viewDeadline) await new Promise(resolve => setTimeout(resolve, 25));
+  assert.ok(popupRows.some(row => row.includes("nested proof")), "clicked agent's real conversation reaches the overlay");
+  assert.ok(popupRows.some(row => row.includes("pi-mock-offline/mock")), "native model identity is readable");
+  for (const width of [1, 4, 60]) assert.ok(popup.render(width).every(row => visibleWidth(row) <= width));
+  popup.handleInput("\u001b");
+  assert.equal(popupsClosed, 1, "Escape closes only the viewer");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 1 }).handled, true);
 });
