@@ -46,7 +46,7 @@ async function host(t, converted, reverse = false, wholePackage = false) {
     finally { session.dispose(); if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); }
   });
   assert.deepEqual(extensionsResult.errors, []);
-  if (wholePackage) assert.equal(extensionsResult.extensions.length, 9);
+  if (wholePackage) assert.equal(extensionsResult.extensions.length, 10);
   await session.bindExtensions({ onError: e => errors.push(e) });
   let reply;
   const streamSimple = (m, context) => {

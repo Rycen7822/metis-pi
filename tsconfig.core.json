@@ -18,7 +18,8 @@
   },
   "include": [
     "src/**/*.ts",
-    "extensions/mcp.ts"
+    "extensions/mcp.ts",
+    "extensions/subagents.ts"
   ],
   "exclude": [
     "src/execution/**",

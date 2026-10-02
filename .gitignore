@@ -23,3 +23,8 @@ native/tools/target/
 docs/preview.html
 docs/transcript.ansi
 docs/transcript.txt
+
+# Subagent package payload and Python interpreter caches
+src/subagents/core/tools.json
+__pycache__/
+*.pyc

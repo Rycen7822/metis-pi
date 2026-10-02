@@ -27,12 +27,15 @@
     "check": "npm run check:core && npm run check:execution && npm run check:condense",
     "check:core": "tsc -p tsconfig.core.json",
     "check:test": "tsc -p tsconfig.test.json",
-    "verify": "npm run check && npm run check:test && npm test && npm pack --dry-run --ignore-scripts",
+    "verify": "npm run prepare:subagents && npm run check && npm run check:test && npm test && npm run test:subagents && npm pack --dry-run --ignore-scripts",
     "preview": "node --experimental-strip-types scripts/preview.mjs",
     "test:pty": "node --experimental-strip-types scripts/pty-verify.mjs",
     "test:pty:strict": "node --experimental-strip-types scripts/pty-verify.mjs --strict",
     "check:execution": "tsc -p tsconfig.execution.json",
-    "check:condense": "tsc -p tsconfig.condense.json"
+    "check:condense": "tsc -p tsconfig.condense.json",
+    "prepare:subagents": "python3 scripts/prepare-subagents.py",
+    "prepack": "npm run prepare:subagents",
+    "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/subagents -v"
   },
   "dependencies": {
     "@earendil-works/pi-mcp": "1.0.0",
@@ -66,7 +69,8 @@
     "docs/provenance/condense/LICENSE",
     "docs/provenance/mcp/LICENSE",
     "vendor/tree-sitter-bash",
-    "assets/native-tools"
+    "assets/native-tools",
+    "docs/provenance/subagents/LICENSE"
   ],
   "engines": {
     "node": ">=22.19.0"

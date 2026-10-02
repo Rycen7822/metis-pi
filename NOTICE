@@ -70,3 +70,8 @@ Copyright (c) 2025 Mario Zechner. MIT License
 (full text in docs/provenance/mcp/LICENSE). Session integration is locally
 maintained; connection/cache ideas reference pi-mcp-adapter 5.0.0 without
 copying its implementation. Pi's public MCP/OAuth packages retain protocol ownership.
+
+The native subagent core (src/subagents/core) derives from Rycen7822/subagent-pi
+commit 4765456f62bbec2724743e17855c4e21f5f6d6d8 (0.5.0).
+Copyright (c) 2026 Rycen7822. MIT License
+(see docs/provenance/subagents/LICENSE and THIRD_PARTY_NOTICES.md).

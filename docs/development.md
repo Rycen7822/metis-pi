@@ -3,9 +3,11 @@
 ## 环境与常用命令
 
 Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 1.0.0。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
+子代理开发与验证还需要 Python 3.11+；测试的独立 schema 校验依赖安装命令为 `python3 -m pip install -r test/subagents/requirements.txt`，运行核心只使用 Python 标准库。
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
+npm run prepare:subagents
 ```
 
 | 命令 | 范围 |
@@ -16,6 +18,7 @@ npm ci --ignore-scripts --no-audit --no-fund
 | `npm run test:host` / `test:protocol` | 真实宿主接线及包内容 / 请求、回放、压缩和历史编辑。 |
 | `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
 | `npm run test:chrome` | 跨层界面、布局和复制测试。 |
+| `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为。 |
 | `npm run verify` | 项目与测试类型 + 全部测试 + pack dry-run。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
 | `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，均不进 Git。 |
@@ -45,7 +48,7 @@ CI 使用锁文件安装的 Pi 执行严格 PTY。手工运行时可用 `PI_BIN=
 
 运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。condense 由根项目统一维护与检查；来源归属见 [NOTICE](../NOTICE)，许可见 [condense LICENSE](provenance/condense/LICENSE) 与 [执行来源](provenance/execution/README.md)。
 
-发布包携带 TS、condense 入口、shell WASM、Linux x64 helper、主题与许可/文档；Rust 来源和开发配置留在 Git。安装依赖宿主 TS 加载器，不新增编译或 npm lifecycle。
+发布包携带 TS、condense 入口、子代理 Python/JS 核心、shell WASM、Linux x64 helper、主题与许可/文档；Rust 来源和开发配置留在 Git。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。
 
 原生 helper 使用：
 
