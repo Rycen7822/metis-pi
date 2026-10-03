@@ -781,7 +781,9 @@ export interface FlushMetricsEntry {
   publishedCharsSaved?: number;
   argumentCharsSaved?: number;
   firstChangedMessage?: number;
-  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "empty" | "error";
+  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "empty" | "delivery-pending" | "error";
+  reason?: string;
+  error?: string;
   /** Computed at flush ENTRY (pre-flush pressure). */
   metrics: ContextMetricsSnapshot;
 }
@@ -921,6 +923,8 @@ export interface FlushOptions {
 
 /** Options for a single summarizeBatch() call. */
 export interface SummarizeBatchOptions {
+  /** Reports a discarded result's cause without putting it in model context. */
+  onFailure?: (message: string) => void;
   /** Receives the number of summary text characters streamed so far. */
   onTextProgress?: (receivedChars: number) => void;
   /**
@@ -938,6 +942,7 @@ export interface SummarizeBatchOptions {
 
 /** Options for summarizeBatches() when callers want live per-batch text progress. */
 export interface SummarizeBatchesOptions {
+  onFailure?: (message: string) => void;
   /** Receives streamed summary text character counts for each batch. */
   onBatchTextProgress?: BatchTextProgressCallback;
   /**

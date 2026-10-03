@@ -28,6 +28,13 @@ Subagent tool rows show compact operation, target and status summaries by defaul
 Use Ctrl+O or click a tool row to expand its full arguments and result. Errors keep
 a short visible preview; wait timeouts, failed children and pending questions remain visible.
 
+Runtime failures retain `isError: true` and `error.code/message` in structured
+output. Native codemode resolves this value; check `result.isError` before using
+success fields. `error.blocking_agent_id` identifies an existing conflicting
+writer; `error.agent_id/run_id` identify a failed launch. Saved direct and nested
+failure receipts consume attention without acknowledging the result. Unobserved
+background failures still wake the parent.
+
 In the TUI, active subagents appear above the input box as a tree with animated
 running indicators, names, states, elapsed time, tool counts, tokens and current
 tool activity. Agents waiting for input appear first. The list clears when work

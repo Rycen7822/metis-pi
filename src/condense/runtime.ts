@@ -267,6 +267,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let firstChangedMessage: number | undefined;
     let modelAttempted = false;
     let outcome: FlushMetricsEntry["outcome"] = "empty";
+    let failureReason: string | undefined, failureMessage: string | undefined;
     let appendEntry: ((customType: string, data?: unknown) => void) | undefined;
 
     // Non-fatal by construction: observability must never affect the flush outcome.
@@ -279,6 +280,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         stubCount,
         publishedCharsSaved, argumentCharsSaved, firstChangedMessage,
         outcome,
+        ...(failureReason ? { reason: failureReason } : {}),
+        ...(outcome === "error" && failureMessage ? { error: failureMessage } : {}),
         metrics: entryMetrics,
       };
       try {
@@ -311,6 +314,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           appendEntry = (customType: string, data?: unknown) => { assertCurrent(version); sessionManager!.appendCustomEntry(customType, data); };
         } catch (err) {
           outcome = "error";
+          failureReason = isStaleContextError(err) ? "stale-context" : "failed";
+          failureMessage = errorMessage(err);
           return { ok: false, reason: isStaleContextError(err) ? "stale-context" : "failed", error: errorMessage(err) };
         }
       } else appendEntry = (type, data) => { assertCurrent(version); pi.appendEntry(type, data); };
@@ -360,6 +365,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Bail out before we drain pendingBatches so they don't need restoring.
       if (options.signal?.aborted) {
         outcome = "error";
+        failureReason = "aborted";
         return { ok: false, reason: "aborted" };
       }
 
@@ -472,6 +478,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           modelAttempted = true;
           const r = await summarizeBatch(record.prepared.candidate, currentConfig.value, ctx, {
             signal: options.signal,
+            onFailure: message => { failureMessage = message; },
             controller: fallbackController,
             onTextProgress: (receivedChars) =>
               options.onBatchTextProgress?.(record.index, records.length, record.batch, receivedChars),
@@ -491,6 +498,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (summarizable.length > 0) {
           modelAttempted = true;
           const ntResults = await summarizeBatches(summarizable.map((record) => record.prepared.candidate), currentConfig.value, ctx, {
+            onFailure: message => { failureMessage = message; },
             onBatchTextProgress: (ntIndex, _ntTotal, batch, receivedChars) => {
               const record = summarizable[ntIndex]!;
               options.onBatchTextProgress?.(record.index, records.length, batch, receivedChars);
@@ -674,7 +682,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (processedBatches.length === 0) {
         // Nothing was persisted (all calls failed or first call failed)
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
-        outcome = "error";
+        outcome = deliveryPending ? "delivery-pending" : "error";
+        failureReason = deliveryPending ? "delivery-pending" : "summarizer-failed";
         return { ok: false, reason: deliveryPending ? "delivery-pending" : "summarizer-failed" };
       }
 
@@ -730,6 +739,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         // reflect that in processedBatches rather than reporting 0.
         processedCount = processedBatches.length;
         outcome = "error";
+        failureReason = "failed";
+        failureMessage = errorMessage(err);
         return { ok: false, reason: isStaleContextError(err) ? "stale-context" : "failed", error: errorMessage(err) };
       }
 
@@ -794,6 +805,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         dedupedCount: totalDedupedCount,
       };
     } catch (err) {
+      failureReason = options.signal?.aborted ? "aborted" : isStaleContextError(err) ? "stale-context" : "failed";
+      failureMessage = errorMessage(err);
       if (version !== lifecycle) {
         if (projectionContext) rebuildBranchIndex(projectionContext);
         return { ok: false, reason: "stale-context", error: errorMessage(err) };

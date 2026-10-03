@@ -276,13 +276,15 @@ async function runSummarization(
   const controller = options.controller;
   const sessionModel = ctx.model;
 
-  const notifyFailure = (o: { message: string; timedOut?: boolean }) =>
+  const notifyFailure = (o: { message: string; timedOut?: boolean }) => {
+    options.onFailure?.(o.message);
     ctx.ui.notify(
       o.timedOut
         ? `pi-condense: ${o.message}; summarizer call abandoned`
         : `pruner: summarization failed: ${o.message}`,
       o.timedOut ? "warning" : "error",
     );
+  };
 
   // No controller or no distinct fallback: single attempt, legacy behavior.
   if (!controller || !FallbackController.hasDistinctFallback(primary, sessionModel)) {
@@ -295,6 +297,7 @@ async function runSummarization(
         notifyFailure(r);
         return null;
       case "unusable":
+        options.onFailure?.("Summarizer returned empty or length-truncated text");
         return null;
     }
   }
@@ -323,6 +326,7 @@ async function runSummarization(
       notifyFailure(r); // auth never trips the controller
       return null;
     case "unusable":
+      options.onFailure?.("Summarizer returned empty or length-truncated text");
       return null; // probe unusable => stay (no state change)
     case "transient": {
       if (decision.target === "fallback") {
@@ -354,7 +358,10 @@ export async function summarizeBatch(
   options: SummarizeBatchOptions = {}
 ): Promise<SummarizeResult | null> {
   const serialized = serializeBatchForSummarizer(batch);
-  if (serialized === undefined) return null;
+  if (serialized === undefined) {
+    options.onFailure?.("Batch has no serializable tool output");
+    return null;
+  }
   const userMessage =
     SYSTEM_PROMPT + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
   return runSummarization(userMessage, config, ctx, options);
@@ -403,6 +410,7 @@ export async function summarizeBatches(
     return [
       await summarizeBatch(batches[0], config, ctx, {
         signal: options.signal,
+        onFailure: options.onFailure,
         controller: options.controller,
         onTextProgress: (receivedChars) => {
           options.onBatchTextProgress?.(0, 1, batches[0], receivedChars);
@@ -416,6 +424,7 @@ export async function summarizeBatches(
     batches.map((batch, index) =>
       summarizeBatch(batch, config, ctx, {
         signal: options.signal,
+        onFailure: options.onFailure,
         controller: options.controller,
         onTextProgress: (receivedChars) => {
           options.onBatchTextProgress?.(index, batches.length, batch, receivedChars);

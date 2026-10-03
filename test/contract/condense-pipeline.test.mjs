@@ -13,7 +13,7 @@ import goalExtension from "../../extensions/goal.ts";
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const buildLog = Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false } = {}) {
+async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", stopReason = "stop", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false } = {}) {
   const workDir = fileURLToPath(new URL("../../.work/", import.meta.url));
   mkdirSync(workDir, { recursive: true });
   const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
@@ -35,8 +35,8 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", d
     calls.push(context);
     const output = createAssistantMessageEventStream();
     const finish = () => {
-      const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: reply }], stopReason: "stop", timestamp: 1, usage };
-      output.push({ type: "done", reason: "stop", message }); output.end(message);
+      const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: reply }], stopReason, errorMessage: stopReason === "error" ? "Offline summary provider failed" : undefined, timestamp: 1, usage };
+      output.push({ type: stopReason === "error" ? "error" : "done", reason: stopReason, message, error: message }); output.end(message);
     };
     if (defer) release = finish; else queueMicrotask(finish);
     return output;
@@ -263,6 +263,20 @@ test("the existing minBatchChars gate skips 4999 characters and summarizes at 50
   assert.equal(f.calls.length, 0);
   f.add("b".repeat(5000), "unknown-command", "at-limit"); await f.finish();
   assert.equal(f.calls.length, 1);
+});
+
+for (const stopReason of ["error", "length"]) test(`summary ${stopReason} records its cause, retains raw output and can retry`, async t => {
+  const f = await fixture(t, { stopReason });
+  const body = "important detail\n".repeat(700), call = f.add(body, "inspect-unknown-tool");
+  await f.finish();
+  const metric = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data;
+  assert.equal(metric.outcome, "error"); assert.equal(metric.reason, "summarizer-failed");
+  assert.match(metric.error, stopReason === "error" ? /Offline summary provider failed/ : /length-truncated/);
+  const request = { sessionId: f.sm.getSessionId(), messages: projectBranchMessages(f.sm.getBranch()) };
+  f.events.emit("metis:condense-project", request);
+  assert.ok(request.messages.some(message => message.toolCallId === call.id && message.content[0].text === body));
+  assert.ok(!request.messages.some(message => message.customType === "context-prune-flush-metrics"));
+  await f.finish(); assert.equal(f.calls.length, 2, "failed batches remain available for retry");
 });
 
 test("effective rescan preserves raw frontier ordinals after global compaction", async t => {

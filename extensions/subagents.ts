@@ -41,7 +41,7 @@ export default function subagents(pi: ExtensionAPI) {
     }
     owner?.update(ctx);
   });
-  pi.on("tool_result", event => { owner?.result(event); });
+  pi.on("tool_result", event => owner?.result(event));
   pi.on("turn_end", async (_event, ctx) => { await owner?.settled(ctx); });
   pi.on("agent_before_settle", (event, ctx) => owner?.beforeSettle(event, ctx));
   pi.on("agent_settled", async (_event, ctx) => { await owner?.settled(ctx, true); });

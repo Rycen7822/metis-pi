@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -12,11 +11,12 @@ import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagent
 
 test("metis owns native direct and codemode subagents with one wait receipt and isolated SDK children", { timeout: 45000 }, async t => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), "metis-subagent-contract-")), state = join(dir, "subagent-pi");
+  mkdirSync(join(root, ".work"), { recursive: true });
+  const dir = mkdtempSync(join(root, ".work/metis-subagent-contract-")), state = join(dir, "subagent-pi");
   const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
   mkdirSync(state);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }));
-  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="250"\n[profiles.questioned.env]\nPI_OFFLINE="1"\nPI_MOCK_ASK_PARENT="1"\n');
+  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="250"\n[profiles.questioned.env]\nPI_OFFLINE="1"\nPI_MOCK_ASK_PARENT="1"\n[profiles.failed.env]\nPI_OFFLINE="1"\nPI_MOCK_FAIL="1"\nPI_MOCK_STREAM_MS="250"\n');
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
   const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model = { id: "parent", name: "Offline Parent", provider: "subagent-contract", api: "openai-completions", baseUrl: "http://invalid",
@@ -44,7 +44,10 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
       call = { name: "pi_answer_agent", arguments: { agent_id: question.agent_id, ui_request_id: question.id, answer: "Use the current isolated branch", request_id: "question-answer" } };
     }
     if (turn === 14) call = { name: "codemode", arguments: { code: 'const a=await tools.pi_spawn_agent({task:"overlap proof",access:"read",model:"pi-mock-offline/mock",request_id:"overlap-spawn"}); text(await Promise.all([tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15}),tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15})]));' } };
-    if (turn === 16) {
+    if (turn === 16) call = { name: "pi_spawn_agent", arguments: { task: "must not start", access: "read", model: "no-such-model-xyz", request_id: "failed-direct" } };
+    if (turn === 18 || turn === 20) call = { name: "codemode", arguments: { code: `text(await tools.pi_spawn_agent({task:"must not start",access:"read",model:"no-such-model-xyz",request_id:"failed-nested-${turn}"}));${turn === 20 ? 'throw new Error("after the child error");' : ""}` } };
+    if (turn === 22) call = { name: "pi_spawn_agent", arguments: { task: "asynchronous failure proof", access: "read", profile: "failed", model: "pi-mock-offline/mock", request_id: "failed-background" } };
+    if (turn === 25) {
       const previous = context.messages.find(message => message.role === "toolResult" && message.toolName === "pi_spawn_agent");
       call = { name: "pi_followup_task", arguments: { agent_id: JSON.parse(previous.content[0].text).agent_id, message: "shutdown viewer proof", request_id: "shutdown-followup" } };
     }
@@ -138,6 +141,21 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   await loaded.session.prompt("Run overlapping wait proof"); await loaded.session.waitForIdle();
   assert.equal(turn, 15); assert.deepEqual(errors, []);
   assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1, "overlapping waits preserve one event receipt");
+  for (const [label, expectedTurn] of [["direct", 17], ["nested", 19], ["nested then script error", 21]]) {
+    await loaded.session.prompt(`Run failed ${label} proof`); await loaded.session.waitForIdle();
+    assert.equal(turn, expectedTurn, "synchronous failure does not trigger a second parent turn");
+    const result = loaded.session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "toolResult").message;
+    assert.match(result.content.map(block => block.text ?? "").join(""), /invalid_model/);
+    assert.equal(result.isError, label !== "nested");
+    assert.ok(result.details.metisSubagentReceipt, "direct and nested failures save recovery receipts");
+  }
+  assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1);
+  await loaded.session.prompt("Run asynchronous failure proof"); await loaded.session.waitForIdle();
+  const failureDeadline = Date.now() + 15000;
+  while (turn < 24 && Date.now() < failureDeadline) await new Promise(resolve => setTimeout(resolve, 25));
+  await loaded.session.waitForIdle(); assert.equal(turn, 24, "unobserved asynchronous failure still wakes the parent");
+  const attention = loaded.session.sessionManager.getBranch().findLast(entry => entry.customType === "metis-subagent-attention");
+  assert.match(attention.content, /failed/);
   const viewDeadline = Date.now() + 5000;
   while (!popupRows.some(row => row.includes("nested proof")) && Date.now() < viewDeadline) await new Promise(resolve => setTimeout(resolve, 25));
   assert.ok(popupRows.some(row => row.includes("nested proof")), `clicked agent's real conversation reaches the overlay: ${popupRows.join("\n")}`);
@@ -155,7 +173,8 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
 
 test("SDK configuration failures expose their cause and preserve recoverable identities", { timeout: 30000 }, async () => {
   const root = fileURLToPath(new URL("../../", import.meta.url)), runtime = runtimePackage();
-  const dir = mkdtempSync(join(tmpdir(), "metis-subagent-config-")), state = join(dir, "subagent-pi");
+  mkdirSync(join(root, ".work"), { recursive: true });
+  const dir = mkdtempSync(join(root, ".work/metis-subagent-config-")), state = join(dir, "subagent-pi");
   const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
   mkdirSync(state);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }));

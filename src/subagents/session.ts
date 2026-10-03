@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { SubagentClient, type RuntimePackage } from "./client.ts";
+import { RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
 import { SubagentViewer, type AgentInspection } from "./viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, type WidgetAgent } from "./widget.ts";
 import { loadConfig } from "../config.ts";
@@ -10,8 +10,8 @@ import { loadConfig } from "../config.ts";
 const BINDING = "metis-subagent-scope", RECEIPT = "metis-subagent-receipt", ATTENTION = "metis-subagent-attention";
 interface Ticket { id: string; events: string[]; receipts: string[] }
 interface Attention { notification_id: string; run_id: string; agent_id: string; name: string; event: string; state: string; ui_request_id?: string }
-interface Delivery { ticket: Ticket; successful: boolean; parent?: string }
-interface ReceiptProof extends Ticket { sessionId: string; scope: string; digest: string }
+interface Delivery { ticket: Ticket; delivered: boolean; isError: boolean; parent?: string }
+interface ReceiptProof extends Ticket { sessionId: string; scope: string; digest: string; isError?: boolean }
 const digest = (content: unknown) => createHash("sha256").update(JSON.stringify(content)).digest("hex");
 
 /** Owns one frontend lease. The daemon remains the sole owner of agents and runs. */
@@ -92,16 +92,12 @@ export class SubagentSession {
         const data = entry.details as { sessionId?: string; scope?: string; receipt?: string };
         if (data?.sessionId === this.sessionId && data.scope === this.client.scope && data.receipt) receipts.add(data.receipt);
       }
-      if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError) continue;
+      if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
       const message = entry.message;
       const detail = message.details as { metisSubagentReceipt?: ReceiptProof } | undefined;
       const proof = detail?.metisSubagentReceipt;
-      if (message.toolName === "pi_wait_agent" && proof?.sessionId === this.sessionId && proof.scope === this.client.scope && proof.digest === digest(message.content)) {
+      if (proof?.sessionId === this.sessionId && proof.scope === this.client.scope && proof.digest === digest(message.content) && message.isError === (proof.isError ?? false)) {
         for (const receipt of proof.receipts) receipts.add(receipt);
-      }
-      for (const nested of message.nestedCalls?.calls ?? []) {
-        const delivery = this.deliveries.get(nested.id);
-        if (nested.status === "ok" && delivery?.successful && delivery.parent === message.toolCallId) for (const receipt of delivery.ticket.receipts) receipts.add(receipt);
       }
     }
     for (const receipt of receipts) {
@@ -183,10 +179,19 @@ export class SubagentSession {
   }
   result(event: ToolResultEvent) {
     const delivery = this.deliveries.get(event.toolCallId);
-    if (delivery) { delivery.successful = !event.isError; delivery.parent = event.parentToolCallId; }
-    if (delivery && event.isError && !event.parentToolCallId) {
+    if (delivery) { delivery.delivered = event.isError === delivery.isError; delivery.parent = event.parentToolCallId; }
+    if (delivery && !delivery.delivered && !event.parentToolCallId) {
       void Promise.all(delivery.ticket.receipts.map(receipt => this.client.call("pi_release", { receipt }))).then(() => this.deliveries.delete(event.toolCallId)).catch(() => {});
     }
+    if (event.parentToolCallId) return;
+    const children = [...this.deliveries.values()].filter(item => item.parent === event.toolCallId && item.delivered);
+    if (!children.length) return;
+    const tickets = children.map(item => item.ticket);
+    return { details: { ...(event.details && typeof event.details === "object" ? event.details : {}), metisSubagentReceipt: {
+      id: tickets[0]!.id, events: [...new Set(tickets.flatMap(ticket => ticket.events))],
+      receipts: [...new Set(tickets.flatMap(ticket => ticket.receipts))],
+      sessionId: this.sessionId, scope: this.client.scope!, digest: digest(event.content), isError: event.isError,
+    } satisfies ReceiptProof } };
   }
   private async trust(cwd: string) {
     const path = realpathSync(resolve(cwd));
@@ -212,18 +217,33 @@ export class SubagentSession {
       extra = { project_trust: await this.trust(agent.cwd) };
     }
     if (!this.valid() || signal?.aborted) throw new Error("Subagent call cancelled before dispatch");
-    const result = await this.client.call(name, args, signal, extra);
+    let result: Record<string, unknown>, isError = false;
+    try { result = await this.client.call(name, args, signal, extra); }
+    catch (error) {
+      if (!(error instanceof RuntimeError)) throw error;
+      isError = true;
+      result = { isError, error: { code: error.code, message: error.message,
+        ...(error.agent_id ? { [error.code === "writer_conflict" ? "blocking_agent_id" : "agent_id"]: error.agent_id } : {}),
+        ...(error.run_id ? { run_id: error.run_id } : {}) } };
+      if (error.run_id && this.valid() && !signal?.aborted) {
+        // Reuse wait's reservation; observation still requires the saved Pi result.
+        try {
+          const failed = await this.client.call("pi_wait_agent", { run_ids: [error.run_id], timeout_seconds: 0 }, signal);
+          result._pi_delivery = failed._pi_delivery;
+        } catch { /* Keep the original failure; unconfirmed attention remains eligible. */ }
+      }
+    }
     const ticket = result._pi_delivery as Ticket | undefined;
     delete result._pi_delivery;
     if (!this.valid()) {
       if (ticket) await Promise.all(ticket.receipts.map(receipt => this.client.call("pi_release", { receipt }))).catch(() => {});
       throw new Error("Subagent result belongs to a detached parent session");
     }
-    if (ticket) this.deliveries.set(id, { ticket, successful: false });
-    this.startWatching();
+    if (ticket) this.deliveries.set(id, { ticket, delivered: false, isError });
+    if (this.client.scope) this.startWatching();
     const content = [{ type: "text" as const, text: JSON.stringify(result) }];
-    return { content, structuredContent: result as Awaited<ReturnType<ToolDefinition["execute"]>>["structuredContent"],
-      details: { ...(ticket ? { metisSubagentReceipt: { ...ticket, sessionId: this.sessionId, scope: this.client.scope!, digest: digest(content) } satisfies ReceiptProof } : {}) } };
+    return { content, structuredContent: result as Awaited<ReturnType<ToolDefinition["execute"]>>["structuredContent"], isError,
+      details: { ...(ticket ? { metisSubagentReceipt: { ...ticket, sessionId: this.sessionId, scope: this.client.scope!, digest: digest(content), isError } satisfies ReceiptProof } : {}) } };
   }
   async command(args: string, ctx: ExtensionContext) {
     this.update(ctx);

@@ -52,7 +52,7 @@ def tool(name, op, description, properties, required, read=False):
         "name": name,
         "description": description,
         "inputSchema": obj(properties, required),
-        "outputSchema": OUTPUTS[op],
+        "outputSchema": {"anyOf": [OUTPUTS[op], ERROR_OUTPUT]},
         "annotations": {
             "readOnlyHint": read,
             "destructiveHint": not read,
@@ -262,6 +262,10 @@ OUTPUTS["interrupt"] = output(
     ["agent_id", "state", "cleanup", "process_retained"],
     mutation=True,
 )
+ERROR_OUTPUT = obj({"isError": {"const": True, "type": "boolean"}, "error": obj({
+    "code": S, "message": S, "agent_id": ID, "run_id": ID, "blocking_agent_id": ID,
+}, ["code", "message"])}, ["isError", "error"])
+
 TOOLS = [
     tool(
         "pi_spawn_agent",
