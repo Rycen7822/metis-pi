@@ -109,6 +109,9 @@ class PiNotifications:
         sid = identifier(p.get('scope'),'scope')
         bind(self.store,sid,source,False)
         lease = source['parent']['lease']
+        if op == 'pi_view':
+            from .views import conversation
+            return conversation(self.store,self.worker_for,p)
         if op == 'pi_watch':
             after = p.get('after')
             until = asyncio.get_running_loop().time()+25

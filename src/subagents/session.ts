@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { realpathSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { SubagentClient, type RuntimePackage } from "./client.ts";
 import { SubagentViewer, type AgentInspection } from "./viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, type WidgetAgent } from "./widget.ts";
+import { loadConfig } from "../config.ts";
 
 const BINDING = "metis-subagent-scope", RECEIPT = "metis-subagent-receipt", ATTENTION = "metis-subagent-attention";
 interface Ticket { id: string; events: string[]; receipts: string[] }
@@ -70,7 +71,8 @@ export class SubagentSession {
     try {
       await this.ctx.ui.custom<undefined>((tui, theme, keys, done) => viewer = new SubagentViewer(
         agentId, theme, tui, keys, done, abort,
-        async after => await this.client.call("pi_inspect_agent", { agent_id: agentId, detail: "full", after, limit: 100, max_bytes: 16384 }, abort.signal) as unknown as AgentInspection,
+        async after => await this.client.call("pi_view", { agent_id: agentId, after }, abort.signal) as unknown as AgentInspection,
+        loadConfig(this.agentDir, path => { try { return readFileSync(path, "utf8"); } catch { return undefined; } }).config.thinking,
       ), { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } });
     } catch (error) {
       if (this.valid()) this.ctx.ui.notify(`Subagent view failed: ${String(error)}`, "warning");

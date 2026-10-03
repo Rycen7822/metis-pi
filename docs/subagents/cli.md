@@ -35,8 +35,13 @@ settles or the parent session closes. It uses at most twelve lines, including
 any remaining-agent count. Click either line of an entry to open its
 read-only conversation overlay, with current state, tool activity and completed
 messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the
-overlay without stopping the agent or acknowledging its result. History uses
-bounded event previews and does not show token-by-token streaming or images.
+overlay without stopping the agent or acknowledging its result. The overlay reads
+bounded saved conversation history, with command highlighting and the same tool
+and thinking fold controls as the main conversation. Click tools to expand or
+collapse; click thoughts for a short preview or to collapse, and double-click for
+full text. Ctrl+O toggles tools and Ctrl+T toggles thoughts. Choices survive refresh.
+Reasoning is displayed only in the overlay, never added to parent tool results.
+Token-by-token streaming and images are not displayed.
 
 Linux/WSL, Python 3.11+, Node 22.19+ and Pi 1.0+ are required. Children use the
 parent's Pi SDK and agent directory. Their default model is the parent's model

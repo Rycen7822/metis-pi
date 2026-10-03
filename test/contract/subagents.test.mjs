@@ -140,7 +140,7 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1, "overlapping waits preserve one event receipt");
   const viewDeadline = Date.now() + 5000;
   while (!popupRows.some(row => row.includes("nested proof")) && Date.now() < viewDeadline) await new Promise(resolve => setTimeout(resolve, 25));
-  assert.ok(popupRows.some(row => row.includes("nested proof")), "clicked agent's real conversation reaches the overlay");
+  assert.ok(popupRows.some(row => row.includes("nested proof")), `clicked agent's real conversation reaches the overlay: ${popupRows.join("\n")}`);
   assert.ok(popupRows.some(row => row.includes("pi-mock-offline/mock")), "native model identity is readable");
   for (const width of [1, 4, 60]) assert.ok(popup.render(width).every(row => visibleWidth(row) <= width));
   popup.handleInput("\u001b");

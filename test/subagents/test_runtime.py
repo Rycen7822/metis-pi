@@ -324,6 +324,37 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         final=await self.spawn()
         self.assertEqual((await self.wait(final['run_id']))['runs'][0]['state'],'completed')
 
+    async def test_pi_view_reads_complete_messages_without_consuming_attention_or_signatures(self):
+        started=await self.spawn(); await self.wait(started['run_id'])
+        a=self.rt.store.agent(self.scope,started['agent_id']); path=Path(a['session_file'])
+        source={'parent':{'kind':'pi','session_id':'view-session','agent_dir':str(self.root),
+            'session_file':'','sdk_path':str(self.root),'node_path':sys.executable,'lease':'lease_view','model':None}}
+        bind(self.rt.store,self.scope,source)
+        host=PiNotifications(self.rt.store,self.rt.workers.get,self.rt.changed)
+        messages=[{'type':'message','id':'thought','message':{'role':'assistant','content':[
+            {'type':'thinking','thinking':'检查依赖','thinkingSignature':'private-signature'},
+            {'type':'toolCall','id':'call','name':'read','arguments':{'path':'file.ts'}}]}},
+            {'type':'message','id':'result','message':{'role':'toolResult','toolCallId':'call','toolName':'read',
+                'content':[{'type':'text','text':'file contents'},{'type':'image','data':'private-image','mimeType':'image/png'}]}}]
+        raw=[(json.dumps(message,ensure_ascii=False)+'\n').encode() for message in messages]
+        path.write_bytes(raw[0]+raw[1][:-1])
+        params={'scope':self.scope,'agent_id':a['id']}; validate_op('pi_view',params)
+        notifications=[dict(row) for row in self.rt.store.all('SELECT * FROM parent_notifications')]
+        first=await host.dispatch('pi_view',params,source)
+        self.assertEqual(first['next_cursor'],len(raw[0]))
+        self.assertEqual(first['messages'][0]['message']['content'][0],{'type':'thinking','thinking':'检查依赖'})
+        params['after']=first['next_cursor']
+        self.assertEqual((await host.dispatch('pi_view',params,source))['messages'],[])
+        with path.open('ab') as stream: stream.write(b'\n')
+        final=await host.dispatch('pi_view',params,source)
+        self.assertEqual(final['messages'][0]['message']['content'],[{'type':'text','text':'file contents'},{'type':'image'}])
+        self.assertEqual(final['next_cursor'],sum(map(len,raw)))
+        self.assertEqual([dict(row) for row in self.rt.store.all('SELECT * FROM parent_notifications')],notifications)
+        self.assertFalse(self.rt.store.run(self.scope,started['run_id'])['ack'])
+        with self.assertRaises(AgentError) as stale:
+            await host.dispatch('pi_view',params,{'parent':{**source['parent'],'lease':'lease_stale'}})
+        self.assertEqual(stale.exception.code,'parent_stale')
+
     async def test_pi_watch_keeps_old_active_agents_and_wakes_for_tool_activity(self):
         started=await self.spawn('delay=120|old active task')
         a=self.rt.store.agent(self.scope,started['agent_id']); w=self.rt.workers[a['id']]

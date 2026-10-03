@@ -10,7 +10,7 @@ from .common import AgentError
 from .schema import TOOLS,BY_NAME,validate,validate_op
 from .stdio import OutputClosed,Stdio
 
-HOST_OPS=frozenset({'pi_watch','pi_claim','pi_observe','pi_release','pi_uncertain','pi_detach'})
+HOST_OPS=frozenset({'pi_watch','pi_view','pi_claim','pi_observe','pi_release','pi_uncertain','pi_detach'})
 
 async def serve_pi(home):
     io=await Stdio().open()

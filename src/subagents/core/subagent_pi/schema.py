@@ -541,11 +541,12 @@ def validate_op(op, p):
                 "invalid_argument",
                 "scope is required; call pi_context first, or pass scope explicitly, or pass cwd to pi_spawn_agent",
             )
-    elif op in {"pi_watch","pi_claim","pi_observe","pi_release","pi_uncertain","pi_detach"}:
+    elif op in {"pi_watch","pi_view","pi_claim","pi_observe","pi_release","pi_uncertain","pi_detach"}:
         fields = {"scope":ID}
         if op=="pi_watch": fields["after"]={**S,"maxLength":64}
+        if op=="pi_view": fields.update(agent_id=LABEL,after={"type":"integer","minimum":0,"maximum":2**53-1})
         if op=="pi_claim": fields["events"]={"type":"array","items":{**S,"minLength":64,"maxLength":64},"maxItems":20}
         if op in {"pi_observe","pi_release","pi_uncertain"}: fields["receipt"]=ID
-        validate(p,obj(fields,["scope"]+(["events"] if op=="pi_claim" else ["receipt"] if "receipt" in fields else [])))
+        validate(p,obj(fields,["scope"]+(["agent_id"] if op=="pi_view" else ["events"] if op=="pi_claim" else ["receipt"] if "receipt" in fields else [])))
     elif op not in {"ping", "doctor", "scope_list", "shutdown"}:
         raise AgentError("unknown_operation", "Unknown operation")
