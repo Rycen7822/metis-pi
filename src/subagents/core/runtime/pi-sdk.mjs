@@ -151,7 +151,15 @@ const modelName = args.model ?? savedModel?.modelId ?? settingsManager.getDefaul
 const provider = args.provider ?? (args.model ? undefined : savedModel?.provider ?? settingsManager.getDefaultProvider());
 const resolved = sdk.resolveCliModel({ cliProvider: provider, cliModel: modelName,
   cliThinking: args.thinking, modelRuntime: services.modelRuntime });
-if (resolved.error || (modelName && !resolved.model)) throw new Error(resolved.error || 'Requested model not found');
+const modelError = resolved.error || (modelName && !resolved.model ? 'Requested model not found' : undefined);
+if (modelError) {
+  for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+    const request = JSON.parse(line);
+    output({ type: 'response', id: request.id, command: request.type, success: true,
+      data: { configurationError: modelError, configurationErrorCode: 'invalid_model' } });
+  }
+  process.exit(1);
+}
 if (args.provider && !modelName) throw new Error('Set an explicit model when selecting a provider for a managed child');
 if (args.apiKey && resolved.model) await services.modelRuntime.setRuntimeApiKey(resolved.model.provider, args.apiKey);
 ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager,

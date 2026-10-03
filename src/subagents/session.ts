@@ -29,7 +29,6 @@ export class SubagentSession {
   private chain: Promise<unknown> = Promise.resolve();
   private readonly sessionId: string;
   private ctx: ExtensionContext;
-  private uncertain = 0;
   private widgetText = "";
   private viewerAbort?: AbortController;
   private observed = new Set<string>();
@@ -137,8 +136,6 @@ export class SubagentSession {
           const result = await this.client.call("pi_watch", { ...(cursor ? { after: cursor } : {}) }, this.watchAbort.signal);
           if (!this.valid()) return;
           cursor = result.cursor; this.pending = result.notifications as Attention[]; this.agents = result.agents as typeof this.agents;
-          this.uncertain = (result.parent_notifications as { failed?: number }).failed ?? 0;
-          this.ctx.ui.setStatus("metis-subagents", this.agents.length ? `agents ${this.agents.filter(a => a.state === "running").length}/${this.agents.length}${this.uncertain ? ` · uncertain ${this.uncertain}` : ""}` : undefined);
           this.renderWidget();
           if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.serialize(() => this.deliverIdle());
         }

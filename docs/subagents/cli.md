@@ -31,7 +31,7 @@ a short visible preview; wait timeouts, failed children and pending questions re
 In the TUI, active subagents appear above the input box with their names and
 states, including waiting for input. The list clears when work settles or the
 parent session closes. Up to eight entries are shown, followed by a remaining
-count; the footer keeps its running/total count. Click an entry to open its
+count. Click an entry to open its
 read-only conversation overlay, with current state, tool activity and completed
 messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the
 overlay without stopping the agent or acknowledging its result. History uses

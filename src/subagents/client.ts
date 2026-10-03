@@ -20,7 +20,13 @@ export function runtimePackage(): RuntimePackage {
 }
 export class RuntimeError extends Error {
   readonly code: string;
-  constructor(error: { code: string; message: string }) { super(error.message); this.code = error.code; }
+  readonly agent_id?: string;
+  readonly run_id?: string;
+  constructor(error: { code: string; message: string; agent_id?: string; run_id?: string }) {
+    const ids = [error.agent_id && `agent_id=${error.agent_id}`, error.run_id && `run_id=${error.run_id}`].filter(Boolean);
+    super(error.message + (ids.length ? ` (${ids.join(', ')})` : ""));
+    this.code = error.code; this.agent_id = error.agent_id; this.run_id = error.run_id;
+  }
 }
 interface Pending { resolve: (result: Record<string, unknown>) => void; reject: (error: Error) => void; cleanup: () => void }
 

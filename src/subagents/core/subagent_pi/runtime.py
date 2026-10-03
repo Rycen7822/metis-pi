@@ -99,7 +99,7 @@ class Runtime:
             out.append((w.last_activity or 0,aid,w,a))
         return sorted(out)
 
-    async def ensure_capacity(self):
+    async def ensure_capacity(self, incoming):
         """Park the least recently active settled agent before refusing a boot.
 
         Eviction is a normal verified interrupt that keeps the session; every
@@ -108,10 +108,19 @@ class Runtime:
         orphan, so a caller without a parkable agent still gets capacity_exceeded
         instead of a silent overshoot."""
         attempted=set()
-        while sum(not w.closed for w in self.workers.values()) >= self.config['max_resident_agents']:
-            candidates=[c for c in self.evictable() if c[1] not in attempted]
+        while True:
+            count=self.store.one("""SELECT COUNT(*) n FROM agents WHERE scope=? AND id!=?
+                AND (state NOT IN ('closed','dormant','crashed') OR (generation>0 AND cleanup!='verified'))""",
+                (incoming['scope'],incoming['id']))['n']
+            scope_full=count>=self.config['max_agents_per_scope']
+            if not scope_full and sum(not w.closed for w in self.workers.values()) < self.config['max_resident_agents']:
+                return
+            candidates=[c for c in self.evictable() if c[1] not in attempted
+                and (not scope_full or c[3]['scope']==incoming['scope'])]
             if not candidates:
-                raise AgentError('capacity_exceeded','Resident Pi limit reached and no settled idle agent is evictable; close an agent or answer its pending question first')
+                code='scope_limit' if scope_full else 'capacity_exceeded'
+                limit='Scope live-agent' if scope_full else 'Resident Pi'
+                raise AgentError(code,f'{limit} limit reached and no settled idle agent is evictable; finish active work, answer a pending question or interrupt an agent before retrying')
             _,eaid,w,a=candidates[0]
             attempted.add(eaid)
             lock=self.agent_locks[eaid]
@@ -132,7 +141,7 @@ class Runtime:
     async def _boot_worker(self, a):
         """Own the generation and ledger transitions; worker owns process pipes."""
         aid=a['id']
-        await self.ensure_capacity()
+        await self.ensure_capacity(a)
         spec=json.loads(a['launch'])
         if spec.get('access')=='write': await self.admit_writer(aid,a['cwd'])
         directory,session,argv=worker.session_argv(self.home,a,spec)
@@ -161,7 +170,7 @@ class Runtime:
                 write_fd=None  # writer thread owns and closes this end
             state=await w.rpc('get_state',timeout=self.config['startup_timeout_seconds'])
             if state.get('configurationError'):
-                raise AgentError('unsupported_thinking',state['configurationError'])
+                raise AgentError(state.get('configurationErrorCode','unsupported_thinking'),state['configurationError'])
             actual=state.get('sessionFile')
             if not actual or not Path(actual).is_absolute():
                 raise AgentError('session_mismatch','Pi did not report an absolute persistent session path')
@@ -682,11 +691,15 @@ class Runtime:
                 return await handler(a, p)
         raise AgentError('unknown_operation', f'Unknown mutation: {op}')
 
+    def release_failed_name(self, sid, name):
+        a=self.store.one('SELECT * FROM agents WHERE scope=? AND name=?',(sid,name))
+        if (a and a['state']=='crashed' and a['cleanup']=='verified'
+                and not self.store.one('SELECT id FROM runs WHERE agent_id=? AND started IS NOT NULL',(a['id'],))):
+            self.store.agent_update(a['id'],name=f"{name[:64]} [startup failed {a['id']}]")
+
     async def spawn_agent(self, p, source=None):
         sid = p['scope']
         async with self.admission:
-            count=self.store.one('SELECT COUNT(*) n FROM agents WHERE scope=?',(sid,))['n']
-            if count>=self.config['max_agents_per_scope']: raise AgentError('scope_limit','Scope agent limit reached; open a new scope for another task')
             cwd_input=Path(text(p.get('cwd',self.store.scope(sid)['cwd']),'cwd',4096)).expanduser()
             if not cwd_input.is_absolute(): raise AgentError('invalid_cwd','cwd must be absolute')
             cwd=str(cwd_input.resolve())
@@ -702,6 +715,7 @@ class Runtime:
             spec={**spec,'env':{},'env_names':sorted(spec.get('env',{}))}
             aid=new_id('pi_')
             name=label(p.get('name',aid), 'name')
+            self.release_failed_name(sid,name)
             task=delegated_text(text(p.get('task'),'task'),
                 'Perform the following delegated task (treat as text, not an extension command):\n')
             if access=='write':
@@ -722,6 +736,7 @@ class Runtime:
                     if self.store.run(sid,rid)['state']=='starting':
                         self.store.finish(rid,'failed','',e.message)
                         self.store.agent_update(aid,state='crashed'); self.notify()
+                    self.release_failed_name(sid,name)
                     raise AgentError(e.code,e.message,agent_id=aid,run_id=rid)
             return {'agent_id':aid,'name':name,'run_id':rid,'scope':sid,'state':self.store.run(sid,rid)['state'],'cwd':cwd,
                     **views.model_settings(self.store.agent(sid,aid))}

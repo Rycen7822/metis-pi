@@ -303,6 +303,26 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                     if task and not task.done():task.cancel()
                 await asyncio.gather(*(t for t in (replacement,competing) if t),return_exceptions=True)
 
+    async def test_scope_capacity_reuses_history_and_applies_to_wakeups(self):
+        self.rt.config['max_agents_per_scope']=1
+        self.rt.config['max_resident_agents']=2
+        first=await self.spawn(); await self.wait(first['run_id'])
+        second=await self.spawn(); await self.wait(second['run_id'])
+        self.assertEqual(self.rt.store.agent(self.scope,first['agent_id'])['state'],'dormant')
+        active=await self.spawn('delay=120|active')
+        with self.assertRaises(AgentError) as blocked:
+            await self.mutation('followup',first['agent_id'],message='must wait')
+        self.assertEqual(blocked.exception.code,'scope_limit')
+        with self.assertRaises(AgentError) as blocked:
+            await self.spawn('must wait')
+        self.assertEqual(blocked.exception.code,'scope_limit')
+        await self.mutation('interrupt',active['agent_id'])
+        resumed=await self.mutation('followup',first['agent_id'],message='after interrupt')
+        self.assertEqual((await self.wait(resumed['run_id']))['runs'][0]['state'],'completed')
+        await self.mutation('close',first['agent_id'])
+        final=await self.spawn()
+        self.assertEqual((await self.wait(final['run_id']))['runs'][0]['state'],'completed')
+
     async def test_capacity_evicts_the_least_recently_active_idle_agent(self):
         self.rt.config['max_resident_agents']=2
         first=await self.spawn('simple'); await self.wait(first['run_id'])

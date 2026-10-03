@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 
 test("metis owns native direct and codemode subagents with one wait receipt and isolated SDK children", { timeout: 45000 }, async t => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -136,4 +137,40 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   assert.equal(popupsClosed, 1, "Escape closes only the viewer");
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 1 }).handled, true);
+});
+
+test("SDK configuration failures expose their cause and preserve recoverable identities", { timeout: 30000 }, async () => {
+  const root = fileURLToPath(new URL("../../", import.meta.url)), runtime = runtimePackage();
+  const dir = mkdtempSync(join(tmpdir(), "metis-subagent-config-")), state = join(dir, "subagent-pi");
+  const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
+  mkdirSync(state);
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }));
+  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="50"\n');
+  const ctx = { cwd: dir, model: { provider: "pi-mock-offline", id: "mock" },
+    sessionManager: SessionManager.create(dir, dir), isProjectTrusted: () => true };
+  const client = new SubagentClient(runtime, ctx, dir, undefined, () => {});
+  try {
+    for (const [request_id, override, code, reason] of [
+      ["bad-model", { model: "no-such-model-xyz" }, "invalid_model", /Model .*no-such-model-xyz.*not found/],
+      ["bad-thinking", { thinking: "ultra" }, "unsupported_thinking", /Unsupported thinking.*ultra/],
+    ]) {
+      let failure;
+      await assert.rejects(client.call("pi_spawn_agent", { name: "configuration-probe", access: "read", task: "must not start", request_id, ...override }), error => {
+        failure = error; assert.ok(error instanceof RuntimeError); assert.equal(error.code, code);
+        assert.match(error.message, reason); assert.match(error.message, /agent_id=pi_.*run_id=run_/); return true;
+      });
+      const inspected = await client.call("pi_inspect_agent", { agent_id: failure.agent_id, detail: "full" });
+      assert.equal(inspected.agent.cleanup, "verified"); assert.equal(inspected.run.id, failure.run_id);
+      assert.equal(inspected.run.state, "failed"); assert.match(inspected.agent.name, /startup failed/);
+    }
+    const started = await client.call("pi_spawn_agent", { name: "configuration-probe", access: "read", task: "recovered", request_id: "fixed-model" });
+    assert.equal(started.name, "configuration-probe");
+    const waited = await client.call("pi_wait_agent", { run_ids: [started.run_id], timeout_seconds: 15 });
+    assert.equal(waited.runs[0].state, "completed");
+  } finally {
+    await client.close();
+    try { execFileSync("python3", [join(runtime.root, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { stdio: "ignore" }); }
+    finally { rmSync(dir, { recursive: true, force: true });
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; }
+  }
 });
