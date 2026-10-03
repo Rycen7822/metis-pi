@@ -47,6 +47,7 @@ class Worker:
         self.closed = False
         self.ui = {}
         self.active_tools = {}
+        self.tool_uses = 0
         self.last_activity = now()
         self.last_progress = time.monotonic()
         self.idle_since = None

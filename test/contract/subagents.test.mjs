@@ -44,6 +44,10 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
       call = { name: "pi_answer_agent", arguments: { agent_id: question.agent_id, ui_request_id: question.id, answer: "Use the current isolated branch", request_id: "question-answer" } };
     }
     if (turn === 14) call = { name: "codemode", arguments: { code: 'const a=await tools.pi_spawn_agent({task:"overlap proof",access:"read",model:"pi-mock-offline/mock",request_id:"overlap-spawn"}); text(await Promise.all([tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15}),tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15})]));' } };
+    if (turn === 16) {
+      const previous = context.messages.find(message => message.role === "toolResult" && message.toolName === "pi_spawn_agent");
+      call = { name: "pi_followup_task", arguments: { agent_id: JSON.parse(previous.content[0].text).agent_id, message: "shutdown viewer proof", request_id: "shutdown-followup" } };
+    }
     const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id, timestamp: Date.now(),
       content: call ? [{ type: "toolCall", id: `call-${turn}`, ...call }] : [{ type: "text", text: "Done" }], stopReason: call ? "toolUse" : "stop",
       usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
@@ -56,19 +60,29 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   await loader.reload(); assert.deepEqual(loader.getExtensions().errors, []);
   const loaded = await createAgentSession({ cwd: dir, agentDir: dir, modelRuntime, settingsManager, resourceLoader: loader, sessionManager: SessionManager.create(dir, dir), model });
   const widgets = [];
-  let clickable, popup, popupRows = [], popupsClosed = 0;
+  let popup, popupRows = [], popupsClosed = 0, openOnNextWidget = true;
   const uiContext = {
     notify() {}, setStatus() {},
     setWidget(key, content, options) {
       assert.equal(key, "metis-subagents");
       if (content === undefined) { widgets.push([]); return; }
       assert.equal(options.placement, "aboveEditor");
-      const widget = content({}, { fg: (_color, text) => text });
-      clickable ??= widget;
-      const rows = widget.render(40);
-      assert.ok(rows.every(row => visibleWidth(row) <= 40));
-      assert.ok(widget.render(1).every(row => visibleWidth(row) <= 1));
-      widgets.push(rows);
+      let widget;
+      const render = () => {
+        const rows = widget.render(40);
+        assert.ok(rows.every(row => visibleWidth(row) <= 40));
+        assert.ok(widget.render(1).every(row => visibleWidth(row) <= 1));
+        widgets.push(rows);
+        if (openOnNextWidget && rows.length) {
+          openOnNextWidget = false;
+          assert.equal(widget.handleMouse({ type: "click", button: "right", y: 1 }), undefined);
+          assert.equal(widget.handleMouse({ type: "wheel", button: "none", y: 1 }), undefined);
+          assert.equal(widget.handleMouse({ type: "click", button: "left", y: 0 }), undefined);
+          assert.equal(widget.handleMouse({ type: "click", button: "left", y: 2 }).handled, true);
+        }
+      };
+      widget = content({ requestRender: render }, { fg: (_color, text) => text, bold: text => text });
+      render();
     },
     custom(factory, options) {
       assert.equal(options.overlay, true);
@@ -124,10 +138,6 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   await loaded.session.prompt("Run overlapping wait proof"); await loaded.session.waitForIdle();
   assert.equal(turn, 15); assert.deepEqual(errors, []);
   assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1, "overlapping waits preserve one event receipt");
-  assert.equal(clickable.handleMouse({ type: "click", button: "right", y: 1 }), undefined);
-  assert.equal(clickable.handleMouse({ type: "wheel", button: "none", y: 1 }), undefined);
-  assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 0 }), undefined);
-  assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 1 }).handled, true);
   const viewDeadline = Date.now() + 5000;
   while (!popupRows.some(row => row.includes("nested proof")) && Date.now() < viewDeadline) await new Promise(resolve => setTimeout(resolve, 25));
   assert.ok(popupRows.some(row => row.includes("nested proof")), "clicked agent's real conversation reaches the overlay");
@@ -136,7 +146,11 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   popup.handleInput("\u001b");
   assert.equal(popupsClosed, 1, "Escape closes only the viewer");
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(clickable.handleMouse({ type: "click", button: "left", y: 1 }).handled, true);
+  openOnNextWidget = true;
+  await loaded.session.prompt("Run shutdown viewer proof"); await loaded.session.waitForIdle();
+  const reopenDeadline = Date.now() + 5000;
+  while (!popup && Date.now() < reopenDeadline) await new Promise(resolve => setTimeout(resolve, 25));
+  assert.ok(popup, "a completed child's new run reappears and opens its viewer before parent shutdown");
 });
 
 test("SDK configuration failures expose their cause and preserve recoverable identities", { timeout: 30000 }, async () => {

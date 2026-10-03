@@ -1,11 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { stripVTControlCharacters } from "node:util";
-import { MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
 import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { SubagentClient, type RuntimePackage } from "./client.ts";
 import { SubagentViewer, type AgentInspection } from "./viewer.ts";
+import { activeAgents, cleanLabel as cleanName, subagentWidget, type WidgetAgent } from "./widget.ts";
 
 const BINDING = "metis-subagent-scope", RECEIPT = "metis-subagent-receipt", ATTENTION = "metis-subagent-attention";
 interface Ticket { id: string; events: string[]; receipts: string[] }
@@ -13,7 +12,6 @@ interface Attention { notification_id: string; run_id: string; agent_id: string;
 interface Delivery { ticket: Ticket; successful: boolean; parent?: string }
 interface ReceiptProof extends Ticket { sessionId: string; scope: string; digest: string }
 const digest = (content: unknown) => createHash("sha256").update(JSON.stringify(content)).digest("hex");
-const cleanName = (name: string) => stripVTControlCharacters(name).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
 
 /** Owns one frontend lease. The daemon remains the sole owner of agents and runs. */
 export class SubagentSession {
@@ -25,11 +23,12 @@ export class SubagentSession {
   private closed = false;
   private deliveries = new Map<string, Delivery>();
   private pending: Attention[] = [];
-  private agents: Array<{ id: string; name: string; state: string; current_run: string | null; cwd: string }> = [];
+  private agents: WidgetAgent[] = [];
   private chain: Promise<unknown> = Promise.resolve();
   private readonly sessionId: string;
   private ctx: ExtensionContext;
-  private widgetText = "";
+  private widgetTimer?: ReturnType<typeof setInterval>;
+  private widgetRefresh?: () => void;
   private viewerAbort?: AbortController;
   private observed = new Set<string>();
 
@@ -50,29 +49,19 @@ export class SubagentSession {
   private valid() { return !this.closed && this.ctx.sessionManager.getSessionId() === this.sessionId; }
   private renderWidget() {
     if (this.ctx.mode !== "tui") return;
-    const active = this.agents.filter(agent => ["starting", "running", "needs_input", "stopping"].includes(agent.state));
-    const rows = active.slice(0, 8).map(agent => ({
-      id: agent.id,
-      text: `${cleanName(agent.name)} · ${agent.state === "needs_input" ? "waiting for input" : agent.state}`,
-      tone: agent.state === "needs_input" ? "warning" as const : "accent" as const,
-    }));
-    const signature = JSON.stringify([active.length, rows]);
-    if (signature === this.widgetText) return;
-    this.widgetText = signature;
-    this.ctx.ui.setWidget("metis-subagents", active.length ? (_tui, theme) => new MouseRegion({
-      render: width => width > 0 ? [
-        theme.fg("muted", `Subagents · ${active.length} active`),
-        ...rows.map(row => `  ${theme.fg(row.tone, row.text)}`),
-        ...(active.length > rows.length ? [theme.fg("muted", `  +${active.length - rows.length} more`)] : []),
-      ].map(line => truncateToWidth(line, width, "…")) : [],
-      invalidate() {},
-    }, event => {
-      if (event.type !== "click" || event.button !== "left") return;
-      const row = rows[event.y - 1];
-      if (!row) return;
-      void this.openViewer(row.id);
-      return { handled: true };
-    }) : undefined, { placement: "aboveEditor" });
+    if (!activeAgents(this.agents).length) {
+      if (this.widgetTimer) {
+        clearInterval(this.widgetTimer); this.widgetTimer = undefined; this.widgetRefresh = undefined;
+        this.ctx.ui.setWidget("metis-subagents", undefined);
+      }
+      return;
+    }
+    if (this.widgetTimer) { this.widgetRefresh?.(); return; }
+    this.ctx.ui.setWidget("metis-subagents", (tui, theme) => {
+      this.widgetRefresh = () => tui.requestRender();
+      return subagentWidget(theme, () => this.agents, id => { void this.openViewer(id); });
+    }, { placement: "aboveEditor" });
+    this.widgetTimer = setInterval(() => this.widgetRefresh?.(), 250); this.widgetTimer.unref();
   }
   private async openViewer(agentId: string) {
     if (!this.valid() || this.ctx.mode !== "tui" || this.viewerAbort) return;
@@ -140,7 +129,10 @@ export class SubagentSession {
           if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.serialize(() => this.deliverIdle());
         }
       } catch (error) {
-        if (this.valid()) this.ctx.ui.notify(`Subagent watch stopped: ${String(error)}`, "warning");
+        if (this.valid()) {
+          this.agents = []; this.renderWidget();
+          this.ctx.ui.notify(`Subagent watch stopped: ${String(error)}`, "warning");
+        }
       }
     })();
   }
@@ -212,8 +204,9 @@ export class SubagentSession {
     let extra: object | undefined;
     if (name === "pi_spawn_agent") extra = { project_trust: await this.trust((args.cwd as string | undefined) ?? ctx.cwd) };
     if (name === "pi_send_message" || name === "pi_followup_task") {
-      const agent = this.agents.find(a => a.id === args.agent_id || a.name === args.agent_id);
-      if (!agent) throw new Error("List agents before continuing a child so its project trust can be checked");
+      const snapshot = await this.client.call("pi_inspect_agent", { agent_id: args.agent_id, limit: 1, max_bytes: 16384 }, signal);
+      const agent = snapshot.agent as { cwd?: string };
+      if (typeof agent.cwd !== "string") throw new Error("Subagent working directory is unavailable for project trust verification");
       extra = { project_trust: await this.trust(agent.cwd) };
     }
     if (!this.valid() || signal?.aborted) throw new Error("Subagent call cancelled before dispatch");
@@ -271,6 +264,8 @@ export class SubagentSession {
   async close() {
     if (this.closed) return;
     this.closed = true; this.watchAbort.abort(); this.ctx.ui.setStatus("metis-subagents", undefined);
+    if (this.widgetTimer) clearInterval(this.widgetTimer);
+    this.widgetTimer = undefined; this.widgetRefresh = undefined;
     this.viewerAbort?.abort();
     if (this.ctx.mode === "tui") this.ctx.ui.setWidget("metis-subagents", undefined);
     await this.client.close(); await this.watching;

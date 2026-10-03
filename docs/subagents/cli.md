@@ -28,10 +28,11 @@ Subagent tool rows show compact operation, target and status summaries by defaul
 Use Ctrl+O or click a tool row to expand its full arguments and result. Errors keep
 a short visible preview; wait timeouts, failed children and pending questions remain visible.
 
-In the TUI, active subagents appear above the input box with their names and
-states, including waiting for input. The list clears when work settles or the
-parent session closes. Up to eight entries are shown, followed by a remaining
-count. Click an entry to open its
+In the TUI, active subagents appear above the input box as a tree with animated
+running indicators, names, states, elapsed time, tool counts, tokens and current
+tool activity. Agents waiting for input appear first. The list clears when work
+settles or the parent session closes. It uses at most twelve lines, including
+any remaining-agent count. Click either line of an entry to open its
 read-only conversation overlay, with current state, tool activity and completed
 messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the
 overlay without stopping the agent or acknowledging its result. History uses

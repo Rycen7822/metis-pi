@@ -296,11 +296,15 @@ class Runtime:
             return  # keep text deltas out of SQLite; message_end is canonical
         if kind in {'tool_execution_start','tool_execution_update','tool_execution_end'}:
             tool_id=e.get('toolCallId') or e.get('toolName')
-            if kind == 'tool_execution_start': w.active_tools[tool_id]=e.get('toolName')
+            if kind == 'tool_execution_start':
+                w.active_tools[tool_id]=e.get('toolName')
+                w.tool_uses += 1
             if kind == 'tool_execution_end':
                 w.active_tools.pop(tool_id,None)
                 w.last_progress=time.monotonic()
-            if kind != 'tool_execution_update': self.event(w,kind,e)
+            if kind != 'tool_execution_update':
+                self.event(w,kind,e)
+                self.notify()
             return
         if kind == 'message_end':
             m=e.get('message',{})
@@ -329,6 +333,7 @@ class Runtime:
                     self.store.execute("UPDATE receipts SET state='consumed',updated=? WHERE id=?",(now(),receipt['id']))
                     self.event(w,'control_consumed',{'request_id':receipt['id'],'evidence':'user_message_text_fifo'})
             self.event(w,'message',{'role':role,'text':crop(mt,3000),'stopReason':m.get('stopReason')})
+            self.notify()
             return
         if kind=='extension_ui_request':
             if e.get('method') in {'select','confirm','input','editor'} and e.get('id'):
@@ -484,7 +489,7 @@ class Runtime:
     async def start_run(self,w,rid):
         r=self.store.run(w.agent['scope'],rid)
         if r['state'] not in {'queued','starting'}: return
-        w.run_id=rid; w.last_text=''; w.error=None; w.usage={}; w.stopping=False; w.ui.clear(); w.active_tools.clear()
+        w.run_id=rid; w.last_text=''; w.error=None; w.usage={}; w.stopping=False; w.ui.clear(); w.active_tools.clear(); w.tool_uses=0
         w.last_progress=time.monotonic(); w.idle_since=None; w.cancelled_run=False
         w.idle_timeout_seconds=r['idle_timeout_seconds'] or self.config['default_idle_timeout_seconds']
         self.store.execute("UPDATE runs SET state='running',started=? WHERE id=?",(now(),rid))

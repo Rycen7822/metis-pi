@@ -117,7 +117,15 @@ class PiNotifications:
                     parent = bound_parent(self.store,sid)
                     if parent['lease'] != lease: raise AgentError('parent_stale','Parent lease replaced')
                     notifications = self.pending(sid)
-                    states = self.store.all('SELECT id,name,state,current_run,cwd FROM agents WHERE scope=? ORDER BY created DESC LIMIT 16',(sid,))
+                    states = self.store.all("""SELECT a.id,a.name,a.state,a.current_run,a.cwd,COALESCE(r.started,r.created,a.updated) AS started
+                        FROM agents a LEFT JOIN runs r ON r.id=a.current_run
+                        WHERE a.scope=? AND a.state IN ('starting','running','needs_input','stopping')
+                        ORDER BY a.created,a.id""",(sid,))
+                    for agent in states:
+                        w = self.worker_for(agent['id'])
+                        if w and not w.closed:
+                            agent.update(active_tools=list(w.active_tools.values()),tool_uses=w.tool_uses,
+                                         total_tokens=w.usage.get('totalTokens',0),response_preview=w.last_text[:200])
                     cursor = hashlib.sha256(dumps([notifications,states]).encode()).hexdigest()
                     remaining = until-asyncio.get_running_loop().time()
                     if cursor != after or remaining<=0:

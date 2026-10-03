@@ -19,6 +19,7 @@ from paths import ROOT, TEST_ROOT, REPO_ROOT
 from subagent_pi.common import AgentError, dumps, group_members, process_identity
 from subagent_pi import worker
 from subagent_pi import views
+from subagent_pi.pi_parent import PiNotifications, bind
 from subagent_pi.runtime import Runtime
 from subagent_pi.worker import read_receipt
 from subagent_pi.schema import TOOLS, validate_op
@@ -322,6 +323,33 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.mutation('close',first['agent_id'])
         final=await self.spawn()
         self.assertEqual((await self.wait(final['run_id']))['runs'][0]['state'],'completed')
+
+    async def test_pi_watch_keeps_old_active_agents_and_wakes_for_tool_activity(self):
+        started=await self.spawn('delay=120|old active task')
+        a=self.rt.store.agent(self.scope,started['agent_id']); w=self.rt.workers[a['id']]
+        await self.until(lambda: self.events(a['id'],'tool_execution_start'))
+        for i in range(20):
+            self.rt.store.execute('INSERT INTO agents(id,scope,name,cwd,state,session_file,launch,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',
+                (f'pi_history_{i}',self.scope,f'history-{i}',a['cwd'],'dormant',a['session_file'],a['launch'],a['created']+i+1,a['updated']))
+        source={'parent':{'kind':'pi','session_id':'test-session','agent_dir':str(self.root),
+            'session_file':'','sdk_path':str(self.root),'node_path':sys.executable,'lease':'lease_test','model':None}}
+        bind(self.rt.store,self.scope,source)
+        host=PiNotifications(self.rt.store,self.rt.workers.get,self.rt.changed)
+        snapshot=await host.dispatch('pi_watch',{'scope':self.scope},source)
+        self.assertEqual([a['id'] for a in snapshot['agents']],[started['agent_id']])
+        self.assertGreater(snapshot['agents'][0]['started'],0)
+        tool_uses=snapshot['agents'][0]['tool_uses']
+        active_tools=snapshot['agents'][0]['active_tools']
+        waiting=asyncio.create_task(host.dispatch('pi_watch',{'scope':self.scope,'after':snapshot['cursor']},source))
+        await asyncio.sleep(0)
+        self.rt.on_event(w,{'type':'tool_execution_start','toolCallId':'watch-probe','toolName':'grep'})
+        snapshot=await asyncio.wait_for(waiting,1)
+        self.assertEqual(snapshot['agents'][0]['active_tools'],active_tools+['grep'])
+        self.assertEqual(snapshot['agents'][0]['tool_uses'],tool_uses+1)
+        waiting=asyncio.create_task(host.dispatch('pi_watch',{'scope':self.scope,'after':snapshot['cursor']},source))
+        await asyncio.sleep(0)
+        self.rt.on_event(w,{'type':'tool_execution_end','toolCallId':'watch-probe','toolName':'grep'})
+        self.assertEqual((await asyncio.wait_for(waiting,1))['agents'][0]['active_tools'],active_tools)
 
     async def test_capacity_evicts_the_least_recently_active_idle_agent(self):
         self.rt.config['max_resident_agents']=2
