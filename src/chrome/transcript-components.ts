@@ -32,9 +32,7 @@ export interface TranscriptMouseEvent {
 export type TranscriptMouseResult = { handled?: boolean; render?: boolean } | undefined;
 
 /** The slice of a host component a wrapper renders and forwards to. */
-export interface TranscriptChild extends Component {
-  invalidate?(): void;
-}
+export type TranscriptChild = Component;
 
 /** Separator before assistant text that follows tool activity: a light
  * horizontal rule sized to the live layout width (never a fixed column count). */

@@ -15,6 +15,7 @@ export class FakeText {
   constructor(text) { this.text = text; }
   setText(text) { this.text = text; }
   render(_width) { return this.text ? this.text.split("\n") : []; }
+  invalidate() {}
 }
 export const bindings = { makeText: (s) => new FakeText(s), expandHint: () => "ctrl+o to expand" };
 /** Session stub with a fixed truecolor capability (Codex reference env). */

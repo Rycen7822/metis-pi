@@ -1,6 +1,6 @@
 import { fusionReceipt } from "./execution/action-fusion.ts";
 import { asRecord, type Component, type Renderers, type ViewContext } from "./tool-names.ts";
-import { productFor, publishRows, registerProduct, type CopyRow } from "./selection-copy/model.ts";
+import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow } from "./selection-copy/model.ts";
 
 /** Use the mutation's immutable evidence, never the outer command's exit status. */
 export function mutationViewContext(result: unknown, ctx: ViewContext): ViewContext {
@@ -24,6 +24,9 @@ function stack(components: Component[]): Component {
     registerProduct(lines, { componentId: "action-fusion", width, rows });
     publishRows(this, lines);
     return lines;
+  }, invalidate() {
+    for (const component of components) component.invalidate();
+    releaseCopyCache(this);
   } };
 }
 

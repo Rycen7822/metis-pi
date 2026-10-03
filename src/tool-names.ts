@@ -29,7 +29,7 @@ export interface ViewContext {
   readonly explorationPlan?: unknown;
 }
 export interface ViewOptions { readonly expanded?: boolean; readonly isPartial?: boolean }
-export interface Component { render(width: number): string[] }
+export interface Component { render(width: number): string[]; invalidate(): void }
 export interface TextComponent extends Component { setText(text: string): void }
 export type TextFactory = (text: string) => TextComponent;
 export type Highlight = (text: string, language: string) => string;

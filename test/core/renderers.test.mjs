@@ -5,13 +5,20 @@ import { stripVTControlCharacters } from "node:util";
 import { theme, FakeText, deepFreeze, sessionStub } from "../helpers.mjs";
 import { layout } from "../helpers/layout.mjs";
 import { fusionRenderers } from "../../src/fusion-view.ts";
+import { MouseRegion, Text } from "@earendil-works/pi-tui";
+import { publishedRowsOf } from "../../src/selection-copy/model.ts";
 
 const result = (text) => ({ content: [{ type: "text", text }] });
 const renderers = makeRenderers(text => new FakeText(text), () => "expand");
 const call = (name, args, ctx) => renderers[name].renderCall(args, theme, ctx).render(80).join("\n");
 
 test("fusion display retains successful write diff while the following command fails", () => {
-  const renderers = makeRenderers(text => new FakeText(text), () => "expand");
+  const invalidated = [];
+  const renderers = makeRenderers(text => {
+    const child = new Text(text, 0, 0), invalidate = child.invalidate.bind(child);
+    child.invalidate = () => { invalidated.push(child); invalidate(); };
+    return child;
+  }, () => "expand");
   const fused = {
     isError: true,
     content: [{ type: "text", text: "Written" }, { type: "text", text: "[then_run:failed] npm test" }, { type: "text", text: "TEST FAILED" }],
@@ -21,13 +28,19 @@ test("fusion display retains successful write diff while the following command f
   const view = fusionRenderers(renderers.write, renderers.bash, () => fused);
   const ctx = { args: { path: "file", content: "saved" }, isError: true, isPartial: false };
   const title = view.renderCall(ctx.args, theme, ctx).render(80).join("\n");
-  const body = view.renderResult(fused, { expanded: true }, theme, ctx).render(80).join("\n");
+  const component = view.renderResult(fused, { expanded: true }, theme, ctx);
+  const region = new MouseRegion(component, () => undefined);
+  const body = region.render(80).join("\n");
   assert.match(title, /Added file/);
   assert.match(body, /saved/);
   assert.match(body, /TEST FAILED/);
   assert.doesNotMatch(body, /write failed|not written/);
   assert.equal(fused.isError, true, "rendering cannot mutate the tool's actual failure");
   assert.equal(fused.details.metisActionFusion.command.exitCode, 1);
+  region.invalidate();
+  assert.equal(invalidated.length, 3, "the Pi refresh reaches all stacked child components");
+  assert.equal(publishedRowsOf(component), undefined, "stale copy rows are released");
+  assert.equal(region.render(80).join("\n"), body, "refresh preserves the fused output");
 });
 
 test("completion and error labels do not rely on mutating shared renderer state", () => {
