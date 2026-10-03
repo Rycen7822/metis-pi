@@ -87,6 +87,11 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.result(q['run_id']))['text'],'Completed: next')
         runs={r['id']:r for r in self.rt.store.all('SELECT * FROM runs WHERE scope=?',(self.scope,))}
         self.assertGreaterEqual(runs[q['run_id']]['started'],runs[s['run_id']]['ended'])
+        usage=json.loads(runs[s['run_id']]['usage'])
+        self.assertEqual(usage['output'],30)
+        self.assertEqual(usage['assistant_messages'],3)
+        self.assertEqual(usage['last_message_output'],10)
+        self.assertEqual(usage['max_message_output'],10)
     async def test_transient_failure_is_not_final_and_settles_after_retry(self):
         # Auto-retry: agent_end(willRetry) is not a terminal boundary, the
         # transient error must not become the run's result, and the run settles
@@ -123,12 +128,19 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 self.assertIn('output limit',terminal['runs'][0]['error'])
                 self.assertEqual((await self.result(s['run_id']))['text'],body)
                 run=self.rt.store.run(self.scope,s['run_id'])
-                self.assertEqual(json.loads(run['usage'])['stop_reason'],'length')
+                usage=json.loads(run['usage'])
+                self.assertEqual(usage['stop_reason'],'length')
+                self.assertEqual(usage['token_scope'],'run_total')
+                self.assertEqual(usage['last_message_output'],8)
+                self.assertEqual(usage['max_message_output'],8)
                 q=await self.mutation('send',s['agent_id'],mode='follow_up',message='finish')
                 resumed=await self.wait(q['run_id'])
                 self.assertEqual(resumed['runs'][0]['state'],'completed')
                 self.assertNotIn('error',resumed['runs'][0])
                 self.assertEqual((await self.result(q['run_id']))['text'],'Completed: finish')
+                resumed_usage=json.loads(self.rt.store.run(self.scope,q['run_id'])['usage'])
+                self.assertEqual(resumed_usage['assistant_messages'],1)
+                self.assertEqual(resumed_usage['output'],resumed_usage['last_message_output'])
     async def test_late_or_duplicate_settle_cannot_finish_another_run(self):
         # A settle callback scheduled for a finished run can run while the next
         # run already owns the worker; it must be a no-op, and repeated

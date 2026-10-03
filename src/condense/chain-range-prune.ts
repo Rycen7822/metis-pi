@@ -6,6 +6,7 @@ import { extractToolResultText } from "./batch-capture.ts";
 import { isChainAnchorCustom } from "./chain-detector.ts";
 import { bareToolCallId, occKey, resultTimestampOf } from "./occurrence-key.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";
+import { isSubagentControl } from "./protected.ts";
 
 export function isPerBatchSummaryMessage(msg: any): boolean {
   return msg.role === "custom" && msg.customType === CUSTOM_TYPE_SUMMARY;
@@ -184,7 +185,7 @@ export function applyChainCompressions(
         inRangeBareIds.push(msg.toolCallId);
         droppedBareIds.add(msg.toolCallId);
         droppedOccKeys.add(occKey(msg.toolCallId, resultTimestampOf(msg.timestamp)));
-        if (protectedIds.has(msg.toolCallId)) {
+        if (protectedIds.has(msg.toolCallId) || isSubagentControl(msg.toolName)) {
           const arr = protectedByBlock.get(entry.blockId) ?? [];
           arr.push({ tool: msg.toolName, text: extractToolResultText(msg) });
           protectedByBlock.set(entry.blockId, arr);

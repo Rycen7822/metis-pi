@@ -326,10 +326,15 @@ class Runtime:
                 elif reason: w.error=None
                 u=m.get('usage')
                 if isinstance(u,dict):
+                    w.usage['token_scope']='run_total'
+                    w.usage['assistant_messages']=w.usage.get('assistant_messages',0)+1
                     for key in ('input','output','cacheRead','cacheWrite','totalTokens'):
                         value=u.get(key)
                         if isinstance(value,(int,float)) and not isinstance(value,bool):
                             w.usage[key]=w.usage.get(key,0)+value
+                            if key=='output':
+                                w.usage['last_message_output']=value
+                                w.usage['max_message_output']=max(w.usage.get('max_message_output',0),value)
                     cost=u.get('cost')
                     if isinstance(cost,dict) and isinstance(cost.get('total'),(int,float)):
                         w.usage['cost_total']=w.usage.get('cost_total',0)+cost['total']

@@ -345,7 +345,7 @@ test("capacity waiting imports temporary output archives without pruning their v
 });
 
 
-test("summary provider sees the retained test tail and bounded original argument excerpts", async (t) => {
+test("summary provider sees the retained test tail, complete command conditions and bounded oversized arguments", async (t) => {
   const f = await fixture(t);
   const tail = "FINAL_TEST_RESULT_SENTINEL: all checks completed";
   const text = Array.from({ length: 260 }, (_, i) => `${i % 12 === 0 ? "warning" : "progress"} ${i}: ${"x".repeat(150)}`).join("\n") + "\n" + tail;
@@ -364,6 +364,27 @@ test("summary provider sees the retained test tail and bounded original argument
   assert.match(input, /Original text omitted/);
   assert.equal(input.isWellFormed(), true);
   assert.equal(serializeBatchForSummarizer({ ...batch, toolCalls: Array(1000).fill(batch.toolCalls[0]) }), undefined);
+  const command = "# context\n".repeat(400) + "assert satisfies('1.0.0', '>*') is False\nprint('>=*: False')\n" + "# tail\n".repeat(400);
+  const exact = serializeBatchForSummarizer({ ...batch, assistantText: "", toolCalls: [
+    { ...batch.toolCalls[0], args: { command }, resultText: ">=*: False", isError: false },
+  ] });
+  assert.ok(exact.includes(JSON.stringify({ command }, null, 2)), "the summary sees the actual condition, not just a misleading printed label");
+});
+
+test("subagent control receipts remain verbatim while ordinary results are summarized", async t => {
+  const f = await fixture(t);
+  const control = { role: "toolResult", toolCallId: "control", toolName: "pi_wait_agent", timestamp: 3,
+    content: [{ type: "text", text: '{"state":"completed","exact":"' + "x".repeat(6000) + '"}' }], isError: false };
+  f.sm.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "control", name: "pi_wait_agent",
+    arguments: { run_ids: ["completed-run"] } }], timestamp: 2, stopReason: "toolUse" });
+  f.sm.appendMessage(control);
+  f.add("ordinary output\n".repeat(400), "cat ordinary.txt", "ordinary");
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  assert(!JSON.stringify(f.calls[0]).includes("completed-run"));
+  const messages = projectBranchMessages(f.sm.getBranch());
+  const projected = (await f.emit("context", { messages }))?.messages ?? messages;
+  assert.deepEqual(projected.find(m => m.role === "toolResult" && m.toolCallId === "control"), control);
 });
 
 test("automatic and manual chunks keep durable progress through a failure inside one assistant turn", async t => {
@@ -388,6 +409,7 @@ test("automatic and manual chunks keep durable progress through a failure inside
     assert.equal(metric.outcome, "partial");
     assert.equal(metric.processedBatches, 1);
     const refs = summaries()[0].details.toolCallRefs;
+    assert(refs.length <= 24, "a long task uses bounded per-request work for the parallel window");
     const frontier = f.sm.getBranch().findLast(e => e.customType === "context-prune-frontier").data;
     assert.equal(frontier.lastAttemptedTurnIndex, 0, "frontier stays inside the original assistant turn");
     assert.equal(frontier.attemptedToolCallCount, refs.length);

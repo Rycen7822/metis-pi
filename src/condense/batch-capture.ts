@@ -242,7 +242,11 @@ export function serializeBatchForSummarizer(batch: CapturedBatch, inputChars = S
     const resultHeader = `\nResult (${tc.isError ? "ERROR" : "OK"}; excerpts are explicitly marked):\n`;
     const quota = Math.floor(remaining / (batch.toolCalls.length - index)) - header.length - resultHeader.length - 5;
     if (quota < 512) return undefined;
-    const args = excerpt(JSON.stringify(tc.args, null, 2), Math.min(2048, Math.floor(quota / 3)));
+    const originalArgs = JSON.stringify(tc.args, null, 2);
+    // Split multi-call batches instead of silently losing command conditions.
+    // A single oversized call still uses explicitly marked recoverable excerpts.
+    if (batch.toolCalls.length > 1 && originalArgs.length > quota - 512) return undefined;
+    const args = excerpt(originalArgs, Math.max(0, quota - 512));
     const result = excerpt(tc.resultText, quota - args.length, true);
     const part = header + args + resultHeader + result;
     parts.push(part);
@@ -277,7 +281,9 @@ export function groupBatchesByMode(batches: CapturedBatch[], mode: BatchingMode,
         assistantText: sameTurn ? current.assistantText : [current.assistantText, batch.assistantText].filter(Boolean).join("\n\n"),
         toolCalls: [...current.toolCalls, tc],
       } : undefined;
-      if (candidate && serializeBatchForSummarizer(prepareBatch(candidate).candidate, inputChars) !== undefined) {
+      // A full user request can contain dozens of tool steps. Limit one model's
+      // work so the three-request window can actually shorten final-reply waits.
+      if (candidate && candidate.toolCalls.length <= 24 && serializeBatchForSummarizer(prepareBatch(candidate).candidate, inputChars) !== undefined) {
         out[out.length - 1] = candidate;
       } else {
         out.push({ ...batch, ...sourceTurn, toolCalls: [tc] });

@@ -14,6 +14,10 @@ task boundaries, and treat stronger filesystem isolation as a separate requireme
 Queued input is
 not consumed input. Reading a result does not acknowledge it; ACK requires its
 exact hash. An uncertain mutation is never retried automatically.
+`completed` means the model stopped normally; acceptance still requires checking
+the requested artifacts. Inspection usage counters are cumulative per run
+(`token_scope=run_total`); `last_message_output` and `max_message_output` measure
+individual assistant responses, not the run's total output or configured limit.
 Answering an expired UI request returns `input_not_found` without waking the
 worker or creating a new run. Local cwd preflight failures return structured
 `invalid_cwd` errors before launch.

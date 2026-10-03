@@ -310,7 +310,7 @@ TOOLS = [
     tool(
         "pi_wait_agent",
         "wait",
-        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes without acknowledgement. Settles earlier parent notifications before output. Cancelling the wait does not stop agents.",
+        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes without acknowledgement. Completed means the model stopped, not that its task passed acceptance; verify artifacts before reporting success. Settles earlier parent notifications before output. Cancelling the wait does not stop agents.",
         {
             **SCOPE,
             "run_ids": {"type": "array", "items": ID, "maxItems": 100,
@@ -341,7 +341,7 @@ TOOLS = [
     tool(
         "pi_inspect_agent",
         "inspect",
-        "Read bounded events and input receipts; pass next_cursor as after. full adds current/latest run diagnostics and notification details.",
+        "Read bounded events and input receipts; pass next_cursor as after. full adds current/latest run diagnostics and notification details. Usage token counters are run totals across assistant messages; last_message_output and max_message_output distinguish individual response output from cumulative output.",
         {
             **AGENT,
             "after": {"type": "integer", "minimum": 0},

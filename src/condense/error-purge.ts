@@ -1,5 +1,5 @@
 import type { ErrorPurgeConfig } from "./types.ts";
-import { hasProtectedNestedResults } from "./protected.ts";
+import { hasProtectedNestedResults, isSubagentControl } from "./protected.ts";
 
 /**
  * Replaces the `arguments` body of failed toolCall blocks with a compact stub
@@ -48,7 +48,7 @@ export function purgeErroredArgs(messages: any[], config: ErrorPurgeConfig): any
 
     let contentModified = false;
     const newContent = (msg.content as any[]).map((block) => {
-      if (block.type !== "toolCall") return block;
+      if (block.type !== "toolCall" || isSubagentControl(block.name)) return block;
 
       const errorTurn = erroredAtTurn.get(block.id);
       if (errorTurn === undefined) return block;
