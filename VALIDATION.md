@@ -1,11 +1,11 @@
 # Validation
 
-## 2026-10-04 — Bounded condense batches and structured subagent errors
+## 2026-10-04 — Bounded condense batches, summary evidence and subagent output limits
 
-- Condense plans serializable chunks within a 65,536-character ceiling and smaller model limits, saves each successful chunk before the next request, and resumes only the unprocessed suffix after a failure or lifecycle change. Both batching modes retain their boundaries; exact archives and persisted summary receipts still gate pruning.
-- `npm test`: **358/358**, zero failures/skips; production and test type checks pass. Package preparation and the **237-file** pack dry-run pass. Existing behavior contracts cover oversized single turns, small model limits, partial progress/reload, stale responses, expired subagent questions and structured cwd preflight errors.
-- Python subagent suite: **399 tests, 41 opt-in skips**, final run passes. The first run had three timeout-related failures; those three and the changed question-answer contract passed a focused rerun before the full suite passed again.
-- Six isolated replays of the reported session preserve original tool results, avoid repeated requests on reload, and successfully process new work after the recovered backlog. The original personal session/settings remain unchanged. Providers are local mocks; external provider availability and summary quality are outside this proof.
+- Condense plans serializable chunks within a 65,536-character ceiling and smaller model limits. Up to three requests run concurrently, with archives, persistent summary receipts and progress committed in input order; failures cancel later requests, and reload resumes the unprocessed suffix. Both batching modes retain their boundaries. Batch and range summaries now share instructions to preserve uncertainty and quote essential code conditions rather than infer behavior.
+- `npm run verify` on **Node 24.15.0 / Pi 1.0.0**: exit 0, **361/361** TS tests with zero failures/skips; production/test type checks and the **237-file** package dry-run pass. Python subagent suite: **400 tests, 41 opt-in skips**, passing. The output-limit regression covers partial text, thinking-only output, stale preambles and successful follow-up.
+- A real Pi child against an isolated local HTTP provider forwards **131,072** output tokens from the model configuration. An **8-token** test model returns `stopReason=length`: the run fails explicitly, the thinking-only result is empty, and follow-up completes. Metis adds no separate output cap. The personal CommandCode model budgets were raised separately in `models.json`; remote provider acceptance of that budget is unverified.
+- Six earlier isolated session replays preserve original tool results, avoid repeated requests on reload, and process new work after the recovered backlog. The personal session is untouched. Providers in these probes are local mocks; external provider availability and factual summary quality are outside this proof.
 
 ## 2026-10-02 — Metis MCP session integration
 

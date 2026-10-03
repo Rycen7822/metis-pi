@@ -313,11 +313,17 @@ class Runtime:
             mt=message_text(m)
             if role=='assistant':
                 w.last_progress=time.monotonic()
-                if mt:
+                reason=m.get('stopReason')
+                # A final reply replaces tool-call preambles even when empty.
+                # Error/abort events may still leave useful partial output.
+                if mt or reason in {'stop','length'}:
                     w.last_text=crop(mt,RESULT_CAP)
                     w.usage['result_truncated']=len(mt.encode('utf-8'))>RESULT_CAP
-                if m.get('stopReason') in {'error','aborted'}: w.error=crop(str(m.get('errorMessage') or m.get('stopReason')),2000)
-                elif m.get('stopReason'): w.error=None
+                if reason: w.usage['stop_reason']=reason
+                if reason=='length':
+                    w.error='Model output limit reached (stopReason=length); the task did not complete. Increase maxTokens in the Pi model configuration or continue this agent with pi_followup_task.'
+                elif reason in {'error','aborted'}: w.error=crop(str(m.get('errorMessage') or reason),2000)
+                elif reason: w.error=None
                 u=m.get('usage')
                 if isinstance(u,dict):
                     for key in ('input','output','cacheRead','cacheWrite','totalTokens'):

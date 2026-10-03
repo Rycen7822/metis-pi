@@ -42,6 +42,12 @@ writer; `error.agent_id/run_id` identify a failed launch. Saved direct and neste
 failure receipts consume attention without acknowledging the result. Unobserved
 background failures still wake the parent.
 
+An output-limit stop produces a `failed` run with an explicit error. Partial final
+text remains readable; a thinking-only stop does not reuse an earlier preamble.
+Output budgets follow Pi's `models.json` model `maxTokens` and remaining context,
+without a separate Metis cap. Use the provider-supported budget for normal work;
+small budgets belong in isolated test models. `pi_followup_task` can continue the task.
+
 For an unusable failed worker, inspect its state and use `pi_spawn_agent` with
 valid settings. `pi_followup_task` resumes a verified parked/closed agent; a missing
 or empty saved session requires a new agent. Unverified cleanup needs the CLI

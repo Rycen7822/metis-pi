@@ -136,7 +136,7 @@ def msg(role,body,**extra):
 def response(r,success=True,data=None,error=None):
     emit({'type':'response','id':r.get('id'),'command':r['type'],'success':success,**({'data':data} if data is not None else {}),**({'error':error} if error else {})})
 
-TASK_OPTS={'delay','settle','resume','retry','compact','dupsettled','model','parallel','after_tool','gate'}
+TASK_OPTS={'delay','settle','resume','retry','compact','dupsettled','model','parallel','after_tool','gate','limit'}
 
 def parse_task(task):
     """Parse test-only key=value| prefixes: turn/post-run delay, continuation and
@@ -199,7 +199,12 @@ async def run(raw_task, rid):
         else: queue.clear()
         if opts.get('after_tool'): await asyncio.sleep(float(opts['after_tool']))
         output=('汉字🙂\u2028\u2029'*3000) if task=='BIG' else 'Completed: '+task
-    if compact:
+    if opts.get('limit'):
+        msg('assistant','I will implement the task.',stopReason='toolUse')
+        content=[{'type':'thinking','thinking':'test-only output budget exhausted'}]
+        if opts['limit']=='text': content.append({'type':'text','text':'Incomplete answer'})
+        msg('assistant','',content=content,stopReason='length',usage={'output':8,'reasoning':8,'totalTokens':8})
+    elif compact:
         # Pi compacts by itself: overflow ends the run with willRetry, the
         # transcript is replaced, then the retried run continues.
         msg('assistant','Context overflow; compacting before retry',stopReason='error',errorMessage='context_length_exceeded')

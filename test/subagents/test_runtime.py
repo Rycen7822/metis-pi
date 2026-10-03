@@ -113,6 +113,22 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         kinds=[e['type'] for e in self.rt.store.all('SELECT type FROM events WHERE agent_id=? ORDER BY created',(s['agent_id'],))]
         self.assertEqual(kinds.count('run_terminal'),1)
         self.assertIn('auto_compaction_end',kinds)
+
+    async def test_output_limit_is_failed_without_stale_preambles_and_can_resume(self):
+        for mode,body in [('thinking',''),('text','Incomplete answer')]:
+            with self.subTest(mode=mode):
+                s=await self.spawn(f'limit={mode}|work')
+                terminal=await self.wait(s['run_id'])
+                self.assertEqual(terminal['runs'][0]['state'],'failed')
+                self.assertIn('output limit',terminal['runs'][0]['error'])
+                self.assertEqual((await self.result(s['run_id']))['text'],body)
+                run=self.rt.store.run(self.scope,s['run_id'])
+                self.assertEqual(json.loads(run['usage'])['stop_reason'],'length')
+                q=await self.mutation('send',s['agent_id'],mode='follow_up',message='finish')
+                resumed=await self.wait(q['run_id'])
+                self.assertEqual(resumed['runs'][0]['state'],'completed')
+                self.assertNotIn('error',resumed['runs'][0])
+                self.assertEqual((await self.result(q['run_id']))['text'],'Completed: finish')
     async def test_late_or_duplicate_settle_cannot_finish_another_run(self):
         # A settle callback scheduled for a finished run can run while the next
         # run already owns the worker; it must be a no-op, and repeated
