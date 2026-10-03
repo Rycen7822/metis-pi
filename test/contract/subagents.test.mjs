@@ -195,6 +195,8 @@ test("SDK configuration failures expose their cause and preserve recoverable ide
       const inspected = await client.call("pi_inspect_agent", { agent_id: failure.agent_id, detail: "full" });
       assert.equal(inspected.agent.cleanup, "verified"); assert.equal(inspected.run.id, failure.run_id);
       assert.equal(inspected.run.state, "failed"); assert.match(inspected.agent.name, /startup failed/);
+      await assert.rejects(client.call("pi_followup_task", { agent_id: failure.agent_id, message: "retry", request_id: `${request_id}-retry` }),
+        error => error instanceof RuntimeError && error.code === "worker_unavailable" && /pi_spawn_agent/.test(error.message));
     }
     const started = await client.call("pi_spawn_agent", { name: "configuration-probe", access: "read", task: "recovered", request_id: "fixed-model" });
     assert.equal(started.name, "configuration-probe");

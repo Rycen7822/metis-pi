@@ -428,7 +428,16 @@ class Runtime:
 
     def require_worker(self,a):
         w=self.workers.get(a['id'])
-        if not w or w.closed or w.tainted: raise AgentError('worker_unavailable','No connected Pi worker; use pi_send_input to wake a cleanly stopped agent, or respawn after checking orphan state')
+        if not w or w.closed or w.tainted:
+            if a['state']=='orphaned' or a['cleanup']=='unknown' or (w and w.tainted):
+                message='Pi worker cleanup is unverified; use pi_inspect_agent to check its state, then close/reap it with the CLI close command using the parent session state directory (--home)'
+            elif a['state']=='crashed':
+                message='Pi worker failed; use pi_inspect_agent to review the failure, then pi_spawn_agent to create a new agent with valid settings'
+            elif a['state'] in {'dormant','closed'}:
+                message='Pi worker is parked or closed; use pi_followup_task to resume its saved session'
+            else:
+                message='No connected Pi worker; use pi_inspect_agent to check its state before resuming with pi_followup_task or creating a new agent with pi_spawn_agent'
+            raise AgentError('worker_unavailable',message)
         return w
 
     async def ensure_loaded(self, a, reason, wake=True):

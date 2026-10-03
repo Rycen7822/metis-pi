@@ -285,6 +285,7 @@ test("one interaction wires live/final usage, Working and the persisted summary"
   update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
   assert.equal(speed(frame()), 100, "message_start resets the measured window");
   handlers.get("message_end")({ message: message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }) });
+  now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
   handlers.get("agent_settled")({}, {});
   assert.equal(speed(frame()), 110, "the final rate remains visible after settle");
@@ -294,9 +295,11 @@ test("one interaction wires live/final usage, Working and the persisted summary"
   assert.equal(data.schemaVersion, 2);
   assert.equal(data.evidence, "assistant-stop");
   assert.equal(data.startedAt, 1_700_000_000_000);
-  assert.equal(data.settledAt, 1_700_000_000_800);
-  assert.equal(data.elapsedMs, 800);
-  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /Worked for 0s/);
+  assert.equal(data.replyEndedAt, 1_700_000_000_800);
+  assert.equal(data.settledAt, 1_700_000_002_800);
+  assert.equal(data.elapsedMs, 2800);
+  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /Worked for 2s/);
+  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /\n2023-11-15 06:13:20$/);
   assert.equal(data.outcome, "completed");
   assert.equal(appended[0].data.toolErrorsObserved, 1, "tool errors stay diagnostic");
   assert.equal(slots.widgetCalls.at(-1).content, undefined);

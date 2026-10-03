@@ -80,7 +80,7 @@ class Store:
     def execute(self, sql, args=()): return self.db.execute(sql, args)
     def scope(self, sid):
         row = self.one("SELECT * FROM scopes WHERE id=?", (sid,))
-        if not row: raise AgentError("scope_not_found", "Unknown scope; use pi_context to open or resume one")
+        if not row: raise AgentError("scope_not_found", f"Unknown scope in state directory {self.home}; check --home or PI_AGENTS_HOME against the parent session, then select an existing scope or use the CLI scope open command")
         return row
     def agent(self, sid, aid):
         self.scope(sid)

@@ -23,6 +23,8 @@ Header 显示实际 Pi/metis 版本。Working 从 `agent_start` 到 `agent_settl
 
 单个工具失败不等于整轮失败。旧 v1 工具错误标记仅显示 `legacy status unverified`。摘要由 `summary.persist` 决定保存到 custom entry 或当前界面临时显示。
 
+已发送的用户消息下方显示发送时间，完成摘要下方显示回复结束时间，格式为 `2026-10-03 02:20:09`（固定 UTC+8）。回复时间取最终消息结束时刻，不受后续 condense 维护耗时影响；旧摘要缺少此字段时使用本轮结束时间。恢复历史使用已保存时间；时间戳只用于界面，不加入模型消息。关闭摘要持久化时，回复时间随临时摘要显示在状态区。
+
 ## 统计口径
 
 Footer 依次显示模型、推理等级、provider、cwd/分支/改动、上下文、累计 I/O、cache 与速度；窄终端按完整字段换行。元数据不依赖 composer 安装，不读取 auth 或查询额度。

@@ -11,6 +11,7 @@ import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration } from "./ui-metrics.ts";
 import { OutputSpeedTracker } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
+import { formatBeijingTime, installUserTimestamps } from "./message-timestamp.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
 import { HostData, type HostContextLike } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
@@ -42,6 +43,8 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   layoutOps?: import("./tool-names.ts").DiffLayoutOps;
   /** Pi AssistantMessageComponent prototype (separator decoration target). */
   assistantPrototype?: object;
+  /** Pi InteractiveMode prototype (user message creation retains timestamps). */
+  interactivePrototype?: object;
   /** Build the live write call component (header + stage + preview body). */
   makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
 
@@ -103,6 +106,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   let startupWarningFilter: ReturnType<typeof installStartupWarningFilter> | undefined;
   let handle: AdapterHandle | undefined;
   let decorations: DecorationHandle | undefined;
+  let userTimestamps: ReturnType<typeof installUserTimestamps>;
+  let replyEndedAt: number | undefined;
+  const replyTimes = new WeakMap<object, number>();
   const transcript = new TranscriptState();
   const tracker = new WriteDiffTracker();
   const session = {
@@ -221,11 +227,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         if (!config.summary.enabled) return;
         const verdict = outcome.freeze();
         if (config.summary.persist) {
-          turnSummary.record(snapshot, verdict);
+          turnSummary.record(snapshot, { ...verdict, replyEndedAt });
         } else {
           // Transient public-UI path (no third transcript patch): the settled
           // line lives in the footer status row until the next interaction.
-          const line = formatSummaryLine(snapshot, verdict.outcome);
+          const line = `${formatSummaryLine(snapshot, verdict.outcome)} · ${formatBeijingTime(replyEndedAt ?? Date.now())}`;
           const u = hostData.ui as { setStatus?: (key: string, text: string | undefined) => void };
           try {
             u.setStatus?.(SUMMARY_STATUS_KEY, line);
@@ -260,6 +266,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     hostData.bind(full);
     ledger.rebuild(hostData.getSessionEntries());
     outcome.reset();
+    replyEndedAt = undefined;
     // One capability snapshot per session, from the same live ctx.ui that
     // chrome.install captures below.
     const available = hostData.available;
@@ -267,6 +274,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && enabled;
+    if (enabled && !userTimestamps && bindings.interactivePrototype) {
+      userTimestamps = installUserTimestamps(bindings.interactivePrototype, () => enabled);
+    }
     startupWarningFilter?.dispose();
     startupWarningFilter = chromeEnabled ? installStartupWarningFilter() : undefined;
     gitChanges.dispose();
@@ -371,6 +381,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       // First start of a chain: a genuinely new interaction — no outcome or
       // tool-error state may leak across interactions.
       outcome.reset();
+      replyEndedAt = undefined;
       const u = hostData.ui as { setStatus?: (key: string, text: string | undefined) => void };
       try {
         u.setStatus?.(SUMMARY_STATUS_KEY, undefined);
@@ -526,6 +537,10 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     transcript.apply({ type: "message_end", message: stateMessage }, message);
     if (!chromeEnabled) return;
     metrics.thinkingEnd();
+    if (message && stateMessage?.role === "assistant" && stateMessage.stopReason && stateMessage.stopReason !== "toolUse") {
+      replyEndedAt = replyTimes.get(message) ?? Date.now();
+      replyTimes.set(message, replyEndedAt);
+    }
     if (stateMessage?.stopReason) outcome.terminalStop(stateMessage.stopReason);
     // Usage totals (read-only): same key for the interaction metrics and the
     // session ledger — replays/duplicate completions never double-count.
@@ -557,6 +572,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     handle = undefined;
     decorations?.dispose();
     decorations = undefined;
+    userTimestamps?.dispose();
+    userTimestamps = undefined;
     fullscreenLayout?.dispose();
     selectionCopy?.dispose();
     // Chrome restore: only OUR factories are removed (identity comparison);
@@ -570,6 +587,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     outputSpeed.reset();
     ledger.reset();
     turnSummary.forgetSession();
+    replyEndedAt = undefined;
     hostData.bind(undefined);
   });
   return { whenReady: () => installation };

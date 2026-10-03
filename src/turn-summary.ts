@@ -14,6 +14,7 @@ import { formatDuration, formatTokensCompact, type InteractionSnapshot } from ".
 import type { InteractionOutcome, TerminalEvidence } from "./interaction-outcome.ts";
 import { resolveThemePainter } from "./palette.ts";
 import { clipLine } from "./segments.ts";
+import { formatBeijingTime } from "./message-timestamp.ts";
 
 export const SUMMARY_CUSTOM_TYPE = "metis-pi:interaction-summary:v1";
 
@@ -28,6 +29,7 @@ export interface InteractionSummaryData {
   branchAnchor?: string;
   startedAt: number; // wall clock epoch ms
   settledAt: number; // wall clock epoch ms
+  replyEndedAt?: number; // final assistant message end, before background maintenance
   elapsedMs: number;
   thinkingMs?: number; // omitted when unknown
   usage?: {
@@ -115,7 +117,7 @@ export class TurnSummary {
   /** Called from the metrics onSettled callback with the frozen verdict. */
   record(
     snapshot: InteractionSnapshot,
-    verdict: { outcome: InteractionOutcome; evidence: TerminalEvidence; reason: string; attempt: number; toolErrorsObserved: number },
+    verdict: { outcome: InteractionOutcome; evidence: TerminalEvidence; reason: string; attempt: number; toolErrorsObserved: number; replyEndedAt?: number },
     branchAnchor?: string,
   ): void {
     const interactionId = `i${snapshot.startedAt ?? 0}`;
@@ -140,6 +142,7 @@ export class TurnSummary {
       attempt: verdict.attempt,
       toolErrorsObserved: verdict.toolErrorsObserved,
     };
+    if (verdict.replyEndedAt !== undefined) data.replyEndedAt = verdict.replyEndedAt;
     if (snapshot.thinkingMs > 0) data.thinkingMs = snapshot.thinkingMs;
     const u = snapshot.usage;
     if (u.input > 0 || u.output > 0 || u.cacheRead > 0 || u.cacheWrite > 0) {
@@ -193,12 +196,15 @@ export function makeEntryRenderer(makeText?: SummaryEntryRendererDeps["makeText"
       : { outcome: data.outcome as InteractionOutcome, legacyUnverified: false };
     const line = formatSummaryLine(snapshot, legacy.outcome, { legacyUnverified: legacy.legacyUnverified });
     if (!line) return undefined;
+    const timestamp = formatBeijingTime(data.replyEndedAt ?? data.settledAt);
+    const lines = timestamp ? [line, timestamp] : [line];
     // The theme handed to entry renderers may be an unbound proxy (early
     // restore rendering) — resolve via the shared lazy probe.
     const painter = resolveThemePainter(theme);
-    if (makeText) return makeText(painter("dim", line));
+    if (makeText) return makeText(lines.map((text) => painter("dim", text)).join("\n"));
     return {
-      render: (width: number) => [painter("dim", clipLine(line, width))],
+      render: (width: number) => lines.map((text) => painter("dim", clipLine(text, width))),
+      invalidate() {},
     };
   };
 }

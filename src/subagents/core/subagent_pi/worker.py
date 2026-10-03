@@ -302,7 +302,7 @@ def session_argv(home, a, spec):
     session=Path(a['session_file'])
     if session.is_symlink(): raise AgentError('unsafe_session','Managed session path must not be a symlink')
     if a['generation'] and (not session.exists() or session.stat().st_size==0):
-        raise AgentError('session_unavailable','Previous Pi session is missing or empty; create a new agent explicitly')
+        raise AgentError('session_unavailable','Previous Pi session is missing or empty; use pi_spawn_agent to create a new agent explicitly')
     from .config import managed_context_argv
     argv=list(spec['argv']) if spec.get('host')=='pi' else managed_context_argv(spec['argv'])
     if not a['generation']:

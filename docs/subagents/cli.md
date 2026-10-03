@@ -10,6 +10,13 @@ Pass `--home <state directory>` before the subcommand. `list`, `inspect`, `resul
 operation before retrying it. `daemon stop` refuses active work without explicit
 `--force`. Use the same state directory as the parent Pi adapter.
 
+For a default native install, pass `--home ~/.pi/agent/subagent-pi`; a custom Pi
+agent directory changes this path. `scope_not_found` reports the state directory
+actually queried. Check `--home`/`PI_AGENTS_HOME` before opening a new scope.
+The shell CLI defaults to XDG state and can otherwise query the independent
+Codex installation's ledger. Separate daemons are expected for separate homes;
+provider conflict detection applies to tools loaded in the same parent Pi session.
+
 The independent Codex plugin remains a separate installation. This checkout
 contains no Codex marketplace installer or standalone runtime npm dependency.
 
@@ -34,6 +41,11 @@ success fields. `error.blocking_agent_id` identifies an existing conflicting
 writer; `error.agent_id/run_id` identify a failed launch. Saved direct and nested
 failure receipts consume attention without acknowledging the result. Unobserved
 background failures still wake the parent.
+
+For an unusable failed worker, inspect its state and use `pi_spawn_agent` with
+valid settings. `pi_followup_task` resumes a verified parked/closed agent; a missing
+or empty saved session requires a new agent. Unverified cleanup needs the CLI
+`close` operation with the correct `--home` before reuse.
 
 In the TUI, active subagents appear above the input box as a tree with animated
 running indicators, names, states, elapsed time, tool counts, tokens and current
@@ -60,6 +72,9 @@ an independent child. A task must contain its own instructions and context.
 `readOnlyHint: true` in an `mcp_*` namespace. Shell, editing, generic MCP gateways
 and nested subagent control are blocked. This is a managed tool policy, not an
 operating-system sandbox; loaded extensions retain their own capabilities.
+Writer exclusivity checks declared cwd overlap at admission. It does not restrict
+write/edit/bash, MCP or extensions to that directory; disjoint cwd declarations
+do not provide filesystem isolation.
 
 Git installs and updates prepare the tool schema during `npm install`. For a
 development checkout installed with `--ignore-scripts`, run

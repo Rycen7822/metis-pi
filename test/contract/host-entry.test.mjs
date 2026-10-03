@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
-import { Text, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, Text, visibleWidth } from "@earendil-works/pi-tui";
 import appearance from "../../extensions/appearance.ts";
 import { productFor } from "../../src/selection-copy/model.ts";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
@@ -30,6 +30,7 @@ function entry(t) {
   const definitions = ["read", "bash", "write", "edit"].map(source);
   const prototype = Core.ToolExecutionComponent.prototype;
   const descriptors = Object.getOwnPropertyDescriptors(prototype);
+  const interactiveDescriptors = Object.getOwnPropertyDescriptors(Core.InteractiveMode.prototype);
   const pi = {
     on: (name, handler) => handlers.set(name, handler),
     getAllTools: () => definitions,
@@ -41,6 +42,7 @@ function entry(t) {
   t.after(() => {
     handlers.get("session_shutdown")({}, {});
     assert.deepEqual(Object.getOwnPropertyDescriptors(prototype), descriptors, "entry releases the host prototype");
+    assert.deepEqual(Object.getOwnPropertyDescriptors(Core.InteractiveMode.prototype), interactiveDescriptors, "entry releases user timestamp decoration");
   });
   handlers.get("session_start")({}, { hasUI: true, ui: { notify(text) { throw new Error(text); } } });
   const ui = { requestRender() {} };
@@ -50,6 +52,34 @@ function entry(t) {
   const fire = (event, ctx = { cwd: process.cwd() }) => handlers.get(event.type)(event, ctx);
   return { handlers, commands, definitions, nativeCall, row, fire };
 }
+
+test("user timestamps use message time through replay, resize and output padding changes", (t) => {
+  entry(t);
+  const host = Object.assign(Object.create(Core.InteractiveMode.prototype), {
+    chatContainer: new Container(), outputPad: 1,
+    getMarkdownThemeWithSettings: () => Core.getMarkdownTheme(),
+    getMarkdownTransformers: () => [],
+  });
+  const message = { role: "user", content: "original input", timestamp: Date.parse("2026-10-02T16:20:09Z") };
+  const before = structuredClone(message);
+  host.addMessageToChat(message);
+  const frame = () => plain(host.chatContainer.render(80));
+  assert.match(frame(), /original input[\s\S]*2026-10-03 00:20:09/);
+  for (const width of [1, 18, 80]) {
+    const rows = host.chatContainer.children.at(-1).render(width);
+    assert.ok(rows.every((row) => visibleWidth(row) <= width));
+  }
+  host.outputPad = 3;
+  host.chatContainer.children[0].setOutputPad(3);
+  assert.match(frame(), /\n {3}2026-10-03 00:20:09/);
+  assert.equal(frame().match(/2026-10-03 00:20:09/g)?.length, 1, "repaints do not append timestamps");
+  host.chatContainer.clear();
+  host.addMessageToChat(message, { populateHistory: false });
+  assert.equal(frame().match(/2026-10-03 00:20:09/g)?.length, 1, "history rebuild keeps original send time");
+  host.addMessageToChat({ role: "user", content: "", timestamp: message.timestamp });
+  assert.equal(frame().match(/2026-10-03 00:20:09/g)?.length, 1, "hidden messages do not create orphan timestamps");
+  assert.deepEqual(message, before, "timestamps are presentation data only");
+});
 
 test("shipped entry owns grouped read rows and images without changing the native tree", (t) => {
   const prototype = Core.ToolExecutionComponent.prototype;

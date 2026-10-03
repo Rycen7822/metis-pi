@@ -37,6 +37,7 @@ for (const [schemaVersion, outcome, matches, absent] of [
       },
     });
     const text = entry!.render(120).join("\n");
+    assert.match(text, /\n1970-01-01 08:00:00$/, "completion row uses persisted settlement time");
     for (const expected of matches) assert.match(text, expected);
     if (absent) assert.doesNotMatch(text, absent);
   });

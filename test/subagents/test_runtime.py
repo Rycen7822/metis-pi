@@ -556,6 +556,10 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError): await self.rt.dispatch('inspect',{'scope':other,'agent_id':s['agent_id']})
     async def test_scope_cwd_validation(self):
         with self.assertRaises(AgentError): await self.rt.dispatch('scope_open',{'scope':self.scope,'cwd':str(self.root)})
+        with self.assertRaises(AgentError) as cm: self.rt.store.scope('scope_missing')
+        self.assertEqual(cm.exception.code,'scope_not_found')
+        self.assertIn(str(self.home),cm.exception.message)
+        self.assertIn('--home',cm.exception.message)
     async def test_spawn_outside_scope_uses_explicit_cwd(self):
         other=self.root/'other-workspace'; other.mkdir()
         spawned=await self.spawn(cwd=str(other))
@@ -798,6 +802,8 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError) as cm:
             await self.mutation('send',s['agent_id'],mode='send',message='must not boot')
         self.assertEqual(cm.exception.code,'worker_unavailable')
+        self.assertIn('cleanup is unverified',cm.exception.message)
+        self.assertIn('CLI close',cm.exception.message)
         self.assertEqual(self.rt.store.agent(self.scope,s['agent_id'])['generation'],1)
     async def test_steer_still_requires_a_live_worker_and_never_wakes(self):
         s=await self.spawn('simple'); await self.wait(s['run_id'])
@@ -805,6 +811,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError) as cm:
             await self.mutation('send',s['agent_id'],mode='steer',message='too late')
         self.assertEqual(cm.exception.code,'worker_unavailable')
+        self.assertIn('pi_followup_task',cm.exception.message)
     async def test_prompt_handled_without_a_run_is_reported_as_a_failed_run(self):
         # A handled input still gets a failed managed completion; the next task
         # can run without an empty success or a missing completion boundary.

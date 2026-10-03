@@ -124,6 +124,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     colorLevel,
     layoutOps: layoutOps(),
     assistantPrototype: assistantComponent?.prototype,
+    interactivePrototype: Pi.InteractiveMode?.prototype,
     makeSeparator: () => new CodexSeparatorComponent(colorLevel),
     makeSpacer: () => new Tui.Spacer(1),
     makeRail: (child) => new CodexThinkingRailComponent(child as Tui.Component, colorLevel),
