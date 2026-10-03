@@ -373,13 +373,14 @@ test("local condense defers a stale threshold but fresh high usage still permits
     beforeLoad(sm) { sm.getBranch().filter(e => e.type === "message" && e.message.role === "assistant").at(-1).message.content[0].text = "Historical reasoning. ".repeat(1000); },
     onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
   await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
-  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true]);
+  // Default turn batching commits the historical read and four new reads separately.
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, true, true, true, true]);
   assert.equal(compactions(h).length, 0);
   assert.deepEqual(compactionReasons(h), ["threshold"]);
   // Pre-prompt checks still see the old usage, but a new actual request clears
   // the publication credit. Its high provider usage must not be suppressed.
   await h.session.prompt("Continue with a fresh response."); await h.session.waitForIdle();
-  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, true, true, true, true, false]);
   assert.equal(compactions(h).length, 1);
 });
 
@@ -393,7 +394,7 @@ test("local condense does not suppress a threshold when fixed overhead still lea
     },
     onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 99900) }) });
   await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
-  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, true, true, true, false]);
   assert.equal(compactions(h).length, 1);
 });
 
@@ -425,7 +426,7 @@ test("a later context edit already accounted for by Pi receives no duplicate loc
     return result;
   };
   await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
-  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, true, true, true, true, false]);
   assert.equal(compactions(h).length, 1);
 });
 
@@ -464,7 +465,7 @@ test("real overflow after local condense bypasses stale-threshold deferral", asy
     onWork: ({ toolUse }) => ({ usage: pressureUsage(toolUse ? 61000 : 101000) }) });
   await h.session.prompt("Do four inspections and finish."); await h.session.waitForIdle();
   assert.deepEqual(compactionReasons(h), ["overflow"]);
-  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, false]);
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => Boolean(c.local)), [true, true, true, true, true, false]);
   assert.equal(compactions(h).length, 1);
 });
 

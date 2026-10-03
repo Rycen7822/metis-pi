@@ -14,6 +14,9 @@ task boundaries, and treat stronger filesystem isolation as a separate requireme
 Queued input is
 not consumed input. Reading a result does not acknowledge it; ACK requires its
 exact hash. An uncertain mutation is never retried automatically.
+Answering an expired UI request returns `input_not_found` without waking the
+worker or creating a new run. Local cwd preflight failures return structured
+`invalid_cwd` errors before launch.
 
 The per-scope limit covers live agents and workers whose cleanup is unverified.
 Settled idle workers are parked automatically; retained history does not consume

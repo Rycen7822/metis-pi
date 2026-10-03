@@ -24,6 +24,7 @@ export class PruneFrontierTracker {
     if (!data?.lastAttemptedToolCallId) return;
     this.frontier = {
       lastAttemptedToolCallId: data.lastAttemptedToolCallId,
+      lastAttemptedResultTimestamp: data.lastAttemptedResultTimestamp,
       lastAttemptedToolName: data.lastAttemptedToolName ?? "unknown",
       lastAttemptedTurnIndex: data.lastAttemptedTurnIndex ?? 0,
       lastAttemptedTimestamp: data.lastAttemptedTimestamp ?? 0,

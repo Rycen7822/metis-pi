@@ -194,7 +194,11 @@ export class SubagentSession {
     } satisfies ReceiptProof } };
   }
   private async trust(cwd: string) {
-    const path = realpathSync(resolve(cwd));
+    let path: string;
+    try { path = realpathSync(resolve(cwd)); }
+    catch (error) {
+      throw new RuntimeError({ code: "invalid_cwd", message: `Cannot access subagent working directory ${cwd}: ${error instanceof Error ? error.message : String(error)}` });
+    }
     if (path === realpathSync(this.ctx.cwd)) return { cwd: path, trusted: this.ctx.isProjectTrusted() };
     const stored = new ProjectTrustStore(this.agentDir).get(path);
     if (!hasTrustRequiringProjectResources(path)) return { cwd: path, trusted: true };
@@ -208,17 +212,19 @@ export class SubagentSession {
   async execute(name: string, args: Record<string, unknown>, id: string, ctx: ExtensionContext, signal?: AbortSignal) {
     this.update(ctx);
     if (!this.valid()) throw new Error("Subagent parent session changed");
-    let extra: object | undefined;
-    if (name === "pi_spawn_agent") extra = { project_trust: await this.trust((args.cwd as string | undefined) ?? ctx.cwd) };
-    if (name === "pi_send_message" || name === "pi_followup_task") {
-      const snapshot = await this.client.call("pi_inspect_agent", { agent_id: args.agent_id, limit: 1, max_bytes: 16384 }, signal);
-      const agent = snapshot.agent as { cwd?: string };
-      if (typeof agent.cwd !== "string") throw new Error("Subagent working directory is unavailable for project trust verification");
-      extra = { project_trust: await this.trust(agent.cwd) };
-    }
-    if (!this.valid() || signal?.aborted) throw new Error("Subagent call cancelled before dispatch");
     let result: Record<string, unknown>, isError = false;
-    try { result = await this.client.call(name, args, signal, extra); }
+    try {
+      let extra: object | undefined;
+      if (name === "pi_spawn_agent") extra = { project_trust: await this.trust((args.cwd as string | undefined) ?? ctx.cwd) };
+      if (name === "pi_send_message" || name === "pi_followup_task") {
+        const snapshot = await this.client.call("pi_inspect_agent", { agent_id: args.agent_id, limit: 1, max_bytes: 16384 }, signal);
+        const agent = snapshot.agent as { cwd?: string };
+        if (typeof agent.cwd !== "string") throw new Error("Subagent working directory is unavailable for project trust verification");
+        extra = { project_trust: await this.trust(agent.cwd) };
+      }
+      if (!this.valid() || signal?.aborted) throw new Error("Subagent call cancelled before dispatch");
+      result = await this.client.call(name, args, signal, extra);
+    }
     catch (error) {
       if (!(error instanceof RuntimeError)) throw error;
       isError = true;

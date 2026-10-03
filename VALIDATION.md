@@ -1,5 +1,12 @@
 # Validation
 
+## 2026-10-04 — Bounded condense batches and structured subagent errors
+
+- Condense plans serializable chunks within a 65,536-character ceiling and smaller model limits, saves each successful chunk before the next request, and resumes only the unprocessed suffix after a failure or lifecycle change. Both batching modes retain their boundaries; exact archives and persisted summary receipts still gate pruning.
+- `npm test`: **358/358**, zero failures/skips; production and test type checks pass. Package preparation and the **237-file** pack dry-run pass. Existing behavior contracts cover oversized single turns, small model limits, partial progress/reload, stale responses, expired subagent questions and structured cwd preflight errors.
+- Python subagent suite: **399 tests, 41 opt-in skips**, final run passes. The first run had three timeout-related failures; those three and the changed question-answer contract passed a focused rerun before the full suite passed again.
+- Six isolated replays of the reported session preserve original tool results, avoid repeated requests on reload, and successfully process new work after the recovered backlog. The original personal session/settings remain unchanged. Providers are local mocks; external provider availability and summary quality are outside this proof.
+
 ## 2026-10-02 — Metis MCP session integration
 
 - Implemented the explicit, default-off `extensions/mcp.ts` entry and six native `src/mcp` modules. Public Pi MCP/OAuth packages own protocol/transports; Pi owns CLI, codemode, tool events and permissions. Native configs/credential keys/file and refresh locks interoperate; only stdio and Streamable HTTP are supported. Pi peers now require **1.0.0**; Node minimum is unchanged.

@@ -47,7 +47,10 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
     if (turn === 16) call = { name: "pi_spawn_agent", arguments: { task: "must not start", access: "read", model: "no-such-model-xyz", request_id: "failed-direct" } };
     if (turn === 18 || turn === 20) call = { name: "codemode", arguments: { code: `text(await tools.pi_spawn_agent({task:"must not start",access:"read",model:"no-such-model-xyz",request_id:"failed-nested-${turn}"}));${turn === 20 ? 'throw new Error("after the child error");' : ""}` } };
     if (turn === 22) call = { name: "pi_spawn_agent", arguments: { task: "asynchronous failure proof", access: "read", profile: "failed", model: "pi-mock-offline/mock", request_id: "failed-background" } };
-    if (turn === 25) {
+    if (turn === 25) call = { name: "pi_spawn_agent", arguments: { cwd: join(dir, "missing"), task: "must not start", request_id: "missing-cwd-direct" } };
+    if (turn === 27) call = { name: "codemode", arguments: { code: `const r=await tools.pi_spawn_agent({cwd:${JSON.stringify(join(dir, "missing"))},task:"must not start",request_id:"missing-cwd-nested"}); if(r.isError!==true||r.error?.code!=="invalid_cwd") throw new Error("missing structured preflight error"); text(r);` } };
+    if (turn === 29) call = { name: "pi_followup_task", arguments: { agent_id: "pi_missing_preflight", message: "must not start", request_id: "missing-agent-preflight" } };
+    if (turn === 31) {
       const previous = context.messages.find(message => message.role === "toolResult" && message.toolName === "pi_spawn_agent");
       call = { name: "pi_followup_task", arguments: { agent_id: JSON.parse(previous.content[0].text).agent_id, message: "shutdown viewer proof", request_id: "shutdown-followup" } };
     }
@@ -156,6 +159,15 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   await loaded.session.waitForIdle(); assert.equal(turn, 24, "unobserved asynchronous failure still wakes the parent");
   const attention = loaded.session.sessionManager.getBranch().findLast(entry => entry.customType === "metis-subagent-attention");
   assert.match(attention.content, /failed/);
+  for (const [label, expectedTurn, code] of [["direct cwd", 26, "invalid_cwd"], ["nested cwd", 28, "invalid_cwd"], ["missing followup", 30, "agent_not_found"]]) {
+    await loaded.session.prompt(`Run ${label} preflight proof`); await loaded.session.waitForIdle();
+    assert.equal(turn, expectedTurn);
+    const result = loaded.session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "toolResult").message;
+    assert.equal(result.isError, label !== "nested cwd");
+    assert.match(result.content.map(block => block.text ?? "").join(""), new RegExp(`"code":"${code}"`));
+    if (label !== "nested cwd") assert.equal(JSON.parse(result.content[0].text).error.code, code);
+  }
+  assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.customType === "metis-subagent-attention").length, 2, "preflight errors do not create background failure notifications");
   const viewDeadline = Date.now() + 5000;
   while (!popupRows.some(row => row.includes("nested proof")) && Date.now() < viewDeadline) await new Promise(resolve => setTimeout(resolve, 25));
   assert.ok(popupRows.some(row => row.includes("nested proof")), `clicked agent's real conversation reaches the overlay: ${popupRows.join("\n")}`);

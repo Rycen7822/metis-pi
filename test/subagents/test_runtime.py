@@ -901,8 +901,18 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     async def test_needs_input_and_explicit_answer(self):
         s=await self.spawn('UI_CONFIRM'); r=await self.wait(s['run_id'])
         self.assertEqual(r['runs'][0]['state'],'needs_input')
+        with self.assertRaises(AgentError) as missing:
+            await self.mutation('answer',s['agent_id'],ui_request_id='expired',answer=False)
+        self.assertEqual(missing.exception.code,'input_not_found')
         await self.mutation('answer',s['agent_id'],ui_request_id='ui-1',answer=False)
         await self.wait(s['run_id']); self.assertIn('False',(await self.result(s['run_id']))['text'])
+        generation=self.rt.store.agent(self.scope,s['agent_id'])['generation']
+        for parked in (False,True):
+            if parked: await self.mutation('interrupt',s['agent_id'])
+            with self.assertRaises(AgentError) as expired:
+                await self.mutation('answer',s['agent_id'],ui_request_id='ui-1',answer=False)
+            self.assertEqual(expired.exception.code,'input_not_found')
+            self.assertEqual(self.rt.store.agent(self.scope,s['agent_id'])['generation'],generation)
     async def test_select_answers_keep_original_option_identity(self):
         s=await self.spawn('UI_CONFIRM'); await self.wait(s['run_id'])
         w=self.rt.workers[s['agent_id']]

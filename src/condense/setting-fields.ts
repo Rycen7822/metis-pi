@@ -70,9 +70,9 @@ function summarizerThinkingDescription(config: ContextPruneConfig): string {
 
 function batchingModeDescription(config: ContextPruneConfig): string {
   if (config.batchingMode === "turn") {
-    return "Per turn (default): one summary per assistant turn. Keeps summaries small and granular.";
+    return "Per turn (default): keep assistant turns separate; split oversized turns to fit the input budget.";
   }
-  return "Per agent message: merges all assistant turns between two user messages into one summary. Fewer, larger summaries per conversation exchange.";
+  return "Per agent message: merge assistant turns within one user task up to the input budget; split larger tasks automatically.";
 }
 
 function pruneStatusLineDescription(config: ContextPruneConfig): string {

@@ -26,17 +26,19 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   } }));
   // Spill files use the session directory; inMemory() leaves it empty.
   const sm = SessionManager.create(dir, dir);
-  const hooks = new Map(), tools = new Map(), calls = [], events = createEventBus();
+  const hooks = new Map(), tools = new Map(), calls = [], commands = new Map(), requests = [], events = createEventBus();
   const api = "condense-local-proof";
   const model = { id: "summary", name: "summary", api, provider: "local", baseUrl: "http://invalid", reasoning: false,
     input: ["text"], contextWindow: 100000, maxTokens: 10000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   let release;
-  const stream = (_model, context) => {
+  const stream = (_model, context, options) => {
     calls.push(context);
+    requests.push(options);
     const output = createAssistantMessageEventStream();
     const finish = () => {
-      const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: reply }], stopReason, errorMessage: stopReason === "error" ? "Offline summary provider failed" : undefined, timestamp: 1, usage };
-      output.push({ type: stopReason === "error" ? "error" : "done", reason: stopReason, message, error: message }); output.end(message);
+      const reason = typeof stopReason === "function" ? stopReason(calls.length) : stopReason;
+      const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: reply }], stopReason: reason, errorMessage: reason === "error" ? "Offline summary provider failed" : undefined, timestamp: 1, usage };
+      output.push({ type: reason === "error" ? "error" : "done", reason, message, error: message }); output.end(message);
     };
     if (defer) release = finish; else queueMicrotask(finish);
     return output;
@@ -44,7 +46,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   registerApiProvider({ api, stream, streamSimple: stream }, api);
   const pi = {
     events, getAllTools: () => [...tools.values()], on(name, fn) { hooks.set(name, [...(hooks.get(name) ?? []), fn]); },
-    registerTool(tool) { tools.set(tool.name, tool); }, registerCommand() {}, registerMessageRenderer() {},
+    registerTool(tool) { tools.set(tool.name, tool); }, registerCommand(name, command) { commands.set(name, command); }, registerMessageRenderer() {},
     appendEntry(type, data) { sm.appendCustomEntry(type, data); },
     sendMessage(message) { sm.appendCustomMessageEntry(message.customType, message.content, message.display, message.details); },
   };
@@ -78,7 +80,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
     rmSync(dir, { recursive: true, force: true });
   });
   sm.appendMessage({ role: "user", content: "Build", timestamp: 1 });
-  return { dir, sm, tools, calls, events, ctx, pi, emit, add, finish, notices, statuses, widgets, release: () => release?.() };
+  return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets, release: () => release?.() };
 }
 
 test("packing precedes the 5000-char gate, archives exact output, and never re-compresses settled history", async (t) => {
@@ -341,12 +343,101 @@ test("summary provider sees the retained test tail and bounded original argument
     resultText: "log ".repeat(20000) + "FAILURE_AT_END", isError: true,
   }] };
   const input = serializeBatchForSummarizer(batch);
-  assert.ok(input.length <= 32768);
+  assert.ok(input.length <= 65536);
   assert.match(input, /large\.ts/);
   assert.match(input, /FAILURE_AT_END/);
   assert.match(input, /Original text omitted/);
   assert.equal(input.isWellFormed(), true);
   assert.equal(serializeBatchForSummarizer({ ...batch, toolCalls: Array(1000).fill(batch.toolCalls[0]) }), undefined);
+});
+
+test("automatic and manual chunks keep durable progress through a failure inside one assistant turn", async t => {
+  for (const path of ["automatic", "manual"]) await t.test(path, async t => {
+    let fail = true;
+    const f = await fixture(t, { stopReason: n => fail && n === 2 ? "error" : "stop" });
+    const ids = Array.from({ length: 130 }, (_, i) => `large-chain-${i}`);
+    f.sm.appendMessage({ role: "assistant", timestamp: 2, stopReason: "toolUse", content: ids.map((id, i) => ({
+      type: "toolCall", id, name: "bash", arguments: { command: `cat evidence-${i}.txt` },
+    })) });
+    for (const [i, id] of ids.entries()) f.sm.appendMessage({ role: "toolResult", toolCallId: id, toolName: "bash",
+      content: [{ type: "text", text: `evidence-${i}\n` + "x".repeat(6000) }], isError: false, timestamp: 3 + i });
+    f.sm.appendMessage({ role: "user", content: "A separate task", timestamp: 200 });
+    f.add("later task output\n".repeat(400), "cat later.txt", "later-task");
+    const flush = () => path === "automatic" ? f.finish() : f.commands.get("pruner").handler("now", f.ctx);
+    const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
+    await flush();
+    assert.equal(f.calls.length, 2, "stop requesting after the failed chunk");
+    assert.equal(summaries().length, 1, "first chunk persists before the second fails");
+    const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+    assert.equal(metric.outcome, "partial");
+    assert.equal(metric.processedBatches, 1);
+    const refs = summaries()[0].details.toolCallRefs;
+    const frontier = f.sm.getBranch().findLast(e => e.customType === "context-prune-frontier").data;
+    assert.equal(frontier.lastAttemptedTurnIndex, 0, "frontier stays inside the original assistant turn");
+    assert.equal(frontier.attemptedToolCallCount, refs.length);
+    const recall = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [refs[0].shortId] }, undefined, undefined, f.ctx);
+    assert.equal(recall.details.results[0].text, "evidence-0\n" + "x".repeat(6000));
+    fail = false;
+    await f.emit("session_start");
+    await flush();
+    assert.equal(summaries().flatMap(e => e.details.toolCallRefs).length, ids.length + 1, "reload resumes all remaining occurrences");
+    assert(f.calls.slice(2).every(call => !JSON.stringify(call).includes('"cat evidence-0.txt"')), "durable first chunk is never requested again");
+    const count = f.calls.length;
+    await flush();
+    assert.equal(f.calls.length, count, "completed history stays settled");
+    if (path === "manual") assert(f.notices.some(([message]) => /batches completed; remaining retained/.test(message)));
+  });
+});
+
+test("summary requests reserve output space and local budget failures never request a provider", async t => {
+  const f = await fixture(t);
+  f.ctx.model.contextWindow = 6000;
+  f.ctx.model.maxTokens = 2000;
+  for (let i = 0; i < 3; i++) {
+    const { assistant } = f.add(`结果-${i}\n` + "证据".repeat(3000), `cat unicode-${i}.txt`);
+    assistant.content.unshift({ type: "text", text: "历史描述 ".repeat(2000) });
+  }
+  await f.finish();
+  assert.equal(f.calls.length, 3, "small model automatically gets smaller chunks");
+  for (const [i, call] of f.calls.entries()) {
+    assert(Buffer.byteLength(call.messages[0].content[0].text, "utf8") + f.requests[i].maxTokens < 6000);
+  }
+  f.ctx.model.contextWindow = 2048;
+  f.add("raw result\n".repeat(600), "cat pending.txt");
+  await f.finish();
+  assert.equal(f.calls.length, 3);
+  const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+  assert.equal(metric.reason, "input-budget");
+  assert.match(metric.error, /Input budget/);
+  f.ctx.model.contextWindow = 6000;
+  await f.finish();
+  assert.equal(f.calls.length, 4, "local budget rejection retains evidence for later retry");
+});
+
+test("a tree switch during the next chunk preserves the durable prefix and rejects its late response", async t => {
+  const f = await fixture(t, { defer: true });
+  for (let i = 0; i < 100; i++) f.add(`source-${i}\n` + "x".repeat(6000), `cat source-${i}.txt`);
+  const waitForCalls = async count => {
+    for (let i = 0; i < 100 && f.calls.length < count; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.length, count);
+  };
+  const first = f.finish();
+  await waitForCalls(1); f.release();
+  await waitForCalls(2);
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
+  await f.emit("session_tree"); f.release(); await first;
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
+  assert.equal(f.calls.length, 2, "old lifecycle starts no later requests");
+  let done = false, released = 2;
+  const resumed = f.finish().finally(() => { done = true; });
+  for (let i = 0; i < 100 && !done; i++) {
+    await new Promise(resolve => setImmediate(resolve));
+    if (f.calls.length > released) { released = f.calls.length; f.release(); }
+  }
+  assert(done, "remaining chunks finish after the switch");
+  await resumed;
+  assert(f.calls.slice(2).every(call => !JSON.stringify(call).includes('"cat source-0.txt"')));
+  assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "summarized");
 });
 
 

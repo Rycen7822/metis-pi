@@ -799,10 +799,11 @@ class Runtime:
 
     async def answer_agent(self, a, p):
         aid, sid = a['id'], a['scope']
-        w=self.require_worker(a)
         ui_id=text(p.get('ui_request_id'),'ui_request_id',256)
-        item=w.ui.get(ui_id)
+        w=self.workers.get(aid)
+        item=w.ui.get(ui_id) if w and not w.closed else None
         if not item: raise AgentError('input_not_found','No such pending Pi UI request')
+        w=self.require_worker(a)
         answer=p.get('answer')
         payload={'type':'extension_ui_response','id':ui_id}
         if item.get('method')=='confirm':

@@ -5,7 +5,7 @@ import { capImages, imageLimitFor } from "./image-cap.ts";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
 import { prepareBatch } from "./packing.ts";
-import { summarizeBatch, summarizeBatches, summarizeRange } from "./summarizer.ts";
+import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summarizer.ts";
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
 import { pruneMessages, toolResultStub } from "./pruner.ts";
@@ -19,6 +19,7 @@ import type {
   CapturedBatch,
   PruneFrontier,
   FlushOptions,
+  FlushResult,
   ContextMetricsSnapshot,
   FlushMetricsEntry,
   FlushTrigger,
@@ -124,10 +125,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
   };
 
-  type FlushResult =
-    | { ok: true; reason: "flushed" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number }
-    | { ok: false; reason: "empty" | "already-flushing" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string };
-
   type SessionAppender = {
     appendCustomEntry(customType: string, data?: unknown): string;
     appendCustomMessageEntry(customType: string, content: string, display: boolean, details?: unknown): string;
@@ -170,7 +167,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (batch.turnIndex < currentFrontier.lastAttemptedTurnIndex) return null;
     if (batch.turnIndex > currentFrontier.lastAttemptedTurnIndex) return { ...batch, toolCalls };
 
-    const originalIndex = toolCalls.findIndex((tc) => tc.toolCallId === currentFrontier.lastAttemptedToolCallId);
+    const originalIndex = toolCalls.findIndex((tc) => tc.toolCallId === currentFrontier.lastAttemptedToolCallId
+      && (currentFrontier.lastAttemptedResultTimestamp === undefined || tc.resultTimestamp === currentFrontier.lastAttemptedResultTimestamp));
     if (originalIndex < 0) return { ...batch, toolCalls };
 
     const remaining = toolCalls.slice(originalIndex + 1);
@@ -209,13 +207,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     batches = batches
       .map((batch) => trimBatchToPendingRange(batch))
       .filter((batch): batch is CapturedBatch => batch !== null);
-    return groupBatchesByMode(batches, currentConfig.value.batchingMode);
+    return groupBatchesByMode(batches, currentConfig.value.batchingMode, summarizerInputBudget(currentConfig.value, ctx));
   };
 
   // Summarizes + indexes all pending batches.
-  // When options.onProgress is provided batches are processed sequentially
-  // (one LLM call each) so the caller can update per-row UI. Otherwise all
-  // batches are summarized in parallel (one summarizeBatches call).
+  // Each budget-bounded chunk is requested and committed before the next one.
   // Runtime delivery is used while the agent/tool loop is active so Pi can place
   // steer messages at protocol-safe boundaries. Session delivery is used only for
   // agent-message's final-message flush, where print-mode Pi may invalidate pi.*
@@ -281,7 +277,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         publishedCharsSaved, argumentCharsSaved, firstChangedMessage,
         outcome,
         ...(failureReason ? { reason: failureReason } : {}),
-        ...(outcome === "error" && failureMessage ? { error: failureMessage } : {}),
+        ...((outcome === "error" || outcome === "partial") && failureMessage ? { error: failureMessage } : {}),
         metrics: entryMetrics,
       };
       try {
@@ -323,12 +319,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Use pre-captured batches if provided (avoids double-capture when the
       // caller previewed the queue before opening the progress overlay).
       batches = options.previewedBatches ?? capturePendingBatches(ctx);
-      if (trigger === "message-end" && batches.length > 1) {
-        batches = [{ ...batches[batches.length - 1]!,
-          assistantText: batches.map((batch) => batch.assistantText).filter(Boolean).join("\n"),
-          toolCalls: batches.flatMap((batch) => batch.toolCalls),
-        }];
-      }
       isFlushing = true;
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
@@ -409,6 +399,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const dedupRecords = batches.map((batch, index) => ({
         index,
         batch,
+        lastToolCall: batch.toolCalls.at(-1)!,
         deduped: [] as import("./types.ts").CapturedToolCall[],
         dedupedRawChars: 0,
       }));
@@ -453,78 +444,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         minChars > 0 && record.prepared.candidateChars < minChars && record.batch.toolCalls.length > 0;
       const packedResult = (record: BatchRecord): ResultSlot =>
         record.prepared.packedBatch.toolCalls.length ? { summaryText: record.prepared.packedText, deterministic: true } : "trivial";
-      const summarizable = records.filter((record) => !isFullyDeduped(record) && !isTrivial(record));
-
-      // Only show "summarizing…" if at least one batch will actually be sent
-      // to the LLM. An all-trivial flush is purely bookkeeping.
-      if (summarizable.length > 0) {
-        setPruneStatusWidget(ctx, currentConfig.value, "prune: summarizing…");
-      }
-
-      const source = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
-      // Summarize the non-trivial subset. When onProgress is provided
-      // (/pruner now overlay) we process sequentially so each row can be
-      // checked off as its LLM call completes. Trivial and fully-deduped
-      // batches emit a "skipped" progress event immediately, with no
-      // spinner / no LLM call, and commit record.result directly.
-      if (options.onProgress) {
-        for (const record of records) {
-          if (isFullyDeduped(record) || isTrivial(record)) {
-            options.onProgress(record.index, records.length, record.batch, "skipped");
-            record.result = isFullyDeduped(record) ? "deduped" : packedResult(record);
-            continue;
-          }
-          options.onProgress(record.index, records.length, record.batch, "start");
-          modelAttempted = true;
-          const r = await summarizeBatch(record.prepared.candidate, currentConfig.value, ctx, {
-            signal: options.signal,
-            onFailure: message => { failureMessage = message; },
-            controller: fallbackController,
-            onTextProgress: (receivedChars) =>
-              options.onBatchTextProgress?.(record.index, records.length, record.batch, receivedChars),
-          });
-          assertCurrent(version);
-          record.result = r;
-          options.onProgress(record.index, records.length, record.batch, r ? "done" : "skipped");
-        }
-      } else {
-        // Mark all trivial + fully-deduped slots up front, then call
-        // summarizeBatches with only the remaining batches (parallel — one
-        // LLM call each).
-        for (const record of records) {
-          if (isFullyDeduped(record)) record.result = "deduped";
-          else if (isTrivial(record)) record.result = packedResult(record);
-        }
-        if (summarizable.length > 0) {
-          modelAttempted = true;
-          const ntResults = await summarizeBatches(summarizable.map((record) => record.prepared.candidate), currentConfig.value, ctx, {
-            onFailure: message => { failureMessage = message; },
-            onBatchTextProgress: (ntIndex, _ntTotal, batch, receivedChars) => {
-              const record = summarizable[ntIndex]!;
-              options.onBatchTextProgress?.(record.index, records.length, batch, receivedChars);
-            },
-            signal: options.signal,
-            controller: fallbackController,
-          });
-          for (let k = 0; k < summarizable.length; k++) summarizable[k]!.result = ntResults[k];
-        }
-      }
-
-      assertCurrent(version);
-      if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== source) {
-        throw new Error("This extension ctx is stale: summary source changed");
-      }
-      // A rejected/oversized model result must not discard a useful local pack.
-      // These decisions and alias publication happen after every awaited model call.
-      for (const record of records) {
-        const result = record.result;
-        if ((!result || (typeof result === "object" && !result.deterministic
-          && result.summaryText.length >= record.prepared.candidateChars))
-          && record.prepared.packedBatch.toolCalls.length) {
-          if (result && typeof result === "object" && result.usage) statsAccum.add(result.usage);
-          record.result = packedResult(record);
-        }
-      }
       for (const [key, originalId, occurrence] of pendingAliases) {
         indexer.registerDuplicate(key, originalId, appendEntry!, occurrence);
         publishedAliasesOrArchives = true;
@@ -544,17 +463,66 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let firstFailureIndex = -1;
       let deliveryPending = false;
 
+      const processedOutcome = (count = processedBatches.length): PruneFrontier["outcome"] =>
+        count > trivialBatches.length + oversizedBatches.length + dedupedBatches.length ? "summarized"
+          : oversizedBatches.length ? "skipped-oversized" : dedupedBatches.length ? "skipped-deduped" : "skipped-trivial";
+      const completeRecord = (record: BatchRecord) => {
+        const last = record.lastToolCall;
+        const snapshot: PruneFrontier = {
+          lastAttemptedToolCallId: last.toolCallId, lastAttemptedToolName: last.toolName,
+          lastAttemptedResultTimestamp: last.resultTimestamp,
+          lastAttemptedTurnIndex: last.sourceTurn?.turnIndex ?? record.batch.turnIndex,
+          lastAttemptedTimestamp: last.sourceTurn?.timestamp ?? record.batch.timestamp,
+          attemptedBatchCount: processedBatches.length + 1, attemptedToolCallCount: totalToolCallCount,
+          rawCharCount: totalRawCharCount, summaryCharCount: totalSummaryCharCount,
+          outcome: processedOutcome(processedBatches.length + 1),
+        };
+        appendEntry!(CUSTOM_TYPE_FRONTIER, snapshot);
+        frontier.advance(snapshot);
+        processedBatches.push(record);
+        processedCount = processedBatches.length;
+        options.onProgress?.(record.index, records.length, record.batch,
+          record.result === "trivial" || record.result === "deduped" ? "skipped" : "done");
+      };
+
       // Every tool call phase 1 will stub on the next render is a floor
       // source for supersession: dedup aliases regardless of batch outcome,
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
 
       for (const [i, record] of records.entries()) {
+        assertCurrent(version);
+        if (options.signal?.aborted) throw new Error("summarize: aborted before next chunk");
+        if (isFullyDeduped(record) || isTrivial(record)) {
+          record.result = isFullyDeduped(record) ? "deduped" : packedResult(record);
+        } else {
+          setPruneStatusWidget(ctx, currentConfig.value, `prune: summarizing ${i + 1}/${records.length}`);
+          const source = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+          options.onProgress?.(i, records.length, record.batch, "start");
+          record.result = await summarizeBatch(record.prepared.candidate, currentConfig.value, ctx, {
+            signal: options.signal, controller: fallbackController,
+            onModelAttempt: () => { modelAttempted = true; },
+            onFailure: (message, reason) => { failureMessage = message; failureReason = reason ?? "summarizer-failed"; },
+            onTextProgress: chars => options.onBatchTextProgress?.(i, records.length, record.batch, chars),
+          });
+          assertCurrent(version);
+          if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== source) {
+            throw new Error("This extension ctx is stale: summary source changed");
+          }
+          const result = record.result;
+          if ((!result || result.summaryText.length >= record.prepared.candidateChars) && record.prepared.packedBatch.toolCalls.length) {
+            if (result?.usage) statsAccum.add(result.usage);
+            record.result = packedResult(record);
+          }
+        }
         const result = record.result;
         if (result === null) {
+          if (failureReason === "input-budget") safeNotify(ctx, `pruner: ${failureMessage}; raw results retained`, "warning");
+          options.onProgress?.(i, records.length, record.batch, "skipped");
           firstFailureIndex = i;
           break;
         }
+        failureReason = failureMessage = undefined;
 
         const batch = record.batch;
         const dedupCount = record.deduped.length;
@@ -571,7 +539,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           totalDedupedCount += dedupCount;
           stubCount += dedupCount;
           dedupedBatches.push(record);
-          processedBatches.push(record);
+          completeRecord(record);
           continue;
         }
 
@@ -586,7 +554,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           totalDedupedCount += dedupCount;
           stubCount += dedupCount;
           trivialBatches.push(record);
-          processedBatches.push(record);
+          completeRecord(record);
           continue;
         }
 
@@ -662,14 +630,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         } catch (err) {
           // Persistence error mid-loop: stop here, restore this and remaining batches.
           if (isStaleContextError(err)) {
-            restoreBatches(batches.slice(i));
-            // Advance frontier to what we managed to persist before this point
+            firstFailureIndex = i;
+            failureReason = "stale-context";
+            failureMessage = errorMessage(err);
             break;
           }
           throw err;
         }
 
-        processedBatches.push(record);
+        completeRecord(record);
       }
 
       lowerFloor(supersede, earliestResultTimestamp(floorSources));
@@ -683,66 +652,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         // Nothing was persisted (all calls failed or first call failed)
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
         outcome = deliveryPending ? "delivery-pending" : "error";
-        failureReason = deliveryPending ? "delivery-pending" : "summarizer-failed";
-        return { ok: false, reason: deliveryPending ? "delivery-pending" : "summarizer-failed" };
+        failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
+        return { ok: false, reason: deliveryPending ? "delivery-pending" : failureReason === "input-budget" ? "input-budget" : "summarizer-failed", error: failureMessage };
       }
 
-      // Advance frontier to the last batch we actually processed. A fully
-      // deduped batch has `toolCalls === []` (the dedup pass shallow-cloned
-      // the batch with only the remaining non-dup calls). In that case, fall
-      // back to the record's deduped calls so the frontier anchor still points
-      // at a real tool call — otherwise we'd dereference `undefined.toolCallId`
-      // and the whole flush would throw, silently dropping the dedup-alias
-      // write's effect on subsequent flushes.
-      const lastRecord = processedBatches[processedBatches.length - 1];
-      const lastBatch = lastRecord.batch;
-      const lastBatchAllTCs = lastBatch.toolCalls.length > 0 ? lastBatch.toolCalls : lastRecord.deduped;
-      const lastTC = lastBatchAllTCs[lastBatchAllTCs.length - 1];
-
-      // Outcome precedence: any actual summary wins; oversized beats deduped
-      // beats trivial. (Trivial and deduped are both zero-LLM-cost; deduped
-      // is the more interesting signal because it implies the indexer caught
-      // a redundancy, so it wins the tiebreaker.)
-      const actuallyFlushedCount =
-        processedBatches.length - trivialBatches.length - oversizedBatches.length - dedupedBatches.length;
-      const flushOutcome: PruneFrontier["outcome"] =
-        actuallyFlushedCount > 0
-          ? "summarized"
-          : oversizedBatches.length > 0
-            ? "skipped-oversized"
-            : dedupedBatches.length > 0
-              ? "skipped-deduped"
-              : "skipped-trivial";
-
-      const frontierSnapshot: PruneFrontier = {
-        lastAttemptedToolCallId: lastTC.toolCallId,
-        lastAttemptedToolName: lastTC.toolName,
-        lastAttemptedTurnIndex: lastBatch.turnIndex,
-        lastAttemptedTimestamp: lastBatch.timestamp,
-        attemptedBatchCount: processedBatches.length,
-        attemptedToolCallCount: totalToolCallCount,
-        rawCharCount: totalRawCharCount,
-        summaryCharCount: totalSummaryCharCount,
-        outcome: flushOutcome,
-      };
-
-      try {
-        frontier.advance(frontierSnapshot);
-        appendEntry!(CUSTOM_TYPE_FRONTIER, frontierSnapshot);
-        try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
-        catch (err) {
-          if (delivery === "runtime") throw err;
-          // Session delivery treats stats as optional, unlike its frontier.
-        }
-      } catch (err) {
-        // Batches were summarized/persisted before the frontier/stats write failed;
-        // reflect that in processedBatches rather than reporting 0.
-        processedCount = processedBatches.length;
-        outcome = "error";
-        failureReason = "failed";
-        failureMessage = errorMessage(err);
-        return { ok: false, reason: isStaleContextError(err) ? "stale-context" : "failed", error: errorMessage(err) };
-      }
+      const flushOutcome = processedOutcome();
+      try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
+      catch (err) { if (delivery === "runtime") throw err; }
 
       setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
       emitExternalCost(pi, statsAccum);
@@ -793,16 +709,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // chain-compression block's own try/catch above: a compression failure
       // must not eat this entry — the summarization phase already succeeded.
       processedCount = processedBatches.length;
-      outcome = flushOutcome;
+      outcome = firstFailureIndex >= 0 ? "partial" : flushOutcome;
+      if (firstFailureIndex >= 0) {
+        failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
+        setPruneStatusWidget(ctx, currentConfig.value, `prune: ${processedCount}/${records.length} complete; remaining pending`);
+      }
 
       return {
         ok: true,
-        reason: flushOutcome === "summarized" ? "flushed" : flushOutcome,
+        reason: firstFailureIndex >= 0 ? "partial" : flushOutcome === "summarized" ? "flushed" : flushOutcome,
         batchCount: processedBatches.length,
         toolCallCount: totalToolCallCount,
         rawCharCount: totalRawCharCount,
         summaryCharCount: totalSummaryCharCount,
         dedupedCount: totalDedupedCount,
+        ...(firstFailureIndex >= 0 && failureMessage ? { error: failureMessage } : {}),
       };
     } catch (err) {
       failureReason = options.signal?.aborted ? "aborted" : isStaleContextError(err) ? "stale-context" : "failed";
@@ -811,19 +732,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (projectionContext) rebuildBranchIndex(projectionContext);
         return { ok: false, reason: "stale-context", error: errorMessage(err) };
       }
-      restoreBatches(batches);
-      outcome = "error";
+      restoreBatches(batches.slice(processedCount));
+      outcome = processedCount > 0 ? "partial" : "error";
       // When the abort signal fired, summarizeBatch rethrows rather than
       // swallowing the error.  Don't show a UI error — the user intended this.
       if (options.signal?.aborted) {
         setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
-        return { ok: false, reason: "aborted" };
+        return { ok: false, reason: "aborted", batchCount: processedCount };
       }
       if (isStaleContextError(err)) {
-        return { ok: false, reason: "stale-context", error: errorMessage(err) };
+        return { ok: false, reason: "stale-context", error: errorMessage(err), batchCount: processedCount };
       }
       safeNotify(ctx, `pruner: summarization failed: ${errorMessage(err)}`, "error");
-      return { ok: false, reason: "failed", error: errorMessage(err) };
+      return { ok: false, reason: "failed", error: errorMessage(err), batchCount: processedCount };
     } finally {
       isFlushing = false;
       if (version === lifecycle && (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)) occ.rewrite(ctx, beforeRewrite);

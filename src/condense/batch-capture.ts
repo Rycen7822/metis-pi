@@ -4,6 +4,7 @@ import type { CapturedBatch, CapturedToolCall, BatchingMode } from "./types.ts";
 import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { isChainAnchorCustom } from "./chain-detector.ts";
 import { hasProtectedNestedResults } from "./protected.ts";
+import { prepareBatch } from "./packing.ts";
 
 /**
  * Unwraps a SessionEntry[] branch into AgentMessage-like objects, including
@@ -208,12 +209,13 @@ export function captureUnindexedBatchesFromSession(
 }
 
 // One budget covers the complete batch. The system prompt is small and separate.
-const SUMMARY_INPUT_CHARS = 32768;
+export const SUMMARY_INPUT_CHARS = 65536;
 
 /** Bounded original excerpts; never silently turn partial evidence into a full result. */
 function excerpt(text: string, budget: number, diagnostics = false): string {
   if (text.length <= budget) return text;
   const marker = "\n[Original text omitted; recover the full occurrence with context_tree_query.]\n";
+  if (budget < 2 * marker.length) return marker;
   const room = Math.max(0, budget - 2 * marker.length);
   let selected = "";
   if (diagnostics) {
@@ -231,10 +233,10 @@ function excerpt(text: string, budget: number, diagnostics = false): string {
 }
 
 /** Undefined means the batch identities themselves cannot safely fit the input budget. */
-export function serializeBatchForSummarizer(batch: CapturedBatch): string | undefined {
+export function serializeBatchForSummarizer(batch: CapturedBatch, inputChars = SUMMARY_INPUT_CHARS): string | undefined {
   const parts: string[] = [];
-  if (batch.assistantText) parts.push(`Assistant said: ${excerpt(batch.assistantText, 2048)}\n`);
-  let remaining = SUMMARY_INPUT_CHARS - parts.join("").length;
+  if (batch.assistantText) parts.push(`Assistant said: ${excerpt(batch.assistantText, Math.min(2048, Math.floor(inputChars / 8)))}\n`);
+  let remaining = inputChars - parts.join("").length;
   for (const [index, tc] of batch.toolCalls.entries()) {
     const header = `[[${index + 1}:${tc.toolName}]] Tool: ${tc.toolName}\nArguments (historical JSON):\n`;
     const resultHeader = `\nResult (${tc.isError ? "ERROR" : "OK"}; excerpts are explicitly marked):\n`;
@@ -247,60 +249,40 @@ export function serializeBatchForSummarizer(batch: CapturedBatch): string | unde
     remaining -= part.length + 5;
   }
   const serialized = parts.join("\n---\n");
-  return serialized.length <= SUMMARY_INPUT_CHARS ? serialized : undefined;
+  return serialized.length <= inputChars ? serialized : undefined;
 }
 
 /**
- * Groups CapturedBatches according to the chosen batching mode.
- *
- * - "turn"          : returns the input array unchanged (one summary per assistant turn).
- * - "agent-message" : merges all consecutive batches that share the same `userTurnGroup`
- *                     into a single CapturedBatch, producing one summary per
- *                     user → final-agent-message span.
- *
- * Batches without a `userTurnGroup` (e.g. from the live `turn_end` capture path) are
- * always passed through one-per-batch regardless of mode — grouping only applies to
- * batches captured from the session branch scan.
- *
- * Merge rules:
- *   - `assistantText` = non-empty values joined with "\n\n"
- *   - `toolCalls`     = concatenation in original order
- *   - `turnIndex`     = last batch's turnIndex (latest turn in the group)
- *   - `timestamp`     = last batch's timestamp
- *   - `userTurnGroup` = shared group value of the merged batches
+ * Plan budget-bounded chunks; only agent-message merges adjacent user-group turns.
+ * Preserve occurrence order and each chunk's last source turn, including retries.
+ * A single call that cannot fit is retained for an explicit local budget failure.
  */
-export function groupBatchesByMode(batches: CapturedBatch[], mode: BatchingMode): CapturedBatch[] {
-  if (mode !== "agent-message") return batches;
-
+export function groupBatchesByMode(batches: CapturedBatch[], mode: BatchingMode, inputChars = SUMMARY_INPUT_CHARS): CapturedBatch[] {
   const out: CapturedBatch[] = [];
-  // current tracks the mutable merged batch being built for the current group.
-  // We spread into a plain object so we can mutate it without affecting the source.
-  let current: CapturedBatch & { userTurnGroup: number } | null = null;
-
   for (const batch of batches) {
-    // Batches without a group key are passed through individually; they break
-    // any open merge group too since we can't confidently assign them a span.
-    if (batch.userTurnGroup === undefined) {
-      current = null;
+    if (!batch.toolCalls.length) {
       out.push(batch);
       continue;
     }
-
-    if (current !== null && current.userTurnGroup === batch.userTurnGroup) {
-      // Same span — merge into the current accumulated batch
-      const textParts = [current.assistantText, batch.assistantText].filter(Boolean);
-      current.assistantText = textParts.join("\n\n");
-      current.toolCalls = current.toolCalls.concat(batch.toolCalls);
-      // Advance to the latest turn metadata
-      current.turnIndex = batch.turnIndex;
-      current.timestamp = batch.timestamp;
-    } else {
-      // New group — create a fresh accumulated batch (shallow copy so mutations
-      // to `current` do not bleed back into the original `batch` object)
-      current = { ...batch, userTurnGroup: batch.userTurnGroup };
-      out.push(current);
+    for (const call of batch.toolCalls) {
+      // Retain original turn metadata when a restored chunk is planned again.
+      const sourceTurn = call.sourceTurn ?? { turnIndex: batch.turnIndex, timestamp: batch.timestamp };
+      const tc = { ...call, sourceTurn };
+      const current = out.at(-1);
+      const sameTurn = current?.turnIndex === sourceTurn.turnIndex && current.timestamp === sourceTurn.timestamp;
+      const sameGroup = mode === "agent-message" && batch.userTurnGroup !== undefined
+        && current?.userTurnGroup === batch.userTurnGroup;
+      const candidate = current && current.toolCalls.length && (sameTurn || sameGroup) ? {
+        ...batch, ...sourceTurn,
+        assistantText: sameTurn ? current.assistantText : [current.assistantText, batch.assistantText].filter(Boolean).join("\n\n"),
+        toolCalls: [...current.toolCalls, tc],
+      } : undefined;
+      if (candidate && serializeBatchForSummarizer(prepareBatch(candidate).candidate, inputChars) !== undefined) {
+        out[out.length - 1] = candidate;
+      } else {
+        out.push({ ...batch, ...sourceTurn, toolCalls: [tc] });
+      }
     }
   }
-
   return out;
 }

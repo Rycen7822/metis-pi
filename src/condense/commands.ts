@@ -5,6 +5,7 @@ import {
   type CapturedBatch,
   type ChainCompressionEntry,
   type FlushOptions,
+  type FlushResult,
   type DiagnosticKind,
   type ContextMetricsSnapshot,
   STATUS_WIDGET_ID,
@@ -314,10 +315,7 @@ function startPrunerWidget(
 export function registerCommands(
   pi: ExtensionAPI,
   currentConfig: { value: ContextPruneConfig },
-  flushPending: (ctx: ExtensionCommandContext, options?: FlushOptions) => Promise<
-    | { ok: true; reason: "flushed" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number }
-    | { ok: false; reason: string; error?: string }
-  >,
+  flushPending: (ctx: ExtensionCommandContext, options?: FlushOptions) => Promise<FlushResult>,
   capturePendingBatches: (ctx: ExtensionCommandContext) => CapturedBatch[],
   getStats: () => SummarizerStats,
   getLiveReclaim: () => LiveReclaim | undefined,
@@ -599,7 +597,13 @@ export function registerCommands(
               break;
             }
             const suffix = "error" in result && result.error ? ` (${result.error})` : "";
-            ctx.ui.notify(`pruner: nothing flushed — ${result.reason}${suffix}`, result.reason === "empty" ? "info" : "warning");
+            const progress = result.batchCount ? `${result.batchCount} batches completed; remaining retained` : "nothing flushed";
+            ctx.ui.notify(`pruner: ${progress} — ${result.reason}${suffix}`, result.reason === "empty" ? "info" : "warning");
+            break;
+          }
+
+          if (result.reason === "partial") {
+            ctx.ui.notify(`pruner: ${result.batchCount}/${batches.length} batches completed; remaining retained${result.error ? ` (${result.error})` : ""}`, "warning");
             break;
           }
 

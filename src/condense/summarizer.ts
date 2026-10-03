@@ -6,10 +6,9 @@ import type {
   ContextPruneConfig,
   SummarizerThinking,
   SummarizeBatchOptions,
-  SummarizeBatchesOptions,
   SummarizeResult,
 } from "./types.ts";
-import { serializeBatchForSummarizer } from "./batch-capture.ts";
+import { serializeBatchForSummarizer, SUMMARY_INPUT_CHARS } from "./batch-capture.ts";
 import { FallbackController, type FallbackTransition } from "./summarizer-fallback.ts";
 
 const SYSTEM_PROMPT = `You are summarizing a batch of tool calls made by an AI coding assistant.
@@ -73,6 +72,21 @@ export function resolveModel(config: ContextPruneConfig, ctx: ExtensionContext):
   }
 
   return found;
+}
+
+function summarizerLimits(model: any) {
+  const window = model?.contextWindow > 0 ? model.contextWindow : Infinity;
+  const maxTokens = Math.max(16, Math.min(model?.maxTokens > 0 ? model.maxTokens : 8192, Math.floor(window / 4)));
+  // Reserve output and prompt overhead. At most three UTF-8 bytes per UTF-16
+  // code unit avoids treating non-ASCII characters as one token each.
+  const inputChars = Math.max(0, Math.min(SUMMARY_INPUT_CHARS, Math.floor((window - maxTokens - 2048) / 3)));
+  return { inputChars, maxTokens };
+}
+
+export function summarizerInputBudget(config: ContextPruneConfig, ctx: ExtensionContext): number {
+  const primary = resolveModel(config, ctx);
+  // The same evidence must fit either model if the outage fallback is used.
+  return Math.min(summarizerLimits(primary).inputChars, summarizerLimits(ctx.model ?? primary).inputChars);
 }
 
 function receivedTextChars(message: AssistantMessage): number {
@@ -162,6 +176,7 @@ async function runOnce(
 
     // Pass the combined signal so the underlying fetch is cancelled immediately
     // either when the user presses Esc, or when an idle/ceiling timeout fires.
+    options.onModelAttempt?.();
     const responseStream = stream(
       effectiveModel,
       {
@@ -177,6 +192,7 @@ async function runOnce(
         apiKey: auth.apiKey,
         headers: auth.headers,
         signal: combineSignals(options.signal, timeoutController.signal),
+        maxTokens: summarizerLimits(model).maxTokens,
         ...summarizerThinkingOptions(config),
       }
     );
@@ -357,9 +373,10 @@ export async function summarizeBatch(
   ctx: ExtensionContext,
   options: SummarizeBatchOptions = {}
 ): Promise<SummarizeResult | null> {
-  const serialized = serializeBatchForSummarizer(batch);
+  const inputChars = summarizerInputBudget(config, ctx);
+  const serialized = serializeBatchForSummarizer(batch, inputChars);
   if (serialized === undefined) {
-    options.onFailure?.("Batch has no serializable tool output");
+    options.onFailure?.(`Input budget of ${inputChars} characters cannot fit ${batch.toolCalls.length} tool calls`, "input-budget");
     return null;
   }
   const userMessage =
@@ -380,56 +397,11 @@ export async function summarizeRange(
   ctx: ExtensionContext,
   options: SummarizeBatchOptions = {}
 ): Promise<SummarizeResult | null> {
+  if (perBatchSummaryText.length > summarizerInputBudget(config, ctx)) {
+    options.onFailure?.("Summary fusion exceeds the input budget", "input-budget");
+    return null;
+  }
   const userMessage =
     RANGE_SYSTEM_PROMPT + "\n\n<sub-task-summaries>\n" + perBatchSummaryText + "\n</sub-task-summaries>";
   return runSummarization(userMessage, config, ctx, options);
-}
-
-/**
- * Summarizes multiple captured batches — one LLM call per batch, run in parallel.
- *
- * Returns an array of per-batch results. Each element is either a SummarizeResult
- * (success) or null (that specific batch's call failed). The array length always
- * equals batches.length so callers can zip by index.
- *
- * Rationale for parallel-per-batch instead of a single merged call:
- *   • Each batch becomes its own summary message (one per turn), so they can be
- *     rendered, browsed, and recovered independently via context_tree_query.
- *   • Parallel calls give similar end-to-end latency to a single merged call while
- *     keeping the summaries strictly separated.
- */
-export async function summarizeBatches(
-  batches: CapturedBatch[],
-  config: ContextPruneConfig,
-  ctx: ExtensionContext,
-  options: SummarizeBatchesOptions = {}
-): Promise<Array<SummarizeResult | null>> {
-  if (batches.length === 0) return [];
-  // Single batch — delegate to the single-batch path (no extra overhead)
-  if (batches.length === 1) {
-    return [
-      await summarizeBatch(batches[0], config, ctx, {
-        signal: options.signal,
-        onFailure: options.onFailure,
-        controller: options.controller,
-        onTextProgress: (receivedChars) => {
-          options.onBatchTextProgress?.(0, 1, batches[0], receivedChars);
-        },
-      }),
-    ];
-  }
-
-  // Multiple batches — run in parallel; each produces its own SummarizeResult
-  return Promise.all(
-    batches.map((batch, index) =>
-      summarizeBatch(batch, config, ctx, {
-        signal: options.signal,
-        onFailure: options.onFailure,
-        controller: options.controller,
-        onTextProgress: (receivedChars) => {
-          options.onBatchTextProgress?.(index, batches.length, batch, receivedChars);
-        },
-      })
-    )
-  );
 }

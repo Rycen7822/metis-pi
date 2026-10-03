@@ -131,9 +131,9 @@ export type PruneOn = "on-demand" | "agent-message";
 
 /**
  * Granularity of pruning batches.
- * - "turn"          : one summary per assistant turn (default; current behavior)
- * - "agent-message" : one summary per full user → final-agent-message span
- *                     (merges all turns between two consecutive user messages)
+ * - "turn"          : keep assistant turns separate (default)
+ * - "agent-message" : merge turns within one user task up to the input budget
+ * Both modes split oversized turns into budget-bounded chunks.
  */
 export type BatchingMode = "turn" | "agent-message";
 
@@ -279,9 +279,9 @@ export interface ContextPruneConfig {
   pruneOn: PruneOn;
   /**
    * Granularity of each pruning batch.
-   * - "turn"          : one summary per assistant turn (default)
-   * - "agent-message" : one summary per user → final-agent-message span
-   *                     (all turns between two user messages are merged)
+   * - "turn"          : keep assistant turns separate (default)
+   * - "agent-message" : merge within one user task up to the input budget
+   * Both modes split oversized turns.
    */
   batchingMode: BatchingMode;
   /**
@@ -604,6 +604,8 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
 
 /** A single tool call + its result as captured from turn_end */
 export interface CapturedToolCall {
+  /** Original assistant turn, retained across budget splitting and queue retries. */
+  sourceTurn?: { turnIndex: number; timestamp: number };
 	parentToolCallId?: string;
 	nestedProtected?: boolean;
 	nestedRootToolCallId?: string;
@@ -636,8 +638,8 @@ export interface CapturedToolCall {
 }
 
 /**
- * One complete batch from a single turn_end event.
- * Represents one assistant turn that contained tool calls.
+ * Captured assistant turn or budget-bounded group of tool calls.
+ * turnIndex/timestamp identify the last source turn in the chunk.
  */
 export interface CapturedBatch {
   turnIndex: number;
@@ -781,7 +783,7 @@ export interface FlushMetricsEntry {
   publishedCharsSaved?: number;
   argumentCharsSaved?: number;
   firstChangedMessage?: number;
-  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "empty" | "delivery-pending" | "error";
+  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "empty" | "delivery-pending" | "partial" | "error";
   reason?: string;
   error?: string;
   /** Computed at flush ENTRY (pre-flush pressure). */
@@ -845,6 +847,8 @@ export type PruneFrontierOutcome =
 export interface PruneFrontier {
   /** Last tool call included in the completed prune attempt */
   lastAttemptedToolCallId: string;
+  /** Occurrence identity when a tool ID is reused within a captured turn. */
+  lastAttemptedResultTimestamp?: number;
   /** Name of the last tool call included in the completed prune attempt */
   lastAttemptedToolName: string;
   /** Assistant turn index containing the last attempted tool call */
@@ -883,12 +887,15 @@ export type BatchTextProgressCallback = (
 ) => void;
 
 /** Options accepted by `flushPending`. */
+export type FlushResult =
+  | { ok: true; reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number; error?: string }
+  | { ok: false; reason: "empty" | "already-flushing" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string; batchCount?: number };
+
 export interface FlushOptions {
   /** Delivery path: "runtime" uses sendMessage/steer (default); "session" writes directly to session. */
   delivery?: "runtime" | "session";
   /**
-   * When provided, batches are processed sequentially (one LLM call each) instead of
-   * in parallel, and this callback is invoked before/after each batch. Used by
+   * Invoked before/after each sequentially committed batch. Used by
    * `/pruner now` to drive the multi-row progress overlay.
    */
   onProgress?: ProgressCallback;
@@ -906,8 +913,8 @@ export interface FlushOptions {
   previewedBatches?: CapturedBatch[];
   /**
    * Abort signal — when fired the in-flight summarization is cancelled and
-   * `flushPending` returns `{ ok: false, reason: "aborted" }` without advancing
-   * the frontier. All pending batches are restored so the next flush can retry.
+   * `flushPending` returns `{ ok: false, reason: "aborted" }`. Completed chunks
+   * keep their durable frontier; unprocessed chunks are restored for retry.
    */
   signal?: AbortSignal;
   /** Which trigger initiated this flush. Defaults to "manual" when absent. */
@@ -924,30 +931,14 @@ export interface FlushOptions {
 /** Options for a single summarizeBatch() call. */
 export interface SummarizeBatchOptions {
   /** Reports a discarded result's cause without putting it in model context. */
-  onFailure?: (message: string) => void;
+  onFailure?: (message: string, reason?: "input-budget") => void;
+  /** Invoked only when a provider stream is about to be requested. */
+  onModelAttempt?: () => void;
   /** Receives the number of summary text characters streamed so far. */
   onTextProgress?: (receivedChars: number) => void;
   /**
    * Abort signal — when fired the in-flight stream call is cancelled and the
    * batch is treated as aborted (not a summarizer failure).
-   */
-  signal?: AbortSignal;
-  /**
-   * Session-scoped outage-fallback controller. When present AND a distinct
-   * fallback model exists, runSummarization routes/retries via the controller
-   * (see src/summarizer-fallback.ts). Absent => today's single-attempt behavior.
-   */
-  controller?: FallbackController;
-}
-
-/** Options for summarizeBatches() when callers want live per-batch text progress. */
-export interface SummarizeBatchesOptions {
-  onFailure?: (message: string) => void;
-  /** Receives streamed summary text character counts for each batch. */
-  onBatchTextProgress?: BatchTextProgressCallback;
-  /**
-   * Abort signal forwarded to every individual summarizeBatch() call.
-   * When fired, all in-flight stream calls are cancelled.
    */
   signal?: AbortSignal;
   /**
