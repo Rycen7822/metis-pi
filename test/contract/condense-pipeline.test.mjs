@@ -27,20 +27,27 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   // Spill files use the session directory; inMemory() leaves it empty.
   const sm = SessionManager.create(dir, dir);
   const hooks = new Map(), tools = new Map(), calls = [], commands = new Map(), requests = [], events = createEventBus();
+  const pendingFinishes = new Set();
   const api = "condense-local-proof";
   const model = { id: "summary", name: "summary", api, provider: "local", baseUrl: "http://invalid", reasoning: false,
     input: ["text"], contextWindow: 100000, maxTokens: 10000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  let release;
+  const releases = [];
   const stream = (_model, context, options) => {
     calls.push(context);
     requests.push(options);
+    const callNumber = calls.length;
     const output = createAssistantMessageEventStream();
+    let settled = false;
     const finish = () => {
-      const reason = typeof stopReason === "function" ? stopReason(calls.length) : stopReason;
+      if (settled) return;
+      settled = true;
+      const reason = options.signal?.aborted ? "aborted" : typeof stopReason === "function" ? stopReason(callNumber) : stopReason;
       const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: reply }], stopReason: reason, errorMessage: reason === "error" ? "Offline summary provider failed" : undefined, timestamp: 1, usage };
       output.push({ type: reason === "error" ? "error" : "done", reason, message, error: message }); output.end(message);
     };
-    if (defer) release = finish; else queueMicrotask(finish);
+    options.signal?.addEventListener("abort", finish, { once: true });
+    releases.push(finish);
+    if (!defer) queueMicrotask(finish);
     return output;
   };
   registerApiProvider({ api, stream, streamSimple: stream }, api);
@@ -70,17 +77,25 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
     sm.appendMessage(assistant); sm.appendMessage(result);
     return { assistant, result, id };
   }
-  async function finish() {
-    const message = { role: "assistant", content: [{ type: "text", text: "Final reply" }], stopReason: "stop", timestamp: clock++ };
-    await emit("message_end", { message }); sm.appendMessage(message);
+  function finish() {
+    const pending = (async () => {
+      const message = { role: "assistant", content: [{ type: "text", text: "Final reply" }], stopReason: "stop", timestamp: clock++ };
+      await emit("message_end", { message }); sm.appendMessage(message);
+    })();
+    pendingFinishes.add(pending);
+    pending.then(() => pendingFinishes.delete(pending), () => pendingFinishes.delete(pending));
+    return pending;
   }
   t.after(async () => {
-    await emit("session_shutdown"); unregisterApiProviders(api);
+    await emit("session_shutdown");
+    await Promise.allSettled(pendingFinishes);
+    unregisterApiProviders(api);
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
     rmSync(dir, { recursive: true, force: true });
   });
   sm.appendMessage({ role: "user", content: "Build", timestamp: 1 });
-  return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets, release: () => release?.() };
+  return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets,
+    release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
 
 test("packing precedes the 5000-char gate, archives exact output, and never re-compresses settled history", async (t) => {
@@ -366,7 +381,8 @@ test("automatic and manual chunks keep durable progress through a failure inside
     const flush = () => path === "automatic" ? f.finish() : f.commands.get("pruner").handler("now", f.ctx);
     const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
     await flush();
-    assert.equal(f.calls.length, 2, "stop requesting after the failed chunk");
+    const attempted = f.calls.length;
+    assert(attempted >= 2 && attempted <= 3, "failure stops scheduling beyond the bounded request window");
     assert.equal(summaries().length, 1, "first chunk persists before the second fails");
     const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
     assert.equal(metric.outcome, "partial");
@@ -381,7 +397,7 @@ test("automatic and manual chunks keep durable progress through a failure inside
     await f.emit("session_start");
     await flush();
     assert.equal(summaries().flatMap(e => e.details.toolCallRefs).length, ids.length + 1, "reload resumes all remaining occurrences");
-    assert(f.calls.slice(2).every(call => !JSON.stringify(call).includes('"cat evidence-0.txt"')), "durable first chunk is never requested again");
+    assert(f.calls.slice(attempted).every(call => !JSON.stringify(call).includes('"cat evidence-0.txt"')), "durable first chunk is never requested again");
     const count = f.calls.length;
     await flush();
     assert.equal(f.calls.length, count, "completed history stays settled");
@@ -414,29 +430,63 @@ test("summary requests reserve output space and local budget failures never requ
   assert.equal(f.calls.length, 4, "local budget rejection retains evidence for later retry");
 });
 
-test("a tree switch during the next chunk preserves the durable prefix and rejects its late response", async t => {
+test("parallel summaries commit in order within a three-record window and reject changed sources", async t => {
+  for (const changed of [false, true]) await t.test(changed ? "source changed" : "out of order", async t => {
+    const f = await fixture(t, { defer: true });
+    for (let i = 0; i < 5; i++) {
+      f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: 100 + i });
+      f.add(`source-${i}\n` + "x".repeat(6000), `cat source-${i}.txt`, `parallel-${i}`);
+    }
+    const pending = f.finish();
+    for (let i = 0; i < 100 && f.calls.length < 3; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.length, 3, "requests overlap before any provider is released");
+    f.release(2); f.release(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.length, 3, "completed later requests do not create an unbounded backlog");
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 0);
+    if (changed) f.sm.appendMessage({ role: "user", content: "New source", timestamp: 300 });
+    f.release(0);
+    let done = false;
+    pending.finally(() => { done = true; });
+    for (let i = 0; i < 100 && !done; i++) { await new Promise(resolve => setImmediate(resolve)); f.releaseAll(); }
+    await pending;
+    const summaries = f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
+    assert.deepEqual(summaries.map(e => e.details.toolCallRefs[0].toolCallId), changed ? [] : Array.from({ length: 5 }, (_, i) => `parallel-${i}`));
+    if (changed) {
+      assert.equal(f.calls.length, 3);
+      assert(f.requests.every(r => r.signal.aborted));
+      assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.reason, "stale-context");
+    } else assert.equal(f.calls.length, 5);
+  });
+});
+
+test("a tree switch cancels concurrent requests, preserves the durable prefix and restores the suffix", async t => {
   const f = await fixture(t, { defer: true });
   for (let i = 0; i < 100; i++) f.add(`source-${i}\n` + "x".repeat(6000), `cat source-${i}.txt`);
   const waitForCalls = async count => {
-    for (let i = 0; i < 100 && f.calls.length < count; i++) await new Promise(resolve => setImmediate(resolve));
+    for (let i = 0; i < 300 && f.calls.length < count; i++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(f.calls.length, count);
   };
   const first = f.finish();
-  await waitForCalls(1); f.release();
-  await waitForCalls(2);
+  await waitForCalls(3); f.release(0);
+  for (let i = 0; i < 300 && !f.sm.getBranch().some(e => e.customType === "context-prune-summary"); i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  const attempted = f.calls.length;
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
-  await f.emit("session_tree"); f.release(); await first;
+  await f.emit("session_tree"); await first;
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 1);
-  assert.equal(f.calls.length, 2, "old lifecycle starts no later requests");
-  let done = false, released = 2;
+  assert.equal(f.calls.length, attempted, "old lifecycle starts no later requests");
+  assert(f.requests.slice(0, attempted).every(r => r.signal.aborted), "cancel propagates to every old provider request");
+  let done = false;
   const resumed = f.finish().finally(() => { done = true; });
   for (let i = 0; i < 100 && !done; i++) {
     await new Promise(resolve => setImmediate(resolve));
-    if (f.calls.length > released) { released = f.calls.length; f.release(); }
+    f.releaseAll();
   }
   assert(done, "remaining chunks finish after the switch");
   await resumed;
-  assert(f.calls.slice(2).every(call => !JSON.stringify(call).includes('"cat source-0.txt"')));
+  assert(f.calls.slice(attempted).every(call => !JSON.stringify(call).includes('"cat source-0.txt"')));
   assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "summarized");
 });
 

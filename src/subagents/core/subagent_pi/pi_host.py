@@ -9,6 +9,7 @@ from .config import load_config
 from .common import AgentError
 from .schema import TOOLS,BY_NAME,validate,validate_op
 from .stdio import OutputClosed,Stdio
+from . import RUNTIME_REVISION
 
 HOST_OPS=frozenset({'pi_watch','pi_view','pi_claim','pi_observe','pi_release','pi_uncertain','pi_detach'})
 
@@ -29,6 +30,11 @@ async def serve_pi(home):
                 ping=await request(home,'ping',{})
                 if ping.get('pi_host')!=1:
                     raise AgentError('version_mismatch','Running daemon lacks Pi host support; drain and restart it explicitly')
+                if ping.get('runtime_revision')!=RUNTIME_REVISION:
+                    raise AgentError('version_mismatch',
+                        'Running subagent daemon has older or different source code. Reload cannot upgrade it. '
+                        'Let work finish, close resident children, stop the daemon without --force, then reload. '
+                        'Background work has not been interrupted.')
                 config=load_config(home)
                 extra={k:os.environ[k] for k in config['inheritance'].get('child_env',[]) if k in os.environ}
                 candidate={**candidate,'env':{**candidate['env'],**extra}}

@@ -31,3 +31,6 @@ inspection and the CLI `close` operation before reuse.
 Runtime upgrades require draining work, closing resident children and waiting
 for the daemon to finish shutting down before reconnecting. A frontend reload
 reconnects the existing daemon and retains the parent session's scope.
+The native frontend checks the loaded backend's source fingerprint, including
+updates within the same package version. A mismatch reports `version_mismatch`
+instead of silently using stale code; it never interrupts background work.

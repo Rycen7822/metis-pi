@@ -97,6 +97,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (version !== lifecycle) throw new Error("This extension ctx is stale: condense lifecycle changed");
   };
   let isFlushing = false;
+  let activeFlushAbort: AbortController | undefined;
   let previousFraction: number | null = null;
   // Set on session_start/session_tree when the branch rescan finds recoverable
   // work but pendingBatches was just zeroed (reload/tree-switch). Lets the
@@ -237,6 +238,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (isFlushing) return { ok: false, reason: "already-flushing" };
     if (options.trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "empty" };
     const version = lifecycle;
+    const abort = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
     const beforeRewrite = occ.measure(ctx);
 
     // Clear on every non-concurrent invocation, regardless of outcome — the
@@ -320,6 +323,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // caller previewed the queue before opening the progress overlay).
       batches = options.previewedBatches ?? capturePendingBatches(ctx);
       isFlushing = true;
+      activeFlushAbort = abort;
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
         const before = projectContext(base.messages, ctx.model?.api, ctx).messages;
@@ -424,13 +428,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           batches[record.index] = record.batch;
         }
       }
-      // Scheduling and commit share complete records; no parallel result or
-      // prepared arrays need to be kept aligned with the batch indexes.
+      // Requests may complete out of order; only the commit loop publishes them.
       const records = dedupRecords.map((record) => ({
         ...record,
         prepared: prepareBatch(record.batch),
         rawChars: record.batch.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0),
         result: null as ResultSlot,
+        job: undefined as Promise<void> | undefined,
+        abort: new AbortController(),
+        error: undefined as unknown,
+        failureReason: undefined as string | undefined,
+        failureMessage: undefined as string | undefined,
       }));
       type BatchRecord = (typeof records)[number];
 
@@ -489,34 +497,59 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // source for supersession: dedup aliases regardless of batch outcome,
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
+      let expectedSource = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+      let nextRequest = 0, failedRequest = Infinity;
+      const controller = fallbackController;
+      const config = currentConfig.value;
+      const checkSource = () => {
+        assertCurrent(version);
+        if (signal.aborted) throw new Error("summarize: aborted");
+        if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== expectedSource) {
+          throw new Error("This extension ctx is stale: summary source changed");
+        }
+      };
+      const schedule = (index: number) => {
+        // Keep at most three uncommitted records in flight, even if later calls
+        // finish first. No further work starts after an observed failure.
+        while (nextRequest < Math.min(index + 3, records.length, failedRequest)) {
+          const i = nextRequest++, record = records[i]!;
+          if (isFullyDeduped(record) || isTrivial(record)) {
+            record.result = isFullyDeduped(record) ? "deduped" : packedResult(record);
+            continue;
+          }
+          options.onProgress?.(i, records.length, record.batch, "start");
+          const requestSignal = AbortSignal.any([signal, record.abort.signal]);
+          record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
+            signal: requestSignal, controller,
+            onModelAttempt: () => { modelAttempted = true; },
+            onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
+            onTextProgress: chars => options.onBatchTextProgress?.(i, records.length, record.batch, chars),
+          }).then(result => {
+            // Count completed provider work even if an earlier chunk later
+            // prevents this result from being committed.
+            if (result?.usage && !signal.aborted) statsAccum.add(result.usage);
+            if ((!result || result.summaryText.length >= record.prepared.candidateChars) && record.prepared.packedBatch.toolCalls.length) {
+              record.result = packedResult(record);
+            } else record.result = result;
+          }).catch(error => { record.error = error; }).then(() => {
+            if (record.result !== null || requestSignal.aborted) return;
+            failedRequest = Math.min(failedRequest, i);
+            for (const later of records.slice(failedRequest + 1, nextRequest)) later.abort.abort();
+          });
+        }
+      };
 
       for (const [i, record] of records.entries()) {
-        assertCurrent(version);
-        if (options.signal?.aborted) throw new Error("summarize: aborted before next chunk");
-        if (isFullyDeduped(record) || isTrivial(record)) {
-          record.result = isFullyDeduped(record) ? "deduped" : packedResult(record);
-        } else {
-          setPruneStatusWidget(ctx, currentConfig.value, `prune: summarizing ${i + 1}/${records.length}`);
-          const source = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
-          options.onProgress?.(i, records.length, record.batch, "start");
-          record.result = await summarizeBatch(record.prepared.candidate, currentConfig.value, ctx, {
-            signal: options.signal, controller: fallbackController,
-            onModelAttempt: () => { modelAttempted = true; },
-            onFailure: (message, reason) => { failureMessage = message; failureReason = reason ?? "summarizer-failed"; },
-            onTextProgress: chars => options.onBatchTextProgress?.(i, records.length, record.batch, chars),
-          });
-          assertCurrent(version);
-          if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== source) {
-            throw new Error("This extension ctx is stale: summary source changed");
-          }
-          const result = record.result;
-          if ((!result || result.summaryText.length >= record.prepared.candidateChars) && record.prepared.packedBatch.toolCalls.length) {
-            if (result?.usage) statsAccum.add(result.usage);
-            record.result = packedResult(record);
-          }
-        }
+        checkSource();
+        schedule(i);
+        if (record.job) setPruneStatusWidget(ctx, currentConfig.value, `prune: summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
+        await record.job;
+        checkSource();
+        if (record.error) throw record.error;
         const result = record.result;
         if (result === null) {
+          failureMessage = record.failureMessage;
+          failureReason = record.failureReason;
           if (failureReason === "input-budget") safeNotify(ctx, `pruner: ${failureMessage}; raw results retained`, "warning");
           options.onProgress?.(i, records.length, record.batch, "skipped");
           firstFailureIndex = i;
@@ -558,7 +591,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           continue;
         }
 
-        if (result.usage) statsAccum.add(result.usage);
         const archivedBatch = result.deterministic ? record.prepared.packedBatch : batch;
         const beforeArchive = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
         const summaryRefs = await archiveBatches([archivedBatch], { indexer, appendEntry: appendEntry!,
@@ -639,6 +671,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
 
         completeRecord(record);
+        expectedSource = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
       }
 
       lowerFloor(supersede, earliestResultTimestamp(floorSources));
@@ -746,6 +779,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       safeNotify(ctx, `pruner: summarization failed: ${errorMessage(err)}`, "error");
       return { ok: false, reason: "failed", error: errorMessage(err), batchCount: processedCount };
     } finally {
+      abort.abort();
+      if (activeFlushAbort === abort) activeFlushAbort = undefined;
       isFlushing = false;
       if (version === lifecycle && (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)) occ.rewrite(ctx, beforeRewrite);
       emitFlushMetricsOnce();
@@ -801,6 +836,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const start = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
+    activeFlushAbort?.abort();
     clearBoot();
     restore(ctx);
     const config = await loadConfig();
@@ -821,6 +857,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const tree = (ctx: ExtensionContext) => {
     lifecycle++;
+    activeFlushAbort?.abort();
     restore(ctx);
     rebuildBranchIndex(ctx);
     restoreBranchPending(ctx);
@@ -1194,6 +1231,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     start, tree,
     shutdown(ctx: ExtensionContext) {
       lifecycle++;
+      activeFlushAbort?.abort();
       clearBoot();
       resetNested();
       occ.shutdown(ctx);

@@ -12,7 +12,7 @@ import shutil
 import sys
 import time
 
-from . import __version__, PROTOCOL_VERSION, views, worker
+from . import __version__, PROTOCOL_VERSION, RUNTIME_REVISION, views, worker
 from .binding import ScopeBindings
 from .common import (TERMINAL, AgentError, RESIDENT_AGENT_STATES, bounded, crop,
     dumps, group_members, identifier, integer, new_id, now, process_identity, text, label)
@@ -621,7 +621,7 @@ class Runtime:
         return {'agent_id':a['id'],'previous_status':previous,'runtime_retained':True}
 
     async def dispatch(self,op,p,source=None):
-        if op=='ping': return {'version':__version__,'protocol':PROTOCOL_VERSION,'pid':os.getpid(),'pi_host':1}
+        if op=='ping': return {'version':__version__,'protocol':PROTOCOL_VERSION,'pid':os.getpid(),'pi_host':1,'runtime_revision':RUNTIME_REVISION}
         if op.startswith('pi_'):
             result=await self.parent_notifications.pi.dispatch(op,p,source)
             self.notify()

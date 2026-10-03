@@ -13,6 +13,7 @@ import shutil
 import sqlite3
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -33,15 +34,31 @@ class McpHarness:
         self.workspace=self.root/'workspace'; self.workspace.mkdir()
         (self.home/'config.toml').write_text('pi_command = '+json.dumps([sys.executable,str(TEST_ROOT/'fake_pi.py')])+'\nrpc_timeout_seconds=8\n[inheritance]\nenabled = false\n')
         self.mcp=None; self.stderr_task=None; self.reqid=0
+        self.daemons=[]
+        popen=subprocess.Popen
+        def owned_daemon(*args,**kwargs):
+            proc=popen(*args,**kwargs)
+            command=args[0] if args else kwargs.get('args',[])
+            if (isinstance(command,(list,tuple)) and command[-2:]==['daemon','run']
+                    and kwargs.get('env',{}).get('PI_AGENTS_HOME')==str(self.home)):
+                self.daemons.append(proc)
+            return proc
+        patcher=mock.patch('subagent_pi.client.subprocess.Popen',side_effect=owned_daemon)
+        patcher.start(); self.addCleanup(patcher.stop)
     async def asyncTearDown(self):
         if self.mcp and self.mcp.returncode is None:
             self.mcp.stdin.close()
             try: await asyncio.wait_for(self.mcp.wait(),3)
             except asyncio.TimeoutError: self.mcp.kill(); await self.mcp.wait()
         if self.stderr_task: await asyncio.gather(self.stderr_task,return_exceptions=True)
-        with contextlib.suppress(AgentError): await request(self.home,'shutdown',{'force':True},autostart=False)
-        until=asyncio.get_running_loop().time()+8
-        while socket_path(self.home).exists() and asyncio.get_running_loop().time()<until: await asyncio.sleep(.05)
+        with contextlib.suppress(AgentError): await request(self.home,'shutdown',{'force':True},timeout=5,autostart=False)
+        for proc in self.daemons:
+            if proc.poll() is None: proc.terminate()
+            try: await asyncio.to_thread(proc.wait,45)
+            except subprocess.TimeoutExpired:
+                proc.kill(); await asyncio.to_thread(proc.wait)
+                self.tmp._finalizer.detach()
+                self.fail(f'Owned daemon {proc.pid} did not shut down; diagnostic state retained at {self.home}')
         self.tmp.cleanup()
     async def open_scope(self):
         return (await request(self.home,'scope_open',{'cwd':str(self.workspace)}))['scope']
@@ -51,6 +68,9 @@ class McpHarness:
         env=os.environ.copy(); env['PI_AGENTS_HOME']=str(self.home); env.pop('PI_AGENTS_SCOPE',None)
         env.pop('CODEX_THREAD_ID',None); env.pop('CODEX_SESSION_ID',None)
         env.update(getattr(self,'mcp_env',{}))
+        # Start from this fixture so its daemon handle is retained, including
+        # failed tests. MCP still uses the real IPC/autostart implementation.
+        with mock.patch.dict(os.environ,env): await request(self.home,'ping',{})
         self.mcp=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/subagent-pi'),'mcp',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,limit=8*1024*1024)
         self.stderr_task=asyncio.create_task(self.mcp.stderr.read())

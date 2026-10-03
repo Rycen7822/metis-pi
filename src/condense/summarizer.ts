@@ -159,7 +159,9 @@ async function runOnce(
       : `summarizer ${modelLabel(model)} stalled (no output for ${Math.round(idleMs / 1000)}s)`;
 
   try {
+    if (options.signal?.aborted) throw new Error("summarize: aborted before authentication");
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (options.signal?.aborted) throw new Error("summarize: aborted during authentication");
     if (!auth.ok) {
       const authMessage = "error" in auth ? auth.error : "authentication failed";
       return { kind: "auth", message: authMessage };
@@ -170,6 +172,7 @@ async function runOnce(
     // The shipped model data pins the individual host, which 421s other seats,
     // so the resolved auth baseUrl must win over the static model baseUrl.
     const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
+    if (options.signal?.aborted) throw new Error("summarize: aborted before provider request");
     const effectiveModel = providerAuth?.auth.baseUrl
       ? { ...model, baseUrl: providerAuth.auth.baseUrl }
       : model;
@@ -235,6 +238,7 @@ async function runOnce(
     if (options.signal?.aborted) throw new Error("summarize: aborted during stream");
 
     const response = await responseStream.result();
+    if (options.signal?.aborted) throw new Error("summarize: aborted before result delivery");
     reportTextProgress(response);
     // stopReason "aborted" means the provider cut the stream short (e.g. signal
     // fired just before the final chunk). Treat identically to the signal check
