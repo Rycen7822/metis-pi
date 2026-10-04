@@ -309,7 +309,7 @@ TOOLS = [
     tool(
         "pi_wait_agent",
         "wait",
-        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes; delivery consumes returned notifications automatically. Completed means the model stopped, not that its task passed acceptance; verify artifacts before reporting success. Settles earlier parent notifications before output. Cancelling the wait does not stop agents.",
+        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes; delivery consumes returned notifications automatically. Completed means the model stopped, not that its task passed acceptance; verify artifacts before reporting success. Inputs marked not_consumed are not replayed; resend explicitly if needed. Cancelling the wait does not stop agents.",
         {
             **SCOPE,
             "run_ids": {"type": "array", "items": ID, "maxItems": 100,
@@ -471,7 +471,8 @@ MANAGEMENT = [
         "pi_close_agent",
         "close",
         "Stop work and terminate the owned process group. Preserve durable session and results. Also reaps a verified orphan. Capacity is managed automatically: settled idle agents are parked when the resident limit is reached.",
-        {**AGENT, **REQ},
+        {**AGENT, **REQ, "confirm_cleanup": {"type":"integer", "minimum":1,
+            "description":"Explicit operator confirmation after inspecting and removing all descendants of this dead owner generation. Does not kill or override a live or unidentified owner."}},
         ["agent_id", "request_id"],
     ),
     tool(
@@ -564,8 +565,8 @@ def validate_op(op, p):
         fields = {"scope":ID}
         if op=="pi_watch": fields["after"]={**S,"maxLength":64}
         if op=="pi_view": fields.update(agent_id=LABEL,after={"type":"integer","minimum":0,"maximum":2**53-1})
-        if op=="pi_claim": fields["events"]={"type":"array","items":{**S,"minLength":64,"maxLength":64},"maxItems":20}
+        if op=="pi_claim": fields["events"]={"type":"array","items":{**S,"minLength":64,"maxLength":64},"minItems":1,"maxItems":20}
         if op in {"pi_observe","pi_release","pi_uncertain"}: fields["receipt"]=ID
-        validate(p,obj(fields,["scope"]+(["agent_id"] if op=="pi_view" else ["events"] if op=="pi_claim" else ["receipt"] if "receipt" in fields else [])))
+        validate(p,obj(fields,["scope"]+(["agent_id"] if op=="pi_view" else ["receipt"] if "receipt" in fields else [])))
     elif op not in {"ping", "doctor", "scope_list", "shutdown"}:
         raise AgentError("unknown_operation", "Unknown operation")

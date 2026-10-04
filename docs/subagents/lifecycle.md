@@ -15,6 +15,10 @@ Queued input is not consumed input. Tool result delivery automatically consumes
 the returned terminal notices; no separate confirmation is required. Pi consumes
 only receipts saved to the parent's current session branch; standalone CLI/MCP
 consumes after successful output. Failed delivery leaves attention pending.
+Results ready during a tool turn enter the next model request before the final
+reply. Later completions still wake an idle parent; delivered results do not repeat.
+Inputs marked `not_consumed` after interruption are not replayed into a new task;
+resend them explicitly if they are still wanted.
 Status-only `list` queries preserve attention. Result files remain available for paging and rereading. Default wait and the
 outstanding list include active and not-yet-delivered runs. Explicit run IDs can
 always reread a result. An uncertain mutation is never retried automatically.
@@ -40,7 +44,10 @@ and results, and release their original name after verified cleanup.
 A failed worker can be inspected with `pi_inspect_agent`; create a new agent with
 `pi_spawn_agent` when its launch settings or saved session are unusable. A verified
 parked/closed agent resumes via `pi_followup_task`. Unverified cleanup requires
-inspection and the CLI `close` operation before reuse.
+inspection before reuse. When a killed guard cannot provide its descendant receipt,
+remove all remaining descendants, inspect the owner generation, then use CLI
+`close --confirm-cleanup GENERATION`. This records the operator's inspection;
+it rejects live or unidentified owners and stale generations.
 
 On Linux/WSL each worker guard adopts orphaned descendants, including detached
 shell process groups, and reaps them before releasing its session lease. Cleanup

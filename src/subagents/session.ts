@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type TurnEndEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
 import { SubagentViewer, type AgentInspection } from "./viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, type WidgetAgent } from "./widget.ts";
@@ -26,7 +26,6 @@ export class SubagentSession {
   private watching?: Promise<void>;
   private closed = false;
   private deliveries = new Map<string, Delivery>();
-  private pending: Attention[] = [];
   private agents: WidgetAgent[] = [];
   private chain: Promise<unknown> = Promise.resolve();
   private readonly sessionId: string;
@@ -125,7 +124,7 @@ export class SubagentSession {
         while (this.valid()) {
           const result = await this.client.call("pi_watch", { ...(cursor ? { after: cursor } : {}) }, this.watchAbort.signal);
           if (!this.valid()) return;
-          cursor = result.cursor; this.pending = result.notifications as Attention[]; this.agents = result.agents as typeof this.agents;
+          cursor = result.cursor; this.agents = result.agents as typeof this.agents;
           this.renderWidget();
           if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.serialize(() => this.deliverIdle());
         }
@@ -139,8 +138,8 @@ export class SubagentSession {
   }
   private async claim() {
     await this.reconcile();
-    if (!this.valid() || !this.pending.length) return;
-    const claim = await this.client.call("pi_claim", { events: this.pending.slice(0, 20).map(event => event.notification_id) });
+    if (!this.valid()) return;
+    const claim = await this.client.call("pi_claim", {});
     const events = claim.events as Attention[];
     if (!events.length) return;
     return { receipt: claim.id as string, events, runs: claim.runs as unknown[], questions: claim.questions as QuestionIdentity[] };
@@ -158,7 +157,7 @@ export class SubagentSession {
     catch (error) { await this.client.call("pi_uncertain", { receipt: claim.receipt }); throw error; }
     await this.reconcile();
   }
-  async beforeSettle(event: AgentBeforeSettleEvent, ctx: ExtensionContext) {
+  async boundary(event: AgentBeforeSettleEvent | TurnEndEvent, ctx: ExtensionContext) {
     this.update(ctx);
     return this.serialize(async () => {
       if (!this.client.scope || !this.valid()) return;

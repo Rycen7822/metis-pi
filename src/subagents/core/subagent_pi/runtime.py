@@ -768,7 +768,10 @@ class Runtime:
     async def close_agent(self, a, p):
         aid, sid = a['id'], a['scope']
         w=self.workers.get(aid)
-        if w and not w.closed:
+        if 'confirm_cleanup' in p:
+            if w and not w.closed: raise AgentError('ownership_unknown','Worker is still resident; close it normally before confirming inspected descendants')
+            cleanup=worker.confirm_cleanup(self.home/'agents'/aid,a,p['confirm_cleanup'])
+        elif w and not w.closed:
             cleanup=(await self.interrupt(a))['cleanup']
         else: cleanup=await reap_orphan(self.home/'agents'/aid,a)
         self.store.agent_update(aid,state='closed' if cleanup=='verified' else 'orphaned',current_run=None,cleanup=cleanup)

@@ -141,10 +141,11 @@ class PiNotifications:
                     try: await asyncio.wait_for(self.changed.wait(),remaining)
                     except asyncio.TimeoutError: pass
         if op == 'pi_claim':
-            ids = p.get('events')
+            eligible = {e['notification_id']:e for e in self.pending(sid)}
+            ids = p.get('events', list(eligible)[:20])
+            if not ids and 'events' not in p: return {'events':[], 'runs':[], 'questions':[]}
             if not isinstance(ids,list) or not 1<=len(ids)<=20 or any(not isinstance(k,str) or len(k)!=64 for k in ids):
                 raise AgentError('invalid_argument','events must contain 1-20 notification IDs')
-            eligible = {e['notification_id']:e for e in self.pending(sid)}
             events = [eligible[k] for k in dict.fromkeys(ids) if k in eligible]
             from .views import runs_for_ids,run_page
             rows=runs_for_ids(self.store,sid,list(dict.fromkeys(e['run_id'] for e in events)))

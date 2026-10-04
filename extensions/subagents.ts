@@ -43,8 +43,8 @@ export default function subagents(pi: ExtensionAPI) {
     owner?.update(ctx);
   });
   pi.on("tool_result", event => owner?.result(event));
-  pi.on("turn_end", async (_event, ctx) => { await owner?.settled(ctx); });
-  pi.on("agent_before_settle", (event, ctx) => owner?.beforeSettle(event, ctx));
+  pi.on("turn_end", (event, ctx) => owner?.boundary(event, ctx));
+  pi.on("agent_before_settle", (event, ctx) => owner?.boundary(event, ctx));
   pi.on("agent_settled", async (_event, ctx) => { await owner?.settled(ctx, true); });
   pi.registerCommand("metis-subagents", { description: "Subagent status; stop <agent>; continue <agent> <task>; answer <agent>", handler: async (args, ctx) => {
     if (!owner || blocked) { ctx.ui.notify("Metis subagents inactive; choose one provider in pi config and reload", "warning"); return; }

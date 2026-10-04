@@ -41,6 +41,7 @@ Listing status preserves result attention; use wait/result to receive the report
 The CLI supports the same `--query`, `--sort`, `--offset` and `--limit` options.
 Wait and automatic attention include bounded results, errors and missed-input
 receipts. A complete result (`has_more: false`) needs no extra result read.
+`not_consumed` inputs from an interrupted task are not replayed; resend wanted inputs.
 Questions include their type and options; `pi_answer_agent` may omit
 `ui_request_id` for the unique question already delivered to this parent.
 An expired/replaced question is rejected; ambiguous questions require an explicit
@@ -72,7 +73,10 @@ small budgets belong in isolated test models. `pi_followup_task` can continue th
 For an unusable failed worker, inspect its state and use `pi_spawn_agent` with
 valid settings. `pi_followup_task` resumes a verified parked/closed agent; a missing
 or empty saved session requires a new agent. Unverified cleanup needs the CLI
-`close` operation with the correct `--home` before reuse.
+`close` operation with the correct `--home` before reuse. If a killed guard left
+cleanup unknown, inspect and remove all descendants first, then run
+`close --scope SCOPE AGENT --confirm-cleanup GENERATION`. Confirmation requires
+the inspected current generation, a dead owner and a released session lease.
 
 In the TUI, active subagents appear above the input box as a tree with animated
 running indicators, names, states, elapsed time, tool counts, tokens and current

@@ -997,6 +997,9 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         owner=json.loads((self.home/'agents'/aid/'owner.json').read_text())
         identities={pid:process_identity(pid) for pid in (owner['pi_pid'],child)}
         try:
+            with self.assertRaises(AgentError) as alive:
+                await self.mutation('close',aid,confirm_cleanup=owner['generation'])
+            self.assertEqual(alive.exception.code,'ownership_unknown')
             os.kill(w.proc.pid,signal.SIGKILL)
             await self.until(lambda:self.rt.store.run(self.scope,s['run_id'])['state']=='crashed',timeout=4)
             self.assertEqual(self.rt.store.agent(self.scope,aid)['cleanup'],'unknown')
@@ -1008,6 +1011,15 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             for pid,identity in identities.items():
                 if process_identity(pid)==identity: os.kill(pid,signal.SIGKILL)
             await self.until(lambda:all(process_identity(pid) is None for pid in identities))
+        with self.assertRaises(AgentError) as stale:
+            await self.mutation('close',aid,confirm_cleanup=owner['generation']+1)
+        self.assertEqual(stale.exception.code,'ownership_unknown')
+        closed=await self.mutation('close',aid,confirm_cleanup=owner['generation'])
+        self.assertEqual((closed['state'],closed['cleanup']),('closed','verified'))
+        confirmed=json.loads((self.home/'agents'/aid/'owner.json').read_text())
+        self.assertEqual(confirmed['cleanup_confirmation']['by'],'operator')
+        revived=await self.mutation('respawn',aid)
+        self.assertEqual(revived['generation'],owner['generation']+1)
     async def test_needs_input_and_explicit_answer(self):
         s=await self.spawn('UI_CONFIRM'); r=await self.wait(s['run_id'])
         self.assertEqual(r['runs'][0]['state'],'needs_input')

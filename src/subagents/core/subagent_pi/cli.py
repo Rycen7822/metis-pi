@@ -31,6 +31,7 @@ def parser():
         if name in {'spawn','send','steer','follow-up','send-message','followup-task','interrupt','close','respawn','resume','answer'}:
             q.add_argument('--request-id',default=None,help='Stable key for safe retries; generated if omitted')
         if name in {'send','steer','follow-up','send-message','followup-task','inspect','interrupt','close','respawn','resume','answer'}: q.add_argument('agent_id')
+        if name=='close': q.add_argument('--confirm-cleanup',type=int,metavar='GENERATION',help='After manually inspecting and removing all descendants, confirm cleanup for this dead owner generation')
         if name=='spawn':
             q.add_argument('--cwd',default=os.getcwd()); q.add_argument('--name'); q.add_argument('--profile'); q.add_argument('--model'); q.add_argument('--thinking',help='A level supported by the selected Pi model; defaults to Pi settings')
             q.add_argument('--access',choices=['read','write'],default='write'); q.add_argument('--idle-timeout-seconds',type=int,help='Model inactivity limit; active tools and parent questions pause it. No total task deadline')

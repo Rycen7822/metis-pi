@@ -35,7 +35,7 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model = { id: "parent", name: "Offline Parent", provider: "subagent-contract", api: "openai-completions", baseUrl: "http://invalid",
     reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  let turn = 0;
+  let turn = 0, backgroundBeforeReply = false;
   modelRuntime.registerProvider(model.provider, { api: model.api, apiKey: "offline", models: [model], streamSimple: (m, context) => {
     const stream = createAssistantMessageEventStream(); turn++;
     let call;
@@ -47,6 +47,13 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
       call = { name: "pi_wait_agent", arguments: { agent_ids: ["direct-proof"], timeout_seconds: 15 } };
     }
     if (turn === 6) call = { name: "pi_spawn_agent", arguments: { task: "background proof", access: "read", model: "pi-mock-offline/mock", request_id: "background-spawn" } };
+    if (turn === 7) {
+      const spawn = context.messages.findLast(message => message.role === "toolResult" && message.toolName === "pi_spawn_agent");
+      const path = join(state, "results", `${JSON.parse(spawn.content[0].text).run_id}.txt`);
+      call = { name: "bash", arguments: { command: `while ! test -f '${path.replaceAll("'", "'\"'\"'")}'; do sleep 0.05; done`, timeout: 15 } };
+    }
+    if (turn === 8) backgroundBeforeReply = context.messages.some(message => message.content?.some?.(block =>
+      block.type === "text" && block.text.startsWith("Subagent results and questions") && block.text.includes("MOCK_REPLY_1")));
     if (turn === 9) call = { name: "pi_spawn_agent", arguments: { task: "ask before proceeding", access: "read", profile: "questioned", model: "pi-mock-offline/mock", request_id: "question-spawn" } };
     if (turn === 10 || turn === 12) {
       const spawn = context.messages.findLast(message => message.role === "toolResult" && message.toolName === "pi_spawn_agent");
@@ -151,7 +158,8 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   await loaded.session.prompt("Run background proof"); await loaded.session.waitForIdle();
   const deadline = Date.now() + 15000;
   while (turn < 8 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
-  await loaded.session.waitForIdle(); assert.equal(turn, 8, "unobserved completion still wakes the parent");
+  await loaded.session.waitForIdle(); assert.equal(turn, 8, "a ready background result does not add a second final response");
+  assert.equal(backgroundBeforeReply, true, "completion during a tool turn reaches the model before its final reply");
   assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1);
   const delivered = loaded.session.sessionManager.getBranch().find(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention");
   const body = JSON.parse(delivered.content.slice(delivered.content.indexOf("\n") + 1));

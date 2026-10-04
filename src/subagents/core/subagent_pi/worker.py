@@ -3,6 +3,7 @@ ownership. The Runtime owns state; this module owns the process-facing mechanics
 from __future__ import annotations
 import asyncio
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -405,7 +406,7 @@ def check_receipt(receipt):
     if receipt.get('state') != 'ready':
         raise AgentError('bridge_unavailable', 'Managed MCP bridge reported failure to start; inspect the agent stderr log')
 
-def ownership(directory: Path, a) -> dict:
+def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
     """The one owner-record verdict for reaping, reconciliation and terminate:
     'gone' | 'live' | 'unknown'. A missing or unreadable record proves nothing
     about the old writer, so only a positively dead leader with no surviving
@@ -431,7 +432,7 @@ def ownership(directory: Path, a) -> dict:
         return {'status': 'live', 'reason': 'A verified session owner is still running', 'record': record}
     if record.get('guard_pid') and group_members(record['guard_pid']):
         return {'status': 'unknown', 'reason': 'A process group remains but its leaders cannot be verified; manual inspection required', 'record': record}
-    if record.get('descendants_cleanup','verified')!='verified':
+    if not descendants_confirmed and record.get('descendants_cleanup','verified')!='verified':
         return {'status': 'unknown', 'reason': 'Guard exited without confirming descendant cleanup; manual inspection required', 'record': record}
     return {'status': 'gone', 'reason': 'Verified leaders are dead and no process group remains', 'record': record}
 
@@ -469,6 +470,23 @@ async def terminate(directory, w):
     cleanup,attempted=await stop_owned_process(directory,w.agent,w.proc)
     if attempted: w.closed=True
     return cleanup
+
+def confirm_cleanup(directory, a, generation):
+    """Record an operator's descendant inspection for exactly one dead owner."""
+    if generation != a['generation']:
+        raise AgentError('ownership_unknown','Cleanup confirmation belongs to a different generation; inspect the current owner')
+    fd=os.open(directory/'session.lock',os.O_RDWR|os.O_CREAT,0o600)
+    try:
+        try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise AgentError('ownership_unknown','Session lease is still owned; cleanup cannot be confirmed')
+        verdict=ownership(directory,a,descendants_confirmed=True)
+        record=verdict['record']
+        if verdict['status']!='gone' or not record or record.get('generation')!=generation:
+            raise AgentError('ownership_unknown','Current owner must be identified and dead, with no original process group, before confirming inspected descendants')
+        atomic_json(directory/'owner.json',{**record,'descendants_cleanup':'verified',
+            'cleanup_confirmation':{'generation':generation,'by':'operator','at':time.time()}})
+    finally: os.close(fd)
+    return 'verified'
 
 async def reap_orphan(directory, a):
     verdict=ownership(directory,a)
