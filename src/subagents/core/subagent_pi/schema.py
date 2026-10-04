@@ -191,16 +191,19 @@ OUTPUTS = {
             "scope": ID,
             "agents": ARR(
                 output(
-                    {"id": ID, "name": S, "state": S, "agent_status": S},
-                    ["id", "name", "state", "agent_status"],
+                    {"id": ID, "name": S, "state": S, "agent_status": S, "created_at": S, "updated_at": S},
+                    ["id", "name", "state", "agent_status", "created_at", "updated_at"],
                 )
             ),
             "total": INT,
+            "matched": INT,
             "omitted": INT,
+            "next_offset": INT,
+            "has_more": BOOL,
             "outstanding": OUTSTANDING,
             "parent_notifications": NOTIFICATIONS,
         },
-        ["scope", "agents", "total", "omitted", "outstanding", "parent_notifications"],
+        ["scope", "agents", "total", "matched", "omitted", "next_offset", "has_more", "outstanding", "parent_notifications"],
     ),
     "inspect": output(
         {
@@ -328,10 +331,13 @@ TOOLS = [
     tool(
         "pi_list_agents",
         "list",
-        "List agent identities, task/residency states and active or not-yet-delivered runs. This tool accepts only scope and limit. For notification details, call pi_inspect_agent with agent_id and detail=full.",
+        "Search this session's retained agent history by name/ID. Defaults to newest status/task update first; sort=created uses creation time. Timestamps are UTC ISO 8601. total counts all history, matched counts query matches; continue with next_offset while has_more, keeping query/sort unchanged. Outstanding runs remain scope-wide. For notification details, call pi_inspect_agent with agent_id and detail=full.",
         {
             **SCOPE,
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+            "query": {**S, "maxLength": LABEL_MAX_CHARS, "description": "Literal name/ID substring; ASCII case-insensitive. Omit to list all history."},
+            "sort": {**S, "enum": ["updated", "created"], "default": "updated"},
+            "offset": {"type": "integer", "minimum": 0, "maximum": 2**31-1, "default": 0},
         },
         [],
         True,
@@ -409,7 +415,6 @@ def native_tools():
             properties['request_id']={**ID,'description':'Normally omit: Pi generates and saves an operation ID. Reuse the returned key only to recover the identical uncertain operation; never retry with a new key.'}
         description=definition['description']
         if definition['_op']=='spawn': description=description.replace('Supply cwd to bind an unbound connection.','The workspace defaults to the current Pi session.')
-        if definition['_op']=='list': description=description.replace('scope and limit','limit')
         if definition['_op']=='answer': description+=' Omit ui_request_id only for the unique question already delivered to this parent; stale or ambiguous questions are rejected.'
         result.append({**definition,'description':description,'inputSchema':obj(properties,[k for k in schema['required'] if k not in {'scope','request_id','ui_request_id'}])})
     return result

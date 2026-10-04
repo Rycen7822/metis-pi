@@ -35,6 +35,36 @@ cwd = "servers/dir with space"
 '''
 
 class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
+    async def test_history_search_and_paging_put_reused_agents_first(self):
+        older=await self.spawn('first',name='Review%Alpha'); await self.wait(older['run_id'])
+        newer=await self.spawn('second',name='review-beta'); await self.wait(newer['run_id'])
+        followup=await self.mutation('followup',older['agent_id'],message='third'); await self.wait(followup['run_id'])
+        async def listing(**extra):
+            return await self.rt.dispatch('list',{'scope':self.scope,'limit':1,**extra})
+        first=await listing()
+        self.assertEqual(first['agents'][0]['id'],older['agent_id'])
+        self.assertEqual(first['agents'][0]['agent_status'],'completed')
+        self.assertEqual((first['total'],first['matched'],first['omitted']),(2,2,1))
+        self.assertTrue(first['has_more'])
+        second=await listing(offset=first['next_offset'])
+        self.assertEqual(second['agents'][0]['id'],newer['agent_id']); self.assertFalse(second['has_more'])
+        self.assertLess(first['agents'][0]['created_at'],second['agents'][0]['created_at'])
+        self.assertGreater(first['agents'][0]['updated_at'],second['agents'][0]['updated_at'])
+        self.assertTrue(first['agents'][0]['updated_at'].endswith('Z'))
+        self.assertEqual((await listing(sort='created'))['agents'][0]['id'],newer['agent_id'])
+        for query in ('REVIEW%ALPHA','%',older['agent_id']):
+            found=await listing(query=query)
+            self.assertEqual([a['id'] for a in found['agents']],[older['agent_id']])
+            self.assertEqual((found['total'],found['matched'],found['omitted']),(2,1,0))
+            self.assertFalse(found['has_more'])
+            self.assertEqual(found['outstanding']['total'],3)
+        missing=await listing(query='absent')
+        self.assertEqual((missing['agents'],missing['total'],missing['matched'],missing['has_more']),([],2,0,False))
+        self.assertEqual(missing['outstanding']['runs'][0]['id'],followup['run_id'])
+        self.assertEqual(views.delivered_events('list',missing),[(followup['run_id'],'terminal',None)])
+        beyond=await listing(offset=20)
+        self.assertFalse(beyond['has_more']); self.assertEqual(beyond['agents'],[])
+
     async def test_named_wait_freezes_task_and_result_preserves_byte_budget_and_input_issues(self):
         a=await self.spawn('simple',name='review')
         selection={'scope':self.scope,'agent_ids':['review']}

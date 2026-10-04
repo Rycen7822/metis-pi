@@ -686,11 +686,7 @@ class Runtime:
                     self.store.request_end(sid,key,{'error':e.as_dict()}); raise
                 self.store.request_end(sid,key,result)  # other exceptions leave an uncertain record, never a silent replay
                 return result
-        if op=='list':
-            limit=integer(p.get('limit',20),'limit',1,50)
-            rows=self.store.all('SELECT * FROM agents WHERE scope=? ORDER BY created DESC LIMIT ?',(sid,limit))
-            total=self.store.one('SELECT COUNT(*) n FROM agents WHERE scope=?',(sid,))['n']
-            return {'scope':sid,'agents':[views.listed_agent(self.store,a,self.workers.get(a['id'])) for a in rows],'total':total,'omitted':max(0,total-len(rows)), 'outstanding':self.views.outstanding(sid,limit),'parent_notifications':parent.status(self.store,sid,compact=True)}
+        if op=='list': return self.views.list(p)
         if op=='inspect': return self.views.inspect(p)
         if op=='result': return self.views.result(p)
         if op=='wait': return await self.views.wait(p)

@@ -38,7 +38,9 @@ def parser():
         if name in {'send','steer','follow-up','send-message','followup-task','respawn','resume'}:
             g=q.add_mutually_exclusive_group(required=name in {'send','steer','follow-up','send-message','followup-task'}); g.add_argument('--message'); g.add_argument('--message-file')
             if name=='send': q.add_argument('--interrupt',action='store_true')
-        if name=='list': q.add_argument('--limit',type=int,default=20)
+        if name=='list':
+            q.add_argument('--limit',type=int,default=20); q.add_argument('--query')
+            q.add_argument('--sort',choices=['updated','created'],default='updated'); q.add_argument('--offset',type=int,default=0)
         if name=='wait':
             q.add_argument('run_ids',nargs='*'); q.add_argument('--mode',choices=['any','all'],default='any'); q.add_argument('--timeout-seconds',type=int,help='Maximum wait in seconds, not a fixed delay; default 10 minutes, max 1 hour, 0 checks immediately')
         if name=='inspect':

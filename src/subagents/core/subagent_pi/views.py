@@ -2,6 +2,7 @@
 a terminal result. Delivery consumption belongs to the transport receipt."""
 from __future__ import annotations
 import asyncio
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import time
@@ -16,11 +17,6 @@ def model_settings(a):
 def agent_status(store,a):
     row=store.one("SELECT state FROM runs WHERE id=?",(a['current_run'],)) if a['current_run'] else store.latest_run(a['id'])
     return row['state'] if row else 'idle'
-
-def listed_agent(store,a,w=None):
-    result={k:a[k] for k in ('id','name','state')}
-    result['agent_status']=agent_status(store,a)
-    return result
 
 def brief_agent(a, w=None):
     result={k:a[k] for k in ('id','name','scope','cwd','state','generation','current_run','cleanup')}
@@ -187,6 +183,31 @@ class ReadViews:
         self.worker_for = worker_for
         self.changed = changed
         self.max_wait_seconds = max_wait_seconds
+
+    def list(self,p):
+        sid=p['scope']; limit=integer(p.get('limit',20),'limit',1,50)
+        offset=integer(p.get('offset',0),'offset',0,2**31-1)
+        order=p.get('sort','updated')
+        if order not in {'updated','created'}: raise AgentError('invalid_argument','sort must be updated or created')
+        selection='FROM agents a WHERE a.scope=?'; params=(sid,)
+        query=p.get('query','')
+        if query:
+            selection+=' AND (instr(lower(a.name),lower(?))>0 OR instr(lower(a.id),lower(?))>0)'
+            params+=(query,query)
+        total=self.store.one('SELECT COUNT(*) n FROM agents WHERE scope=?',(sid,))['n']
+        matched=self.store.one('SELECT COUNT(*) n '+selection,params)['n'] if query else total
+        rows=self.store.all("""SELECT a.id,a.name,a.state,a.created,a.updated,
+            COALESCE((SELECT state FROM runs WHERE id=a.current_run),
+                (SELECT state FROM runs WHERE agent_id=a.id AND state!='queued' ORDER BY created DESC LIMIT 1),'idle') agent_status
+            """+selection+f' ORDER BY a.{order} DESC,a.created DESC,a.id DESC LIMIT ? OFFSET ?',(*params,limit,offset))
+        agents=[]
+        for a in rows:
+            agents.append({**{k:a[k] for k in ('id','name','state','agent_status')},
+                **{k+'_at':datetime.fromtimestamp(a[k],timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z') for k in ('created','updated')}})
+        next_offset=offset+len(agents)
+        return {'scope':sid,'agents':agents,'total':total,'matched':matched,'omitted':max(0,matched-len(agents)),
+            'next_offset':next_offset,'has_more':next_offset<matched,
+            'outstanding':self.outstanding(sid,limit),'parent_notifications':parent.status(self.store,sid,compact=True)}
 
     def outstanding(self, sid, limit=20):
         selection="""FROM runs r LEFT JOIN parent_notifications n ON n.run_id=r.id AND n.kind='terminal'

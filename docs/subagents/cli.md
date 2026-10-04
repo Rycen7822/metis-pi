@@ -30,6 +30,14 @@ for identical recovery. A new call is a new operation, even with identical text.
 Use `agent_ids: ["review"]` in wait or `agent_id: "review"` in result to select
 the current/latest task by name. Multiple active/queued tasks require explicit run
 IDs; continue paging a long result with its returned `run.id`.
+`pi_list_agents` retains this scope's full history. `limit` bounds only the page;
+`total` counts history and `matched` counts name/ID substring matches (`query`).
+The default order is `updated_at` descending, including reused agents' latest
+task/status changes; `sort: "created"` orders by creation instead. Both timestamps
+are UTC ISO 8601. Continue with `offset: next_offset` while `has_more`, keeping the
+same query and sort. Pages can shift while agents change. `outstanding` remains a
+separate scope-wide list of active/unseen runs, independent of the history search.
+The CLI supports the same `--query`, `--sort`, `--offset` and `--limit` options.
 Wait and automatic attention include bounded results, errors and missed-input
 receipts. A complete result (`has_more: false`) needs no extra result read.
 Questions include their type and options; `pi_answer_agent` may omit

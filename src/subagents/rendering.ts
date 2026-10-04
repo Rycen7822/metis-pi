@@ -23,7 +23,11 @@ function payload(result?: AgentToolResult<unknown>): Record<string, unknown> {
 }
 
 function summary(name: string, data: Record<string, unknown>): string {
-  if (name === "pi_list_agents") return `${data.total ?? (Array.isArray(data.agents) ? data.agents.length : 0)} subagents`;
+  if (name === "pi_list_agents") {
+    const returned = Array.isArray(data.agents) ? data.agents.length : 0;
+    const total = data.total ?? returned;
+    return `${returned} returned${data.matched !== undefined && data.matched !== total ? ` · ${data.matched} matches` : ""} · ${total} total subagents`;
+  }
   if (name === "pi_wait_agent") {
     const runs = Array.isArray(data.runs) ? data.runs.map(displayRecord) : [];
     const states = runs.map(run => `${run.name ?? run.id ?? "run"}: ${run.state ?? "returned"}`);
@@ -42,7 +46,7 @@ export function subagentToolRenderers(name: string): Pick<ToolDefinition, "rende
   const [active, complete] = titles[name] ?? [name, name];
   const base = auxiliaryToolRenderers(`${active} failed`, (args, result) => {
     const data = payload(result);
-    const target = args.name ?? args.agent_id ?? args.run_id
+    const target = args.name ?? args.agent_id ?? args.run_id ?? (name === "pi_list_agents" ? args.query : undefined)
       ?? (Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : Array.isArray(args.run_ids) ? `${args.run_ids.length} run(s)` : undefined);
     const questions = Array.isArray(data.questions) ? data.questions.length : 0;
     const failed = Array.isArray(data.runs) ? data.runs.filter(run => displayRecord(run).state === "failed").length : 0;
