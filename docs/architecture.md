@@ -52,7 +52,7 @@ Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 仅�
 
 condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。OCC 由 condense 在 `session_before_compact` 准备，执行模块只提供忙状态，goal 暂存续跑并在完成后复核；没有第二个 compaction owner。
 
-子代理核心由 metis 完全维护并随包交付，不依赖独立 subagent-pi 仓库或运行包。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；不确定交付保留账本，读取结果与 ACK 分开。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[管理入口](subagents/cli.md)。
+子代理核心由 metis 完全维护并随包交付，不依赖独立 subagent-pi 仓库或运行包。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；不确定交付保留账本，wait、结果读取、状态检查和列表返回的终态通知自动消费，无需额外 ACK；结果文件保留，支持重复读取。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[管理入口](subagents/cli.md)。
 
 ## 生命周期与交付
 

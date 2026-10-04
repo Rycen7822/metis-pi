@@ -66,7 +66,7 @@ export function normalizePath(path: string): string {
 }
 
 // Large agent results and inspection histories keep the normal archive path.
-const subagentControls = new Set(["pi_spawn_agent", "pi_wait_agent", "pi_list_agents", "pi_ack_result",
+const subagentControls = new Set(["pi_spawn_agent", "pi_wait_agent", "pi_list_agents",
   "pi_answer_agent", "pi_send_message", "pi_followup_task", "pi_interrupt_agent"]);
 export const isSubagentControl = (toolName: string): boolean => subagentControls.has(toolName);
 

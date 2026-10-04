@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import signal
 import sys
-from .common import MAX_FRAME, AgentError, check_peer, dumps, private_dir, read_frame, socket_path, close_writer
+from .common import MAX_FRAME, DELIVERY_OPS, AgentError, check_peer, dumps, private_dir, read_frame, socket_path, close_writer
 from .runtime import Runtime
 from .schema import validate_op
 from . import PROTOCOL_VERSION
@@ -26,7 +26,7 @@ async def serve(home: Path):
         sock.unlink(missing_ok=True)
         async def handle(reader,writer):
             current=asyncio.current_task(); clients.add(current)
-            job=None; disconnected=None; reservation=None; delivered=None
+            job=None; disconnected=None; reservation=None; delivered=None; op=None
             try:
                 try:
                     check_peer(writer)
@@ -43,8 +43,8 @@ async def serve(home: Path):
                         env=source['env']
                         if len(env)>64 or any(not isinstance(k,str) or len(k)>128 or not isinstance(v,str) or len(v)>16384 for k,v in env.items()):
                             raise AgentError('invalid_request','source env snapshot exceeds bounds')
-                    track_delivery=op=='wait' and req.get('wait_delivery') is True
-                    if track_delivery: reservation=runtime.parent_notifications.reserve_wait(params,source)
+                    track_delivery=op in DELIVERY_OPS and req.get('delivery_receipt') is True
+                    if track_delivery: reservation=runtime.parent_notifications.reserve_delivery(op,params,source)
                     job=asyncio.create_task(runtime.dispatch(op,params,source)); operations.add(job)
                     job.add_done_callback(operations.discard)
                     if op=='wait':
@@ -55,7 +55,7 @@ async def serve(home: Path):
                         disconnected.cancel()
                         await asyncio.gather(disconnected,return_exceptions=True)
                     value=await asyncio.shield(job)
-                    if track_delivery: await runtime.parent_notifications.settle_wait(reservation,value)
+                    if track_delivery: await runtime.parent_notifications.settle_delivery(reservation,op,value)
                     reply={'ok':True,'result':value}
                 except AgentError as e: reply={'ok':False,'error':e.as_dict()}
                 except (json.JSONDecodeError,UnicodeDecodeError): reply={'ok':False,'error':{'code':'invalid_json','message':'Invalid JSON request'}}
@@ -72,7 +72,7 @@ async def serve(home: Path):
                 pass  # No delivery receipt: pending attention becomes eligible again.
             finally:
                 if disconnected: disconnected.cancel()
-                runtime.parent_notifications.release_wait(reservation,delivered)
+                runtime.parent_notifications.release_delivery(reservation,op,delivered)
                 clients.discard(current)
                 await close_writer(writer)
         server=await asyncio.start_unix_server(handle,str(sock),limit=MAX_FRAME)

@@ -23,8 +23,6 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         a = await self.spawn()
         await self.wait(a['run_id'])
         page = await self.result(a['run_id'])
-        await self.rt.dispatch('ack', {'scope':self.scope, 'request_id':self.key(),
-            'run_id':a['run_id'], 'result_sha256':page['result_sha256']})
         self.rt.store.db.set_trace_callback(None)
         self.assertEqual(self.rt.store.scope(self.scope)['revision'], 11)
         self.assertFalse(any('SET revision=' in sql for sql in statements))
@@ -115,7 +113,7 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.wait(b['run_id'])
         self.assertIn('remember this',Path(path).read_text())
 
-    async def test_idle_timer_ignores_telemetry_and_preserves_unacked_result(self):
+    async def test_idle_timer_ignores_telemetry_and_preserves_result(self):
         a=await self.spawn(); await self.wait(a['run_id'])
         w=self.rt.workers[a['agent_id']]; stamp=time.monotonic()-1801; w.idle_since=stamp
         self.rt.on_event(w,{'type':'extension_ui_request','method':'notify','message':'telemetry'})
@@ -123,7 +121,7 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(w.idle_since,stamp)
         await self.rt.park_expired()
         self.assertEqual(self.rt.store.agent(self.scope,a['agent_id'])['state'],'dormant')
-        self.assertFalse((await self.result(a['run_id']))['acknowledged'])
+        self.assertEqual((await self.result(a['run_id']))['text'],'Completed: simple')
         listing=await self.rt.dispatch('list',{'scope':self.scope})
         self.assertEqual(listing['agents'][0]['agent_status'],'completed')
 
@@ -232,7 +230,7 @@ class V2TransportTests(McpHarness,unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r['result']['isError'],value); self.assertEqual(value,r['result']['structuredContent'])
             validate_contract(value,BY_NAME[name]['outputSchema'])
 
-    async def test_compact_read_contract_preserves_paging_ack_and_diagnostics(self):
+    async def test_compact_read_contract_preserves_paging_delivery_and_diagnostics(self):
         await self.initialize()
         async def checked(name,args):
             response=await self.rpc('tools/call',{'name':name,'arguments':args})
@@ -248,36 +246,33 @@ class V2TransportTests(McpHarness,unittest.IsolatedAsyncioTestCase):
         done=await checked('pi_wait_agent',{'run_ids':[a['run_id']],'timeout_seconds':8})
         summary=done['runs'][0]
         self.assertEqual(summary['state'],'completed')
-        self.assertNotIn('ack',summary); self.assertNotIn('result_sha',summary); self.assertNotIn('error',summary)
+        self.assertNotIn('result_sha',summary); self.assertNotIn('error',summary)
         preview=summary['result']; self.assertTrue(preview['has_more'])
         page=await checked('pi_agent_result',{'run_id':a['run_id'],'offset':preview['next_offset'],'max_bytes':16384})
-        self.assertFalse(page['acknowledged']); self.assertNotIn('offset',page)
+        self.assertNotIn('offset',page)
         self.assertNotIn('usage',page); self.assertNotIn('artifact_path',page)
         self.assertNotIn('created',page['run'])
         contents=preview['text']+page['text']
         while page['has_more']:
             page=await checked('pi_agent_result',{'run_id':a['run_id'],'offset':page['next_offset'],'max_bytes':16384})
-            self.assertFalse(page['acknowledged']); contents+=page['text']
+            contents+=page['text']
         self.assertEqual(hashlib.sha256(contents.encode()).hexdigest(),page['result_sha256'])
         self.assertEqual(preview['result_sha256'],page['result_sha256'])
         listing=await checked('pi_list_agents',{})
         self.assertEqual(listing['parent_notifications'],{'enabled':False})
         self.assertNotIn('resolved_model',listing['agents'][0]); self.assertNotIn('thinking',listing['agents'][0])
-        self.assertEqual(listing['outstanding']['runs'][0]['id'],a['run_id'])
+        self.assertEqual(listing['outstanding']['total'],0)
         normal=await checked('pi_inspect_agent',{'agent_id':'results','max_bytes':16384})
         self.assertNotIn('parent_notifications',normal)
         self.assertEqual(normal['agent']['resolved_model'],a['resolved_model'])
         self.assertEqual(normal['agent'].get('thinking'),a.get('thinking'))
         full=await checked('pi_inspect_agent',{'agent_id':'results','detail':'full','max_bytes':16384})
         self.assertEqual(full['run']['id'],a['run_id']); self.assertEqual(full['run']['state'],'completed')
-        self.assertFalse(full['run']['acknowledged']); self.assertIsNotNone(full['run']['ended'])
+        self.assertIsNotNone(full['run']['ended'])
         self.assertTrue(full['run']['usage'])
         self.assertEqual(Path(full['run']['artifact_path']).read_text(),contents)
         self.assertIn('parent_notifications',full)
-        ack_args={'run_id':a['run_id'],'result_sha256':page['result_sha256'],'request_id':'ack-big'}
-        ack=await checked('pi_ack_result',ack_args); self.assertTrue(ack['acknowledged'])
-        self.assertTrue((await checked('pi_ack_result',ack_args))['replayed'])
-        self.assertTrue((await checked('pi_agent_result',{'run_id':a['run_id']}))['acknowledged'])
+        self.assertEqual((await checked('pi_agent_result',{'run_id':a['run_id']}))['result_sha256'],page['result_sha256'])
         self.assertEqual((await checked('pi_list_agents',{}))['outstanding']['total'],0)
         await checked('pi_send_message',{'agent_id':'results','message':'idle history','request_id':'idle-msg'})
         asking=await checked('pi_followup_task',{'agent_id':'results','message':'UI_CONFIRM','request_id':'ask'})

@@ -87,7 +87,7 @@ else:
             runs=[await rt.dispatch('spawn',{'scope':sid,'task':f'gate={gate}|run-{i}',
                 'access':'read','request_id':f'barrier-{i}'},source) for i,gate in enumerate(gates)]
             params={'scope':sid,'run_ids':[r['run_id'] for r in runs],'mode':'all','timeout_seconds':4}
-            token=rt.parent_notifications.reserve_wait(params,source)
+            token=rt.parent_notifications.reserve_delivery('wait',params,source)
             waiting=asyncio.create_task(rt.dispatch('wait',params,source))
             gates[0].touch()
             async with asyncio.timeout(2):
@@ -98,11 +98,10 @@ else:
             self.assertIn(runs[0]['run_id'],first_notice['message'])
             gates[1].touch()
             response=await waiting
-            await rt.parent_notifications.settle_wait(token,response)
-            rt.parent_notifications.release_wait(token,response); token=None
+            await rt.parent_notifications.settle_delivery(token,'wait',response)
+            rt.parent_notifications.release_delivery(token,'wait',response); token=None
             self.assertIn({'threadId':self.parent,'queuedSubmissionId':first_notice['id']},self.recalls())
             self.assertEqual([r['state'] for r in response['runs']],['completed','completed'])
-            self.assertTrue(all(not rt.store.run(sid,r['run_id'])['ack'] for r in runs))
             notices=rt.store.all('SELECT state,handled FROM parent_notifications WHERE scope=?',(sid,))
             self.assertEqual(len(notices),2)
             self.assertTrue(all(r['handled'] and r['state'] not in ('pending','sending','queued','recalling') for r in notices))
@@ -110,7 +109,7 @@ else:
             for gate in gates: gate.touch()
             if waiting and not waiting.done(): waiting.cancel()
             if waiting: await asyncio.gather(waiting,return_exceptions=True)
-            if token: rt.parent_notifications.release_wait(token)
+            if token: rt.parent_notifications.release_delivery(token,'wait')
             await rt.shutdown()
 
     async def test_two_parents_share_adapter_without_scope_or_notification_cross_talk(self):
@@ -199,7 +198,7 @@ else:
         rows=await self.settled_notifications(sid,1)
         self.assertEqual(rows[0]['state'],'unknown'); self.assertEqual(len(self.queued()),1)
 
-    async def test_interrupted_recall_resumes_without_ack_or_resending(self):
+    async def test_interrupted_recall_resumes_without_resending(self):
         sid=await self.open_parent()
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'done','task':'done','access':'read'})
         notice=(await self.settled_notifications(sid,1))[0]
@@ -212,15 +211,15 @@ else:
         await self.wait_notice_state(sid,'recalled')
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
         result=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
-        self.assertFalse(result['acknowledged']); self.assertEqual(len(self.queued()),1)
+        self.assertEqual(result['text'],'Completed: done'); self.assertEqual(len(self.queued()),1)
 
-    async def test_legacy_acknowledged_queue_is_recalled_on_restart(self):
+    async def test_consumed_queue_is_recalled_on_restart(self):
         sid=await self.open_parent()
         await self.parent_tool('pi_spawn_agent',{'request_id':'done','task':'done','access':'read'})
         notice=(await self.settled_notifications(sid,1))[0]
         import sqlite3
         with sqlite3.connect(self.home/'registry.sqlite') as db:
-            db.execute('UPDATE runs SET ack=1')
+            db.execute('UPDATE parent_notifications SET handled=1')
         await self.restart_daemon()
         await self.wait_notice_state(sid,'recalled')
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
@@ -262,14 +261,12 @@ else:
                 if rows and rows[0]['state']==state: return rows
                 await asyncio.sleep(.02)
 
-    async def test_ack_recalls_only_its_queued_message_and_preserves_the_result(self):
+    async def test_result_read_recalls_only_its_queued_message_and_preserves_the_result(self):
         sid=await self.open_parent()
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
         notice=(await self.settled_notifications(sid,1))[0]
         result=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
-        ack=await self.parent_tool('pi_ack_result',{'run_id':run['run_id'],'request_id':'ack','result_sha256':result['result_sha256']})
-        self.assertTrue(ack['acknowledged'])
-        rows=await self.wait_notice_state(sid,'recalled')
+        rows=await self.wait_notice_state(sid,'observed')
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
         again=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
         self.assertEqual(again['result_sha256'],result['result_sha256'])
@@ -278,12 +275,11 @@ else:
         self.assertEqual(len(self.queued()),1)
         self.assertEqual(len(self.recalls()),1)
 
-    async def test_late_wait_recalls_queue_without_acknowledging_the_result(self):
+    async def test_late_wait_recalls_queue_and_consumes_delivery(self):
         sid=await self.open_parent()
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
         notice=(await self.settled_notifications(sid,1))[0]
         result=await self.parent_tool('pi_wait_agent',{'run_ids':[run['run_id']]})
-        self.assertFalse((await self.parent_tool('pi_agent_result',{'scope':sid,'run_id':run['run_id']}))['acknowledged'])
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
         await self.wait_notice_state(sid,'observed')
 
@@ -301,7 +297,6 @@ else:
             self.assertFalse(waiting.done())
             hold.unlink()
             result=await waiting
-            self.assertFalse((await self.parent_tool('pi_agent_result',{'scope':sid,'run_id':run['run_id']}))['acknowledged'])
             await self.wait_notice_state(sid,'observed')
             self.assertEqual(len(self.queued()),1)
             self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':self.queued()[0]['id']}])
@@ -325,46 +320,49 @@ else:
         await self.wait_notice_state(sid,'observed')
         self.assertEqual(len(outputs),1); self.assertEqual(len(self.queued()),1)
 
-    async def test_failed_wait_output_after_recall_restores_automatic_wakeup(self):
+    async def test_failed_read_output_after_recall_restores_automatic_wakeup(self):
         sid=await self.open_parent()
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
-        notice=(await self.settled_notifications(sid,1))[0]
-        async def output(value):
-            self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
-            raise BrokenPipeError('wait output closed after withdrawal')
-        with self.assertRaises(BrokenPipeError):
-            await request(self.home,'wait',{'scope':sid,'run_ids':[run['run_id']]},source=self.trusted_source(),on_result=output)
-        rows=await self.wait_notice_state(sid,'queued')
-        self.assertNotEqual(rows[0]['queued_id'],notice['queued_id'])
-        self.assertEqual(len(self.queued()),2,'the first receipt was deleted; only the replacement can wake the parent')
+        await self.settled_notifications(sid,1)
+        for index,(op,args) in enumerate((('wait',{'run_ids':[run['run_id']]}), ('result',{'run_id':run['run_id']}),
+                                         ('inspect',{'agent_id':run['agent_id']}), ('list',{})),1):
+            with self.subTest(op=op):
+                notice=(await self.wait_notice_state(sid,'queued'))[0]
+                async def output(value):
+                    self.assertEqual(self.recalls()[-1],{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']})
+                    raise BrokenPipeError('output closed after withdrawal')
+                with self.assertRaises(BrokenPipeError):
+                    await request(self.home,op,{'scope':sid,**args},source=self.trusted_source(),on_result=output)
+                rows=await self.wait_notice_state(sid,'queued')
+                self.assertNotEqual(rows[0]['queued_id'],notice['queued_id'])
+                self.assertEqual(len(self.queued()),index+1,'only the replacement can wake the parent')
 
-    async def test_ack_during_enqueue_waits_for_receipt_then_recalls_it(self):
+    async def test_result_during_enqueue_waits_for_receipt_then_recalls_it(self):
         sid=await self.open_parent(); hold=self.codex_home/('hold-'+self.parent); hold.touch()
-        ack=None
+        reading=None
         try:
             run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
             async with asyncio.timeout(8):
                 while not self.queued(): await asyncio.sleep(.02)
-            result=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
-            ack=asyncio.create_task(request(self.home,'ack',{'scope':sid,'run_id':run['run_id'],'request_id':'ack','result_sha256':result['result_sha256']},source=self.trusted_source()))
+            async def output(value): self.assertEqual(value['text'],'Completed: done')
+            reading=asyncio.create_task(request(self.home,'result',{'scope':sid,'run_id':run['run_id']},source=self.trusted_source(),on_result=output))
             await asyncio.sleep(.05)
-            self.assertFalse(ack.done(),'ack must settle its in-flight notification before reporting completion')
+            self.assertFalse(reading.done(),'result delivery must settle its in-flight notification')
             hold.unlink()
-            self.assertTrue((await ack)['acknowledged'])
-            await self.wait_notice_state(sid,'recalled')
+            self.assertEqual((await reading)['text'],'Completed: done')
+            await self.wait_notice_state(sid,'observed')
             self.assertEqual(len(self.queued()),1);self.assertEqual(len(self.recalls()),1)
         finally:
             hold.unlink(missing_ok=True)
-            if ack: await asyncio.gather(ack,return_exceptions=True)
+            if reading: await asyncio.gather(reading,return_exceptions=True)
 
     async def test_unavailable_recall_is_reported_without_resending(self):
         (self.codex_home/'recall-reject').touch()
         sid=await self.open_parent()
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
         await self.settled_notifications(sid,1)
-        result=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
-        ack=await self.parent_tool('pi_ack_result',{'run_id':run['run_id'],'request_id':'ack','result_sha256':result['result_sha256']})
-        self.assertTrue(ack['acknowledged']); self.assertEqual(ack['notification_recall'],'failed')
+        error=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']},error=True)
+        self.assertEqual(error['error']['code'],'notification_handoff_failed')
         rows=await self.wait_notice_state(sid,'recall_failed')
         self.assertTrue(rows[0]['error']); self.assertEqual(len(self.queued()),1)
         listing=await self.tool('pi_list_agents',{'scope':sid})
@@ -378,24 +376,20 @@ else:
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
         await self.settled_notifications(sid,1)
         result=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
-        await self.parent_tool('pi_ack_result',{'run_id':run['run_id'],'request_id':'ack','result_sha256':result['result_sha256']})
         await self.wait_notice_state(sid,'delivered')
         self.assertEqual(len(self.queued()),1);self.assertEqual(len(self.recalls()),1)
 
-    async def test_active_parent_wait_delivers_once_without_acknowledging(self):
+    async def test_active_parent_wait_delivers_once_and_preserves_rereads(self):
         sid=await self.open_parent()
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'delay=0.3|done','access':'read'})
         result=await self.parent_tool('pi_wait_agent',{'run_ids':[run['run_id']]})
         self.assertEqual(result['reason'],'completed')
-        self.assertFalse((await self.parent_tool('pi_agent_result',{'scope':sid,'run_id':run['run_id']}))['acknowledged'])
         rows=await self.settled_notifications(sid,1)
         self.assertEqual(rows[0]['state'],'observed'); self.assertEqual(self.queued(),[])
         await self.restart_daemon()
         again=await self.parent_tool('pi_wait_agent',{'scope':sid,'run_ids':[run['run_id']],'timeout_seconds':0})
         self.assertEqual(again['runs'][0]['result']['result_sha256'],result['runs'][0]['result']['result_sha256'])
-        self.assertFalse((await self.parent_tool('pi_agent_result',{'scope':sid,'run_id':run['run_id']}))['acknowledged']); self.assertEqual(self.queued(),[])
-        await self.parent_tool('pi_ack_result',{'scope':sid,'run_id':run['run_id'],'request_id':'ack',
-            'result_sha256':result['runs'][0]['result']['result_sha256']})
+        self.assertEqual((await self.parent_tool('pi_agent_result',{'scope':sid,'run_id':run['run_id']}))['result_sha256'],result['runs'][0]['result']['result_sha256'])
         self.assertEqual(self.queued(),[])
 
     async def test_question_receipt_does_not_hide_later_completion(self):
@@ -503,7 +497,7 @@ class ParentScheduleBounds(unittest.TestCase):
     def test_shutdown_done_callback_does_not_start_another_delivery(self):
         binding={'codex_home':'/tmp/codex','thread_id':str(uuid.uuid4())}
         notice={'id':'n1','scope':'s','run_id':'r','agent_id':'a','run_state':'completed',
-                'ack':0,'kind':'terminal','ui_id':None,'parent':dumps(binding),'priority':2,'created':0,'state':'pending','handled':0}
+                'kind':'terminal','ui_id':None,'parent':dumps(binding),'priority':2,'created':0,'state':'pending','handled':0}
         class StoreStub:
             queries=0
             def all(self,sql,args=()):
@@ -580,20 +574,20 @@ class ParentScheduleBounds(unittest.TestCase):
 
 class ParentDeliveryProcessTests(unittest.IsolatedAsyncioTestCase):
     async def test_sender_rechecks_consumption_and_wait_before_starting_queue(self):
-        run={'id':'r','agent_id':'a','state':'completed','ack':0}
+        run={'id':'r','agent_id':'a','state':'completed'}
         notice={'id':'n','scope':'s','run_id':'r','kind':'terminal','ui_id':None}
         class Store:
             handled=0
             def one(self,*_args): return {'handled':self.handled}
             def run(self,*_args): return run
             def execute(self,_sql,values): self.state=values[0]
-        for winner in ('wait_receipt','ack','wait_reservation'):
+        for winner in ('delivery_receipt','wait_reservation'):
             with self.subTest(winner=winner):
-                store=Store(); run['ack']=int(winner=='ack'); store.handled=int(winner=='wait_receipt')
+                store=Store(); store.handled=int(winner=='delivery_receipt')
                 notifications=parent.ParentNotifications(store,None,lambda _aid: None)
                 if winner=='wait_reservation': notifications.waits[object()]=('s',frozenset({'r'}),True)
                 with mock.patch.object(parent,'enqueue',new_callable=mock.AsyncMock) as enqueue:
-                    await notifications.deliver(notice,{'state':'completed','ack':0},{})
+                    await notifications.deliver(notice,run,{})
                     enqueue.assert_not_awaited()
                 self.assertEqual(store.state,'pending' if winner=='wait_reservation' else 'superseded')
 
@@ -634,7 +628,7 @@ time.sleep(30)
             store=StoreStub()
             notifications=parent.ParentNotifications(store,None,lambda _aid: None)
             notice={'id':'notice-1','scope':'scope-1','run_id':'run-1','kind':'terminal','ui_id':None}
-            run={'agent_id':'agent-1','id':'run-1','state':'completed','ack':0}
+            run={'agent_id':'agent-1','id':'run-1','state':'completed'}
             bound={'command':str(wrapper),'home':str(root),'codex_home':str(codex_home),
                    'path':os.environ.get('PATH',''),'thread_id':str(uuid.uuid4())}
             pgid=None

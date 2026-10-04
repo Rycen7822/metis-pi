@@ -6,7 +6,7 @@ import os
 import sys
 from . import __version__
 from .client import call_timeout, request
-from .common import MAX_FRAME, AgentError, dumps
+from .common import MAX_FRAME, DELIVERY_OPS, AgentError, dumps
 from .schema import TOOLS, BY_NAME, validate, validate_op
 from .parent import capture
 
@@ -86,8 +86,8 @@ async def serve_mcp(home):
                     source=scope_source(home,parent)
                 async def write_result(value):
                     await output({'jsonrpc':'2.0','id':rid,'result':success_result(value)})
-                if spec['_op']=='wait':
-                    await request(home,'wait',args,timeout=timeout,source=source,on_result=write_result)
+                if spec['_op'] in DELIVERY_OPS:
+                    await request(home,spec['_op'],args,timeout=timeout,source=source,on_result=write_result)
                     return
                 value=await request(home,spec['_op'],args,timeout=timeout,source=source)
                 if spec['_op']=='scope_open':

@@ -1,5 +1,5 @@
 """Bounded read projections: what a client can see about an agent, a run trace and
-a terminal result. Nothing here mutates state or acknowledges work."""
+a terminal result. Delivery consumption belongs to the transport receipt."""
 from __future__ import annotations
 import asyncio
 import json
@@ -103,18 +103,30 @@ def result_row(r, limit, offset=0):
     usage=json.loads(r['usage'])
     return {'run':brief_run(r),'text':content,'result_sha256':r['result_sha'],
             'next_offset':offset+used,'has_more':offset+used<size,'total_bytes':size,
-            'acknowledged':bool(r['ack']),'result_truncated':usage.get('result_truncated',False)}
+            'result_truncated':usage.get('result_truncated',False)}
 
 
 def wait_run_ids(store,p):
     sid=p['scope']
     ids=p.get('run_ids')
     if ids is None:
-        ids=[r['id'] for r in store.all("SELECT id FROM runs WHERE scope=? AND ack=0 ORDER BY created LIMIT 100",(sid,))]
+        ids=[r['id'] for r in store.all("""SELECT r.id FROM runs r LEFT JOIN parent_notifications n
+            ON n.run_id=r.id AND n.kind='terminal' WHERE r.scope=?
+            AND (r.state NOT IN ('completed','failed','interrupted','crashed','cancelled','timed_out') OR COALESCE(n.handled,0)=0)
+            ORDER BY r.created LIMIT 100""",(sid,))]
     if not isinstance(ids,list) or len(ids)>100: raise AgentError('invalid_argument','run_ids must be a list of at most 100 ids')
     ids=list(dict.fromkeys(identifier(x,'run_id') for x in ids))
     runs_for_ids(store,sid,ids)
     return ids
+
+def delivered_events(op, response):
+    if op=='wait': runs=response['runs']
+    elif op=='list': runs=response['outstanding']['runs']
+    elif op in {'result','inspect'}: runs=[response.get('run',{})]
+    else: runs=[{'id':response.get('run_id'),'state':'interrupted'}]
+    events=[(r['id'],'terminal',None) for r in runs if r.get('id') and r.get('state') in TERMINAL]
+    if op=='wait': events.extend((q['run_id'],'question',q['id']) for q in response['questions'])
+    return list(dict.fromkeys(events))
 
 class ReadViews:
     """Read and wait using explicit data sources; no task control or mutations."""
@@ -125,9 +137,10 @@ class ReadViews:
         self.max_wait_seconds = max_wait_seconds
 
     def outstanding(self, sid, limit=20):
-        rows=self.store.all("""SELECT r.*, a.name FROM runs r JOIN agents a ON a.id=r.agent_id
-                             WHERE r.scope=? AND r.ack=0 ORDER BY r.created DESC LIMIT ?""",(sid,limit))
-        count=self.store.one("SELECT COUNT(*) n FROM runs WHERE scope=? AND ack=0",(sid,))['n']
+        selection="""FROM runs r LEFT JOIN parent_notifications n ON n.run_id=r.id AND n.kind='terminal'
+            WHERE r.scope=? AND (r.state NOT IN ('completed','failed','interrupted','crashed','cancelled','timed_out') OR COALESCE(n.handled,0)=0)"""
+        rows=self.store.all("SELECT r.*, (SELECT name FROM agents WHERE id=r.agent_id) name "+selection+" ORDER BY r.created DESC LIMIT ?",(sid,limit))
+        count=self.store.one("SELECT COUNT(*) n "+selection,(sid,))['n']
         return {'runs':[brief_run(r) for r in rows], 'total':count,'omitted':max(0,count-len(rows))}
 
     def inspect(self,p):
@@ -147,7 +160,7 @@ class ReadViews:
             result['run']={k:run[k] for k in ('id','state')}
             if detail=='full':
                 result['run'].update({k:run[k] for k in ('created','started','ended','idle_timeout_seconds')})
-                result['run'].update(artifact_path=run['result_path'],usage=json.loads(run['usage']),acknowledged=bool(run['ack']))
+                result['run'].update(artifact_path=run['result_path'],usage=json.loads(run['usage']))
         if detail=='full': result['parent_notifications']=parent.status(self.store,p['scope'])
         # Large diagnostic metadata must not consume the event page's budget.
         if len(dumps(result).encode())>budget:

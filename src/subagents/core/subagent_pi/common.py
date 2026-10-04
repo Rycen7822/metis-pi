@@ -23,6 +23,7 @@ IDENTIFIER_PATTERN = r'^[A-Za-z0-9_.:-]+(?![\s\S])'
 # workspace exclusion and crash reconciliation both use exactly this set.
 RESIDENT_AGENT_STATES = ('starting', 'running', 'needs_input', 'idle', 'stopping', 'orphaned')
 TERMINAL = {"completed", "failed", "interrupted", "crashed", "cancelled", "timed_out"}
+DELIVERY_OPS = frozenset({'wait','result','inspect','list','soft_interrupt'})
 # Canonical base environment for a managed worker: enough to find an interpreter,
 # a home, a locale and its own Pi configuration directory, and nothing that
 # carries credentials. PI_CODING_AGENT_DIR is a non-secret LOCATION the child Pi

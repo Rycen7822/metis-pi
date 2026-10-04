@@ -50,18 +50,23 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
             self.assertIn(task,done,'cancelled request is stuck flushing its socket')
             with self.assertRaises(asyncio.CancelledError): await task
         finally: await self.finish_task(task)
-    async def test_successful_wait_confirms_after_output(self):
-        receipt=asyncio.get_running_loop().create_future(); output=[]
+    async def test_successful_delivery_confirms_after_output(self):
+        receipts=[]; output=[]
         async def handler(reader,writer):
             frame=await read_frame(reader)
-            self.assertTrue(frame['wait_delivery'])
+            self.assertTrue(frame['delivery_receipt'])
             writer.write((dumps({'ok':True,'result':{'runs':[]}})+'\n').encode()); await writer.drain()
-            receipt.set_result(await read_frame(reader))
+            receipt=await read_frame(reader)
+            receipts.append((len(output),receipt))
         self.handler=handler
         async def deliver(value): output.append(value)
-        result=await request(self.home,'wait',{},timeout=1,autostart=False,on_result=deliver)
-        self.assertEqual(output,[result])
-        self.assertEqual(await asyncio.wait_for(receipt,1),{'received':True})
+        for op in ('wait','result','inspect','list','soft_interrupt'):
+            with self.subTest(op=op):
+                result=await request(self.home,op,{},timeout=1,autostart=False,on_result=deliver)
+                self.assertEqual(output[-1],result)
+                async with asyncio.timeout(1):
+                    while len(receipts)<len(output): await asyncio.sleep(.01)
+                self.assertEqual(receipts[-1],(len(output),{'received':True}))
     async def test_receipt_timeout_after_output_does_not_replace_success(self):
         # Tiny receipts do not normally fill a kernel buffer. Stall just that
         # drain to exercise the post-delivery deadline deterministically.

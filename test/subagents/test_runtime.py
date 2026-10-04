@@ -378,7 +378,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final['messages'][0]['message']['content'],[{'type':'text','text':'file contents'},{'type':'image'}])
         self.assertEqual(final['next_cursor'],sum(map(len,raw)))
         self.assertEqual([dict(row) for row in self.rt.store.all('SELECT * FROM parent_notifications')],notifications)
-        self.assertFalse(self.rt.store.run(self.scope,started['run_id'])['ack'])
+        self.assertFalse(self.rt.store.one("SELECT handled FROM parent_notifications WHERE run_id=? AND kind='terminal'", (started['run_id'],))['handled'])
         with self.assertRaises(AgentError) as stale:
             await host.dispatch('pi_view',params,{'parent':{**source['parent'],'lease':'lease_stale'}})
         self.assertEqual(stale.exception.code,'parent_stale')
@@ -493,13 +493,11 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(runs),2)
         terminal=[json.loads(e['payload']) for e in self.events(s['agent_id'],'run_terminal')]
         self.assertEqual([e['state'] for e in terminal],['completed','completed'])
-    async def test_spawn_wait_result_and_ack(self):
+    async def test_spawn_wait_result_is_repeatable(self):
         s=await self.spawn(); terminal=await self.wait(s['run_id'])
         self.assertFalse(terminal['timed_out']); self.assertEqual(terminal['runs'][0]['state'],'completed')
         r=await self.result(s['run_id']); self.assertEqual(r['text'],'Completed: simple')
-        self.assertFalse(r['acknowledged'])
-        await self.rt.dispatch('ack',{'scope':self.scope,'run_id':s['run_id'],'request_id':self.key(),'result_sha256':r['result_sha256']})
-        self.assertTrue((await self.result(s['run_id']))['acknowledged'])
+        self.assertEqual((await self.result(s['run_id']))['result_sha256'],r['result_sha256'])
     async def test_spawn_idempotency(self):
         p={'scope':self.scope,'request_id':'same','cwd':str(self.workspace),'task':'simple','access':'read'}
         a=await self.rt.dispatch('spawn',p); b=await self.rt.dispatch('spawn',p)
@@ -596,10 +594,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         await self.spawn('delay=2|writer',access='write')
         with self.assertRaises(AgentError) as cm: await self.spawn('writer2',access='write')
         self.assertEqual(cm.exception.code,'writer_conflict')
-    async def test_wrong_result_hash_rejected(self):
-        s=await self.spawn(); await self.wait(s['run_id'])
-        with self.assertRaises(AgentError): await self.rt.dispatch('ack',{'scope':self.scope,'run_id':s['run_id'],'request_id':self.key(),'result_sha256':'bad'})
-    async def test_result_read_does_not_ack(self):
+    async def test_internal_projection_does_not_consume_delivery(self):
         s=await self.spawn(); await self.wait(s['run_id']); await self.result(s['run_id'])
         listing=await self.rt.dispatch('list',{'scope':self.scope})
         self.assertEqual(listing['outstanding']['total'],1)
@@ -614,7 +609,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         body=''.join(chunks)
         self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),r['result_sha256'])
         self.assertIn('\u2028',body)
-    async def test_wait_result_budget_and_pagination_preserve_exact_hash_without_ack(self):
+    async def test_wait_result_budget_and_pagination_preserve_exact_hash(self):
         agents=[]
         for _ in range(6):
             agent=await self.spawn('BIG'); agents.append(agent)
@@ -628,7 +623,6 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 continuation=await self.result(run['id'],offset=offset)
                 text+=continuation['text']; more=continuation['has_more']; offset=continuation['next_offset']
             self.assertEqual(hashlib.sha256(text.encode()).hexdigest(),preview['result_sha256'])
-            self.assertFalse((await self.result(run['id']))['acknowledged'])
 
     async def test_wait_and_outstanding_use_bounded_scoped_reads(self):
         store=self.rt.store
@@ -692,8 +686,6 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             refs.append(weakref.ref(self.rt.workers[run['agent_id']]))
             await self.wait(run['run_id'])
             result=await self.result(run['run_id'])
-            await self.rt.dispatch('ack',{'scope':self.scope,'request_id':self.key(),'run_id':run['run_id'],
-                                          'result_sha256':result['result_sha256']})
             self.assertEqual((await self.mutation('close',run['agent_id']))['cleanup'],'verified')
             completed.append((params,run,result['result_sha256']))
         await self.until(lambda: not self.rt.workers,timeout=2)

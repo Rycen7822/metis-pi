@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 import sys
 from . import __version__
-from .common import AgentError, dumps, new_id, state_home
+from .common import AgentError, DELIVERY_OPS, dumps, new_id, state_home
 from .client import call_timeout, request
 
 DOC_ROOT=Path(__file__).resolve().parents[4]/'docs'/'subagents'
@@ -25,10 +25,10 @@ def parser():
     s=sub.add_parser('scope'); ss=s.add_subparsers(dest='action',required=True)
     so=ss.add_parser('open'); so.add_argument('--cwd',default=os.getcwd()); so.add_argument('--scope'); so.add_argument('--label',default='CLI delegation')
     ss.add_parser('list')
-    for name in ('list','spawn','send','steer','follow-up','send-message','followup-task','wait','inspect','result','ack','interrupt','close','respawn','resume','answer'):
+    for name in ('list','spawn','send','steer','follow-up','send-message','followup-task','wait','inspect','result','interrupt','close','respawn','resume','answer'):
         q=sub.add_parser(name)
         q.add_argument('--scope',default=os.environ.get('PI_AGENTS_SCOPE'))
-        if name in {'spawn','send','steer','follow-up','send-message','followup-task','ack','interrupt','close','respawn','resume','answer'}:
+        if name in {'spawn','send','steer','follow-up','send-message','followup-task','interrupt','close','respawn','resume','answer'}:
             q.add_argument('--request-id',default=None,help='Stable key for safe retries; generated if omitted')
         if name in {'send','steer','follow-up','send-message','followup-task','inspect','interrupt','close','respawn','resume','answer'}: q.add_argument('agent_id')
         if name=='spawn':
@@ -43,9 +43,8 @@ def parser():
             q.add_argument('run_ids',nargs='*'); q.add_argument('--mode',choices=['any','all'],default='any'); q.add_argument('--timeout-seconds',type=int,help='Maximum wait in seconds, not a fixed delay; default 10 minutes, max 1 hour, 0 checks immediately')
         if name=='inspect':
             q.add_argument('--after',type=int,default=0); q.add_argument('--limit',type=int,default=20); q.add_argument('--max-bytes',type=int,default=4096); q.add_argument('--detail',choices=['tools','full'],default='tools')
-        if name in {'result','ack'}: q.add_argument('run_id')
+        if name=='result': q.add_argument('run_id')
         if name=='result': q.add_argument('--offset',type=int,default=0); q.add_argument('--max-bytes',type=int,default=4096)
-        if name=='ack': q.add_argument('--sha256',required=True)
         if name=='answer':
             q.add_argument('ui_request_id'); q.add_argument('--answer',required=True,help='Text, or JSON true/false for confirmation')
     d=sub.add_parser('doctor',help='Diagnostics; add --inheritance for source/skill/server names only')
@@ -126,6 +125,12 @@ async def execute(args):
     if cmd=='call':
         raw=sys.stdin.read() if args.json=='-' else args.json
         payload=json.loads(raw)
+        if args.operation in DELIVERY_OPS:
+            from .parent import capture
+            async def write_result(value): print(dumps(value),flush=True)
+            source={'env':{},'parent':capture(os.environ,os.environ.get('CODEX_THREAD_ID'))}
+            await request(home,args.operation,payload,timeout=call_timeout(args.operation,payload,home),source=source,on_result=write_result)
+            return None
         return await request(home,args.operation,payload,timeout=call_timeout(args.operation,payload,home))
     if cmd=='codex':
         exe=shutil.which('codex')
@@ -153,14 +158,15 @@ async def execute(args):
     if data.get('message_file'): data['message']=read_input(data['message_file'])
     data.pop('task_file',None); data.pop('message_file',None)
     if cmd in {'send','steer','follow-up'}: data['mode']={'send':'send','steer':'steer','follow-up':'follow_up'}[cmd]
-    if cmd=='ack': data['result_sha256']=data.pop('sha256')
     if cmd=='answer' and data['answer'] in {'true','false'}: data['answer']=data['answer']=='true'
     if cmd=='wait' and not data['run_ids']: data.pop('run_ids')
     data={k:v for k,v in data.items() if v is not None}
     op={'steer':'send','follow-up':'send','send-message':'message','followup-task':'followup','interrupt':'soft_interrupt','resume':'respawn'}.get(cmd,cmd)
-    if op=='wait':
+    if op in DELIVERY_OPS:
         from .parent import capture
-        async def write_result(value): print(dumps(value),flush=True)
+        async def write_result(value):
+            if 'request_id' in data: value={**value,'request_id':data['request_id']}
+            print(dumps(value),flush=True)
         source={'env':{},'parent':capture(os.environ,os.environ.get('CODEX_THREAD_ID'))}
         await request(home,op,data,timeout=call_timeout(op,data,home),source=source,on_result=write_result)
         return None

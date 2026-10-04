@@ -22,7 +22,7 @@ contains no Codex marketplace installer or standalone runtime npm dependency.
 
 ## Native Pi entry
 
-The `extensions/subagents.ts` entry registers the ten `pi_*` daily tools. It keeps
+The `extensions/subagents.ts` entry registers the nine `pi_*` daily tools. It keeps
 Pi's current tool set; users can call the same tools through native codemode.
 `/metis-subagents` lists this session's agents; select one to open its read-only
 conversation. With no agents, it shows a short empty-state message.
@@ -39,7 +39,7 @@ Runtime failures retain `isError: true` and `error.code/message` in structured
 output. Native codemode resolves this value; check `result.isError` before using
 success fields. `error.blocking_agent_id` identifies an existing conflicting
 writer; `error.agent_id/run_id` identify a failed launch. Saved direct and nested
-failure receipts consume attention without acknowledging the result. Unobserved
+failure receipts automatically consume the corresponding attention. Unobserved
 background failures still wake the parent.
 
 An output-limit stop produces a `failed` run with an explicit error. Partial final
@@ -60,7 +60,7 @@ settles or the parent session closes. It uses at most twelve lines, including
 any remaining-agent count. Click either line of an entry to open its
 read-only conversation overlay, with current state, tool activity and completed
 messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the
-overlay without stopping the agent or acknowledging its result. The overlay reads
+overlay without stopping the agent or consuming its notification. The overlay reads
 bounded saved conversation history, with command highlighting and the same tool
 and thinking fold controls as the main conversation. Click tools to expand or
 collapse; click thoughts for a short preview or to collapse, and double-click for

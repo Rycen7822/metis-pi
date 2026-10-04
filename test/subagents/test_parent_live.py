@@ -92,8 +92,8 @@ class LiveParentWakeup(McpHarness, unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(event['params']['turn']['status'],'completed',event)
                     return event['params']
 
-    async def test_ack_retracts_busy_parent_notification_preserving_other_queue_entries(self):
-        await self.assert_busy_parent_recall('ack')
+    async def test_result_read_retracts_busy_parent_notification_preserving_other_queue_entries(self):
+        await self.assert_busy_parent_recall('result')
 
     async def test_wait_consumes_notification_before_parent_finishes_without_ack(self):
         await self.assert_busy_parent_recall('wait')
@@ -129,21 +129,14 @@ class LiveParentWakeup(McpHarness, unittest.IsolatedAsyncioTestCase):
                 'input':[{'type':'text','text':'Unrelated user queue entry.'}]})
             before=(await self.app_rpc('thread/queue/list',{'threadId':parent}))['data']
             self.assertEqual(len(before),2)
-            if consumer=='ack':
-                result=await self.tool('pi_agent_result',{'scope':scope,'run_id':child['run_id']})
-                ack=await self.tool('pi_ack_result',{'scope':scope,'run_id':child['run_id'],'request_id':'ack',
-                    'result_sha256':result['result_sha256']})
-                self.assertTrue(ack['acknowledged']); self.assertNotIn('notification_recall',ack)
-            else:
-                response=await self.rpc('tools/call',{'name':'pi_wait_agent',
-                    'arguments':{'scope':scope,'run_ids':[child['run_id']]},'_meta':{'threadId':parent}})
-                attention=self.unpack(response)
-                self.assertFalse(response['result'].get('isError'),attention)
-                self.assertFalse((await self.tool('pi_agent_result',{'scope':scope,'run_id':child['run_id']}))['acknowledged'])
+            response=await self.rpc('tools/call',{'name':'pi_agent_result' if consumer=='result' else 'pi_wait_agent',
+                'arguments':{'scope':scope,**({'run_id':child['run_id']} if consumer=='result' else {'run_ids':[child['run_id']]})},
+                '_meta':{'threadId':parent}})
+            self.assertFalse(response['result'].get('isError'),self.unpack(response))
             after=(await self.app_rpc('thread/queue/list',{'threadId':parent}))['data']
             self.assertEqual(after,[item for item in before if item['id']!=receipt])
             rows=(await self.tool('pi_context',{'cwd':str(self.workspace),'scope':scope}))['parent_notifications']['recent']
-            self.assertEqual(rows[0]['state'],'recalled' if consumer=='ack' else 'observed')
+            self.assertEqual(rows[0]['state'],'observed')
             # Remove the test's unrelated entry, then let the parent finish.
             await self.app_rpc('thread/queue/delete',{'threadId':parent,'queuedSubmissionId':after[0]['id']})
             release.set(); await self.completed()
@@ -178,4 +171,4 @@ class LiveParentWakeup(McpHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.requests),3)  # initial + question wake + completion wake
         self.assertIn('terminal',self.requests[2]); self.assertIn('completed',self.requests[2])
         result=await self.tool('pi_agent_result',{'scope':scope,'run_id':child['run_id']})
-        self.assertEqual(result['text'],'MOCK_REPLY_2'); self.assertFalse(result['acknowledged'])
+        self.assertEqual(result['text'],'MOCK_REPLY_2')

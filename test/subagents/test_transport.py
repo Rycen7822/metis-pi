@@ -256,7 +256,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
     async def test_mcp_initialize_and_list(self):
         init=await self.initialize(); self.assertEqual(init['result']['protocolVersion'],'2025-06-18')
         result=await self.rpc('tools/list'); tools=result['result']['tools']
-        self.assertEqual(len(tools),10)
+        self.assertEqual(len(tools),9)
         self.assertTrue(all('_op' not in t for t in tools))
     async def test_wait_schema_defaults_to_any_and_accepts_all_at_the_mcp_boundary(self):
         await self.initialize()
@@ -288,9 +288,6 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
             states={r['id']:r['state'] for r in done['runs']}
             self.assertEqual(states,{slow['run_id']:'running',fast['run_id']:'completed'})
             result=await self.tool('pi_agent_result',{'run_id':fast['run_id']})
-            self.assertFalse(result['acknowledged'])
-            await self.tool('pi_ack_result',{'run_id':fast['run_id'],
-                'result_sha256':result['result_sha256'],'request_id':'handled-fast'})
             gate.touch()
             remainder=await self.tool('pi_wait_agent',{'run_ids':[slow['run_id']],'timeout_seconds':4})
             self.assertEqual(remainder['runs'][0]['state'],'completed')
@@ -343,7 +340,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(page['runs'][0]['state'],'running')
             self.assertEqual([r['id'] for r in page['runs'] if r.get('result')],ready)
             for rid in ready:
-                self.assertFalse((await self.tool('pi_agent_result',{'run_id':rid}))['acknowledged'])
+                self.assertTrue((await self.tool('pi_agent_result',{'run_id':rid}))['result_sha256'])
         finally: gate.touch()
 
     async def test_cli_retains_explicit_all_completed_wait(self):
@@ -375,11 +372,11 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         for a in agents:
             result=await self.tool('pi_agent_result',{'run_id':a['run_id']})
             self.assertEqual(result['run']['name'],a['name'])
-            self.assertFalse(result['acknowledged'])
         listing=await self.tool('pi_list_agents',{})
-        self.assertEqual({r['agent_id']:r['name'] for r in listing['outstanding']['runs']},expected)
+        self.assertEqual({r['id']:r['name'] for r in listing['agents']},expected)
+        self.assertEqual(listing['outstanding']['total'],0)
         resumed=await self.tool('pi_context',{'cwd':str(self.workspace),'scope':scope['scope']})
-        self.assertEqual({r['agent_id']:r['name'] for r in resumed['outstanding']['runs']},expected)
+        self.assertEqual(resumed['outstanding']['total'],0)
         conflict=await self.rpc('tools/call',{'name':'pi_spawn_agent','arguments':{'name':agents[0]['name'],
             'task':'duplicate','access':'read','request_id':'duplicate'}})
         self.assertEqual(self.unpack(conflict)['error']['code'],'name_conflict')
@@ -455,8 +452,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         done=await self.tool('pi_wait_agent',{'run_ids':[run['run_id']],'timeout_seconds':4})
         result=done['runs'][0]['result']
         self.assertEqual(result['text'],'Completed: bound scope')
-        self.assertFalse(result['has_more']); self.assertFalse((await self.tool('pi_agent_result',{'run_id':run['run_id']}))['acknowledged'])
-        await self.tool('pi_ack_result',{'request_id':'ack-bound','run_id':run['run_id'],'result_sha256':result['result_sha256']})
+        self.assertFalse(result['has_more'])
         await self.tool('pi_close_agent',{'agent_id':run['agent_id'],'request_id':'stop-bound'})
         self.mcp.stdin.close(); await self.mcp.wait(); await self.stderr_task
         await self.initialize()
@@ -542,7 +538,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         self.mcp.stdin.close(); await self.mcp.wait()
         done=await request(self.home,'wait',{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':4})
         self.assertEqual(done['runs'][0]['state'],'completed')
-    async def test_durable_unacknowledged_result_after_daemon_restart(self):
+    async def test_durable_unseen_result_after_daemon_restart(self):
         sid=await self.open_scope(); a=await self.spawn(sid)
         await request(self.home,'wait',{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':4})
         first=await request(self.home,'result',{'scope':sid,'run_id':a['run_id']})
@@ -550,7 +546,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         until=asyncio.get_running_loop().time()+8
         while socket_path(self.home).exists() and asyncio.get_running_loop().time()<until: await asyncio.sleep(.05)
         second=await request(self.home,'result',{'scope':sid,'run_id':a['run_id']})
-        self.assertEqual(first['result_sha256'],second['result_sha256']); self.assertFalse(second['acknowledged'])
+        self.assertEqual(first['result_sha256'],second['result_sha256'])
         listing=await request(self.home,'list',{'scope':sid})
         self.assertEqual(listing['outstanding']['total'],1)
     async def test_ipc_disconnected_mutation_still_has_idempotent_result(self):

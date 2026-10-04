@@ -5,7 +5,7 @@ from pathlib import Path
 import sqlite3
 from .common import AgentError, TERMINAL, atomic_write, dumps, now, private_dir
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 # Applied in order to reach SCHEMA_VERSION from an older ledger. A fresh database
 # is created at the current version, so these statements never run on it.
 MIGRATIONS = {
@@ -18,6 +18,9 @@ MIGRATIONS = {
     6: ('ALTER TABLE parent_notifications ADD COLUMN handled INTEGER NOT NULL DEFAULT 0',),
     7: ('ALTER TABLE parent_notifications ADD COLUMN pi_receipt TEXT',
         'ALTER TABLE parent_notifications ADD COLUMN pi_owner TEXT'),
+    8: ('DROP INDEX runs_scope_state',
+        'ALTER TABLE runs DROP COLUMN ack',
+        'CREATE INDEX runs_scope_state ON runs(scope,state,created)'),
 }
 
 class Store:
@@ -34,13 +37,13 @@ class Store:
         CREATE TABLE IF NOT EXISTS scopes(id TEXT PRIMARY KEY,cwd TEXT NOT NULL,label TEXT NOT NULL,created REAL NOT NULL,revision INTEGER NOT NULL DEFAULT 0,
             codex_home TEXT,codex_source TEXT,inheritance INTEGER NOT NULL DEFAULT 1,base_env TEXT,parent TEXT);
         CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY,scope TEXT NOT NULL REFERENCES scopes(id),name TEXT NOT NULL,cwd TEXT NOT NULL,state TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 0,session_file TEXT NOT NULL,launch TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL,current_run TEXT,pid INTEGER,identity TEXT,cleanup TEXT NOT NULL DEFAULT 'verified',UNIQUE(scope,name));
-        CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),scope TEXT NOT NULL REFERENCES scopes(id),state TEXT NOT NULL,task TEXT NOT NULL,created REAL NOT NULL,started REAL,ended REAL,deadline REAL,idle_timeout_seconds INTEGER,result_path TEXT,result_sha TEXT,ack INTEGER NOT NULL DEFAULT 0,error TEXT,usage TEXT NOT NULL DEFAULT '{}');
+        CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),scope TEXT NOT NULL REFERENCES scopes(id),state TEXT NOT NULL,task TEXT NOT NULL,created REAL NOT NULL,started REAL,ended REAL,deadline REAL,idle_timeout_seconds INTEGER,result_path TEXT,result_sha TEXT,error TEXT,usage TEXT NOT NULL DEFAULT '{}');
         CREATE TABLE IF NOT EXISTS requests(scope TEXT NOT NULL,key TEXT NOT NULL,digest TEXT NOT NULL,op TEXT NOT NULL,state TEXT NOT NULL,response TEXT,created REAL NOT NULL,PRIMARY KEY(scope,key));
         CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,run_id TEXT NOT NULL,scope TEXT NOT NULL,message TEXT NOT NULL,state TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,agent_id TEXT NOT NULL,run_id TEXT,generation INTEGER NOT NULL,type TEXT NOT NULL,payload TEXT NOT NULL,created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS parent_notifications(id TEXT PRIMARY KEY,scope TEXT NOT NULL REFERENCES scopes(id),run_id TEXT NOT NULL REFERENCES runs(id),kind TEXT NOT NULL,ui_id TEXT,state TEXT NOT NULL DEFAULT 'pending',queued_id TEXT,error TEXT,created REAL NOT NULL,handled INTEGER NOT NULL DEFAULT 0,pi_receipt TEXT,pi_owner TEXT);
         CREATE INDEX IF NOT EXISTS parent_notifications_state ON parent_notifications(state,created);
-        CREATE INDEX IF NOT EXISTS runs_scope_state ON runs(scope,state,ack,created);
+        CREATE INDEX IF NOT EXISTS runs_scope_state ON runs(scope,state,created);
         CREATE INDEX IF NOT EXISTS runs_agent_state ON runs(agent_id,state,created);
         CREATE INDEX IF NOT EXISTS events_agent_seq ON events(agent_id,seq);
         CREATE INDEX IF NOT EXISTS receipts_run ON receipts(run_id,state);
@@ -48,6 +51,7 @@ class Store:
         CREATE INDEX IF NOT EXISTS receipts_agent_pending ON receipts(agent_id) WHERE state IN ('sending','queued');
         CREATE INDEX IF NOT EXISTS runs_agent_recent ON runs(agent_id,created DESC) WHERE state!='queued';
         CREATE INDEX IF NOT EXISTS parent_notifications_scope_recent ON parent_notifications(scope,created DESC);
+        CREATE INDEX IF NOT EXISTS parent_notifications_run ON parent_notifications(run_id,kind);
         ''')
         row = self.one("SELECT value FROM meta WHERE key='schema'")
         current = int(row['value']) if row else None
@@ -65,6 +69,13 @@ class Store:
                         continue
                     if version==7 and any(c['name']=='pi_receipt' for c in self.all('PRAGMA table_info(parent_notifications)')):
                         continue
+                    if version==8:
+                        if not any(c['name']=='ack' for c in self.all('PRAGMA table_info(runs)')):
+                            continue
+                        for run in self.all("SELECT id,ack FROM runs WHERE state IN ('completed','failed','interrupted','crashed','cancelled','timed_out')"):
+                            self.attention(run['id'],'terminal')
+                            if run['ack']:
+                                self.db.execute("UPDATE parent_notifications SET handled=1,state=CASE WHEN state='pending' THEN 'observed' ELSE state END WHERE run_id=? AND kind='terminal'", (run['id'],))
                     for statement in MIGRATIONS[version]:
                         self.db.execute(statement)
                 self.db.execute('COMMIT')
@@ -132,7 +143,7 @@ class Store:
             self.execute("ROLLBACK"); raise
     def attention(self, rid, kind, ui_id=None):
         row=self.one('SELECT r.scope,s.parent FROM runs r JOIN scopes s ON s.id=r.scope WHERE r.id=?',(rid,))
-        if not row or not row['parent']: return
+        if not row: return
         key=hashlib.sha256(dumps([rid,kind,ui_id]).encode()).hexdigest()
         self.execute('INSERT OR IGNORE INTO parent_notifications(id,scope,run_id,kind,ui_id,created) VALUES(?,?,?,?,?,?)',
                      (key,row['scope'],rid,kind,ui_id,now()))

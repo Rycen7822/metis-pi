@@ -58,22 +58,22 @@ class PiNotifications:
         self.store, self.worker_for, self.changed = store, worker_for, changed
         self.waits = {}
 
-    def reserve_wait(self, params, source):
+    def reserve_delivery(self, op, params, source):
         from .views import wait_run_ids
         bind(self.store,params['scope'],source,False)
-        ids = wait_run_ids(self.store,params)
-        params['run_ids'] = ids
+        ids = wait_run_ids(self.store,params) if op=='wait' else None
+        if op=='wait': params['run_ids'] = ids
         token = object()
-        self.waits[token] = (params['scope'], frozenset(ids), source['parent']['lease'])
+        self.waits[token] = (params['scope'], frozenset(ids) if ids is not None else None, source['parent']['lease'])
         return token
 
-    def prepare_wait(self, token, response):
+    def prepare_delivery(self, token, op, response):
         sid, ids, lease = self.waits[token]
         parent = bound_parent(self.store,sid)
         if parent['lease'] != lease:
-            raise AgentError('parent_stale', 'Parent changed before wait delivery')
-        events = [(r['id'],'terminal',None) for r in response['runs'] if r['id'] in ids and r.get('result')]
-        events += [(q['run_id'],'question',q['id']) for q in response['questions'] if q['run_id'] in ids]
+            raise AgentError('parent_stale', 'Parent changed before result delivery')
+        from .views import delivered_events
+        events = [e for e in delivered_events(op,response) if ids is None or e[0] in ids]
         selected = []; receipts = []
         for rid,kind,ui_id in events:
             row = self.store.one('SELECT id,state,handled FROM parent_notifications WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?', (sid,rid,kind,ui_id))
@@ -85,21 +85,21 @@ class PiNotifications:
                 receipts.append(receipt)
         if selected: response['_pi_delivery'] = {'id':receipts[0],'events':selected,'receipts':list(dict.fromkeys(receipts))}
 
-    def release_wait(self, token):
+    def release_delivery(self, token):
         # IPC output is not a Pi result receipt. Prepared tickets stay reserved
         # until the native frontend confirms, releases or reconciles them.
         self.waits.pop(token,None)
 
     def pending(self, sid):
-        rows = self.store.all("SELECT n.*,r.agent_id,r.state AS run_state,r.ack,a.name FROM parent_notifications n JOIN runs r ON r.id=n.run_id JOIN agents a ON a.id=r.agent_id WHERE n.scope=? AND n.state='pending' AND n.handled=0 ORDER BY n.created,n.id LIMIT 50", (sid,))
+        rows = self.store.all("SELECT n.*,r.agent_id,r.state AS run_state,a.name FROM parent_notifications n JOIN runs r ON r.id=n.run_id JOIN agents a ON a.id=r.agent_id WHERE n.scope=? AND n.state='pending' AND n.handled=0 ORDER BY n.created,n.id LIMIT 50", (sid,))
         result = []
         for row in rows:
             w = self.worker_for(row['agent_id'])
-            relevant = not row['ack'] if row['kind']=='terminal' else bool(w and w.run_id==row['run_id'] and row['ui_id'] in w.ui)
+            relevant = row['kind']=='terminal' or bool(w and w.run_id==row['run_id'] and row['ui_id'] in w.ui)
             if not relevant:
                 self.store.execute("UPDATE parent_notifications SET state='superseded' WHERE id=?", (row['id'],))
                 continue
-            if any(scope==sid and row['run_id'] in ids for scope,ids,_ in self.waits.values()): continue
+            if any(scope==sid and (ids is None or row['run_id'] in ids) for scope,ids,_ in self.waits.values()): continue
             result.append({'notification_id':row['id'],'run_id':row['run_id'],'agent_id':row['agent_id'],
                            'name':row['name'],'event':row['kind'],'state':row['run_state'],
                            **({'ui_request_id':row['ui_id']} if row['ui_id'] else {})})
@@ -161,6 +161,3 @@ class PiNotifications:
             self.store.execute('UPDATE scopes SET parent=? WHERE id=?',(dumps({**parent,'lease':new_id('detached_'),'expires':0}),sid))
             return {'detached':True}
         raise AgentError('unknown_operation','Unknown Pi host operation')
-
-    def observe_run(self, sid, rid):
-        self.store.execute("UPDATE parent_notifications SET state='observed',handled=1,error=NULL WHERE scope=? AND run_id=? AND kind='terminal'",(sid,rid))

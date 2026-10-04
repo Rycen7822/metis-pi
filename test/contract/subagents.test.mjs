@@ -183,14 +183,14 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   assert.ok(popup, "a completed child's new run reappears and opens its viewer before parent shutdown");
 });
 
-test("SDK configuration failures expose their cause and preserve recoverable identities", { timeout: 30000 }, async () => {
+test("SDK configuration failures preserve identities and result delivery survives rereads", { timeout: 30000 }, async () => {
   const root = fileURLToPath(new URL("../../", import.meta.url)), runtime = runtimePackage();
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work/metis-subagent-config-")), state = join(dir, "subagent-pi");
   const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
   mkdirSync(state);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }));
-  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="50"\n');
+  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="50"\n[profiles.slow.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="5000"\n');
   const ctx = { cwd: dir, model: { provider: "pi-mock-offline", id: "mock" },
     sessionManager: SessionManager.create(dir, dir), isProjectTrusted: () => true };
   const client = new SubagentClient(runtime, ctx, dir, undefined, () => {});
@@ -207,6 +207,7 @@ test("SDK configuration failures expose their cause and preserve recoverable ide
       const inspected = await client.call("pi_inspect_agent", { agent_id: failure.agent_id, detail: "full" });
       assert.equal(inspected.agent.cleanup, "verified"); assert.equal(inspected.run.id, failure.run_id);
       assert.equal(inspected.run.state, "failed"); assert.match(inspected.agent.name, /startup failed/);
+      for (const receipt of inspected._pi_delivery.receipts) await client.call("pi_observe", { receipt });
       await assert.rejects(client.call("pi_followup_task", { agent_id: failure.agent_id, message: "retry", request_id: `${request_id}-retry` }),
         error => error instanceof RuntimeError && error.code === "worker_unavailable" && /pi_spawn_agent/.test(error.message));
     }
@@ -214,6 +215,27 @@ test("SDK configuration failures expose their cause and preserve recoverable ide
     assert.equal(started.name, "configuration-probe");
     const waited = await client.call("pi_wait_agent", { run_ids: [started.run_id], timeout_seconds: 15 });
     assert.equal(waited.runs[0].state, "completed");
+    for (const receipt of waited._pi_delivery.receipts) await client.call("pi_release", { receipt });
+    for (const [operation, args] of [["pi_agent_result", { run_id: started.run_id }], ["pi_inspect_agent", { agent_id: started.agent_id }], ["pi_list_agents", {}]]) {
+      const ui = await client.call(operation, args, undefined, { consume: false });
+      assert.equal(ui._pi_delivery, undefined, "internal UI reads preserve unseen attention");
+      const result = await client.call(operation, args);
+      assert.ok(result._pi_delivery?.receipts.length, `${operation} prepares a durable delivery receipt`);
+      for (const receipt of result._pi_delivery.receipts) await client.call("pi_release", { receipt });
+      assert.ok((await client.call("pi_watch", {})).notifications.some(event => event.run_id === started.run_id), "unpersisted delivery remains eligible for wakeup");
+    }
+    const delivered = await client.call("pi_agent_result", { run_id: started.run_id });
+    for (const receipt of delivered._pi_delivery.receipts) await client.call("pi_observe", { receipt });
+    assert.equal((await client.call("pi_wait_agent", { timeout_seconds: 0 })).runs.length, 0);
+    assert.equal((await client.call("pi_list_agents", {})).outstanding.total, 0);
+    assert.equal((await client.call("pi_agent_result", { run_id: started.run_id })).result_sha256, delivered.result_sha256);
+    assert.equal((await client.call("pi_watch", {})).notifications.length, 0);
+    const interruptible = await client.call("pi_spawn_agent", { task: "interrupt before completion", profile: "slow", access: "read", request_id: "interruptible" });
+    const stopped = await client.call("pi_interrupt_agent", { agent_id: interruptible.agent_id, request_id: "stop" });
+    assert.equal(stopped.run_id, interruptible.run_id);
+    for (const receipt of stopped._pi_delivery.receipts) await client.call("pi_observe", { receipt });
+    assert.equal((await client.call("pi_watch", {})).notifications.length, 0, "the parent's own interruption does not become a late notification");
+    assert.equal((await client.call("pi_agent_result", { run_id: stopped.run_id })).run.state, "interrupted");
   } finally {
     await client.close();
     try { execFileSync("python3", [join(runtime.root, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { stdio: "ignore" }); }

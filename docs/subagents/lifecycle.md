@@ -11,9 +11,13 @@ overlapping declared cwd subtrees; it does not constrain actual write paths.
 Write tools, shell commands and extensions can write outside the declared cwd,
 including another writer's directory. Assign separate workspaces and explicit
 task boundaries, and treat stronger filesystem isolation as a separate requirement.
-Queued input is
-not consumed input. Reading a result does not acknowledge it; ACK requires its
-exact hash. An uncertain mutation is never retried automatically.
+Queued input is not consumed input. Tool result delivery automatically consumes
+the returned terminal notices; no separate confirmation is required. Pi consumes
+only receipts saved to the parent's current session branch; standalone CLI/MCP
+consumes after successful output. Failed delivery leaves attention pending.
+Result files remain available for paging and rereading. Default wait and the
+outstanding list include active and not-yet-delivered runs. Explicit run IDs can
+always reread a result. An uncertain mutation is never retried automatically.
 `completed` means the model stopped normally; acceptance still requires checking
 the requested artifacts. Inspection usage counters are cumulative per run
 (`token_scope=run_total`); `last_message_output` and `max_message_output` measure

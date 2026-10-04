@@ -162,6 +162,7 @@ OUTPUTS = {
             "previous_status": S,
             "runtime_retained": BOOL,
             "forced": BOOL,
+            "run_id": ID,
         },
         ["agent_id", "previous_status", "runtime_retained"],
         mutation=True,
@@ -232,7 +233,6 @@ OUTPUTS = {
             "next_offset": INT,
             "has_more": BOOL,
             "total_bytes": INT,
-            "acknowledged": BOOL,
             "result_truncated": BOOL,
         },
         [
@@ -242,14 +242,8 @@ OUTPUTS = {
             "next_offset",
             "has_more",
             "total_bytes",
-            "acknowledged",
             "result_truncated",
         ],
-    ),
-    "ack": output(
-        {"run_id": ID, "acknowledged": BOOL, "notification_recall": S},
-        ["run_id", "acknowledged"],
-        mutation=True,
     ),
     "answer": output(
         {"agent_id": ID, "sent": BOOL, "ui_request_id": S},
@@ -310,11 +304,11 @@ TOOLS = [
     tool(
         "pi_wait_agent",
         "wait",
-        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes without acknowledgement. Completed means the model stopped, not that its task passed acceptance; verify artifacts before reporting success. Settles earlier parent notifications before output. Cancelling the wait does not stop agents.",
+        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes; delivery consumes returned notifications automatically. Completed means the model stopped, not that its task passed acceptance; verify artifacts before reporting success. Settles earlier parent notifications before output. Cancelling the wait does not stop agents.",
         {
             **SCOPE,
             "run_ids": {"type": "array", "items": ID, "maxItems": 100,
-                        "description": "Selected run IDs; omit for up to 100 currently unacknowledged runs in the bound scope."},
+                        "description": "Selected run IDs; omit for up to 100 active or not-yet-delivered runs in the bound scope."},
             "mode": {"type": "string", "enum": ["any", "all"], "default": "any"},
             "timeout_seconds": {
                 "type": "integer",
@@ -330,7 +324,7 @@ TOOLS = [
     tool(
         "pi_list_agents",
         "list",
-        "List agent identities, task/residency states and unacknowledged runs. This tool accepts only scope and limit. For notification details, call pi_inspect_agent with agent_id and detail=full.",
+        "List agent identities, task/residency states and active or not-yet-delivered runs. This tool accepts only scope and limit. For notification details, call pi_inspect_agent with agent_id and detail=full.",
         {
             **SCOPE,
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
@@ -355,7 +349,7 @@ TOOLS = [
     tool(
         "pi_agent_result",
         "result",
-        "Read UTF-8 byte pages of a terminal result without acknowledgement. Keep result_sha256 for ACK; paginate with next_offset.",
+        "Read UTF-8 byte pages of a terminal result; paginate with next_offset. Delivery consumes its notification automatically. Results remain available for re-reading.",
         {
             **SCOPE,
             "run_id": ID,
@@ -364,13 +358,6 @@ TOOLS = [
         },
         ["run_id"],
         True,
-    ),
-    tool(
-        "pi_ack_result",
-        "ack",
-        "Acknowledge the exact result hash after incorporating or dismissing it. notification_recall reports pending/failed notification cleanup. Files remain.",
-        {**SCOPE, **REQ, "run_id": ID, "result_sha256": S},
-        ["request_id", "run_id", "result_sha256"],
     ),
     tool(
         "pi_answer_agent",

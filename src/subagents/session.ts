@@ -217,7 +217,7 @@ export class SubagentSession {
       let extra: object | undefined;
       if (name === "pi_spawn_agent") extra = { project_trust: await this.trust((args.cwd as string | undefined) ?? ctx.cwd) };
       if (name === "pi_send_message" || name === "pi_followup_task") {
-        const snapshot = await this.client.call("pi_inspect_agent", { agent_id: args.agent_id, limit: 1, max_bytes: 16384 }, signal);
+        const snapshot = await this.client.call("pi_inspect_agent", { agent_id: args.agent_id, limit: 1, max_bytes: 16384 }, signal, { consume: false });
         const agent = snapshot.agent as { cwd?: string };
         if (typeof agent.cwd !== "string") throw new Error("Subagent working directory is unavailable for project trust verification");
         extra = { project_trust: await this.trust(agent.cwd) };
@@ -254,10 +254,21 @@ export class SubagentSession {
   async command(args: string, ctx: ExtensionContext) {
     this.update(ctx);
     const [operation, target, ...message] = args.trim().split(/\s+/);
-    if (operation === "stop" && target) return this.execute("pi_interrupt_agent", { agent_id: target, request_id: randomUUID() }, randomUUID(), ctx);
-    if (operation === "continue" && target && message.length) return this.execute("pi_followup_task", { agent_id: target, request_id: randomUUID(), message: message.join(" ") }, randomUUID(), ctx);
+    if (target && (operation === "stop" || operation === "continue" && message.length)) {
+      const result = await this.execute(operation === "stop" ? "pi_interrupt_agent" : "pi_followup_task",
+        { agent_id: target, request_id: randomUUID(), ...(operation === "continue" ? { message: message.join(" ") } : {}) }, randomUUID(), ctx);
+      if (!this.valid()) return result;
+      const status = result.isError ? JSON.parse(result.content[0]!.text).error.message : operation === "stop" ? "interrupted" : "continuing";
+      ctx.ui.notify(`${cleanName(target)}: ${status}`, result.isError ? "error" : "info");
+      const proof = result.details.metisSubagentReceipt;
+      if (proof) {
+        for (const receipt of proof.receipts) this.pi.appendEntry(RECEIPT, { sessionId: this.sessionId, scope: this.client.scope, receipt });
+        await this.serialize(() => this.reconcile());
+      }
+      return result;
+    }
     if (operation === "answer" && target) {
-      const snapshot = await this.client.call("pi_inspect_agent", { agent_id: target, detail: "full" });
+      const snapshot = await this.client.call("pi_inspect_agent", { agent_id: target, detail: "full" }, undefined, { consume: false });
       const run = snapshot.run as { id: string } | undefined;
       if (!run) { ctx.ui.notify("No pending subagent question", "info"); return; }
       if (!ctx.hasUI) { ctx.ui.notify("Answering a subagent question requires an interactive Pi session", "warning"); return; }
@@ -279,7 +290,7 @@ export class SubagentSession {
       } finally { if (ticket && this.valid()) await Promise.all(ticket.receipts.map(receipt => this.client.call("pi_release", { receipt }))); }
       return;
     }
-    const snapshot = await this.client.call("pi_list_agents", {}); this.startWatching();
+    const snapshot = await this.client.call("pi_list_agents", {}, undefined, { consume: false }); this.startWatching();
     if (!this.valid()) return;
     const agents = snapshot.agents as typeof this.agents;
     if (!agents.length) { ctx.ui.notify("No subagents in this session", "info"); return; }

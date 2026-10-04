@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from .common import MAX_FRAME, DEFAULT_WAIT_SECONDS, AgentError, dumps, private_dir, read_frame, socket_path, close_writer
+from .common import MAX_FRAME, DEFAULT_WAIT_SECONDS, DELIVERY_OPS, AgentError, dumps, private_dir, read_frame, socket_path, close_writer
 from . import PROTOCOL_VERSION
 
 BASE_TIMEOUT = 45
@@ -70,14 +70,14 @@ async def request(home,op,params,timeout=45,autostart=True,source=None,on_result
         async with asyncio.timeout(timeout):
             reader,writer=await connect_daemon(home,autostart)
             frame={'v':PROTOCOL_VERSION,'op':op,'params':params}
-            if op=='wait' and on_result is not None: frame['wait_delivery']=True
+            if op in DELIVERY_OPS and on_result is not None: frame['delivery_receipt']=True
             if source is not None: frame['source']=source
             writer.write((dumps(frame)+'\n').encode()); await writer.drain()
             response=await read_frame(reader)
             if not response: raise AgentError('connection_lost','No response; mutation may have committed. Retry the same request_id.')
             if not response.get('ok'): raise AgentError(**response.get('error',{'code':'protocol_error','message':'Invalid reply'}))
             if on_result is not None: await on_result(response['result'])
-        if op=='wait' and on_result is not None:
+        if op in DELIVERY_OPS and on_result is not None:
             # Output has succeeded. A failed delivery receipt must never turn it
             # into a second response; the daemon can restore pending attention.
             with contextlib.suppress(OSError,TimeoutError):

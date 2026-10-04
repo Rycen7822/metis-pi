@@ -1,5 +1,11 @@
 # Validation
 
+## 2026-10-04 — Automatic subagent delivery consumption
+
+- Removed the explicit result ACK tool, CLI command and run flag. Wait, result, inspect, list and interruption consume only notices actually returned and delivered; Pi requires saved branch receipts. Unbound CLI/MCP confirms after successful output. Internal UI reads preserve attention, and result artifacts remain available for paging and rereading.
+- Schema 8 preserves prior confirmations before removing the column; a Store-only migration of a read-only personal-ledger backup preserves all **111 runs**, **102 confirmed results** and **9 unseen terminal results**, including queue IDs and Pi receipts. The personal daemon and session were not modified. Protocol 4 rejects older resident backends rather than silently skipping delivery receipts.
+- `verify`: **362/362 TS**, **399 Python cases / 41 opt-in skips**, production/test type checks and **237 package files**, passing. Closest final queue tests cover broken output for all four read paths; native SDK tests cover released/observed delivery tickets, UI reads, result rereads, questions and interruption. Strict PTY **E1, E2, E3, E4, E6** passes with **161** exact clipboard characters. The final tarball installed offline under `.work/ack-install` passes both SDK contracts with Pi **1.0.0** and local mock models; changed shipped source/documentation files match the working tree. No permanent source-removal tests were added.
+
 ## 2026-10-04 — Bounded condense batches, summary evidence and subagent output limits
 
 - Condense plans serializable chunks within a 65,536-character ceiling and smaller model limits. Up to three requests run concurrently, with archives, persistent summary receipts and progress committed in input order; failures cancel later requests, and reload resumes the unprocessed suffix. Both batching modes retain their boundaries. Batch and range summaries now share instructions to preserve uncertainty and quote essential code conditions rather than infer behavior.

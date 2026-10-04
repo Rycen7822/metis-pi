@@ -8,7 +8,6 @@ const titles: Record<string, [string, string]> = {
   pi_list_agents: ["Listing subagents", "Listed subagents"],
   pi_inspect_agent: ["Inspecting subagent", "Inspected subagent"],
   pi_agent_result: ["Reading subagent result", "Read subagent result"],
-  pi_ack_result: ["Acknowledging subagent result", "Acknowledged subagent result"],
   pi_answer_agent: ["Answering subagent", "Answered subagent"],
   pi_send_message: ["Messaging subagent", "Messaged subagent"],
   pi_followup_task: ["Assigning subagent task", "Assigned subagent task"],
@@ -34,7 +33,6 @@ function summary(name: string, data: Record<string, unknown>): string {
     const agent = displayRecord(data.agent), run = displayRecord(data.run);
     return `${agent.name ?? run.name ?? agent.id ?? run.id ?? "Subagent"} · ${agent.state ?? run.state ?? "result available"}`;
   }
-  if (name === "pi_ack_result") return data.acknowledged ? "Result acknowledged" : "Result not acknowledged";
   if (name === "pi_answer_agent") return data.sent ? "Answer sent" : "Answer not sent";
   if (name === "pi_interrupt_agent") return `Previous state: ${data.previous_status ?? "unknown"}${data.forced ? " · forced" : ""}`;
   return [data.name ?? data.agent_id, data.state ?? data.delivery ?? "Accepted"].filter(Boolean).join(" · ");

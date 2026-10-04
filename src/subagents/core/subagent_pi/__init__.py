@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 
 __version__ = json.loads((Path(__file__).resolve().parents[4] / "package.json").read_text())["version"]
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 # Captured at import time: changing files on disk cannot update a resident daemon.
 _root = Path(__file__).resolve().parent.parent
