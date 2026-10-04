@@ -106,7 +106,8 @@ function combined(mutation: AgentToolResult<unknown>, input: ThenRunInput, comma
 	const details = mutation.details && typeof mutation.details === "object" ? mutation.details as Record<string, unknown> : {};
 	const mutationStatus = details["status"] === "partial_failure" ? "partial_failure" : details["status"] === "failed" ? "failed" : "success";
 	const { output, ...command } = commandResult;
-	const status = [`[then_run:${command.status}] ${input.command}`, command.error,
+	const status = [`[then_run:${command.status}] ${input.command}`,
+		command.exitCode !== undefined && command.exitCode !== 0 ? `Exit code: ${command.exitCode}` : undefined, command.error,
 		command.fullOutputPath ? `Full output: ${command.fullOutputPath}` : undefined, command.fullOutputError].filter(Boolean).join("\n");
 	const content = [...mutation.content, { type: "text" as const, text: status }, { type: "text" as const, text: output }];
 	return { content, details: { ...details, metisActionFusion: { version: 1, mutationStatus, command: { ...command, command: input.command, outputBlock: content.length - 1 } } } };

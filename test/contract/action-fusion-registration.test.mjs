@@ -85,6 +85,9 @@ for (const foreignWrite of [false, true]) test(`real host registers native fusio
   const changed = await session.extensionRunner.emitToolResult({ type: "tool_result", toolName: "write", toolCallId: "native-fused", input: {}, content: result.content, details: result.details, isError: false });
   assert.equal(changed.isError, true);
   assert.equal(result.details.metisActionFusion.mutationStatus, "success");
+  assert.equal(result.details.metisActionFusion.command.exitCode, 3);
+  assert.match(result.content.map(block => block.text ?? "").join("\n"), /Exit code: 3/,
+    "Pi codemode rejects failed built-ins with their text, so the actual exit code must survive there");
   const normalizedTarget = join(cwd, "fusion path");
   writeFileSync(normalizedTarget, "before");
   const normalized = await write.definition.execute("normalized", { path: "@fusion\u00a0path", content: "after" }, undefined, undefined, ctx);
