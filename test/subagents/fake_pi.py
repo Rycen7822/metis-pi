@@ -164,8 +164,8 @@ async def run(raw_task, rid):
     if opts.get('gate'):
         while not Path(opts['gate']).exists(): await asyncio.sleep(.01)
     if task=='CRASH': os._exit(9)
-    if task=='SPAWN_CHILD':
-        proc=subprocess.Popen(['sleep','120'])
+    if task in {'SPAWN_CHILD','SPAWN_DETACHED_CHILD'}:
+        proc=subprocess.Popen(['sleep','120'],start_new_session=task=='SPAWN_DETACHED_CHILD')
         emit({'type':'tool_execution_start','toolName':'bash','toolCallId':'sleep','args':{'command':'sleep 120','pid':proc.pid}})
         await asyncio.sleep(120)
     if opts.get('model'):

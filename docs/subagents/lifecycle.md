@@ -15,7 +15,7 @@ Queued input is not consumed input. Tool result delivery automatically consumes
 the returned terminal notices; no separate confirmation is required. Pi consumes
 only receipts saved to the parent's current session branch; standalone CLI/MCP
 consumes after successful output. Failed delivery leaves attention pending.
-Result files remain available for paging and rereading. Default wait and the
+Status-only `list` queries preserve attention. Result files remain available for paging and rereading. Default wait and the
 outstanding list include active and not-yet-delivered runs. Explicit run IDs can
 always reread a result. An uncertain mutation is never retried automatically.
 Native mutations save their generated operation identity and normalized arguments
@@ -41,6 +41,12 @@ A failed worker can be inspected with `pi_inspect_agent`; create a new agent wit
 `pi_spawn_agent` when its launch settings or saved session are unusable. A verified
 parked/closed agent resumes via `pi_followup_task`. Unverified cleanup requires
 inspection and the CLI `close` operation before reuse.
+
+On Linux/WSL each worker guard adopts orphaned descendants, including detached
+shell process groups, and reaps them before releasing its session lease. Cleanup
+is verified from the guard's generation-specific receipt and process ownership.
+If the guard is killed before confirming cleanup, the state remains unknown;
+inspect remaining processes before reopening the workspace.
 
 Runtime upgrades require draining work, closing resident children and waiting
 for the daemon to finish shutting down before reconnecting. A frontend reload

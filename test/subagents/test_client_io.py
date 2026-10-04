@@ -60,7 +60,7 @@ class ClientIO(unittest.IsolatedAsyncioTestCase):
             receipts.append((len(output),receipt))
         self.handler=handler
         async def deliver(value): output.append(value)
-        for op in ('wait','result','inspect','list','soft_interrupt'):
+        for op in ('wait','result','inspect','soft_interrupt'):
             with self.subTest(op=op):
                 result=await request(self.home,op,{},timeout=1,autostart=False,on_result=deliver)
                 self.assertEqual(output[-1],result)

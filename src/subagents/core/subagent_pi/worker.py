@@ -431,13 +431,19 @@ def ownership(directory: Path, a) -> dict:
         return {'status': 'live', 'reason': 'A verified session owner is still running', 'record': record}
     if record.get('guard_pid') and group_members(record['guard_pid']):
         return {'status': 'unknown', 'reason': 'A process group remains but its leaders cannot be verified; manual inspection required', 'record': record}
+    if record.get('descendants_cleanup','verified')!='verified':
+        return {'status': 'unknown', 'reason': 'Guard exited without confirming descendant cleanup; manual inspection required', 'record': record}
     return {'status': 'gone', 'reason': 'Verified leaders are dead and no process group remains', 'record': record}
 
-async def stop_group(pgid):
+async def stop_group(pgid,graceful_guard=False):
     """Signal and verify a group whose ownership the caller has already proved."""
     for sig,wait in ((signal.SIGTERM,1.5),(signal.SIGKILL,1.0)):
         if not group_members(pgid): break
-        with contextlib.suppress(ProcessLookupError): os.killpg(pgid,sig)
+        # A current guard forwards TERM and reaps tools; avoid sending Pi a
+        # duplicate signal while its once-only shutdown handler is disposing.
+        with contextlib.suppress(ProcessLookupError):
+            if graceful_guard and sig==signal.SIGTERM: os.kill(pgid,signal.SIGCONT)
+            (os.kill if graceful_guard and sig==signal.SIGTERM else os.killpg)(pgid,sig)
         until=time.monotonic()+wait
         while group_members(pgid) and time.monotonic()<until: await asyncio.sleep(.025)
     return 'unknown' if group_members(pgid) else 'verified'
@@ -450,8 +456,12 @@ async def stop_owned_process(directory, agent, proc):
         owned=ownership(directory,agent)['status']=='live'
     if not owned and group_members(pgid):
         return 'unknown',False
-    cleanup=await stop_group(pgid)
+    record=ownership(directory,agent)['record'] or {}
+    guarded=(record.get('guard_pid')==pgid and 'descendants_cleanup' in record
+        and live_identity(pgid,record.get('guard_identity')) is True)
+    cleanup=await stop_group(pgid,graceful_guard=guarded)
     with contextlib.suppress(asyncio.TimeoutError): await asyncio.wait_for(proc.wait(),2)
+    if cleanup=='verified' and ownership(directory,agent)['status']!='gone': cleanup='unknown'
     return cleanup,True
 
 async def terminate(directory, w):
@@ -467,4 +477,7 @@ async def reap_orphan(directory, a):
         raise AgentError('ownership_unknown',verdict['reason'])
     pgid=verdict['record'].get('guard_pid')
     if not pgid: raise AgentError('ownership_unknown','No verified process group')
-    return await stop_group(pgid)
+    record=verdict['record']
+    guarded=('descendants_cleanup' in record and live_identity(pgid,record.get('guard_identity')) is True)
+    cleanup=await stop_group(pgid,graceful_guard=guarded)
+    return cleanup if ownership(directory,a)['status']=='gone' else 'unknown'

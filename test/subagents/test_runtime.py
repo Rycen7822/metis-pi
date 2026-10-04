@@ -61,7 +61,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         missing=await listing(query='absent')
         self.assertEqual((missing['agents'],missing['total'],missing['matched'],missing['has_more']),([],2,0,False))
         self.assertEqual(missing['outstanding']['runs'][0]['id'],followup['run_id'])
-        self.assertEqual(views.delivered_events('list',missing),[(followup['run_id'],'terminal',None)])
+        self.assertEqual(views.delivered_events('list',missing),[])
         beyond=await listing(offset=20)
         self.assertFalse(beyond['has_more']); self.assertEqual(beyond['agents'],[])
 
@@ -974,23 +974,40 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         r=await self.mutation('close',s['agent_id'])
         self.assertEqual(r['cleanup'],'verified'); self.assertEqual(group_members(pid),[])
     async def test_exited_guard_reconciles_even_if_descendant_keeps_pipes_open(self):
-        s=await self.spawn('SPAWN_CHILD')
-        aid=s['agent_id']; w=self.rt.workers[aid]; pgid=w.proc.pid
-        queued=await self.mutation('send',aid,mode='follow_up',message='MUST_NOT_RUN')
-        owner_file=self.home/'agents'/aid/'owner.json'
+        for task in ('SPAWN_CHILD','SPAWN_DETACHED_CHILD'):
+            with self.subTest(task=task):
+                s=await self.spawn(task)
+                aid=s['agent_id']; w=self.rt.workers[aid]; pgid=w.proc.pid
+                queued=await self.mutation('send',aid,mode='follow_up',message='MUST_NOT_RUN')
+                events=await self.until(lambda:self.events(aid,'tool_execution_start'))
+                child=json.loads(events[0]['payload'])['args']['pid']
+                owner=json.loads((self.home/'agents'/aid/'owner.json').read_text())
+                os.kill(owner['pi_pid'],signal.SIGKILL)
+                await self.until(lambda: self.rt.store.run(self.scope,s['run_id'])['state']=='crashed',timeout=3)
+                self.assertEqual(self.rt.store.run(self.scope,queued['run_id'])['state'],'cancelled')
+                self.assertEqual(self.rt.store.agent(self.scope,aid)['cleanup'],'verified')
+                self.assertIsNone(process_identity(child)); self.assertEqual(group_members(pgid),[])
+                await self.until(lambda: w.closed and all(t.done() for t in w.tasks),timeout=3)
+                self.assertNotIn(aid,self.rt.workers)
+    async def test_killed_guard_cannot_claim_verified_cleanup(self):
+        s=await self.spawn('SPAWN_DETACHED_CHILD')
+        aid=s['agent_id']; w=self.rt.workers[aid]
+        events=await self.until(lambda:self.events(aid,'tool_execution_start'))
+        child=json.loads(events[0]['payload'])['args']['pid']
+        owner=json.loads((self.home/'agents'/aid/'owner.json').read_text())
+        identities={pid:process_identity(pid) for pid in (owner['pi_pid'],child)}
         try:
-            await self.until(lambda: len(group_members(pgid))>=3)
-            owner=json.loads(owner_file.read_text())
-            os.kill(owner['pi_pid'],signal.SIGKILL)
-            await self.until(lambda: w.proc.returncode is not None)
-            await self.until(lambda: self.rt.store.run(self.scope,s['run_id'])['state']=='crashed',timeout=3)
-            self.assertEqual(self.rt.store.run(self.scope,queued['run_id'])['state'],'cancelled')
+            os.kill(w.proc.pid,signal.SIGKILL)
+            await self.until(lambda:self.rt.store.run(self.scope,s['run_id'])['state']=='crashed',timeout=4)
             self.assertEqual(self.rt.store.agent(self.scope,aid)['cleanup'],'unknown')
-            await self.until(lambda: w.closed and all(t.done() for t in w.tasks),timeout=3)
-            self.assertNotIn(aid,self.rt.workers)
+            self.assertIsNotNone(process_identity(child))
+            with self.assertRaises(AgentError) as blocked:
+                await self.mutation('respawn',aid)
+            self.assertEqual(blocked.exception.code,'orphaned_worker')
         finally:
-            if group_members(pgid): os.killpg(pgid,signal.SIGKILL)
-            await asyncio.wait_for(w.tasks[2],5)
+            for pid,identity in identities.items():
+                if process_identity(pid)==identity: os.kill(pid,signal.SIGKILL)
+            await self.until(lambda:all(process_identity(pid) is None for pid in identities))
     async def test_needs_input_and_explicit_answer(self):
         s=await self.spawn('UI_CONFIRM'); r=await self.wait(s['run_id'])
         self.assertEqual(r['runs'][0]['state'],'needs_input')

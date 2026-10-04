@@ -37,6 +37,7 @@ task/status changes; `sort: "created"` orders by creation instead. Both timestam
 are UTC ISO 8601. Continue with `offset: next_offset` while `has_more`, keeping the
 same query and sort. Pages can shift while agents change. `outstanding` remains a
 separate scope-wide list of active/unseen runs, independent of the history search.
+Listing status preserves result attention; use wait/result to receive the report.
 The CLI supports the same `--query`, `--sort`, `--offset` and `--limit` options.
 Wait and automatic attention include bounded results, errors and missed-input
 receipts. A complete result (`has_more: false`) needs no extra result read.

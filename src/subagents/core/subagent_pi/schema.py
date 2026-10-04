@@ -331,7 +331,7 @@ TOOLS = [
     tool(
         "pi_list_agents",
         "list",
-        "Search this session's retained agent history by name/ID. Defaults to newest status/task update first; sort=created uses creation time. Timestamps are UTC ISO 8601. total counts all history, matched counts query matches; continue with next_offset while has_more, keeping query/sort unchanged. Outstanding runs remain scope-wide. For notification details, call pi_inspect_agent with agent_id and detail=full.",
+        "Search this session's retained agent history by name/ID. Defaults to newest status/task update first; sort=created uses creation time. Timestamps are UTC ISO 8601. total counts all history, matched counts query matches; continue with next_offset while has_more, keeping query/sort unchanged. Outstanding runs remain scope-wide; listing status does not consume result attention. Read results with wait or pi_agent_result. For notification details, call pi_inspect_agent with agent_id and detail=full.",
         {
             **SCOPE,
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},

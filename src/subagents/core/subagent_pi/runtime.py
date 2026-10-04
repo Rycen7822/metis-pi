@@ -586,8 +586,12 @@ class Runtime:
                 w.run_id=None
             self.cancel_queued(a['id'],'Worker exited; queued task was not automatically retried')
             if a['state'] not in {'closed','dormant'}:
+                verdict=ownership(self.home/'agents'/a['id'],a)
+                proof=verdict['record'] or {}
+                verified=(verdict['status']=='gone' and proof.get('guard_pid')==w.proc.pid
+                    and proof.get('generation')==w.generation and proof.get('descendants_cleanup')=='verified')
                 self.store.agent_update(a['id'],state='crashed',current_run=None,
-                    cleanup='unknown' if group_members(w.proc.pid) else 'verified')
+                    cleanup='verified' if verified else 'unknown')
             self.notify()
 
     async def interrupt(self,a,terminal='interrupted',reason='Explicit interruption; filesystem effects may be partial'):

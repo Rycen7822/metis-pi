@@ -221,7 +221,7 @@ test("SDK configuration failures preserve identities and result delivery survive
     const waited = await client.call("pi_wait_agent", { run_ids: [started.run_id], timeout_seconds: 15 });
     assert.equal(waited.runs[0].state, "completed");
     for (const receipt of waited._pi_delivery.receipts) await client.call("pi_release", { receipt });
-    for (const [operation, args] of [["pi_agent_result", { run_id: started.run_id }], ["pi_inspect_agent", { agent_id: started.agent_id }], ["pi_list_agents", {}]]) {
+    for (const [operation, args] of [["pi_agent_result", { run_id: started.run_id }], ["pi_inspect_agent", { agent_id: started.agent_id }]]) {
       const ui = await client.call(operation, args, undefined, { consume: false });
       assert.equal(ui._pi_delivery, undefined, "internal UI reads preserve unseen attention");
       const result = await client.call(operation, args);
@@ -229,6 +229,10 @@ test("SDK configuration failures preserve identities and result delivery survive
       for (const receipt of result._pi_delivery.receipts) await client.call("pi_release", { receipt });
       assert.ok((await client.call("pi_watch", {})).notifications.some(event => event.run_id === started.run_id), "unpersisted delivery remains eligible for wakeup");
     }
+    const listed = await client.call("pi_list_agents", {});
+    assert.equal(listed.outstanding.total, 1);
+    assert.equal(listed._pi_delivery, undefined, "listing completion status does not deliver the result");
+    assert.ok((await client.call("pi_watch", {})).notifications.some(event => event.run_id === started.run_id), "listing preserves automatic result attention");
     const delivered = await client.call("pi_agent_result", { run_id: started.run_id });
     for (const receipt of delivered._pi_delivery.receipts) await client.call("pi_observe", { receipt });
     assert.equal((await client.call("pi_wait_agent", { timeout_seconds: 0 })).runs.length, 0);

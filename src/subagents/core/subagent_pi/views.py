@@ -169,7 +169,7 @@ def run_page(store, worker_for, rows, question_ids=None):
 
 def delivered_events(op, response):
     if op=='wait': runs=response['runs']
-    elif op=='list': runs=response['outstanding']['runs']
+    elif op=='list': return []  # Status discovery is not delivery of a task result.
     elif op in {'result','inspect'}: runs=[response.get('run',{})]
     else: runs=[{'id':response.get('run_id'),'state':'interrupted'}]
     events=[(r['id'],'terminal',None) for r in runs if r.get('id') and r.get('state') in TERMINAL]

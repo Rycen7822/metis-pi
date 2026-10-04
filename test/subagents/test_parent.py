@@ -325,7 +325,7 @@ else:
         run=await self.parent_tool('pi_spawn_agent',{'request_id':'finish','task':'done','access':'read'})
         await self.settled_notifications(sid,1)
         for index,(op,args) in enumerate((('wait',{'run_ids':[run['run_id']]}), ('result',{'run_id':run['run_id']}),
-                                         ('inspect',{'agent_id':run['agent_id']}), ('list',{})),1):
+                                         ('inspect',{'agent_id':run['agent_id']})),1):
             with self.subTest(op=op):
                 notice=(await self.wait_notice_state(sid,'queued'))[0]
                 async def output(value):
