@@ -2,10 +2,11 @@ import { getAgentDir, type ExtensionAPI, type ToolDefinition } from "@earendil-w
 import { fileURLToPath } from "node:url";
 import { runtimePackage } from "../src/subagents/client.ts";
 import { SubagentSession } from "../src/subagents/session.ts";
-import { subagentToolRenderers } from "../src/subagents/rendering.ts";
+import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/rendering.ts";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
+  pi.registerMessageRenderer("metis-subagent-attention", subagentAttentionRenderer);
   const agentDir = getAgentDir();
   let runtime: ReturnType<typeof runtimePackage>;
   try { runtime = runtimePackage(); }

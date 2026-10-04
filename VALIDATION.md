@@ -1,5 +1,11 @@
 # Validation
 
+## 2026-10-04 — Native subagent operation simplification
+
+- Native mutations save generated request IDs and normalized arguments before dispatch; retries retain their identity and uncertain errors expose the original key. Pi schemas hide scope. Name-based wait freezes concrete run IDs; ambiguous queues require explicit selection, and result pagination retains the returned run ID.
+- Wait and automatic attention share an 8,192-byte UTF-8 result budget, fitting small reports first. Notices include actual questions and missed-input diagnostics, with folded TUI rendering. Automatic answers require a saved delivered-question proof and recheck run/worker identity under the agent lock; message versus followup semantics remain distinct.
+- Full `verify` passes: **362 TS cases**, **401 Python cases / 41 existing opt-in skips**, production/test type checks and **237 package files**. Closest native SDK contracts pass again after the final TS refinements. An isolated tarball installation under `.work/agent-simplification-install` passes **2/2** SDK contracts using Pi **1.0.0** and local mock models. Temporary probes verify invocation replay after reattachment, argument-order-independent recovery, stale/ambiguous question handling and collapsed notification rendering. A detected N+1 query regression was fixed with one batched receipt query; the existing bounded-read gate passes. No permanent source-removal tests or personal installation/session changes.
+
 ## 2026-10-04 — Automatic subagent delivery consumption
 
 - Removed the explicit result ACK tool, CLI command and run flag. Wait, result, inspect, list and interruption consume only notices actually returned and delivered; Pi requires saved branch receipts. Unbound CLI/MCP confirms after successful output. Internal UI reads preserve attention, and result artifacts remain available for paging and rereading.

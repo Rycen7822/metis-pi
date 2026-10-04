@@ -708,8 +708,9 @@ class Runtime:
                 return await self.soft_interrupt(a)
             if op in {'message', 'followup'}:
                 return await self.message_agent(a, p, op)
+            if op=='answer': return await self.answer_agent(a,p,source)
             handler = {'close': self.close_agent, 'respawn': self.respawn_agent,
-                       'answer': self.answer_agent, 'send': self.send_input}.get(op)
+                       'send': self.send_input}.get(op)
             if handler:
                 return await handler(a, p)
         raise AgentError('unknown_operation', f'Unknown mutation: {op}')
@@ -797,10 +798,14 @@ class Runtime:
             await self.start_run(w,rid)
         return {'agent_id':aid,'generation':w.generation,'run_id':rid,'state':'running' if rid else 'idle','scope':sid}
 
-    async def answer_agent(self, a, p):
+    async def answer_agent(self, a, p, source=None):
         aid, sid = a['id'], a['scope']
         ui_id=text(p.get('ui_request_id'),'ui_request_id',256)
         w=self.workers.get(aid)
+        question=(source or {}).get('question')
+        if question and (not w or question['agent_id']!=aid or question['id']!=ui_id or
+                         question['run_id']!=w.run_id or question['generation']!=w.generation):
+            raise AgentError('input_stale','Delivered question belongs to an earlier task or worker; read the current question before answering')
         item=w.ui.get(ui_id) if w and not w.closed else None
         if not item: raise AgentError('input_not_found','No such pending Pi UI request')
         w=self.require_worker(a)

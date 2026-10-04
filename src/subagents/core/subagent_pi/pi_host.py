@@ -7,7 +7,7 @@ import os
 from .client import call_timeout,request
 from .config import load_config
 from .common import AgentError, DELIVERY_OPS
-from .schema import TOOLS,BY_NAME,validate,validate_op
+from .schema import NATIVE_BY_NAME,ID,S,obj,validate,validate_op
 from .stdio import OutputClosed,Stdio
 from . import RUNTIME_REVISION
 
@@ -44,8 +44,8 @@ async def serve_pi(home):
             else:
                 if source is None: raise AgentError('uninitialized','Initialize Pi host first')
                 if p.get('scope',scope)!=scope: raise AgentError('scope_mismatch','Native tools belong to the current Pi session scope')
-                if op in BY_NAME and any(t['name']==op for t in TOOLS):
-                    definition=BY_NAME[op]
+                if op in NATIVE_BY_NAME:
+                    definition=NATIVE_BY_NAME[op]
                     validate(p,definition['inputSchema'])
                     op=definition['_op']
                 elif op not in HOST_OPS:
@@ -59,6 +59,10 @@ async def serve_pi(home):
                 if 'project_trust' in msg:
                     if op not in {'spawn','message','followup'}: raise AgentError('invalid_argument','Project trust applies only to child launches')
                     current={**source,'project_trust':msg['project_trust']}
+                if 'question' in msg:
+                    if op!='answer': raise AgentError('invalid_argument','Question identity applies only to answers')
+                    validate(msg['question'],obj({'id':S,'agent_id':ID,'run_id':ID,'generation':{'type':'integer','minimum':0}},['id','agent_id','run_id','generation']))
+                    current={**current,'question':msg['question']}
                 if op in DELIVERY_OPS and msg.get('consume') is not False:
                     async def output(value):
                         nonlocal prepared

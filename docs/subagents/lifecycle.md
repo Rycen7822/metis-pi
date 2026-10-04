@@ -18,6 +18,12 @@ consumes after successful output. Failed delivery leaves attention pending.
 Result files remain available for paging and rereading. Default wait and the
 outstanding list include active and not-yet-delivered runs. Explicit run IDs can
 always reread a result. An uncertain mutation is never retried automatically.
+Native mutations save their generated operation identity and normalized arguments
+in the Pi branch before dispatch. Retransmitting that invocation reuses its key;
+transport failure exposes the same key instead of silently starting new work.
+Name-based wait locks concrete run IDs before blocking. Automatic answers are
+bound to a delivered question's run and worker generation and checked under the
+agent lock. `send_message` remains store-only when idle; `followup_task` starts work.
 `completed` means the model stopped normally; acceptance still requires checking
 the requested artifacts. Inspection usage counters are cumulative per run
 (`token_scope=run_total`); `last_message_output` and `max_message_output` measure

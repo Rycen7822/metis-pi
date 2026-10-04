@@ -94,7 +94,9 @@ class ParentNotifications:
         if bound and any(parent.get(k)!=bound[k] for k in ('thread_id','codex_home')): return None
         token=object()
         self.waits[token]=(params['scope'],frozenset(ids) if ids is not None else None,False)
-        if op=='wait': params['run_ids']=ids
+        if op=='wait':
+            params['run_ids']=ids
+            params.pop('agent_ids',None)
         if op=='wait' and params.get('mode','any')=='any': self.cover_wait(token)
         self.schedule()
         return token

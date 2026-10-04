@@ -24,6 +24,18 @@ contains no Codex marketplace installer or standalone runtime npm dependency.
 
 The `extensions/subagents.ts` entry registers the nine `pi_*` daily tools. It keeps
 Pi's current tool set; users can call the same tools through native codemode.
+Native calls bind the current scope automatically and save a request ID for each
+mutation. Normally omit `request_id`; an uncertain error retains the original key
+for identical recovery. A new call is a new operation, even with identical text.
+Use `agent_ids: ["review"]` in wait or `agent_id: "review"` in result to select
+the current/latest task by name. Multiple active/queued tasks require explicit run
+IDs; continue paging a long result with its returned `run.id`.
+Wait and automatic attention include bounded results, errors and missed-input
+receipts. A complete result (`has_more: false`) needs no extra result read.
+Questions include their type and options; `pi_answer_agent` may omit
+`ui_request_id` for the unique question already delivered to this parent.
+An expired/replaced question is rejected; ambiguous questions require an explicit
+ID. Task acceptance and question answers still require a deliberate decision.
 `/metis-subagents` lists this session's agents; select one to open its read-only
 conversation. With no agents, it shows a short empty-state message.
 `stop <agent>`, `continue <agent> <task>` and
@@ -36,7 +48,7 @@ Use Ctrl+O or click a tool row to expand its full arguments and result. Errors k
 a short visible preview; wait timeouts, failed children and pending questions remain visible.
 
 Runtime failures retain `isError: true` and `error.code/message` in structured
-output. Native codemode resolves this value; check `result.isError` before using
+output, including `error.request_id` for mutation recovery. Native codemode resolves this value; check `result.isError` before using
 success fields. `error.blocking_agent_id` identifies an existing conflicting
 writer; `error.agent_id/run_id` identify a failed launch. Saved direct and nested
 failure receipts automatically consume the corresponding attention. Unobserved

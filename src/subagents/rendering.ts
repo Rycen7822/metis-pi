@@ -1,5 +1,5 @@
 import { Container, Text } from "@earendil-works/pi-tui";
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { auxiliaryToolRenderers, displayRecord, inlineToolText } from "../execution/ui/auxiliary-tool.ts";
 
 const titles: Record<string, [string, string]> = {
@@ -43,7 +43,7 @@ export function subagentToolRenderers(name: string): Pick<ToolDefinition, "rende
   const base = auxiliaryToolRenderers(`${active} failed`, (args, result) => {
     const data = payload(result);
     const target = args.name ?? args.agent_id ?? args.run_id
-      ?? (Array.isArray(args.run_ids) ? `${args.run_ids.length} run(s)` : undefined);
+      ?? (Array.isArray(args.agent_ids) ? args.agent_ids.join(", ") : Array.isArray(args.run_ids) ? `${args.run_ids.length} run(s)` : undefined);
     const questions = Array.isArray(data.questions) ? data.questions.length : 0;
     const failed = Array.isArray(data.runs) ? data.runs.filter(run => displayRecord(run).state === "failed").length : 0;
     return { active, complete, target: typeof target === "string" ? target : undefined,
@@ -64,3 +64,12 @@ export function subagentToolRenderers(name: string): Pick<ToolDefinition, "rende
     },
   };
 }
+
+export const subagentAttentionRenderer: Parameters<ExtensionAPI["registerMessageRenderer"]>[1] = (message, { expanded }, theme) => {
+  const text = typeof message.content === "string" ? message.content : "";
+  let status: string;
+  try { status = summary("pi_wait_agent", JSON.parse(text.slice(text.indexOf("\n") + 1))); }
+  catch { status = text.split("\n").slice(1, 5).join("; ") || "Attention"; }
+  const header = theme.fg("accent", "Subagents") + " · " + inlineToolText(status);
+  return new Text(header + (expanded ? "\n" + text : "\n" + theme.fg("dim", "ctrl+o to expand")), 0, 0);
+};

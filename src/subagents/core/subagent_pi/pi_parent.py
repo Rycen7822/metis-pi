@@ -62,7 +62,9 @@ class PiNotifications:
         from .views import wait_run_ids
         bind(self.store,params['scope'],source,False)
         ids = wait_run_ids(self.store,params) if op=='wait' else None
-        if op=='wait': params['run_ids'] = ids
+        if op=='wait':
+            params['run_ids'] = ids
+            params.pop('agent_ids',None)
         token = object()
         self.waits[token] = (params['scope'], frozenset(ids) if ids is not None else None, source['parent']['lease'])
         return token
@@ -83,7 +85,10 @@ class PiNotifications:
                 self.store.execute("UPDATE parent_notifications SET state='pi_waiting',pi_receipt=?,pi_owner=?,error=NULL WHERE id=?", (receipt,lease,row['id']))
                 selected.append(row['id'])
                 receipts.append(receipt)
-        if selected: response['_pi_delivery'] = {'id':receipts[0],'events':selected,'receipts':list(dict.fromkeys(receipts))}
+        questions=response.get('questions',[])
+        if selected or questions:
+            response['_pi_delivery'] = {'id':receipts[0] if receipts else new_id('delivery_'),'events':selected,
+                'receipts':list(dict.fromkeys(receipts)), 'questions':questions}
 
     def release_delivery(self, token):
         # IPC output is not a Pi result receipt. Prepared tickets stay reserved
@@ -141,10 +146,13 @@ class PiNotifications:
                 raise AgentError('invalid_argument','events must contain 1-20 notification IDs')
             eligible = {e['notification_id']:e for e in self.pending(sid)}
             events = [eligible[k] for k in dict.fromkeys(ids) if k in eligible]
+            from .views import runs_for_ids,run_page
+            rows=runs_for_ids(self.store,sid,list(dict.fromkeys(e['run_id'] for e in events)))
+            page=run_page(self.store,self.worker_for,rows,{(e['run_id'],e['ui_request_id']) for e in events if e.get('ui_request_id')})
             receipt = new_id('delivery_')
             for event in events:
                 self.store.execute("UPDATE parent_notifications SET state='pi_claimed',pi_receipt=?,pi_owner=? WHERE id=?", (receipt,lease,event['notification_id']))
-            return {'id':receipt,'events':events}
+            return {'id':receipt,'events':events,**page}
         if op in {'pi_observe','pi_release','pi_uncertain'}:
             receipt = identifier(p.get('receipt'),'receipt')
             rows = self.store.all('SELECT id,state,pi_owner FROM parent_notifications WHERE scope=? AND pi_receipt=?',(sid,receipt))

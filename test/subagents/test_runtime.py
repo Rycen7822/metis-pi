@@ -35,6 +35,49 @@ cwd = "servers/dir with space"
 '''
 
 class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
+    async def test_named_wait_freezes_task_and_result_preserves_byte_budget_and_input_issues(self):
+        a=await self.spawn('simple',name='review')
+        selection={'scope':self.scope,'agent_ids':['review']}
+        token=self.rt.parent_notifications.reserve_delivery('wait',selection,None)
+        await self.wait(a['run_id'])
+        b=await self.mutation('followup','review',message='delay=120|next task')
+        frozen=await self.rt.dispatch('wait',{**selection,'timeout_seconds':0})
+        self.rt.parent_notifications.release_delivery(token,'wait')
+        self.assertEqual(frozen['runs'][0]['id'],a['run_id'])
+        current=await self.rt.dispatch('wait',{'scope':self.scope,'agent_ids':['review'],'timeout_seconds':0})
+        self.assertEqual(current['runs'][0]['id'],b['run_id'])
+        queued=await self.mutation('send','review',message='queued task',mode='follow_up')
+        with self.assertRaises(AgentError) as ambiguous:
+            await self.rt.dispatch('wait',{'scope':self.scope,'agent_ids':['review'],'timeout_seconds':0})
+        self.assertEqual(ambiguous.exception.code,'ambiguous_run')
+        await self.mutation('interrupt','review')
+        self.assertEqual((await self.rt.dispatch('result',{'scope':self.scope,'agent_id':'review'}))['run']['id'],queued['run_id'])
+        # A small UTF-8 report must fit completely, even beside a much larger report.
+        owner=self.rt.store.agent(self.scope,a['agent_id'])
+        small=self.rt.add_run(owner,'small report'); large=self.rt.add_run(owner,'large report')
+        self.rt.store.finish(small,'completed','中'*1000); self.rt.store.finish(large,'completed','中'*5000)
+        self.rt.store.execute('INSERT INTO receipts VALUES(?,?,?,?,?,?,?,?)',('missed',a['agent_id'],small,self.scope,'private message','not_consumed',1,1))
+        page=await self.rt.dispatch('wait',{'scope':self.scope,'run_ids':[large,small],'timeout_seconds':0})
+        self.assertEqual(page['runs'][1]['result']['text'],'中'*1000)
+        self.assertFalse(page['runs'][1]['result']['has_more'])
+        self.assertLessEqual(sum(len(r['result']['text'].encode()) for r in page['runs']),8192)
+        self.assertTrue(page['runs'][0]['result']['has_more'])
+        issues=page['runs'][1]['input_issues']
+        self.assertEqual((issues['total'],issues['receipts'][0]['state']),(1,'not_consumed'))
+        self.assertNotIn('message',issues['receipts'][0])
+
+    async def test_automatic_answer_identity_rejects_replaced_run_and_worker(self):
+        a=await self.spawn('UI_CONFIRM')
+        q=(await self.wait(a['run_id']))['questions'][0]
+        guard={k:q[k] for k in ('id','agent_id','run_id','generation')}
+        for override in ({'run_id':'run_old'},{'generation':q['generation']+1}):
+            with self.assertRaises(AgentError) as stale:
+                await self.rt.dispatch('answer',{'scope':self.scope,'agent_id':a['agent_id'],'request_id':self.key(),'ui_request_id':q['id'],'answer':True},source={'question':{**guard,**override}})
+            self.assertEqual(stale.exception.code,'input_stale')
+        self.assertIn(q['id'],self.rt.workers[a['agent_id']].ui)
+        await self.rt.dispatch('answer',{'scope':self.scope,'agent_id':a['agent_id'],'request_id':self.key(),'ui_request_id':q['id'],'answer':True},source={'question':guard})
+        self.assertEqual((await self.wait(a['run_id']))['reason'],'completed')
+
     async def test_slash_prefixed_task_is_enveloped_before_it_reaches_pi(self):
         # A delegated task is data, never an extension command: text Pi would
         # parse as one is wrapped on the way in (spawn, respawn and send share

@@ -86,6 +86,32 @@ def runs_for_ids(store, sid, ids):
     if len(by_id)!=len(ids): raise AgentError('run_not_found','Run not found in this scope')
     return [by_id[rid] for rid in ids]
 
+def agent_run_ids(store, sid, targets):
+    ids=[]
+    for target in targets:
+        a=store.resolve_agent(sid,label(target,'agent_id'))
+        active=store.all("SELECT id FROM runs WHERE agent_id=? AND state NOT IN ('completed','failed','interrupted','crashed','cancelled','timed_out') ORDER BY created",(a['id'],))
+        if len(active)>1: raise AgentError('ambiguous_run','Agent has multiple active/queued tasks; use explicit run IDs')
+        r=active[0] if active else store.latest_run(a['id'])
+        if not r: raise AgentError('run_not_found','Agent has no task')
+        ids.append(r['id'])
+    return list(dict.fromkeys(ids))
+
+def input_issues(store, ids):
+    result={rid:{'receipts':[],'total':0,'omitted':0} for rid in ids}
+    if not ids: return result
+    marks=','.join('?' for _ in ids)
+    rows=store.all(f'''WITH issues AS (SELECT id,run_id,state,updated,
+        COUNT(*) OVER (PARTITION BY run_id) total,
+        ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created DESC,id) position
+        FROM receipts WHERE run_id IN ({marks}) AND state IN ('sending','queued','unknown','not_consumed','failed'))
+        SELECT * FROM issues WHERE position<=5''',ids)
+    for row in rows:
+        item=result[row['run_id']]
+        item['receipts'].append({k:row[k] for k in ('id','state','updated')})
+        item.update(total=row['total'],omitted=max(0,row['total']-5))
+    return result
+
 def result_row(r, limit, offset=0):
     path=Path(r['result_path'])
     size=path.stat().st_size
@@ -109,6 +135,11 @@ def result_row(r, limit, offset=0):
 def wait_run_ids(store,p):
     sid=p['scope']
     ids=p.get('run_ids')
+    if 'agent_ids' in p:
+        if ids is not None: raise AgentError('invalid_argument','Choose agent_ids or run_ids, not both')
+        targets=p['agent_ids']
+        if not isinstance(targets,list) or len(targets)>100: raise AgentError('invalid_argument','agent_ids must be a list of at most 100 names/IDs')
+        ids=agent_run_ids(store,sid,targets)
     if ids is None:
         ids=[r['id'] for r in store.all("""SELECT r.id FROM runs r LEFT JOIN parent_notifications n
             ON n.run_id=r.id AND n.kind='terminal' WHERE r.scope=?
@@ -118,6 +149,27 @@ def wait_run_ids(store,p):
     ids=list(dict.fromkeys(identifier(x,'run_id') for x in ids))
     runs_for_ids(store,sid,ids)
     return ids
+
+def run_page(store, worker_for, rows, question_ids=None):
+    # Complete small results first; long results share the remaining UTF-8 budget.
+    budget=8192; pages={}; runs=[]; questions=[]
+    done=sorted((r for r in rows if r['state'] in TERMINAL),key=lambda r:Path(r['result_path']).stat().st_size)
+    issues=input_issues(store,[r['id'] for r in done])
+    for row in done:
+        page=result_row(row,budget)
+        pages[row['id']]={k:page[k] for k in ('text','result_sha256','next_offset','has_more','total_bytes','result_truncated')}
+        budget-=len(page['text'].encode())
+    for row in rows:
+        item=brief_run(row)
+        if row['state'] in TERMINAL:
+            item.update(result=pages[row['id']],input_issues=issues[row['id']])
+        if row['state']=='needs_input':
+            w=worker_for(row['agent_id'])
+            if w:
+                questions.extend({**q,'agent_id':row['agent_id'],'run_id':row['id'],'name':item['name'],'generation':w.generation}
+                    for q in list(w.ui.values())[:4] if question_ids is None or (row['id'],q['id']) in question_ids)
+        runs.append(item)
+    return {'runs':runs,'questions':questions}
 
 def delivered_events(op, response):
     if op=='wait': runs=response['runs']
@@ -201,11 +253,15 @@ class ReadViews:
         return result
 
     def result(self,p):
-        r=runs_for_ids(self.store,p['scope'],[identifier(p.get('run_id'),'run_id')])[0]
+        if ('run_id' in p)==('agent_id' in p): raise AgentError('invalid_argument','Choose exactly one of run_id or agent_id')
+        rid=identifier(p['run_id'],'run_id') if 'run_id' in p else agent_run_ids(self.store,p['scope'],[p['agent_id']])[0]
+        r=runs_for_ids(self.store,p['scope'],[rid])[0]
         if r['state'] not in TERMINAL: raise AgentError('not_terminal','Result is not ready; use wait')
         limit=integer(p.get('max_bytes',4096),'max_bytes',256,16384)
         offset=integer(p.get('offset',0),'offset',0,2**40)
-        return result_row(r,limit,offset)
+        if 'agent_id' in p and offset:
+            raise AgentError('invalid_offset','Continuation requires the returned run.id; an agent may have started a new task')
+        return {**result_row(r,limit,offset),'input_issues':input_issues(self.store,[rid])[rid]}
 
     async def wait(self,p):
         sid=p['scope']; limit=self.max_wait_seconds
@@ -222,23 +278,7 @@ class ReadViews:
                 failures=[r for r in done if r['state']!='completed']
                 ready=not ids or bool(attention) or (bool(done) if mode=='any' else len(done)==len(ids))
                 if ready or time.monotonic()>=until:
-                    # Share a fixed text budget across the page, never 100 full results.
-                    budget=8192; runs=[]; questions=[]
-                    for row in rows:
-                        item=brief_run(row)
-                        if row['state'] in TERMINAL and budget>=256:
-                            page=result_row(row,min(2048,budget))
-                            item['result']={k:page[k] for k in ('text','result_sha256','next_offset','has_more','total_bytes','result_truncated')}
-                            budget-=max(256,len(page['text'].encode()))
-                        elif row['state'] in TERMINAL:
-                            item['result']={'result_sha256':row['result_sha'],'next_offset':0,'has_more':True}
-                        if row['state']=='needs_input':
-                            worker=self.worker_for(row['agent_id'])
-                            if worker:
-                                questions.extend({**question,'agent_id':row['agent_id'],'run_id':row['id'],'name':item['name']}
-                                                 for question in list(worker.ui.values())[:4])
-                        runs.append(item)
                     reason='timeout' if not ready else 'needs_input' if attention else 'failed_or_stopped' if failures else 'completed' if done else 'empty' if not ids else 'timeout'
-                    return {'scope':sid,'timed_out':not ready,'reason':reason,'runs':runs,'questions':questions}
+                    return {'scope':sid,'timed_out':not ready,'reason':reason,**run_page(self.store,self.worker_for,rows)}
                 try: await asyncio.wait_for(self.changed.wait(),until-time.monotonic())
                 except asyncio.TimeoutError: pass

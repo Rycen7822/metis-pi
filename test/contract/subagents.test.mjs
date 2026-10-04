@@ -25,11 +25,12 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   modelRuntime.registerProvider(model.provider, { api: model.api, apiKey: "offline", models: [model], streamSimple: (m, context) => {
     const stream = createAssistantMessageEventStream(); turn++;
     let call;
-    if (turn === 1) call = { name: "codemode", arguments: { code: 'const a=await tools.pi_spawn_agent({task:"nested proof",access:"read",model:"pi-mock-offline/mock",request_id:"nested-spawn"}); text(await tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15}));' } };
-    if (turn === 3) call = { name: "pi_spawn_agent", arguments: { task: "direct proof", access: "read", model: "pi-mock-offline/mock", request_id: "direct-spawn" } };
+    if (turn === 1) call = { name: "codemode", arguments: { code: 'const a=await tools.pi_spawn_agent({name:"nested-proof",task:"nested proof",access:"read",model:"pi-mock-offline/mock"}); if(!a.request_id) throw new Error("missing operation identity"); text(await tools.pi_wait_agent({agent_ids:["nested-proof"],timeout_seconds:15}));' } };
+    if (turn === 3) call = { name: "pi_spawn_agent", arguments: { name: "direct-proof", task: "direct proof", access: "read", model: "pi-mock-offline/mock" } };
     if (turn === 4) {
       const spawn = context.messages.findLast(message => message.role === "toolResult" && message.toolName === "pi_spawn_agent");
-      call = { name: "pi_wait_agent", arguments: { run_ids: [JSON.parse(spawn.content[0].text).run_id], timeout_seconds: 15 } };
+      assert.ok(JSON.parse(spawn.content[0].text).request_id);
+      call = { name: "pi_wait_agent", arguments: { agent_ids: ["direct-proof"], timeout_seconds: 15 } };
     }
     if (turn === 6) call = { name: "pi_spawn_agent", arguments: { task: "background proof", access: "read", model: "pi-mock-offline/mock", request_id: "background-spawn" } };
     if (turn === 9) call = { name: "pi_spawn_agent", arguments: { task: "ask before proceeding", access: "read", profile: "questioned", model: "pi-mock-offline/mock", request_id: "question-spawn" } };
@@ -41,7 +42,7 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
       const wait = context.messages.findLast(message => message.role === "toolResult" && message.toolName === "pi_wait_agent");
       const question = JSON.parse(wait.content[0].text).questions[0];
       assert.ok(question, "a read-only child can ask its parent without bypassing policy");
-      call = { name: "pi_answer_agent", arguments: { agent_id: question.agent_id, ui_request_id: question.id, answer: "Use the current isolated branch", request_id: "question-answer" } };
+      call = { name: "pi_answer_agent", arguments: { agent_id: question.name, answer: "Use the current isolated branch" } };
     }
     if (turn === 14) call = { name: "codemode", arguments: { code: 'const a=await tools.pi_spawn_agent({task:"overlap proof",access:"read",model:"pi-mock-offline/mock",request_id:"overlap-spawn"}); text(await Promise.all([tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15}),tools.pi_wait_agent({run_ids:[a.run_id],timeout_seconds:15})]));' } };
     if (turn === 16) call = { name: "pi_spawn_agent", arguments: { task: "must not start", access: "read", model: "no-such-model-xyz", request_id: "failed-direct" } };
@@ -138,6 +139,10 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   while (turn < 8 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
   await loaded.session.waitForIdle(); assert.equal(turn, 8, "unobserved completion still wakes the parent");
   assert.equal(loaded.session.sessionManager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length, 1);
+  const delivered = loaded.session.sessionManager.getBranch().find(entry => entry.type === "custom_message" && entry.customType === "metis-subagent-attention");
+  const body = JSON.parse(delivered.content.slice(delivered.content.indexOf("\n") + 1));
+  assert.equal(body.runs[0].result.text, "MOCK_REPLY_1");
+  assert.equal(body.runs[0].result.has_more, false, "a complete automatic result needs no second read");
   assert.deepEqual(errors, []);
   await loaded.session.prompt("Run question proof"); await loaded.session.waitForIdle();
   assert.equal(turn, 13); assert.deepEqual(errors, []);

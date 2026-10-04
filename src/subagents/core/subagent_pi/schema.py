@@ -88,7 +88,8 @@ PREVIEW = output(
     },
     ["result_sha256", "next_offset", "has_more"],
 )
-WAIT_RUN = output({**RUN_FIELDS, "result": PREVIEW}, RUN["required"])
+INPUT_ISSUES = output({"receipts": ARR(MAP), "total": INT, "omitted": INT}, ["receipts", "total", "omitted"])
+WAIT_RUN = output({**RUN_FIELDS, "result": PREVIEW, "input_issues": INPUT_ISSUES}, RUN["required"])
 OUTSTANDING = output(
     {"runs": ARR(RUN), "total": INT, "omitted": INT}, ["runs", "total", "omitted"]
 )
@@ -228,6 +229,7 @@ OUTPUTS = {
     "result": output(
         {
             "run": RUN,
+            "input_issues": INPUT_ISSUES,
             "text": S,
             "result_sha256": S,
             "next_offset": INT,
@@ -257,7 +259,7 @@ OUTPUTS["interrupt"] = output(
     mutation=True,
 )
 ERROR_OUTPUT = obj({"isError": {"const": True, "type": "boolean"}, "error": obj({
-    "code": S, "message": S, "agent_id": ID, "run_id": ID, "blocking_agent_id": ID,
+    "code": S, "message": S, "agent_id": ID, "run_id": ID, "blocking_agent_id": ID, "request_id": ID,
 }, ["code", "message"])}, ["isError", "error"])
 
 TOOLS = [
@@ -309,6 +311,8 @@ TOOLS = [
             **SCOPE,
             "run_ids": {"type": "array", "items": ID, "maxItems": 100,
                         "description": "Selected run IDs; omit for up to 100 active or not-yet-delivered runs in the bound scope."},
+            "agent_ids": {"type": "array", "items": LABEL, "maxItems": 100,
+                          "description": "Agent names/IDs instead of run_ids. Locks each current or latest task at call entry; multiple queued tasks require explicit run_ids."},
             "mode": {"type": "string", "enum": ["any", "all"], "default": "any"},
             "timeout_seconds": {
                 "type": "integer",
@@ -349,14 +353,15 @@ TOOLS = [
     tool(
         "pi_agent_result",
         "result",
-        "Read UTF-8 byte pages of a terminal result; paginate with next_offset. Delivery consumes its notification automatically. Results remain available for re-reading.",
+        "Read a terminal result by agent name/ID or explicit run ID; choose exactly one. Paginate long results with next_offset and the returned run.id. Complete wait/notification results need no extra read. Delivery consumes its notification automatically; results remain available for re-reading.",
         {
             **SCOPE,
             "run_id": ID,
+            "agent_id": LABEL,
             "offset": {"type": "integer", "minimum": 0},
             "max_bytes": {"type": "integer", "minimum": 256, "maximum": 16384},
         },
-        ["run_id"],
+        [],
         True,
     ),
     tool(
@@ -393,6 +398,24 @@ TOOLS = [
         ["agent_id", "request_id"],
     ),
 ]
+
+def native_tools():
+    """Pi supplies scope and durable invocation IDs; backend/CLI contracts stay explicit."""
+    result=[]
+    for definition in TOOLS:
+        schema=definition['inputSchema']
+        properties={k:v for k,v in schema['properties'].items() if k!='scope'}
+        if 'request_id' in properties:
+            properties['request_id']={**ID,'description':'Normally omit: Pi generates and saves an operation ID. Reuse the returned key only to recover the identical uncertain operation; never retry with a new key.'}
+        description=definition['description']
+        if definition['_op']=='spawn': description=description.replace('Supply cwd to bind an unbound connection.','The workspace defaults to the current Pi session.')
+        if definition['_op']=='list': description=description.replace('scope and limit','limit')
+        if definition['_op']=='answer': description+=' Omit ui_request_id only for the unique question already delivered to this parent; stale or ambiguous questions are rejected.'
+        result.append({**definition,'description':description,'inputSchema':obj(properties,[k for k in schema['required'] if k not in {'scope','request_id','ui_request_id'}])})
+    return result
+
+NATIVE_TOOLS=native_tools()
+NATIVE_BY_NAME={t['name']:t for t in NATIVE_TOOLS}
 
 # Explicit recovery/legacy calls stay callable without discovery.
 MANAGEMENT = [
