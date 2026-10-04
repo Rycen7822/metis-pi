@@ -13,7 +13,7 @@ import goalExtension from "../../extensions/goal.ts";
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const buildLog = Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", stopReason = "stop", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false } = {}) {
+async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", stopReason = "stop", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false, chainCompression = { enabled: false } } = {}) {
   const workDir = fileURLToPath(new URL("../../.work/", import.meta.url));
   mkdirSync(workDir, { recursive: true });
   const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
@@ -22,7 +22,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 }, contextPrune: {
     enabled: true, opportunisticCompaction: occ, showPruneStatusLine, minBatchChars: 5000, pruneOn, batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
-    chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true }, purgeErrors: { enabled: false },
+    chainCompression, purgeErrors: { enabled: false },
   } }));
   // Spill files use the session directory; inMemory() leaves it empty.
   const sm = SessionManager.create(dir, dir);
@@ -71,8 +71,8 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   registerCondense(pi);
   await emit("session_start");
   let clock = 10;
-  function add(body, command = "npm run build", id = `call-${clock}`) {
-    const assistant = { role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: { command } }], timestamp: clock++, stopReason: "toolUse" };
+  function add(body, command = "npm run build", id = `call-${clock}`, thinking) {
+    const assistant = { role: "assistant", content: [...(thinking ? [{ type: "thinking", thinking }] : []), { type: "toolCall", id, name: "bash", arguments: { command } }], timestamp: clock++, stopReason: "toolUse" };
     const result = { role: "toolResult", toolCallId: id, toolName: "bash", content: [{ type: "text", text: body }], isError: false, timestamp: clock++ };
     sm.appendMessage(assistant); sm.appendMessage(result);
     return { assistant, result, id };
@@ -95,10 +95,11 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   });
   sm.appendMessage({ role: "user", content: "Build", timestamp: 1 });
   return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets,
+    nextTimestamp: () => clock++,
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
 
-test("packing precedes the 5000-char gate, archives exact output, and never re-compresses settled history", async (t) => {
+test("packing precedes the 5000-char gate and keeps settled history stable with chain compression disabled", async (t) => {
   const f = await fixture(t);
   const call = f.add(buildLog);
   await f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
@@ -122,6 +123,79 @@ test("packing precedes the 5000-char gate, archives exact output, and never re-c
   assert.equal(f.calls.length, 0);
   assert.equal(f.sm.getBranch().filter(e => e.type === "custom_message" && e.details?.representation === "packed").length, 1);
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0);
+});
+
+test("automatic chain compression follows its switch and retains three recent tasks with exact recovery", async t => {
+  for (const enabled of [false, true]) await t.test(`enabled=${enabled}`, async t => {
+    const f = await fixture(t, { chainCompression: { enabled, rollingWindow: 3, fuseRangeSummary: false } });
+    const body = "first task evidence\n".repeat(400);
+    for (let i = 0; i < 4; i++) {
+      if (i) f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: f.nextTimestamp() });
+      const call = f.add(body, "cat evidence.txt", `chain-${i}`, `THOUGHT_${i} ` + "x".repeat(5000));
+      if (i === 0) {
+        f.sm.appendMessage({ role: "assistant", timestamp: f.nextTimestamp(), stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "protected-receipt", name: "pi_spawn_agent", arguments: { task: "Inspect" } }] });
+        f.sm.appendMessage({ role: "toolResult", timestamp: f.nextTimestamp(), toolCallId: "protected-receipt", toolName: "pi_spawn_agent",
+          content: [{ type: "text", text: "PROTECTED_RECEIPT_VERBATIM" }], isError: false });
+      }
+      await f.finish();
+    }
+    const chains = () => f.sm.getBranch().filter(e => e.customType === "context-prune-chain");
+    assert.equal(chains().length, enabled ? 1 : 0, "the fourth closing message counts before Pi persists it");
+    const original = f.sm.buildSessionProjection().messages;
+    const projected = (await f.emit("context", { messages: original })).messages;
+    const text = JSON.stringify(projected);
+    assert.equal(text.includes("THOUGHT_0"), !enabled);
+    for (let i = 1; i < 4; i++) assert.match(text, new RegExp(`THOUGHT_${i}`));
+    assert.match(text, /PROTECTED_RECEIPT_VERBATIM/);
+    assert.equal(projected.filter(m => m.role === "user").length, enabled ? 5 : 4);
+    assert.equal(projected.filter(m => m.role === "assistant" && m.content.some(b => b.text === "Final reply")).length, 4);
+    const recalled = await f.tools.get("context_tree_query").execute("q", { toolCallIds: ["chain-0"] }, undefined, undefined, f.ctx);
+    assert.equal(recalled.details.results[0].text, body);
+    await f.emit("session_start");
+    assert.deepEqual((await f.emit("context", { messages: original })).messages, projected);
+    await f.finish();
+    assert.equal(chains().length, enabled ? 1 : 0);
+    assert.equal(f.calls.length, 1, "dedup and chain compression reuse the durable summary without another model call");
+  });
+});
+
+test("automatic chain compression archives skipped small outputs and preserves them on persistence failures", async t => {
+  for (const failure of [undefined, "chain", "archive"]) await t.test(failure ?? "mixed coverage", async t => {
+    const f = await fixture(t, { chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false } });
+    const call = f.add(buildLog);
+    const small = f.add("UNSUMMARIZED_EVIDENCE", "cat small.txt");
+    if (failure) {
+      const append = f.sm.appendCustomEntry.bind(f.sm);
+      f.sm.appendCustomEntry = (type, data) => {
+        if (failure === "chain" && type === "context-prune-chain" || failure === "archive" && type === "context-prune-index" && data.backfilled && data.toolCalls.some(call => call.toolCallId === small.id)) throw new Error("chain disk failure");
+        return append(type, data);
+      };
+    }
+    await f.finish();
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, failure ? 0 : 1);
+    assert.ok(f.sm.getBranch().some(e => e.details?.representation === "packed"), "the successful summary remains persisted");
+    const projected = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+    if (failure) assert.match(JSON.stringify(projected), /UNSUMMARIZED_EVIDENCE/, "archiving alone cannot hide raw output");
+    if (failure !== "archive") assert.equal((await f.tools.get("context_tree_query").execute("q", { toolCallIds: [small.id] }, undefined, undefined, f.ctx)).details.results[0].text, "UNSUMMARIZED_EVIDENCE");
+    assert.equal((await f.tools.get("context_tree_query").execute("q", { toolCallIds: [call.id] }, undefined, undefined, f.ctx)).details.results[0].text, buildLog);
+  });
+});
+
+test("a tree switch aborts automatic chain fusion while retaining its persisted batch summaries", async t => {
+  const f = await fixture(t, { defer: true, chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  for (let i = 0; i < 25; i++) f.add(`evidence-${i}\n` + "x".repeat(6000), `cat evidence-${i}.txt`);
+  const pending = f.finish();
+  for (let i = 0; i < 100 && f.calls.length < 2; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.length, 2);
+  f.releaseAll();
+  for (let i = 0; i < 100 && f.calls.length < 3; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.length, 3, "completed batch summaries feed the optional fusion request");
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 2);
+  await f.emit("session_tree"); await pending;
+  assert.equal(f.requests[2].signal.aborted, true);
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0);
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 2);
 });
 
 for (const boundary of ["settled", "session_tree", "session_start", "session_shutdown"]) test(`final boundary retains refs and discards late summaries after ${boundary}`, async (t) => {
@@ -390,7 +464,8 @@ test("subagent control receipts remain verbatim while ordinary results are summa
 test("automatic and manual chunks keep durable progress through a failure inside one assistant turn", async t => {
   for (const path of ["automatic", "manual"]) await t.test(path, async t => {
     let fail = true;
-    const f = await fixture(t, { stopReason: n => fail && n === 2 ? "error" : "stop" });
+    const f = await fixture(t, { stopReason: n => fail && n === 2 ? "error" : "stop",
+      chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false } });
     const ids = Array.from({ length: 130 }, (_, i) => `large-chain-${i}`);
     f.sm.appendMessage({ role: "assistant", timestamp: 2, stopReason: "toolUse", content: ids.map((id, i) => ({
       type: "toolCall", id, name: "bash", arguments: { command: `cat evidence-${i}.txt` },
@@ -405,6 +480,7 @@ test("automatic and manual chunks keep durable progress through a failure inside
     const attempted = f.calls.length;
     assert(attempted >= 2 && attempted <= 3, "failure stops scheduling beyond the bounded request window");
     assert.equal(summaries().length, 1, "first chunk persists before the second fails");
+    assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0, "a partial flush cannot trigger automatic chain compression");
     const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
     assert.equal(metric.outcome, "partial");
     assert.equal(metric.processedBatches, 1);

@@ -38,7 +38,7 @@ import { PruneFrontierTracker } from "./frontier.ts";
 import { BlockRefIssuer } from "./block-refs.ts";
 import { compressEligible } from "./chain-compressor.ts";
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
-import { detectChains } from "./chain-detector.ts";
+import { detectChains, withClosingMessage } from "./chain-detector.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
 import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./budget.ts";
 import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./spill.ts";
@@ -220,11 +220,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Range-summary fuser injected into compressEligible (B). Returns undefined
   // when fuseRangeSummary is off so the compressor keeps the per-batch concat.
   // Each successful fusion folds its usage + bumps the rangesSummarized counter.
-  const makeFuseRange = (ctx: any): ((text: string) => Promise<string | null>) | undefined => {
+  const makeFuseRange = (ctx: any, signal?: AbortSignal): ((text: string) => Promise<string | null>) | undefined => {
     if (!currentConfig.value.chainCompression.fuseRangeSummary) return undefined;
     const version = lifecycle;
     return async (text: string) => {
-      const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController });
+      const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal });
       assertCurrent(version);
       if (r) {
         statsAccum.add(r.usage);
@@ -232,6 +232,29 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
       return r?.summaryText ?? null;
     };
+  };
+
+  const compressChains = async (ctx: any, rollingWindow: number,
+    appendEntry: (type: string, data: unknown) => void, closingMessage?: any, signal?: AbortSignal) => {
+    const version = lifecycle;
+    const messages = withClosingMessage(ctx.sessionManager.buildSessionProjection().messages, closingMessage);
+    const chains = detectChains(messages, protectionPredicate);
+    const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
+    const result = await compressEligible(chains, rollingWindow, {
+      indexer, blockRefs, appendEntry: (type, data) => {
+        assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
+      }, now: () => Date.now(), fuseRange: makeFuseRange(ctx, signal),
+      messages, diagnostics,
+      backfill: { spillThreshold: currentConfig.value.spillThreshold,
+        spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+        sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() },
+    }, inGrace);
+    assertCurrent(version);
+    if (result.compressedEntries.length > 0) {
+      lowerFloor(supersede, earliestChainStart(result.compressedEntries));
+      statsAccum.addChainsCompressed(result.compressedEntries.length);
+    }
+    return result;
   };
 
   const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
@@ -690,15 +713,20 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
 
       const flushOutcome = processedOutcome();
+      if (currentConfig.value.enabled && currentConfig.value.chainCompression.enabled
+        && firstFailureIndex < 0 && !signal.aborted) {
+        try {
+          const result = await compressChains(ctx, currentConfig.value.chainCompression.rollingWindow, appendEntry!, options.closingMessage, signal);
+          publishedAliasesOrArchives ||= result.compressedEntries.length > 0;
+        } catch (err) {
+          if (!signal.aborted && !isStaleContextError(err)) safeNotify(ctx, `pruner: chain compression failed: ${errorMessage(err)}`, "warning");
+        }
+      }
       try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
       catch (err) { if (delivery === "runtime") throw err; }
 
       setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
       emitExternalCost(pi, statsAccum);
-
-      // Automatic history has one owner: the settled per-batch projection.
-      // A second rolling chain pass would rewrite older cached prefixes. Explicit
-      // /pruner compact-chains remains available and preserves program-owned refs.
 
       // Notify about any batches that were skipped — either oversized or
       // trivial. Neither is an error: the pruner correctly chose not to grow
@@ -1178,34 +1206,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const compactChains = async (ctx: any) => {
     const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
-    const branchMessages = projectBranchMessages(ctx.sessionManager.getBranch());
-    const chains = detectChains(branchMessages, protectionPredicate);
-    const inGrace = inGraceRecoveryToolCallIds(branchMessages, currentConfig.value.recoveryGraceTurns);
-    const result = await compressEligible(
-      chains,
-      0, // effectiveK=0: compress every closed chain not already compressed
-      {
-        indexer,
-        blockRefs,
-        appendEntry: (type: string, data: unknown) => { assertCurrent(version); pi.appendEntry(type, data); },
-        now: () => Date.now(),
-        fuseRange: makeFuseRange(ctx),
-        messages: branchMessages,
-        diagnostics,
-        backfill: {
-          spillThreshold: currentConfig.value.spillThreshold,
-          spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-          sessionDir: ctx.sessionManager.getSessionDir(),
-          sessionId: ctx.sessionManager.getSessionId(),
-        },
-      },
-      inGrace,
-    );
+    const result = await compressChains(ctx, 0,
+      (type, data) => { assertCurrent(version); pi.appendEntry(type, data); });
     assertCurrent(version);
     if (result.compressedEntries.length > 0) {
       occ.rewrite(ctx, beforeRewrite);
-      lowerFloor(supersede, earliestChainStart(result.compressedEntries));
-      statsAccum.addChainsCompressed(result.compressedEntries.length);
       statsAccum.persist(pi);
       emitExternalCost(pi, statsAccum);
     }

@@ -138,6 +138,7 @@ export function extractChainRecords(
         turnIndex: -1, // backfilled records have no batch turn; query tool renders "Turn: -1" (pinned)
         timestamp: resultTimestamp,
         resultTimestamp,
+        archiveOnly: true,
       });
     }
   }
@@ -212,6 +213,18 @@ export async function compressEligible(
     // Bare ids would match nothing and silently skip every chain.
     const lookupKeys = chain.middleOccurrenceKeys?.length ? chain.middleOccurrenceKeys : chain.middleToolCallIds;
 
+    // Small skipped outputs can share a chain with summarized outputs. Archive
+    // them before any range drop; archive-only records never authorize stubbing.
+    if (deps.indexer.hasPerBatchSummaryCoveringAny(lookupKeys)) {
+      const fresh = extractChainRecords(deps.messages, chain, key => deps.indexer.getIndex().has(key));
+      try {
+        if (fresh.length) await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry });
+      } catch {
+        skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-summary" });
+        continue;
+      }
+    }
+
     if (!deps.indexer.hasPerBatchSummaryCoveringAny(lookupKeys)) {
       // Deterministic zero-LLM fallback (spec 2026-08-14). Fail-closed: any
       // failure below preserves the historical no-summary skip.
@@ -267,16 +280,19 @@ export async function compressEligible(
 
     const blockId = deps.blockRefs.issue();
     const toolRefs = deps.indexer.getToolRefsForToolCallIds(lookupKeys);
+    const uncovered = lookupKeys.map(key => deps.indexer.getIndex().get(key)).filter((record): record is ToolCallRecord => record?.archiveOnly === true);
+    const extraBody = uncovered.length ? buildDeterministicBody(uncovered, deps.indexer.getToolRefsForToolCallIds(
+      uncovered.map(record => occKey(record.toolCallId, record.resultTimestamp)))) : undefined;
+    const summaries = deps.indexer.getPerBatchSummariesForToolCallIds(lookupKeys);
 
     // B: fuse this span's per-batch summaries into one cohesive summary.
     // Gated on >= 2 summaries (nothing to fuse otherwise). Non-fatal.
-    let rangeSummaryText: string | undefined;
+    let rangeSummaryText = extraBody ? [...summaries, extraBody].join("\n\n") : undefined;
     if (deps.fuseRange) {
-      const summaries = deps.indexer.getPerBatchSummariesForToolCallIds(lookupKeys);
       if (summaries.length >= 2) {
         try {
           const fused = await deps.fuseRange(summaries.join("\n\n"));
-          if (fused && fused.trim()) rangeSummaryText = fused;
+          if (fused && fused.trim()) rangeSummaryText = extraBody ? `${fused}\n\n${extraBody}` : fused;
         } catch {
           // fall back to the per-batch concatenation at render time
         }
