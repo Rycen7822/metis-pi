@@ -200,6 +200,10 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
 		assert.ok(directories.every((path) => !fs.existsSync(path)));
 		const running = await exec(`process.stdout.write("b".repeat(${2 * Mi})); setInterval(() => {}, 1000)`, { yield_time_ms: 250 });
 		assert.equal(typeof running.session_id, "number");
+		const until = Date.now() + 5000;
+		while (!directories.some((path) => fs.existsSync(path)) && Date.now() < until) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
 		assert.ok(directories.some((path) => fs.existsSync(path)));
 		await manager.shutdown();
 		await manager.shutdown();

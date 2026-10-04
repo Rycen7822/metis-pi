@@ -9,6 +9,20 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 
+function stopDaemon(core, state) {
+  execFileSync("python3", [join(core, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { timeout: 20000 });
+  // Shutdown is accepted before guards finish writing their cleanup receipts.
+  execFileSync("python3", ["-c", `import fcntl,sys,time
+with open(sys.argv[1], 'rb') as lock:
+    until=time.monotonic()+10
+    while True:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB); break
+        except BlockingIOError:
+            if time.monotonic()>=until: raise TimeoutError('Daemon shutdown did not release its lease')
+            time.sleep(.025)
+`, join(state, "daemon.lock")], { timeout: 12000 });
+}
+
 test("metis owns native direct and codemode subagents with one wait receipt and isolated SDK children", { timeout: 45000 }, async t => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
   mkdirSync(join(root, ".work"), { recursive: true });
@@ -105,7 +119,7 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
     try {
       await loaded.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       loaded.session.dispose();
-      execFileSync("python3", [join(root, "src/subagents/core/bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { timeout: 20000 });
+      stopDaemon(join(root, "src/subagents/core"), state);
       assert.deepEqual(widgets.at(-1), [], "session shutdown clears the subagent widget");
       assert.equal(popupsClosed, 2, "session shutdown also closes the open viewer");
     } finally {
@@ -247,7 +261,7 @@ test("SDK configuration failures preserve identities and result delivery survive
     assert.equal((await client.call("pi_agent_result", { run_id: stopped.run_id })).run.state, "interrupted");
   } finally {
     await client.close();
-    try { execFileSync("python3", [join(runtime.root, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { stdio: "ignore" }); }
+    try { stopDaemon(runtime.root, state); }
     finally { rmSync(dir, { recursive: true, force: true });
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; }
   }
