@@ -180,6 +180,7 @@ export const BATCHING_MODES: { value: BatchingMode; label: string }[] = [
  * number when applied.
  */
 export const ROLLING_WINDOW_PRESETS: { value: string; label: string }[] = [
+  { value: "0", label: "0" },
   { value: "1", label: "1" },
   { value: "2", label: "2" },
   { value: "3", label: "3 (default)" },
@@ -396,9 +397,10 @@ export interface ContextPruneConfig {
    * context window, NOT a 0–100 percentage; e.g. 0.8 = flush at 80% of the
    * window, capped at 300k tokens - see below). When set, a flush of all
    * pending batches is forced at the end of
-   * any tool-using turn once context usage reaches `threshold * contextWindow`
+   * a tool-using turn in on-demand mode once usage reaches `threshold * contextWindow`
    * tokens OR 300,000 tokens (MAX_BUDGET_WINDOW in src/budget.ts), whichever
-   * comes first — regardless of `pruneOn`. The ceiling keeps the setting
+   * comes first, subject to OCC coordination. Agent-message mode keeps ordinary
+   * summaries until its final reply. The ceiling keeps the setting
    * reachable on huge-window models, where 0.9 of 1M would mean 900k tokens; it
    * never binds on a model advertising 300k or less. An ADDITIONAL trigger on
    * top of `pruneOn`, not a replacement.
@@ -484,7 +486,9 @@ export interface ChainRange {
  * Written via pi.appendEntry(CUSTOM_TYPE_CHAIN, entry).
  * Rebuilt into the chain registry on session_start.
  */
-export interface ChainCompressionEntry {
+export interface SingleChainCompressionEntry {
+  /** Semantic bodies used to build this entry; later summaries invalidate it. */
+  summaryFingerprint?: string;
   /** Stable block ID, monotonic per session: "b1", "b2", ... */
   blockId: string;
   /**
@@ -539,6 +543,35 @@ export interface ChainCompressionEntry {
    * per-batch semantics, unchanged.
    */
   bodySource?: "deterministic";
+}
+
+export interface SharedChainMember extends Omit<SingleChainCompressionEntry, "blockId" | "compressedAt" | "rangeSummaryText" | "bodySource"> {
+  startEntryId: string;
+  finalEntryId: string;
+  sourceFingerprint: string;
+  bodyStart: number;
+  bodyEnd: number;
+}
+
+export interface SharedChainCompressionEntry {
+  kind: "shared-v1";
+  blockId: string;
+  compressedAt: number;
+  bodyText: string;
+  members: SharedChainMember[];
+}
+
+export type ChainCompressionEntry = SingleChainCompressionEntry | SharedChainCompressionEntry;
+
+export function isSharedChain(entry: ChainCompressionEntry): entry is SharedChainCompressionEntry {
+  return "kind" in entry && entry.kind === "shared-v1";
+}
+
+/** Temporary render views; the durable shared body is stored only once. */
+export function chainMembers(entry: ChainCompressionEntry): SingleChainCompressionEntry[] {
+  return isSharedChain(entry) ? entry.members.map(member => ({ ...member,
+    blockId: entry.blockId, compressedAt: entry.compressedAt,
+    rangeSummaryText: entry.bodyText.slice(member.bodyStart, member.bodyEnd) })) : [entry];
 }
 
 export interface ChainCompressionConfig {
@@ -716,7 +749,7 @@ export interface IndexEntryData {
  * Data stored via pi.appendEntry(CUSTOM_TYPE_DEDUP_ALIAS, data).
  *
  * Each entry maps a duplicate toolCallId to the original (already-indexed)
- * toolCallId whose (toolName, normalized resultText) hash it matched.
+ * toolCallId whose (toolName, exact resultText) hash it matched.
  *
  *  - pruneMessages stub-replaces the duplicate's ToolResultMessage using the
  *    original's short ref (via the indexer's toolCallIdToAlias map).
@@ -889,7 +922,7 @@ export type BatchTextProgressCallback = (
 /** Options accepted by `flushPending`. */
 export type FlushResult =
   | { ok: true; reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number; error?: string }
-  | { ok: false; reason: "empty" | "already-flushing" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string; batchCount?: number };
+  | { ok: false; reason: "empty" | "already-flushing" | "deferred-occ" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string; batchCount?: number };
 
 export interface FlushOptions {
   /** Delivery path: "runtime" uses sendMessage/steer (default); "session" writes directly to session. */

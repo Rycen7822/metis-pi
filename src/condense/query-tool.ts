@@ -70,7 +70,7 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
     name: QUERY_TOOL_NAME,
     label: "Query Original Tool History",
     description: "Omit toolCallIds to list the evidence directory, then recover archived tool outputs by short refs (t12) or raw tool call IDs. Set component=arguments to recover full original parameters, or sourceEntryIds to recover historical message/compaction/summary entries from this branch. Returns JSON pages with exact text, byte offsets, completeness, and nextCursor. Repeat the same toolCallIds with nextCursor until eof. Reused IDs return every indexed occurrence. These are historical captured tool outputs, not current file contents or necessarily unfiltered process logs. Missing archives are explicit errors.",
-    promptSnippet: "Retrieve archived tool outputs by ref, following nextCursor for subsequent pages",
+    promptSnippet: "Retrieve archived tool outputs by tool ref or chain block ID (b1), following nextCursor for subsequent pages",
     promptGuidelines: ["Use context_tree_query to recover evidence omitted from pruner summaries. Follow nextCursor until the needed range or eof; incomplete pages and archive errors are not complete original outputs."],
     parameters: Type.Object({
       toolCallIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),

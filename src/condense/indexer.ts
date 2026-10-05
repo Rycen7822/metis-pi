@@ -11,6 +11,8 @@ import {
   CUSTOM_TYPE_DEDUP_ALIAS,
   CUSTOM_TYPE_INDEX,
   CUSTOM_TYPE_SUMMARY,
+  chainMembers,
+  isSharedChain,
 } from "./types.ts";
 import {
   buildShortToolCallRefs,
@@ -45,8 +47,7 @@ export class ToolCallIndexer {
    */
   private summaryBodies: Array<{ toolCallIds: string[]; text: string }> = [];
   private seenSummaryEntries = new Set<string>();
-  /** Compressed chains, keyed on startUserTimestamp for O(1) dedup checks. */
-  private chainRegistry = new Map<number, ChainCompressionEntry>();
+  private chainRegistry = new Map<string, ChainCompressionEntry>();
 
   /**
    * Rebuilds the in-memory index from session history by scanning all
@@ -92,8 +93,8 @@ export class ToolCallIndexer {
 
       if (entry.type === "custom" && (entry as any).customType === CUSTOM_TYPE_CHAIN) {
         const data = (entry as any).data as ChainCompressionEntry;
-        if (data?.blockId && typeof data.startUserTimestamp === "number") {
-          this.chainRegistry.set(data.startUserTimestamp, data);
+        if (data?.blockId && (isSharedChain(data) ? Array.isArray(data.members) : typeof data.startUserTimestamp === "number")) {
+          this.registerChain(data);
         }
         continue;
       }
@@ -271,6 +272,8 @@ export class ToolCallIndexer {
    * listing but not a strict ordering guarantee.
    */
   getRecordsForId(input: string): ToolCallRecord[] {
+    const block = this.chainRegistry.get(input);
+    if (block) return this.lookupToolCalls(chainMembers(block).flatMap(member => member.droppedOccurrenceKeys ?? member.droppedToolCallIds));
     const keys = this.bareIdToKeys.get(input);
     const records = (keys ?? [])
       .map((k) => this.index.get(k))
@@ -413,6 +416,14 @@ export class ToolCallIndexer {
     return this.getPerBatchSummariesForToolCallIds(toolCallIds).join("\n\n");
   }
 
+  /** A mixed semantic summary cannot be split by guessing from its refs. */
+  getOwnedSummaryText(toolCallIds: string[]): string | null {
+    const own = new Set(toolCallIds);
+    const summaries = this.summaryBodies.filter(s => s.toolCallIds.some(id => own.has(id)));
+    if (summaries.some(s => s.toolCallIds.some(id => !own.has(id)))) return null;
+    return [...new Set(summaries.map(s => s.text))].join("\n\n");
+  }
+
   /**
    * Returns the short t<N> refs for the given toolCallIds.
    * Skips ids with no registered short ref (tool calls not yet summarized).
@@ -428,20 +439,17 @@ export class ToolCallIndexer {
 
   /** Registers a chain entry in the in-memory registry. Called by chain-compressor after persisting. */
   registerChain(entry: ChainCompressionEntry): void {
-    this.chainRegistry.set(entry.startUserTimestamp, entry);
+    this.chainRegistry.set(entry.blockId, entry);
   }
 
   /** Returns all compressed chain entries sorted by startUserTimestamp ascending. */
   getChainEntries(): ChainCompressionEntry[] {
-    return [...this.chainRegistry.values()].sort((a, b) => a.startUserTimestamp - b.startUserTimestamp);
+    return [...this.chainRegistry.values()].sort((a, b) => chainMembers(a)[0].startUserTimestamp - chainMembers(b)[0].startUserTimestamp);
   }
 
   /** O(n) scan over the chain registry by blockId. Registry is small (bounded by session chain count). */
   findChainEntryByBlockId(blockId: string): ChainCompressionEntry | undefined {
-    for (const entry of this.chainRegistry.values()) {
-      if (entry.blockId === blockId) return entry;
-    }
-    return undefined;
+    return this.chainRegistry.get(blockId);
   }
 
   /**
@@ -505,16 +513,21 @@ export class ToolCallIndexer {
       sessionDir: string;
       sessionId: string;
       appendEntry: (customType: string, data?: unknown) => void;
+      assertValid?: () => void;
     },
   ): Promise<SummaryToolCallRef[]> {
     for (const r of records) {
+      opts.assertValid?.();
       if (r.resultText.length < opts.spillThreshold) continue;
       const key = occKey(r.toolCallId, r.resultTimestamp);
       const path = blobPathFor(opts.sessionDir, opts.sessionId, key);
       await mkdir(blobDirFor(opts.sessionDir, opts.sessionId), { recursive: true });
+      opts.assertValid?.();
       await writeFile(path, r.resultText, "utf-8"); // throw = abort backfill (fail-closed)
+      opts.assertValid?.();
       applySpill(r, path, opts.spillPreviewBytes);
     }
+    opts.assertValid?.();
     const calls = records.map((r) => ({ toolCallId: r.toolCallId, resultTimestamp: r.resultTimestamp }));
     const { refs, nextIndex } = buildShortToolCallRefs(calls, this.nextShortAliasNumber);
     this.nextShortAliasNumber = nextIndex; // burned numbers on failure are acceptable (monotonic, opaque)

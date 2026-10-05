@@ -104,8 +104,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     const tokens = boundaryTokens ?? usage?.tokens;
     const budget = capacity(ctx);
     const capacityWaiting = budget && tokens != null && Number.isFinite(tokens)
-      ? budget.limit - tokens <= budget.buffer * (state.capacityWaiting ? 1.5 : 1)
-      : !!budget && !!state.capacityWaiting;
+      ? tokens > budget.limit
+      : false;
     if (capacityWaiting !== !!state.capacityWaiting) {
       state.capacityWaiting = capacityWaiting;
       if (state.phase === "waiting") state.phase = "normal";
@@ -115,6 +115,13 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     if (state.phase === "hold") {
       if (state.work - state.atWork < HOLD_WORK || size - state.atChars < Math.max(5000, state.atChars * 0.15)) return true;
       state.phase = "normal";
+    }
+    // Near native capacity, avoid an economic model call while still allowing
+    // local pruning to create headroom. Pi takes over only above its limit.
+    if (budget && tokens != null && Number.isFinite(tokens) && budget.limit - tokens <= budget.buffer) {
+      ready = false;
+      if (state.phase === "waiting") { state.phase = "normal"; persist(); }
+      return false;
     }
     const window = ctx.model?.contextWindow;
     const fraction = tokens != null && window && window > 0 ? tokens / window : undefined;
@@ -140,6 +147,22 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   const decision = (reason: string, details: Record<string, unknown> = {}) => {
     try { pi.appendEntry("metis-occ-decision", { reason, ...details }); } catch { /* Observability never controls maintenance. */ }
   };
+  function staleCapacity(event: SessionBeforeCompactEvent, ctx: ExtensionContext): boolean {
+    // Credit only an actual reduction in the same request. Keep provider
+    // overhead, use half the reduction, and leave a full headroom buffer.
+    if (event.reason !== "threshold" || !ctx.model || localTokensSaved <= 0 || requestTokens === undefined) return false;
+    let usageValid = false;
+    for (const entry of event.branchEntries) {
+      if (entry.type === "context_edit" || entry.type === "compaction") usageValid = false;
+      else if (entry.type === "message" && entry.message.role === "assistant"
+        && entry.message.stopReason !== "error" && entry.message.stopReason !== "aborted"
+        && entry.message.usage && calculateContextTokens(entry.message.usage) > 0) usageValid = true;
+    }
+    const saved = Math.min(localTokensSaved, Math.max(0, requestTokens - estimatedTokens(visible(ctx).messages)));
+    const threshold = ctx.model.contextWindow - event.preparation.settings.reserveTokens;
+    return usageValid && saved > 0 && event.preparation.tokensBefore - saved / 2
+      < threshold - Math.max(1024, ctx.model.contextWindow * 0.05);
+  }
   async function prepare(event: SessionBeforeCompactEvent, ctx: ExtensionContext) {
     // This handler returns a cancellation on every failure: throwing would let
     // Pi's extension runner fall through to an unprotected default summary.
@@ -149,27 +172,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     const reject = (reason: string) => { if (version === lifecycle) decision(reason, metrics); return { cancel: true as const }; };
     try {
       if (!capability(ctx) || !ctx.model) return reject("unsupported-or-busy");
-      // A local publication can make the last provider usage stale. Keep its
-      // measured system/tool overhead, credit only half the estimated history
-      // reduction, and require headroom. Fresh requests discard this credit;
-      // manual compaction and actual overflow never use it.
-      if (event.reason === "threshold" && localTokensSaved > 0 && requestTokens !== undefined) {
-        let usageValid = false;
-        for (const entry of event.branchEntries) {
-          if (entry.type === "context_edit" || entry.type === "compaction") usageValid = false;
-          else if (entry.type === "message" && entry.message.role === "assistant"
-            && entry.message.stopReason !== "error" && entry.message.stopReason !== "aborted"
-            && entry.message.usage && calculateContextTokens(entry.message.usage) > 0) usageValid = true;
-        }
-        const saved = Math.min(localTokensSaved, Math.max(0, requestTokens - estimatedTokens(visible(ctx).messages)));
-        const threshold = ctx.model.contextWindow - event.preparation.settings.reserveTokens;
-        // Context edits may have already replaced usage with a fresh size
-        // estimate. Do not subtract the same reduction from that estimate.
-        if (usageValid && saved > 0 && event.preparation.tokensBefore - saved / 2
-          < threshold - Math.max(1024, ctx.model.contextWindow * 0.05)) return reject("stale-capacity-usage");
-      }
+      if (staleCapacity(event, ctx)) return reject("stale-capacity-usage");
       const source = signature(ctx);
-      if (state.attemptedSource === source) return reject("same-source");
+      if ((running || event.reason !== "manual") && state.attemptedSource === source) return reject("same-source");
       const p = event.preparation;
       const projected = projection(ctx);
       const cut = projected.entries.findIndex(e => e.sourceEntry.id === p.firstKeptEntryId);
@@ -329,15 +334,22 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     decide(ctx);
   });
   pi.on("session_compact", (_event, ctx) => {
+    state.capacityWaiting = false;
     boundaryTokens = undefined; compactionSignal = undefined;
     requestTokens = undefined; localTokensSaved = 0;
     rewrite(ctx);
   });
   pi.on("session_before_compact", (event, ctx) => {
     compactionSignal = event.signal;
-    return enabled() ? prepare(event, ctx) : undefined;
+    if (enabled()) return prepare(event, ctx);
+    if (config.value.enabled && staleCapacity(event, ctx)) {
+      decision("stale-capacity-usage", { trigger: event.reason });
+      return { cancel: true };
+    }
+    return undefined;
   });
   pi.on("session_compact_failed", (event, ctx) => {
+    state.capacityWaiting = false;
     if (enabled()) {
       // Pi also reports extension safety rejections as aborted. Prefer the
       // actual signal, observed before checkpoint/capability checks. Before the
@@ -380,22 +392,22 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     pi.events.on("metis:occ-status", (data: any) => {
       // Let native post-run capacity handling finish before issuing the owed
       // continuation. Settled immediately releases it when no compaction runs.
-      data.deferGoal = ready || running || !!state.capacityWaiting; data.running = running;
+      data.deferGoal = running || (enabled() && (ready || !!state.capacityWaiting)); data.running = running;
     }),
   ];
   return {
     restore,
     shutdown(ctx: ExtensionContext) { lifecycle++; showStatus(ctx); off.forEach(fn => fn()); sessionId = undefined; },
     enabled, deferLocal: decide, isRunning: () => running,
-    isCapacityWaiting: () => !!state.capacityWaiting,
+    isCapacityWaiting: () => enabled() && !!state.capacityWaiting,
     refreshStatus(ctx: ExtensionContext) { showStatus(ctx, running ? "compacting…" : state.lastOutcome); },
     observeRequest(messages: any[]) {
-      requestTokens = enabled() ? estimatedTokens(messages) : undefined;
+      requestTokens = config.value.enabled ? estimatedTokens(messages) : undefined;
       localTokensSaved = 0;
     },
-    measure(ctx: ExtensionContext) { return enabled() ? estimatedTokens(visible(ctx).messages) : 0; },
+    measure(ctx: ExtensionContext) { return config.value.enabled ? estimatedTokens(visible(ctx).messages) : 0; },
     rewrite(ctx: ExtensionContext, before = 0) {
-      if (enabled()) localTokensSaved += Math.max(0, before - estimatedTokens(visible(ctx).messages));
+      if (config.value.enabled) localTokensSaved += Math.max(0, before - estimatedTokens(visible(ctx).messages));
       rewrite(ctx);
     },
   };

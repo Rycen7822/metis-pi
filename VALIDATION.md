@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-10-05 — Shared chain maintenance and compression coordination
+
+- Old closed chains share one durable summary with independent member anchors and archive references. Maintenance makes no model calls; full effective projections must shrink under both Pi and o200k counts. Single/shared ranges retain inputs, final answers, protected evidence and complete tool pairs. Failed, edited, incomplete or mixed-owner sources retain raw content.
+- A lazy worker owns o200k tokenization; exact whole-message oracle comparisons, cancellation, latest-job replacement, real worker errors/exits and idle-process shutdown pass. Commands/settings stop active work immediately. Eager, ordinary, manual and native/OCC archive paths cancel and await maintenance before taking ownership of I/O.
+- Three independent native reviews and their fixes pass: protected-floor/publication races, lifecycle invalidation, current grace and semantic ownership, archive completeness, record-level cancellation and archive handoffs. Temporary probes remain in `.work/condense-ratio-review`; 2/50/500-member groups, 89 independent encoding comparisons, 32 timing scenarios and 14 full offline Pi sessions pass.
+- Final `verify` passes on sequential rerun: **372 Node cases**, **403 Python cases / 41 existing opt-in skips**, production/test type checks and **239 package files**. An earlier concurrent run failed an existing subagent callback-count assertion; its closest isolated contracts and the sequential gate pass, with the failure retained in temporary notes.
+- A normal isolated tarball installation uses Pi **1.0.0** and pinned **tiktoken 1.0.22**; **200** production/extension files match the final source byte for byte. Node **22.19.0** and **24.15.0** each pass five full SDK scenarios and independent installed Pi/jiti shared maintenance; Node 22 also passes **39 OCC contracts**. Strict TUI journeys **E1, E2, E3, E4, E6** pass against the installed package, including **161** exact clipboard characters. Providers are local mocks; online summary quality and provider billing tokenizers are outside this evidence.
+
 ## 2026-10-04 — Native subagent operation simplification
 
 - Native mutations save generated request IDs and normalized arguments before dispatch; retries retain their identity and uncertain errors expose the original key. Pi schemas hide scope. Name-based wait freezes concrete run IDs; ambiguous queues require explicit selection, and result pagination retains the returned run ID.

@@ -77,10 +77,18 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
     sm.appendMessage(assistant); sm.appendMessage(result);
     return { assistant, result, id };
   }
-  function finish() {
+  async function waitMaintenance() {
+    for (;;) {
+      const status = {}; events.emit("metis:condense-maintenance", status);
+      if (!status.pending) return;
+      await status.pending;
+    }
+  }
+  function finish(settle = true) {
     const pending = (async () => {
       const message = { role: "assistant", content: [{ type: "text", text: "Final reply" }], stopReason: "stop", timestamp: clock++ };
       await emit("message_end", { message }); sm.appendMessage(message);
+      if (settle) { await emit("turn_end", { message, toolResults: [], turnIndex: 0 }); await waitMaintenance(); }
     })();
     pendingFinishes.add(pending);
     pending.then(() => pendingFinishes.delete(pending), () => pendingFinishes.delete(pending));
@@ -95,7 +103,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   });
   sm.appendMessage({ role: "user", content: "Build", timestamp: 1 });
   return { dir, sm, tools, calls, commands, requests, events, ctx, pi, emit, add, finish, notices, statuses, widgets,
-    nextTimestamp: () => clock++,
+    waitMaintenance, nextTimestamp: () => clock++,
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
 
@@ -163,7 +171,7 @@ test("automatic chain compression follows its switch and retains three recent ta
 test("automatic chain compression archives skipped small outputs and preserves them on persistence failures", async t => {
   for (const failure of [undefined, "chain", "archive"]) await t.test(failure ?? "mixed coverage", async t => {
     const f = await fixture(t, { chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: false } });
-    const call = f.add(buildLog);
+    const call = f.add(buildLog, "npm run build", "mixed-large", "Retain intermediate reasoning until a durable replacement exists. ".repeat(100));
     const small = f.add("UNSUMMARIZED_EVIDENCE", "cat small.txt");
     if (failure) {
       const append = f.sm.appendCustomEntry.bind(f.sm);
@@ -185,12 +193,12 @@ test("automatic chain compression archives skipped small outputs and preserves t
 test("a tree switch aborts automatic chain fusion while retaining its persisted batch summaries", async t => {
   const f = await fixture(t, { defer: true, chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
   for (let i = 0; i < 25; i++) f.add(`evidence-${i}\n` + "x".repeat(6000), `cat evidence-${i}.txt`);
-  const pending = f.finish();
+  const pending = f.finish(false);
   for (let i = 0; i < 100 && f.calls.length < 2; i++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.length, 2);
   f.releaseAll();
   for (let i = 0; i < 100 && f.calls.length < 3; i++) await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.calls.length, 3, "completed batch summaries feed the optional fusion request");
+  assert.equal(f.calls.length, 3, "OCC-off retains the configured single-chain fusion");
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 2);
   await f.emit("session_tree"); await pending;
   assert.equal(f.requests[2].signal.aborted, true);
@@ -639,3 +647,37 @@ for (const kind of ["failed", "protected", "mixed", "recent", "fusion-failed"]) 
     assert.deepEqual(write.content[0].arguments, args);
   });
 }
+
+
+test("shared chains preserve every endpoint, recover the block and stop deriving from an edited member", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  for (let i = 0; i < 2; i++) {
+    f.sm.appendMessage({ role: "user", content: `shared-request-${i}`, timestamp: f.nextTimestamp() });
+    f.add(`raw-shared-${i}`, `echo member-${i}`, `member-${i}`, "Independent intermediate reasoning. ".repeat(100));
+    f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: `shared-final-${i}` }], stopReason: "stop", timestamp: f.nextTimestamp() });
+  }
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const block = f.sm.getBranch().find(e => e.customType === "context-prune-chain").data;
+  const raw = () => f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw() })).messages;
+  assert.equal(f.calls.length, 0);
+  assert.equal(projected.filter(m => m.metisDerived?.kind === "condense-chain").length, 1);
+  for (let i = 0; i < 2; i++) {
+    assert.ok(projected.some(m => m.content === `shared-request-${i}`));
+    assert.ok(projected.some(m => m.role === "assistant" && m.content.some(b => b.text === `shared-final-${i}`)));
+  }
+  const page = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [block.blockId] }, undefined, undefined, f.ctx);
+  assert.deepEqual(page.details.results.map(result => result.text), ["raw-shared-0", "raw-shared-1"]);
+  const source = f.sm.getBranch().find(e => e.type === "message" && e.message.toolCallId === "member-0");
+  f.sm.appendContextEdit(source.id, { content: [{ type: "text", text: "CORRECTED_SHARED_EVIDENCE" }] });
+  const changed = (await f.emit("context", { messages: raw() }))?.messages ?? raw();
+  assert.match(JSON.stringify(changed), /CORRECTED_SHARED_EVIDENCE/);
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  const partial = (await f.emit("context", { messages: raw() })).messages;
+  assert.match(JSON.stringify(partial), /CORRECTED_SHARED_EVIDENCE/);
+  const body = partial.find(m => m.metisDerived?.kind === "condense-chain").content[0].text;
+  assert.doesNotMatch(body, /member-0/);
+  assert.match(body, /member-1/);
+  await f.emit("session_start");
+  assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
+});

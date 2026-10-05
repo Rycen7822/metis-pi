@@ -1,3 +1,4 @@
+import { chainMembers } from "./types.ts";
 import {
   type ContextPruneConfig,
   type SummarizerStats,
@@ -533,7 +534,7 @@ export function registerCommands(
             // Coarse estimate: uses original (unstubbed) toolResult sizes which overstates
             // tool-result savings; but assistant-message savings (thinking + toolCall args + text)
             // are not counted at all, so the two errors partly cancel. Treat as a rough proxy.
-            const droppedChars = compressedEntries.reduce((total, entry) => {
+            const droppedChars = compressedEntries.flatMap(chainMembers).reduce((total, entry) => {
               const records = indexer.lookupToolCalls(entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds);
               return total + records.reduce((s, r) => s + r.resultText.length, 0);
             }, 0);
@@ -572,6 +573,7 @@ export function registerCommands(
           const { updateRow, clearWidget } = startPrunerWidget(ctx, batches);
 
           const result = await flushPending(ctx, {
+            trigger: "manual",
             previewedBatches: batches,
             onProgress: (index, _total, _batch, stage) => {
               if (stage === "start") {

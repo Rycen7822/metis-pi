@@ -48,7 +48,7 @@ export interface ScalarRow {
 
 const PRUNE_MODE_GUIDANCE: Record<ContextPruneConfig["pruneOn"], string> = {
   "agent-message": "Recommended default. Batches tool work and prunes once after the final text reply, giving the best balance of automation, context savings, and cache stability.",
-  "on-demand": "Maximum manual control. Nothing is pruned until you run /pruner now, so cache invalidation happens only when you choose.",
+  "on-demand": "Ordinary summaries are manual unless a budget trigger is enabled. Zero-call old-chain maintenance remains independent.",
 };
 
 function pruneTriggerDescription(config: ContextPruneConfig): string {
@@ -122,15 +122,15 @@ function maxTimeoutDescription(config: ContextPruneConfig): string {
 function autoBudgetThresholdDescription(config: ContextPruneConfig): string {
   const cap = `${MAX_BUDGET_WINDOW / 1000}k`;
   if (config.autoBudgetThreshold == null) {
-    return `Token-budget auto-flush: force a prune when context usage reaches this share of the window (or ${cap} tokens, whichever comes first), regardless of prune-on mode. Currently off. Pick a percentage to enable.`;
+    return `Token-budget auto-flush during tool turns in on-demand mode, subject to OCC coordination. Agent-message mode keeps ordinary summaries until the final reply. Currently off. Pick a percentage to enable.`;
   }
   const pct = Math.round(config.autoBudgetThreshold * 100);
-  return `Token-budget auto-flush: force a prune when context usage reaches ${pct}% of the window or ${cap} tokens, whichever comes first, regardless of prune-on mode. The ${cap} ceiling keeps this reachable on huge-window models. Set to Off to disable.`;
+  return `Token-budget auto-flush at ${pct}% of the window or ${cap} tokens, whichever comes first, during on-demand tool turns and subject to OCC coordination. Agent-message mode waits for the final reply. Set to Off to disable.`;
 }
 
 function dedupByContentHashDescription(config: ContextPruneConfig): string {
   if (config.dedupByContentHash) {
-    return `Pre-flush content-hash dedup. When a captured tool call's (toolName, normalized resultText) matches a record already in the indexer, the duplicate is registered as an alias of the original — no summarizer LLM call. Currently ON.`;
+    return `Pre-flush content-hash dedup. When a captured tool call's (toolName, exact resultText) matches a record already in the indexer, the duplicate is registered as an alias of the original — no summarizer LLM call. Currently ON.`;
   }
   return `Pre-flush content-hash dedup. Currently OFF. Identical re-reads will be sent to the summarizer like any other tool call.`;
 }
@@ -197,7 +197,7 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     options: BOOLEAN_OPTIONS, description: dedupByContentHashDescription },
   { id: "chainCompressionEnabled", path: "chainCompression.enabled", label: "Chain compression", kind: "boolean",
     options: BOOLEAN_OPTIONS, description: chainCompressionEnabledDescription },
-  { id: "chainCompressionRollingWindow", path: "chainCompression.rollingWindow", label: "Chain window (K)", kind: "integer", min: 1,
+  { id: "chainCompressionRollingWindow", path: "chainCompression.rollingWindow", label: "Chain window (K)", kind: "integer", min: 0,
     options: ROLLING_WINDOW_PRESETS, description: chainWindowDescription },
   { id: "chainCompressionStripThinking", path: "chainCompression.stripFinalAssistantThinking", label: "Strip final thinking", kind: "boolean",
     options: BOOLEAN_OPTIONS, description: stripThinkingDescription },

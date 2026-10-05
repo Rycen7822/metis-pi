@@ -50,7 +50,12 @@ export function shouldDeltaFlush(
   if (previousFraction == null) return false;
   const current = usageFraction(usage);
   if (current == null) return false;
-  return current - previousFraction >= delta;
+  const window = Math.min(usage!.contextWindow, MAX_BUDGET_WINDOW);
+  const previousTokens = previousFraction * window;
+  const required = delta * window;
+  const tokens = usage!.tokens!;
+  const rounding = 4 * Number.EPSILON * Math.max(1, Math.abs(tokens), Math.abs(previousTokens), Math.abs(required));
+  return tokens - previousTokens + rounding >= required;
 }
 
 /** Fail-closed: an undefined snapshot (metrics computation failed) never fires. */

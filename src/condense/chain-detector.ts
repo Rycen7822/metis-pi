@@ -21,7 +21,7 @@ function collectToolCalls(msg: any): { id: string; name: string; args: unknown }
   if (!Array.isArray(msg.content)) return [];
   return msg.content
     .filter((b: any) => b.type === "toolCall" && b.id && b.name)
-    .map((b: any) => ({ id: b.id as string, name: b.name as string, args: b.input ?? b.arguments }));
+    .map((b: any) => ({ id: b.id as string, name: b.name as string, args: b.input ?? b.args ?? b.arguments }));
 }
 
 /**

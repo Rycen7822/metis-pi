@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { registerOcc } from "./occ.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, saveConfig } from "./config.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
@@ -23,9 +23,12 @@ import type {
   ContextMetricsSnapshot,
   FlushMetricsEntry,
   FlushTrigger,
+  SingleChainCompressionEntry,
+  SharedChainCompressionEntry,
 } from "./types.ts";
 import {
   DEFAULT_CONFIG,
+  chainMembers, isSharedChain, CUSTOM_TYPE_CHAIN,
   CUSTOM_TYPE_SUMMARY,
   CUSTOM_TYPE_STATS,
   CUSTOM_TYPE_FRONTIER,
@@ -36,7 +39,7 @@ import { computeContextMetrics } from "./context-metrics.ts";
 import { StatsAccumulator, emitExternalCost } from "./stats.ts";
 import { PruneFrontierTracker } from "./frontier.ts";
 import { BlockRefIssuer } from "./block-refs.ts";
-import { compressEligible } from "./chain-compressor.ts";
+import { compressEligible, prepareSharedChain, selectEligible, findCompressibleRange, chainMatchesGrace, extractChainRecords } from "./chain-compressor.ts";
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
 import { detectChains, withClosingMessage } from "./chain-detector.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
@@ -44,6 +47,8 @@ import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFract
 import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./spill.ts";
 import { bareToolCallId, occKey } from "./occurrence-key.ts";
 import { DiagnosticSink } from "./diagnostics.ts";
+import { TokenEstimator, projectionFingerprint } from "./token-estimator.ts";
+import { resolveRange, perBatchSummaryOverlapsDropped } from "./chain-range-prune.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 
@@ -61,7 +66,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Shared indexer — rebuilt from session on every session_start / session_tree
   const indexer = new ToolCallIndexer();
   const resetNested = registerNestedCapture(pi, indexer, protectionPredicate);
-  const occ = registerOcc(pi, indexer, currentConfig);
   let argumentHistory: ArgumentHistory[] = [];
   const restoreArguments = (ctx: ExtensionContext) => {
     argumentHistory = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === ARGUMENT_HISTORY)
@@ -93,10 +97,32 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Pending batches — accumulated until the prune trigger fires
   const pendingBatches: CapturedBatch[] = [];
   let lifecycle = 0;
+  const tokenEstimator = new TokenEstimator();
+  const sharedApprovals = new Map<string, string>();
+  let maintenanceAbort: AbortController | undefined;
+  let maintenanceTask: Promise<void> | undefined;
+  let maintenanceNext: { ctx: ExtensionContext; version: number } | undefined;
+  let lastMaintenanceSource: string | undefined;
+  const stagedChains = new Map<number, { entry: SingleChainCompressionEntry; source: string; config: string }>();
+  let deferredFinal: number | undefined;
   const assertCurrent = (version: number) => {
     if (version !== lifecycle) throw new Error("This extension ctx is stale: condense lifecycle changed");
   };
   let isFlushing = false;
+  let isArchiving = false;
+  let isCompactingChains = false;
+  let maintenanceHandoffs = 0;
+  const stopMaintenance = async () => {
+    maintenanceHandoffs++;
+    maintenanceNext = undefined; maintenanceAbort?.abort();
+    try { await maintenanceTask; } finally { maintenanceHandoffs--; }
+  };
+  // Native/OCC preparation must wait for the current archive write before it owns I/O.
+  pi.on("session_before_compact", async () => {
+    tokenEstimator.clear(); sharedApprovals.clear();
+    await stopMaintenance();
+  });
+  const occ = registerOcc(pi, indexer, currentConfig);
   let activeFlushAbort: AbortController | undefined;
   let previousFraction: number | null = null;
   // Set on session_start/session_tree when the branch rescan finds recoverable
@@ -220,8 +246,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Range-summary fuser injected into compressEligible (B). Returns undefined
   // when fuseRangeSummary is off so the compressor keeps the per-batch concat.
   // Each successful fusion folds its usage + bumps the rangesSummarized counter.
-  const makeFuseRange = (ctx: any, signal?: AbortSignal): ((text: string) => Promise<string | null>) | undefined => {
-    if (!currentConfig.value.chainCompression.fuseRangeSummary) return undefined;
+  const makeFuseRange = (ctx: any, signal?: AbortSignal, automatic = false): ((text: string) => Promise<string | null>) | undefined => {
+    if (!currentConfig.value.chainCompression.fuseRangeSummary || (automatic && occ.enabled())) return undefined;
     const version = lifecycle;
     return async (text: string) => {
       const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal });
@@ -235,31 +261,73 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   const compressChains = async (ctx: any, rollingWindow: number,
-    appendEntry: (type: string, data: unknown) => void, closingMessage?: any, signal?: AbortSignal) => {
+    appendEntry: (type: string, data: unknown) => void, closingMessage?: any, signal?: AbortSignal, automatic = false, zeroCall = false) => {
     const version = lifecycle;
+    const beforeRewrite = occ.measure(ctx);
     const messages = withClosingMessage(ctx.sessionManager.buildSessionProjection().messages, closingMessage);
-    const chains = detectChains(messages, protectionPredicate);
+    const chains = detectChains(messages, protectionPredicate).filter(chain => findCompressibleRange(chain, messages));
     const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
+    if (automatic && selectEligible(chains, rollingWindow,
+      new Set(indexer.getChainEntries().flatMap(chainMembers).map(entry => entry.startUserTimestamp)), inGrace).length >= 2) {
+      return { compressedEntries: [], skipped: [] }; // The stable maintenance hook prepares one shared group.
+    }
+    const append = (type: string, data: unknown) => {
+      assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
+      if (!ctx.sessionManager.getBranch().some((item: any) => item.type === "custom" && item.customType === type
+        && JSON.stringify(item.data) === JSON.stringify(data))) throw new Error("Chain evidence was not persisted on the current branch");
+      if (type === CUSTOM_TYPE_CHAIN) lowerFloor(supersede, (data as SingleChainCompressionEntry).startUserTimestamp);
+    };
+    const backfill = { spillThreshold: currentConfig.value.spillThreshold,
+      spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+      sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
+      assertValid: () => { assertCurrent(version); signal?.throwIfAborted(); } };
+    for (const chain of selectEligible(chains, rollingWindow,
+      new Set(indexer.getChainEntries().flatMap(chainMembers).map(entry => entry.startUserTimestamp)), inGrace)) {
+      const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.getIndex().has(key));
+      if (fresh.length) await indexer.backfillChainRecords(fresh, { ...backfill, appendEntry: append });
+    }
     const result = await compressEligible(chains, rollingWindow, {
-      indexer, blockRefs, appendEntry: (type, data) => {
-        assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
-      }, now: () => Date.now(), fuseRange: makeFuseRange(ctx, signal),
-      messages, diagnostics,
-      backfill: { spillThreshold: currentConfig.value.spillThreshold,
-        spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-        sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() },
+      indexer, blockRefs, appendEntry: append, now: () => Date.now(), fuseRange: zeroCall ? undefined : makeFuseRange(ctx, signal, automatic),
+      messages, diagnostics, validate: async entry => {
+        const keys = entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds;
+        if (indexer.getOwnedSummaryText(keys) === null || !singleSummaryCurrent(entry, ctx)) return false;
+        if (keys.some(key => { const record = indexer.getIndex().get(key);
+          return !record || record.metadataUnavailable || record.archiveComplete === false; })) return false;
+        if (automatic && !zeroCall) {
+          const range = resolveRange(entry, messages);
+          if (range) stagedChains.set(entry.startUserTimestamp, { entry,
+            source: projectionFingerprint(messages.slice(range.startIndex, range.endIndex + 1)),
+            config: JSON.stringify(currentConfig.value) });
+          return false; // Validate/publish only after the final is durable, in background.
+        }
+        const raw = ctx.sessionManager.buildSessionProjection().messages;
+        if (!resolveRange(entry, raw)) return false; // A preview final is not a persistence receipt.
+        const source = projectionFingerprint(raw);
+        const config = JSON.stringify(currentConfig.value);
+        const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
+        const views = currentChainViews(raw, ctx).concat(entry);
+        const after = projectContext(raw, ctx.model?.api, ctx, views, true, entry.startUserTimestamp).messages;
+        const counts = await tokenEstimator.compare(before, after, signal);
+        assertCurrent(version); signal?.throwIfAborted();
+        if (!counts && automatic) lastMaintenanceSource = undefined;
+        return !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
+          && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
+          && config === JSON.stringify(currentConfig.value);
+      },
+      backfill,
     }, inGrace);
     assertCurrent(version);
     if (result.compressedEntries.length > 0) {
-      lowerFloor(supersede, earliestChainStart(result.compressedEntries));
       statsAccum.addChainsCompressed(result.compressedEntries.length);
+      occ.rewrite(ctx, beforeRewrite);
     }
     return result;
   };
 
   const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
-    if (isFlushing) return { ok: false, reason: "already-flushing" };
-    if (options.trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "empty" };
+    if (isFlushing || isArchiving || isCompactingChains) return { ok: false, reason: "already-flushing" };
+    const trigger: FlushTrigger = options.trigger ?? "manual";
+    if (trigger !== "manual" && occ.deferLocal(ctx)) return { ok: false, reason: "deferred-occ" };
     const version = lifecycle;
     const abort = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
@@ -273,7 +341,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // observability entry reflects what triggered this attempt, not what's
     // left after it ran.
     const entryMetrics: ContextMetricsSnapshot = computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT;
-    const trigger: FlushTrigger = options.trigger ?? "manual";
     const delivery = options.delivery ?? "runtime";
 
     // One-entry-per-attempt tracking, emitted once from the outer `finally`
@@ -326,6 +393,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let batches: CapturedBatch[] = [];
     let sessionManager: SessionAppender | undefined;
     try {
+      isFlushing = true;
+      activeFlushAbort = abort;
+      await stopMaintenance();
+      assertCurrent(version); signal.throwIfAborted();
       // Bind the session appender as soon as delivery is known, BEFORE the
       // empty-capture/aborted exits below — so emitFlushMetricsOnce's finally
       // emit routes through sessionManager for those exits too, instead of
@@ -345,8 +416,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Use pre-captured batches if provided (avoids double-capture when the
       // caller previewed the queue before opening the progress overlay).
       batches = options.previewedBatches ?? capturePendingBatches(ctx);
-      isFlushing = true;
-      activeFlushAbort = abort;
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
         const before = projectContext(base.messages, ctx.model?.api, ctx).messages;
@@ -716,7 +785,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (currentConfig.value.enabled && currentConfig.value.chainCompression.enabled
         && firstFailureIndex < 0 && !signal.aborted) {
         try {
-          const result = await compressChains(ctx, currentConfig.value.chainCompression.rollingWindow, appendEntry!, options.closingMessage, signal);
+          const result = await compressChains(ctx, currentConfig.value.chainCompression.rollingWindow, appendEntry!, options.closingMessage, signal, trigger !== "manual");
           publishedAliasesOrArchives ||= result.compressedEntries.length > 0;
         } catch (err) {
           if (!signal.aborted && !isStaleContextError(err)) safeNotify(ctx, `pruner: chain compression failed: ${errorMessage(err)}`, "warning");
@@ -864,6 +933,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const start = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
+    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear(); deferredFinal = undefined; lastMaintenanceSource = undefined; maintenanceNext = undefined;
     activeFlushAbort?.abort();
     clearBoot();
     restore(ctx);
@@ -882,21 +952,27 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       bootTimer = setTimeout(clearBoot, 10000);
       bootTimer.unref?.();
     }
+    if (indexer.getChainEntries().some(isSharedChain)) await maintainChains(ctx);
   };
-  const tree = (ctx: ExtensionContext) => {
+  const tree = async (ctx: ExtensionContext) => {
     lifecycle++;
+    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear(); deferredFinal = undefined; lastMaintenanceSource = undefined; maintenanceNext = undefined;
     activeFlushAbort?.abort();
     restore(ctx);
     rebuildBranchIndex(ctx);
     restoreBranchPending(ctx);
     activeSessionId = ctx.sessionManager.getSessionId();
     projectionContext = ctx;
+    if (indexer.getChainEntries().some(isSharedChain)) await maintainChains(ctx);
   };
 
   // Cache is a per-model prefix; these three moments are cold regardless, so
   // activating every pending supersession here costs no extra cache miss.
-  pi.on("model_select", async () => {
+  pi.on("model_select", async (_event, ctx) => {
+    previousFraction = null;
+    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear(); lastMaintenanceSource = undefined;
     supersede.floor = 0;
+    void maintainChains(ctx);
   });
   pi.on("session_compact", async () => {
     supersede.floor = 0;
@@ -961,36 +1037,43 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // ever reach a request. addBatch inside marks them isSummarized, so
       // trimBatchToPendingRange drops them from the pending set below. Best-effort:
       // a spill failure leaves the result inline for the normal flush pipeline.
-      try {
-        const beforeRewrite = occ.measure(ctx);
-        const deferred = occ.deferLocal(ctx);
-        if (occ.isCapacityWaiting()) {
-          for (const call of capturedBatch.toolCalls) {
-            if (!call.outputArchive || indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))) continue;
-            const archive = { indexer, sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
-              appendEntry: appendArchive };
-            await archiveToolOutput(call, capturedBatch, archive);
-            indexer.addBatch({ ...capturedBatch, toolCalls: [call] }, archive.appendEntry, true);
+      if (!isFlushing && !isArchiving && !isCompactingChains) {
+        isArchiving = true;
+        try {
+          await stopMaintenance();
+          assertCurrent(version);
+          if (!currentConfig.value.enabled) return;
+          const beforeRewrite = occ.measure(ctx);
+          const deferred = occ.deferLocal(ctx);
+          if (occ.isCapacityWaiting()) {
+            for (const call of capturedBatch.toolCalls) {
+              if (!call.outputArchive || indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))) continue;
+              const archive = { indexer, sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
+                appendEntry: appendArchive };
+              await archiveToolOutput(call, capturedBatch, archive);
+              indexer.addBatch({ ...capturedBatch, toolCalls: [call] }, archive.appendEntry, true);
+            }
           }
+          const handled = deferred ? new Set<string>() : await spillOversizedBatch({
+            batch: filtered,
+            indexer,
+            config: {
+              spillThreshold: currentConfig.value.spillThreshold,
+              spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+              dedupByContentHash: currentConfig.value.dedupByContentHash,
+            },
+            sessionDir: ctx.sessionManager.getSessionDir(),
+            sessionId: ctx.sessionManager.getSessionId(),
+            appendEntry: appendArchive,
+          });
+          assertCurrent(version);
+          if (handled.size) occ.rewrite(ctx, beforeRewrite);
+        } catch {
+          // best-effort; never block the turn
+        } finally {
+          isArchiving = false;
         }
-        const handled = deferred ? new Set<string>() : await spillOversizedBatch({
-          batch: filtered,
-          indexer,
-          config: {
-            spillThreshold: currentConfig.value.spillThreshold,
-            spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-            dedupByContentHash: currentConfig.value.dedupByContentHash,
-          },
-          sessionDir: ctx.sessionManager.getSessionDir(),
-          sessionId: ctx.sessionManager.getSessionId(),
-          appendEntry: appendArchive,
-        });
-        assertCurrent(version);
-        if (handled.size) occ.rewrite(ctx, beforeRewrite);
-      } catch {
-        // best-effort; never block the turn
       }
-
       if (version !== lifecycle) return;
       const batch = trimBatchToPendingRange(filtered);
       if (batch) {
@@ -1070,7 +1153,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!currentConfig.value.enabled) return;
     if (currentConfig.value.pruneOn !== "agent-message") return;
     if (!isFinalAssistantMessage(event.message)) return;
-    await flushPending(ctx, { delivery: "session", closingMessage: event.message, trigger: "message-end" });
+    const result = await flushPending(ctx, { delivery: "session", closingMessage: event.message, trigger: "message-end" });
+    deferredFinal = (!result.ok && result.reason !== "empty") || (result.ok && result.reason === "partial")
+      ? event.message.timestamp : undefined;
   });
 
   // ── agent_end: last-chance cleanup only ─────────────────────────────────────
@@ -1092,7 +1177,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   });
 
   // ── context: prune summarized tool results from next LLM call ─────────────
-  const projectContext = (input: any[], api?: string, ctx?: ExtensionContext) => {
+  const projectContext = (input: any[], api?: string, ctx?: ExtensionContext,
+    chainViews?: SingleChainCompressionEntry[], probe = false, chainFloor?: number) => {
     let messages = input;
     let changed = false;
 
@@ -1113,7 +1199,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // edited sources visible and remove stale summaries of the same source group.
     const editedToolIds = new Set<string>();
     if (ctx) {
-      indexer.syncSummaryEntries(ctx);
       const projection = ctx.sessionManager.buildSessionProjection();
       const editedSummaries = new Set<string>();
       const summaryIdentity = (message: any) => JSON.stringify([message.timestamp, message.content, message.details]);
@@ -1161,6 +1246,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     messages = projectArguments(messages, argumentHistory, effectiveProtection());
     const argumentsChanged = messages !== beforeArguments;
     changed ||= argumentsChanged;
+    const supersedeState = probe ? { floor: supersede.floor, activated: new Set(supersede.activated) } : supersede;
+    if (chainFloor !== undefined) lowerFloor(supersedeState, chainFloor);
     const result = pruneMessages(
       messages,
       indexer,
@@ -1168,9 +1255,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       occ.enabled() ? { ...currentConfig.value.purgeErrors, enabled: false } : currentConfig.value.purgeErrors,
       effectiveProtection(),
       currentConfig.value.recoveryGraceTurns,
-      diagnostics,
-      occ.enabled() ? undefined : { state: supersede, isProtected: protectionPredicate },
+      probe ? undefined : diagnostics,
+      occ.enabled() ? undefined : { state: supersedeState, isProtected: protectionPredicate },
       editedToolIds,
+      chainViews ?? currentChainViews(input, ctx),
     );
     if (result.pruned) {
       messages = result.messages;
@@ -1182,6 +1270,217 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       afterChars: argumentsChanged ? JSON.stringify(messages).length : result.afterChars };
   };
 
+  function anchorId(ctx: ExtensionContext, role: "start" | "final", timestamp: number,
+    entries = ctx.sessionManager.buildSessionProjection().entries): string | undefined {
+    const matches = entries.filter(entry => entry.messages.some(message =>
+      message.timestamp === timestamp && (role === "final" ? message.role === "assistant" : message.role === "user" || message.role === "custom")));
+    return matches.length === 1 ? matches[0]!.sourceEntry.id : undefined;
+  }
+
+  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext): SingleChainCompressionEntry[] {
+    const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
+    const chains = detectChains(raw, protectionPredicate);
+    const edited = changedSourceToolIds(ctx);
+    const anchors = ctx.sessionManager.buildSessionProjection().entries;
+    return chainMembers(entry).filter((view, i) => {
+      const member = entry.members[i]!;
+      const range = resolveRange(view, raw);
+      const chain = chains.find(chain => chain.startUserTimestamp === view.startUserTimestamp);
+      if (!range || !chain || view.droppedToolCallIds.some(id => edited.has(id))
+        || chainMatchesGrace(chain, grace)) return false;
+      if (member.startEntryId !== anchorId(ctx, "start", member.startUserTimestamp, anchors)
+        || member.finalEntryId !== anchorId(ctx, "final", member.finalAssistantTimestamp!, anchors)) return false;
+      if (member.sourceFingerprint !== projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))) return false;
+      view.protectedToolCallIds = chain.protectedToolCallIds;
+      const owned = indexer.getOwnedSummaryText(view.droppedOccurrenceKeys ?? []);
+      return owned !== null && (!owned || view.rangeSummaryText?.includes(owned) === true);
+    });
+  }
+
+  function changedSourceToolIds(ctx: ExtensionContext): Set<string> {
+    const changed = new Set<string>();
+    for (const entry of ctx.sessionManager.buildSessionProjection().entries) {
+      const source = entry.sourceEntry;
+      const original: any = source.type === "message" ? source.message : source.type === "custom_message" ? source : undefined;
+      if (!original || (entry.messages.length === 1
+        && JSON.stringify([(entry.messages[0] as any).content, (entry.messages[0] as any).details]) === JSON.stringify([original.content, original.details]))) continue;
+      if (original.role === "toolResult") changed.add(original.toolCallId);
+      if (original.role === "assistant") for (const block of original.content ?? []) if (block.type === "toolCall") changed.add(block.id);
+      if (source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY)
+        for (const ref of normalizeSummaryToolCallRefs(source.details)) changed.add(bareToolCallId(ref.toolCallId));
+    }
+    return changed;
+  }
+
+  function sharedShape(before: any[], views: SingleChainCompressionEntry[]): string {
+    const middle = views.flatMap(view => {
+      const range = resolveRange(view, before);
+      return range ? before.slice(range.startIndex, range.endIndex + 1) : [];
+    });
+    const keys = new Set(views.flatMap(view => view.droppedOccurrenceKeys ?? []));
+    const summaries = before.filter(message => message.customType === CUSTOM_TYPE_SUMMARY
+      && perBatchSummaryOverlapsDropped(message, keys, new Set()));
+    return projectionFingerprint([views, middle, summaries, currentConfig.value.chainCompression]);
+  }
+
+  function singleSummaryCurrent(entry: SingleChainCompressionEntry, ctx?: ExtensionContext): boolean {
+    const keys = entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds;
+    const summaries = indexer.getPerBatchSummariesForToolCallIds(keys);
+    if (entry.summaryFingerprint !== undefined) return entry.summaryFingerprint === projectionFingerprint([summaries]);
+    if (!entry.rangeSummaryText) return true; // Legacy concatenation reads current semantic bodies.
+    if (entry.bodySource === "deterministic") return summaries.length === 0;
+    const branch = ctx?.sessionManager.getBranch() ?? [];
+    const published = branch.findIndex(item => item.type === "custom" && item.customType === CUSTOM_TYPE_CHAIN
+      && (item.data as SingleChainCompressionEntry)?.blockId === entry.blockId);
+    const own = new Set(keys);
+    return published < 0 || !branch.slice(published + 1).some(item => item.type === "custom_message"
+      && item.customType === CUSTOM_TYPE_SUMMARY && normalizeSummaryToolCallRefs(item.details)
+        .some(ref => own.has(occKey(ref.toolCallId, ref.resultTimestamp))));
+  }
+
+  function currentChainViews(messages: any[], ctx?: ExtensionContext): SingleChainCompressionEntry[] {
+    const entries = indexer.getChainEntries();
+    const raw = ctx?.sessionManager.buildSessionProjection().messages ?? messages;
+    const chains = detectChains(raw, protectionPredicate);
+    const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
+    const singles: SingleChainCompressionEntry[] = entries.filter(entry => !isSharedChain(entry)).flatMap(chainMembers).flatMap(entry => {
+      const chain = chains.find(chain => chain.startUserTimestamp === entry.startUserTimestamp
+        && chain.finalAssistantTimestamp === entry.finalAssistantTimestamp);
+      if (!chain || chainMatchesGrace(chain, grace) || !singleSummaryCurrent(entry, ctx)) return [];
+      return [{ ...entry, protectedToolCallIds: chain.protectedToolCallIds }];
+    });
+    const shared = entries.filter(isSharedChain);
+    if (!ctx || shared.length === 0) return singles;
+    const before = projectContext(messages, ctx.model?.api, ctx, singles, true).messages;
+    return singles.concat(shared.flatMap(entry => {
+      const views = sharedCandidates(entry, raw, ctx);
+      return views.length && sharedApprovals.get(entry.blockId) === sharedShape(before, views) ? views : [];
+    }));
+  }
+
+  const maintainChains = (ctx: ExtensionContext): Promise<void> => {
+    if (!currentConfig.value.enabled || !currentConfig.value.chainCompression.enabled) {
+      maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear();
+      stagedChains.clear(); lastMaintenanceSource = undefined; maintenanceNext = undefined;
+      return Promise.resolve();
+    }
+    if (maintenanceTask) { maintenanceNext = { ctx, version: lifecycle }; return maintenanceTask; }
+    if (maintenanceHandoffs || isFlushing || isArchiving || isCompactingChains || occ.isRunning() || occ.isCapacityWaiting()) return Promise.resolve();
+    const version = lifecycle;
+    const controller = new AbortController(); maintenanceAbort = controller;
+    const signal = controller.signal;
+    const manager = ctx.sessionManager;
+    const config = JSON.stringify(currentConfig.value);
+    const assertValid = () => { assertCurrent(version); signal.throwIfAborted();
+      if (maintenanceHandoffs || isFlushing || isArchiving || isCompactingChains || occ.isRunning() || occ.isCapacityWaiting() || config !== JSON.stringify(currentConfig.value)) throw new Error("Chain maintenance invalidated"); };
+    maintenanceTask = (async () => {
+      indexer.syncSummaryEntries(ctx);
+      let raw = manager.buildSessionProjection().messages;
+      // Revalidate published shapes after edits, recovery or reload, without rewriting their records.
+      const singles = indexer.getChainEntries().filter(entry => !isSharedChain(entry)).flatMap(chainMembers);
+      for (const entry of indexer.getChainEntries().filter(isSharedChain)) {
+        assertValid();
+        const views = sharedCandidates(entry, raw, ctx);
+        const before = projectContext(raw, ctx.model?.api, ctx, singles, true).messages;
+        const shape = sharedShape(before, views);
+        if (sharedApprovals.get(entry.blockId) === shape) continue;
+        sharedApprovals.delete(entry.blockId);
+        if (!views.length) continue;
+        const source = projectionFingerprint(raw);
+        const after = projectContext(raw, ctx.model?.api, ctx, singles.concat(views), true).messages;
+        const counts = await tokenEstimator.compare(before, after, signal);
+        assertValid();
+        if (source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
+        if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0) sharedApprovals.set(entry.blockId, shape);
+      }
+      raw = manager.buildSessionProjection().messages;
+      const source = projectionFingerprint(raw);
+      const chains = detectChains(raw, protectionPredicate);
+      const window = currentConfig.value.chainCompression.rollingWindow;
+      const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
+      const known = new Set(indexer.getChainEntries().flatMap(chainMembers).map(member => member.startUserTimestamp));
+      const edited = changedSourceToolIds(ctx);
+      const eligible = selectEligible(chains, window, known, grace).filter(chain => chain.finalAssistantTimestamp !== deferredFinal
+        && !chain.middleToolCallIds.some(id => edited.has(id)));
+      const attempt = source + config + [...known].join(",");
+      if (attempt === lastMaintenanceSource || eligible.length === 0) return;
+      lastMaintenanceSource = attempt;
+      const appendEntry = (type: string, data: unknown) => {
+        assertValid(); pi.appendEntry(type, data);
+        if (!manager.getBranch().some(item => item.type === "custom" && item.customType === type
+          && JSON.stringify(item.data) === JSON.stringify(data))) throw new Error("Chain archive was not persisted on the current branch");
+      };
+      if (eligible.length === 1) {
+        const stage = stagedChains.get(eligible[0]!.startUserTimestamp);
+        const range = stage && resolveRange(stage.entry, raw);
+        if (stage && range && stage.config === config && singleSummaryCurrent(stage.entry, ctx)
+          && stage.source === projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))) {
+          const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
+          const after = projectContext(raw, ctx.model?.api, ctx, currentChainViews(raw, ctx).concat(stage.entry), true, stage.entry.startUserTimestamp).messages;
+          const counts = await tokenEstimator.compare(before, after, signal);
+          assertValid();
+          if (!counts) { lastMaintenanceSource = undefined; return; }
+          if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
+            && source === projectionFingerprint(manager.buildSessionProjection().messages)) {
+            appendEntry(CUSTOM_TYPE_CHAIN, stage.entry); indexer.registerChain(stage.entry);
+            lowerFloor(supersede, stage.entry.startUserTimestamp); statsAccum.addChainsCompressed(1);
+            occ.rewrite(ctx, counts.piBefore);
+          }
+          stagedChains.delete(stage.entry.startUserTimestamp);
+          return;
+        }
+        await compressChains(ctx, window, appendEntry, undefined, signal, true, true);
+        return;
+      }
+      const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
+      const backlogChars = eligible.reduce((sum, chain) => {
+        const range = resolveRange(chain, before);
+        return sum + (range ? JSON.stringify(before.slice(range.startIndex + 1, range.endIndex)).length : 0);
+      }, 0);
+      if (backlogChars < currentConfig.value.minBatchChars) return;
+      const anchors = manager.buildSessionProjection().entries;
+      const entry = await prepareSharedChain(eligible, 0, { indexer, blockRefs, messages: raw,
+        now: Date.now, appendEntry, diagnostics,
+        backfill: { spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+          sessionDir: manager.getSessionDir(), sessionId: manager.getSessionId(), assertValid } },
+        (role, timestamp) => anchorId(ctx, role, timestamp, anchors), grace, signal);
+      assertValid();
+      if (!entry || source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
+      const views = chainMembers(entry);
+      const current = currentChainViews(raw, ctx);
+      const floor = earliestChainStart(views);
+      const after = projectContext(raw, ctx.model?.api, ctx, current.concat(views), true, floor).messages;
+      const counts = await tokenEstimator.compare(before, after, signal);
+      assertValid();
+      if (!counts) { lastMaintenanceSource = undefined; return; }
+      if (!counts || counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0
+        || source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
+      if (indexer.getChainEntries().flatMap(chainMembers).some(member => views.some(view => view.startUserTimestamp === member.startUserTimestamp))) return;
+      appendEntry(CUSTOM_TYPE_CHAIN, entry);
+      if (!manager.getBranch().some(item => item.type === "custom" && item.customType === CUSTOM_TYPE_CHAIN
+        && JSON.stringify(item.data) === JSON.stringify(entry))) return;
+      indexer.registerChain(entry);
+      const plain = projectContext(raw, ctx.model?.api, ctx, singles, true, floor).messages;
+      sharedApprovals.set(entry.blockId, sharedShape(plain, views));
+      lowerFloor(supersede, floor);
+      statsAccum.addChainsCompressed(views.length);
+      occ.rewrite(ctx, counts.piBefore);
+    })().catch(error => {
+      lastMaintenanceSource = undefined;
+      if (!signal.aborted && version === lifecycle) diagnostics.report("backfill-empty", "shared-maintenance", String(error));
+    }).finally(() => {
+      if (maintenanceAbort === controller) maintenanceAbort = undefined;
+      maintenanceTask = undefined;
+      const next = maintenanceNext; maintenanceNext = undefined;
+      if (next?.version === lifecycle) void maintainChains(next.ctx);
+    });
+    return maintenanceTask;
+  };
+
+  pi.on("turn_end", (_event, ctx) => { void maintainChains(ctx); });
+  pi.on("agent_settled", (_event, ctx) => { void maintainChains(ctx); });
+  const unsubscribeMaintenance = pi.events.on("metis:condense-maintenance", (data: any) => { data.pending = maintenanceTask; });
+
   let activeSessionId: string | undefined;
   let projectionContext: ExtensionContext | undefined;
   const unsubscribeProjection = pi.events.on("metis:condense-project", (data: unknown) => {
@@ -1189,9 +1488,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const request = data as { sessionId: string; messages: any[]; api?: string; busy?: boolean; maintenance?: boolean };
     if (request.sessionId !== activeSessionId) return;
     if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
+    if (projectionContext) indexer.syncSummaryEntries(projectionContext);
     request.messages = projectContext(request.messages, request.api, projectionContext).messages;
   });
   pi.on("context", async (event, ctx) => {
+    indexer.syncSummaryEntries(ctx);
     const result = projectContext(event.messages, ctx.model?.api, ctx);
     occ.observeRequest(result.messages);
     if (result.beforeChars !== undefined) statsAccum.setLiveReclaim(result.beforeChars, result.afterChars!);
@@ -1204,17 +1505,26 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   // ── Register /pruner command + summary message renderer ────────────
   const compactChains = async (ctx: any) => {
+    if (isFlushing || isArchiving || isCompactingChains || occ.isRunning()) throw new Error("Another context rewrite is running; retry after it settles");
     const version = lifecycle;
-    const beforeRewrite = occ.measure(ctx);
-    const result = await compressChains(ctx, 0,
-      (type, data) => { assertCurrent(version); pi.appendEntry(type, data); });
-    assertCurrent(version);
-    if (result.compressedEntries.length > 0) {
-      occ.rewrite(ctx, beforeRewrite);
-      statsAccum.persist(pi);
-      emitExternalCost(pi, statsAccum);
+    const abort = new AbortController();
+    activeFlushAbort = abort;
+    isCompactingChains = true;
+    try {
+      await stopMaintenance();
+      assertCurrent(version); abort.signal.throwIfAborted();
+      const result = await compressChains(ctx, 0,
+        (type, data) => { assertCurrent(version); pi.appendEntry(type, data); }, undefined, abort.signal);
+      assertCurrent(version);
+      if (result.compressedEntries.length > 0) {
+        statsAccum.persist(pi);
+        emitExternalCost(pi, statsAccum);
+      }
+      return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length };
+    } finally {
+      isCompactingChains = false;
+      if (activeFlushAbort === abort) activeFlushAbort = undefined;
     }
-    return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length };
   };
 
   registerCommands(
@@ -1229,13 +1539,20 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     () => diagnostics.counts(),
     (ctx: any) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT,
     () => rearmedPending,
-    undefined,
+    (config) => {
+      // Commands and the settings overlay share this persistence boundary.
+      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear();
+      sharedApprovals.clear(); stagedChains.clear(); lastMaintenanceSource = undefined;
+      activeFlushAbort?.abort();
+      return saveConfig(config);
+    },
     (ctx) => occ.refreshStatus(ctx),
   );
   return {
     start, tree,
     shutdown(ctx: ExtensionContext) {
       lifecycle++;
+      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear();
       activeFlushAbort?.abort();
       clearBoot();
       resetNested();
@@ -1245,6 +1562,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       pendingBatches.length = 0;
       queuedSummaryKeys.clear();
       unsubscribeProjection();
+      unsubscribeMaintenance();
       try { ctx.ui.setStatus(STATUS_WIDGET_ID, undefined); } catch { /* UI may already be gone. */ }
     },
   };

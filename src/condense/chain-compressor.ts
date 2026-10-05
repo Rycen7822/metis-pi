@@ -1,10 +1,33 @@
-import { CUSTOM_TYPE_CHAIN } from "./types.ts";
-import type { ChainRange, ChainCompressionEntry, ToolCallRecord } from "./types.ts";
+import { chainMembers, CUSTOM_TYPE_CHAIN } from "./types.ts";
+import type { ChainRange, ChainCompressionEntry, SingleChainCompressionEntry, ToolCallRecord } from "./types.ts";
 import type { BlockRefIssuer } from "./block-refs.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";
 import { bareToolCallId, occKey, parseOccKey, resultTimestampOf } from "./occurrence-key.ts";
 import { resolveRange } from "./chain-range-prune.ts";
+import { projectionFingerprint } from "./token-estimator.ts";
+import { setImmediate } from "node:timers/promises";
+import type { SharedChainCompressionEntry, SharedChainMember } from "./types.ts";
 import { extractToolResultText } from "./batch-capture.ts";
+
+/** Text archives cannot replace incomplete replies or recover tool attachments. */
+export function findCompressibleRange(chain: ChainRange, messages: any[]) {
+  const range = resolveRange(chain, messages);
+  if (!range || ["error", "aborted", "length"].includes(messages[range.endIndex]?.stopReason)) return null;
+  const open = new Set<string>();
+  for (const message of messages.slice(range.startIndex + 1, range.endIndex)) {
+    if (message.role === "assistant") {
+      if (open.size) return null;
+      for (const block of message.content ?? []) if (block.type === "toolCall") {
+        if (open.has(block.id)) return null;
+        open.add(block.id);
+      }
+    } else if (message.role === "toolResult") {
+      if (!open.delete(message.toolCallId) || message.content?.some((block: any) => block.type !== "text")) return null;
+    } else if (open.size) return null;
+  }
+  if (open.size) return null;
+  return range;
+}
 
 /**
  * Grace ids are keyed the same way `recovery-grace.ts` keys them: occurrence
@@ -16,7 +39,7 @@ import { extractToolResultText } from "./batch-capture.ts";
  * bare-to-bare fallback is for grace entries that themselves have no
  * timestamp discriminant — there is no exact key to compare in that case.
  */
-function chainMatchesGrace(chain: ChainRange, inGraceToolCallIds: Set<string>): boolean {
+export function chainMatchesGrace(chain: ChainRange, inGraceToolCallIds: Set<string>): boolean {
   const keys = chain.middleOccurrenceKeys?.length ? chain.middleOccurrenceKeys : chain.middleToolCallIds;
   if (keys.some((k) => inGraceToolCallIds.has(k))) return true;
   for (const g of inGraceToolCallIds) {
@@ -76,6 +99,7 @@ export interface ChainCompressorIndexerDeps {
       sessionDir: string;
       sessionId: string;
       appendEntry: (customType: string, data?: unknown) => void;
+      assertValid?: () => void;
     },
   ): Promise<import("./types.ts").SummaryToolCallRef[]>;
 }
@@ -97,7 +121,8 @@ export interface CompressEligibleDeps {
   /** MUST be the same withClosingMessage(...) array chain detection ran on - raw branch messages spuriously fail span resolution on the message_end path (see doc/specs/2026-08-14-uncovered-chain-deterministic-backfill.md). */
   messages: any[];
   diagnostics: Pick<DiagnosticSink, "report">;
-  backfill: { spillThreshold: number; spillPreviewBytes: number; sessionDir: string; sessionId: string };
+  backfill: { spillThreshold: number; spillPreviewBytes: number; sessionDir: string; sessionId: string; assertValid?: () => void };
+  validate?: (entry: SingleChainCompressionEntry) => Promise<boolean>;
 }
 
 /**
@@ -178,7 +203,7 @@ export function buildDeterministicBody(records: ToolCallRecord[], refs: string[]
 
 export interface CompressEligibleResult {
   compressedEntries: ChainCompressionEntry[];
-  skipped: Array<{ startUserTimestamp: number; reason: "no-summary" | "already-compressed" }>;
+  skipped: Array<{ startUserTimestamp: number; reason: "no-summary" | "already-compressed" | "no-gain" }>;
 }
 
 /**
@@ -193,7 +218,7 @@ export async function compressEligible(
   inGraceToolCallIds: Set<string> = new Set(),
 ): Promise<CompressEligibleResult> {
   const alreadyCompressedTimestamps = new Set(
-    deps.indexer.getChainEntries().map((e) => e.startUserTimestamp),
+    deps.indexer.getChainEntries().flatMap(chainMembers).map((e) => e.startUserTimestamp),
   );
 
   const skipped: CompressEligibleResult["skipped"] = [];
@@ -260,7 +285,8 @@ export async function compressEligible(
       }
       const allRecords = [...indexed, ...fresh];
       const toolRefs = deps.indexer.getToolRefsForToolCallIds(lookupKeys);
-      const entry: ChainCompressionEntry = {
+      const entry: SingleChainCompressionEntry = {
+        summaryFingerprint: projectionFingerprint([[]]),
         blockId: deps.blockRefs.issue(),
         startUserTimestamp: chain.startUserTimestamp,
         droppedToolCallIds: chain.middleToolCallIds,
@@ -272,6 +298,7 @@ export async function compressEligible(
         ...(chain.protectedToolCallIds?.length ? { protectedToolCallIds: chain.protectedToolCallIds } : {}),
         ...(chain.middleOccurrenceKeys?.length ? { droppedOccurrenceKeys: chain.middleOccurrenceKeys } : {}),
       };
+      if (deps.validate && !await deps.validate(entry)) { skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" }); continue; }
       deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
       deps.indexer.registerChain(entry);
       compressedEntries.push(entry);
@@ -284,6 +311,7 @@ export async function compressEligible(
     const extraBody = uncovered.length ? buildDeterministicBody(uncovered, deps.indexer.getToolRefsForToolCallIds(
       uncovered.map(record => occKey(record.toolCallId, record.resultTimestamp)))) : undefined;
     const summaries = deps.indexer.getPerBatchSummariesForToolCallIds(lookupKeys);
+    const summaryFingerprint = projectionFingerprint([summaries]);
 
     // B: fuse this span's per-batch summaries into one cohesive summary.
     // Gated on >= 2 summaries (nothing to fuse otherwise). Non-fatal.
@@ -299,7 +327,8 @@ export async function compressEligible(
       }
     }
 
-    const entry: ChainCompressionEntry = {
+    const entry: SingleChainCompressionEntry = {
+      summaryFingerprint,
       blockId,
       startUserTimestamp: chain.startUserTimestamp,
       droppedToolCallIds: chain.middleToolCallIds,
@@ -311,10 +340,62 @@ export async function compressEligible(
       ...(chain.middleOccurrenceKeys?.length ? { droppedOccurrenceKeys: chain.middleOccurrenceKeys } : {}),
     };
 
+    if (deps.validate && !await deps.validate(entry)) { skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" }); continue; }
     deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
     deps.indexer.registerChain(entry);
     compressedEntries.push(entry);
   }
 
   return { compressedEntries, skipped };
+}
+
+/** Prepare recoverable, independently owned members. No model call or publish. */
+export async function prepareSharedChain(
+  chains: ChainRange[], rollingWindow: number,
+  deps: CompressEligibleDeps & { indexer: ChainCompressorIndexerDeps & { getOwnedSummaryText(keys: string[]): string | null } },
+  anchorId: (role: "start" | "final", timestamp: number) => string | undefined,
+  inGrace: Set<string>, signal: AbortSignal,
+): Promise<SharedChainCompressionEntry | null> {
+  const compressed = new Set(deps.indexer.getChainEntries().flatMap(chainMembers).map(member => member.startUserTimestamp));
+  const eligible = selectEligible(chains, rollingWindow, compressed, inGrace);
+  const members: SharedChainMember[] = [];
+  let bodyText = "";
+  for (const chain of eligible) {
+    await setImmediate(); signal.throwIfAborted();
+    const range = findCompressibleRange(chain, deps.messages);
+    if (!range || chain.finalAssistantTimestamp === null) continue;
+    const startEntryId = anchorId("start", chain.startUserTimestamp);
+    const finalEntryId = anchorId("final", chain.finalAssistantTimestamp);
+    if (!startEntryId || !finalEntryId) continue;
+    const source = deps.messages.slice(range.startIndex, range.endIndex + 1);
+    const final = source.at(-1);
+    const keys = chain.middleOccurrenceKeys ?? [];
+    if (!keys.length || keys.length !== source.filter(m => m.role === "toolResult").length) continue;
+    const calls = source.flatMap(m => m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall") : []);
+    if (calls.length !== keys.length) continue;
+    const owned = deps.indexer.getOwnedSummaryText(keys);
+    if (owned === null) continue;
+    const fresh = extractChainRecords(deps.messages, { ...chain, protectedToolCallIds: [] }, key => deps.indexer.getIndex().has(key));
+    if (fresh.length) await deps.indexer.backfillChainRecords(fresh, { ...deps.backfill, appendEntry: deps.appendEntry,
+      assertValid: () => { signal.throwIfAborted(); deps.backfill.assertValid?.(); } });
+    signal.throwIfAborted();
+    const records = keys.map(key => deps.indexer.getIndex().get(key));
+    if (records.some(record => !record || record.metadataUnavailable || record.archiveComplete === false)) continue;
+    const uncovered = records.filter((record): record is ToolCallRecord => !!record && (!owned || record.archiveOnly === true));
+    const facts = uncovered.length ? uncovered.map(record => {
+      const status = record.isError ? "ERROR" : "completed";
+      return `${record.toolName} ${excerpt(record.args)}: ${status}`;
+    }).join("\n") : "";
+    const body = [owned, facts].filter(Boolean).join("\n\n");
+    if (!body) continue;
+    const bodyStart = bodyText.length;
+    bodyText += body;
+    members.push({ startEntryId, finalEntryId, sourceFingerprint: projectionFingerprint(source),
+      startUserTimestamp: chain.startUserTimestamp, finalAssistantTimestamp: chain.finalAssistantTimestamp,
+      droppedToolCallIds: chain.middleToolCallIds, droppedOccurrenceKeys: keys,
+      protectedToolCallIds: chain.protectedToolCallIds, toolRefs: deps.indexer.getToolRefsForToolCallIds(keys),
+      bodyStart, bodyEnd: bodyText.length });
+  }
+  return members.length < 2 ? null : { kind: "shared-v1", blockId: deps.blockRefs.issue(),
+    compressedAt: deps.now(), bodyText, members };
 }

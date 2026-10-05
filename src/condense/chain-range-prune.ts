@@ -1,6 +1,6 @@
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { CUSTOM_TYPE_SUMMARY } from "./types.ts";
-import type { ChainCompressionEntry } from "./types.ts";
+import type { SingleChainCompressionEntry } from "./types.ts";
 import { substituteBlockRefs } from "./nested-placeholders.ts";
 import { extractToolResultText } from "./batch-capture.ts";
 import { isChainAnchorCustom } from "./chain-detector.ts";
@@ -41,7 +41,7 @@ export function withoutThinkingBlocks(msg: AssistantMessage): AssistantMessage {
 }
 
 export function buildSyntheticChainMessage(
-  entry: ChainCompressionEntry,
+  entry: SingleChainCompressionEntry,
   summary: string,
   blockSummaryLookup?: (blockId: string) => string | undefined,
   protectedOutputs: { tool: string; text: string }[] = [],
@@ -79,7 +79,7 @@ export function buildSyntheticChainMessage(
  * live turns (doc/specs/2026-08-12-toolcall-id-collisions.md).
  */
 export function resolveRange(
-  entry: Pick<ChainCompressionEntry, "startUserTimestamp" | "finalAssistantTimestamp">,
+  entry: Pick<SingleChainCompressionEntry, "startUserTimestamp" | "finalAssistantTimestamp">,
   messages: any[],
 ): { startIndex: number; endIndex: number } | null {
   if (entry.finalAssistantTimestamp === null) return null;
@@ -104,8 +104,8 @@ export function resolveRange(
 
 export function applyChainCompressions(
   messages: any[],
-  chainEntries: ChainCompressionEntry[],
-  summaryTextForChain: (entry: ChainCompressionEntry) => string,
+  chainEntries: SingleChainCompressionEntry[],
+  summaryTextForChain: (entry: SingleChainCompressionEntry) => string,
   stripFinalThinking: boolean,
   blockSummaryLookup?: (blockId: string) => string | undefined,
   diagnostics?: DiagnosticSink,
@@ -125,7 +125,7 @@ export function applyChainCompressions(
   }
 
   // 1. resolve every entry to a range; unresolved entries contribute nothing
-  const resolved: { entry: ChainCompressionEntry; startIndex: number; endIndex: number }[] = [];
+  const resolved: { entry: SingleChainCompressionEntry; startIndex: number; endIndex: number }[] = [];
   for (const entry of chainEntries) {
     const range = resolveRange(entry, messages);
     if (!range) {
@@ -174,6 +174,7 @@ export function applyChainCompressions(
   const droppedBareIds = new Set<string>();
   const droppedOccKeys = new Set<string>();
   const protectedByBlock = new Map<string, { tool: string; text: string }[]>();
+  const groups = new Map<string, { entry: SingleChainCompressionEntry; startIndex: number; bodies: string[] }>();
 
   for (const { entry, startIndex, endIndex } of accepted) {
     const protectedIds = new Set(entry.protectedToolCallIds ?? []);
@@ -210,14 +211,21 @@ export function applyChainCompressions(
       );
     }
     if (stripFinalThinking) stripAtIndex.add(endIndex);
-    insertAfterIndex.set(startIndex, {
+    const group = groups.get(entry.blockId);
+    if (group) {
+      group.bodies.push(summaryTextForChain(entry));
+      group.entry = { ...group.entry, toolRefs: [...new Set([...group.entry.toolRefs, ...entry.toolRefs])] };
+    } else groups.set(entry.blockId, { entry: { ...entry }, startIndex, bodies: [summaryTextForChain(entry)] });
+  }
+  for (const [blockId, group] of groups) {
+    insertAfterIndex.set(group.startIndex, {
       synthetic: buildSyntheticChainMessage(
-        entry,
-        summaryTextForChain(entry),
+        group.entry,
+        group.bodies.join("\n\n"),
         blockSummaryLookup,
-        protectedByBlock.get(entry.blockId) ?? [],
+        protectedByBlock.get(blockId) ?? [],
       ),
-      blockId: entry.blockId,
+      blockId,
     });
   }
 

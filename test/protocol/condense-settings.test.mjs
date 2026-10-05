@@ -6,6 +6,28 @@ import { openPrunerSettings } from "../../src/condense/settings.ts";
 import { registerCommands } from "../../src/condense/commands.ts";
 import { ToolCallIndexer } from "../../src/condense/indexer.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
+import { loadConfig } from "../../src/condense/config.ts";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+test("partial chain settings keep defaults, accept zero window and reject invalid fields", async () => {
+  mkdirSync(".work", { recursive: true });
+  const dir = mkdtempSync(join(process.cwd(), ".work/condense-config-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  try {
+    for (const [given, expected] of [[{ enabled: true }, { enabled: true }],
+      [{ rollingWindow: 0, fuseRangeSummary: false }, { rollingWindow: 0, fuseRangeSummary: false }],
+      [{ enabled: "yes", rollingWindow: -1 }, {}], [null, {}]]) {
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { chainCompression: given } }));
+      assert.deepEqual((await loadConfig()).chainCompression, { ...DEFAULT_CONFIG.chainCompression, ...expected });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 /** Opens the real overlay and hands back its row list plus the save/refresh recorders. */
 async function openSettings() {

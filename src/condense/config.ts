@@ -51,6 +51,8 @@ const fractionOrDefault = <T extends number | null>(value: unknown, fallback: T)
 
 function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
   const merged = { ...DEFAULT_CONFIG, ...existing };
+  const chain = existing.chainCompression;
+  const defaults = DEFAULT_CONFIG.chainCompression;
   return {
     ...merged,
     opportunisticCompaction: merged.opportunisticCompaction === true,
@@ -71,6 +73,12 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
     budgetTurnDelta: fractionOrDefault(merged.budgetTurnDelta, DEFAULT_CONFIG.budgetTurnDelta),
     frontierGapThresholdTokens: integerOrDefault(merged.frontierGapThresholdTokens, DEFAULT_CONFIG.frontierGapThresholdTokens, 0, true),
     maxImagesPerRequest: integerOrDefault(merged.maxImagesPerRequest, DEFAULT_CONFIG.maxImagesPerRequest, 1),
+    chainCompression: {
+      enabled: booleanOrDefault(chain?.enabled, defaults.enabled),
+      rollingWindow: integerOrDefault(chain?.rollingWindow, defaults.rollingWindow),
+      stripFinalAssistantThinking: booleanOrDefault(chain?.stripFinalAssistantThinking, defaults.stripFinalAssistantThinking),
+      fuseRangeSummary: booleanOrDefault(chain?.fuseRangeSummary, defaults.fuseRangeSummary),
+    },
   };
 }
 

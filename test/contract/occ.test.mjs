@@ -477,29 +477,30 @@ for (const goal of [false, true]) test(`capacity buffer skips ready OCC without 
   assert.equal(h.calls.filter(c => !c.summarizing).length, goal ? 2 : 1);
   assert.deepEqual(compactionReasons(h), []);
   const state = h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data;
-  assert.equal(state.capacityWaiting, true);
+  assert.equal(!!state.capacityWaiting, false, "below native threshold does not claim capacity takeover");
   assert.equal(state.spentRequest, undefined);
 });
 
-test("capacity buffer suppresses local summaries and preserves original tool results", async t => {
+test("near native capacity allows local summaries while skipping economic OCC", async t => {
   const h = await host(t, { auto: true, workTurns: 1, localSummary: true,
     onWork: () => ({ usage: pressureUsage(95000) }) });
   await h.session.prompt("Inspect and finish."); await h.session.waitForIdle();
-  assert.equal(h.calls.filter(c => c.summarizing).length, 0);
-  assert.equal(h.sm.getEntries().filter(e => e.type === "custom_message" && e.customType === "context-prune-summary").length, 0);
-  assert.match(JSON.stringify(h.calls.at(-1).context), /NEW_WORK_EVIDENCE/);
+  assert.equal(h.calls.filter(c => c.summarizing).length, 2);
+  assert.ok(h.sm.getEntries().some(e => e.type === "custom_message" && e.customType === "context-prune-summary"));
+  assert.deepEqual(compactionReasons(h), []);
+  assert.match(JSON.stringify(h.sm.getEntries()), /NEW_WORK_EVIDENCE/, "raw evidence remains recoverable");
 });
 
-test("capacity band hysteresis survives reload and releases only beyond 1.5 buffers", async t => {
-  const h = await host(t, { auto: true, onWork: ({ index }) => ({ usage: pressureUsage([95000, 93000, 91000][index - 1]) }) });
+test("native capacity uses strict greater-than after reload, including the exact threshold", async t => {
+  const h = await host(t, { auto: true, onWork: ({ index }) => ({ usage: pressureUsage([95000, 99000, 99500 - usage.output][index - 1]) }) });
   const state = () => h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-occ-state").at(-1).data;
   await h.session.prompt("First."); await h.session.waitForIdle();
-  assert.equal(state().capacityWaiting, true);
+  assert.equal(!!state().capacityWaiting, false);
   await h.session.extensionRunner.emit({ type: "session_start" });
   await h.session.prompt("Second."); await h.session.waitForIdle();
-  assert.equal(state().capacityWaiting, true, "6500 tokens remaining is still inside the exit band");
+  assert.equal(!!state().capacityWaiting, false);
   await h.session.prompt("Third."); await h.session.waitForIdle();
-  assert.equal(state().capacityWaiting, false);
+  assert.equal(!!state().capacityWaiting, false, "the exact threshold remains eligible for local pruning");
   assert.equal(state().spentRequest, undefined);
   assert.equal(h.calls.filter(c => c.summarizing).length, 0);
 });

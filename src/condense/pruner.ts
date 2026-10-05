@@ -3,6 +3,7 @@ import type { ToolCallIndexer } from "./indexer.ts";
 import type { ChainCompressionConfig, ErrorPurgeConfig, ToolCallRecord } from "./types.ts";
 import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { applyChainCompressions } from "./chain-range-prune.ts";
+import { chainMembers, isSharedChain, type SingleChainCompressionEntry } from "./types.ts";
 import { purgeErroredArgs } from "./error-purge.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
 import { bareToolCallId, occKey } from "./occurrence-key.ts";
@@ -88,6 +89,7 @@ export function pruneMessages(
   diagnostics?: DiagnosticSink,
   supersede?: { state: SupersedeState; isProtected: (toolName: string, args: unknown) => boolean },
   editedToolIds: ReadonlySet<string> = new Set(),
+  chainViews?: SingleChainCompressionEntry[],
 ): { messages: any[]; pruned: boolean; beforeChars: number; afterChars: number } {
   // Phase 1: stub-replace summarized tool results
   let pruned = false;
@@ -147,7 +149,8 @@ export function pruneMessages(
 
   // Phase 3: chain range prune — drop closed chains beyond the rolling window
   if (chainCompression?.enabled) {
-    const chainEntries = indexer.getChainEntries().filter(entry =>
+    // Shared views require a current gain authorization from the runtime.
+    const chainEntries = (chainViews ?? indexer.getChainEntries().filter(entry => !isSharedChain(entry)).flatMap(chainMembers)).filter(entry =>
       !(entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds).some(key => editedToolIds.has(bareToolCallId(key))));
     if (chainEntries.length > 0) {
       // Prefer the cohesive LLM range summary (B) when present; fall back to the
@@ -158,7 +161,7 @@ export function pruneMessages(
       const blockSummaryLookup = (blockId: string): string | undefined => {
         const entry = indexer.findChainEntryByBlockId(blockId);
         if (!entry) return undefined;
-        return chainSummaryText(entry) || undefined;
+        return chainMembers(entry).map(chainSummaryText).join("\n\n") || undefined;
       };
       const compressed = applyChainCompressions(
         current,
