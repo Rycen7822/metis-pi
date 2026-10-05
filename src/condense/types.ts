@@ -268,6 +268,8 @@ export interface ContextPruneConfig {
   showPruneStatusLine: boolean;
   /** Whether to show the persistent OCC footer status line */
   showOccStatusLine: boolean;
+  /** Additional output-token ceiling for Pi compaction summaries; 0 keeps Pi's native limit. */
+  compactionSummaryMaxTokens: number;
   /**
    * Which model to use for summarization.
    * "default" = current active Pi model (ctx.model)
@@ -602,6 +604,7 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
   enabled: false,
   showPruneStatusLine: true,
   showOccStatusLine: true,
+  compactionSummaryMaxTokens: 0,
   summarizerModel: "default",
   summarizerThinking: "default",
   pruneOn: "agent-message",

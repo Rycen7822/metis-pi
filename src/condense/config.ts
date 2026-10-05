@@ -59,6 +59,8 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
     enabled: booleanOrDefault(merged.enabled, DEFAULT_CONFIG.enabled),
     showPruneStatusLine: booleanOrDefault(merged.showPruneStatusLine, DEFAULT_CONFIG.showPruneStatusLine),
     showOccStatusLine: booleanOrDefault(merged.showOccStatusLine, DEFAULT_CONFIG.showOccStatusLine),
+    compactionSummaryMaxTokens: Number.isSafeInteger(merged.compactionSummaryMaxTokens) && merged.compactionSummaryMaxTokens >= 0
+      ? merged.compactionSummaryMaxTokens : DEFAULT_CONFIG.compactionSummaryMaxTokens,
     pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : DEFAULT_CONFIG.pruneOn,
     summarizerThinking: isSummarizerThinking(merged.summarizerThinking) ? merged.summarizerThinking : DEFAULT_CONFIG.summarizerThinking,
     quietOversizedSkips: booleanOrDefault(merged.quietOversizedSkips, DEFAULT_CONFIG.quietOversizedSkips),

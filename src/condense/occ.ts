@@ -68,6 +68,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   ]);
   const chars = (ctx: ExtensionContext) => JSON.stringify(visible(ctx).messages).length;
   const estimatedTokens = (messages: any[]) => messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+  const summaryLimit = (reserveTokens: number, modelMaxTokens: number) => Math.max(0, Math.min(
+    Math.floor(0.8 * reserveTokens), modelMaxTokens > 0 ? modelMaxTokens : Infinity,
+    config.value.compactionSummaryMaxTokens > 0 ? config.value.compactionSummaryMaxTokens : Infinity));
   function capacity(ctx: ExtensionContext, settings?: { enabled: boolean; reserveTokens: number }) {
     const window = ctx.model?.contextWindow;
     if (!window || !Number.isFinite(window) || window <= 0) return undefined;
@@ -79,7 +82,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
         if (manager.drainErrors().length) return undefined;
         settings = manager.getCompactionSettings(ctx.model);
       }
-      return settings.enabled ? { limit: window - settings.reserveTokens, buffer: Math.max(1024, window * 0.05) } : undefined;
+      const limit = window - settings.reserveTokens;
+      return settings.enabled && limit > 0 ? { limit, buffer: Math.max(1024, limit * 0.05) } : undefined;
     } catch { return undefined; }
   }
   const capability = (ctx: ExtensionContext) => {
@@ -127,7 +131,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (state.phase === "waiting") { state.phase = "normal"; persist(); }
       return false;
     }
-    const window = ctx.model?.contextWindow;
+    // Economic occupancy and reuse end at Pi's configured compaction boundary,
+    // which can be much earlier than the physical model window.
+    const window = budget?.limit ?? ctx.model?.contextWindow;
     const fraction = tokens != null && window && window > 0 ? tokens / window : undefined;
     const observedGrowth = (state.recentGrowth ?? []).filter(n => Number.isFinite(n) && n > 0);
     // Do not make local summaries wait for an economic decision that has no
@@ -231,8 +237,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const before = JSON.stringify(request.messages).length;
       // Protect old summaries verbatim; never ask the model to summarize a summary again.
       const modelMessages = request.messages.filter(m => !isDerived(m));
-      const upperAfter = protection.length + 4 * p.settings.reserveTokens;
-      metrics = { ...metrics, beforeChars: before, protectedChars: protection.length, estimatedAfterChars: upperAfter };
+      const summaryOutput = summaryLimit(p.settings.reserveTokens, ctx.model.maxTokens);
+      const upperAfter = protection.length + 4 * summaryOutput;
+      metrics = { ...metrics, beforeChars: before, protectedChars: protection.length, estimatedAfterChars: upperAfter, summaryOutputUpperBound: summaryOutput };
       if (upperAfter >= before * 0.75) return reject("protected-content-too-large");
       const budget = running ? capacity(ctx, p.settings) : undefined;
       const wholeTokens = estimatedTokens(visible(ctx).messages);
@@ -245,13 +252,9 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const fits = (summaryTokens: number) => !budget
         || budget.limit - (retainedTokens + summaryTokens + 128) >= 2 * budget.buffer;
       if (budget && (budget.limit - p.tokensBefore <= budget.buffer
-        || !fits(Math.ceil(protection.length / 4) + p.settings.reserveTokens))) return reject("insufficient-capacity-headroom");
+        || !fits(Math.ceil(protection.length / 4) + summaryOutput))) return reject("insufficient-capacity-headroom");
       if (running) {
         const saved = (before - upperAfter) / 4;
-        // Match Pi's summary output cap. This is a conservative preflight bound,
-        // not an assertion that all reserved tokens will actually be generated.
-        const summaryOutput = Math.max(0, Math.min(Math.floor(0.8 * p.settings.reserveTokens),
-          ctx.model.maxTokens > 0 ? ctx.model.maxTokens : Infinity));
         const summaryCost = before / 4 * COST_RATIO.input + summaryOutput * COST_RATIO.output;
         const coldPrefixCost = (upperAfter + JSON.stringify(kept).length) / 4 * (COST_RATIO.input - COST_RATIO.cacheRead);
         const growth = Math.max(0, ...(state.recentGrowth ?? []).filter(n => Number.isFinite(n) && n > 0));
@@ -290,7 +293,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const result = await compact({ ...p, messagesToSummarize: modelMessages, turnPrefixMessages: [],
         isSplitTurn: false, previousSummary: undefined }, model, auth.apiKey, undefined,
         event.customInstructions, event.signal, undefined,
-        (m, c, o) => ctx.modelRegistry.streamSimple(m, c, o), auth.env, undefined, undefined, sessionId);
+        (m, c, o) => ctx.modelRegistry.streamSimple(m, c, { ...o, maxTokens: Math.min(o?.maxTokens ?? Infinity, summaryOutput) }),
+        auth.env, undefined, undefined, sessionId);
       metrics.usage = result.usage;
       if (running && metrics.economics && result.usage) {
         (metrics.economics as Record<string, unknown>).actualSummaryCost = result.usage.input * COST_RATIO.input
@@ -377,6 +381,16 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     if (config.value.enabled && staleCapacity(event, ctx)) {
       decision("stale-capacity-usage", { trigger: event.reason });
       return { cancel: true };
+    }
+    const limit = config.value.compactionSummaryMaxTokens;
+    if (limit > 0 && limit < Math.floor(0.8 * event.preparation.settings.reserveTokens)) {
+      // Pi has already selected the cut using its real reserve. Only generation
+      // reads this prepared copy now; leave persisted settings and native
+      // routing/auth/retry/split-turn handling with Pi. Its history cap is 80%
+      // of this reserve, and its turn-prefix cap is smaller (50%).
+      let reserveTokens = Math.ceil(limit / 0.8);
+      if (Math.floor(0.8 * reserveTokens) > limit) reserveTokens--;
+      event.preparation.settings = { ...event.preparation.settings, reserveTokens };
     }
     return undefined;
   });

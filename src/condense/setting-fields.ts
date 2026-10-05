@@ -175,6 +175,9 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     options: BOOLEAN_OPTIONS, description: pruneStatusLineDescription },
   { id: "showOccStatusLine", path: "showOccStatusLine", label: "OCC status line", kind: "boolean",
     options: BOOLEAN_OPTIONS, description: "Show OCC progress and retain its latest result in the footer. Does not affect compaction." },
+  { id: "compactionSummaryMaxTokens", path: "compactionSummaryMaxTokens", label: "Native summary token limit", kind: "integer",
+    options: ["0", "4096", "8192", "16384", "32768", "65536"].map(value => ({ value, label: value === "0" ? "Pi default" : value })),
+    description: config => `Current limit: ${config.compactionSummaryMaxTokens || "Pi default"}. Limits each native/OCC summary request, even with pruning off; Pi/model limits still apply. Does not change the compaction trigger. Set any non-negative integer with /pruner compaction-summary-limit <n>; 0 restores Pi's limit.` },
   { id: "pruneOn", path: "pruneOn", label: "Prune trigger", kind: "enum", loose: true,
     options: PRUNE_ON_MODES, description: pruneTriggerDescription },
   { id: "summarizerThinking", path: "summarizerThinking", label: "Summarizer thinking", kind: "enum",
@@ -245,6 +248,7 @@ export function parseScalar(row: ScalarRow, raw: string): ScalarValue | undefine
 export function displayValue(row: ScalarRow, config: ContextPruneConfig): string {
   const value = pathValue(config, row.path);
   const raw = value == null ? "0" : String(value);
+  if (row.id === "compactionSummaryMaxTokens") return raw;
   if (row.kind !== "integer" && row.kind !== "fraction") return raw;
   return row.options.some((option) => option.value === raw)
     ? raw

@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 75000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 75010,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false, pruneOn = "agent-message" } = {}) {
+async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false, pruneOn = "agent-message", pruneOverrides = {} } = {}) {
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work", "occ-host-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -24,6 +24,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...installedSettings, contextPrune: {
     enabled: true, opportunisticCompaction: true, minBatchChars: 5000, pruneOn,
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
+    ...pruneOverrides,
   } }));
   const sm = SessionManager.create(dir, dir);
   const compaction = { enabled: auto && !autoAfterLocal, reserveTokens: 500, keepRecentTokens: 1000, ...compactionOverrides };
@@ -61,9 +62,9 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     streamSimple(m, context, options) {
       const out = createAssistantMessageEventStream();
       const summarizing = !JSON.stringify(context).includes("OCC_TEST");
-      calls.push({ summarizing, context });
+      calls.push({ summarizing, context, maxTokens: options?.maxTokens });
       Promise.resolve().then(async () => {
-        if (summarizing) await onSummary?.({ sm, options });
+        const summaryResponse = summarizing ? await onSummary?.({ sm, options }) : undefined;
         const toolUse = !summarizing && actualWork++ < workTurns;
         if (toolUse) writeFileSync(join(dir, "work.txt"), `NEW_WORK_EVIDENCE_${actualWork} `.repeat(350));
         const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
@@ -71,6 +72,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
             : [{ type: "text", text: summarizing ? summary : "Final response." }],
           stopReason: options?.signal?.aborted ? "aborted" : toolUse ? "toolUse" : "stop", timestamp: Date.now(), usage };
         if (!summarizing) Object.assign(message, await onWork?.({ sm, toolUse, index: calls.filter(c => !c.summarizing).length }));
+        else if (summaryResponse) Object.assign(message, summaryResponse);
         out.push({ type: "done", reason: message.stopReason, message }); out.end(message);
       }).catch(error => out.end({ role: "assistant", api: m.api, provider: m.provider, model: m.id,
         content: [], stopReason: "error", errorMessage: String(error), timestamp: Date.now(), usage }));
@@ -122,6 +124,60 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   });
   return { ...loaded, sm, calls, errors, notices, eventBus, events, settingsManager };
 }
+
+for (const [limit, expected] of [[0, 400], [64, 64], [2048, 400]]) {
+  test(`native manual summary ceiling ${limit} preserves Pi limits, previous summary and ordinary requests`, async t => {
+    const h = await host(t, { pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: limit } });
+    await h.session.prompt("Continue real inspection work. " + "RECENT_WORK ".repeat(500)); await h.session.waitForIdle();
+    await h.session.compact("Keep exact file paths.");
+    assert.equal(h.calls.find(c => c.summarizing).maxTokens, expected);
+    assert.match(JSON.stringify(h.calls.find(c => c.summarizing).context), /Keep exact file paths/);
+    assert.equal(h.settingsManager.getCompactionSettings(h.session.model).reserveTokens, 500);
+    await h.session.prompt("Continue real inspection work. " + "RECENT_WORK ".repeat(500)); await h.session.waitForIdle();
+    assert.equal(h.calls.find(c => !c.summarizing).maxTokens, undefined);
+    await h.session.compact();
+    assert.match(JSON.stringify(h.calls.filter(c => c.summarizing).at(-1).context), /Derived progress: investigation continues/);
+    assert.ok(h.calls.filter(c => c.summarizing).every(c => c.maxTokens <= expected));
+  });
+}
+
+for (const reason of ["threshold", "overflow"]) {
+  test(`native ${reason} summary ceiling works with pruning and OCC off`, async t => {
+    const h = await host(t, { auto: true, pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: 64 },
+      onWork: ({ index }) => reason === "overflow" && index === 1
+        ? { stopReason: "error", errorMessage: "maximum context length exceeded", content: [] }
+        : { usage: pressureUsage(index === 1 ? 99900 : 50000) } });
+    await h.session.prompt("Inspect the remaining evidence."); await h.session.waitForIdle();
+    assert.deepEqual(compactionReasons(h), [reason]);
+    assert.ok(h.calls.filter(c => c.summarizing).length > 0);
+    assert.ok(h.calls.filter(c => c.summarizing).every(c => c.maxTokens <= 64));
+    assert.equal(h.settingsManager.getCompactionSettings(h.session.model).reserveTokens, 500);
+  });
+}
+
+test("custom native summary ceiling makes OCC use the same bounded output for costs, headroom and generation", async t => {
+  const h = await host(t, { auto: true, compactionOverrides: { reserveTokens: 600000 },
+    pruneOverrides: { compactionSummaryMaxTokens: 8192 },
+    beforeLoad(_sm, model) { model.contextWindow = 1000000; model.maxTokens = 131072; },
+    onWork: () => ({ usage: pressureUsage(288000) }) });
+  await h.session.prompt("Continue inspection without deploying."); await h.session.waitForIdle();
+  assert.deepEqual(h.calls.filter(c => c.summarizing).map(c => c.maxTokens), [8192]);
+  const decision = h.sm.getBranch().find(e => e.customType === "metis-occ-decision" && e.data.reason === "accepted").data;
+  assert.equal(decision.estimatedAfterChars, decision.protectedChars + 4 * 8192);
+  assert.equal(decision.economics.summaryOutputUpperBound, 8192);
+  assert.equal(h.settingsManager.getCompactionSettings(h.session.model).reserveTokens, 600000);
+  assert.match(compactions(h)[0].summary, /ORIGINAL_GOAL/);
+});
+
+test("a capped native summary ending at length does not publish a partial checkpoint", async t => {
+  const h = await host(t, { pruneOverrides: { enabled: false, opportunisticCompaction: false, compactionSummaryMaxTokens: 64 },
+    onSummary: () => ({ stopReason: "length", content: [{ type: "text", text: "Incomplete summary" }] }) });
+  const before = h.sm.buildSessionProjection();
+  await assert.rejects(h.session.compact(), /token cap/);
+  assert.equal(compactions(h).length, 0);
+  assert.deepEqual(h.sm.buildSessionProjection(), before);
+  assert.equal(h.calls.find(c => c.summarizing).maxTokens, 40, "Pi keeps its smaller split-turn budget within the configured ceiling");
+});
 
 test("real AgentSession automatically commits OCC once, protects source requirements and recalls exact evidence", async t => {
   const h = await host(t);
@@ -608,6 +664,36 @@ test("successive native compactions flatten protected sources and retain exact h
   assert.equal(JSON.parse(result.details.results[0].text).summary, first.summary);
 });
 
+
+test("OCC waiting and readiness follow Pi's model-specific auto-compaction limit", async t => {
+  const dir = mkdtempSync(join(root, ".work", "occ-limit-")), old = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  t.after(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); });
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: true, reserveTokens: 32768,
+    modelOverrides: { "local/large-window": { reserveTokens: 600000 } } } }));
+  const branch = [{ type: "message", id: "request", message: { role: "user" } },
+    { type: "custom", customType: "metis-occ-state", data: { phase: "normal", work: 4, atWork: 0, atChars: 0, recentGrowth: [100, 100, 100, 100] } }];
+  const hooks = new Map(); let tokens = 239999, compactions = 0;
+  const ctx = { cwd: dir, model: { provider: "local", id: "large-window", contextWindow: 1000000 },
+    sessionManager: { getSessionId: () => "limit-test", getBranch: () => branch, getEntries: () => branch,
+      buildSessionProjection: () => ({ messages: [], entries: [] }) },
+    getContextUsage: () => ({ tokens, contextWindow: 1000000 }), isIdle: () => true, hasPendingMessages: () => false,
+    compact({ onComplete }) { compactions++; onComplete(); }, ui: { setStatus() {} } };
+  const occ = registerOcc({ on(name, fn) { hooks.set(name, fn); }, events: { emit() {}, on() { return () => {}; } },
+    appendEntry(customType, data) { branch.push({ type: "custom", customType, data }); } }, {},
+    { value: { ...DEFAULT_CONFIG, enabled: true, opportunisticCompaction: true } });
+  t.after(() => occ.shutdown(ctx)); occ.restore(ctx);
+  assert.equal(occ.deferLocal(ctx), false, "below 60% of the 400k native trigger");
+  tokens = 240000; assert.equal(occ.deferLocal(ctx), true, "wait at 240k, not 600k");
+  hooks.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse", timestamp: 1,
+    content: [{ type: "toolCall", id: "work", name: "read", arguments: { path: "work.txt" } }] },
+    toolResults: [{ role: "toolResult", toolCallId: "work", toolName: "read", isError: false, timestamp: 2,
+      content: [{ type: "text", text: "distinct successful work" }] }] }, ctx);
+  tokens = 287999; occ.deferLocal(ctx); await hooks.get("agent_settled")({}, ctx);
+  assert.equal(compactions, 0, "below 72% is not ready");
+  tokens = 288000; occ.deferLocal(ctx); await hooks.get("agent_settled")({}, ctx);
+  assert.equal(compactions, 1, "ready at 288k, not 720k");
+});
 
 test("OCC work ignores recall, polling, failures and repeated identical observations", () => {
   const hooks = new Map(), states = [];

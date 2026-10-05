@@ -82,6 +82,7 @@ const SUBCOMMANDS = [
   { value: "protected-tools", label: "protected-tools — show or edit the never-pruned tool allowlist" },
   { value: "protected-paths", label: "protected-paths — show or edit the never-pruned path globs" },
   { value: "min-batch-chars", label: "min-batch-chars — show or set the pre-flush trivial-batch threshold" },
+  { value: "compaction-summary-limit", label: "compaction-summary-limit — show or set the native compaction summary token ceiling" },
   { value: "recovery-grace", label: "recovery-grace - show or set how long context_tree_query output stays verbatim (user-turn-groups)" },
   { value: "dedup",   label: "dedup     — toggle pre-flush content-hash dedup (on/off/status)" },
   { value: "help",    label: "help      — show this help" },
@@ -137,6 +138,7 @@ Usage:
   /pruner protected-paths <globs>          Set the globs (comma- or space-separated; 'none' clears)
   /pruner min-batch-chars                  Show the current pre-flush trivial-batch threshold
   /pruner min-batch-chars <n>              Set the threshold (non-negative integer; 0 disables)
+  /pruner compaction-summary-limit [n]    Show/set native summary token ceiling (0 keeps Pi's limit)
   /pruner recovery-grace                   Show the current recovery grace window (user-turn-groups)
   /pruner recovery-grace <n>               Set the window (non-negative integer; 0 disables)
   /pruner compact                          Retroactively compress all closed chains (ignores rollingWindow; force-compresses every eligible chain)
@@ -384,7 +386,7 @@ export function registerCommands(
             ? `\n  --- context ---\n  thinking:     ${formatTokens(m.openCycleThinkingTokens)} tokens (open segment)\n  chain share:  ${m.largestChainSharePct}%\n  frontier gap: ${formatTokens(m.frontierGapTokens)} tokens${getRearmed?.() ? "\n  rearmed:      yes" : ""}`
             : "";
           ctx.ui.notify(
-            `pruner status:\n  enabled:  ${cfg.enabled}\n  model:    ${cfg.summarizerModel}\n  thinking: ${optionLabel("summarizerThinking", cfg.summarizerThinking)} (${cfg.summarizerThinking})\n  idle to:  ${fmtTimeout(cfg.summarizerIdleTimeoutMs)}\n  max to:   ${fmtTimeout(cfg.summarizerMaxTimeoutMs)}\n  trigger:  ${mode}\n  batching: ${optionLabel("batchingMode", cfg.batchingMode)} (${cfg.batchingMode})\n  dedup:    ${cfg.dedupByContentHash ? "on" : "off"}\n  status:   ${cfg.showPruneStatusLine ? "on" : "off"}${statsLine}${contextLine}`,
+            `pruner status:\n  enabled:  ${cfg.enabled}\n  model:    ${cfg.summarizerModel}\n  thinking: ${optionLabel("summarizerThinking", cfg.summarizerThinking)} (${cfg.summarizerThinking})\n  native summary limit: ${cfg.compactionSummaryMaxTokens || "Pi default"}\n  idle to:  ${fmtTimeout(cfg.summarizerIdleTimeoutMs)}\n  max to:   ${fmtTimeout(cfg.summarizerMaxTimeoutMs)}\n  trigger:  ${mode}\n  batching: ${optionLabel("batchingMode", cfg.batchingMode)} (${cfg.batchingMode})\n  dedup:    ${cfg.dedupByContentHash ? "on" : "off"}\n  status:   ${cfg.showPruneStatusLine ? "on" : "off"}${statsLine}${contextLine}`,
           );
           break;
         }
@@ -665,6 +667,23 @@ export function registerCommands(
           currentConfig.value = { ...currentConfig.value, [field]: nextList };
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(`Protected ${label}: ${protectedToolsDisplay(nextList)}`);
+          break;
+        }
+
+        case "compaction-summary-limit": {
+          const arg = subArgs[0];
+          if (arg === undefined) {
+            ctx.ui.notify(`Native summary token limit: ${currentConfig.value.compactionSummaryMaxTokens || "Pi default"}.`);
+            break;
+          }
+          const value = /^\d+$/.test(arg) ? Number(arg) : NaN;
+          if (subArgs.length !== 1 || !Number.isSafeInteger(value)) {
+            ctx.ui.notify(`Invalid summary limit: "${subArgs.join(" ")}". Expected a non-negative safe integer (0 keeps Pi's limit).`, "warning");
+            break;
+          }
+          currentConfig.value = writeScalar(currentConfig.value, scalarRow("compactionSummaryMaxTokens"), value);
+          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
+          ctx.ui.notify(`Native summary token limit: ${value || "Pi default"}.`);
           break;
         }
 

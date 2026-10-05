@@ -22,6 +22,10 @@ test("partial chain settings keep defaults, accept zero window and reject invali
       writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { chainCompression: given } }));
       assert.deepEqual((await loadConfig()).chainCompression, { ...DEFAULT_CONFIG.chainCompression, ...expected });
     }
+    for (const value of [0, 8192, -1, 1.5, "8192", null, Number.MAX_SAFE_INTEGER + 1]) {
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { compactionSummaryMaxTokens: value } }));
+      assert.equal((await loadConfig()).compactionSummaryMaxTokens, Number.isSafeInteger(value) && value >= 0 ? value : 0);
+    }
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -30,9 +34,9 @@ test("partial chain settings keep defaults, accept zero window and reject invali
 });
 
 /** Opens the real overlay and hands back its row list plus the save/refresh recorders. */
-async function openSettings() {
+async function openSettings(overrides = {}) {
   initTheme("dark", false);
-  const current = { value: structuredClone(DEFAULT_CONFIG) };
+  const current = { value: { ...structuredClone(DEFAULT_CONFIG), ...overrides } };
   const saved = [];
   const refreshed = [];
   let list;
@@ -86,13 +90,24 @@ test("pruner settings cycles enum and number rows, refreshes their text, and def
   assert.equal(row("minBatchChars").currentValue, String(cycled));
   assert.match(row("minBatchChars").description, new RegExp(`Currently ${cycled}\\b`));
 
+  list.selectItem("compactionSummaryMaxTokens");
+  list.handleInput(" ");
+  assert.equal(current.value.compactionSummaryMaxTokens, 4096);
+  assert.match(row("compactionSummaryMaxTokens").description, /Current limit: 4096/);
+
   // A value the row's cycle can still produce but the field rejects (hand-edited
   // settings.json can put one in the cycle) falls back to the configured default.
   row("minBatchChars").values = [String(cycled), "not-a-number"];
   row("minBatchChars").currentValue = String(cycled);
+  list.selectItem("minBatchChars");
   list.handleInput(" ");
   assert.equal(current.value.minBatchChars, DEFAULT_CONFIG.minBatchChars);
   assert.match(row("minBatchChars").description, new RegExp(`Currently ${DEFAULT_CONFIG.minBatchChars}\\b`));
+
+  const custom = await openSettings({ compactionSummaryMaxTokens: 12345 });
+  assert.equal(custom.row("compactionSummaryMaxTokens").currentValue, "12345");
+  custom.list.selectItem("compactionSummaryMaxTokens"); custom.list.handleInput(" ");
+  assert.equal(custom.current.value.compactionSummaryMaxTokens, 0);
 });
 
 /** Captures the /pruner handler with no-op collaborators for untouched subcommands. */
@@ -151,4 +166,18 @@ test("pruner commands reject illegal simple-field values without saving", async 
   await run("prune-on whatever");
   await flushSaves();
   assert.equal(current.value.pruneOn, "whatever");
+});
+
+test("native summary limit command accepts custom integers and reset, rejecting malformed values without saving", async () => {
+  const { current, saved, notifications, run } = prunerCommand();
+  for (const arg of ["-1", "1.5", "64junk", "NaN", "9007199254740992", "64 128"]) await run(`compaction-summary-limit ${arg}`);
+  await flushSaves();
+  assert.equal(saved.length, 0);
+  assert.ok(notifications.every(entry => entry.type === "warning"));
+  await run("compaction-summary-limit 12345");
+  await run("compaction-summary-limit");
+  assert.equal(current.value.compactionSummaryMaxTokens, 12345);
+  await run("compaction-summary-limit 0");
+  await flushSaves();
+  assert.deepEqual(saved.map(value => value.compactionSummaryMaxTokens), [12345, 0]);
 });
