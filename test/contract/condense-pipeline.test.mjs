@@ -397,6 +397,8 @@ test("effective rescan preserves raw frontier ordinals after global compaction",
 
 test("a local rewrite holds through two steps and only releases after real reuse plus new history", async t => {
   const f = await fixture(t, { occ: true });
+  // Exercise hold release below OCC's economic range, independently of prices.
+  f.ctx.getContextUsage = () => ({ tokens: 50000, contextWindow: 100000 });
   f.add("FIRST_EVIDENCE ".repeat(500), "custom inspection");
   await f.finish();
   assert.equal(f.calls.length, 1);

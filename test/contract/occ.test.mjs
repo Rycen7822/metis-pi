@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 75000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 75010,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false } = {}) {
+async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false, pruneOn = "agent-message" } = {}) {
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work", "occ-host-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -22,7 +22,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   const installedSettings = installed ? JSON.parse(readFileSync(join(installed, "settings.json"), "utf8")) : {};
   if (installed) installedSettings.packages = installedSettings.packages.map(source => resolve(installed, source));
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...installedSettings, contextPrune: {
-    enabled: true, opportunisticCompaction: true, minBatchChars: 5000,
+    enabled: true, opportunisticCompaction: true, minBatchChars: 5000, pruneOn,
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
   } }));
   const sm = SessionManager.create(dir, dir);
@@ -36,7 +36,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model = { id: "occ-local", name: "OCC local", provider: "occ-local", api: "openai-completions",
     baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
-    cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 } };
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const calls = [], errors = [], notices = [];
   if (localSummary) {
     const stream = (m, context) => {
@@ -86,7 +86,8 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   sm.appendMessage({ role: "toolResult", toolCallId: "evidence", toolName: "read", isError: false,
     content: [{ type: "text", text: "EXACT_EVIDENCE\n" + "source-body ".repeat(14000) }], timestamp: 3 });
   sm.appendMessage({ role: "assistant", ...model, model: model.id, content: [{ type: "text", text: "Completed source inspection." }], stopReason: "stop", timestamp: 4, usage });
-  if (!workTurns) sm.appendCustomEntry("metis-occ-state", { phase: "waiting", work: 5, atWork: 4, atChars: 0 });
+  if (!workTurns) sm.appendCustomEntry("metis-occ-state", { phase: "waiting", work: 5, atWork: 4, atChars: 0,
+    recentGrowth: [100, 100, 100, 100] });
   if (edit) {
     const target = sm.getBranch().find(e => e.type === "message" && e.message.role === "user");
     sm.appendContextEdit(target.id, edit === "remove" ? null : { content: edit });
@@ -145,6 +146,35 @@ test("real AgentSession automatically commits OCC once, protects source requirem
   assert.equal(h.sm.getBranch().filter(e => e.type === "compaction").length, 1);
   assert.deepEqual(h.sm.buildSessionProjection().messages[0], JSON.parse(snapshot)[0]);
 });
+
+for (const prices of [undefined, { input: 1000000, output: 1000000000, cacheRead: 0.001, cacheWrite: 1000000 }]) {
+  test(`OCC relative-cost policy ignores provider tariff metadata: ${prices ? "channel markup" : "missing"}`, async t => {
+    const h = await host(t, { beforeLoad(_sm, model) { model.cost = prices; } });
+    await h.session.prompt("Continue real inspection work."); await h.session.waitForIdle();
+    assert.equal(h.calls.filter(c => c.summarizing).length, 1);
+    const decision = h.sm.getBranch().find(e => e.customType === "metis-occ-decision" && e.data.reason === "accepted").data;
+    assert.deepEqual(decision.economics.weights, { input: 1, output: 5, cacheRead: 0.1 });
+    assert.ok(decision.economics.reusableRequests > decision.economics.breakEvenRequests);
+  });
+}
+
+for (const growth of [undefined, [2240, 2240, 2240, 2240]]) {
+  test(`OCC avoids speculative summary calls when growth is ${growth ? "too fast to amortize" : "unobserved"}`, async t => {
+    const h = await host(t, { pruneOn: "on-demand", beforeLoad(sm) {
+      sm.getBranch().find(e => e.customType === "metis-occ-state").data.recentGrowth = growth;
+    } });
+    await h.session.prompt("Continue inspection."); await h.session.waitForIdle();
+    assert.equal(h.calls.filter(c => c.summarizing).length, 0);
+    const decision = h.sm.getBranch().find(e => e.customType === "metis-occ-decision")?.data;
+    if (growth) {
+      assert.equal(decision.reason, "insufficient-estimated-savings");
+      assert.ok(decision.economics.reusableRequests <= decision.economics.breakEvenRequests);
+    }
+    await h.session.compact();
+    assert.equal(h.calls.filter(c => c.summarizing).length, 1, "manual compaction remains available");
+    assert.match(h.sm.getBranch().find(e => e.type === "compaction").summary, /ORIGINAL_GOAL/);
+  });
+}
 
 for (const blocked of ["archiveFailed", "unfinished"]) test(`OCC preserves unavailable native nested evidence: ${blocked}`, async t => {
   const h = await host(t, { beforeLoad(sm, model) {

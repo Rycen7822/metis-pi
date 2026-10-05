@@ -12,12 +12,16 @@ const STATE = "metis-occ-state";
 const HOLD_WORK = 4;
 const WAIT_WORK = 3;
 const ENTER = 0.60, EXIT = 0.52, READY = 0.72;
+// Relative resource weights chosen by the user; not provider billing prices.
+const COST_RATIO = { input: 1, output: 5, cacheRead: 0.1 };
 type Phase = "normal" | "waiting" | "hold";
 interface MaintenanceState {
   phase: Phase;
   work: number;
   lastWork?: string;
   recentWork?: string[];
+  /** Estimated added tokens in recent distinct successful tool-work turns. */
+  recentGrowth?: number[];
   atWork: number;
   atChars: number;
   request?: string;
@@ -125,19 +129,26 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     }
     const window = ctx.model?.contextWindow;
     const fraction = tokens != null && window && window > 0 ? tokens / window : undefined;
-    const cost = ctx.model?.cost;
-    if (fraction === undefined || !capability(ctx) || !cost || cost.input <= 0 || cost.cacheRead <= 0 || cost.output < 0) { ready = false; return false; }
+    const observedGrowth = (state.recentGrowth ?? []).filter(n => Number.isFinite(n) && n > 0);
+    // Do not make local summaries wait for an economic decision that has no
+    // measured reuse horizon yet, including state restored from older sessions.
+    if (fraction === undefined || !capability(ctx) || observedGrowth.length < HOLD_WORK - 1) {
+      ready = false; return false;
+    }
+    // Even perfect removal must pay for reading its input. If observed work
+    // cannot leave that much reuse, let local summaries proceed immediately.
+    const remainingRequests = Math.floor(Math.max(0, (window! - tokens!) / Math.max(...observedGrowth)));
+    if (remainingRequests * COST_RATIO.cacheRead <= COST_RATIO.input) { ready = false; return false; }
     if (state.phase === "waiting" && fraction < EXIT) {
       state.phase = "normal"; state.waitExhaustedRequest = state.request; ready = false; persist(); return false;
     }
     if (state.phase === "normal" && fraction >= ENTER && !spent() && state.waitExhaustedRequest !== state.request) {
       state.phase = "waiting"; state.atWork = state.work; persist();
     }
-    // Occupancy alone does not justify economic OCC. Require known cached-input
-    // prices and real tool-work observations; the candidate checks break-even.
+    // Occupancy alone does not justify economic OCC. Real tool-work observations
+    // earn the boundary; the candidate checks relative resource break-even.
     ready = state.phase === "waiting" && fraction >= READY && state.work - state.atWork >= 1
-      && state.work >= HOLD_WORK && !spent()
-      && !!cost && cost.input > 0 && cost.cacheRead > 0 && cost.output >= 0;
+      && state.work >= HOLD_WORK && !spent();
     if (state.phase === "waiting" && !ready && state.work - state.atWork >= WAIT_WORK) {
       state.phase = "normal"; state.waitExhaustedRequest = state.request; persist();
     }
@@ -236,12 +247,23 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (budget && (budget.limit - p.tokensBefore <= budget.buffer
         || !fits(Math.ceil(protection.length / 4) + p.settings.reserveTokens))) return reject("insufficient-capacity-headroom");
       if (running) {
-        const cost = ctx.model.cost;
         const saved = (before - upperAfter) / 4;
-        const summaryCost = before / 4 * cost.input + p.settings.reserveTokens * cost.output;
-        const coldPrefixCost = (upperAfter + JSON.stringify(kept).length) / 4 * Math.max(0, cost.input - cost.cacheRead);
-        // Eight future requests is a bounded estimate, not a promise of savings.
-        if (8 * saved * cost.cacheRead <= 1.5 * (summaryCost + coldPrefixCost)) return reject("insufficient-estimated-savings");
+        // Match Pi's summary output cap. This is a conservative preflight bound,
+        // not an assertion that all reserved tokens will actually be generated.
+        const summaryOutput = Math.max(0, Math.min(Math.floor(0.8 * p.settings.reserveTokens),
+          ctx.model.maxTokens > 0 ? ctx.model.maxTokens : Infinity));
+        const summaryCost = before / 4 * COST_RATIO.input + summaryOutput * COST_RATIO.output;
+        const coldPrefixCost = (upperAfter + JSON.stringify(kept).length) / 4 * (COST_RATIO.input - COST_RATIO.cacheRead);
+        const growth = Math.max(0, ...(state.recentGrowth ?? []).filter(n => Number.isFinite(n) && n > 0));
+        const limit = ctx.model.contextWindow - p.settings.reserveTokens;
+        const currentTokens = Math.max(p.tokensBefore, wholeTokens);
+        const reusableRequests = growth > 0 ? Math.max(0, Math.floor((limit - currentTokens) / growth)) : 0;
+        const breakEvenRequests = (summaryCost + coldPrefixCost) / (saved * COST_RATIO.cacheRead);
+        metrics.economics = { weights: COST_RATIO, growthTokens: growth, reusableRequests, breakEvenRequests,
+          summaryCost, coldPrefixCost, savedTokens: saved, summaryOutputUpperBound: summaryOutput };
+        // No invented fixed future-task count. Compare reuse until the next
+        // capacity boundary using observed work; manual/necessary rescue bypasses it.
+        if (!Number.isFinite(breakEvenRequests) || reusableRequests <= breakEvenRequests) return reject("insufficient-estimated-savings");
       }
       // Persist the attempt before any provider await; failed attempts consume the
       // same request quota and enter hold rather than switching compressors.
@@ -270,6 +292,11 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
         event.customInstructions, event.signal, undefined,
         (m, c, o) => ctx.modelRegistry.streamSimple(m, c, o), auth.env, undefined, undefined, sessionId);
       metrics.usage = result.usage;
+      if (running && metrics.economics && result.usage) {
+        (metrics.economics as Record<string, unknown>).actualSummaryCost = result.usage.input * COST_RATIO.input
+          + result.usage.cacheWrite * COST_RATIO.input + result.usage.cacheRead * COST_RATIO.cacheRead
+          + result.usage.output * COST_RATIO.output;
+      }
       if (version !== lifecycle || event.signal.aborted || signature(ctx) !== source) return reject("cancelled-or-source-changed");
       const summary = `[Program-retained sources]\n${protection}\n[Derived summary; non-authoritative]\n${result.summary}`;
       metrics.afterChars = summary.length;
@@ -315,6 +342,10 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     if (state.recentWork?.includes(key)) return;
     state.lastWork = key;
     state.recentWork = [...(state.recentWork ?? []), key].slice(-16);
+    // A genuine work turn can also contain failed/poll/recall results. They do
+    // not earn work, but their retained tokens still consume capacity.
+    const growth = estimatedTokens([event.message, ...event.toolResults]);
+    if (Number.isFinite(growth) && growth > 0) state.recentGrowth = [...(state.recentGrowth ?? []), growth].slice(-HOLD_WORK);
     state.work++; persist();
   });
   pi.on("before_agent_start", () => { boundaryTokens = undefined; });
@@ -337,6 +368,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     state.capacityWaiting = false;
     boundaryTokens = undefined; compactionSignal = undefined;
     requestTokens = undefined; localTokensSaved = 0;
+    state.recentGrowth = undefined;
     rewrite(ctx);
   });
   pi.on("session_before_compact", (event, ctx) => {
