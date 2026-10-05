@@ -665,7 +665,7 @@ test("successive native compactions flatten protected sources and retain exact h
 });
 
 
-test("OCC waiting and readiness follow Pi's model-specific auto-compaction limit", async t => {
+for (const exhaustWait of [false, true]) test(`OCC follows Pi's compaction limit and can become ready after waiting expires; exhausted=${exhaustWait}`, async t => {
   const dir = mkdtempSync(join(root, ".work", "occ-limit-")), old = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   t.after(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); });
@@ -685,14 +685,24 @@ test("OCC waiting and readiness follow Pi's model-specific auto-compaction limit
   t.after(() => occ.shutdown(ctx)); occ.restore(ctx);
   assert.equal(occ.deferLocal(ctx), false, "below 60% of the 400k native trigger");
   tokens = 240000; assert.equal(occ.deferLocal(ctx), true, "wait at 240k, not 600k");
-  hooks.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse", timestamp: 1,
-    content: [{ type: "toolCall", id: "work", name: "read", arguments: { path: "work.txt" } }] },
-    toolResults: [{ role: "toolResult", toolCallId: "work", toolName: "read", isError: false, timestamp: 2,
-      content: [{ type: "text", text: "distinct successful work" }] }] }, ctx);
+  for (let i = 0; i < (exhaustWait ? 3 : 1); i++) {
+    hooks.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse", timestamp: i,
+      content: [{ type: "toolCall", id: `work-${i}`, name: "read", arguments: { path: `work-${i}.txt` } }] },
+      toolResults: [{ role: "toolResult", toolCallId: `work-${i}`, toolName: "read", isError: false, timestamp: i + 1,
+        content: [{ type: "text", text: "distinct successful work" }] }] }, ctx);
+    tokens = 244964 + i * 1960; occ.deferLocal(ctx);
+  }
+  if (exhaustWait) {
+    assert.equal(occ.deferLocal(ctx), false, "expired waiting releases local summaries within the same request");
+    occ.restore(ctx);
+    assert.equal(occ.deferLocal(ctx), false, "reload does not restart waiting below the readiness threshold");
+  }
   tokens = 287999; occ.deferLocal(ctx); await hooks.get("agent_settled")({}, ctx);
   assert.equal(compactions, 0, "below 72% is not ready");
   tokens = 288000; occ.deferLocal(ctx); await hooks.get("agent_settled")({}, ctx);
   assert.equal(compactions, 1, "ready at 288k, not 720k");
+  await hooks.get("agent_settled")({}, ctx);
+  assert.equal(compactions, 1, "repeated idle boundaries do not repeat the summary attempt");
 });
 
 test("OCC work ignores recall, polling, failures and repeated identical observations", () => {

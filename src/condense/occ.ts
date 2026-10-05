@@ -148,8 +148,13 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     if (state.phase === "waiting" && fraction < EXIT) {
       state.phase = "normal"; state.waitExhaustedRequest = state.request; ready = false; persist(); return false;
     }
-    if (state.phase === "normal" && fraction >= ENTER && !spent() && state.waitExhaustedRequest !== state.request) {
-      state.phase = "waiting"; state.atWork = state.work; persist();
+    const exhausted = state.waitExhaustedRequest === state.request;
+    if (state.phase === "normal" && fraction >= (exhausted ? READY : ENTER) && !spent()) {
+      // Expiry releases local summaries below READY, not the request's future
+      // OCC opportunity. Keep the real work already earned in that wait window.
+      state.phase = "waiting";
+      if (!exhausted) state.atWork = state.work;
+      persist();
     }
     // Occupancy alone does not justify economic OCC. Real tool-work observations
     // earn the boundary; the candidate checks relative resource break-even.
