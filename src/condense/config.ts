@@ -49,6 +49,15 @@ const integerOrDefault = <T extends number | null>(
 const fractionOrDefault = <T extends number | null>(value: unknown, fallback: T): number | T =>
   typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1 ? value : fallback;
 
+/** Fail-soft at the settings.json boundary, preserving order and valid entries. */
+function normalizeFallbackModels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map(entry => entry.trim())
+    .filter(entry => /^[^/\s]+\/\S+$/.test(entry)))];
+}
+
 function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
   const merged = { ...DEFAULT_CONFIG, ...existing };
   const chain = existing.chainCompression;
@@ -62,6 +71,7 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
     compactionSummaryMaxTokens: Number.isSafeInteger(merged.compactionSummaryMaxTokens) && merged.compactionSummaryMaxTokens >= 0
       ? merged.compactionSummaryMaxTokens : DEFAULT_CONFIG.compactionSummaryMaxTokens,
     pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : DEFAULT_CONFIG.pruneOn,
+    summarizerFallbackModels: normalizeFallbackModels(merged.summarizerFallbackModels),
     summarizerThinking: isSummarizerThinking(merged.summarizerThinking) ? merged.summarizerThinking : DEFAULT_CONFIG.summarizerThinking,
     quietOversizedSkips: booleanOrDefault(merged.quietOversizedSkips, DEFAULT_CONFIG.quietOversizedSkips),
     minBatchChars: integerOrDefault(merged.minBatchChars, DEFAULT_CONFIG.minBatchChars),

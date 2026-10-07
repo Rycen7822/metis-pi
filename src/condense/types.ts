@@ -276,6 +276,8 @@ export interface ContextPruneConfig {
    * "provider/model-id" = explicit model (e.g. "anthropic/claude-haiku-3-5")
    */
   summarizerModel: string;
+  /** Ordered provider/model-id outage fallbacks; the session model is always last. */
+  summarizerFallbackModels: string[];
   /** Thinking/reasoning level to request for summarizer calls. */
   summarizerThinking: SummarizerThinking;
   /** When to trigger summarization and pruning */
@@ -606,6 +608,7 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
   showOccStatusLine: true,
   compactionSummaryMaxTokens: 0,
   summarizerModel: "default",
+  summarizerFallbackModels: [],
   summarizerThinking: "default",
   pruneOn: "agent-message",
   batchingMode: "turn",
