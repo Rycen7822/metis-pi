@@ -25,4 +25,4 @@
 | `git-changes` | HEAD/空树计数和采样参数。 |
 | `selection-copy` / `copy-stats` | 镜像降级、`other-wrapper`、复制模式/字数/耗时和失败。 |
 
-无活动会话时返回 `no active session`。此命令由 `src/diagnostics.ts` 装配，不验证所有外部服务或插件；运行覆盖见 [VALIDATION](../VALIDATION.md)。
+无活动会话时返回 `no active session`。此命令由 `src/diagnostics.ts` 装配，不验证所有外部服务或插件。

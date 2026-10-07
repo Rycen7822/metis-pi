@@ -31,4 +31,4 @@ fullscreen 选区按 Ctrl+C 复制对应逻辑文本：合并软折行，保留�
 
 Windows Terminal 快速通道、远程和非 WSL 环境沿用宿主路径。启动失败、退出或超时可回退；首次复制仍可能等待预热。关闭、重载和卸载取消请求、结束进程，不启动迟到回退。
 
-`src/selection-copy/` 持有映射、提取、传输与清理。严格 PTY 验证实际复制回读，`scripts/copy-perf.mjs` 仅测渲染/提取成本；覆盖见 [VALIDATION](../../VALIDATION.md)。
+`src/selection-copy/` 持有映射、提取、传输与清理。严格 PTY 验证实际复制回读，`scripts/copy-perf.mjs` 仅测渲染/提取成本。

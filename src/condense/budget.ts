@@ -9,19 +9,39 @@ import type { ContextMetricsSnapshot } from "./types.ts";
 // enters through the denominator instead (delta * min(window, CAP)).
 export const MAX_BUDGET_WINDOW = 300_000;
 
+/** Calibrated pressure, local o200k gain/output, and native soft-target policy; not billing guarantees. */
+export const SUMMARY_POLICY = {
+  minGainTokens: 2048, minGainFraction: 0.40, maxProxyTokens: 6144,
+  targetBaseTokens: 512, targetPerCallTokens: 96,
+  growthHeadroomTokens: 16384, nativeTargetTokens: 16384,
+} as const;
+
+export function summaryBudget(before: number, fixed: number, calls: number) {
+  const minimumGain = Math.max(SUMMARY_POLICY.minGainTokens, Math.ceil(SUMMARY_POLICY.minGainFraction * before));
+  return {
+    minimumGain,
+    limit: Math.min(SUMMARY_POLICY.maxProxyTokens, Math.floor(before - fixed - minimumGain)),
+    target: Math.min(SUMMARY_POLICY.maxProxyTokens, SUMMARY_POLICY.targetBaseTokens + SUMMARY_POLICY.targetPerCallTokens * calls),
+  };
+}
+
 /**
  * True iff a budget-triggered flush should fire: at `threshold` of the model's
- * window, or at MAX_BUDGET_WINDOW tokens, whichever comes first. Computes the
+ * window, MAX_BUDGET_WINDOW, or resolved native capacity minus growth headroom.
+ * Computes the
  * level ourselves rather than using ContextUsage.percent (a 0–100 value, null
  * when tokens is null). tokens is also null right after a compaction — guarded here.
  */
 export function shouldBudgetFlush(
   usage: ContextUsage | undefined,
   threshold: number | null,
+  nativeCapacity?: number,
 ): boolean {
   if (threshold == null || threshold <= 0 || threshold > 1) return false;
-  if (!usage || usage.tokens == null || !(usage.contextWindow > 0)) return false;
-  return usage.tokens >= Math.min(MAX_BUDGET_WINDOW, threshold * usage.contextWindow);
+  if (!usage || usage.tokens == null || !Number.isFinite(usage.tokens) || !(usage.contextWindow > 0)) return false;
+  const capacityGate = nativeCapacity !== undefined && Number.isFinite(nativeCapacity)
+    ? Math.max(0, nativeCapacity - SUMMARY_POLICY.growthHeadroomTokens) : Infinity;
+  return usage.tokens >= Math.min(MAX_BUDGET_WINDOW, threshold * usage.contextWindow, capacityGate);
 }
 
 /**

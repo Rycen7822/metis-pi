@@ -337,7 +337,10 @@ export class ToolCallIndexer {
     const original = this.getRecord(originalKey);
     const own = occurrence ?? (original && this.unknownLegacyOccurrence(newKey, original));
     if (!own) return;
-    const { refs, nextIndex } = buildShortToolCallRefs([own], this.nextShortAliasNumber);
+    const existingRef = this.getShortRefForToolCallId(newKey);
+    const { refs, nextIndex } = existingRef
+      ? { refs: [{ shortId: existingRef, toolCallId: own.toolCallId, resultTimestamp: own.resultTimestamp }], nextIndex: this.nextShortAliasNumber }
+      : buildShortToolCallRefs([own], this.nextShortAliasNumber);
     appendEntry(CUSTOM_TYPE_INDEX, { toolCalls: [own], backfilled: true, refs } satisfies IndexEntryData);
     this.nextShortAliasNumber = nextIndex;
     this.indexRecord(own);

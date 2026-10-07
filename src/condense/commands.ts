@@ -147,14 +147,19 @@ Usage:
   /pruner dedup on|off                     Enable or disable content-hash dedup
   /pruner help                             Show this help
 
-Trivial-batch skip (minBatchChars):
-  If the total raw resultText across a batch is below minBatchChars, the
-  batch is skipped: no summarizer LLM call is made, no summary message is
-  injected, and the prune frontier still advances so the same tool calls are
-  not reconsidered next flush. Default is 1000. Set to 0 to disable.
-  This runs BEFORE summarization, so it is cheaper than the post-LLM
-  skipped-oversized path that also rejects summaries larger than the raw
-  input. Both skip notifications are silenced by quietOversizedSkips.
+Paid summary admission:
+  Default pressure: 70% of the window, 300k tokens, or native capacity minus
+  16384 growth headroom, whichever comes first. Final-reply mode obeys this
+  gate too; manual now bypasses pressure, not net-benefit/output budgets.
+  Remaining semantic batches below minBatchChars (default 5000) make no
+  model call. Set 0 to disable ONLY this character guard. Mechanical work
+  is measured separately and needs no paid summary.
+  Paid replacements must save max(2048, ceil(40% of replaced proxy tokens)).
+  The complete summary, including recovery refs/wrapping, is limited to
+  min(6144, source - retained stubs - required gain) local o200k proxy tokens.
+  Budget rejection retains raw evidence and pending work; the frontier
+  never jumps its gap. Quiet non-error notices with quietOversizedSkips.
+  These proxy budgets are not provider billing/output tokens.
 
 Protected tools:
   Some tools' outputs must stay verbatim across turns — typically planning tools
@@ -165,18 +170,12 @@ Protected tools:
   tool call are silently ignored.
 
 Content-hash dedup (dedupByContentHash):
-  When ON (default), each captured tool call is hashed by
-  (toolName, normalize(resultText)) using SHA-1 and compared against records
-  already in the indexer. If an earlier prune already covered identical
-  content, the duplicate is registered as an alias of the original — no
-  summarizer LLM call is made, the duplicate's ToolResultMessage gets
-  stub-replaced via pruneMessages, and context_tree_query returns the
-  original record when asked with the duplicate's id. Normalization is
-  conservative: line endings, per-line trailing whitespace, and a final
-  trim() only. Internal whitespace and capitalization are preserved.
-  V1 dedupes only against records ALREADY in the indexer (from previous
-  flushes); intra-flush dedup is deferred to v2 to avoid dangling aliases
-  when a canonical batch is skipped as oversized / trivial.
+  When ON (default), exact (toolName, resultText) SHA-256 identities are
+  compared with previously covered records. Allocate the duplicate's own
+  recovery ref and verify its actual stub shrinks the local proxy before
+  authorizing hiding. No model call is needed; recall preserves each
+  occurrence's arguments, status and timestamp. Whitespace is not normalized.
+  Intra-flush dedup is not used; archiving alone never authorizes pruning.
 
 Batching mode:
   - turn (default): each assistant turn that used tools gets its own summary block. Small, granular.
@@ -600,6 +599,10 @@ export function registerCommands(
           if (!result.ok) {
             if (result.reason === "delivery-pending") {
               ctx.ui.notify("pruner: summary queued — raw results retained until delivery", "info");
+              break;
+            }
+            if (result.reason === "deferred-budget") {
+              ctx.ui.notify("pruner: complete-summary token budget insufficient — raw evidence retained pending; frontier unchanged across the gap", "info");
               break;
             }
             const suffix = "error" in result && result.error ? ` (${result.error})` : "";

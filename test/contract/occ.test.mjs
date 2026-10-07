@@ -23,6 +23,9 @@ async function host(t, { summary = "Derived progress: investigation continues.",
   if (installed) installedSettings.packages = installedSettings.packages.map(source => resolve(installed, source));
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...installedSettings, contextPrune: {
     enabled: true, opportunisticCompaction: true, minBatchChars: 5000, pruneOn,
+    // Isolate native/OCC ownership unless this fixture explicitly supplies a
+    // local-summary provider; the shipped pressure default now admits it.
+    autoBudgetThreshold: localSummary ? 0.7 : null,
     spillThreshold: 1000000, chainCompression: { enabled: false }, purgeErrors: { enabled: false },
     ...pruneOverrides,
   } }));
@@ -44,7 +47,8 @@ async function host(t, { summary = "Derived progress: investigation continues.",
       calls.push({ summarizing: true, local: true, context });
       const out = createAssistantMessageEventStream();
       const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
-        content: [{ type: "text", text: "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
+        content: [{ type: "text", text: localSummary === "dense" ? "a".repeat(7200)
+          : "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
         stopReason: "stop", timestamp: Date.now(), usage };
       Promise.resolve().then(async () => {
         if (autoAfterLocal) { settingsManager.setCompactionEnabled(true); await settingsManager.flush(); }
@@ -56,7 +60,9 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     t.after(() => unregisterApiProviders("occ-test-local-summary"));
   }
   let actualWork = 0;
-  writeFileSync(join(dir, "work.txt"), "NEW_WORK_EVIDENCE ".repeat(350));
+  const workEvidence = index => localSummary === "dense" ? `NEW_WORK_EVIDENCE_${index}\n` + "界".repeat(6000)
+    : `NEW_WORK_EVIDENCE_${index} `.repeat(localSummary ? 800 : 350);
+  writeFileSync(join(dir, "work.txt"), workEvidence(0));
   modelRuntime.registerProvider("occ-local", {
     api: model.api, apiKey: "local", baseUrl: model.baseUrl, models: [model],
     streamSimple(m, context, options) {
@@ -66,7 +72,7 @@ async function host(t, { summary = "Derived progress: investigation continues.",
       Promise.resolve().then(async () => {
         const summaryResponse = summarizing ? await onSummary?.({ sm, options }) : undefined;
         const toolUse = !summarizing && actualWork++ < workTurns;
-        if (toolUse) writeFileSync(join(dir, "work.txt"), `NEW_WORK_EVIDENCE_${actualWork} `.repeat(350));
+        if (toolUse) writeFileSync(join(dir, "work.txt"), workEvidence(actualWork));
         const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
           content: toolUse ? [{ type: "toolCall", id: `work-${actualWork}`, name: "read", arguments: { path: join(dir, "work.txt") } }]
             : [{ type: "text", text: summarizing ? summary : "Final response." }],
@@ -189,6 +195,8 @@ test("real AgentSession automatically commits OCC once, protects source requirem
   assert.match(compacted[0].summary, /ORIGINAL_GOAL: inspect only; do not deploy/);
   assert.match(compacted[0].summary, /context_tree_query/);
   assert.equal(h.calls.filter(c => c.summarizing).length, 1);
+  assert.match(JSON.stringify(h.calls.find(c => c.summarizing).context), /Aim for at most 16384 output text tokens/);
+  assert.equal(h.calls.find(c => c.summarizing).maxTokens, 400, "soft target does not alter Pi's hard generation ceiling");
   const query = h.session.extensionRunner.getAllRegisteredTools().find(t => t.definition.name === "context_tree_query").definition;
   const ctx = { sessionManager: h.sm };
   const directory = await query.execute("list", {}, undefined, undefined, ctx);
@@ -470,8 +478,10 @@ test("local condense defers a stale threshold but fresh high usage still permits
   assert.equal(compactions(h).length, 1);
 });
 
-test("local condense does not suppress a threshold when fixed overhead still leaves pressure high", async t => {
-  const h = await host(t, { auto: true, workTurns: 4, localSummary: true, autoAfterLocal: true,
+test("local proxy gains do not suppress native pressure when Pi estimates no useful reduction", async t => {
+  // Dense source tokens and a longer ASCII summary satisfy the o200k budget,
+  // but cannot earn Pi/native capacity credit merely by passing that check.
+  const h = await host(t, { auto: true, workTurns: 4, localSummary: "dense", autoAfterLocal: true,
     // Leave most history outside condense's eligible tool output. Less than
     // the required headroom is recovered, despite publishing a local summary.
     beforeLoad(sm) {

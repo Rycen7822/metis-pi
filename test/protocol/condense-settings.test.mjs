@@ -22,6 +22,14 @@ test("partial chain settings keep defaults, accept zero window and reject invali
       writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { chainCompression: given } }));
       assert.deepEqual((await loadConfig()).chainCompression, { ...DEFAULT_CONFIG.chainCompression, ...expected });
     }
+    assert.equal(DEFAULT_CONFIG.minBatchChars, 5000);
+    assert.equal(DEFAULT_CONFIG.autoBudgetThreshold, 0.7);
+    assert.equal(DEFAULT_CONFIG.enabled, false);
+    assert.equal(DEFAULT_CONFIG.opportunisticCompaction, false);
+    for (const [value, expected] of [[undefined, 0.7], [null, null], [0.5, 0.5], [2, 0.7], ["bad", 0.7]]) {
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { autoBudgetThreshold: value } }));
+      assert.equal((await loadConfig()).autoBudgetThreshold, expected);
+    }
     for (const value of [0, 8192, -1, 1.5, "8192", null, Number.MAX_SAFE_INTEGER + 1]) {
       writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { compactionSummaryMaxTokens: value } }));
       assert.equal((await loadConfig()).compactionSummaryMaxTokens, Number.isSafeInteger(value) && value >= 0 ? value : 0);

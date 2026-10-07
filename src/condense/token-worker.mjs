@@ -24,10 +24,21 @@ function difference(before, after, used) {
   return delta;
 }
 
-parentPort.on("message", ({ id, before, after }) => {
+parentPort.on("message", ({ id, before, after, absolute }) => {
   try {
     const used = new Set();
     const result = { id, delta: difference(before, after, used) };
+    if (absolute) {
+      const count = messages => messages.reduce((sum, message) => {
+        const text = JSON.stringify(message);
+        const key = createHash("sha256").update(text).digest("hex");
+        used.add(key);
+        let tokens = cache.get(key);
+        if (tokens === undefined) { tokens = encoding.encode(text, [], []).length; cache.set(key, tokens); }
+        return sum + tokens;
+      }, 0);
+      result.before = count(before); result.after = count(after);
+    }
     for (const key of cache.keys()) if (!used.has(key)) cache.delete(key);
     parentPort.postMessage(result);
   }

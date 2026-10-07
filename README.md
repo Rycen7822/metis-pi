@@ -32,7 +32,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Execution tools](docs/execution.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
 | [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from an external JSON file, applied at the next agent run. Replaces request context only; preserves project rules and source files. |
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
-| [Condense](docs/features/condense.md) | Native history condensation using the existing contextPrune configuration. After each final reply, simplifies history before applying threshold-based summarization. Persists large outputs and supports paginated retrieval and summary usage display. |
+| [Condense](docs/features/condense.md) | Opt-in history condensation using contextPrune. Measures mechanical replacements independently; paid summaries need pressure and complete-message proxy budgets. Deferred evidence stays recoverable. Supports paginated retrieval and token-only summary usage. |
 
 Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid fields fall back according to the configuration rules; the display layer does not rewrite user files. Set `enabled: false` to disable the display layer; filter the separate goal/condense/execution entries individually. Display options and defaults are maintained in the [configuration reference](docs/configuration.md). Condense uses `contextPrune` in Pi's `settings.json`.
 
@@ -44,7 +44,7 @@ Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid f
 - The main UI may conflict with other plugins that replace the editor, footer, or Working indicator. This package's exact copy path takes over the heuristic copying provided by `pi-copy-soft-wrap`; use only one implementation.
 - Bundled native tools include only linux-x64 binaries. See the [execution guide](docs/execution.md) for the retained tools.
 
-The [compatibility guide](docs/compatibility.md) documents host contracts. [VALIDATION.md](VALIDATION.md) records current checks and coverage gaps; it does not guarantee compatibility with every plugin combination.
+The [compatibility guide](docs/compatibility.md) documents host contracts and limits; it does not guarantee compatibility with every plugin combination.
 
 ## Development
 

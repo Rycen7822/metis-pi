@@ -7,6 +7,9 @@ import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent"
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
 import registerCondense from "../../extensions/condense.ts";
+import { TokenEstimator } from "../../src/condense/token-estimator.ts";
+import { summaryBudget, shouldBudgetFlush } from "../../src/condense/budget.ts";
+import { toolResultStub } from "../../src/condense/pruner.ts";
 import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
 
@@ -42,7 +45,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
       if (settled) return;
       settled = true;
       const reason = options.signal?.aborted ? "aborted" : typeof stopReason === "function" ? stopReason(callNumber) : stopReason;
-      const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: reply }], stopReason: reason, errorMessage: reason === "error" ? "Offline summary provider failed" : undefined, timestamp: 1, usage };
+      const message = { role: "assistant", api, provider: "local", model: "summary", content: [{ type: "text", text: typeof reply === "function" ? reply(callNumber) : reply }], stopReason: reason, errorMessage: reason === "error" ? "Offline summary provider failed" : undefined, timestamp: 1, usage };
       output.push({ type: reason === "error" ? "error" : "done", reason, message, error: message }); output.end(message);
     };
     options.signal?.addEventListener("abort", finish, { once: true });
@@ -136,7 +139,7 @@ test("packing precedes the 5000-char gate and keeps settled history stable with 
 test("automatic chain compression follows its switch and retains three recent tasks with exact recovery", async t => {
   for (const enabled of [false, true]) await t.test(`enabled=${enabled}`, async t => {
     const f = await fixture(t, { chainCompression: { enabled, rollingWindow: 3, fuseRangeSummary: false } });
-    const body = "first task evidence\n".repeat(400);
+    const body = "first task evidence\n".repeat(1400);
     for (let i = 0; i < 4; i++) {
       if (i) f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: f.nextTimestamp() });
       const call = f.add(body, "cat evidence.txt", `chain-${i}`, `THOUGHT_${i} ` + "x".repeat(5000));
@@ -190,27 +193,23 @@ test("automatic chain compression archives skipped small outputs and preserves t
   });
 });
 
-test("a tree switch aborts automatic chain fusion while retaining its persisted batch summaries", async t => {
-  const f = await fixture(t, { defer: true, chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
-  for (let i = 0; i < 25; i++) f.add(`evidence-${i}\n` + "x".repeat(6000), `cat evidence-${i}.txt`);
-  const pending = f.finish(false);
-  for (let i = 0; i < 100 && f.calls.length < 2; i++) await new Promise(resolve => setImmediate(resolve));
+test("automatic chain compression reuses durable summaries without a second paid fusion", async t => {
+  const f = await fixture(t, { chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  for (let i = 0; i < 25; i++) f.add(`evidence-${i}\n` + (i === 24 ? "界" : "x").repeat(6000), `cat evidence-${i}.txt`);
+  await f.finish();
   assert.equal(f.calls.length, 2);
-  f.releaseAll();
-  for (let i = 0; i < 100 && f.calls.length < 3; i++) await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.calls.length, 3, "OCC-off retains the configured single-chain fusion");
   assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 2);
-  await f.emit("session_tree"); await pending;
-  assert.equal(f.requests[2].signal.aborted, true);
-  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 0);
-  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-summary").length, 2);
+  assert.equal(f.sm.getBranch().filter(e => e.customType === "context-prune-chain").length, 1);
+  await f.emit("session_tree");
+  await f.finish(false);
+  assert.equal(f.calls.length, 2, "reload cannot turn mechanical chain compression into paid fusion");
 });
 
 for (const boundary of ["settled", "session_tree", "session_start", "session_shutdown"]) test(`final boundary retains refs and discards late summaries after ${boundary}`, async (t) => {
   const f = await fixture(t, { reply: "A short useful summary with no reference labels.", defer: true });
-  const call = f.add("important detail\n".repeat(700), "inspect-unknown-tool");
+  const call = f.add("important detail\n".repeat(1500), "inspect-unknown-tool");
   const pending = f.finish();
-  for (let i = 0; i < 30 && f.calls.length === 0; i++) await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 600 && f.calls.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(f.calls.length, 1);
   const request = { sessionId: f.sm.getSessionId(), messages: projectBranchMessages(f.sm.getBranch()) };
   f.events.emit("metis:condense-project", request);
@@ -221,14 +220,14 @@ for (const boundary of ["settled", "session_tree", "session_start", "session_shu
   if (boundary !== "settled") {
     assert.equal(summary, undefined);
     const messages = projectBranchMessages(f.sm.getBranch());
-    assert.equal(messages.find(message => message.toolCallId === call.id).content[0].text, "important detail\n".repeat(700));
+    assert.equal(messages.find(message => message.toolCallId === call.id).content[0].text, "important detail\n".repeat(1500));
     return;
   }
   assert.ok(summary);
   assert.match(summary.content, /t1/);
   assert.equal(summary.details.toolCallRefs.length, 1);
   const recall = await f.tools.get("context_tree_query").execute("q", { toolCallIds: ["t1"] }, undefined, undefined, f.ctx);
-  assert.equal(recall.details.results[0].text, "important detail\n".repeat(700));
+  assert.equal(recall.details.results[0].text, "important detail\n".repeat(1500));
   await f.finish(); assert.equal(f.calls.length, 1, "same history is not summarized again");
   const source = f.sm.getBranch().find(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === call.id);
   f.sm.appendContextEdit(source.id, { content: "CORRECTED_WITHOUT_OCC" });
@@ -241,7 +240,7 @@ for (const boundary of ["settled", "session_tree", "session_start", "session_shu
 test("session restore drops the previous queue while a tree switch keeps its own records and never reloads config", async (t) => {
   const f = await fixture(t);
   // A body that reaches the summarizer (buildLog packs into an archive instead).
-  const body = "important detail\n".repeat(700);
+  const body = "important detail\n".repeat(1500);
   // agent-message queues this batch and returns before the budget gate.
   const queued = f.add(body, "inspect-unknown-tool");
   await f.emit("turn_end", { message: queued.assistant, toolResults: [queued.result], turnIndex: 0 });
@@ -272,7 +271,7 @@ test("session restore drops the previous queue while a tree switch keeps its own
   // re-arms work that only this branch holds, and (unlike session_start) neither
   // reloads config nor shows the boot widget.
   writeFileSync(join(f.dir, "settings.json"), JSON.stringify({ ...settings, contextPrune: { ...settings.contextPrune, showPruneStatusLine: false } }));
-  const afterBody = "later detail\n".repeat(700);
+  const afterBody = "later detail\n".repeat(1800);
   f.add(afterBody, "inspect-after-tree");
   await f.emit("session_tree");
   await f.emit("turn_end", {});
@@ -356,17 +355,115 @@ test("goal continuation counters change only the appended message, preserving sy
 });
 
 
-test("the existing minBatchChars gate skips 4999 characters and summarizes at 5000", async (t) => {
+test("manual paid fusion budgets the full chain wrapper and retains concatenation on rejection", async t => {
+  for (const rejected of [false, true]) await t.test(rejected ? "budget rejected" : "accepted", async t => {
+    const f = await fixture(t, { reply: n => n <= 2 ? "界".repeat(2500) : rejected ? "界".repeat(3500) : "Fused evidence.",
+      chainCompression: { enabled: true, rollingWindow: 100, fuseRangeSummary: true } });
+    for (let i = 0; i < 26; i++) f.add(`evidence-${i}\n` + "界 ".repeat(3000), `cat evidence-${i}.txt`);
+    await f.finish();
+    assert.equal(f.calls.length, 2);
+    assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-chain"));
+    await f.commands.get("pruner").handler("compact", f.ctx);
+    assert.equal(f.calls.length, 3);
+    const chain = f.sm.getBranch().find(e => e.customType === "context-prune-chain").data;
+    assert.equal(chain.rangeSummaryText, rejected ? undefined : "Fused evidence.");
+    assert.ok((await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages
+      .some(m => m.metisDerived?.blockId === chain.blockId));
+  });
+});
+
+test("pressure deferral keeps a frontier gap, permits packing and retries on the next real context", async t => {
   const f = await fixture(t);
-  f.add("a".repeat(4999), "unknown-command", "below"); await f.finish();
+  f.ctx.getContextUsage = () => ({ tokens: 60000, contextWindow: 100000 });
+  const semantic = f.add("界".repeat(6000), "unknown-command", "deferred");
+  await f.finish();
   assert.equal(f.calls.length, 0);
-  f.add("b".repeat(5000), "unknown-command", "at-limit"); await f.finish();
+  assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "deferred-budget");
+  f.add(buildLog); await f.finish();
+  assert.equal(f.calls.length, 0);
+  assert.ok(f.sm.getBranch().some(e => e.details?.representation === "packed"));
+  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier"), "later packing cannot cross a deferred semantic gap");
+  f.ctx.getContextUsage = () => ({ tokens: 75000, contextWindow: 100000 });
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw })).messages;
+  assert.equal(f.calls.length, 1);
+  assert.ok(projected.some(m => m.customType === "context-prune-summary" && m.details?.representation === "summary"), "this request includes the just-persisted summary");
+  assert.notEqual(projected.find(m => m.toolCallId === semantic.id).content[0].text, semantic.result.content[0].text);
+  await f.emit("context", { messages: projected });
+  assert.equal(f.calls.length, 1, "repeated projection does not regenerate completed evidence");
+});
+
+test("complete-message budgets include refs, reject without hiding and charge reported rejected output", async t => {
+  const encoder = new TokenEstimator(); t.after(() => encoder.clear());
+  let badReply;
+  const f = await fixture(t, { showPruneStatusLine: true, reply: n => n === 1 ? badReply : "Inspection complete." });
+  const call = f.add("界".repeat(6000), "unknown-command", "full-budget");
+  const counts = await encoder.measure([call.result], [toolResultStub(call.result, undefined, "t1")]);
+  const budget = summaryBudget(counts.before, counts.after, 1);
+  badReply = "界".repeat(budget.limit); // Body alone fits; the real refs/wrapper do not.
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  assert.match(f.statuses.get("context-prune"), /usage: 20 tokens/);
+  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier" || e.customType === "context-prune-summary"));
+  assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.reason, "deferred-budget");
+  assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === call.id).content[0].text, call.result.content[0].text);
+  const original = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: original })).messages;
+  assert.equal(f.calls.length, 2, "next context retries at high pressure and publishes reply 2");
+  const summary = f.sm.getBranch().find(e => e.details?.representation === "summary");
+  assert.equal(summary.details.toolCallRefs[0].shortId, "t1", "retry reuses the durable source reference");
+  const stub = projected.find(m => m.toolCallId === call.id);
+  const rendered = await encoder.measure([call.result], [stub, summary]);
+  assert.ok(rendered.before - rendered.after >= budget.minimumGain);
+  const size = await encoder.measure([summary], []);
+  assert.ok(size.before <= budget.limit && size.before <= 6144);
+  assert.match(f.statuses.get("context-prune"), /usage: 40 tokens/);
+});
+
+test("legacy duplicate evidence never authorizes a growing mechanical stub", async t => {
+  const f = await fixture(t);
+  f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: "legacy-small", resultTimestamp: 5,
+    toolName: "bash", args: { command: "unknown-command" }, resultText: "OK", isError: false, turnIndex: -1, timestamp: 4 }] });
+  await f.emit("session_start");
+  const call = f.add("OK", "unknown-command", "fresh-small");
+  await f.finish();
+  assert.equal(f.calls.length, 0);
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+  assert.equal(projected.find(m => m.toolCallId === call.id).content[0].text, "OK");
+  const stored = f.sm.getBranch().filter(e => e.customType === "context-prune-index")
+    .flatMap(e => e.data.toolCalls).find(record => record.toolCallId === call.id);
+  assert.equal(stored.archiveOnly, true, "durable recovery metadata alone cannot hide evidence");
+});
+
+test("model-facing proxy measurements ignore metadata/timestamps and concurrent jobs all complete", async t => {
+  const encoder = new TokenEstimator(); t.after(() => encoder.clear());
+  const jobs = Array.from({ length: 8 }, (_, i) => encoder.measure([{ role: "custom", customType: "test", content: "Same evidence.",
+    details: { hidden: "x".repeat(i * 1000) }, display: Boolean(i % 2), timestamp: i }], []));
+  const results = await Promise.all(jobs);
+  assert.ok(results.every(result => result !== null));
+  assert.ok(results.every(result => result.before === results[0].before));
+  assert.equal(shouldBudgetFlush({ tokens: 67000, contextWindow: 100000 }, 0.7, 83000), true, "native reserve and 16K headroom can admit below 70%");
+  assert.equal(shouldBudgetFlush({ tokens: 69999, contextWindow: 100000 }, 0.7), false);
+  assert.equal(shouldBudgetFlush({ tokens: 70000, contextWindow: 100000 }, 0.7), true);
+  assert.equal(shouldBudgetFlush({ tokens: 300000, contextWindow: 1000000 }, 0.7), true);
+  assert.equal(shouldBudgetFlush({ tokens: Infinity, contextWindow: 100000 }, 0.7), false);
+  assert.equal(shouldBudgetFlush({ tokens: 90000, contextWindow: 100000 }, null), false);
+});
+
+test("minBatchChars is only a character guard; paid summaries must also earn their token budget", async (t) => {
+  const f = await fixture(t);
+  f.add("界".repeat(4999), "unknown-command", "below"); await f.finish();
+  assert.equal(f.calls.length, 0);
+  f.add("b".repeat(5000), "unknown-command", "low-proxy-benefit"); await f.finish();
+  assert.equal(f.calls.length, 0, "passing the character guard never forces a paid request");
+  f.add("界".repeat(5000), "unknown-command", "at-limit"); await f.finish();
   assert.equal(f.calls.length, 1);
 });
 
 for (const stopReason of ["error", "length"]) test(`summary ${stopReason} records its cause, retains raw output and can retry`, async t => {
   const f = await fixture(t, { stopReason });
-  const body = "important detail\n".repeat(700), call = f.add(body, "inspect-unknown-tool");
+  const body = "important detail\n".repeat(1800), call = f.add(body, "inspect-unknown-tool");
   await f.finish();
   const metric = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data;
   assert.equal(metric.outcome, "error"); assert.equal(metric.reason, "summarizer-failed");
@@ -385,7 +482,7 @@ test("effective rescan preserves raw frontier ordinals after global compaction",
   const kept = f.sm.appendMessage({ role: "user", content: "new effective task", timestamp: 200 });
   f.sm.appendCompaction("old summary", kept, 1000);
   f.sm.appendCustomEntry("metis-occ-state", { phase: "hold", work: 10, atWork: 0, atChars: 0 });
-  f.add("FRESH_BODY ".repeat(700), "custom inspection", "fresh");
+  f.add("FRESH_BODY ".repeat(1800), "custom inspection", "fresh");
   await f.emit("session_start");
   await f.finish();
   assert.equal(f.calls.length, 1);
@@ -398,12 +495,12 @@ test("effective rescan preserves raw frontier ordinals after global compaction",
 test("a local rewrite holds through two steps and only releases after real reuse plus new history", async t => {
   const f = await fixture(t, { occ: true });
   // Exercise hold release below OCC's economic range, independently of prices.
-  f.ctx.getContextUsage = () => ({ tokens: 50000, contextWindow: 100000 });
-  f.add("FIRST_EVIDENCE ".repeat(500), "custom inspection");
+  f.ctx.getContextUsage = () => ({ tokens: 75000, contextWindow: 100000 });
+  f.add("FIRST_EVIDENCE ".repeat(1400), "custom inspection");
   await f.finish();
   assert.equal(f.calls.length, 1);
   for (let i = 0; i < 4; i++) {
-    const next = f.add(`NEW_${i} ` + "observation ".repeat(200), "custom inspection");
+    const next = f.add(`NEW_${i} ` + "observation ".repeat(1600), "custom inspection");
     await f.emit("turn_end", { message: next.assistant, toolResults: [next.result], turnIndex: i });
     await f.finish();
     assert.equal(f.calls.length, i < 3 ? 1 : 2);
@@ -429,14 +526,15 @@ test("capacity waiting imports temporary output archives without pruning their v
 });
 
 
-test("summary provider sees the retained test tail, complete command conditions and bounded oversized arguments", async (t) => {
+test("deterministic packing retains the test tail; semantic serialization preserves conditions and bounds arguments", async (t) => {
   const f = await fixture(t);
   const tail = "FINAL_TEST_RESULT_SENTINEL: all checks completed";
-  const text = Array.from({ length: 260 }, (_, i) => `${i % 12 === 0 ? "warning" : "progress"} ${i}: ${"x".repeat(150)}`).join("\n") + "\n" + tail;
+  const text = Array.from({ length: 260 }, (_, i) => `${i % 12 === 0 ? "warning" : "progress"} ${i}: ${"界".repeat(150)}`).join("\n") + "\n" + tail;
   f.add(text);
   await f.finish();
-  assert.equal(f.calls.length, 1);
-  assert.ok(JSON.stringify(f.calls[0]).includes(tail), "packing's retained tail reaches the actual summary provider");
+  assert.equal(f.calls.length, 0, "a profitable deterministic candidate does not need a paid summary");
+  const packed = f.sm.getBranch().find(entry => entry.details?.representation === "packed");
+  assert.ok(packed.content.includes(tail));
   const batch = { turnIndex: 0, timestamp: 1, assistantText: "plan ".repeat(5000), toolCalls: [{
     toolCallId: "large-write", toolName: "write", args: { path: "large.ts", content: "🙂".repeat(50000) },
     resultText: "log ".repeat(20000) + "FAILURE_AT_END", isError: true,
@@ -462,7 +560,7 @@ test("subagent control receipts remain verbatim while ordinary results are summa
   f.sm.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "control", name: "pi_wait_agent",
     arguments: { run_ids: ["completed-run"] } }], timestamp: 2, stopReason: "toolUse" });
   f.sm.appendMessage(control);
-  f.add("ordinary output\n".repeat(400), "cat ordinary.txt", "ordinary");
+  f.add("ordinary output\n".repeat(1800), "cat ordinary.txt", "ordinary");
   await f.finish();
   assert.equal(f.calls.length, 1);
   assert(!JSON.stringify(f.calls[0]).includes("completed-run"));
@@ -483,7 +581,7 @@ test("automatic and manual chunks keep durable progress through a failure inside
     for (const [i, id] of ids.entries()) f.sm.appendMessage({ role: "toolResult", toolCallId: id, toolName: "bash",
       content: [{ type: "text", text: `evidence-${i}\n` + "x".repeat(6000) }], isError: false, timestamp: 3 + i });
     f.sm.appendMessage({ role: "user", content: "A separate task", timestamp: 200 });
-    f.add("later task output\n".repeat(400), "cat later.txt", "later-task");
+    f.add("later task output\n".repeat(1400), "cat later.txt", "later-task");
     const flush = () => path === "automatic" ? f.finish() : f.commands.get("pruner").handler("now", f.ctx);
     const summaries = () => f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
     await flush();
@@ -527,7 +625,7 @@ test("summary requests reserve output space and local budget failures never requ
     assert(Buffer.byteLength(call.messages[0].content[0].text, "utf8") + f.requests[i].maxTokens < 6000);
   }
   f.ctx.model.contextWindow = 2048;
-  f.add("raw result\n".repeat(600), "cat pending.txt");
+  f.add("raw result\n".repeat(1800), "cat pending.txt");
   await f.finish();
   assert.equal(f.calls.length, 3);
   const metric = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
@@ -543,10 +641,10 @@ test("parallel summaries commit in order within a three-record window and reject
     const f = await fixture(t, { defer: true });
     for (let i = 0; i < 5; i++) {
       f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: 100 + i });
-      f.add(`source-${i}\n` + "x".repeat(6000), `cat source-${i}.txt`, `parallel-${i}`);
+      f.add(`source-${i}\n` + "界".repeat(6000), `cat source-${i}.txt`, `parallel-${i}`);
     }
     const pending = f.finish();
-    for (let i = 0; i < 100 && f.calls.length < 3; i++) await new Promise(resolve => setImmediate(resolve));
+    for (let i = 0; i < 600 && f.calls.length < 3; i++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(f.calls.length, 3, "requests overlap before any provider is released");
     f.release(2); f.release(1);
     await new Promise(resolve => setImmediate(resolve));
@@ -556,7 +654,7 @@ test("parallel summaries commit in order within a three-record window and reject
     f.release(0);
     let done = false;
     pending.finally(() => { done = true; });
-    for (let i = 0; i < 100 && !done; i++) { await new Promise(resolve => setImmediate(resolve)); f.releaseAll(); }
+    for (let i = 0; i < 600 && !done; i++) { await new Promise(resolve => setTimeout(resolve, 5)); f.releaseAll(); }
     await pending;
     const summaries = f.sm.getBranch().filter(e => e.customType === "context-prune-summary");
     assert.deepEqual(summaries.map(e => e.details.toolCallRefs[0].toolCallId), changed ? [] : Array.from({ length: 5 }, (_, i) => `parallel-${i}`));
@@ -570,9 +668,9 @@ test("parallel summaries commit in order within a three-record window and reject
 
 test("a tree switch cancels concurrent requests, preserves the durable prefix and restores the suffix", async t => {
   const f = await fixture(t, { defer: true });
-  for (let i = 0; i < 100; i++) f.add(`source-${i}\n` + "x".repeat(6000), `cat source-${i}.txt`);
+  for (let i = 0; i < 100; i++) f.add(`source-${i}\n` + (i >= 96 ? "界" : "x").repeat(6000), `cat source-${i}.txt`);
   const waitForCalls = async count => {
-    for (let i = 0; i < 300 && f.calls.length < count; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    for (let i = 0; i < 1000 && f.calls.length < count; i++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(f.calls.length, count);
   };
   const first = f.finish();
@@ -588,8 +686,8 @@ test("a tree switch cancels concurrent requests, preserves the durable prefix an
   assert(f.requests.slice(0, attempted).every(r => r.signal.aborted), "cancel propagates to every old provider request");
   let done = false;
   const resumed = f.finish().finally(() => { done = true; });
-  for (let i = 0; i < 100 && !done; i++) {
-    await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 600 && !done; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
     f.releaseAll();
   }
   assert(done, "remaining chunks finish after the switch");

@@ -39,16 +39,17 @@ import { computeContextMetrics } from "./context-metrics.ts";
 import { StatsAccumulator } from "./stats.ts";
 import { PruneFrontierTracker } from "./frontier.ts";
 import { BlockRefIssuer } from "./block-refs.ts";
-import { compressEligible, prepareSharedChain, selectEligible, findCompressibleRange, chainMatchesGrace, extractChainRecords } from "./chain-compressor.ts";
+import { compressEligible, prepareSharedChain, selectEligible, findCompressibleRange, chainMatchesGrace, extractChainRecords, type CompressEligibleDeps } from "./chain-compressor.ts";
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
 import { detectChains, withClosingMessage } from "./chain-detector.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
-import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction } from "./budget.ts";
+import { shouldBudgetFlush, shouldDeltaFlush, shouldFrontierGapFlush, usageFraction, summaryBudget } from "./budget.ts";
 import { archiveBatches, archiveToolOutput, spillOversizedBatch } from "./spill.ts";
 import { bareToolCallId, occKey } from "./occurrence-key.ts";
 import { DiagnosticSink } from "./diagnostics.ts";
 import { TokenEstimator, projectionFingerprint } from "./token-estimator.ts";
 import { resolveRange, perBatchSummaryOverlapsDropped } from "./chain-range-prune.ts";
+import { hashToolResult } from "./content-hash.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 
@@ -233,6 +234,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (opts?.rethrow) throw err;
       batches = pendingBatches.slice();
     }
+    // Archive-only records in a dropped chain are recoverable, not pending
+    // model work. Also leave non-text results intact rather than summarizing
+    // only their text and accidentally discarding attachments.
+    const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
+    const edited = changedSourceToolIds(ctx);
+    const visibleKeys = new Set(visible.filter((message: any) => message.role === "toolResult" && !edited.has(message.toolCallId)
+      && Array.isArray(message.content) && message.content.every((block: any) => block.type === "text"))
+      .map((message: any) => occKey(message.toolCallId, message.timestamp)));
+    batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => visibleKeys.has(occKey(call.toolCallId, call.resultTimestamp))) }));
     batches = batches
       .map((batch) => trimBatchToPendingRange(batch))
       .filter((batch): batch is CapturedBatch => batch !== null);
@@ -248,14 +258,46 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Range-summary fuser injected into compressEligible (B). Returns undefined
   // when fuseRangeSummary is off so the compressor keeps the per-batch concat.
   // Each successful fusion folds its usage + bumps the rangesSummarized counter.
-  const makeFuseRange = (ctx: any, signal?: AbortSignal, automatic = false): ((text: string) => Promise<string | null>) | undefined => {
-    if (!currentConfig.value.chainCompression.fuseRangeSummary || (automatic && occ.enabled())) return undefined;
+  const makeFuseRange = (ctx: any, signal?: AbortSignal, automatic = false): CompressEligibleDeps["fuseRange"] => {
+    if (!currentConfig.value.chainCompression.fuseRangeSummary || automatic) return undefined;
     const version = lifecycle;
-    return async (text: string) => {
-      const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal });
-      assertCurrent(version);
+    return async (text, entry, extraBody) => {
+      const raw = ctx.sessionManager.buildSessionProjection().messages;
+      const source = projectionFingerprint(raw), config = JSON.stringify(currentConfig.value);
+      const views = currentChainViews(raw, ctx);
+      const render = (body: string) => projectContext(raw, ctx.model?.api, ctx,
+        views.concat({ ...entry, rangeSummaryText: extraBody ? `${body}\n\n${extraBody}` : body }), true, entry.startUserTimestamp)
+        .messages.find((message: any) => message.metisDerived?.blockId === entry.blockId);
+      const original = render(text), empty = render("");
+      if (!original || !empty) return null;
+      // Paid fusion must earn a gain over the mechanical concatenation, not
+      // borrow savings from removing unrelated assistant/tool-call arguments.
+      const before = await tokenEstimator.measure([original], [], signal);
+      const overhead = await tokenEstimator.measure([empty], [], signal);
+      if (!before || !overhead) return null;
+      const budget = summaryBudget(before.before, 0, entry.toolRefs.length);
+      budget.target = Math.max(budget.target, overhead.before + 256);
+      if (budget.limit < budget.target) return null;
+      const valid = () => {
+        assertCurrent(version);
+        signal?.throwIfAborted();
+        if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
+          || config !== JSON.stringify(currentConfig.value)) throw new Error("This extension ctx is stale: fusion source changed");
+      };
+      valid();
+      const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal,
+        outputBudget: budget,
+        onUsage: usage => { if (!signal?.aborted) statsAccum.add(usage); },
+        acceptSummary: async summary => {
+          valid();
+          const message = render(summary);
+          const counts = message && await tokenEstimator.measure([message], [], signal);
+          valid();
+          return !!counts && counts.before <= budget.limit;
+        },
+      });
+      valid();
       if (r) {
-        statsAccum.add(r.usage);
         statsAccum.addRangesSummarized(1);
       }
       return r?.summaryText ?? null;
@@ -326,6 +368,66 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return result;
   };
 
+  const paidPressure = (ctx: any, closingMessage?: any) => {
+    let usage = ctx.getContextUsage?.();
+    // message_end precedes persistence: ctx may still report the previous tool
+    // request. Admit against the just-finished main response when available.
+    const boundary = closingMessage?.usage;
+    if (boundary && Number.isFinite(boundary.input)) {
+      const tokens = boundary.input + (boundary.output ?? 0) + (boundary.cacheRead ?? 0) + (boundary.cacheWrite ?? 0);
+      if (Number.isFinite(tokens) && tokens > 0) usage = { tokens, contextWindow: usage?.contextWindow ?? ctx.model?.contextWindow };
+    }
+    return shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx));
+  };
+
+  // Archive first so aliases, spill previews and recovery paths are real and
+  // fixed before paying for a summary. This same renderer is used to publish.
+  const prepareReplacement = async (batch: CapturedBatch, ctx: any,
+    appendEntry: (type: string, data?: unknown) => void, signal: AbortSignal) => {
+    const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
+    const existing = batch.toolCalls.map(call => {
+      const key = occKey(call.toolCallId, call.resultTimestamp), record = indexer.getRecord(key);
+      const shortId = indexer.getShortRefForToolCallId(key);
+      return record && shortId && !record.metadataUnavailable && record.archiveComplete !== false
+        && record.toolName === call.toolName && record.isError === call.isError
+        && JSON.stringify(record.args) === JSON.stringify(call.args)
+        && (record.contentHash ?? hashToolResult(record.toolName, record.resultText)) === hashToolResult(call.toolName, call.resultText)
+        ? { shortId, toolCallId: call.toolCallId, resultTimestamp: call.resultTimestamp } : undefined;
+    });
+    const refs = existing.every(ref => ref !== undefined) ? existing : await archiveBatches([batch], { indexer, appendEntry,
+      spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+      sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() });
+    signal.throwIfAborted();
+    if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)) throw new Error("This extension ctx is stale: summary source changed during archive");
+    const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
+    const replacements = new Map(batch.toolCalls.map((call, i) => [occKey(call.toolCallId, call.resultTimestamp),
+      { call, ref: refs[i]!.shortId, record: indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))! }]));
+    const before = visible.filter((message: any) => message.role === "toolResult" && replacements.has(occKey(message.toolCallId, message.timestamp)));
+    if ([...replacements.values()].some(({ record }) => !record || record.metadataUnavailable || record.archiveComplete === false)) return null;
+    if (before.length !== batch.toolCalls.length || before.some((message: any) => !Array.isArray(message.content)
+      || message.content.some((block: any) => block.type !== "text"))) return null;
+    if (batch.toolCalls.some(call => call.nestedProtected || protectionPredicate(call.toolName, call.args))) return null;
+    const stubs = before.map((message: any) => {
+      const replacement = replacements.get(occKey(message.toolCallId, message.timestamp))!;
+      return toolResultStub(message, replacement.record, replacement.ref);
+    });
+    const counts = await tokenEstimator.measure(before, stubs, signal);
+    if (!counts) return null;
+    const timestamp = Date.now();
+    const render = (text: string, deterministic = false) => ({ role: "custom", customType: CUSTOM_TYPE_SUMMARY,
+      content: substituteInlineRefs(text, refs, batch.toolCalls.map(call => call.toolName)) + formatSummaryToolCallRefs(refs),
+      display: false, details: { ...makeSummaryDetails(batch, refs), representation: deterministic ? "packed" : "summary" }, timestamp });
+    const empty = await tokenEstimator.measure([render("")], [], signal);
+    if (!empty) return null;
+    const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length);
+    budget.target = Math.max(budget.target, empty.before + 256);
+    return { before, stubs, replacements, render, budget, counts,
+      accepts: async (text: string, deterministic = false) => {
+        const size = await tokenEstimator.measure([render(text, deterministic)], [], signal);
+        return !!size && (deterministic ? counts.after + size.before < counts.before : size.before <= budget.limit);
+      } };
+  };
+
   const flushPending = async (ctx: any, options: FlushOptions = {}): Promise<FlushResult> => {
     if (isFlushing || isArchiving || isCompactingChains) return { ok: false, reason: "already-flushing" };
     const trigger: FlushTrigger = options.trigger ?? "manual";
@@ -391,8 +493,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
       | null
       | "trivial"
-      | "deduped";
+      | "deduped"
+      | "deferred";
     let batches: CapturedBatch[] = [];
+    let unprocessed = () => batches.slice(processedCount);
+    let restored = false;
+    const restoreUnprocessed = () => { if (!restored) { restoreBatches(unprocessed()); restored = true; } };
     let sessionManager: SessionAppender | undefined;
     try {
       isFlushing = true;
@@ -443,6 +549,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           }
         }
       }
+      // Keep deterministic and semantic calls in separate ordered runs. A
+      // wholly packed run is measured/published without any model request,
+      // even when its packed text exceeds the character guard.
+      batches = batches.flatMap(batch => {
+        const packed = new Set(prepareBatch(batch).packedBatch.toolCalls);
+        const runs: CapturedBatch[] = [];
+        for (const call of batch.toolCalls) {
+          const last = runs.at(-1);
+          if (last && packed.has(last.toolCalls[0]!) === packed.has(call)) last.toolCalls.push(call);
+          else runs.push({ ...batch, toolCalls: [call] });
+        }
+        return runs;
+      });
       capturedBatches = batches.length;
 
       if (batches.length === 0) {
@@ -508,13 +627,28 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           for (const tc of batch.toolCalls) {
             const originalId = tc.spillPath || tc.archiveSource ? undefined : indexer.lookupByContent(tc.toolName, tc.resultText);
             const key = occKey(tc.toolCallId, tc.resultTimestamp);
+            let beneficial = false;
             if (originalId && originalId !== key) {
-              pendingAliases.push([key, originalId, { ...tc, turnIndex: batch.turnIndex, timestamp: batch.timestamp }]);
+              const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
+              // Allocate a durable recovery ref without authorizing hiding.
+              // registerDuplicate reuses it only after this exact stub wins.
+              const refs = await archiveBatches([{ ...batch, toolCalls: [tc] }], { indexer, appendEntry: appendEntry!,
+                spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+                sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() });
+              const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
+              const message = visible.find((message: any) => message.role === "toolResult" && occKey(message.toolCallId, message.timestamp) === key);
+              const archived = indexer.getRecord(key);
+              const counts = message && archived && !archived.metadataUnavailable && archived.archiveComplete !== false
+                && await tokenEstimator.measure([message], [toolResultStub(message, archived, refs[0]!.shortId)], signal);
+              assertCurrent(version); signal.throwIfAborted();
+              if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)) throw new Error("This extension ctx is stale: dedup source changed");
+              beneficial = !!counts && counts.before > counts.after;
+            }
+            if (beneficial) {
+              pendingAliases.push([key, originalId!, { ...indexer.getRecord(key)!, archiveOnly: false }]);
               record.deduped.push(tc);
               record.dedupedRawChars += tc.resultText.length;
-            } else {
-              remaining.push(tc);
-            }
+            } else remaining.push(tc);
           }
           // Shallow-clone the batch so we don't mutate the captured array
           // (pendingBatches consumers retain the original shape on retry).
@@ -528,12 +662,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         prepared: prepareBatch(record.batch),
         rawChars: record.batch.toolCalls.reduce((s, tc) => s + tc.resultText.length, 0),
         result: null as ResultSlot,
+        frontierAdvanced: false,
         job: undefined as Promise<void> | undefined,
         abort: new AbortController(),
         error: undefined as unknown,
         failureReason: undefined as string | undefined,
         failureMessage: undefined as string | undefined,
+        plan: undefined as Awaited<ReturnType<typeof prepareReplacement>> | undefined,
+        completed: false,
       }));
+      unprocessed = () => records.filter(record => !record.completed).map(record => record.batch);
       type BatchRecord = (typeof records)[number];
 
       // Batches below minBatchChars are trivial: the summarizer is skipped
@@ -559,15 +697,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let totalSummaryCharCount = 0;
       let totalToolCallCount = 0;
       let totalDedupedCount = 0;
-      const oversizedBatches: BatchRecord[] = [];
       const trivialBatches: BatchRecord[] = [];
       const dedupedBatches: BatchRecord[] = [];
       let firstFailureIndex = -1;
       let deliveryPending = false;
+      let frontierBlocked = false;
+      const deferredBatches: BatchRecord[] = [];
 
       const processedOutcome = (count = processedBatches.length): PruneFrontier["outcome"] =>
-        count > trivialBatches.length + oversizedBatches.length + dedupedBatches.length ? "summarized"
-          : oversizedBatches.length ? "skipped-oversized" : dedupedBatches.length ? "skipped-deduped" : "skipped-trivial";
+        count > trivialBatches.length + dedupedBatches.length ? "summarized"
+          : dedupedBatches.length ? "skipped-deduped" : "skipped-trivial";
       const completeRecord = (record: BatchRecord) => {
         const last = record.lastToolCall;
         const snapshot: PruneFrontier = {
@@ -579,8 +718,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           rawCharCount: totalRawCharCount, summaryCharCount: totalSummaryCharCount,
           outcome: processedOutcome(processedBatches.length + 1),
         };
-        appendEntry!(CUSTOM_TYPE_FRONTIER, snapshot);
-        frontier.advance(snapshot);
+        // A later successful chunk must not leap past an earlier deferred one.
+        record.frontierAdvanced = !frontierBlocked;
+        if (record.frontierAdvanced) { appendEntry!(CUSTOM_TYPE_FRONTIER, snapshot); frontier.advance(snapshot); }
+        record.completed = true;
         processedBatches.push(record);
         processedCount = processedBatches.length;
         options.onProgress?.(record.index, records.length, record.batch,
@@ -602,29 +743,37 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           throw new Error("This extension ctx is stale: summary source changed");
         }
       };
-      const schedule = (index: number) => {
+      const allowPaid = trigger === "manual" || paidPressure(ctx, options.closingMessage);
+      const schedule = async (index: number) => {
         // Keep at most three uncommitted records in flight, even if later calls
         // finish first. No further work starts after an observed failure.
         while (nextRequest < Math.min(index + 3, records.length, failedRequest)) {
           const i = nextRequest++, record = records[i]!;
-          if (isFullyDeduped(record) || isTrivial(record)) {
-            record.result = isFullyDeduped(record) ? "deduped" : packedResult(record);
+          if (isFullyDeduped(record)) { record.result = "deduped"; continue; }
+          const deterministic = record.prepared.packedBatch.toolCalls.length === record.batch.toolCalls.length;
+          if (!deterministic && isTrivial(record)) { record.result = "trivial"; continue; }
+          if (!deterministic && !allowPaid) { record.result = "deferred"; continue; }
+          record.plan = await prepareReplacement(record.batch, ctx, appendEntry!, signal);
+          checkSource();
+          if (!record.plan) { record.result = "deferred"; continue; }
+          if (deterministic) {
+            record.result = await record.plan.accepts(record.prepared.packedText, true) ? packedResult(record) : "deferred";
             continue;
           }
+          if (record.plan.budget.limit < record.plan.budget.target) { record.result = "deferred"; continue; }
           options.onProgress?.(i, records.length, record.batch, "start");
           const requestSignal = AbortSignal.any([signal, record.abort.signal]);
           record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
-            signal: requestSignal, controller,
+            signal: requestSignal, controller, outputBudget: record.plan.budget,
+            acceptSummary: text => record.plan!.accepts(text),
+            onUsage: usage => { if (!signal.aborted) statsAccum.add(usage); },
             onModelAttempt: () => { modelAttempted = true; },
             onFailure: (message, reason) => { record.failureMessage = message; record.failureReason = reason ?? "summarizer-failed"; },
             onTextProgress: chars => options.onBatchTextProgress?.(i, records.length, record.batch, chars),
           }).then(result => {
             // Count completed provider work even if an earlier chunk later
             // prevents this result from being committed.
-            if (result?.usage && !signal.aborted) statsAccum.add(result.usage);
-            if ((!result || result.summaryText.length >= record.prepared.candidateChars) && record.prepared.packedBatch.toolCalls.length) {
-              record.result = packedResult(record);
-            } else record.result = result;
+            record.result = !result && record.failureReason === "output-budget" ? "deferred" : result;
           }).catch(error => { record.error = error; }).then(() => {
             if (record.result !== null || requestSignal.aborted) return;
             failedRequest = Math.min(failedRequest, i);
@@ -635,12 +784,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       for (const [i, record] of records.entries()) {
         checkSource();
-        schedule(i);
+        await schedule(i);
         if (record.job) updatePruneStatus(ctx, `prune: summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
         await record.job;
         checkSource();
         if (record.error) throw record.error;
         const result = record.result;
+        if (result === "deferred") {
+          frontierBlocked = true;
+          deferredBatches.push(record);
+          options.onProgress?.(i, records.length, record.batch, "skipped");
+          continue;
+        }
         if (result === null) {
           failureMessage = record.failureMessage;
           failureReason = record.failureReason;
@@ -685,32 +840,29 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           continue;
         }
 
-        const archivedBatch = result.deterministic ? record.prepared.packedBatch : batch;
-        const beforeArchive = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
-        const summaryRefs = await archiveBatches([archivedBatch], { indexer, appendEntry: appendEntry!,
-          spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-          sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() });
-        assertCurrent(version);
-        if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== beforeArchive) {
-          throw new Error("This extension ctx is stale: summary source changed during archive");
-        }
-        const toolNames = archivedBatch.toolCalls.map((tc) => tc.toolName);
-        const decorated = substituteInlineRefs(result.summaryText, summaryRefs, toolNames);
-        const summaryText = decorated + formatSummaryToolCallRefs(summaryRefs);
-        const batchDetails = { ...makeSummaryDetails(archivedBatch, summaryRefs), representation: result.deterministic ? "packed" : "summary" };
-        const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
-        const replacements = new Map(archivedBatch.toolCalls.map((call, i) => [occKey(call.toolCallId, call.resultTimestamp), { call, ref: summaryRefs[i]!.shortId }]));
+        const archivedBatch = batch;
+        const plan = record.plan!;
+        const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
+        const current = visible.filter((message: any) => message.role === "toolResult" && plan.replacements.has(occKey(message.toolCallId, message.timestamp)));
+        if (projectionFingerprint(current) !== projectionFingerprint(plan.before)) throw new Error("This extension ctx is stale: replacement source changed");
+        const summary = plan.render(result.summaryText, result.deterministic);
+        const summaryText = summary.content, batchDetails = summary.details;
         let replaced = 0;
         const proposed = visible.map((message: any) => {
           if (message.role !== "toolResult") return message;
-          const candidate = replacements.get(occKey(message.toolCallId, message.timestamp));
-          if (!candidate || candidate.call.nestedProtected || protectionPredicate(candidate.call.toolName, candidate.call.args)) return message;
-          replaced++;
-          return toolResultStub(message, { ...candidate.call, turnIndex: archivedBatch.turnIndex, timestamp: archivedBatch.timestamp }, candidate.ref);
+          const candidate = plan.replacements.get(occKey(message.toolCallId, message.timestamp));
+          if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args)) return message;
+          return plan.stubs[replaced++];
         });
-        proposed.push({ role: "custom", customType: CUSTOM_TYPE_SUMMARY, content: summaryText, display: false, details: batchDetails, timestamp: Date.now() });
+        proposed.push(summary);
         const charsSaved = JSON.stringify(visible).length - JSON.stringify(proposed).length;
-        const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || charsSaved <= 0;
+        const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || !await plan.accepts(result.summaryText, result.deterministic);
+        checkSource();
+        if (shouldSkipOversized) {
+          frontierBlocked = true; deferredBatches.push(record);
+          options.onProgress?.(i, records.length, record.batch, "skipped");
+          continue;
+        }
 
         totalRawCharCount += record.rawChars + dedupRawChars;
         totalSummaryCharCount += summaryText.length;
@@ -718,7 +870,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         totalDedupedCount += dedupCount;
 
         try {
-          if (!shouldSkipOversized) {
+          {
             // Write one hidden summary message per turn and index its tool calls.
             // `display: false` keeps the summary in future LLM context (convertToLlm
             // ignores `display`) while suppressing the full markdown block from Pi's
@@ -749,9 +901,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             firstChangedMessage = firstChangedMessage === undefined ? first : Math.min(firstChangedMessage, first);
             stubCount += archivedBatch.toolCalls.length + dedupCount;
             floorSources.push(...archivedBatch.toolCalls);
-          } else {
-            stubCount += dedupCount;
-            oversizedBatches.push(record);
           }
         } catch (err) {
           // Persistence error mid-loop: stop here, restore this and remaining batches.
@@ -770,22 +919,24 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       lowerFloor(supersede, earliestResultTimestamp(floorSources));
 
-      // Restore unprocessed batches (those at and after the first failure)
-      if (firstFailureIndex >= 0) {
-        restoreBatches(batches.slice(firstFailureIndex));
-      }
+      // Includes deferred gaps, even when later deterministic work committed.
+      restoreUnprocessed();
 
       if (processedBatches.length === 0) {
         // Nothing was persisted (all calls failed or first call failed)
+        if (modelAttempted) {
+          try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
+          catch (error) { if (delivery === "runtime") throw error; }
+        }
         updatePruneStatus(ctx);
-        outcome = deliveryPending ? "delivery-pending" : "error";
-        failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
-        return { ok: false, reason: deliveryPending ? "delivery-pending" : failureReason === "input-budget" ? "input-budget" : "summarizer-failed", error: failureMessage };
+        outcome = deliveryPending ? "delivery-pending" : deferredBatches.length ? "deferred-budget" : "error";
+        failureReason = deliveryPending ? "delivery-pending" : deferredBatches.length ? "deferred-budget" : failureReason ?? "summarizer-failed";
+        return { ok: false, reason: deliveryPending ? "delivery-pending" : deferredBatches.length ? "deferred-budget" : failureReason === "input-budget" ? "input-budget" : "summarizer-failed", error: failureMessage };
       }
 
       const flushOutcome = processedOutcome();
       if (currentConfig.value.enabled && currentConfig.value.chainCompression.enabled
-        && firstFailureIndex < 0 && !signal.aborted) {
+        && firstFailureIndex < 0 && deferredBatches.length === 0 && !signal.aborted) {
         try {
           const result = await compressChains(ctx, currentConfig.value.chainCompression.rollingWindow, appendEntry!, options.closingMessage, signal, trigger !== "manual");
           publishedAliasesOrArchives ||= result.compressedEntries.length > 0;
@@ -798,32 +949,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       updatePruneStatus(ctx);
 
-      // Notify about any batches that were skipped — either oversized or
-      // trivial. Neither is an error: the pruner correctly chose not to grow
-      // context (oversized) or to skip the LLM call entirely (trivial). Both
-      // are silenced by `quietOversizedSkips`, which acts as a single
-      // "quiet all non-error skips" toggle.
+      // Non-error skips, including budget deferral, share the quiet toggle.
       if (!currentConfig.value.quietOversizedSkips) {
         const notify = (message: string) => safeNotify(ctx, message, "info");
-        for (const record of oversizedBatches) {
-          const batch = record.batch;
-          const slot = record.result;
-          const batchSummaryLen = slot && slot !== "trivial" && slot !== "deduped" ? slot.summaryText.length : 0;
-          notify(
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary was ${batchSummaryLen} chars vs ${record.rawChars} raw chars; frontier advanced past this range`
-          );
-        }
+        if (deferredBatches.length) notify(`pruner: ${deferredBatches.length} batch(es) retained pending — pressure or complete-summary token budget insufficient; frontier did not advance over them`);
         for (const record of trivialBatches) {
           const batch = record.batch;
           notify(
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${record.rawChars} raw chars (< minBatchChars=${minChars}); no LLM call made; frontier advanced past this range`
+            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${record.rawChars} raw chars (< minBatchChars=${minChars}); no LLM call made; ${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`
           );
         }
         for (const record of dedupedBatches) {
           const batch = record.batch;
           const n = record.deduped.length;
           notify(
-            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${record.dedupedRawChars} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`
+            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${record.dedupedRawChars} raw chars) against earlier prunes; no LLM call made; ${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`
           );
         }
         if (totalDedupedCount > 0 && dedupedBatches.length === 0) {
@@ -841,15 +981,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // chain-compression block's own try/catch above: a compression failure
       // must not eat this entry — the summarization phase already succeeded.
       processedCount = processedBatches.length;
-      outcome = firstFailureIndex >= 0 ? "partial" : flushOutcome;
-      if (firstFailureIndex >= 0) {
+      outcome = firstFailureIndex >= 0 || deferredBatches.length ? "partial" : flushOutcome;
+      if (firstFailureIndex >= 0 || deferredBatches.length) {
         failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
         updatePruneStatus(ctx, `prune: ${processedCount}/${records.length} complete; remaining pending`);
       }
 
       return {
         ok: true,
-        reason: firstFailureIndex >= 0 ? "partial" : flushOutcome === "summarized" ? "flushed" : flushOutcome,
+        reason: firstFailureIndex >= 0 || deferredBatches.length ? "partial" : flushOutcome === "summarized" ? "flushed" : flushOutcome,
         batchCount: processedBatches.length,
         toolCallCount: totalToolCallCount,
         rawCharCount: totalRawCharCount,
@@ -864,7 +1004,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (projectionContext) rebuildBranchIndex(projectionContext);
         return { ok: false, reason: "stale-context", error: errorMessage(err) };
       }
-      restoreBatches(batches.slice(processedCount));
+      restoreUnprocessed();
       outcome = processedCount > 0 ? "partial" : "error";
       // When the abort signal fired, summarizeBatch rethrows rather than
       // swallowing the error.  Don't show a UI error — the user intended this.
@@ -1091,7 +1231,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           updatePruneStatus(ctx, `prune: ${n} pending`);
           safeNotify(
             ctx,
-            `pruner: ${n} turn${n === 1 ? "" : "s"} queued — will summarize on ${trigger}`,
+            `pruner: ${n} turn${n === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${trigger}`,
             "info"
           );
         }
@@ -1113,7 +1253,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // waiting for this mode's flush boundary. The pendingBatches.length-or-rearmed
     // guard makes an already-drained, non-rearmed queue a no-op.
     const usage = ctx.getContextUsage?.();
-    const budgetHit = shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold);
+    const budgetHit = shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx));
     const deltaHit = shouldDeltaFlush(usage, previousFraction, currentConfig.value.budgetTurnDelta);
     // Frontier-gap auto-flush (opt-in): absolute un-pruned tail size, for huge
     // windows where fractional thresholds never trip. Threshold null (default)
@@ -1490,8 +1630,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     request.messages = projectContext(request.messages, request.api, projectionContext).messages;
   });
   pi.on("context", async (event, ctx) => {
+    // A below-pressure final kept its batches pending. Retry only when a real
+    // subsequent request arrives and pressure now admits paid work.
+    if (currentConfig.value.enabled && currentConfig.value.pruneOn === "agent-message"
+      && deferredFinal !== undefined && paidPressure(ctx)) {
+      const flush = await flushPending(ctx, { delivery: "session", trigger: "context", signal: ctx.signal });
+      if (flush.ok && flush.reason !== "partial" || !flush.ok && flush.reason === "empty") deferredFinal = undefined;
+    }
     indexer.syncSummaryEntries(ctx);
-    const result = projectContext(event.messages, ctx.model?.api, ctx);
+    // Session delivery can append evidence after Pi took this request snapshot.
+    // Carry only currently effective summaries; never resurrect a dropped chain.
+    const durable = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages
+      .filter((message: any) => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY);
+    const identities = new Set(event.messages.map(message => projectionFingerprint([message])));
+    const missing = durable.filter((message: any) => !identities.has(projectionFingerprint([message])));
+    const result = projectContext(missing.length ? [...event.messages, ...missing] : event.messages, ctx.model?.api, ctx);
+    if (missing.length) result.changed = true;
     occ.observeRequest(result.messages);
     if (result.beforeChars !== undefined) statsAccum.setLiveReclaim(result.beforeChars, result.afterChars!);
     updatePruneStatus(ctx);

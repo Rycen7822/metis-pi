@@ -47,7 +47,7 @@ export interface ScalarRow {
 }
 
 const PRUNE_MODE_GUIDANCE: Record<ContextPruneConfig["pruneOn"], string> = {
-  "agent-message": "Recommended default. Batches tool work and prunes once after the final text reply, giving the best balance of automation, context savings, and cache stability.",
+  "agent-message": "Recommended default. Evaluate mechanical pruning after the final text reply; paid summaries also require pressure and a complete-message net-benefit budget. Deferred work retries on a later request.",
   "on-demand": "Ordinary summaries are manual unless a budget trigger is enabled. Zero-call old-chain maintenance remains independent.",
 };
 
@@ -86,16 +86,16 @@ function pruneStatusLineDescription(config: ContextPruneConfig): string {
 function quietOversizedSkipsDescription(config: ContextPruneConfig): string {
   const base = config.quietOversizedSkips ? "ON" : "OFF";
   if (config.quietOversizedSkips) {
-    return `Suppress all non-error 'skipped pruning' notifications — both 'oversized' (summary was larger than the raw output) and 'trivial' (batch was below minBatchChars, no LLM call made). The frontier still advances in both cases. Currently ${base}.`;
+    return `Suppress non-error skip/deferral notifications. Trivial batches may advance the frontier; budget-deferred work stays pending and blocks advancement across its gap. Currently ${base}.`;
   }
-  return `Show 'skipped pruning' info notifications when a batch is skipped — either because the summary would have been larger than the raw output (oversized) or because the batch was below minBatchChars (trivial, no LLM call). Currently ${base}.`;
+  return `Show non-error character-guard and token-budget deferral notifications. Budget rejection retains raw evidence and pending work. Currently ${base}.`;
 }
 
 function minBatchCharsDescription(config: ContextPruneConfig): string {
   if (config.minBatchChars === 0) {
-    return `Pre-flush guard: skip batches whose total raw resultText is below this many chars (no LLM call, frontier advances anyway). Currently 0 — disabled, every batch is sent to the summarizer.`;
+    return `Currently 0 — character guard disabled. This never forces a model request: paid summaries still need pressure and at least both 2048 tokens and 40% local proxy gain; deterministic pruning is checked separately.`;
   }
-  return `Pre-flush guard: skip batches whose total raw resultText is below this many chars (no LLM call, frontier advances anyway). Currently ${config.minBatchChars}. Useful for sessions with many tiny tool calls. Set to 0 to disable.`;
+  return `Currently ${config.minBatchChars} chars. Skip remaining semantic batches below that size without a model call. Default 5000; 0 disables only this guard. Paid pressure/token budgets still apply; profitable deterministic candidates bypass it. Pending gaps prevent frontier advancement.`;
 }
 
 function recoveryGraceDescription(config: ContextPruneConfig): string {
@@ -122,10 +122,10 @@ function maxTimeoutDescription(config: ContextPruneConfig): string {
 function autoBudgetThresholdDescription(config: ContextPruneConfig): string {
   const cap = `${MAX_BUDGET_WINDOW / 1000}k`;
   if (config.autoBudgetThreshold == null) {
-    return `Token-budget auto-flush during tool turns in on-demand mode, subject to OCC coordination. Agent-message mode keeps ordinary summaries until the final reply. Currently off. Pick a percentage to enable.`;
+    return `Automatic paid summaries disabled in both modes. Mechanical work, manual requests and Pi's native capacity rescue remain available. Pick a percentage to enable pressure admission.`;
   }
   const pct = Math.round(config.autoBudgetThreshold * 100);
-  return `Token-budget auto-flush at ${pct}% of the window or ${cap} tokens, whichever comes first, during on-demand tool turns and subject to OCC coordination. Agent-message mode waits for the final reply. Set to Off to disable.`;
+  return `Admit automatic paid summaries at ${pct}% of the window, ${cap} tokens, or native capacity minus 16384 growth headroom, whichever comes first. Subject to OCC coordination and net-benefit budgets. Agent-message waits for the final reply; Off disables paid automatic work.`;
 }
 
 function dedupByContentHashDescription(config: ContextPruneConfig): string {
@@ -148,7 +148,7 @@ function stripThinkingDescription(config: ContextPruneConfig): string {
 }
 
 function fuseRangeDescription(config: ContextPruneConfig): string {
-  return `Fuse a compressed chain's per-batch summaries into one cohesive LLM summary (one extra summarizer call per multi-batch span). Off keeps the per-batch concatenation. Currently ${config.chainCompression.fuseRangeSummary ? "ON" : "OFF"}.`;
+  return `Allow one paid fusion during manual /pruner compact only when the full chain message earns the 2048-token / 40% proxy gain over mechanical concatenation. Automatic maintenance makes no fusion calls; rejection keeps concatenation. Currently ${config.chainCompression.fuseRangeSummary ? "ON" : "OFF"}.`;
 }
 
 function purgeErrorsEnabledDescription(config: ContextPruneConfig): string {

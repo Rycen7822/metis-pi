@@ -24,4 +24,4 @@ text(await tools.write({
 
 完整日志在截断前保存到 `<sessionId>-blobs/exec-<uuid>.log`，内存会话使用临时目录。关闭 condense 仍保留引用，捕获失败明确标不完整；禁用 Fusion 不破坏历史回执。
 
-启用 condense 时 nested 调用分别归档，可按子 ID/parentToolCallId [回读](condense.md)。仅明确成功且可识别的 build/test 日志可精简，失败和未知命令保留预览。命令使用 Pi native bash，metis 持有锁、快照和收据；实测见 [VALIDATION](../../VALIDATION.md)。
+启用 condense 时 nested 调用分别归档，可按子 ID/parentToolCallId [回读](condense.md)。仅明确成功且可识别的 build/test 日志可精简，失败和未知命令保留预览。命令使用 Pi native bash，metis 持有锁、快照和收据。

@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
-import { estimateTokens } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, estimateTokens } from "@earendil-works/pi-coding-agent";
 
 export interface TokenComparison {
   fingerprint: string;
   piBefore: number;
   piAfter: number;
   proxyDelta: number;
+  proxyBefore?: number;
+  proxyAfter?: number;
 }
 type Job = {
   id: number; before: any[]; after: any[]; fingerprint: string;
-  piBefore: number; piAfter: number;
+  piBefore: number; piAfter: number; absolute: boolean;
   signal?: AbortSignal; abort: () => void;
   resolve: (result: TokenComparison | null) => void;
 };
@@ -22,32 +24,44 @@ export function projectionFingerprint(messages: any[]): string {
   return hash.digest("hex");
 }
 
-/** One lazy encoder, one active comparison and one replaceable latest request. */
+/** One lazy encoder; FIFO keeps concurrent summary validations from displacing each other. */
 export class TokenEstimator {
   private worker?: Worker;
   private active?: Job;
-  private pending?: Job;
+  private pending: Job[] = [];
   private nextId = 0;
   private cache?: TokenComparison;
 
-  compare(before: any[], after: any[], signal?: AbortSignal): Promise<TokenComparison | null> {
+  compare(before: any[], after: any[], signal?: AbortSignal, absolute = false): Promise<TokenComparison | null> {
     if (signal?.aborted) return Promise.resolve(null);
-    const fingerprint = projectionFingerprint(before) + ":" + projectionFingerprint(after);
+    const fingerprint = `${absolute}:` + projectionFingerprint(before) + ":" + projectionFingerprint(after);
     if (this.cache?.fingerprint === fingerprint) return Promise.resolve(this.cache);
     let snapshot: [any[], any[]];
-    try { snapshot = structuredClone([before, after]); }
+    try {
+      // Count only model-facing fields. In particular, custom.details/display
+      // and tool execution metadata are not evidence sent to the model.
+      const normalize = (messages: any[]) => convertToLlm(messages).map(message => message.role === "toolResult"
+        ? { role: message.role, toolCallId: message.toolCallId, toolName: message.toolName,
+          content: message.content, isError: message.isError }
+        : { role: message.role, content: message.content });
+      snapshot = structuredClone([normalize(before), normalize(after)]);
+    }
     catch { return Promise.resolve(null); }
     return new Promise(resolve => {
       const job: Job = { id: ++this.nextId, before: snapshot[0], after: snapshot[1], fingerprint, signal, resolve,
         piBefore: before.reduce((n, m) => n + estimateTokens(m), 0),
-        piAfter: after.reduce((n, m) => n + estimateTokens(m), 0),
+        piAfter: after.reduce((n, m) => n + estimateTokens(m), 0), absolute,
         abort: () => this.clear() };
       signal?.addEventListener("abort", job.abort, { once: true });
-      if (this.active) {
-        if (this.pending) this.finish(this.pending, null);
-        this.pending = job;
-      } else this.start(job);
+      if (this.active) this.pending.push(job);
+      else this.start(job);
     });
+  }
+
+  async measure(before: any[], after: any[], signal?: AbortSignal): Promise<{ before: number; after: number } | null> {
+    const result = await this.compare(before, after, signal, true);
+    return result?.proxyBefore !== undefined && result.proxyAfter !== undefined
+      ? { before: result.proxyBefore, after: result.proxyAfter } : null;
   }
 
   private finish(job: Job, result: TokenComparison | null) {
@@ -67,12 +81,11 @@ export class TokenEstimator {
           if (result.error || !Number.isFinite(result.delta)) { this.clear(); return; }
           const measured: TokenComparison = { fingerprint: current.fingerprint,
             piBefore: current.piBefore, piAfter: current.piAfter,
-            proxyDelta: result.delta };
+            proxyDelta: result.delta, proxyBefore: result.before, proxyAfter: result.after };
           this.cache = measured;
           this.active = undefined;
           this.finish(current, measured);
-          const next = this.pending;
-          this.pending = undefined;
+          const next = this.pending.shift();
           if (next) this.start(next);
           else worker.unref();
         });
@@ -80,7 +93,7 @@ export class TokenEstimator {
         worker.on("exit", () => { if (this.worker === worker) this.clear(); });
       }
       this.worker.ref();
-      this.worker.postMessage({ id: job.id, before: job.before, after: job.after });
+      this.worker.postMessage({ id: job.id, before: job.before, after: job.after, absolute: job.absolute });
     } catch { this.clear(); }
   }
 
@@ -89,8 +102,9 @@ export class TokenEstimator {
     this.worker = undefined;
     this.cache = undefined;
     if (this.active) this.finish(this.active, null);
-    if (this.pending) this.finish(this.pending, null);
-    this.active = this.pending = undefined;
+    for (const job of this.pending) this.finish(job, null);
+    this.active = undefined;
+    this.pending = [];
     if (worker) { worker.unref(); void worker.terminate(); }
   }
 }

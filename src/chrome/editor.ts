@@ -10,8 +10,7 @@
 // hit tests and autocomplete anchors are untouched (real-component tests
 // cover this). The gray background is painted per physical row with bg
 // re-assertion after inner resets (see src/surface.ts).
-// Intentionally no per-line '›' prefix beyond the first row (deliberate Codex
-// deviation, see VALIDATION.md).
+// Intentionally no per-line '›' prefix beyond the first row (deliberate Codex deviation).
 
 import { CODEX_CYAN_RGB } from "../palette.ts";
 import { isSkillPrefixOnly } from "../skill-tokens.ts";

@@ -117,7 +117,7 @@ export interface CompressEligibleDeps {
    * Returning null (or throwing) is non-fatal: the chain still compresses and
    * the renderer falls back to the per-batch concatenation.
    */
-  fuseRange?: (perBatchSummaryText: string) => Promise<string | null>;
+  fuseRange?: (perBatchSummaryText: string, entry: SingleChainCompressionEntry, extraBody?: string) => Promise<string | null>;
   /** MUST be the same withClosingMessage(...) array chain detection ran on - raw branch messages spuriously fail span resolution on the message_end path (see doc/specs/2026-08-14-uncovered-chain-deterministic-backfill.md). */
   messages: any[];
   diagnostics: Pick<DiagnosticSink, "report">;
@@ -313,20 +313,7 @@ export async function compressEligible(
     const summaries = deps.indexer.getPerBatchSummariesForToolCallIds(lookupKeys);
     const summaryFingerprint = projectionFingerprint([summaries]);
 
-    // B: fuse this span's per-batch summaries into one cohesive summary.
-    // Gated on >= 2 summaries (nothing to fuse otherwise). Non-fatal.
-    let rangeSummaryText = extraBody ? [...summaries, extraBody].join("\n\n") : undefined;
-    if (deps.fuseRange) {
-      if (summaries.length >= 2) {
-        try {
-          const fused = await deps.fuseRange(summaries.join("\n\n"));
-          if (fused && fused.trim()) rangeSummaryText = extraBody ? `${fused}\n\n${extraBody}` : fused;
-        } catch {
-          // fall back to the per-batch concatenation at render time
-        }
-      }
-    }
-
+    const rangeSummaryText = extraBody ? [...summaries, extraBody].join("\n\n") : undefined;
     const entry: SingleChainCompressionEntry = {
       summaryFingerprint,
       blockId,
@@ -339,6 +326,14 @@ export async function compressEligible(
       ...(chain.protectedToolCallIds?.length ? { protectedToolCallIds: chain.protectedToolCallIds } : {}),
       ...(chain.middleOccurrenceKeys?.length ? { droppedOccurrenceKeys: chain.middleOccurrenceKeys } : {}),
     };
+    // Give the fuser the real, already allocated wrapper and retained facts.
+    // Returning null is non-fatal: mechanical concatenation remains available.
+    if (deps.fuseRange && summaries.length >= 2) {
+      try {
+        const fused = await deps.fuseRange(summaries.join("\n\n"), entry, extraBody);
+        if (fused?.trim()) entry.rangeSummaryText = extraBody ? `${fused}\n\n${extraBody}` : fused;
+      } catch { /* retain per-batch concatenation */ }
+    }
 
     if (deps.validate && !await deps.validate(entry)) { skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" }); continue; }
     deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);

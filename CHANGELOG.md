@@ -1,8 +1,10 @@
 # Changelog
 
-仅保留版本差异摘要。当前行为见 [功能手册](docs/README.md)，验证结果见 [VALIDATION](VALIDATION.md)。此前的详细发布/排查记录可用 `git show 4b1319a:CHANGELOG.md` 查看。
+仅保留版本差异摘要。当前行为见 [功能手册](docs/README.md)。此前的详细发布/排查记录可用 `git show 4b1319a:CHANGELOG.md` 查看。
 
 ## Unreleased
+
+- condense 自动付费摘要实际应用 70% 压力准入、300K ceiling 和可解析原生容量线前的 16K 增长余量；字符保护默认 5000。完整渲染摘要须满足至少 2048 / 40% 的本地 o200k 净收益和 6144 proxy 上限，包含占位符与恢复引用；预算不足保留 pending，frontier 不跨缺口。自动链整理不二次付费融合，手动融合相对机械拼接另行验预算；已报告的拒绝响应用量照常计入。OCC 请求 16K 文本软目标，Pi 普通原生路径及既有硬 cap 保持不变；proxy 不换算成 provider `maxTokens` 或账单保证。
 
 - 新增默认关闭的 MCP 会话模块：沿用 Pi 1.0.0 的配置、CLI/OAuth 和协议包，独立注册工具供原生 codemode/延迟发现/直接暴露使用；增加身份绑定目录缓存、按需连接、空闲回收与普通资源回读，过滤 MCP Apps UI。切换与回滚见配置参考；最低 Pi 版本提高至 1.0.0。
 

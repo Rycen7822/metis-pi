@@ -24,7 +24,7 @@ npm run prepare:subagents
 | `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，均不进 Git。 |
 | `node scripts/copy-perf.mjs` | 测量渲染/提取成本，不测系统剪贴板延迟。 |
 
-先运行改动附近的已有测试；跨模块变更运行 verify，终端显示/交互变更再运行严格 PTY。文档变更核对事实、链接和实际包内容；结果放 [VALIDATION](../VALIDATION.md)。
+先运行改动附近的已有测试；跨模块变更运行 verify，终端显示/交互变更再运行严格 PTY。文档变更核对事实、链接和实际包内容；验证结果随当次任务或提交报告，并明确未覆盖边界。
 
 ## 测试边界
 
@@ -60,4 +60,4 @@ cargo test --manifest-path native/tools/Cargo.toml --locked --workspace
 
 本地安装为 `pi install .`，更新为 `pi update --extensions`。安装验证不能只直接导入源码；开发测试不等同于生产安装证明。
 
-默认值、用法、模块职责和实测记录分别更新配置页、功能页、架构页与 VALIDATION。改写原段落，避免追加重复说明；版本过程留在 Git。推送、发布和修改个人安装需按当次授权执行。
+默认值、用法和模块职责分别更新配置页、功能页与架构页。改写原段落，避免追加重复说明；版本过程留在 Git。推送、发布和修改个人安装需按当次授权执行。

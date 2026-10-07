@@ -58,4 +58,4 @@ fullscreen 留白和历史窗口共用一个布局根拦截器；关闭留白不
 
 `glyphs.include` 可追加字符；终端和字体决定实际效果，绕过帧写入路径的组件不受处理。
 
-实现集中在 `src/chrome/`、`turn-summary.ts`、`git-changes.ts` 和 `glyph-presentation.ts`；运行覆盖见 [VALIDATION](../../VALIDATION.md)。
+实现集中在 `src/chrome/`、`turn-summary.ts`、`git-changes.ts` 和 `glyph-presentation.ts`。

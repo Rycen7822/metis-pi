@@ -43,4 +43,4 @@ version/groups 必填，enabled/notify 默认 true；每组须唯一 id、file�
 
 辅助摘要使用主会话同一快照，不按摘要模型重选组；run 前普通 compaction 使用此前生效指令。condense、OCC、goal 的开关与持久状态不改变。
 
-同策略不加时间戳/计数，换策略可能降低前缀缓存命中；本地离线验证不证明服务端缓存收益，见 [VALIDATION](../../VALIDATION.md)。
+同策略不加时间戳/计数，换策略可能降低前缀缓存命中；本地离线验证不证明服务端缓存收益。

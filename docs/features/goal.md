@@ -26,4 +26,4 @@ UI 与模型权限不同；禁用入口见 [配置](../configuration.md)。
 - 用量属于开始该回合的目标，新目标不继承旧回合用量；input 去掉 cacheRead 后加 output，无测量值时回退 totalTokens。
 - 取分支最后一条 goal 记录；提示只保留当前目标最近续跑消息，移除 UI 消息。OCC 协调见 [condense](condense.md)。
 
-入口拥有宿主 I/O；`src/goal-state.ts` 拥有状态和计账。Apache-2.0 来源与修改归属见 [NOTICE](../../NOTICE)，实测见 [VALIDATION](../../VALIDATION.md)。
+入口拥有宿主 I/O；`src/goal-state.ts` 拥有状态和计账。Apache-2.0 来源与修改归属见 [NOTICE](../../NOTICE)。

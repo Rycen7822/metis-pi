@@ -199,6 +199,8 @@ async function runOnce(
         apiKey: auth.apiKey,
         headers: auth.headers,
         signal: combineSignals(options.signal, timeoutController.signal),
+        // Provider output includes model-specific tokenization/reasoning.
+        // Keep its existing ceiling; enforce proxy limits on the rendered reply.
         maxTokens: summarizerLimits(model).maxTokens,
         ...summarizerThinkingOptions(config),
       }
@@ -243,6 +245,7 @@ async function runOnce(
 
     const response = await responseStream.result();
     if (options.signal?.aborted) throw new Error("summarize: aborted before result delivery");
+    options.onUsage?.(response.usage);
     reportTextProgress(response);
     // stopReason "aborted" means the provider cut the stream short (e.g. signal
     // fired just before the final chunk). Treat identically to the signal check
@@ -326,6 +329,10 @@ async function runSummarization(
   for (let index = decision.index; index < chain.length; index++) {
     const outcome = await runOnce(chain[index], userMessage, config, ctx, options);
     if (outcome.kind === "ok") {
+      if (options.acceptSummary && !await options.acceptSummary(outcome.result.summaryText)) {
+        options.onFailure?.("Complete rendered summary exceeds its net-benefit budget; raw results retained", "output-budget");
+        return null;
+      }
       emit(controller?.complete(decision, index) ?? (index > 0 ? "enter" : "none"), chain[index]);
       return outcome.result;
     }
@@ -338,6 +345,13 @@ async function runSummarization(
   if (chain.length > 1) controller?.complete(decision);
   if (failure) notifyFailure(failure);
   return null;
+}
+
+function outputBudgetPrompt(options: SummarizeBatchOptions): string {
+  const budget = options.outputBudget;
+  return budget ? `\n\nAim for approximately ${budget.target} local o200k proxy tokens for the complete summary message. `
+    + `Its hard limit is ${budget.limit} proxy tokens INCLUDING recovery references and message packaging added by the caller. `
+    + "Leave room for that overhead. Preserve essential evidence and uncertainty; do not pad or return truncated/incomplete statements." : "";
 }
 
 /**
@@ -357,7 +371,7 @@ export async function summarizeBatch(
     return null;
   }
   const userMessage =
-    SYSTEM_PROMPT + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
+    SYSTEM_PROMPT + outputBudgetPrompt(options) + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
   return runSummarization(userMessage, config, ctx, options);
 }
 
@@ -379,6 +393,6 @@ export async function summarizeRange(
     return null;
   }
   const userMessage =
-    RANGE_SYSTEM_PROMPT + "\n\n<sub-task-summaries>\n" + perBatchSummaryText + "\n</sub-task-summaries>";
+    RANGE_SYSTEM_PROMPT + outputBudgetPrompt(options) + "\n\n<sub-task-summaries>\n" + perBatchSummaryText + "\n</sub-task-summaries>";
   return runSummarization(userMessage, config, ctx, options);
 }

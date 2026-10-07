@@ -1,6 +1,6 @@
 # metis-pi 文档
 
-安装与更新见 [中文 README](../README.zh-CN.md) / [English README](../README.md)。本目录说明当前行为；版本差异见 [CHANGELOG](../CHANGELOG.md)，实测证据见 [VALIDATION](../VALIDATION.md)。
+安装与更新见 [中文 README](../README.zh-CN.md) / [English README](../README.md)。本目录说明当前行为；版本差异见 [CHANGELOG](../CHANGELOG.md)。
 
 ## 使用
 

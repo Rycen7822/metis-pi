@@ -55,4 +55,4 @@ Dynamic tool activation requires Pi 0.86.1 or newer; web tools remain eagerly av
 
 其他警告、错误和 notify 保留；仅覆盖当前 TUI 生命周期，不改变 Web 工具启用方式。
 
-输出布局位于 `src/renderers.ts`、`shell.ts`、`diff.ts`、`write-preview.ts`，快照由 `write-tracker.ts` 持有；思考交互由 `thinking-view.ts` 与 `transcript-state.ts` 持有。运行证据见 [VALIDATION](../../VALIDATION.md)。
+输出布局位于 `src/renderers.ts`、`shell.ts`、`diff.ts`、`write-preview.ts`，快照由 `write-tracker.ts` 持有；思考交互由 `thinking-view.ts` 与 `transcript-state.ts` 持有。

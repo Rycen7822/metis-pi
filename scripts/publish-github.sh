@@ -35,7 +35,7 @@ git add -- \
   test/adapter.test.mjs test/helpers.mjs test/package.test.mjs test/renderers.test.mjs \
   test/contract/host-entry.test.mjs scripts/publish-github.sh scripts/preview.mjs \
   package.json tsconfig.json tsconfig.core.json \
-  README.md LICENSE NOTICE VALIDATION.md CHANGELOG.md .gitignore .github/workflows/ci.yml \
+  README.md LICENSE NOTICE CHANGELOG.md .gitignore .github/workflows/ci.yml \
   docs/compatibility.md
 id="$(gh api user --jq .id)"
 git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \

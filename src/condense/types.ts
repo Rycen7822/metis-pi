@@ -190,9 +190,9 @@ export const ROLLING_WINDOW_PRESETS: { value: string; label: string }[] = [
 export const MIN_BATCH_CHARS_PRESETS: { value: string; label: string }[] = [
   { value: "0", label: "0 (disabled)" },
   { value: "500", label: "500" },
-  { value: "1000", label: "1000 (default)" },
+  { value: "1000", label: "1000" },
   { value: "2000", label: "2000" },
-  { value: "5000", label: "5000" },
+  { value: "5000", label: "5000 (default)" },
 ];
 
 /**
@@ -239,9 +239,9 @@ export const SUMMARIZER_MAX_TIMEOUT_PRESETS: { value: string; label: string }[] 
  * 80% of the window, or at MAX_BUDGET_WINDOW tokens, whichever comes first).
  */
 export const AUTO_BUDGET_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "Off (default)" },
+  { value: "0", label: "Off" },
   { value: "0.6", label: "60%" },
-  { value: "0.7", label: "70%" },
+  { value: "0.7", label: "70% (default)" },
   { value: "0.8", label: "80%" },
   { value: "0.9", label: "90%" },
 ];
@@ -306,10 +306,10 @@ export interface ContextPruneConfig {
    * mechanism catches this AFTER the LLM round-trip; `minBatchChars` catches
    * the obvious cases BEFORE it, at zero LLM cost.
    *
-   * Set to `0` to disable the pre-flush guard entirely (every batch is sent
-   * to the summarizer; oversized skipping still applies after the fact).
+   * Set to `0` to disable only the character guard. Token gain and pressure
+   * admission still apply; it does not force a model request.
    *
-   * Default: 1000.
+   * Default: 5000.
    */
   minBatchChars: number;
   /**
@@ -366,45 +366,23 @@ export interface ContextPruneConfig {
   /** Replace failed toolCall argument bodies with compact stubs after a cooldown window. */
   purgeErrors: ErrorPurgeConfig;
   /**
-   * Pre-flush content-hash dedup pass. When `true`, each captured tool call
-   * is hashed by `(toolName, normalize(resultText))` and compared against
-   * records already in the indexer. Matches are registered as aliases of the
-   * original via `CUSTOM_TYPE_DEDUP_ALIAS` and removed from the batch BEFORE
-   * any summarizer LLM call. The duplicate's `ToolResultMessage` is then
-   * stub-replaced by `pruneMessages` using the original's short ref, and
-   * `context_tree_query` resolves the duplicate's id back to the original
-   * record via the alias map.
-   *
-   * Normalization is conservative: line-ending normalization (`\r\n` → `\n`),
-   * per-line trailing whitespace stripping, plus a final `trim()`. Internal
-   * whitespace, tabs, and capitalization are preserved so hashes only match
-   * for exact-content duplicates.
-   *
-   * V1 deliberately dedupes only against records ALREADY in the indexer
-   * (i.e. from earlier flushes). Intra-flush dedup is not yet implemented to
-   * avoid the case where a "canonical" batch is skipped as oversized or
-   * trivial, leaving dangling aliases.
-   *
-   * Default: `true` — low-risk free win. Set to `false` if you want to keep
-   * redundant raw outputs verbatim (e.g. debugging two reads of the same
-   * file).
+   * Exact SHA-256 (toolName, resultText) identity against previously covered
+   * records; whitespace is not normalized. Each duplicate keeps its own
+   * durable recovery ref, arguments, status and timestamp. Its actual stub
+   * must shrink the local model-facing proxy before hiding is authorized.
+   * Archive-only records never seed dedup. No intra-flush dedup or model call.
+   * Default true; false keeps duplicate raw outputs inline.
    */
   dedupByContentHash: boolean;
   /**
-   * Token-budget auto-flush trigger. A fraction in (0, 1] (a 0–1 share of the
-   * context window, NOT a 0–100 percentage; e.g. 0.8 = flush at 80% of the
-   * window, capped at 300k tokens - see below). When set, a flush of all
-   * pending batches is forced at the end of
-   * a tool-using turn in on-demand mode once usage reaches `threshold * contextWindow`
-   * tokens OR 300,000 tokens (MAX_BUDGET_WINDOW in src/budget.ts), whichever
-   * comes first, subject to OCC coordination. Agent-message mode keeps ordinary
-   * summaries until its final reply. The ceiling keeps the setting
-   * reachable on huge-window models, where 0.9 of 1M would mean 900k tokens; it
-   * never binds on a model advertising 300k or less. An ADDITIONAL trigger on
-   * top of `pruneOn`, not a replacement.
-   *
-   * null (default) = disabled, preserving pre-feature behavior. Out-of-range
-   * values (<= 0 or > 1) normalize to null.
+   * Automatic paid-summary pressure gate, fraction in (0, 1]. The first of
+   * threshold * model window, 300000 tokens, or Pi-resolved native capacity
+   * minus 16384 growth headroom admits evaluation (still subject to OCC and
+   * the net-benefit/output budget). On-demand evaluates at tool-turn triggers;
+   * agent-message evaluates at the final reply or a later request retry.
+   * Default 0.7; explicit null disables automatic paid summaries, not
+   * mechanical pruning, manual summaries or Pi's native capacity guard.
+   * Invalid values normalize to the default.
    */
   autoBudgetThreshold: number | null;
   /** Min chars (resultText.length) for a single tool result to spill to a sidecar file. */
@@ -412,8 +390,8 @@ export interface ContextPruneConfig {
   /** Head-preview size in bytes kept inline as resultPreview on a spilled record. */
   spillPreviewBytes: number;
   /**
-   * Per-turn usage-fraction increase (0–1) that forces a flush, independent of
-   * autoBudgetThreshold. The fraction is measured against the effective window
+   * Per-turn usage-fraction increase (0–1) that triggers a flush evaluation.
+   * Paid generation still requires autoBudgetThreshold pressure admission. The fraction is measured against the effective window
    * `min(contextWindow, MAX_BUDGET_WINDOW)` (300_000), so the required growth is
    * `delta * min(contextWindow, MAX_BUDGET_WINDOW)` tokens - e.g. 0.1 means +30k
    * tokens in one turn on any model at or above 300k, and +20k on a 200k model.
@@ -422,7 +400,8 @@ export interface ContextPruneConfig {
   budgetTurnDelta: number | null;
   /**
    * Opt-in flush trigger: when the un-pruned tail past the frontier
-   * (frontierGapTokens) reaches this many tokens, flush at turn_end.
+   * (frontierGapTokens) reaches this many tokens, evaluate at turn_end.
+   * This does not bypass paid-summary pressure/net-benefit admission.
    * null (default) disables. Config-file-only — no settings overlay row.
    */
   frontierGapThresholdTokens: number | null;
@@ -607,7 +586,7 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
   pruneOn: "agent-message",
   batchingMode: "turn",
   quietOversizedSkips: false,
-  minBatchChars: 1000,
+  minBatchChars: 5000,
   recoveryGraceTurns: 3,
   summarizerIdleTimeoutMs: 20000,
   summarizerMaxTimeoutMs: 180000,
@@ -625,7 +604,7 @@ export const DEFAULT_CONFIG: ContextPruneConfig = {
     minArgChars: 500,
   },
   dedupByContentHash: true,
-  autoBudgetThreshold: null,
+  autoBudgetThreshold: 0.7,
   spillThreshold: 65536,
   spillPreviewBytes: 2048,
   budgetTurnDelta: null,
@@ -801,7 +780,7 @@ export interface ContextMetricsSnapshot {
   frontierGapTokens: number;
 }
 
-export type FlushTrigger = "budget" | "delta" | "frontier-gap" | "message-end" | "manual" | "rearmed";
+export type FlushTrigger = "budget" | "delta" | "frontier-gap" | "message-end" | "context" | "manual" | "rearmed";
 
 /** Payload of CUSTOM_TYPE_FLUSH_METRICS. */
 export interface FlushMetricsEntry {
@@ -816,7 +795,7 @@ export interface FlushMetricsEntry {
   publishedCharsSaved?: number;
   argumentCharsSaved?: number;
   firstChangedMessage?: number;
-  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "empty" | "delivery-pending" | "partial" | "error";
+  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "deferred-budget" | "empty" | "delivery-pending" | "partial" | "error";
   reason?: string;
   error?: string;
   /** Computed at flush ENTRY (pre-flush pressure). */
@@ -908,7 +887,7 @@ export type BatchTextProgressCallback = (
 /** Options accepted by `flushPending`. */
 export type FlushResult =
   | { ok: true; reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number; error?: string }
-  | { ok: false; reason: "empty" | "already-flushing" | "deferred-occ" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string; batchCount?: number };
+  | { ok: false; reason: "empty" | "already-flushing" | "deferred-occ" | "deferred-budget" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string; batchCount?: number };
 
 export interface FlushOptions {
   /** Delivery path: "runtime" uses sendMessage/steer (default); "session" writes directly to session. */
@@ -950,7 +929,13 @@ export interface FlushOptions {
 /** Options for a single summarizeBatch() call. */
 export interface SummarizeBatchOptions {
   /** Reports a discarded result's cause without putting it in model context. */
-  onFailure?: (message: string, reason?: "input-budget") => void;
+  onFailure?: (message: string, reason?: "input-budget" | "output-budget") => void;
+  /** Complete rendered-message proxy budget; not a provider maxTokens value. */
+  outputBudget?: { target: number; limit: number };
+  /** Validate the complete decorated candidate. A rejection never retries a fallback. */
+  acceptSummary?: (text: string) => Promise<boolean>;
+  /** Provider usage, including responses rejected by the output-budget guard. */
+  onUsage?: (usage: Usage) => void;
   /** Invoked only when a provider stream is about to be requested. */
   onModelAttempt?: () => void;
   /** Receives the number of summary text characters streamed so far. */

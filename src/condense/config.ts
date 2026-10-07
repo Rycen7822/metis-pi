@@ -79,7 +79,8 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
     summarizerMaxTimeoutMs: integerOrDefault(merged.summarizerMaxTimeoutMs, DEFAULT_CONFIG.summarizerMaxTimeoutMs),
     recoveryGraceTurns: integerOrDefault(merged.recoveryGraceTurns, DEFAULT_CONFIG.recoveryGraceTurns),
     dedupByContentHash: booleanOrDefault(merged.dedupByContentHash, DEFAULT_CONFIG.dedupByContentHash),
-    autoBudgetThreshold: fractionOrDefault(merged.autoBudgetThreshold, DEFAULT_CONFIG.autoBudgetThreshold),
+    autoBudgetThreshold: merged.autoBudgetThreshold === null ? null
+      : fractionOrDefault(merged.autoBudgetThreshold, DEFAULT_CONFIG.autoBudgetThreshold),
     spillThreshold: integerOrDefault(merged.spillThreshold, DEFAULT_CONFIG.spillThreshold, 0, true),
     spillPreviewBytes: integerOrDefault(merged.spillPreviewBytes, DEFAULT_CONFIG.spillPreviewBytes),
     budgetTurnDelta: fractionOrDefault(merged.budgetTurnDelta, DEFAULT_CONFIG.budgetTurnDelta),
