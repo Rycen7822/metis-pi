@@ -1,11 +1,11 @@
-import type { SummarizerStats, ExternalCostUpdate, LiveReclaim } from "./types.ts";
-import { CUSTOM_TYPE_STATS, EXTERNAL_COST_CHANNEL, EXTERNAL_COST_SOURCE } from "./types.ts";
+import type { SummarizerStats, LiveReclaim } from "./types.ts";
+import { CUSTOM_TYPE_STATS } from "./types.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { Usage } from "@earendil-works/pi-ai";
 
 /**
- * Accumulates cumulative token/cost stats for summarizer LLM calls.
+ * Accumulates cumulative token stats for summarizer LLM calls.
  * Stats are persisted to the session via `pi.appendEntry(CUSTOM_TYPE_STATS, ...)`
  * and reconstructed on `session_start` / `session_tree`.
  */
@@ -13,29 +13,23 @@ export class StatsAccumulator {
   private stats: SummarizerStats = {
     totalInputTokens: 0,
     totalOutputTokens: 0,
-    totalCost: 0,
     callCount: 0,
     chainsCompressed: 0,
     rangesSummarized: 0,
   };
-  private baseline = { totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 };
+  private baselineTokens = 0;
   private liveReclaim: LiveReclaim | undefined = undefined;
 
   /** Add usage data from one summarizer LLM call. */
   add(usage: Usage): void {
     this.stats.totalInputTokens += usage.input ?? 0;
     this.stats.totalOutputTokens += usage.output ?? 0;
-    this.stats.totalCost += usage.cost?.total ?? 0;
     this.stats.callCount += 1;
   }
 
-  /** Return session-delta spend (current stats minus baseline set at reconstructFromSession). */
-  getSessionDelta(): { totalCost: number; inputTokens: number; outputTokens: number } {
-    return {
-      totalCost: this.stats.totalCost - this.baseline.totalCost,
-      inputTokens: this.stats.totalInputTokens - this.baseline.totalInputTokens,
-      outputTokens: this.stats.totalOutputTokens - this.baseline.totalOutputTokens,
-    };
+  /** Tokens used since the active session/branch was loaded, excluding restored history. */
+  getSessionTokens(): number {
+    return this.stats.totalInputTokens + this.stats.totalOutputTokens - this.baselineTokens;
   }
 
   /** Store the before/after context-char measurement from the last prune. */
@@ -68,12 +62,11 @@ export class StatsAccumulator {
     this.stats = {
       totalInputTokens: 0,
       totalOutputTokens: 0,
-      totalCost: 0,
       callCount: 0,
       chainsCompressed: 0,
       rangesSummarized: 0,
     };
-    this.baseline = { totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 };
+    this.baselineTokens = 0;
     this.liveReclaim = undefined;
   }
 
@@ -82,7 +75,6 @@ export class StatsAccumulator {
     this.stats = {
       totalInputTokens: data.totalInputTokens ?? 0,
       totalOutputTokens: data.totalOutputTokens ?? 0,
-      totalCost: data.totalCost ?? 0,
       callCount: data.callCount ?? 0,
       chainsCompressed: data.chainsCompressed ?? 0,
       rangesSummarized: data.rangesSummarized ?? 0,
@@ -107,11 +99,7 @@ export class StatsAccumulator {
         }
       }
     }
-    this.baseline = {
-      totalInputTokens: this.stats.totalInputTokens,
-      totalOutputTokens: this.stats.totalOutputTokens,
-      totalCost: this.stats.totalCost,
-    };
+    this.baselineTokens = this.stats.totalInputTokens + this.stats.totalOutputTokens;
   }
 
   /**
@@ -143,25 +131,4 @@ export function formatCharProgress(receivedChars: number, rawChars?: number): st
   const receivedLabel = `${formatCompactCount(receivedChars)} summary char${receivedChars === 1 ? "" : "s"}`;
   if (rawChars == null) return receivedLabel;
   return `${receivedLabel} / ${formatCompactCount(rawChars)} raw char${rawChars === 1 ? "" : "s"}`;
-}
-
-/** Format cost like "$0.003" */
-export function formatCost(n: number): string {
-  if (n < 0.001 && n > 0) return `<$0.001`;
-  return `$${n.toFixed(3)}`;
-}
-
-/**
- * Emit the session-delta cost from `accumulator` on EXTERNAL_COST_CHANNEL.
- * Idempotent from the aggregator's perspective: keyed by source, re-emitting overwrites.
- */
-export function emitExternalCost(pi: ExtensionAPI, accumulator: StatsAccumulator): void {
-  const delta = accumulator.getSessionDelta();
-  const payload: ExternalCostUpdate = {
-    source: EXTERNAL_COST_SOURCE,
-    totalCost: delta.totalCost,
-    inputTokens: delta.inputTokens,
-    outputTokens: delta.outputTokens,
-  };
-  pi.events.emit(EXTERNAL_COST_CHANNEL, payload);
 }

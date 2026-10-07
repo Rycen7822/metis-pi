@@ -13,8 +13,10 @@ condense 先保存可查询原文，再精简请求历史；模型摘要与机�
 | `pruneOn` | `agent-message` | 最终回复边界处理，含 goal 中间回复。 |
 | `minBatchChars` | `1000` | 确定性精简后达到门槛才考虑摘要；0 关闭门槛。 |
 | `chainCompression.enabled` / `rollingWindow` | `true` / `3` | 工具结束或回复落盘后，在后台收拢较旧的已结束任务链，保留最近 3 条；0 表示不保留最近链。 |
-| `showPruneStatusLine` / `showOccStatusLine` | `true` | 额外摘要用量 / 最近 OCC 状态。 |
+| `showPruneStatusLine` / `showOccStatusLine` | `true` | 单行精简比例及摘要 token 用量 / 最近 OCC 状态。 |
 | `compactionSummaryMaxTokens` | `0` | Pi 原生压缩摘要的额外输出 token 上限；0 沿用 Pi，正整数自定义，仍受 Pi 和模型上限约束。 |
+
+精简状态与摘要用量合并为一行，例如 `│ prune: ON · 242.1k->87.9k (-64%) · usage: 23039 tokens`。用量为本次会话/分支加载后的摘要输入与输出 token 合计，不含恢复的历史用量；不统计或显示美元费用。
 
 也可直接编辑 `~/.pi/agent/settings.json`（或 `PI_CODING_AGENT_DIR` 下的同名文件），在已有 `contextPrune` 对象中设置 `"compactionSummaryMaxTokens": 32768`；保存后用 `/reload` 或重启 Pi 读取。
 

@@ -55,7 +55,7 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
   return { ...loaded, modelRuntime, sm, errors, notices, statuses, eventBus };
 }
 
-test("real host loads one built-in tool, preserves settings, and isolates cumulative summarizer costs", async (t) => {
+test("real host loads one built-in tool, preserves settings, and uses one token-only prune status", async (t) => {
   const h = await loadHost(t);
   const runner = h.session.extensionRunner;
   const tools = runner.getAllRegisteredTools().map((x) => x.definition);
@@ -63,12 +63,10 @@ test("real host loads one built-in tool, preserves settings, and isolates cumula
   assert.ok(runner.getRegisteredCommands().some((x) => x.name === "pruner"));
   await h.session.prompt("/pruner recovery-grace");
   assert.ok(h.notices.some((text) => text.includes("Current recovery grace: 3 user-turn-group")), "the command must dispatch through AgentSession");
-  const cost = { source: "pi-condense", totalCost: 0.02, inputTokens: 200, outputTokens: 10 };
-  h.eventBus.emit("cost:external", cost);
-  assert.equal(h.statuses.get("metis-condense-cost"), "prune usage: 210 tokens · $0.0200 (since session load)");
-  h.eventBus.emit("cost:external", cost);
-  h.eventBus.emit("cost:external", { ...cost, source: "unrelated", inputTokens: 99999 });
-  assert.equal(h.statuses.get("metis-condense-cost"), "prune usage: 210 tokens · $0.0200 (since session load)");
+  assert.equal(h.statuses.get("context-prune"), "│ prune: ON · usage: 0 tokens");
+  h.eventBus.emit("cost:external", { source: "pi-condense", totalCost: 0.02, inputTokens: 200, outputTokens: 10 });
+  assert.equal(h.statuses.get("metis-condense-cost"), undefined);
+  assert.equal(h.statuses.get("context-prune"), "│ prune: ON · usage: 0 tokens");
   await runner.emit({ type: "session_start" });
   assert.equal(h.statuses.get("metis-condense-cost"), undefined);
   assert.equal(runner.getAllRegisteredTools().filter((x) => x.definition.name === "context_tree_query").length, 1);

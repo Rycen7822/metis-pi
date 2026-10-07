@@ -14,7 +14,7 @@ import {
 } from "./types.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { saveConfig, persistConfig } from "./config.ts";
-import { formatTokens, formatCost, formatCharProgress, formatCompactCount } from "./stats.ts";
+import { formatTokens, formatCharProgress, formatCompactCount } from "./stats.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { openPrunerSettings, protectedToolsDisplay } from "./settings.ts";
 import { optionLabel, optionValues, parseScalar, rowDescription, scalarRow, writeScalar } from "./setting-fields.ts";
@@ -51,6 +51,7 @@ export function setPruneStatusWidget(
   config: ContextPruneConfig,
   value?: LiveReclaim | string,
   diagnostics?: Record<DiagnosticKind, number>,
+  usageTokens = 0,
 ): void {
   if (!config.showPruneStatusLine) {
     ctx.ui.setStatus(STATUS_WIDGET_ID, undefined);
@@ -61,7 +62,7 @@ export function setPruneStatusWidget(
   // single space, so a trailing divider collides with the next segment's leading
   // one and renders doubled. One leading bar yields single dividers between
   // sections, load-order independent.
-  ctx.ui.setStatus(STATUS_WIDGET_ID, `\u2502 ${text}`);
+  ctx.ui.setStatus(STATUS_WIDGET_ID, `\u2502 ${text} \u00b7 usage: ${usageTokens} tokens`);
 }
 
 // ── Subcommand list (for completions & interactive picker) ──────────────────
@@ -75,7 +76,7 @@ const SUBCOMMANDS = [
   { value: "thinking", label: "thinking  — show or set the summarizer thinking level" },
   { value: "prune-on", label: "prune-on  — show or set the trigger mode" },
   { value: "batching", label: "batching  — show or set the batching mode (turn / agent-message)" },
-  { value: "stats",   label: "stats     — show cumulative summarizer token/cost stats" },
+  { value: "stats",   label: "stats     — show cumulative summarizer token stats" },
   { value: "tree",    label: "tree      — browse pruned tool calls in a foldable tree" },
   { value: "now",     label: "now       — flush pending tool calls immediately (widget progress)" },
   { value: "compact", label: "compact   — retroactively compress all eligible closed chains" },
@@ -129,7 +130,7 @@ Usage:
   /pruner batching                         Show or interactively pick the batching granularity
   /pruner batching turn                    One summary per assistant turn (default)
   /pruner batching agent-message           One summary per user→final-agent-message span (merges all turns in a span)
-  /pruner stats                            Show cumulative summarizer token/cost stats
+  /pruner stats                            Show cumulative summarizer token stats
   /pruner tree                             Browse pruned tool calls in a foldable tree (Ctrl-O opens selected summary)
   /pruner now                              Flush pending tool calls immediately (shows live footer progress)
   /pruner protected-tools                  Interactively edit the never-pruned tool allowlist
@@ -329,6 +330,7 @@ export function registerCommands(
   getRearmed?: () => boolean,
   save: (config: ContextPruneConfig) => Promise<void> = saveConfig,
   refreshOccStatus?: (ctx: ExtensionCommandContext) => void,
+  getUsageTokens: () => number = () => 0,
 ): void {
   // Register the /pruner command
   pi.registerCommand("pruner", {
@@ -356,7 +358,7 @@ export function registerCommands(
         case "settings": {
           await openPrunerSettings(ctx, currentConfig, save, (config) => {
             refreshOccStatus?.(ctx);
-            setPruneStatusWidget(ctx, config, getLiveReclaim(), getDiagnosticCounts?.());
+            setPruneStatusWidget(ctx, config, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
           });
           break;
         }
@@ -368,7 +370,7 @@ export function registerCommands(
           currentConfig.value = { ...currentConfig.value, enabled };
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(`Context pruning ${enabled ? "enabled" : "disabled"}.`);
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
+          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
           break;
         }
 
@@ -378,7 +380,7 @@ export function registerCommands(
           const mode = optionLabel("pruneOn", cfg.pruneOn);
           const s = getStats();
           const statsLine = s.callCount > 0
-            ? `\n  --- summarizer ---\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens\n  cost:        ${formatCost(s.totalCost)}`
+            ? `\n  --- summarizer ---\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens`
             : "\n  (no summarizer calls yet)";
           const fmtTimeout = (ms: number) => (ms === 0 ? "disabled" : `${Math.round(ms / 1000)}s`);
           const m = getContextMetrics?.(ctx);
@@ -420,7 +422,7 @@ export function registerCommands(
           } else {
             const chainsLine = s.chainsCompressed > 0 ? `\n  chains:      ${s.chainsCompressed} compressed` : "";
             ctx.ui.notify(
-              `pruner stats:\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens\n  cost:        ${formatCost(s.totalCost)}${chainsLine}`,
+              `pruner stats:\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens${chainsLine}`,
             );
           }
           break;
@@ -489,7 +491,7 @@ export function registerCommands(
             currentConfig.value = writeScalar(currentConfig.value, pruneOnField, modeArg);
           }
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
+          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
           break;
         }
 
@@ -593,7 +595,7 @@ export function registerCommands(
 
           // Remove the widget and restore the normal footer status.
           clearWidget();
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.());
+          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
 
           if (!result.ok) {
             if (result.reason === "delivery-pending") {

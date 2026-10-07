@@ -36,7 +36,7 @@ import {
   STATUS_WIDGET_ID,
 } from "./types.ts";
 import { computeContextMetrics } from "./context-metrics.ts";
-import { StatsAccumulator, emitExternalCost } from "./stats.ts";
+import { StatsAccumulator } from "./stats.ts";
 import { PruneFrontierTracker } from "./frontier.ts";
 import { BlockRefIssuer } from "./block-refs.ts";
 import { compressEligible, prepareSharedChain, selectEligible, findCompressibleRange, chainMatchesGrace, extractChainRecords } from "./chain-compressor.ts";
@@ -73,7 +73,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       .filter(group => group?.version === 1 && Array.isArray(group.sourceIds) && Array.isArray(group.fingerprints) && Array.isArray(group.keys) && typeof group.text === "string");
   };
 
-  // Shared stats accumulator — tracks cumulative token/cost stats for summarizer calls
+  // Shared stats accumulator — tracks cumulative token usage for summarizer calls
   const statsAccum = new StatsAccumulator();
 
   // Session-scoped summarizer outage-fallback controller (in-memory; reset on session_start).
@@ -89,6 +89,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Session-scoped diagnostic sink — tracks recovery-path anomaly counters
   // (dedup'd across the session's lifetime, not per-render).
   const diagnostics = new DiagnosticSink((type, data) => pi.appendEntry(type, data));
+  const updatePruneStatus = (ctx: ExtensionContext, value?: string) =>
+    setPruneStatusWidget(ctx, currentConfig.value, value ?? statsAccum.getLiveReclaim(), diagnostics.counts(), statsAccum.getSessionTokens());
 
   // Newest-protected-read-wins state (spec 2026-09-07). In-memory only: on
   // session_start / session_tree the cold floor re-activates everything.
@@ -634,7 +636,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       for (const [i, record] of records.entries()) {
         checkSource();
         schedule(i);
-        if (record.job) setPruneStatusWidget(ctx, currentConfig.value, `prune: summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
+        if (record.job) updatePruneStatus(ctx, `prune: summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
         await record.job;
         checkSource();
         if (record.error) throw record.error;
@@ -775,7 +777,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       if (processedBatches.length === 0) {
         // Nothing was persisted (all calls failed or first call failed)
-        setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
+        updatePruneStatus(ctx);
         outcome = deliveryPending ? "delivery-pending" : "error";
         failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
         return { ok: false, reason: deliveryPending ? "delivery-pending" : failureReason === "input-budget" ? "input-budget" : "summarizer-failed", error: failureMessage };
@@ -794,8 +796,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
       catch (err) { if (delivery === "runtime") throw err; }
 
-      setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
-      emitExternalCost(pi, statsAccum);
+      updatePruneStatus(ctx);
 
       // Notify about any batches that were skipped — either oversized or
       // trivial. Neither is an error: the pruner correctly chose not to grow
@@ -842,7 +843,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       outcome = firstFailureIndex >= 0 ? "partial" : flushOutcome;
       if (firstFailureIndex >= 0) {
         failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
-        setPruneStatusWidget(ctx, currentConfig.value, `prune: ${processedCount}/${records.length} complete; remaining pending`);
+        updatePruneStatus(ctx, `prune: ${processedCount}/${records.length} complete; remaining pending`);
       }
 
       return {
@@ -867,7 +868,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // When the abort signal fired, summarizeBatch rethrows rather than
       // swallowing the error.  Don't show a UI error — the user intended this.
       if (options.signal?.aborted) {
-        setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
+        updatePruneStatus(ctx);
         return { ok: false, reason: "aborted", batchCount: processedCount };
       }
       if (isStaleContextError(err)) {
@@ -916,7 +917,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
 
     // Update footer status
-    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
+    updatePruneStatus(ctx);
   };
 
   let bootTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1086,7 +1087,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           ? "agent's next text response"
           : "/pruner now";
         if (currentConfig.value.showPruneStatusLine) {
-          setPruneStatusWidget(ctx, currentConfig.value, `prune: ${n} pending`);
+          updatePruneStatus(ctx, `prune: ${n} pending`);
           safeNotify(
             ctx,
             `pruner: ${n} turn${n === 1 ? "" : "s"} queued — will summarize on ${trigger}`,
@@ -1164,11 +1165,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   pi.on("agent_end", async (_event, ctx) => {
     if (!currentConfig.value.enabled) return;
     if (pendingBatches.length === 0 && !rearmedPending) return;
-    setPruneStatusWidget(
-      ctx,
-      currentConfig.value,
-      pendingBatches.length > 0 ? `prune: ${pendingBatches.length} pending` : "prune: recovered pending (reload)",
-    );
+    updatePruneStatus(ctx, pendingBatches.length > 0 ? `prune: ${pendingBatches.length} pending` : "prune: recovered pending (reload)");
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -1496,7 +1493,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const result = projectContext(event.messages, ctx.model?.api, ctx);
     occ.observeRequest(result.messages);
     if (result.beforeChars !== undefined) statsAccum.setLiveReclaim(result.beforeChars, result.afterChars!);
-    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts());
+    updatePruneStatus(ctx);
     return result.changed ? { messages: result.messages } : undefined;
   });
 
@@ -1518,8 +1515,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       assertCurrent(version);
       if (result.compressedEntries.length > 0) {
         statsAccum.persist(pi);
-        emitExternalCost(pi, statsAccum);
       }
+      updatePruneStatus(ctx);
       return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length };
     } finally {
       isCompactingChains = false;
@@ -1547,6 +1544,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       return saveConfig(config);
     },
     (ctx) => occ.refreshStatus(ctx),
+    () => statsAccum.getSessionTokens(),
   );
   return {
     start, tree,

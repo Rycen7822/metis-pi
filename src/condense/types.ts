@@ -106,12 +106,6 @@ export interface DiagnosticEntryData {
  * grace checks in pruner.ts / chain-compressor.ts cannot drift from registration. */
 export const QUERY_TOOL_NAME = "context_tree_query";
 
-/** pi.events channel for cross-extension cost contributions (an aggregator like pi-subagents folds these into one total). */
-export const EXTERNAL_COST_CHANNEL = "cost:external";
-
-/** Stable producer id for this extension's cost contributions. */
-export const EXTERNAL_COST_SOURCE = "pi-condense";
-
 /** Footer status widget ID */
 export const STATUS_WIDGET_ID = "context-prune";
 
@@ -832,7 +826,7 @@ export interface FlushMetricsEntry {
 // ── Summarizer stats ────────────────────────────────────────────────────────
 
 /**
- * Cumulative token/cost stats for summarizer LLM calls and chain compression.
+ * Cumulative token stats for summarizer LLM calls and chain compression.
  * Persisted via pi.appendEntry(CUSTOM_TYPE_STATS, ...) so stats survive
  * restarts and branch navigation.
  */
@@ -841,26 +835,12 @@ export interface SummarizerStats {
   totalInputTokens: number;
   /** Cumulative output tokens across all summarizer calls */
   totalOutputTokens: number;
-  /** Cumulative cost in USD across all summarizer calls */
-  totalCost: number;
   /** Number of summarizer LLM calls made */
   callCount: number;
   /** Cumulative number of chains range-compressed across all flushes */
   chainsCompressed: number;
   /** Cumulative number of chains given a fused LLM range summary */
   rangesSummarized: number;
-}
-
-/**
- * Cumulative-per-source cost contribution emitted on EXTERNAL_COST_CHANNEL.
- * "Cumulative" = for the CURRENT session, not all-time. Idempotent: an
- * aggregator keys by `source` and overwrites, so a re-emit never double-counts.
- */
-export interface ExternalCostUpdate {
-  source: string;
-  totalCost: number;
-  inputTokens?: number;
-  outputTokens?: number;
 }
 
 /** Transient before/after context-size measurement from the last prune (chars). */
