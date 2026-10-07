@@ -827,11 +827,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           );
         }
         if (totalDedupedCount > 0 && dedupedBatches.length === 0) {
-          // Partial-dedup case: some tool calls were dedup'd but the rest
-          // of the batch went through the summarizer. Surface a single
-          // aggregate notification so users see the savings.
+          // Partial dedup does not imply the remaining calls used an LLM.
+          const remainder = modelAttempted
+            ? "LLM summarization was attempted for remaining tool calls."
+            : "No LLM summarization was attempted for remaining tool calls.";
           notify(
-            `pruner: deduplicated ${totalDedupedCount} tool call${totalDedupedCount === 1 ? "" : "s"} against earlier prunes (no LLM call for those); remaining tool calls were summarized normally.`
+            `pruner: deduplicated ${totalDedupedCount} tool call${totalDedupedCount === 1 ? "" : "s"} against earlier prunes (no LLM call for those); ${remainder}`
           );
         }
       }
