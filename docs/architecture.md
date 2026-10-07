@@ -16,7 +16,7 @@
 | `mcp.ts` | 默认关闭；`src/mcp` 持有目录缓存、连接租约和工具装配，协议/OAuth/CLI/codemode/权限由 Pi 提供。 |
 | `subagents.ts` | `src/subagents` 持有父会话租约、接收票据和轻量交互；`core` 原生持有子代理 Runtime、账本、任务队列和进程管理。 |
 
-`metis-pi.json.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。
+全局 `metis-pi.toml` 的 `appearance.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。
 
 ## 显示数据流
 

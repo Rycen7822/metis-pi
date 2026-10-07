@@ -1,5 +1,6 @@
 // Configuration validation follows Pi 1.0.0 (MIT, Mario Zechner). See NOTICE.
 import { existsSync, readFileSync } from "node:fs";
+import { defaultMetisConfig, metisConfigPath, readMetisConfig } from "../metis-config.ts";
 import { execSync, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,33 +20,26 @@ function readObject(path: string): Record<string, unknown> {
   return value;
 }
 export function mcpEnabled(agentDir: string): boolean {
-  const section = readObject(join(agentDir, "metis-pi.json")).mcp;
+  const section = readMetisConfig(agentDir).config.mcp;
   return isRecord(section) && section.enabled === true;
 }
 export function readMcpConfiguration(agentDir: string, cwd: string, trusted: boolean, registered: RegisteredMcpServer[] = []): McpConfiguration {
   const result: McpConfiguration = { servers: [], errors: [], autoEnableCodemode: true,
-    policy: { enabled: false, idleTimeoutSeconds: 600, keepAliveServers: [] } };
+    policy: defaultMetisConfig().mcp as McpPolicy };
   const servers = new Map<string, McpServerEntry>();
   const scopes: ("global" | "project")[] = trusted ? ["global", "project"] : ["global"];
+  try {
+    const section = readMetisConfig(agentDir).config.mcp;
+    if (!isRecord(section)) throw new Error("mcp settings must be a table");
+    if (typeof section.enabled !== "boolean") throw new Error("mcp.enabled must be a boolean");
+    if (typeof section.idleTimeoutSeconds !== "number" || !Number.isFinite(section.idleTimeoutSeconds) || section.idleTimeoutSeconds <= 0)
+      throw new Error("mcp.idleTimeoutSeconds must be positive seconds");
+    if (!Array.isArray(section.keepAliveServers) || section.keepAliveServers.some(name => typeof name !== "string"))
+      throw new Error("mcp.keepAliveServers must be an array of server names");
+    result.policy = section as unknown as McpPolicy;
+  } catch (error) { result.errors.push(`${metisConfigPath(agentDir)}: ${(error as Error).message}`); }
   for (const scope of scopes) {
     const dir = scope === "global" ? agentDir : join(cwd, CONFIG_DIR_NAME);
-    try {
-      const section = readObject(join(dir, "metis-pi.json")).mcp;
-      if (section !== undefined && !isRecord(section)) throw new Error("mcp settings must be an object");
-      if (isRecord(section)) {
-        if (scope === "global") result.policy.enabled = section.enabled === true;
-        if (section.idleTimeoutSeconds !== undefined) {
-          if (typeof section.idleTimeoutSeconds !== "number" || !Number.isFinite(section.idleTimeoutSeconds) || section.idleTimeoutSeconds <= 0)
-            throw new Error("mcp.idleTimeoutSeconds must be positive seconds");
-          result.policy.idleTimeoutSeconds = section.idleTimeoutSeconds;
-        }
-        if (section.keepAliveServers !== undefined) {
-          if (!Array.isArray(section.keepAliveServers) || section.keepAliveServers.some(name => typeof name !== "string"))
-            throw new Error("mcp.keepAliveServers must be an array of server names");
-          result.policy.keepAliveServers = section.keepAliveServers as string[];
-        }
-      }
-    } catch (error) { result.errors.push(`${dir}/metis-pi.json: ${(error as Error).message}`); }
     const path = join(dir, "mcp.json");
     try {
       const raw = readObject(path);

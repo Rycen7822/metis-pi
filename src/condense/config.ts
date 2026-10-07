@@ -1,199 +1,95 @@
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ContextPruneConfig, PruneOn, SummarizerThinking } from "./types.ts";
 import { DEFAULT_CONFIG, PRUNE_ON_MODES, SUMMARIZER_THINKING_LEVELS } from "./types.ts";
+import { decodePruneConfig, encodePruneConfig, MetisConfigError, metisConfigPath, parseMetisConfig, readMetisConfig, updateMetisConfig } from "../metis-config.ts";
 
-/**
- * Settings location: the active pi agent's main `settings.json` under the
- * `contextPrune` namespace, mirroring pi's own conventions for `compaction`,
- * `retry`, `branchSummary`, etc. Pi's SettingsManager preserves unknown
- * top-level keys when it rewrites settings, so the namespace coexists safely
- * with pi's own settings.
- *
- * Resolved against `getAgentDir()` so it honors `PI_CODING_AGENT_DIR`
- * (defaults to `~/.pi/agent`). Each pi preset directory therefore gets its
- * own context-prune config — including its own summarizer model.
- *
- * Computed lazily on each read/write rather than frozen at module load, so the
- * resolved path always reflects the current `PI_CODING_AGENT_DIR` regardless of
- * when the module was first imported.
- */
-export function settingsPath(): string {
-  return join(getAgentDir(), "settings.json");
-}
-
-/** Top-level key under which context-prune state lives in `settings.json`. */
+export const settingsPath = () => metisConfigPath(getAgentDir());
 export const SETTINGS_KEY = "contextPrune" as const;
-
+export { MetisConfigError as SettingsReadError };
 function isPruneOn(value: unknown): value is PruneOn {
-  return typeof value === "string" && PRUNE_ON_MODES.some((mode) => mode.value === value);
+  return typeof value === "string" && PRUNE_ON_MODES.some(mode => mode.value === value);
 }
-
 function isSummarizerThinking(value: unknown): value is SummarizerThinking {
-  return typeof value === "string" && SUMMARIZER_THINKING_LEVELS.some((level) => level.value === value);
+  return typeof value === "string" && SUMMARIZER_THINKING_LEVELS.some(level => level.value === value);
 }
-
-const booleanOrDefault = (value: unknown, fallback: boolean): boolean =>
-  typeof value === "boolean" ? value : fallback;
-
-// Validate before flooring to preserve fractional input behavior.
-const integerOrDefault = <T extends number | null>(
-  value: unknown, fallback: T, minimum = 0, positive = false,
-): number | T =>
-  typeof value === "number" && Number.isFinite(value) && (positive ? value > minimum : value >= minimum)
-    ? Math.floor(value)
-    : fallback;
-
+const booleanOrDefault = (value: unknown, fallback: boolean) => typeof value === "boolean" ? value : fallback;
+const integerOrDefault = <T extends number | null>(value: unknown, fallback: T, minimum = 0, positive = false): number | T =>
+  typeof value === "number" && Number.isFinite(value) && (positive ? value > minimum : value >= minimum) ? Math.floor(value) : fallback;
 const fractionOrDefault = <T extends number | null>(value: unknown, fallback: T): number | T =>
   typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1 ? value : fallback;
-
-/** Fail-soft at the settings.json boundary, preserving order and valid entries. */
 function normalizeFallbackModels(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map(entry => entry.trim())
-    .filter(entry => /^[^/\s]+\/\S+$/.test(entry)))];
+  return Array.isArray(value) ? [...new Set(value.filter((entry): entry is string => typeof entry === "string")
+    .map(entry => entry.trim()).filter(entry => /^[^/\s]+\/\S+$/.test(entry)))] : [];
 }
-
+const strings = (value: unknown, fallback: string[]) => Array.isArray(value) && value.every(item => typeof item === "string") ? value : [...fallback];
 function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
-  const merged = { ...DEFAULT_CONFIG, ...existing };
-  const chain = existing.chainCompression;
-  const defaults = DEFAULT_CONFIG.chainCompression;
+  const merged = { ...structuredClone(DEFAULT_CONFIG), ...existing }, defaults = DEFAULT_CONFIG;
+  const chain = existing.chainCompression, purge = existing.purgeErrors;
+  const summaryBudget = { ...defaults.summaryBudget };
+  for (const key of Object.keys(summaryBudget) as (keyof typeof summaryBudget)[]) {
+    const value = existing.summaryBudget?.[key];
+    if (key === "minGainFraction") {
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1) summaryBudget[key] = value;
+    } else if (Number.isSafeInteger(value) && value! >= (["maxBudgetWindowTokens", "minGainTokens", "maxProxyTokens"].includes(key) ? 1 : 0)) summaryBudget[key] = value!;
+  }
   return {
-    ...merged,
+    ...merged, summaryBudget,
     opportunisticCompaction: merged.opportunisticCompaction === true,
-    enabled: booleanOrDefault(merged.enabled, DEFAULT_CONFIG.enabled),
-    showPruneStatusLine: booleanOrDefault(merged.showPruneStatusLine, DEFAULT_CONFIG.showPruneStatusLine),
-    showOccStatusLine: booleanOrDefault(merged.showOccStatusLine, DEFAULT_CONFIG.showOccStatusLine),
-    compactionSummaryMaxTokens: Number.isSafeInteger(merged.compactionSummaryMaxTokens) && merged.compactionSummaryMaxTokens >= 0
-      ? merged.compactionSummaryMaxTokens : DEFAULT_CONFIG.compactionSummaryMaxTokens,
-    pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : DEFAULT_CONFIG.pruneOn,
+    enabled: booleanOrDefault(merged.enabled, defaults.enabled),
+    showPruneStatusLine: booleanOrDefault(merged.showPruneStatusLine, defaults.showPruneStatusLine),
+    showOccStatusLine: booleanOrDefault(merged.showOccStatusLine, defaults.showOccStatusLine),
+    compactionSummaryMaxTokens: Number.isSafeInteger(merged.compactionSummaryMaxTokens) && merged.compactionSummaryMaxTokens >= 0 ? merged.compactionSummaryMaxTokens : defaults.compactionSummaryMaxTokens,
+    summarizerModel: typeof merged.summarizerModel === "string" && merged.summarizerModel.trim() ? merged.summarizerModel : defaults.summarizerModel,
+    pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : defaults.pruneOn,
     summarizerFallbackModels: normalizeFallbackModels(merged.summarizerFallbackModels),
-    summarizerThinking: isSummarizerThinking(merged.summarizerThinking) ? merged.summarizerThinking : DEFAULT_CONFIG.summarizerThinking,
-    quietOversizedSkips: booleanOrDefault(merged.quietOversizedSkips, DEFAULT_CONFIG.quietOversizedSkips),
-    minBatchChars: integerOrDefault(merged.minBatchChars, DEFAULT_CONFIG.minBatchChars),
-    summarizerIdleTimeoutMs: integerOrDefault(merged.summarizerIdleTimeoutMs, DEFAULT_CONFIG.summarizerIdleTimeoutMs),
-    summarizerMaxTimeoutMs: integerOrDefault(merged.summarizerMaxTimeoutMs, DEFAULT_CONFIG.summarizerMaxTimeoutMs),
-    recoveryGraceTurns: integerOrDefault(merged.recoveryGraceTurns, DEFAULT_CONFIG.recoveryGraceTurns),
-    dedupByContentHash: booleanOrDefault(merged.dedupByContentHash, DEFAULT_CONFIG.dedupByContentHash),
-    autoBudgetThreshold: merged.autoBudgetThreshold === null ? null
-      : fractionOrDefault(merged.autoBudgetThreshold, DEFAULT_CONFIG.autoBudgetThreshold),
-    spillThreshold: integerOrDefault(merged.spillThreshold, DEFAULT_CONFIG.spillThreshold, 0, true),
-    spillPreviewBytes: integerOrDefault(merged.spillPreviewBytes, DEFAULT_CONFIG.spillPreviewBytes),
-    budgetTurnDelta: fractionOrDefault(merged.budgetTurnDelta, DEFAULT_CONFIG.budgetTurnDelta),
-    frontierGapThresholdTokens: integerOrDefault(merged.frontierGapThresholdTokens, DEFAULT_CONFIG.frontierGapThresholdTokens, 0, true),
-    maxImagesPerRequest: integerOrDefault(merged.maxImagesPerRequest, DEFAULT_CONFIG.maxImagesPerRequest, 1),
+    summarizerThinking: isSummarizerThinking(merged.summarizerThinking) ? merged.summarizerThinking : defaults.summarizerThinking,
+    quietOversizedSkips: booleanOrDefault(merged.quietOversizedSkips, defaults.quietOversizedSkips),
+    minBatchChars: integerOrDefault(merged.minBatchChars, defaults.minBatchChars),
+    summarizerIdleTimeoutMs: integerOrDefault(merged.summarizerIdleTimeoutMs, defaults.summarizerIdleTimeoutMs),
+    summarizerMaxTimeoutMs: integerOrDefault(merged.summarizerMaxTimeoutMs, defaults.summarizerMaxTimeoutMs),
+    recoveryGraceTurns: integerOrDefault(merged.recoveryGraceTurns, defaults.recoveryGraceTurns),
+    dedupByContentHash: booleanOrDefault(merged.dedupByContentHash, defaults.dedupByContentHash),
+    autoBudgetThreshold: merged.autoBudgetThreshold === null ? null : fractionOrDefault(merged.autoBudgetThreshold, defaults.autoBudgetThreshold),
+    spillThreshold: integerOrDefault(merged.spillThreshold, defaults.spillThreshold, 0, true),
+    spillPreviewBytes: integerOrDefault(merged.spillPreviewBytes, defaults.spillPreviewBytes),
+    budgetTurnDelta: fractionOrDefault(merged.budgetTurnDelta, defaults.budgetTurnDelta),
+    frontierGapThresholdTokens: integerOrDefault(merged.frontierGapThresholdTokens, defaults.frontierGapThresholdTokens, 0, true),
+    maxImagesPerRequest: integerOrDefault(merged.maxImagesPerRequest, defaults.maxImagesPerRequest, 1),
+    protectedTools: strings(merged.protectedTools, defaults.protectedTools),
+    protectedPaths: strings(merged.protectedPaths, defaults.protectedPaths),
     chainCompression: {
-      enabled: booleanOrDefault(chain?.enabled, defaults.enabled),
-      rollingWindow: integerOrDefault(chain?.rollingWindow, defaults.rollingWindow),
-      stripFinalAssistantThinking: booleanOrDefault(chain?.stripFinalAssistantThinking, defaults.stripFinalAssistantThinking),
-      fuseRangeSummary: booleanOrDefault(chain?.fuseRangeSummary, defaults.fuseRangeSummary),
+      enabled: booleanOrDefault(chain?.enabled, defaults.chainCompression.enabled),
+      rollingWindow: integerOrDefault(chain?.rollingWindow, defaults.chainCompression.rollingWindow),
+      stripFinalAssistantThinking: booleanOrDefault(chain?.stripFinalAssistantThinking, defaults.chainCompression.stripFinalAssistantThinking),
+      fuseRangeSummary: booleanOrDefault(chain?.fuseRangeSummary, defaults.chainCompression.fuseRangeSummary),
+    },
+    purgeErrors: {
+      enabled: booleanOrDefault(purge?.enabled, defaults.purgeErrors.enabled),
+      cooldownTurns: integerOrDefault(purge?.cooldownTurns, defaults.purgeErrors.cooldownTurns),
+      minArgChars: integerOrDefault(purge?.minArgChars, defaults.purgeErrors.minArgChars),
     },
   };
 }
-
-export class SettingsReadError extends Error {
-  public readonly path: string;
-  public readonly reason: string;
-
-  constructor(
-    path: string,
-    reason: string,
-  ) {
-    super(`settings.json unreadable at ${path}: ${reason}`);
-    this.path = path;
-    this.reason = reason;
-    this.name = "SettingsReadError";
-  }
-}
-
-/**
- * Single classifier for settings.json read outcomes. Only ENOENT means "no
- * file"; every other failure throws so a save never starts from `{}` over a
- * file it could not read.
- */
-async function readJsonObject(
-  path: string,
-  read: typeof readFile = readFile,
-): Promise<Record<string, unknown> | undefined> {
-  let raw: string;
-  try {
-    raw = await read(path, "utf-8");
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === "ENOENT") return undefined;
-    throw new SettingsReadError(path, e.code ?? e.message);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new SettingsReadError(path, "invalid JSON");
-  }
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  throw new SettingsReadError(path, "not a JSON object");
-}
-
-/**
- * Reads `<agent-dir>/settings.json` and returns the `contextPrune` block, or
- * defaults. Fail-soft: an unreadable or malformed file yields defaults, since
- * a broken settings.json is pi-wide and not this extension's to report.
- */
 export async function loadConfig(): Promise<ContextPruneConfig> {
-  let main: Record<string, unknown> | undefined;
-  try {
-    main = await readJsonObject(settingsPath());
-  } catch (err) {
-    if (err instanceof SettingsReadError) return { ...DEFAULT_CONFIG };
-    throw err;
-  }
-  const namespaced = main?.[SETTINGS_KEY];
-  if (namespaced && typeof namespaced === "object" && !Array.isArray(namespaced)) {
-    return normalize(namespaced as Partial<ContextPruneConfig>);
-  }
-  return { ...DEFAULT_CONFIG };
+  try { return normalize(decodePruneConfig(readMetisConfig(getAgentDir()).config[SETTINGS_KEY] ?? {})); }
+  catch (error) { if (error instanceof MetisConfigError) return structuredClone(DEFAULT_CONFIG); throw error; }
 }
-
-/**
- * Writes the full config back to `<agent-dir>/settings.json` under
- * {@link SETTINGS_KEY}, preserving every other top-level key in the file.
- * Tmp-file + atomic rename, so a concurrent reader never observes a partial
- * file. A file that cannot be read as a JSON object is never replaced: the
- * read throws {@link SettingsReadError} before anything is written. Concurrent
- * saves (ours or pi's own) are last-write-wins; that race is not coordinated.
- */
-export async function saveConfig(config: ContextPruneConfig, read: typeof readFile = readFile): Promise<void> {
-  const path = settingsPath();
-  const current = (await readJsonObject(path, read)) ?? {};
-  const next = { ...current, [SETTINGS_KEY]: config };
-  await mkdir(dirname(path), { recursive: true });
-  const tmpPath = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-  await writeFile(tmpPath, `${JSON.stringify(next, null, 2)}\n`);
-  await rename(tmpPath, path);
+export async function saveConfig(config: ContextPruneConfig, read?: typeof readFile): Promise<void> {
+  // Retain the injectable read boundary for failure fixtures; normal writers are synchronous and shared.
+  if (read) {
+    try { parseMetisConfig(await read(settingsPath(), "utf8"), settingsPath()); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error instanceof MetisConfigError ? error : new MetisConfigError(settingsPath(), (error as NodeJS.ErrnoException).code ?? String(error));
+    }
+  }
+  updateMetisConfig(getAgentDir(), { [SETTINGS_KEY]: encodePruneConfig(config) });
 }
-
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;
-
-/**
- * Saves and reports failure through `notify` instead of rejecting, so callers
- * can fire-and-forget. The in-memory change stands; only persistence failed.
- */
-export async function persistConfig(
-  notify: Notify,
-  config: ContextPruneConfig,
-  save: (config: ContextPruneConfig) => Promise<void> = saveConfig,
-): Promise<void> {
-  try {
-    await save(config);
-  } catch (err) {
-    const reason = err instanceof SettingsReadError
-      ? err.reason
-      : ((err as NodeJS.ErrnoException | null | undefined)?.code ?? String(err));
+export async function persistConfig(notify: Notify, config: ContextPruneConfig, save: (config: ContextPruneConfig) => Promise<void> = saveConfig): Promise<void> {
+  try { await save(config); }
+  catch (error) {
+    const reason = error instanceof MetisConfigError ? error.reason : ((error as NodeJS.ErrnoException)?.code ?? String(error));
     notify(`Could not save settings to ${settingsPath()}: ${reason}. Change applies to this session only.`, "error");
   }
 }

@@ -15,7 +15,6 @@ import {
   AUTO_BUDGET_PRESETS, ROLLING_WINDOW_PRESETS,
   PURGE_COOLDOWN_PRESETS, PURGE_MIN_ARG_PRESETS, DEFAULT_CONFIG,
 } from "./types.ts";
-import { MAX_BUDGET_WINDOW } from "./budget.ts";
 
 export interface FieldOption {
   readonly value: string;
@@ -93,7 +92,7 @@ function quietOversizedSkipsDescription(config: ContextPruneConfig): string {
 
 function minBatchCharsDescription(config: ContextPruneConfig): string {
   if (config.minBatchChars === 0) {
-    return `Currently 0 — character guard disabled. This never forces a model request: paid summaries still need pressure and at least both 2048 tokens and 40% local proxy gain; deterministic pruning is checked separately.`;
+    return `Currently 0 — character guard disabled. This never forces a model request: paid summaries still need pressure and at least both ${config.summaryBudget.minGainTokens} tokens and ${Math.round(config.summaryBudget.minGainFraction * 100)}% local proxy gain; deterministic pruning is checked separately.`;
   }
   return `Currently ${config.minBatchChars} chars. Skip remaining semantic batches below that size without a model call. Default 5000; 0 disables only this guard. Paid pressure/token budgets still apply; profitable deterministic candidates bypass it. Pending gaps prevent frontier advancement.`;
 }
@@ -120,12 +119,12 @@ function maxTimeoutDescription(config: ContextPruneConfig): string {
 }
 
 function autoBudgetThresholdDescription(config: ContextPruneConfig): string {
-  const cap = `${MAX_BUDGET_WINDOW / 1000}k`;
+  const cap = `${config.summaryBudget.maxBudgetWindowTokens / 1000}k`;
   if (config.autoBudgetThreshold == null) {
     return `Automatic paid summaries disabled in both modes. Mechanical work, manual requests and Pi's native capacity rescue remain available. Pick a percentage to enable pressure admission.`;
   }
   const pct = Math.round(config.autoBudgetThreshold * 100);
-  return `Admit automatic paid summaries at ${pct}% of the window, ${cap} tokens, or native capacity minus 16384 growth headroom, whichever comes first. Subject to OCC coordination and net-benefit budgets. Agent-message waits for the final reply; Off disables paid automatic work.`;
+  return `Admit automatic paid summaries at ${pct}% of the window, ${cap} tokens, or native capacity minus ${config.summaryBudget.growthHeadroomTokens} growth headroom, whichever comes first. Subject to OCC coordination and net-benefit budgets. Agent-message waits for the final reply; Off disables paid automatic work.`;
 }
 
 function dedupByContentHashDescription(config: ContextPruneConfig): string {
@@ -148,7 +147,7 @@ function stripThinkingDescription(config: ContextPruneConfig): string {
 }
 
 function fuseRangeDescription(config: ContextPruneConfig): string {
-  return `Allow one paid fusion during manual /pruner compact only when the full chain message earns the 2048-token / 40% proxy gain over mechanical concatenation. Automatic maintenance makes no fusion calls; rejection keeps concatenation. Currently ${config.chainCompression.fuseRangeSummary ? "ON" : "OFF"}.`;
+  return `Allow one paid fusion during manual /pruner compact only when the full chain message earns the ${config.summaryBudget.minGainTokens}-token / ${Math.round(config.summaryBudget.minGainFraction * 100)}% proxy gain over mechanical concatenation. Automatic maintenance makes no fusion calls; rejection keeps concatenation. Currently ${config.chainCompression.fuseRangeSummary ? "ON" : "OFF"}.`;
 }
 
 function purgeErrorsEnabledDescription(config: ContextPruneConfig): string {

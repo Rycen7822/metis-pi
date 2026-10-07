@@ -23,11 +23,11 @@ test("package exposes display, goal, condense, dynamic-agents and execution entr
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["appearance", "goal", "condense", "dynamic-agents"]) {
+  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of [
-    "CHANGELOG.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
+    "CHANGELOG.md", "metis-pi.toml", "metis-pi-config.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/view-image/linux-x64/view_image",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",

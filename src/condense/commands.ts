@@ -192,7 +192,7 @@ Why this matters:
 Related:
   - Anthropic prompt caching docs: https://docs.claude.com/en/docs/build-with-claude/prompt-caching
 
-Settings are saved under the "contextPrune" key in <agent-dir>/settings.json (where <agent-dir> is $PI_CODING_AGENT_DIR or ~/.pi/agent).`;
+Settings are saved in [contextPrune] of global <agent-dir>/metis-pi.toml (PI_CODING_AGENT_DIR or ~/.pi/agent). /metis-config init imports legacy settings and installs metis-pi-config.md. Advanced gain/output/pressure constants are configurable in [contextPrune.summaryBudget].`;
 
 // ── Pruner progress widget ────────────────────────────────────────────────────
 

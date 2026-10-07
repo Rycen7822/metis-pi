@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { metisConfigPath, readMetisConfig } from "../src/metis-config.ts";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "../src/dynamic-agents.ts";
@@ -9,7 +8,11 @@ type Snapshot = { model: string; policy: Policy; replacement?: AgentFile };
 const identity = (model?: ModelIdentity) => model ? JSON.stringify([model.provider, model.id]) : "";
 
 export default function dynamicAgents(pi: ExtensionAPI): void {
-  const configPath = join(getAgentDir(), "dynamic-agents.json");
+  const configPath = metisConfigPath(getAgentDir());
+  const configured = () => {
+    try { return readMetisConfig(getAgentDir()).config.dynamicAgents.enabled === true; }
+    catch { return true; } // Invalid config must surface and restore a previously selected policy.
+  };
   let sources = new Set(globalPaths(getAgentDir()));
   let snapshot: Snapshot | undefined;
   let lastNoticeKey = "";
@@ -18,10 +21,10 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
   let nativeGlobal: AgentFile | undefined;
   let globalError: string | undefined;
   let lastOptions: Options | undefined;
-  let managed = existsSync(configPath);
+  let managed = configured();
 
   const prepare = (options: Options, ctx: ExtensionContext) => {
-    if (!managed && !existsSync(configPath)) return;
+    if (!managed && !configured()) return;
     // Read globals once for this run; tool steps keep the same file snapshot.
     if (lastOptions !== options) {
       const global = loadGlobal(getAgentDir());
@@ -37,7 +40,7 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
         delete policy.file; delete policy.group;
       }
       if (!policy.file && globalError) policy.error = [policy.error, globalError].filter(Boolean).join("; ");
-      managed = existsSync(configPath) || sources.size > globalPaths(getAgentDir()).length;
+      managed = configured() || sources.size > globalPaths(getAgentDir()).length;
       snapshot = { model: identity(ctx.model), policy, replacement: policy.file ?? nativeGlobal };
       if (policy.file) sources.add(policy.file.path);
       dirty = false;
@@ -55,7 +58,7 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
       if (Array.isArray(data?.sources)) for (const path of data.sources) if (typeof path === "string") sources.add(path);
     }
     snapshot = undefined; lastOptions = undefined; dirty = true; preparing = false;
-    managed = existsSync(configPath) || sources.size > globalPaths(getAgentDir()).length;
+    managed = configured() || sources.size > globalPaths(getAgentDir()).length;
   };
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));

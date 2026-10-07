@@ -275,7 +275,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const before = await tokenEstimator.measure([original], [], signal);
       const overhead = await tokenEstimator.measure([empty], [], signal);
       if (!before || !overhead) return null;
-      const budget = summaryBudget(before.before, 0, entry.toolRefs.length);
+      const budget = summaryBudget(before.before, 0, entry.toolRefs.length, currentConfig.value.summaryBudget);
       budget.target = Math.max(budget.target, overhead.before + 256);
       if (budget.limit < budget.target) return null;
       const valid = () => {
@@ -377,7 +377,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const tokens = boundary.input + (boundary.output ?? 0) + (boundary.cacheRead ?? 0) + (boundary.cacheWrite ?? 0);
       if (Number.isFinite(tokens) && tokens > 0) usage = { tokens, contextWindow: usage?.contextWindow ?? ctx.model?.contextWindow };
     }
-    return shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx));
+    return shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx), currentConfig.value.summaryBudget);
   };
 
   // Archive first so aliases, spill previews and recovery paths are real and
@@ -419,7 +419,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       display: false, details: { ...makeSummaryDetails(batch, refs), representation: deterministic ? "packed" : "summary" }, timestamp });
     const empty = await tokenEstimator.measure([render("")], [], signal);
     if (!empty) return null;
-    const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length);
+    const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length, currentConfig.value.summaryBudget);
     budget.target = Math.max(budget.target, empty.before + 256);
     return { before, stubs, replacements, render, budget, counts,
       accepts: async (text: string, deterministic = false) => {
@@ -1253,8 +1253,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // waiting for this mode's flush boundary. The pendingBatches.length-or-rearmed
     // guard makes an already-drained, non-rearmed queue a no-op.
     const usage = ctx.getContextUsage?.();
-    const budgetHit = shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx));
-    const deltaHit = shouldDeltaFlush(usage, previousFraction, currentConfig.value.budgetTurnDelta);
+    const budgetHit = shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx), currentConfig.value.summaryBudget);
+    const deltaHit = shouldDeltaFlush(usage, previousFraction, currentConfig.value.budgetTurnDelta, currentConfig.value.summaryBudget);
     // Frontier-gap auto-flush (opt-in): absolute un-pruned tail size, for huge
     // windows where fractional thresholds never trip. Threshold null (default)
     // skips the metrics snapshot entirely; a failed snapshot fails closed.
@@ -1262,7 +1262,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const gapHit = gapThreshold != null && shouldFrontierGapFlush(computeMetricsSnapshot(ctx), gapThreshold);
     // Update the per-turn baseline; leave it unchanged when tokens is null (e.g.
     // right after a compaction) so the next real reading compares to the last known.
-    const f = usageFraction(usage);
+    const f = usageFraction(usage, currentConfig.value.summaryBudget);
     if (f != null) previousFraction = f;
 
     const n = pendingBatches.length;

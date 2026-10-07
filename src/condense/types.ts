@@ -1,4 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
+import type { SummaryBudgetPolicy } from "./budget.ts";
+import { defaultMetisConfig, decodePruneConfig } from "../metis-config.ts";
 /**
  * Shared types for the context-prune extension.
  *
@@ -14,8 +16,7 @@ import type { Usage } from "@earendil-works/pi-ai";
  *   - Runtime state: Map<occurrenceKey, ToolCallRecord> rebuilt on session_start
  *   - Session metadata: pi.appendEntry("context-prune-index", IndexEntryData)
  *     stored once per summarized batch; NOT in LLM context
- *   - User config: .pi/settings.json → "contextPrune" key (JSON merge safe,
- *     Pi preserves unknown keys when rewriting settings files)
+ *   - User config: global metis-pi.toml → [contextPrune], owned by metis-config.ts
  *
  * CONFIG FORMAT (Ph1 step 4):
  *   { "contextPrune": { "enabled": false, "summarizerModel": "default", "showPruneStatusLine": true } }
@@ -252,8 +253,10 @@ export const PRUNE_ON_MODES: { value: PruneOn; label: string }[] = [
   { value: "on-demand", label: "On demand" },
 ];
 
-/** Extension config stored under the `contextPrune` key in `<agent-dir>/settings.json` (agent-dir honors `PI_CODING_AGENT_DIR`). */
+/** Global metis-pi.toml [contextPrune]; agent-dir honors PI_CODING_AGENT_DIR. */
 export interface ContextPruneConfig {
+  /** Advanced calibrated pressure/gain/output/soft-target policy; configuration-file only. */
+  summaryBudget: SummaryBudgetPolicy;
   /** Opt in to shared rewrite buffering and ordinary-Pi opportunistic compaction. */
   opportunisticCompaction: boolean;
   /** Whether to prune raw tool outputs from future LLM context */
@@ -358,7 +361,7 @@ export interface ContextPruneConfig {
    * protected with identical semantics to protectedTools. Default protects
    * skill files and their sibling reference docs under any `skills/` dir,
    * plus per-repo `gauntlet-overrides.md` files.
-   * Kill switch: set to [] in settings.json (`contextPrune.protectedPaths`).
+   * Kill switch: set protectedPaths = [] in global metis-pi.toml [contextPrune].
    */
   protectedPaths: string[];
   /** Chain-level range compression for old closed chains beyond the rolling window. */
@@ -574,43 +577,7 @@ export interface ErrorPurgeConfig {
   minArgChars: number;
 }
 
-export const DEFAULT_CONFIG: ContextPruneConfig = {
-  opportunisticCompaction: false,
-  enabled: false,
-  showPruneStatusLine: true,
-  showOccStatusLine: true,
-  compactionSummaryMaxTokens: 0,
-  summarizerModel: "default",
-  summarizerFallbackModels: [],
-  summarizerThinking: "default",
-  pruneOn: "agent-message",
-  batchingMode: "turn",
-  quietOversizedSkips: false,
-  minBatchChars: 5000,
-  recoveryGraceTurns: 3,
-  summarizerIdleTimeoutMs: 20000,
-  summarizerMaxTimeoutMs: 180000,
-  protectedTools: [],
-  protectedPaths: ["**/skills/**/*.md", "**/gauntlet-overrides.md"],
-  chainCompression: {
-    enabled: true,
-    rollingWindow: 3,
-    stripFinalAssistantThinking: true,
-    fuseRangeSummary: true,
-  },
-  purgeErrors: {
-    enabled: true,
-    cooldownTurns: 2,
-    minArgChars: 500,
-  },
-  dedupByContentHash: true,
-  autoBudgetThreshold: 0.7,
-  spillThreshold: 65536,
-  spillPreviewBytes: 2048,
-  budgetTurnDelta: null,
-  frontierGapThresholdTokens: null,
-  maxImagesPerRequest: null,
-};
+export const DEFAULT_CONFIG = decodePruneConfig(defaultMetisConfig().contextPrune) as ContextPruneConfig;
 
 // ── Captured batch ─────────────────────────────────────────────────────────
 

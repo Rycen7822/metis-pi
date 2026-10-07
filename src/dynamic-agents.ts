@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { readMetisConfig } from "./metis-config.ts";
 
 export const DYNAMIC_AGENTS_STATE = "metis-dynamic-agents";
 const GLOBAL_NAMES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
@@ -13,7 +14,7 @@ function strings(value: unknown): value is string[] {
 }
 
 export function parseConfig(value: unknown): { enabled: boolean; notify: boolean; groups: Group[] } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON object");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a configuration table");
   const raw = value as Record<string, unknown>;
   if (raw.version !== 1 || !Array.isArray(raw.groups)) throw new Error("Expected version: 1 and groups array");
   for (const key of ["enabled", "notify"]) {
@@ -41,9 +42,8 @@ export function matches(pattern: string, model: ModelIdentity): boolean {
 }
 
 export function loadPolicy(configPath: string, model: ModelIdentity | undefined): Policy {
-  if (!existsSync(configPath)) return { notify: true };
   try {
-    const config = parseConfig(JSON.parse(readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")));
+    const config = parseConfig(readMetisConfig(dirname(configPath)).config.dynamicAgents);
     if (!config.enabled || !model) return { notify: config.notify };
     const group = config.groups.find(group => group.include.some(pattern => matches(pattern, model))
       && !group.exclude.some(pattern => matches(pattern, model)));

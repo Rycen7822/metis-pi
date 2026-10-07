@@ -7,11 +7,28 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { McpServerSession } from "../../src/mcp/session.ts";
+import { readMcpConfiguration } from "../../src/mcp/config.ts";
 import { CatalogCache } from "../../src/mcp/catalog.ts";
 import { McpCredentials, createAuth } from "../../src/mcp/auth.ts";
 import { convertResult } from "../../src/mcp/tools.ts";
 import { startHttp, image } from "../helpers/mcp-server.mjs";
 const run = promisify(execFile), cli = fileURLToPath(new URL("../../node_modules/.bin/pi", import.meta.url));
+
+test("MCP policy is global-only while Pi trusted project server definitions still work", t => {
+  const dir = mkdtempSync(join(tmpdir(), "metis-mcp-config-")), cwd = join(dir, "project");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(cwd, ".pi"), { recursive: true });
+  writeFileSync(join(dir, "metis-pi.toml"), '[mcp]\nenabled=true\nidleTimeoutSeconds=123\nkeepAliveServers=["global"]\n');
+  writeFileSync(join(cwd, ".pi", "metis-pi.toml"), '[mcp]\nenabled=false\nidleTimeoutSeconds=1\n');
+  writeFileSync(join(cwd, ".pi", "metis-pi.json"), '{"mcp":{"idleTimeoutSeconds":2}}');
+  writeFileSync(join(cwd, ".pi", "mcp.json"), '{"mcpServers":{"project":{"url":"http://localhost:1234/mcp"}}}');
+  for (const trusted of [false, true]) {
+    const result = readMcpConfiguration(dir, cwd, trusted);
+    assert.deepEqual(result.policy, { enabled: true, idleTimeoutSeconds: 123, keepAliveServers: ["global"] });
+    assert.equal(result.servers.length, trusted ? 1 : 0);
+    assert.deepEqual(result.errors, []);
+  }
+});
 
 test("HTTP preserves result/images, filters Apps, retries only expired sessions and observes live catalog changes", async t => {
   const fixture = await startHttp(), dir = mkdtempSync(join(tmpdir(), "metis-mcp-http-"));

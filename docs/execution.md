@@ -26,7 +26,7 @@ text(await tools.exec_command({cmd: "bash", tty: true}));
 
 ## 设置与资源
 
-配置字段和默认值统一见 [配置参考](configuration.md#执行字段)。`/execution` 写全局，`/execution project` 写可信项目；快捷键修改后重启。
+配置字段和默认值统一见 [配置参考](configuration.md#执行字段)。`/execution` 只写全局 TOML，项目 metis 覆盖和 project 参数不再支持；快捷键修改后重启。
 
 - `autoReasoning` 开启且模型支持 reasoning 时，deferred `change_reasoning` 可用；以 run 开始时的 thinking level 为下限，结束恢复仍由该策略持有的级别。
 - `viewImageFallback` 使用 Pi 注册表和已有认证，优先可用的 OpenAI Codex mini 图片模型，否则使用可用的 `gpt-5.6-luna`；没有可用模型时明确报错。

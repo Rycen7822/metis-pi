@@ -6,8 +6,9 @@ import { openPrunerSettings } from "../../src/condense/settings.ts";
 import { registerCommands } from "../../src/condense/commands.ts";
 import { ToolCallIndexer } from "../../src/condense/indexer.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
-import { loadConfig } from "../../src/condense/config.ts";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { loadConfig, saveConfig } from "../../src/condense/config.ts";
+import { parseMetisConfig } from "../../src/metis-config.ts";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 test("partial chain settings keep defaults, accept zero window and reject invalid fields", async () => {
@@ -34,6 +35,20 @@ test("partial chain settings keep defaults, accept zero window and reject invali
       writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { compactionSummaryMaxTokens: value } }));
       assert.equal((await loadConfig()).compactionSummaryMaxTokens, Number.isSafeInteger(value) && value >= 0 ? value : 0);
     }
+    const before = readFileSync(join(dir, "settings.json"), "utf8");
+    const path = join(dir, "metis-pi.toml");
+    writeFileSync(path, '[contextPrune]\nautoBudgetThreshold=false\nbudgetTurnDelta=false\n[contextPrune.summaryBudget]\nminGainTokens=512\nminGainFraction=0.1\nmaxProxyTokens=1000\nnativeTargetTokens=0\ngrowthHeadroomTokens=-1\n');
+    const config = await loadConfig();
+    assert.equal(config.autoBudgetThreshold, null);
+    assert.equal(config.budgetTurnDelta, null);
+    assert.equal(config.summaryBudget.minGainTokens, 512);
+    assert.equal(config.summaryBudget.maxProxyTokens, 1000);
+    assert.equal(config.summaryBudget.nativeTargetTokens, 0);
+    assert.equal(config.summaryBudget.growthHeadroomTokens, 16384);
+    await saveConfig(config);
+    assert.equal(parseMetisConfig(readFileSync(path, "utf8")).contextPrune.autoBudgetThreshold, false);
+    assert.equal((await loadConfig()).autoBudgetThreshold, null);
+    assert.equal(readFileSync(join(dir, "settings.json"), "utf8"), before);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

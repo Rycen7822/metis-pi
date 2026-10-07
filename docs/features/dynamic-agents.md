@@ -4,21 +4,23 @@
 
 ## 配置与匹配
 
-创建 `<agentDir>/dynamic-agents.json`，目录跟随 `PI_CODING_AGENT_DIR`。文件缺失时不激活，不自动创建。
+使用全局 `<agentDir>/metis-pi.toml` 的 `[dynamicAgents]`，目录跟随 `PI_CODING_AGENT_DIR`。默认 `enabled=false`、`notify=true`、`version=1`、`groups=[]`。`/metis-config init` 保留旧全局策略的原有效开关并导入 TOML，不删除原文件。
 
-```json
-{
-  "version": 1,
-  "enabled": true,
-  "notify": true,
-  "groups": [{
-    "id": "codex", "file": "./AGENTS-CODEX.md",
-    "include": ["openai-codex/*"], "exclude": ["*-mini"]
-  }]
-}
+添加 array-of-tables 时移除默认的 `groups=[]`：
+
+```toml
+[dynamicAgents]
+version = 1
+enabled = true
+notify = true
+[[dynamicAgents.groups]]
+id = "codex"
+file = "./AGENTS-CODEX.md"
+include = ["openai-codex/*"]
+exclude = ["*-mini"]
 ```
 
-version/groups 必填，enabled/notify 默认 true；每组须唯一 id、file、非空 include，exclude 默认空。先验证全部组，再选文件。路径相对 JSON 目录或绝对路径，不展开 `~`，不含双引号/换行；选中文件须可读非空，且不能兼作当前项目指令来源。
+每组须唯一 id、file、非空 include，exclude 默认空。先验证全部组，再选文件。路径相对全局 TOML 目录或绝对路径，不展开 `~`，不含双引号/换行；选中文件须可读非空，且不能兼作当前项目指令来源。
 
 | 模式 | 规则 |
 | --- | --- |
@@ -27,7 +29,7 @@ version/groups 必填，enabled/notify 默认 true；每组须唯一 id、file�
 | 字符 | 区分大小写；仅字面量和 `*`，星号可跨 `/`，不解释正则。 |
 | 组内 / 组间 | 任一 include 命中且所有 exclude 未命中；按数组取首组，不合并或按精确度排序。 |
 
-未命中、关闭或出错时使用原生 `AGENTS.override.md` → `AGENTS.md` → `CLAUDE.md`。JSON、重复 ID、文件错误会警告并回退，不沿用上个模型策略；错误不受 notify 控制。
+未命中、关闭或出错时使用原生 `AGENTS.override.md` → `AGENTS.md` → `CLAUDE.md`。TOML、重复 ID、文件错误会警告并回退，不沿用上个模型策略；错误不受 notify 控制。
 
 ## 生效和恢复
 
@@ -35,7 +37,7 @@ version/groups 必填，enabled/notify 默认 true；每组须唯一 id、file�
 
 `/dynamic-agents` 显示生效组、模型、文件和待生效状态；`reload` 标记刷新、暂停旧快照预热，不发模型请求。原生文件的正文/新增/删除也在新 run 重新解析，候选不可读时按优先级回退。
 
-设 enabled:false 并开始下一次 run 可恢复原生指令。彻底卸载前先完成恢复，或使用新会话；卸载入口后不再清理旧策略投影。关闭正常切换提示用 notify:false。
+设 `enabled=false` 并开始下一次 run 可恢复原生指令。彻底卸载前先完成恢复，或使用新会话；卸载入口后不再清理旧策略投影。关闭正常切换提示用 `notify=false`。
 
 ## 会话与缓存
 

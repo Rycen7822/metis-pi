@@ -1,0 +1,254 @@
+# =============================================================================
+# metis-pi · 全局配置
+# =============================================================================
+# 位置：<agentDir>/metis-pi.toml，通常为 ~/.pi/agent/metis-pi.toml。
+# 以下启用的赋值全部是默认值；首次升级请用 /metis-config init 导入旧设置，
+# 不要用此默认模板覆盖已有个性配置。逐项说明见同目录 metis-pi-config.md。
+#
+# 使用约定：
+#   - 只读取全局配置，不读取项目级 metis 配置。
+#   - TOML 没有 null；指定的可选字段用 false 关闭，不能写成字符串 "false"。
+#   - 密钥、MCP 服务器、Pi 模型/主题/packages 仍由 Pi 管理，不写进本文件。
+#   - 显示和快捷键修改后重启；condense 用 /reload，MCP 用 /mcp reload。
+#
+# 分区：1 显示界面 · 2 执行工具 · 3 MCP · 4 动态指令 · 5 历史精简
+
+
+# =============================================================================
+# 1. 显示界面 / Appearance
+# =============================================================================
+# 这一组只影响呈现，不关闭执行工具、condense 或其他独立扩展。
+[appearance]
+enabled = true
+
+# 思考内容的流式预览与结束状态。
+[appearance.thinking]
+# streaming: "peek" 只看末尾窗口；"full" 完整展示；"collapsed" 折叠。
+streaming = "peek"
+# completed: "collapsed" 折叠；"full" 完整展示。
+completed = "collapsed"
+# 左侧分隔线，以及 peek 窗口行数（1–40）。
+rail = true
+peekLines = 6
+
+# write 工具的流式参数预览。
+[appearance.writePreview]
+enabled = true
+# 屏幕行预算（0–64）；0 只保留标题和阶段。
+rows = 8
+
+# 输入区域：底面、首行提示符、模型/provider/推理/上下文元信息。
+[appearance.composer]
+surface = true
+promptPrefix = true
+metadata = true
+
+# 运行中的状态显示；各开关互相独立。
+[appearance.working]
+elapsed = true
+thought = true
+tool = true
+tokens = false
+# 工作动画；帧间隔单位 ms，范围 32–1000。
+animation = true
+animationIntervalMs = 32
+
+# Footer 与详细统计。
+[appearance.footer]
+enabled = true
+details = true
+showCache = true
+showChanges = true
+showSpeed = true
+
+# 每次任务结束的统计摘要；persist 控制是否随会话保存。
+[appearance.summary]
+enabled = true
+persist = true
+
+# 全屏选区精确复制；无选区时 Ctrl+C 保持宿主原行为。
+[appearance.selectionCopy]
+enabled = true
+ctrlC = true
+
+# 全屏左右留白：marginX 为列数（0–8），0 关闭。
+# 终端宽度低于 minWidth（40–400）时不留白。
+[appearance.fullscreen]
+marginX = 2
+minWidth = 72
+
+# 为指定符号请求文字字形；不改写模型收到的语义文本。
+[appearance.glyphs]
+textPresentation = true
+# 额外的单个非 ASCII 字符；去重后最多 32 项。示例：["★", "⚙"]。
+include = []
+
+
+# =============================================================================
+# 2. 执行工具 / Execution
+# =============================================================================
+# /execution 只保存全局设置；不再支持 project 参数或项目覆盖。
+[execution.tools]
+# 可选的 run 内推理等级调整。
+autoReasoning = false
+# 原生 helper 目录；空字符串使用包内默认路径。
+customRustBinariesDir = ""
+# 文本模型借助已认证的图片模型描述图片；默认不启用。
+viewImageFallback = false
+
+# 工具显示与后台 shell 面板；快捷键修改后重启。
+[execution.ui]
+toolRenaming = true
+backgroundShellWidget = true
+# 面板：展开 / 上一项 / 下一项 / 关闭。
+# 上一项若与宿主冲突，可将 alt+q 改成 alt+u。
+backgroundShellToggleShortcut = "alt+w"
+backgroundShellPrevShortcut = "alt+q"
+backgroundShellNextShortcut = "alt+e"
+backgroundShellCloseShortcut = "alt+r"
+
+
+# =============================================================================
+# 3. MCP 连接策略
+# =============================================================================
+# 默认关闭。启用前先关闭 Pi 原生 mcp 扩展和其他 MCP adapter，避免双 owner。
+# 服务器定义和凭据仍使用 Pi 的 mcp.json / mcp-auth.json，不在这里配置。
+[mcp]
+enabled = false
+# 空闲回收时间，单位秒；须 >0，工具运行或等待操作时不回收。
+idleTimeoutSeconds = 600
+# 需保持连接的服务器名；仍按需连接。示例：["browser", "database"]。
+keepAliveServers = []
+
+
+# =============================================================================
+# 4. 动态全局指令 / Dynamic agents
+# =============================================================================
+# 按 provider/model-id 选择策略 Markdown；只替换全局指令来源。
+[dynamicAgents]
+# 当前策略 schema；必须为 1。
+version = 1
+enabled = false
+# 正式 run 提示策略选择；错误始终提示。
+notify = true
+# 按顺序匹配，首个 include 命中且 exclude 未命中的组生效。
+groups = []
+
+# 可选示例：使用前删除上面的 groups = []，再取消以下行的注释。
+# file 相对本配置所在目录；裸 glob 匹配模型名，带 / 的 glob 匹配 provider/model-id。
+# [[dynamicAgents.groups]]
+# id = "codex"
+# file = "AGENTS-codex.md"
+# include = ["openai-codex/*"]
+# exclude = ["*-mini"]
+
+
+# =============================================================================
+# 5. 历史精简 / Condense 与 OCC
+# =============================================================================
+# 默认关闭自动精简和 OCC；机械处理、付费摘要、原生容量恢复有各自的准入。
+[contextPrune]
+enabled = false
+opportunisticCompaction = false
+showPruneStatusLine = true
+showOccStatusLine = true
+
+# --- 摘要模型与请求超时 -------------------------------------------------------
+# "default" 使用当前会话模型；也可指定已注册的 "provider/model-id"。
+summarizerModel = "default"
+# 有序故障备用链；当前会话模型总在最后。示例：["provider/fallback"]。
+summarizerFallbackModels = []
+# 推理等级：default / off / minimal / low / medium / high / xhigh。
+summarizerThinking = "default"
+# 单位 ms：事件间无进展超时 / 单次请求总时长；0 分别关闭该超时。
+summarizerIdleTimeoutMs = 20000
+summarizerMaxTimeoutMs = 180000
+
+# --- 自动触发与分批 -----------------------------------------------------------
+# pruneOn: "agent-message" 在最终回复评估；"on-demand" 在工具轮次评估。
+pruneOn = "agent-message"
+# batchingMode: "turn" 按轮次；"agent-message" 合并同一用户任务的轮次。
+batchingMode = "turn"
+# 付费摘要的窗口占比，范围 (0,1]；false 禁用自动付费摘要。
+# 手动请求、确定性处理和 Pi 原生容量恢复不受此关闭开关影响。
+autoBudgetThreshold = 0.7
+# 语义候选的字符保护；0 仅取消此保护，仍须满足压力和净收益预算。
+minBatchChars = 5000
+# 静默字符门槛/过大跳过通知，不改变实际处理和保护逻辑。
+quietOversizedSkips = false
+# 可选增长触发：(0,1] 的窗口比例；false 关闭，触发后仍要过准入。
+budgetTurnDelta = false
+# 可选尾部 gap 触发，单位 tokens，须 >0；false 关闭。
+frontierGapThresholdTokens = false
+
+# --- 原文保护与恢复 -----------------------------------------------------------
+# 精确工具名；命中的结果保持原文。示例：["read", "browser"]。
+protectedTools = []
+# 对 args.path 的 glob；空数组关闭路径保护。
+protectedPaths = ["**/skills/**/*.md", "**/gauntlet-overrides.md"]
+# 回读结果保留原文的用户任务组数；0 立即允许恢复成 stub。
+recoveryGraceTurns = 3
+# 精确正文哈希去重；保留每次执行的参数/状态/ref，且实际 stub 必须更小。
+dedupByContentHash = true
+
+# --- 大输出落盘与图片 ---------------------------------------------------------
+# 单结果落 sidecar 的字符门槛，须 >0；预览大小单位 bytes，允许 0。
+spillThreshold = 65536
+spillPreviewBytes = 2048
+# 每请求保留最新 N 张图片（整数 >=1）；false 使用 API 默认，不是禁用图片。
+# 此限制在精简关闭时仍生效。
+maxImagesPerRequest = false
+
+# --- Pi 原生压缩输出 ----------------------------------------------------------
+# 额外输出硬上限，单位 provider tokens；0 沿用 Pi 默认。
+# 不改 reserve/容量触发线，不等同下方的 OCC 文本软目标。
+compactionSummaryMaxTokens = 0
+
+# 旧闭合任务链整理；自动维护不发起二次付费融合。
+[contextPrune.chainCompression]
+enabled = true
+# 保留最近几条任务链；0 不保留最近链。
+rollingWindow = 3
+stripFinalAssistantThinking = true
+# 仅允许手动 compact 额外融合；失败或预算不足时保留机械拼接。
+fuseRangeSummary = true
+
+# 失败调用的参数清理；正文和恢复证据另行保护。
+[contextPrune.purgeErrors]
+enabled = true
+# 失败后等待轮次数 / 可清理参数的字符门槛；两项均允许 0。
+cooldownTurns = 2
+minArgChars = 500
+
+
+# =============================================================================
+# 5a. 高级摘要预算 / 通常保持默认
+# =============================================================================
+# local proxy 是归一化模型消息的 o200k 计量，不等同 provider 输出 tokens 或账单。
+# B = 实际被替换结果，K = 真实 stub/预览/路径，N = 本批调用数。
+# 最低收益 G = max(minGainTokens, ceil(minGainFraction × B))。
+# 完整消息限额 R = min(maxProxyTokens, B - K - G)，包含引用和消息包装。
+# 软目标 Q = min(maxProxyTokens, targetBaseTokens + targetPerCallTokens × N)。
+# 预算不足保留原文和 pending，frontier 不跨缺口；不盲目截断来凑预算。
+[contextPrune.summaryBudget]
+
+# --- 自动压力：provider 上下文 tokens -----------------------------------------
+# 绝对压力 ceiling，也是 delta 窗口分母 ceiling；正安全整数。
+maxBudgetWindowTokens = 300000
+# 可解析 Pi 原生容量线前的增长余量；0 不额外预留。
+growthHeadroomTokens = 16384
+
+# --- 净收益与完整消息：本地 proxy tokens --------------------------------------
+# 最低绝对收益（正安全整数）及最低比例 [0,1]；两者取较大值。
+minGainTokens = 2048
+minGainFraction = 0.4
+# 整个渲染摘要消息的硬上限，不只是正文；正安全整数。
+maxProxyTokens = 6144
+# 软目标的基数及每调用增量；允许 0，仍保留必要包装和正文余地。
+targetBaseTokens = 512
+targetPerCallTokens = 96
+
+# --- OCC：输出文本 tokens 的软目标 --------------------------------------------
+# 仅 OCC 通过受支持的自定义指令请求；0 不附加目标。
+# 不降低 Pi/provider 硬 cap，也不自动注入普通 Pi 原生压缩路径。
+nativeTargetTokens = 16384

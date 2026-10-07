@@ -4,7 +4,7 @@ condense 先保存可查询原文，再精简请求历史；模型摘要与机�
 
 ## 设置与命令
 
-配置位于 Pi `settings.json.contextPrune`，跟随宿主 agentDir。新安装不自动开启，不覆盖已有值；`/pruner status` 查看，`settings` 修改，`on/off` 启停，`now` 手动处理待摘要批次，`compact` 压缩已摘要调用链。
+配置位于全局 `metis-pi.toml` 的 `[contextPrune]`，跟随宿主 agentDir；首次升级用 `/metis-config init` 导入旧全局配置并写同目录参数说明。新安装不自动开启，不覆盖已有值；`/pruner status` 查看，`settings` 修改，`on/off` 启停，`now` 手动处理待摘要批次，`compact` 压缩已摘要调用链。
 
 | 设置 | 默认 | 作用 |
 | --- | --- | --- |
@@ -12,32 +12,24 @@ condense 先保存可查询原文，再精简请求历史；模型摘要与机�
 | `summarizerModel` / `summarizerFallbackModels` | `default` / `[]` | 主摘要模型 / 按顺序尝试的备用模型列表，最后回退当前会话模型。 |
 | `pruneOn` | `agent-message` | 最终回复边界处理，含 goal 中间回复。 |
 | `minBatchChars` | `5000` | 剩余语义候选的字符保护；0 仅关闭此保护，不强制模型请求。 |
-| `autoBudgetThreshold` | `0.7` | 自动付费摘要的压力准入；另有 300,000-token 上限及原生容量减 16,384 的增长余量。显式 `null` 关闭自动付费摘要，不关闭确定性处理、手动请求或原生容量恢复。 |
+| `autoBudgetThreshold` | `0.7` | 自动付费摘要的压力准入；另有 300,000-token 上限及原生容量减 16,384 的增长余量。TOML 中显式 `false` 关闭自动付费摘要，不关闭确定性处理、手动请求或原生容量恢复。 |
 | `batchingMode` | `turn` | 按助手工具轮次分组；`agent-message` 合并同一用户任务内的轮次，均按输入预算拆片。 |
 | `chainCompression.enabled` / `rollingWindow` | `true` / `3` | 工具结束或回复落盘后，在后台收拢较旧的已结束任务链，保留最近 3 条；0 表示不保留最近链。 |
 | `chainCompression.fuseRangeSummary` | `true` | 仅允许手动 `compact` 对满足净收益预算的多批摘要额外融合；自动整理始终不请求二次融合。 |
 | `showPruneStatusLine` / `showOccStatusLine` | `true` | 单行精简比例及摘要 token 用量 / 最近 OCC 状态。 |
 | `compactionSummaryMaxTokens` | `0` | Pi 原生压缩摘要的额外输出 token 上限；0 沿用 Pi，正整数自定义，仍受 Pi 和模型上限约束。 |
 
-未填写字段采用上述新默认值；已有合法值（包括 `autoBudgetThreshold: null`）不自动改写。总开关和 OCC 仍默认关闭。这不是对个人 settings 的修改。
+未填写字段采用包内默认值；迁移保留已有合法值（旧 JSON 的 `autoBudgetThreshold: null` 转为 TOML `false`）。总开关和 OCC 仍默认关闭。TOML 存在后不再叠加旧 JSON，项目 metis 覆盖不生效。完整默认值和参数说明见包根目录 `metis-pi.toml` / `metis-pi-config.md`。
 
 精简状态与摘要用量合并为一行，例如 `│ prune: ON · 242.1k->87.9k (-64%) · usage: 23039 tokens`。用量为本次会话/分支加载后的摘要输入与输出 token 合计，不含恢复的历史用量；不统计或显示美元费用。
 
-也可直接编辑 `~/.pi/agent/settings.json`（或 `PI_CODING_AGENT_DIR` 下的同名文件），在已有 `contextPrune` 对象中设置 `"compactionSummaryMaxTokens": 32768`；保存后用 `/reload` 或重启 Pi 读取。
+也可编辑 `~/.pi/agent/metis-pi.toml`（或 `PI_CODING_AGENT_DIR` 下同名文件），保存后 `/reload` 或重启。回退链需使用注册表中的实际 provider/model-id：
 
-可在已有 `settings.json.contextPrune` 中配置摘要回退链（替换为模型注册表中的实际 provider/model-id）：
-
-```json
-{
-  "contextPrune": {
-    "summarizerModel": "provider/primary",
-    "summarizerFallbackModels": [
-      "provider/fallback-1",
-      "provider/fallback-2",
-      "provider/fallback-3"
-    ]
-  }
-}
+```toml
+[contextPrune]
+compactionSummaryMaxTokens = 32768
+summarizerModel = "provider/primary"
+summarizerFallbackModels = ["provider/fallback-1", "provider/fallback-2", "provider/fallback-3"]
 ```
 
 保存后 `/reload` 或重启 Pi。主模型不可用时，按数组顺序尝试，全部不可用才使用当前会话模型；默认空列表保留直接回退会话模型的行为。provider 错误、超时、缺少认证或模型未注册会继续下一项；用户取消立即终止，不再尝试。空摘要、输出截断或完整消息超预算不是服务不可用，不触发继续回退，原文保留；所有备用模型共用同一个最终消息预算。列表中的无效值被忽略，重复模型只尝试一次，当前会话模型始终放在最后（若已作为主模型尝试则不重复请求）。
@@ -64,7 +56,7 @@ OCC 通过受支持的 `customInstructions` 请求约 **16,384 输出文本 toke
 
 ### 自动准入与完整摘要预算
 
-`agent-message` 在最终回复边界评估，不再无条件请求付费摘要。准入线为：
+`agent-message` 在最终回复边界评估，不再无条件请求付费摘要。以下数字为默认值；`[contextPrune.summaryBudget]` 可配置 300K ceiling、增长余量、净收益/完整消息上限和目标公式参数，具体合法值见参数说明。准入线为：
 
 ```text
 min(autoBudgetThreshold × 模型窗口,

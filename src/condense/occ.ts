@@ -7,7 +7,6 @@ import type { ToolCallIndexer } from "./indexer.ts";
 import { ARGUMENT_HISTORY } from "./argument-history.ts";
 import { isDerived, retainSources, type Obligation } from "./occ-protection.ts";
 import type { ContextPruneConfig } from "./types.ts";
-import { SUMMARY_POLICY } from "./budget.ts";
 
 const STATE = "metis-occ-state";
 const HOLD_WORK = 4;
@@ -15,7 +14,7 @@ const WAIT_WORK = 3;
 const ENTER = 0.60, EXIT = 0.52, READY = 0.72;
 // Relative resource weights chosen by the user; not provider billing prices.
 const COST_RATIO = { input: 1, output: 5, cacheRead: 0.1 };
-const NATIVE_TARGET = `Aim for at most ${SUMMARY_POLICY.nativeTargetTokens} output text tokens. This is a soft target, not a truncation instruction: preserve required facts, uncertainties and complete statements. It does not change the provider's output/reasoning ceiling.`;
+const nativeTarget = (tokens: number) => tokens === 0 ? undefined : `Aim for at most ${tokens} output text tokens. This is a soft target, not a truncation instruction: preserve required facts, uncertainties and complete statements. It does not change the provider's output/reasoning ceiling.`;
 
 type Phase = "normal" | "waiting" | "hold";
 interface MaintenanceState {
@@ -300,7 +299,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const model = auth.baseUrl ? { ...ctx.model, baseUrl: auth.baseUrl } : ctx.model;
       const result = await compact({ ...p, messagesToSummarize: modelMessages, turnPrefixMessages: [],
         isSplitTurn: false, previousSummary: undefined }, model, auth.apiKey, undefined,
-        [event.customInstructions, NATIVE_TARGET].filter(Boolean).join("\n\n"), event.signal, undefined,
+        [event.customInstructions, nativeTarget(config.value.summaryBudget.nativeTargetTokens)].filter(Boolean).join("\n\n"), event.signal, undefined,
         (m, c, o) => ctx.modelRegistry.streamSimple(m, c, { ...o, maxTokens: Math.min(o?.maxTokens ?? Infinity, summaryOutput) }),
         auth.env, undefined, undefined, sessionId);
       metrics.usage = result.usage;

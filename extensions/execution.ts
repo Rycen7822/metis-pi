@@ -40,10 +40,9 @@ export default function execution(pi: ExtensionAPI): void {
     await runtime.sessions.shutdown();
   });
   pi.registerCommand("execution", { description: "Configure metis execution tools", async handler(args, ctx) {
-    if (!ctx.hasUI) { ctx.ui.notify("Edit metis-pi.json.execution to configure execution tools", "info"); return; }
-    const project = args.trim() === "project";
-    if (project && !ctx.isProjectTrusted()) { ctx.ui.notify("Trust the project before changing its execution settings", "warning"); return; }
-    const draft = structuredClone(project ? runtime.config : readExecutionConfig());
+    if (args.trim()) { ctx.ui.notify("Execution settings are global only. Use /execution without project arguments.", "warning"); return; }
+    if (!ctx.hasUI) { ctx.ui.notify("Edit [execution] in metis-pi.toml to configure execution tools", "info"); return; }
+    const draft = structuredClone(readExecutionConfig());
     const fields = Object.entries(draft).flatMap(([group, values]) => Object.keys(values).map(key => ({ group, key })));
     const selected = await ctx.ui.select("Execution settings", fields.map(({ group, key }) => `${group}.${key}`));
     const field = fields.find(({ group, key }) => `${group}.${key}` === selected);
@@ -52,7 +51,7 @@ export default function execution(pi: ExtensionAPI): void {
     const value = typeof current === "boolean" ? await ctx.ui.select(field.key, ["on", "off"]) : await ctx.ui.input(field.key, current);
     if (value === undefined) return;
     values[field.key] = typeof current === "boolean" ? value === "on" : value;
-    writeExecutionConfig({ [field.group]: { [field.key]: values[field.key] } }, project ? ctx.cwd : undefined);
+    writeExecutionConfig({ [field.group]: { [field.key]: values[field.key] } });
     refresh(undefined, ctx);
     ctx.ui.notify(field.key.endsWith("Shortcut") ? "Saved; restart Pi to apply shortcut changes" : "Execution settings saved", "info");
   } });

@@ -1,5 +1,5 @@
 const RECOVERY =
-	"Build the native helpers locally, set `execution.tools.customRustBinariesDir` in `metis-pi.json`, then run `/reload`";
+	"Build the native helpers locally, set `execution.tools.customRustBinariesDir` in global `metis-pi.toml`, then run `/reload`";
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);

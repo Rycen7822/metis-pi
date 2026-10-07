@@ -1,4 +1,5 @@
-// Config for the Codex appearance UI — rendering never reads the file, invalid values fall back to defaults, the user's file is never rewritten.
+// Appearance validation; global configuration IO is owned by metis-config.ts.
+import { defaultMetisConfig, readMetisConfig } from "./metis-config.ts";
 
 export interface AppearanceConfig {
   enabled: boolean;
@@ -23,20 +24,7 @@ export interface AppearanceConfig {
   glyphs: { textPresentation: boolean; include: string[] };
 }
 
-const CONFIG_FILE = "metis-pi.json";
-
-export const DEFAULT_CONFIG: AppearanceConfig = {
-  enabled: true,
-  thinking: { streaming: "peek", completed: "collapsed", rail: true, peekLines: 6 },
-  writePreview: { enabled: true, rows: 8 },
-  composer: { surface: true, promptPrefix: true, metadata: true },
-  working: { elapsed: true, thought: true, tool: true, tokens: false, animation: true, animationIntervalMs: 32 },
-  footer: { enabled: true, details: true, showCache: true, showChanges: true, showSpeed: true },
-  summary: { enabled: true, persist: true },
-  selectionCopy: { enabled: true, ctrlC: true },
-  fullscreen: { marginX: 2, minWidth: 72 },
-  glyphs: { textPresentation: true, include: [] },
-};
+export const DEFAULT_CONFIG = defaultMetisConfig().appearance as AppearanceConfig;
 
 export interface ConfigLoadResult {
   config: AppearanceConfig;
@@ -145,20 +133,11 @@ export function loadConfig(
   readFile: (path: string) => string | undefined = () => undefined,
 ): ConfigLoadResult {
   if (!agentDir) return { config: structuredClone(DEFAULT_CONFIG), problems: [], present: false };
-  const path = `${agentDir.replace(/\/$/, "")}/${CONFIG_FILE}`;
-  let text: string | undefined;
-  try {
-    text = readFile(path);
-  } catch {
-    text = undefined;
-  }
-  if (text === undefined) return { config: structuredClone(DEFAULT_CONFIG), problems: [], present: false };
   const problems: string[] = [];
-  let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    const loaded = readMetisConfig(agentDir, readFile);
+    return { config: validateConfig(loaded.config.appearance, problems), problems, present: loaded.present };
   } catch (error) {
-    return { config: structuredClone(DEFAULT_CONFIG), problems: [`JSON parse failed: ${(error as Error).message} — using defaults`], present: true };
+    return { config: structuredClone(DEFAULT_CONFIG), problems: [`${(error as Error).message} — using defaults`], present: true };
   }
-  return { config: validateConfig(raw, problems), problems, present: true };
 }

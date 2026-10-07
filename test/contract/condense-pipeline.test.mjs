@@ -420,6 +420,21 @@ test("complete-message budgets include refs, reject without hiding and charge re
   assert.match(f.statuses.get("context-prune"), /usage: 40 tokens/);
 });
 
+test("global TOML policy governs actual paid summary admission and full-message rejection", async t => {
+  for (const [size, accepted] of [[300, true], [1000, false]]) await t.test(String(size), async t => {
+    const f = await fixture(t, { reply: "论".repeat(size) });
+    writeFileSync(join(f.dir, "metis-pi.toml"), '[contextPrune]\nenabled=true\nminBatchChars=0\nautoBudgetThreshold=0.7\n[contextPrune.chainCompression]\nenabled=false\n[contextPrune.summaryBudget]\nminGainTokens=512\nminGainFraction=0.1\nmaxProxyTokens=1000\ntargetBaseTokens=128\ntargetPerCallTokens=0\n');
+    await f.emit("session_start");
+    const call = f.add("甲".repeat(4000), "opaque-command", `toml-${size}`);
+    await f.finish();
+    assert.equal(f.calls.length, 1, "TOML minBatchChars overrides legacy JSON");
+    const raw = f.sm.buildSessionProjection().messages;
+    const projected = (await f.emit("context", { messages: raw }))?.messages ?? raw;
+    assert.equal(projected.some(message => message.customType === "context-prune-summary"), accepted);
+    if (!accepted) assert.equal(projected.find(message => message.toolCallId === call.id).content[0].text, call.result.content[0].text);
+  });
+});
+
 test("legacy duplicate evidence never authorizes a growing mechanical stub", async t => {
   const f = await fixture(t);
   f.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: "legacy-small", resultTimestamp: 5,

@@ -2,6 +2,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
+import { initializeMetisConfig, readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig } from "../../src/metis-config.ts";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { stringify } from "smol-toml";
+const legacyReader = (text: string) => (path: string) => path.endsWith("metis-pi.json") ? text : undefined;
 
 test("missing file yields defaults", () => {
   const { config, problems } = loadConfig(undefined, () => undefined);
@@ -23,10 +28,10 @@ test("partial settings merge over defaults while obsolete quota fields are ignor
 });
 
 test("malformed JSON is reported and defaults are used", () => {
-  const { config, problems } = loadConfig("/agent", () => "{ not json");
+  const { config, problems } = loadConfig("/agent", legacyReader("{ not json"));
   assert.deepEqual(config, DEFAULT_CONFIG);
   assert.equal(problems.length, 1);
-  assert.match(problems[0]!, /JSON parse failed/);
+  assert.match(problems[0]!, /invalid legacy JSON/);
 });
 
 test("numeric options preserve clamp versus reject boundaries", () => {
@@ -44,7 +49,7 @@ test("numeric options preserve clamp versus reject boundaries", () => {
       [min - 1, clamps ? min : fallback, clamps ? 0 : 1],
       [max + 1, clamps ? max : fallback, clamps ? 0 : 1],
     ]) {
-      const { config, problems } = loadConfig("/agent", () => JSON.stringify({ [section]: { [key]: value } }));
+      const { config, problems } = loadConfig("/agent", legacyReader(JSON.stringify({ [section]: { [key]: value } })));
       assert.equal((config[section] as Record<string, unknown>)[key], expected, `${section}.${key}=${value}`);
       assert.equal(problems.length, errors);
     }
@@ -52,12 +57,12 @@ test("numeric options preserve clamp versus reject boundaries", () => {
 });
 
 test("invalid sections and fields report actual defaults without sharing mutable defaults", () => {
-  const loaded = loadConfig("/agent", () => JSON.stringify({
+  const loaded = loadConfig("/agent", legacyReader(JSON.stringify({
     thinking: { completed: "invalid", rail: "false" },
     composer: false,
     footer: { enabled: false, details: null, unknown: true },
     glyphs: { include: ["★", "★", "😀", "ascii", 4] },
-  }));
+  })));
   assert.equal(loaded.config.thinking.completed, "collapsed");
   assert.deepEqual(loaded.config.composer, DEFAULT_CONFIG.composer);
   assert.deepEqual(loaded.config.footer, { ...DEFAULT_CONFIG.footer, enabled: false });
@@ -67,4 +72,80 @@ test("invalid sections and fields report actual defaults without sharing mutable
   assert.match(loaded.problems[1]!, /thinking.rail: expected boolean/);
   loaded.config.glyphs.include.push("✓");
   assert.deepEqual(loadConfig(undefined).config.glyphs.include, []);
+});
+
+test("TOML is authoritative and malformed TOML never falls back to legacy", () => {
+  const files: Record<string, string> = {
+    "/agent/metis-pi.toml": "[appearance]\nenabled=false\n[appearance.thinking]\npeekLines=12\n",
+    "/agent/metis-pi.json": '{"enabled":true,"footer":{"enabled":false}}',
+  };
+  const loaded = loadConfig("/agent", path => files[path]);
+  assert.equal(loaded.config.enabled, false);
+  assert.equal(loaded.config.thinking.peekLines, 12);
+  assert.equal(loaded.config.footer.enabled, true);
+  files["/agent/metis-pi.toml"] = "[broken";
+  assert.match(loadConfig("/agent", path => files[path]).problems[0]!, /invalid TOML/);
+});
+
+test("readable rendering retains default annotations without changing serialized values", () => {
+  const config = defaultMetisConfig();
+  config.appearance.thinking.peekLines = 17;
+  config.dynamicAgents.groups = [{ id: "example", file: "AGENTS.md", include: ["p/*"], exclude: [] }];
+  config.future = { text: '[appearance]\nenabled = false\n# not a config comment', "quoted.key": '"quoted" # value',
+    mixed: [1, { nested: true }], date: parseMetisConfig("value = 2026-10-08").value };
+  config["quoted table"] = { enabled: true };
+  const rendered = renderMetisConfig(config);
+  assert.deepEqual(parseMetisConfig(rendered), parseMetisConfig(stringify(config)));
+  assert.match(rendered, /# 1\. 显示界面 \/ Appearance/);
+  assert.match(rendered, /# 5a\. 高级摘要预算/);
+  assert.match(rendered, /peek 窗口行数.*\nrail = true\npeekLines = 17/);
+  assert.match(rendered, /\[\[dynamicAgents.groups\]\]/);
+});
+
+test("global migration materializes defaults and guide, preserving originals and future sections", t => {
+  mkdirSync(".work", { recursive: true });
+  const dir = mkdtempSync(join(process.cwd(), ".work/metis-config-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const originals = {
+    "settings.json": '{"theme":"private-theme","contextPrune":{"enabled":true,"autoBudgetThreshold":null}}',
+    "metis-pi.json": '{"thinking":{"peekLines":13},"execution":{"tools":{"viewImageFallback":true}},"mcp":{"enabled":true}}',
+    "dynamic-agents.json": '{"version":1,"groups":[{"id":"x","file":"x.md","include":["x*"],"exclude":[]}]}',
+  };
+  for (const [name, text] of Object.entries(originals)) writeFileSync(join(dir, name), text);
+  assert.equal(readMetisConfig(dir).legacy, true);
+  assert.equal(initializeMetisConfig(dir).created, true);
+  const path = join(dir, "metis-pi.toml");
+  let config = parseMetisConfig(readFileSync(path, "utf8"));
+  assert.equal(config.appearance.thinking.peekLines, 13);
+  assert.equal(config.contextPrune.enabled, true);
+  assert.equal(config.contextPrune.autoBudgetThreshold, false);
+  assert.equal(config.execution.tools.viewImageFallback, true);
+  assert.equal(config.dynamicAgents.enabled, true);
+  assert.equal(config.mcp.enabled, true);
+  assert.deepEqual(Object.keys(config.contextPrune.summaryBudget), Object.keys(defaultMetisConfig().contextPrune.summaryBudget));
+  assert.match(readFileSync(join(dir, "metis-pi-config.md"), "utf8"), /minGainTokens/);
+  for (const [name, text] of Object.entries(originals)) assert.equal(readFileSync(join(dir, name), "utf8"), text);
+  const initial = readFileSync(path, "utf8");
+  assert.equal(initializeMetisConfig(dir).created, false);
+  assert.equal(readFileSync(path, "utf8"), initial);
+  assert.match(initial, /# 1\. 显示界面 \/ Appearance/);
+  assert.match(initial, /# 5a\. 高级摘要预算/);
+  writeFileSync(path, initial + '\n[futureDate]\nday=2026-10-08\nclock=12:30:00\n');
+  updateMetisConfig(dir, { future: { opaque: [1, 2] }, execution: { ui: { toolRenaming: false } } });
+  updateMetisConfig(dir, { contextPrune: { minBatchChars: 1234 } });
+  config = readMetisConfig(dir).config;
+  assert.deepEqual(config.future.opaque, [1, 2]);
+  assert.equal(config.execution.ui.toolRenaming, false);
+  assert.equal(config.execution.tools.viewImageFallback, true);
+  assert.equal(config.contextPrune.minBatchChars, 1234);
+  assert.match(readFileSync(path, "utf8"), /# 5a\. 高级摘要预算/);
+  assert.match(readFileSync(path, "utf8"), /day = 2026-10-08\n/);
+  assert.match(readFileSync(path, "utf8"), /clock = 12:30:00(?:\.0+)?\n/);
+  writeFileSync(path, "[broken");
+  assert.throws(() => updateMetisConfig(dir, { appearance: { enabled: true } }), /invalid TOML/);
+  assert.equal(readFileSync(path, "utf8"), "[broken");
+  rmSync(path);
+  writeFileSync(join(dir, "metis-pi.json"), "{broken");
+  assert.throws(() => initializeMetisConfig(dir), /invalid legacy JSON/);
+  assert.throws(() => readFileSync(path), /ENOENT/);
 });

@@ -5,7 +5,7 @@ import type { McpServerSession } from "../src/mcp/session.ts";
 export default function mcp(pi: ExtensionAPI) {
   const agentDir = getAgentDir();
   try { if (!mcpEnabled(agentDir)) return; }
-  catch { pi.on("session_start", (_event, ctx) => ctx.ui.notify("Metis MCP disabled: invalid metis-pi.json", "warning")); return; }
+  catch { pi.on("session_start", (_event, ctx) => ctx.ui.notify("Metis MCP disabled: invalid global metis configuration", "warning")); return; }
   const owned = new Map<string, ToolDefinition>();
   let servers = new Map<string, McpServerSession>();
   let current: ExtensionContext;

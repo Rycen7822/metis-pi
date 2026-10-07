@@ -34,7 +34,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
 | [Condense](docs/features/condense.md) | Opt-in history condensation using contextPrune. Measures mechanical replacements independently; paid summaries need pressure and complete-message proxy budgets. Deferred evidence stays recoverable. Supports paginated retrieval and token-only summary usage. |
 
-Display settings are optional and live in `~/.pi/agent/metis-pi.json`. Invalid fields fall back according to the configuration rules; the display layer does not rewrite user files. Set `enabled: false` to disable the display layer; filter the separate goal/condense/execution entries individually. Display options and defaults are maintained in the [configuration reference](docs/configuration.md). Condense uses `contextPrune` in Pi's `settings.json`.
+All Metis-owned preferences use one global `~/.pi/agent/metis-pi.toml` (honoring `PI_CODING_AGENT_DIR`), with no project Metis overrides. Run `/metis-config init` to import legacy global settings and install the adjacent [parameter guide](metis-pi-config.md); originals are retained. The bundled [TOML template](metis-pi.toml) contains all defaults. Set `[appearance] enabled = false` to disable only display; Pi-owned model/theme/package/MCP credentials remain in their own files. See the [configuration reference](docs/configuration.md).
 
 ## Compatibility boundaries
 

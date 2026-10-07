@@ -1,4 +1,5 @@
 import type { ContextUsage } from "@earendil-works/pi-coding-agent";
+import { defaultMetisConfig } from "../metis-config.ts";
 import type { ContextMetricsSnapshot } from "./types.ts";
 
 // Ceiling on what the budget triggers treat as the context window. Advertised
@@ -7,21 +8,20 @@ import type { ContextMetricsSnapshot } from "./types.ts";
 // LEVEL, so the cap bounds the level itself (min(CAP, threshold * window)); the
 // delta is a GROWTH RATE, where a 300k ceiling could never bind, so the cap
 // enters through the denominator instead (delta * min(window, CAP)).
-export const MAX_BUDGET_WINDOW = 300_000;
+export interface SummaryBudgetPolicy {
+  maxBudgetWindowTokens: number; minGainTokens: number; minGainFraction: number; maxProxyTokens: number;
+  targetBaseTokens: number; targetPerCallTokens: number; growthHeadroomTokens: number; nativeTargetTokens: number;
+}
+/** Defaults; runtime paths explicitly pass the validated current policy. */
+export const SUMMARY_POLICY = defaultMetisConfig().contextPrune.summaryBudget as SummaryBudgetPolicy;
+export const MAX_BUDGET_WINDOW = SUMMARY_POLICY.maxBudgetWindowTokens;
 
-/** Calibrated pressure, local o200k gain/output, and native soft-target policy; not billing guarantees. */
-export const SUMMARY_POLICY = {
-  minGainTokens: 2048, minGainFraction: 0.40, maxProxyTokens: 6144,
-  targetBaseTokens: 512, targetPerCallTokens: 96,
-  growthHeadroomTokens: 16384, nativeTargetTokens: 16384,
-} as const;
-
-export function summaryBudget(before: number, fixed: number, calls: number) {
-  const minimumGain = Math.max(SUMMARY_POLICY.minGainTokens, Math.ceil(SUMMARY_POLICY.minGainFraction * before));
+export function summaryBudget(before: number, fixed: number, calls: number, policy = SUMMARY_POLICY) {
+  const minimumGain = Math.max(policy.minGainTokens, Math.ceil(policy.minGainFraction * before));
   return {
     minimumGain,
-    limit: Math.min(SUMMARY_POLICY.maxProxyTokens, Math.floor(before - fixed - minimumGain)),
-    target: Math.min(SUMMARY_POLICY.maxProxyTokens, SUMMARY_POLICY.targetBaseTokens + SUMMARY_POLICY.targetPerCallTokens * calls),
+    limit: Math.min(policy.maxProxyTokens, Math.floor(before - fixed - minimumGain)),
+    target: Math.min(policy.maxProxyTokens, policy.targetBaseTokens + policy.targetPerCallTokens * calls),
   };
 }
 
@@ -36,12 +36,13 @@ export function shouldBudgetFlush(
   usage: ContextUsage | undefined,
   threshold: number | null,
   nativeCapacity?: number,
+  policy = SUMMARY_POLICY,
 ): boolean {
   if (threshold == null || threshold <= 0 || threshold > 1) return false;
   if (!usage || usage.tokens == null || !Number.isFinite(usage.tokens) || !(usage.contextWindow > 0)) return false;
   const capacityGate = nativeCapacity !== undefined && Number.isFinite(nativeCapacity)
-    ? Math.max(0, nativeCapacity - SUMMARY_POLICY.growthHeadroomTokens) : Infinity;
-  return usage.tokens >= Math.min(MAX_BUDGET_WINDOW, threshold * usage.contextWindow, capacityGate);
+    ? Math.max(0, nativeCapacity - policy.growthHeadroomTokens) : Infinity;
+  return usage.tokens >= Math.min(policy.maxBudgetWindowTokens, threshold * usage.contextWindow, capacityGate);
 }
 
 /**
@@ -50,9 +51,9 @@ export function shouldBudgetFlush(
  * 600k tokens on a 1M window returns 2.0. Deliberately unclamped — clamping would make
  * shouldDeltaFlush saturate above the ceiling and stop re-arming.
  */
-export function usageFraction(usage: ContextUsage | undefined): number | null {
+export function usageFraction(usage: ContextUsage | undefined, policy = SUMMARY_POLICY): number | null {
   if (!usage || usage.tokens == null || !(usage.contextWindow > 0)) return null;
-  return usage.tokens / Math.min(usage.contextWindow, MAX_BUDGET_WINDOW);
+  return usage.tokens / Math.min(usage.contextWindow, policy.maxBudgetWindowTokens);
 }
 
 /**
@@ -65,12 +66,13 @@ export function shouldDeltaFlush(
   usage: ContextUsage | undefined,
   previousFraction: number | null,
   delta: number | null,
+  policy = SUMMARY_POLICY,
 ): boolean {
   if (delta == null || delta <= 0 || delta > 1) return false;
   if (previousFraction == null) return false;
-  const current = usageFraction(usage);
+  const current = usageFraction(usage, policy);
   if (current == null) return false;
-  const window = Math.min(usage!.contextWindow, MAX_BUDGET_WINDOW);
+  const window = Math.min(usage!.contextWindow, policy.maxBudgetWindowTokens);
   const previousTokens = previousFraction * window;
   const required = delta * window;
   const tokens = usage!.tokens!;

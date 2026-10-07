@@ -90,19 +90,14 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     (text) => `\x1b[2m${text}\x1b[22m`,
   );
   // Config access shared by activate() and the write-preview budget below.
-  // PI_AGENT_DIR override is respected by Pi itself; we only need the PATH,
-  // never auth contents.
-  const getAgentDir = (): string => {
-    const fromEnv = process.env.PI_AGENT_DIR;
-    if (fromEnv) return fromEnv;
-    const fromOs = (Pi as unknown as { getAgentDir?: () => string }).getAgentDir?.();
-    return fromOs ?? `${process.env.HOME ?? ""}/.pi/agent`;
-  };
+  // Every module uses Pi's agent dir (PI_CODING_AGENT_DIR); no appearance-only override.
+  const getAgentDir = (): string => Pi.getAgentDir();
   const readFile = (path: string): string | undefined => {
     try {
       return readFileSync(path, "utf8");
-    } catch {
-      return undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
     }
   };
   // One boot-time read from the same path activate() resolves.
@@ -152,9 +147,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     isCollapsedLabel: (node) => node instanceof Tui.Text,
     makeWriteCall: (input) => {
       // Read ONCE at boot from the same path activate() uses: a per-write-call
-      // reload could disagree with the startup config (and made the host's
-      // getAgentDir the only resolution path, dropping the PI_AGENT_DIR
-      // override the startup read honors).
+      // reload could disagree with the startup config.
       const maxRows = bootWritePreview.enabled ? bootWritePreview.rows : 0;
       return new CodexWriteCallComponent({ ...input, layout: layoutOps(), maxRows });
     },

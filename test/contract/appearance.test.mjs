@@ -7,6 +7,8 @@ import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
 import { theme, toolInfo } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { stringify } from "smol-toml";
+const appearanceFile = config => path => path.endsWith("metis-pi.toml") ? stringify({ appearance: config }) : undefined;
 
 initTheme("dark", false);
 
@@ -164,7 +166,7 @@ test("hidden footer metadata never requests a context projection", async (t) => 
   let reads = 0;
   const { footer } = await session(t, {
     getAgentDir: () => "/unused",
-    readFile: () => JSON.stringify({ composer: { metadata: false } }),
+    readFile: appearanceFile({ composer: { metadata: false } }),
   }, { getContextUsage() { reads += 1; } });
   footer().render(140);
   assert.equal(reads, 0);
@@ -225,7 +227,7 @@ test("static configuration gates Git polling before a footer can start it", asyn
     { footer: { enabled: false } },
     { enabled: false },
   ]) {
-    await session(t, { getAgentDir: () => "/unused", readFile: () => JSON.stringify(config) });
+    await session(t, { getAgentDir: () => "/unused", readFile: appearanceFile(config) });
     assert.equal(schedule.mock.calls.filter(({ arguments: args }) => args[1] === GIT_CHANGES_INTERVAL_MS).length, 0,
       `no poller for ${JSON.stringify(config)}`);
   }
@@ -313,7 +315,7 @@ for (const [name, config, context] of [
   test(`${name} activation leaves native tools, chrome and summaries untouched`, async (t) => {
     const appended = [];
     const { handlers, slots, Host, original } = await session(t, {
-      getAgentDir: () => "/unused", readFile: () => JSON.stringify(config),
+      getAgentDir: () => "/unused", readFile: appearanceFile(config),
       api: { appendEntry: (...args) => appended.push(args) },
     }, context);
     const definition = { renderCall: () => ({ render: () => ["native call"] }), renderResult: () => ({ render: () => ["native result"] }) };

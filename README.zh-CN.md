@@ -34,7 +34,7 @@ pi install .
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [condense](docs/features/condense.md) | 默认关闭，沿用 contextPrune；独立测量确定性替换，付费摘要须满足压力和完整消息 proxy 预算；不足时保留待处理证据，支持分页回读与 token 用量显示。 |
 
-显示配置文件为 `~/.pi/agent/metis-pi.json`，可省略；无效字段按规则回退，显示层不改写用户文件。`enabled: false` 关闭显示层，独立 goal/condense/execution 入口另行过滤。显示配置范围和默认值只在[配置参考](docs/configuration.md)维护；condense 沿用 Pi `settings.json` 的 `contextPrune`。
+metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不再使用项目 metis 覆盖。`/metis-config init` 导入旧全局设置并安装同目录[参数说明](metis-pi-config.md)，旧文件保留；[TOML 模板](metis-pi.toml)列出全部默认值。`[appearance] enabled = false` 只关闭显示层；Pi 自有模型/主题/packages/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
 
 ## 兼容边界
 
