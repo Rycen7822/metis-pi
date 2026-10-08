@@ -749,6 +749,17 @@ export interface ContextMetricsSnapshot {
 
 export type FlushTrigger = "budget" | "delta" | "frontier-gap" | "message-end" | "context" | "manual" | "rearmed";
 
+export type DeferredReason = "automatic-disabled" | "pressure" | "measurement" | "replacement" | "budget" | "no-gain";
+
+export const DEFERRED_REASON_LABELS: Record<DeferredReason, string> = {
+  "automatic-disabled": "automatic summarization disabled",
+  pressure: "automatic summaries not admitted by pressure/capacity policy",
+  measurement: "token measurement unavailable",
+  replacement: "safe complete replacement unavailable",
+  budget: "complete-summary token budget insufficient",
+  "no-gain": "replacement would not reduce context tokens",
+};
+
 /** Payload of CUSTOM_TYPE_FLUSH_METRICS. */
 export interface FlushMetricsEntry {
   ts: number;
@@ -762,7 +773,8 @@ export interface FlushMetricsEntry {
   publishedCharsSaved?: number;
   argumentCharsSaved?: number;
   firstChangedMessage?: number;
-  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "deferred-budget" | "empty" | "delivery-pending" | "partial" | "error";
+  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "deferred" | "deferred-budget" | "empty" | "delivery-pending" | "partial" | "aborted" | "error";
+  deferredReasons?: Partial<Record<DeferredReason, number>>;
   reason?: string;
   error?: string;
   /** Computed at flush ENTRY (pre-flush pressure). */
@@ -781,7 +793,7 @@ export interface SummarizerStats {
   totalInputTokens: number;
   /** Cumulative output tokens across all summarizer calls */
   totalOutputTokens: number;
-  /** Number of summarizer LLM calls made */
+  /** Number of completed summarizer calls with reported usage */
   callCount: number;
   /** Cumulative number of chains range-compressed across all flushes */
   chainsCompressed: number;
@@ -853,8 +865,8 @@ export type BatchTextProgressCallback = (
 
 /** Options accepted by `flushPending`. */
 export type FlushResult =
-  | { ok: true; reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number; error?: string }
-  | { ok: false; reason: "empty" | "already-flushing" | "deferred-occ" | "deferred-budget" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; error?: string; batchCount?: number };
+  | { ok: true; reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number; dedupedRawCharCount?: number; deferredReasons?: Partial<Record<DeferredReason, number>>; error?: string }
+  | { ok: false; reason: "empty" | "already-flushing" | "deferred-occ" | "deferred" | "deferred-budget" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; deferredReasons?: Partial<Record<DeferredReason, number>>; error?: string; batchCount?: number };
 
 export interface FlushOptions {
   /** Delivery path: "runtime" uses sendMessage/steer (default); "session" writes directly to session. */

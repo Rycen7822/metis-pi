@@ -6,6 +6,7 @@ export interface TargetDecision {
   key: string;
   index: number;
   wasProbe: boolean;
+  generation: number;
 }
 
 export class FallbackController {
@@ -13,6 +14,7 @@ export class FallbackController {
   private index = 0;
   private announcedIndex = 0;
   private lastProbeAt = 0;
+  private generation = 0;
 
   private readonly now: () => number;
 
@@ -25,16 +27,18 @@ export class FallbackController {
     if (key !== this.chainKey) {
       this.chainKey = key;
       this.index = this.announcedIndex = this.lastProbeAt = 0;
+      this.generation++;
     }
     const wasProbe = this.index > 0 && this.now() - this.lastProbeAt >= COOLDOWN_MS;
     if (wasProbe) this.lastProbeAt = this.now();
-    return { key, index: wasProbe ? 0 : this.index, wasProbe };
+    return { key, index: wasProbe ? 0 : this.index, wasProbe, generation: this.generation };
   }
 
   /** An absent index means the attempted suffix of the chain was unavailable. */
   complete(decision: TargetDecision, index?: number): FallbackTransition {
-    // Ignore stale chains and fallback calls finishing after primary recovery.
-    if (decision.key !== this.chainKey || (decision.index > 0 && this.index === 0)) return "none";
+    // Recovery invalidates every older decision, including primary probes
+    // that were already falling back when a newer probe recovered.
+    if (decision.key !== this.chainKey || decision.generation !== this.generation) return "none";
     if (index === undefined) {
       if (decision.index === 0) {
         this.lastProbeAt = this.now();
@@ -46,6 +50,7 @@ export class FallbackController {
     if (index === 0) {
       if (!decision.wasProbe || this.index === 0) return "none";
       this.index = this.announcedIndex = 0;
+      this.generation++;
       return "recover";
     }
     if (decision.index === 0) this.lastProbeAt = this.now();

@@ -4,7 +4,7 @@ import { loadConfig, saveConfig } from "./config.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
-import { prepareBatch } from "./packing.ts";
+import { prepareBatch, splitPackingRuns } from "./packing.ts";
 import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summarizer.ts";
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
@@ -23,11 +23,12 @@ import type {
   ContextMetricsSnapshot,
   FlushMetricsEntry,
   FlushTrigger,
+  DeferredReason,
   SingleChainCompressionEntry,
   SharedChainCompressionEntry,
 } from "./types.ts";
 import {
-  DEFAULT_CONFIG,
+  DEFAULT_CONFIG, DEFERRED_REASON_LABELS,
   chainMembers, isSharedChain, CUSTOM_TYPE_CHAIN,
   CUSTOM_TYPE_SUMMARY,
   CUSTOM_TYPE_STATS,
@@ -313,7 +314,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const inGrace = inGraceRecoveryToolCallIds(messages, currentConfig.value.recoveryGraceTurns);
     if (automatic && selectEligible(chains, rollingWindow,
       new Set(indexer.getChainEntries().flatMap(chainMembers).map(entry => entry.startUserTimestamp)), inGrace).length >= 2) {
-      return { compressedEntries: [], skipped: [] }; // The stable maintenance hook prepares one shared group.
+      return { compressedEntries: [], skipped: [], reclaimedTokens: 0 }; // The stable maintenance hook prepares one shared group.
     }
     const append = (type: string, data: unknown) => {
       assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
@@ -330,6 +331,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.getIndex().has(key));
       if (fresh.length) await indexer.backfillChainRecords(fresh, { ...backfill, appendEntry: append });
     }
+    const validatedGains = new Map<string, number>();
     const result = await compressEligible(chains, rollingWindow, {
       indexer, blockRefs, appendEntry: append, now: () => Date.now(), fuseRange: zeroCall ? undefined : makeFuseRange(ctx, signal, automatic),
       messages, diagnostics, validate: async entry => {
@@ -354,9 +356,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const counts = await tokenEstimator.compare(before, after, signal);
         assertCurrent(version); signal?.throwIfAborted();
         if (!counts && automatic) lastMaintenanceSource = undefined;
-        return !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
+        const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
           && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
           && config === JSON.stringify(currentConfig.value);
+        if (accepted) validatedGains.set(entry.blockId, counts!.proxyDelta);
+        return accepted;
       },
       backfill,
     }, inGrace);
@@ -365,7 +369,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       statsAccum.addChainsCompressed(result.compressedEntries.length);
       occ.rewrite(ctx, beforeRewrite);
     }
-    return result;
+    return { ...result, reclaimedTokens: result.compressedEntries.reduce((sum, entry) => sum + (validatedGains.get(entry.blockId) ?? 0), 0) };
   };
 
   const paidPressure = (ctx: any, closingMessage?: any) => {
@@ -383,7 +387,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Archive first so aliases, spill previews and recovery paths are real and
   // fixed before paying for a summary. This same renderer is used to publish.
   const prepareReplacement = async (batch: CapturedBatch, ctx: any,
-    appendEntry: (type: string, data?: unknown) => void, signal: AbortSignal) => {
+    appendEntry: (type: string, data?: unknown) => void, signal: AbortSignal,
+    onDeferred: (reason: DeferredReason) => void) => {
+    const unavailable = (reason: DeferredReason) => { onDeferred(reason); return null; };
     const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
     const existing = batch.toolCalls.map(call => {
       const key = occKey(call.toolCallId, call.resultTimestamp), record = indexer.getRecord(key);
@@ -403,28 +409,31 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const replacements = new Map(batch.toolCalls.map((call, i) => [occKey(call.toolCallId, call.resultTimestamp),
       { call, ref: refs[i]!.shortId, record: indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))! }]));
     const before = visible.filter((message: any) => message.role === "toolResult" && replacements.has(occKey(message.toolCallId, message.timestamp)));
-    if ([...replacements.values()].some(({ record }) => !record || record.metadataUnavailable || record.archiveComplete === false)) return null;
+    if ([...replacements.values()].some(({ record }) => !record || record.metadataUnavailable || record.archiveComplete === false)) return unavailable("replacement");
     if (before.length !== batch.toolCalls.length || before.some((message: any) => !Array.isArray(message.content)
-      || message.content.some((block: any) => block.type !== "text"))) return null;
-    if (batch.toolCalls.some(call => call.nestedProtected || protectionPredicate(call.toolName, call.args))) return null;
+      || message.content.some((block: any) => block.type !== "text"))) return unavailable("replacement");
+    if (batch.toolCalls.some(call => call.nestedProtected || protectionPredicate(call.toolName, call.args))) return unavailable("replacement");
     const stubs = before.map((message: any) => {
       const replacement = replacements.get(occKey(message.toolCallId, message.timestamp))!;
       return toolResultStub(message, replacement.record, replacement.ref);
     });
     const counts = await tokenEstimator.measure(before, stubs, signal);
-    if (!counts) return null;
+    if (!counts) return unavailable("measurement");
     const timestamp = Date.now();
     const render = (text: string, deterministic = false) => ({ role: "custom", customType: CUSTOM_TYPE_SUMMARY,
       content: substituteInlineRefs(text, refs, batch.toolCalls.map(call => call.toolName)) + formatSummaryToolCallRefs(refs),
       display: false, details: { ...makeSummaryDetails(batch, refs), representation: deterministic ? "packed" : "summary" }, timestamp });
     const empty = await tokenEstimator.measure([render("")], [], signal);
-    if (!empty) return null;
+    if (!empty) return unavailable("measurement");
     const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length, currentConfig.value.summaryBudget);
     budget.target = Math.max(budget.target, empty.before + 256);
     return { before, stubs, replacements, render, budget, counts,
       accepts: async (text: string, deterministic = false) => {
         const size = await tokenEstimator.measure([render(text, deterministic)], [], signal);
-        return !!size && (deterministic ? counts.after + size.before < counts.before : size.before <= budget.limit);
+        if (!size) { onDeferred("measurement"); return false; }
+        const accepted = deterministic ? counts.after + size.before < counts.before : size.before <= budget.limit;
+        if (!accepted) onDeferred(deterministic ? "no-gain" : "budget");
+        return accepted;
       } };
   };
 
@@ -461,6 +470,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let modelAttempted = false;
     let outcome: FlushMetricsEntry["outcome"] = "empty";
     let failureReason: string | undefined, failureMessage: string | undefined;
+    const deferredReasons: Partial<Record<DeferredReason, number>> = {};
     let appendEntry: ((customType: string, data?: unknown) => void) | undefined;
 
     // Non-fatal by construction: observability must never affect the flush outcome.
@@ -473,6 +483,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         stubCount,
         publishedCharsSaved, argumentCharsSaved, firstChangedMessage,
         outcome,
+        ...(Object.keys(deferredReasons).length ? { deferredReasons: { ...deferredReasons } } : {}),
         ...(failureReason ? { reason: failureReason } : {}),
         ...((outcome === "error" || outcome === "partial") && failureMessage ? { error: failureMessage } : {}),
         metrics: entryMetrics,
@@ -552,16 +563,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Keep deterministic and semantic calls in separate ordered runs. A
       // wholly packed run is measured/published without any model request,
       // even when its packed text exceeds the character guard.
-      batches = batches.flatMap(batch => {
-        const packed = new Set(prepareBatch(batch).packedBatch.toolCalls);
-        const runs: CapturedBatch[] = [];
-        for (const call of batch.toolCalls) {
-          const last = runs.at(-1);
-          if (last && packed.has(last.toolCalls[0]!) === packed.has(call)) last.toolCalls.push(call);
-          else runs.push({ ...batch, toolCalls: [call] });
-        }
-        return runs;
-      });
+      batches = splitPackingRuns(batches);
       capturedBatches = batches.length;
 
       if (batches.length === 0) {
@@ -571,7 +573,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       // Bail out before we drain pendingBatches so they don't need restoring.
       if (options.signal?.aborted) {
-        outcome = "error";
+        outcome = "aborted";
         failureReason = "aborted";
         return { ok: false, reason: "aborted" };
       }
@@ -668,6 +670,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         error: undefined as unknown,
         failureReason: undefined as string | undefined,
         failureMessage: undefined as string | undefined,
+        deferredReason: undefined as DeferredReason | undefined,
         plan: undefined as Awaited<ReturnType<typeof prepareReplacement>> | undefined,
         completed: false,
       }));
@@ -703,6 +706,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       let deliveryPending = false;
       let frontierBlocked = false;
       const deferredBatches: BatchRecord[] = [];
+      const deferRecord = (record: BatchRecord) => {
+        const reason = record.deferredReason ?? "budget";
+        deferredReasons[reason] = (deferredReasons[reason] ?? 0) + 1;
+        frontierBlocked = true;
+        deferredBatches.push(record);
+      };
 
       const processedOutcome = (count = processedBatches.length): PruneFrontier["outcome"] =>
         count > trivialBatches.length + dedupedBatches.length ? "summarized"
@@ -752,15 +761,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           if (isFullyDeduped(record)) { record.result = "deduped"; continue; }
           const deterministic = record.prepared.packedBatch.toolCalls.length === record.batch.toolCalls.length;
           if (!deterministic && isTrivial(record)) { record.result = "trivial"; continue; }
-          if (!deterministic && !allowPaid) { record.result = "deferred"; continue; }
-          record.plan = await prepareReplacement(record.batch, ctx, appendEntry!, signal);
+          if (!deterministic && !allowPaid) {
+            record.deferredReason = config.autoBudgetThreshold === null ? "automatic-disabled" : "pressure";
+            record.result = "deferred"; continue;
+          }
+          record.plan = await prepareReplacement(record.batch, ctx, appendEntry!, signal, reason => { record.deferredReason = reason; });
           checkSource();
           if (!record.plan) { record.result = "deferred"; continue; }
           if (deterministic) {
             record.result = await record.plan.accepts(record.prepared.packedText, true) ? packedResult(record) : "deferred";
             continue;
           }
-          if (record.plan.budget.limit < record.plan.budget.target) { record.result = "deferred"; continue; }
+          if (record.plan.budget.limit < record.plan.budget.target) { record.deferredReason = "budget"; record.result = "deferred"; continue; }
           options.onProgress?.(i, records.length, record.batch, "start");
           const requestSignal = AbortSignal.any([signal, record.abort.signal]);
           record.job = summarizeBatch(record.prepared.candidate, config, ctx, {
@@ -791,8 +803,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (record.error) throw record.error;
         const result = record.result;
         if (result === "deferred") {
-          frontierBlocked = true;
-          deferredBatches.push(record);
+          deferRecord(record);
           options.onProgress?.(i, records.length, record.batch, "skipped");
           continue;
         }
@@ -859,7 +870,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || !await plan.accepts(result.summaryText, result.deterministic);
         checkSource();
         if (shouldSkipOversized) {
-          frontierBlocked = true; deferredBatches.push(record);
+          if (replaced !== archivedBatch.toolCalls.length) record.deferredReason = "replacement";
+          deferRecord(record);
           options.onProgress?.(i, records.length, record.batch, "skipped");
           continue;
         }
@@ -921,6 +933,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       // Includes deferred gaps, even when later deterministic work committed.
       restoreUnprocessed();
+      const deferredOutcome = Object.keys(deferredReasons).every(reason => reason === "budget") ? "deferred-budget" : "deferred";
 
       if (processedBatches.length === 0) {
         // Nothing was persisted (all calls failed or first call failed)
@@ -929,9 +942,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           catch (error) { if (delivery === "runtime") throw error; }
         }
         updatePruneStatus(ctx);
-        outcome = deliveryPending ? "delivery-pending" : deferredBatches.length ? "deferred-budget" : "error";
-        failureReason = deliveryPending ? "delivery-pending" : deferredBatches.length ? "deferred-budget" : failureReason ?? "summarizer-failed";
-        return { ok: false, reason: deliveryPending ? "delivery-pending" : deferredBatches.length ? "deferred-budget" : failureReason === "input-budget" ? "input-budget" : "summarizer-failed", error: failureMessage };
+        outcome = deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : "error";
+        failureReason = deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : failureReason ?? "summarizer-failed";
+        return { ok: false, reason: deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : failureReason === "input-budget" ? "input-budget" : "summarizer-failed",
+          ...(deferredBatches.length ? { deferredReasons } : {}), error: failureMessage };
       }
 
       const flushOutcome = processedOutcome();
@@ -952,11 +966,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Non-error skips, including budget deferral, share the quiet toggle.
       if (!currentConfig.value.quietOversizedSkips) {
         const notify = (message: string) => safeNotify(ctx, message, "info");
-        if (deferredBatches.length) notify(`pruner: ${deferredBatches.length} batch(es) retained pending — pressure or complete-summary token budget insufficient; frontier did not advance over them`);
+        for (const [reason, count] of Object.entries(deferredReasons)) {
+          notify(`pruner: ${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}; frontier did not advance over them`);
+        }
         for (const record of trivialBatches) {
           const batch = record.batch;
           notify(
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — only ${record.rawChars} raw chars (< minBatchChars=${minChars}); no LLM call made; ${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`
+            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary candidate ${record.prepared.candidateChars} chars (< minBatchChars=${minChars}); ${record.rawChars} raw chars retained; no LLM call made; ${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`
           );
         }
         for (const record of dedupedBatches) {
@@ -983,7 +999,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       processedCount = processedBatches.length;
       outcome = firstFailureIndex >= 0 || deferredBatches.length ? "partial" : flushOutcome;
       if (firstFailureIndex >= 0 || deferredBatches.length) {
-        failureReason = deliveryPending ? "delivery-pending" : failureReason ?? "summarizer-failed";
+        failureReason = deliveryPending ? "delivery-pending" : failureReason ?? (deferredBatches.length ? deferredOutcome : "summarizer-failed");
         updatePruneStatus(ctx, `prune: ${processedCount}/${records.length} complete; remaining pending`);
       }
 
@@ -995,20 +1011,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         rawCharCount: totalRawCharCount,
         summaryCharCount: totalSummaryCharCount,
         dedupedCount: totalDedupedCount,
+        dedupedRawCharCount: processedBatches.reduce((sum, record) => sum + record.dedupedRawChars, 0),
+        ...(deferredBatches.length ? { deferredReasons } : {}),
         ...(firstFailureIndex >= 0 && failureMessage ? { error: failureMessage } : {}),
       };
     } catch (err) {
-      failureReason = options.signal?.aborted ? "aborted" : isStaleContextError(err) ? "stale-context" : "failed";
-      failureMessage = errorMessage(err);
+      failureReason = signal.aborted ? "aborted" : isStaleContextError(err) ? "stale-context" : "failed";
+      failureMessage = signal.aborted ? undefined : errorMessage(err);
       if (version !== lifecycle) {
         if (projectionContext) rebuildBranchIndex(projectionContext);
         return { ok: false, reason: "stale-context", error: errorMessage(err) };
       }
       restoreUnprocessed();
-      outcome = processedCount > 0 ? "partial" : "error";
+      outcome = signal.aborted ? "aborted" : processedCount > 0 ? "partial" : "error";
       // When the abort signal fired, summarizeBatch rethrows rather than
       // swallowing the error.  Don't show a UI error — the user intended this.
-      if (options.signal?.aborted) {
+      if (signal.aborted) {
         updatePruneStatus(ctx);
         return { ok: false, reason: "aborted", batchCount: processedCount };
       }
@@ -1225,7 +1243,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         // Let the user know a batch is queued
         const n = pendingBatches.length;
         const trigger = currentConfig.value.pruneOn === "agent-message"
-          ? "agent's next text response"
+          ? "agent's next final text response"
           : "/pruner now";
         if (currentConfig.value.showPruneStatusLine) {
           updatePruneStatus(ctx, `prune: ${n} pending`);
@@ -1497,7 +1515,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   }
 
   const maintainChains = (ctx: ExtensionContext): Promise<void> => {
-    if (!currentConfig.value.enabled || !currentConfig.value.chainCompression.enabled) {
+    if (!currentConfig.value.enabled) {
       maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear();
       stagedChains.clear(); lastMaintenanceSource = undefined; maintenanceNext = undefined;
       return Promise.resolve();
@@ -1530,6 +1548,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertValid();
         if (source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
         if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0) sharedApprovals.set(entry.blockId, shape);
+      }
+      // The automatic switch controls new work, not already committed evidence.
+      if (!currentConfig.value.chainCompression.enabled) {
+        stagedChains.clear(); lastMaintenanceSource = undefined;
+        return;
       }
       raw = manager.buildSessionProjection().messages;
       const source = projectionFingerprint(raw);
@@ -1672,7 +1695,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         statsAccum.persist(pi);
       }
       updatePruneStatus(ctx);
-      return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length };
+      return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length, reclaimedTokens: result.reclaimedTokens };
     } finally {
       isCompactingChains = false;
       if (activeFlushAbort === abort) activeFlushAbort = undefined;
@@ -1683,7 +1706,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     pi,
     currentConfig,
     flushPending,
-    capturePendingBatches,
+    ctx => splitPackingRuns(capturePendingBatches(ctx, { rethrow: true })),
     () => statsAccum.getStats(),
     () => statsAccum.getLiveReclaim(),
     indexer,

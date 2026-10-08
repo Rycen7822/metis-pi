@@ -50,10 +50,10 @@ export function sizeMessages(messages: any[]): number {
  * cooldown, reclaiming context from large `write`/`edit` arguments that will
  * never succeed. The toolResult error message stays visible.
  *
- * Phase 3 — chain range prune: closed chains older than the rolling window
- * are dropped (middle assistant + toolResult messages) and replaced with a
- * synthetic user message wrapping the existing per-batch summary text.
- * Only runs when `chainCompression.enabled` and chain entries exist.
+ * Phase 3 — chain range prune: committed closed ranges drop middle assistant
+ * and toolResult messages, replacing them with a synthetic user message
+ * wrapping the existing summary text. Automatic scheduling uses the rolling
+ * window; committed ranges also apply with `chainCompression.enabled=false`.
  *
  * Phase 4 — orphan sweep: structural post-condition run unconditionally over
  * the final array. Removes any toolResult whose matching toolCall id is not
@@ -148,7 +148,9 @@ export function pruneMessages(
   }
 
   // Phase 3: chain range prune — drop closed chains beyond the rolling window
-  if (chainCompression?.enabled) {
+  // enabled schedules automatic compression; committed ranges remain active
+  // after it is switched off, including explicit /pruner compact results.
+  if (chainCompression) {
     // Shared views require a current gain authorization from the runtime.
     const chainEntries = (chainViews ?? indexer.getChainEntries().filter(entry => !isSharedChain(entry)).flatMap(chainMembers)).filter(entry =>
       !(entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds).some(key => editedToolIds.has(bareToolCallId(key))));

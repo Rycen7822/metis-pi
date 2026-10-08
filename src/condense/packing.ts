@@ -1,5 +1,19 @@
 import type { CapturedBatch, CapturedToolCall } from "./types.ts";
 
+/** Shared, idempotent plan for previews and flushes; preparation never changes index state. */
+export function splitPackingRuns(batches: CapturedBatch[]): CapturedBatch[] {
+  return batches.flatMap(batch => {
+    const packed = new Set(prepareBatch(batch).packedBatch.toolCalls);
+    const runs: CapturedBatch[] = [];
+    for (const call of batch.toolCalls) {
+      const last = runs.at(-1);
+      if (last && packed.has(last.toolCalls[0]!) === packed.has(call)) last.toolCalls.push(call);
+      else runs.push({ ...batch, toolCalls: [call] });
+    }
+    return runs;
+  });
+}
+
 // Restrict lossy packing to recognizable successful build/test output. Reads,
 // searches, arbitrary shell programs and failed tools retain the existing path.
 function isBuildOutput(call: CapturedToolCall): boolean {

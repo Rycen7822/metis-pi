@@ -156,10 +156,11 @@ async function runOnce(
       }, idleMs);
     }
   };
+  const duration = (ms: number) => ms < 1000 ? `${ms}ms` : `${ms / 1000}s`;
   const timeoutMessage = () =>
     timeoutKind === "ceiling"
-      ? `summarizer ${modelLabel(model)} exceeded ${Math.round(maxMs / 1000)}s ceiling`
-      : `summarizer ${modelLabel(model)} stalled (no output for ${Math.round(idleMs / 1000)}s)`;
+      ? `summarizer ${modelLabel(model)} exceeded ${duration(maxMs)} ceiling`
+      : `summarizer ${modelLabel(model)} stalled (no output for ${duration(idleMs)})`;
 
   try {
     if (options.signal?.aborted) throw new Error("summarize: aborted before authentication");
@@ -301,7 +302,7 @@ async function runSummarization(
   const chain = resolveModelChain(config, ctx);
   const controller = options.controller;
   const key = JSON.stringify([config.summarizerModel, config.summarizerFallbackModels, chain.map(modelKey)]);
-  const decision = controller?.chooseTarget(key) ?? { key, index: 0, wasProbe: false };
+  const decision = controller?.chooseTarget(key) ?? { key, index: 0, wasProbe: false, generation: 0 };
   const primaryLabel = chain[0] ? modelLabel(chain[0]) : config.summarizerModel;
 
   const notifyFailure = (o: { message: string; timedOut?: boolean }) => {

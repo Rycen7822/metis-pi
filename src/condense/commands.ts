@@ -9,6 +9,8 @@ import {
   type FlushResult,
   type DiagnosticKind,
   type ContextMetricsSnapshot,
+  type DeferredReason,
+  DEFERRED_REASON_LABELS,
   STATUS_WIDGET_ID,
   PROGRESS_WIDGET_ID,
 } from "./types.ts";
@@ -323,7 +325,7 @@ export function registerCommands(
   getStats: () => SummarizerStats,
   getLiveReclaim: () => LiveReclaim | undefined,
   indexer: ToolCallIndexer,
-  compactChains: (ctx: ExtensionCommandContext) => Promise<{ compressedEntries: ChainCompressionEntry[]; skipped: number }>,
+  compactChains: (ctx: ExtensionCommandContext) => Promise<{ compressedEntries: ChainCompressionEntry[]; skipped: number; reclaimedTokens?: number }>,
   getDiagnosticCounts?: () => Record<DiagnosticKind, number>,
   getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot,
   getRearmed?: () => boolean,
@@ -379,9 +381,9 @@ export function registerCommands(
           const mode = optionLabel("pruneOn", cfg.pruneOn);
           const s = getStats();
           const statsLine = s.callCount > 0
-            ? `\n  --- summarizer ---\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens`
-            : "\n  (no summarizer calls yet)";
-          const fmtTimeout = (ms: number) => (ms === 0 ? "disabled" : `${Math.round(ms / 1000)}s`);
+            ? `\n  --- summarizer ---\n  completed usage records: ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens`
+            : "\n  (no completed summarizer usage yet)";
+          const fmtTimeout = (ms: number) => (ms === 0 ? "disabled" : ms < 1000 ? `${ms}ms` : `${ms / 1000}s`);
           const m = getContextMetrics?.(ctx);
           const contextLine = m
             ? `\n  --- context ---\n  thinking:     ${formatTokens(m.openCycleThinkingTokens)} tokens (open segment)\n  chain share:  ${m.largestChainSharePct}%\n  frontier gap: ${formatTokens(m.frontierGapTokens)} tokens${getRearmed?.() ? "\n  rearmed:      yes" : ""}`
@@ -417,11 +419,11 @@ export function registerCommands(
         case "stats": {
           const s = getStats();
           if (s.callCount === 0 && s.chainsCompressed === 0) {
-            ctx.ui.notify("pruner stats: no summarizer calls yet.");
+            ctx.ui.notify("pruner stats: no completed summarizer usage yet.");
           } else {
             const chainsLine = s.chainsCompressed > 0 ? `\n  chains:      ${s.chainsCompressed} compressed` : "";
             ctx.ui.notify(
-              `pruner stats:\n  calls:       ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens${chainsLine}`,
+              `pruner stats:\n  completed usage records: ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens${chainsLine}`,
             );
           }
           break;
@@ -524,7 +526,7 @@ export function registerCommands(
         // the user invoking /pruner compact is explicit intent.
         case "compact": {
           try {
-            const { compressedEntries, skipped } = await compactChains(ctx);
+            const { compressedEntries, skipped, reclaimedTokens } = await compactChains(ctx);
             if (compressedEntries.length === 0) {
               ctx.ui.notify(
                 skipped > 0
@@ -534,17 +536,11 @@ export function registerCommands(
               );
               break;
             }
-            // Coarse estimate: uses original (unstubbed) toolResult sizes which overstates
-            // tool-result savings; but assistant-message savings (thinking + toolCall args + text)
-            // are not counted at all, so the two errors partly cancel. Treat as a rough proxy.
-            const droppedChars = compressedEntries.flatMap(chainMembers).reduce((total, entry) => {
-              const records = indexer.lookupToolCalls(entry.droppedOccurrenceKeys ?? entry.droppedToolCallIds);
-              return total + records.reduce((s, r) => s + r.resultText.length, 0);
-            }, 0);
-            const reclaimedTokens = Math.ceil(droppedChars / 4);
+            const reclaim = reclaimedTokens === undefined ? "incremental token estimate unavailable"
+              : `reclaimed ~${reclaimedTokens} tokens (local incremental estimate)`;
             const ids = compressedEntries.map((e) => e.blockId).join(", ");
             ctx.ui.notify(
-              `pruner: compacted ${compressedEntries.length} chain${compressedEntries.length === 1 ? "" : "s"} (${ids}), reclaimed ~${reclaimedTokens} tokens`,
+              `pruner: compacted ${compressedEntries.length} chain${compressedEntries.length === 1 ? "" : "s"} (${ids}), ${reclaim}`,
               "info",
             );
           } catch (err) {
@@ -561,7 +557,12 @@ export function registerCommands(
           }
 
           // Capture the pending queue first so we can pre-build the widget rows.
-          const batches = capturePendingBatches(ctx);
+          let batches: CapturedBatch[];
+          try { batches = capturePendingBatches(ctx); }
+          catch (error) {
+            ctx.ui.notify(`pruner: could not inspect pending batches: ${error instanceof Error ? error.message : String(error)}; raw results retained`, "warning");
+            break;
+          }
           if (batches.length === 0) {
             ctx.ui.notify("pruner: nothing pending — no batches to summarize", "info");
             // Still invoke flushPending so its finally-emitted flush-metrics entry
@@ -601,8 +602,10 @@ export function registerCommands(
               ctx.ui.notify("pruner: summary queued — raw results retained until delivery", "info");
               break;
             }
-            if (result.reason === "deferred-budget") {
-              ctx.ui.notify("pruner: complete-summary token budget insufficient — raw evidence retained pending; frontier unchanged across the gap", "info");
+            if (result.reason === "deferred-budget" || result.reason === "deferred") {
+              const reasons = Object.entries(result.deferredReasons ?? { budget: 1 })
+                .map(([reason, count]) => `${count} batch(es): ${DEFERRED_REASON_LABELS[reason as DeferredReason]}`).join("; ");
+              ctx.ui.notify(`pruner: raw evidence retained pending — ${reasons}; frontier unchanged across the gap`, "info");
               break;
             }
             const suffix = "error" in result && result.error ? ` (${result.error})` : "";
@@ -626,7 +629,7 @@ export function registerCommands(
 
           if (result.reason === "skipped-trivial") {
             ctx.ui.notify(
-              `pruner: skipped ${result.toolCallCount} trivial tool call${result.toolCallCount === 1 ? "" : "s"} — only ${result.rawCharCount} raw chars below minBatchChars=${currentConfig.value.minBatchChars}; no LLM call made; frontier advanced past this range`,
+              `pruner: skipped ${result.toolCallCount} trivial tool call${result.toolCallCount === 1 ? "" : "s"} — ${result.rawCharCount} total raw chars retained; summary candidates below minBatchChars=${currentConfig.value.minBatchChars}; no LLM call made; frontier advanced past this range`,
               "info"
             );
             break;
@@ -635,7 +638,7 @@ export function registerCommands(
           if (result.reason === "skipped-deduped") {
             const n = result.dedupedCount ?? result.toolCallCount;
             ctx.ui.notify(
-              `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (${result.rawCharCount} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`,
+              `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (${result.dedupedRawCharCount ?? result.rawCharCount} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`,
               "info"
             );
             break;

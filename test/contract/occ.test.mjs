@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { registerOcc } from "../../src/condense/occ.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
+import { TokenEstimator } from "../../src/condense/token-estimator.ts";
+import { detectChains } from "../../src/condense/chain-detector.ts";
+import { findCompressibleRange } from "../../src/condense/chain-compressor.ts";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -13,7 +16,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const usage = { input: 75000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 75010,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false, pruneOn = "agent-message", pruneOverrides = {} } = {}) {
+async function host(t, { summary = "Derived progress: investigation continues.", onSummary, goal = false, edit, workTurns = 0, beforeLoad, auto = false, onWork, localSummary = false, requirement = "ORIGINAL_GOAL: inspect only; do not deploy", compactionOverrides = {}, autoAfterLocal = false, pruneOn = "agent-message", pruneOverrides = {}, captureNotices = false } = {}) {
   mkdirSync(join(root, ".work"), { recursive: true });
   const dir = mkdtempSync(join(root, ".work", "occ-host-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -123,12 +126,66 @@ async function host(t, { summary = "Derived progress: investigation continues.",
     assert.ok(loaded.extensionsResult.extensions.some(extension => extension.path === join(expectedRoot, "extensions/condense.ts")));
     assert.ok(loaded.extensionsResult.extensions.every(extension => extension.path.startsWith(expectedRoot + "/")));
   }
-  await loaded.session.bindExtensions({ onError: e => errors.push(e) });
+  await loaded.session.bindExtensions({ onError: e => errors.push(e), ...(captureNotices ? {
+    mode: "rpc", uiContext: { notify: (message, type) => notices.push({ message, type }), setStatus() {}, setWidget() {} },
+  } : {}) });
   const events = [];
   loaded.session.subscribe(event => {
     if (event.type === "compaction_start" || event.type === "compaction_end") events.push(event);
   });
   return { ...loaded, sm, calls, errors, notices, eventBus, events, settingsManager };
+}
+
+for (const enabled of [false, true]) {
+  test(`real SDK manual chain compression with automation ${enabled ? "on" : "off"} reports only incremental tokens`, async t => {
+    const h = await host(t, {
+      captureNotices: true, workTurns: 1, localSummary: true, pruneOn: "on-demand",
+      pruneOverrides: { opportunisticCompaction: false, autoBudgetThreshold: null, minBatchChars: 0,
+        chainCompression: { enabled, rollingWindow: 999, fuseRangeSummary: false } },
+      beforeLoad(sm) {
+        sm.getBranch().find(e => e.message?.role === "assistant").message.content.unshift({
+          type: "thinking", thinking: "prior detailed source reasoning ".repeat(500),
+        });
+      },
+    });
+    await h.session.prompt("Continue inspection. " + "RECENT_WORK ".repeat(500));
+    await h.session.prompt("/pruner now");
+    assert.ok(h.sm.getBranch().some(e => e.customType === "context-prune-summary"));
+    assert.ok(!h.sm.getBranch().some(e => e.customType === "context-prune-chain"), "rolling window prevents automatic scheduling");
+    const project = () => {
+      const request = { sessionId: h.sm.getSessionId(), api: h.session.model.api,
+        messages: h.sm.buildSessionProjection().messages };
+      h.eventBus.emit("metis:condense-project", request);
+      return request.messages;
+    };
+    const raw = h.sm.buildSessionProjection().messages;
+    assert.ok(detectChains(raw).some(chain => findCompressibleRange(chain, raw)));
+    const before = project();
+    const callsBefore = h.calls.length;
+    await h.session.prompt("/pruner compact");
+    const after = project();
+    assert.ok(h.sm.getBranch().some(e => e.customType === "context-prune-chain"));
+    assert.ok(after.some(message => message.metisDerived?.kind === "condense-chain"));
+    assert.equal(h.calls.length, callsBefore, "manual compaction reuses archived summaries without another model request");
+    const counter = new TokenEstimator();
+    let counts;
+    try { counts = await counter.measure(before, after); } finally { counter.clear(); }
+    assert.ok(counts && counts.before > counts.after);
+    const notice = h.notices.find(({ message }) => /compacted \d+ chain.*reclaimed/.test(message));
+    assert.ok(notice, "valid explicit work must not be announced as no eligible chains");
+    const reported = Number(notice.message.match(/reclaimed ~(\d+) tokens/)[1]);
+    assert.equal(reported, counts.before - counts.after, "do not recount the already-pruned archived outputs");
+    assert.match(notice.message, /local incremental estimate/);
+    await h.session.extensionRunner.emit({ type: "session_start" });
+    assert.deepEqual(project(), after, "committed manual ranges still project after runtime reload");
+    await h.session.prompt("/pruner off");
+    assert.ok(!project().some(message => message.metisDerived?.kind === "condense-chain"), "the global switch remains authoritative");
+    await h.session.prompt("/pruner on");
+    assert.deepEqual(project(), after);
+    const source = h.sm.getBranch().find(e => e.message?.toolCallId === "evidence");
+    h.sm.appendContextEdit(source.id, { content: [{ type: "text", text: "CORRECTED_MANUAL_EVIDENCE" }] });
+    assert.match(JSON.stringify(project()), /CORRECTED_MANUAL_EVIDENCE/, "a manual range cannot hide edited source evidence");
+  });
 }
 
 for (const [limit, expected] of [[0, 400], [64, 64], [2048, 400]]) {

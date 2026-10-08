@@ -16,7 +16,13 @@ import goalExtension from "../../extensions/goal.ts";
 const usage = { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const buildLog = Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
-async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", stopReason = "stop", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false, chainCompression = { enabled: false } } = {}) {
+async function waitForSummarizer(f) {
+  const deadline = Date.now() + 3000;
+  while (!f.calls.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(f.calls.length, "offline provider must start before checking in-flight state");
+}
+
+async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", stopReason = "stop", defer = false, occ = false, capacity = false, pruneOn = "agent-message", showPruneStatusLine = false, chainCompression = { enabled: false }, ...configOverrides } = {}) {
   const workDir = fileURLToPath(new URL("../../.work/", import.meta.url));
   mkdirSync(workDir, { recursive: true });
   const dir = mkdtempSync(join(workDir, "condense-pipeline-"));
@@ -25,7 +31,7 @@ async function fixture(t, { reply = "[[1:bash]] Finished; evidence retained.", s
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { enabled: capacity, reserveTokens: 500 }, contextPrune: {
     enabled: true, opportunisticCompaction: occ, showPruneStatusLine, minBatchChars: 5000, pruneOn, batchingMode: "agent-message",
     autoBudgetThreshold: 0.7, budgetTurnDelta: 0.2, frontierGapThresholdTokens: 1,
-    chainCompression, purgeErrors: { enabled: false },
+    chainCompression, purgeErrors: { enabled: false }, ...configOverrides,
   } }));
   // Spill files use the session directory; inMemory() leaves it empty.
   const sm = SessionManager.create(dir, dir);
@@ -378,7 +384,10 @@ test("pressure deferral keeps a frontier gap, permits packing and retries on the
   const semantic = f.add("界".repeat(6000), "unknown-command", "deferred");
   await f.finish();
   assert.equal(f.calls.length, 0);
-  assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "deferred-budget");
+  const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+  assert.equal(metrics.outcome, "deferred");
+  assert.deepEqual(metrics.deferredReasons, { pressure: 1 });
+  assert.equal(metrics.error, undefined);
   f.add(buildLog); await f.finish();
   assert.equal(f.calls.length, 0);
   assert.ok(f.sm.getBranch().some(e => e.details?.representation === "packed"));
@@ -777,6 +786,15 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   const projected = (await f.emit("context", { messages: raw() })).messages;
   assert.equal(f.calls.length, 0);
   assert.equal(projected.filter(m => m.metisDerived?.kind === "condense-chain").length, 1);
+  const settingsPath = join(f.dir, "settings.json");
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  settings.contextPrune.chainCompression.enabled = false;
+  writeFileSync(settingsPath, JSON.stringify(settings));
+  await f.emit("session_start");
+  await f.emit("agent_settled"); await f.waitMaintenance();
+  assert.deepEqual((await f.emit("context", { messages: raw() })).messages, projected,
+    "committed shared ranges are revalidated on reload even with automatic scheduling disabled");
+  assert.equal(f.calls.length, 0);
   for (let i = 0; i < 2; i++) {
     assert.ok(projected.some(m => m.content === `shared-request-${i}`));
     assert.ok(projected.some(m => m.role === "assistant" && m.content.some(b => b.text === `shared-final-${i}`)));
@@ -795,4 +813,143 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   assert.match(body, /member-1/);
   await f.emit("session_start");
   assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
+});
+
+test("pruner off silently aborts an active flush, records cancellation and retains raw evidence", async t => {
+  const f = await fixture(t, { defer: true });
+  const source = f.add("semantic source ".repeat(2000), "unknown-command", "cancelled");
+  const finishing = f.finish(false);
+  await waitForSummarizer(f);
+  await f.commands.get("pruner").handler("off", f.ctx);
+  await finishing;
+  const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+  assert.equal(metrics.outcome, "aborted");
+  assert.ok(!f.notices.some(([message]) => /summarization failed|summarize: aborted/.test(message)));
+  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier" || e.customType === "context-prune-summary"));
+  assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === source.id).content[0].text, source.result.content[0].text);
+});
+
+test("manual progress uses the same packed/semantic runs as execution", async t => {
+  const f = await fixture(t, { defer: true, pruneOn: "on-demand" });
+  f.add(buildLog, "npm run build", "packed-run");
+  f.add("unpackable semantic evidence ".repeat(1000), "unknown-command", "semantic-run");
+  const flushing = f.commands.get("pruner").handler("now", f.ctx);
+  await waitForSummarizer(f);
+  const create = f.widgets.findLast(([, value]) => typeof value === "function")[1];
+  const widget = create({ requestRender() {} }, { fg: (_color, text) => text });
+  const pending = widget.render(120);
+  assert.equal(pending.length, 2);
+  assert.match(pending[0], /^✓ Batch 1\/2/);
+  assert.ok(pending[1] && !pending[1].startsWith("✓"), "semantic work cannot be marked done before the provider completes");
+  f.releaseAll();
+  await flushing;
+  assert.ok(widget.render(120).every(row => row.startsWith("✓")));
+  assert.ok(f.notices.some(([message]) => /from 2 batches/.test(message)));
+  assert.ok(!f.notices.some(([message]) => /[3-9]\/2|2\/1/.test(message)));
+});
+
+test("measurement deferral has its own result, notification and nonfailure metrics", async t => {
+  const f = await fixture(t, { quietOversizedSkips: false, batchingMode: "agent-turn" });
+  const source = f.add("semantic source ".repeat(2000), "unknown-command", "measurement-gap");
+  f.add("small", "unknown-command", "later-trivial");
+  t.mock.method(TokenEstimator.prototype, "measure", async () => null);
+  await f.finish();
+  const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+  assert.equal(metrics.outcome, "partial");
+  assert.equal(metrics.reason, "deferred");
+  assert.deepEqual(metrics.deferredReasons, { measurement: 1 });
+  assert.equal(metrics.error, undefined);
+  assert.ok(f.notices.some(([message]) => /token measurement unavailable/.test(message)));
+  assert.ok(!f.notices.some(([message]) => /pressure\/budget|summarization failed/.test(message)));
+  assert.equal(f.calls.length, 0);
+  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier"));
+  assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === source.id).content[0].text, source.result.content[0].text);
+});
+
+test("automatic-disabled deferral is distinct from pressure and keeps packing below the gap", async t => {
+  const f = await fixture(t, { autoBudgetThreshold: null });
+  f.add("semantic source ".repeat(2000), "unknown-command", "automatic-gap");
+  f.add(buildLog, "npm run build", "later-packed");
+  await f.finish();
+  const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+  assert.equal(metrics.outcome, "partial");
+  assert.equal(metrics.reason, "deferred");
+  assert.deepEqual(metrics.deferredReasons, { "automatic-disabled": 1 });
+  assert.equal(metrics.error, undefined);
+  assert.equal(f.calls.length, 0);
+  assert.ok(f.sm.getBranch().some(e => e.details?.representation === "packed"));
+  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier"));
+});
+
+test("an unavailable post-summary measurement retains evidence without calling it inadequate budget", async t => {
+  const f = await fixture(t);
+  const measure = TokenEstimator.prototype.measure;
+  t.mock.method(TokenEstimator.prototype, "measure", async function (before, after) {
+    if (before[0]?.customType === "context-prune-summary" && /Finished/.test(before[0].content)) return null;
+    return measure.call(this, before, after);
+  });
+  f.add("semantic source ".repeat(2000), "unknown-command", "post-summary-measurement");
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+  assert.equal(metrics.reason, "deferred");
+  assert.deepEqual(metrics.deferredReasons, { measurement: 1 });
+  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier" || e.customType === "context-prune-summary"));
+});
+
+test("manual capture errors report retained pending work and the unchanged work can retry", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand" });
+  f.add("semantic source ".repeat(2000), "unknown-command", "scan-pending");
+  const getBranch = f.sm.getBranch.bind(f.sm);
+  const mock = t.mock.method(f.sm, "getBranch", () => { throw new Error("offline branch read failed"); });
+  await f.commands.get("pruner").handler("now", f.ctx);
+  assert.ok(f.notices.some(([message]) => /could not inspect pending batches.*raw results retained/.test(message)));
+  assert.ok(!f.notices.some(([message]) => /nothing pending/.test(message)));
+  assert.equal(f.calls.length, 0);
+  mock.mock.restore();
+  assert.ok(getBranch().some(e => e.message?.toolCallId === "scan-pending"));
+  await f.commands.get("pruner").handler("now", f.ctx);
+  assert.equal(f.calls.length, 1);
+  assert.ok(f.sm.getBranch().some(e => e.customType === "context-prune-summary"));
+});
+
+test("trivial aggregate sizes are retention totals, not a comparison against one batch gate", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", batchingMode: "agent-turn" });
+  f.add("x".repeat(3200), "unknown-command", "small-one");
+  f.add("y".repeat(3300), "unknown-command", "small-two");
+  await f.commands.get("pruner").handler("now", f.ctx);
+  assert.equal(f.calls.length, 0);
+  assert.ok(f.notices.some(([message]) => /6500 total raw chars retained; summary candidates below minBatchChars=5000/.test(message)));
+  assert.ok(!f.notices.some(([message]) => /6500 raw chars below/.test(message)));
+});
+
+test("dedup totals exclude unrelated trivial results", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", batchingMode: "agent-turn" });
+  const body = "semantic evidence ".repeat(1500);
+  f.add(body, "unknown-command", "original-dedup");
+  await f.commands.get("pruner").handler("now", f.ctx);
+  f.notices.length = 0;
+  f.add(body, "unknown-command", "copy-dedup");
+  f.add("small", "another-unknown-command", "small-not-dedup");
+  await f.commands.get("pruner").handler("now", f.ctx);
+  const notice = f.notices.findLast(([message]) => /deduplicated 1 tool call/.test(message))[0];
+  assert.ok(notice.includes(`(${body.length} raw chars)`));
+  assert.ok(!notice.includes(`(${body.length + 5} raw chars)`));
+  assert.equal(f.calls.length, 1);
+});
+
+test("stats distinguish completed usage from an in-flight summarizer request", async t => {
+  const f = await fixture(t, { defer: true });
+  f.add("semantic source ".repeat(2000), "unknown-command", "usage-in-flight");
+  const finishing = f.finish(false);
+  await waitForSummarizer(f);
+  f.notices.length = 0;
+  await f.commands.get("pruner").handler("stats", f.ctx);
+  assert.ok(f.notices.some(([message]) => /no completed summarizer usage yet/.test(message)));
+  assert.ok(!f.notices.some(([message]) => /no summarizer calls yet/.test(message)));
+  f.releaseAll();
+  await finishing;
+  f.notices.length = 0;
+  await f.commands.get("pruner").handler("stats", f.ctx);
+  assert.ok(f.notices.some(([message]) => /completed usage records: 1/.test(message)));
 });
