@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import tomllib
 
-from .common import AgentError, BASE_ENV_KEYS
+from .common import AgentError, BASE_ENV_KEYS, PROXY_ENV_KEYS
 from .mcp_config import Diagnostic, parse_mcp_servers
 
 MAX_MANAGED_SKILLS = 64
@@ -14,7 +14,7 @@ MAX_ENV_VARS = 64
 MAX_ENV_VALUE = 16384
 # The snapshot additionally captures CODEX_HOME: it is a source pointer the daemon
 # resolves itself, so it is bound for the scope but never forwarded to a child.
-SNAPSHOT_ENV_KEYS = BASE_ENV_KEYS + ('CODEX_HOME',)
+SNAPSHOT_ENV_KEYS = BASE_ENV_KEYS + PROXY_ENV_KEYS + ('CODEX_HOME',)
 MANAGEMENT_SKILL_NAMES = {'subagent-pi'}
 
 
@@ -194,8 +194,8 @@ def referenced_env_names(servers: list[dict]) -> set[str]:
 
 def scope_source_snapshot(home: Path, environ: dict) -> dict:
     """Trusted client-side snapshot for scope binding (CLI launcher and Codex-spawned
-    MCP adapter). With the inheritance master switch off this binds ONLY the base
-    worker environment: no Codex directory is read, so an invalid or missing
+    MCP adapter). With the inheritance master switch off this binds only the
+    worker environment/proxies: no Codex directory is read, so an invalid or missing
     CODEX_HOME cannot break a normal worker start."""
     from .config import load_config  # local import: config owns the state home layout
     cfg = load_config(home)

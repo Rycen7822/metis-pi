@@ -165,7 +165,7 @@ exclude = []
 
 `enabled=true`、`skills=true`、`mcp=true`、`codexHome=""`、`mcpProtocolMode="auto"` 是本包 Codex CLI/MCP 兼容入口的继承设置；`codexHome` 非空时须为存在目录，空字符串自动选择；协议模式为 `auto` / `legacy_2025_06_18` / `modern_2026_07_28`。**native Pi 不使用这些 Codex 开关**，ambient skills/扩展使用 profile/Pi 设置，MCP 及凭据仍由 Pi 管理。
 
-`childEnv=[]` 是允许传给子代理的环境变量名（native Pi 也使用），凭据值来自父环境，不应直接写入 TOML。基本进程环境自动保留；运行绑定、租约、bootstrap FD 等内部环境变量是协议状态，不是另一份用户配置。
+`childEnv=[]` 是额外允许传给子代理的环境变量名（native Pi 也使用），凭据值来自父环境，不应直接写入 TOML。基本进程环境及 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 和对应小写名自动继承；代理值仅绑定在 scope 内存中，不落盘，daemon 重启后需父会话重新绑定。profile 的 `env` 可覆写代理变量。子代理 SDK 初始化代理感知的 HTTP/WebSocket，沿用 Pi 全局 `httpProxy` 和 HTTP 空闲超时；运行绑定、租约、bootstrap FD 等内部环境变量是协议状态，不是另一份用户配置。
 
 ### `[subagents.profiles.<name>]`
 

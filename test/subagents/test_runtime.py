@@ -35,6 +35,37 @@ cwd = "servers/dir with space"
 '''
 
 class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
+    async def test_proxy_environment_follows_each_scope_and_never_persists(self):
+        from subagent_pi.binding import ScopeBindings
+        from subagent_pi.common import BASE_ENV_KEYS, PROXY_ENV_KEYS
+        spec={'profile':'default','access':'read','cwd':str(self.workspace)}
+        for native in (False,True):
+            sid=(await self.rt.dispatch('scope_open',{'cwd':str(self.workspace)}))['scope']
+            proxy='http://user:proxy-secret-canary@127.0.0.1:7897'
+            env={key:proxy for key in PROXY_ENV_KEYS}
+            env.update(PATH='/bin',OPENAI_API_KEY='auth-not-authorized',UNRELATED_SECRET='not-authorized')
+            source={'env':env,**({'parent':{'kind':'pi'}} if native else {})}
+            self.rt.bindings.bind_scope_source(sid,{},source)
+            child=self.rt.bindings.child_env(sid,spec)
+            self.assertTrue(all(child[key]==proxy for key in PROXY_ENV_KEYS))
+            self.assertNotIn('OPENAI_API_KEY',child)
+            self.assertNotIn('UNRELATED_SECRET',child)
+            stored=json.loads(self.rt.store.scope(sid)['base_env'])
+            self.assertEqual(stored,{'PATH':'/bin'})
+            self.assertTrue(set(stored)<=set(BASE_ENV_KEYS))
+            self.assertNotIn(b'proxy-secret-canary',(self.home/'registry.sqlite').read_bytes())
+            restored=ScopeBindings(self.rt.store,self.rt.config)
+            self.assertEqual(restored.child_env(sid,spec)['PATH'],'/bin')
+            self.assertTrue(all(key not in restored.child_env(sid,spec) for key in PROXY_ENV_KEYS))
+            restored.bind_scope_source(sid,{},source)
+            self.assertEqual(restored.child_env(sid,spec)['HTTPS_PROXY'],proxy)
+        other=(await self.rt.dispatch('scope_open',{'cwd':str(self.workspace)}))['scope']
+        self.rt.bindings.bind_scope_source(other,{}, {'env':{'HTTPS_PROXY':'http://127.0.0.1:8888'}})
+        self.assertEqual(self.rt.bindings.child_env(other,spec)['HTTPS_PROXY'],'http://127.0.0.1:8888')
+        self.assertNotIn('HTTP_PROXY',self.rt.bindings.child_env(other,spec))
+        self.rt.config['profiles']['default']['env']={'HTTPS_PROXY':''}
+        self.assertEqual(self.rt.bindings.child_env(other,spec)['HTTPS_PROXY'],'')
+
     async def test_history_search_and_paging_put_reused_agents_first(self):
         older=await self.spawn('first',name='Review%Alpha'); await self.wait(older['run_id'])
         newer=await self.spawn('second',name='review-beta'); await self.wait(newer['run_id'])

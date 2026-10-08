@@ -55,6 +55,16 @@ is verified from the guard's generation-specific receipt and process ownership.
 If the guard is killed before confirming cleanup, the state remains unknown;
 inspect remaining processes before reopening the workspace.
 
+Children inherit the opening client's standard HTTP_PROXY, HTTPS_PROXY, ALL_PROXY,
+NO_PROXY and lowercase equivalents, even with `childEnv=[]` or Codex inheritance
+disabled. These routing values stay in the scope's memory, never its persisted
+base environment or launches; after a daemon restart the parent must rebind them.
+Other credential/environment names still require explicit `childEnv` authorization.
+Profile environment overrides remain authoritative. Managed SDK startup configures
+proxy-aware HTTP and WebSocket globals through public Undici APIs before extensions
+load; Pi's global `httpProxy` supplies missing HTTP(S) proxy variables, and its
+HTTP idle timeout applies to the dispatcher. NO_PROXY still permits direct traffic.
+
 Backend capacity/timeouts/profiles/inheritance are read from global
 `metis-pi.toml` at daemon startup; reload does not change a resident daemon's loaded
 policy. The packaged TOML participates in its source fingerprint. Old standalone

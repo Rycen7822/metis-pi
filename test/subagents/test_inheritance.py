@@ -442,8 +442,16 @@ approval_mode = "banana"
         self.assertEqual(snap['ANTHROPIC_API_KEY'],'sk-test')  # authorized child-env name is captured for model auth
         self.assertNotIn('UNRELATED_SECRET',snap)
         servers,_=self.parse(STDIO_TOML+'[mcp_servers.w2]\nurl="https://e.example"\nbearer_token_env_var="BT"\n')
-        self.assertEqual(set(referenced_env_names(servers)),{'PATH','HOME','LANG','LC_ALL','TERM','TMPDIR','SHELL','USER','LOGNAME',
-            'PI_CODING_AGENT_DIR','CODEX_HOME','TOKEN_VAR','BT'})
+        from subagent_pi.common import BASE_ENV_KEYS, PROXY_ENV_KEYS
+        self.assertEqual(set(referenced_env_names(servers)),set(BASE_ENV_KEYS + PROXY_ENV_KEYS) | {'CODEX_HOME','TOKEN_VAR','BT'})
+
+    def test_proxy_env_is_captured_without_extra_child_env_or_codex_home(self):
+        from subagent_pi.common import PROXY_ENV_KEYS
+        environ={key:'http://user:proxy-canary@127.0.0.1:7897' for key in PROXY_ENV_KEYS}
+        environ.update(UNRELATED_SECRET='not-authorized',OPENAI_API_KEY='not-authorized')
+        snapshot=capture_scope_env(None,environ)
+        self.assertEqual(set(snapshot),set(PROXY_ENV_KEYS))
+        self.assertTrue(all(snapshot[key]==environ[key] for key in PROXY_ENV_KEYS))
 
 class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .common import AgentError, BASE_ENV_KEYS, dumps, text, now
+from .common import AgentError, BASE_ENV_KEYS, PROXY_ENV_KEYS, dumps, text, now
 from .inheritance import collect_skills, read_codex_config, referenced_env_names, resolve_codex_home
 from .mcp_config import (CODEX_MCP_BASELINE, SERVER_POLICY_KEYS, SERVER_RESOLVED_KEYS, Diagnostic,
     parse_mcp_servers, read_access_diagnostics, resolve_environment)
@@ -32,14 +32,14 @@ class ScopeBindings:
 
     def child_env(self, sid, spec):
         """Base environment for the guard/Pi child, built from the scope's bound
-        snapshot — never a copy of the daemon's environ. Env-based model auth
+        snapshot, including proxy routing — never a copy of the daemon's environ. Env-based model auth
         requires explicitly configured names (inheritance.child_env); profile env
         values come from the current config, never from the persisted copy.
         A daemon restart drops the in-memory snapshot, so the non-secret base keys
         reload from the ledger; other bound values stay gone until a rebind."""
         snapshot = {**self.persisted_base_env(sid), **self.scope_env.get(sid, {})}
         inh = self.config['inheritance']
-        allowed = set(BASE_ENV_KEYS) | {k for k in inh.get('child_env', []) if isinstance(k, str)}
+        allowed = set(BASE_ENV_KEYS + PROXY_ENV_KEYS) | {k for k in inh.get('child_env', []) if isinstance(k, str)}
         env = {k: v for k, v in snapshot.items() if k in allowed and isinstance(v, str)}
         profile = self.config['profiles'].get(spec.get('profile'), {}) if isinstance(self.config['profiles'], dict) else {}
         penv = profile.get('env', {}) if isinstance(profile, dict) else {}
@@ -79,7 +79,7 @@ class ScopeBindings:
 
     def bind_scope_source(self, sid, p, source):
         """Bind a scope in two independent layers: layer 1 (always) the worker base
-        environment from the opening client plus authorized child_env names — a
+        environment/proxies from the opening client plus authorized child_env names — a
         child must find its interpreter whether or not Codex inheritance is on;
         layer 2 (master switch on) the Codex source pointer. Secrets stay in
         memory in both layers."""
@@ -90,7 +90,7 @@ class ScopeBindings:
             self.remember_pi_trust(sid,source)
             self.store.execute('UPDATE scopes SET inheritance=0 WHERE id=?',(sid,))
             if env is not None:
-                self.scope_env[sid]={k:v for k,v in env.items() if k in BASE_ENV_KEYS or k in inh.get('child_env',[])}
+                self.scope_env[sid]={k:v for k,v in env.items() if k in BASE_ENV_KEYS + PROXY_ENV_KEYS or k in inh.get('child_env',[])}
                 self.remember_base_env(sid,self.scope_env[sid])
             return
         master_enabled = bool(inh.get('enabled',True))
@@ -116,7 +116,7 @@ class ScopeBindings:
              (mode if home else scope['codex_source']) if master_enabled else scope['codex_source'],
              1 if enabled else 0, sid))
         if env is not None:
-            names=set(BASE_ENV_KEYS) | {k for k in inh.get('child_env',[]) if isinstance(k,str)}
+            names=set(BASE_ENV_KEYS + PROXY_ENV_KEYS) | {k for k in inh.get('child_env',[]) if isinstance(k,str)}
             if master_enabled and home is not None:
                 try:
                     servers,_=parse_mcp_servers(home,read_codex_config(home))

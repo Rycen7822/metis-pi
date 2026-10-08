@@ -285,7 +285,8 @@ skills = true
 mcp = true
 # Codex CLI 兼容来源目录；空字符串自动选择。native Pi 不使用此目录。
 codexHome = ""
-# 显式允许传递到 child 的环境变量名，禁止把令牌直接写入 TOML。
+# 额外允许传递到 child 的环境变量名，禁止把令牌直接写入 TOML。
+# 基本环境及 HTTP(S)/ALL/NO_PROXY（含小写）自动继承；代理值不落盘。
 childEnv = []
 # Codex 兼容 MCP：auto / legacy_2025_06_18 / modern_2026_07_28。
 mcpProtocolMode = "auto"

@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TaskQueue } from './task-queue.mjs';
+import { configureNetwork } from './network.mjs';
 import { createProtocolOutput } from './protocol-output.mjs';
 
 // Only this writer owns the protocol pipe. Extension console/terminal output is
@@ -103,6 +104,8 @@ const settingsManager = sdk.SettingsManager.fromStorage({ withLock(scope, edit) 
   const updated = edit(settings[scope]);
   if (updated !== undefined) settings[scope] = updated;
 } });
+configureNetwork({ httpProxy: settingsManager.getGlobalSettings().httpProxy,
+  idleTimeoutMs: settingsManager.getHttpIdleTimeoutMs() });
 const services = await sdk.createAgentSessionServices({
   cwd, agentDir, settingsManager, extensionFlagValues: args.unknownFlags,
   ...(nativeHost ? { resourceLoaderReloadOptions: { async resolveProjectTrust() {

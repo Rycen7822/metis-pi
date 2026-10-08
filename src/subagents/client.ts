@@ -12,11 +12,11 @@ export interface SubagentTool {
   _op: string;
   annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
 }
-export interface RuntimePackage { root: string; tools: SubagentTool[]; baseEnvKeys: string[]; maxFrame: number }
+export interface RuntimePackage { root: string; tools: SubagentTool[]; baseEnvKeys: string[]; scopeEnvKeys: string[]; maxFrame: number }
 export function runtimePackage(): RuntimePackage {
   const root = fileURLToPath(new URL("./core/", import.meta.url));
   const metadata = JSON.parse(readFileSync(join(root, "tools.json"), "utf8"));
-  if (metadata.hostProtocol !== 1) throw new Error("Metis subagent schema needs host protocol 1; run npm run prepare:subagents");
+  if (metadata.hostProtocol !== 1 || !Array.isArray(metadata.scopeEnvKeys)) throw new Error("Metis subagent schema needs host protocol 1 with scopeEnvKeys; run npm run prepare:subagents");
   return { root, ...metadata };
 }
 export class RuntimeError extends Error {
@@ -118,7 +118,7 @@ export class SubagentClient {
       child.stderr.on("data", (chunk: Buffer) => { this.stderr = (this.stderr + chunk.toString("utf8")).slice(-2048); });
       child.on("error", error => this.fail(new Error(`Subagents require Linux and Python 3.11+: ${error.message}`)));
       child.on("exit", () => this.fail(new Error(`Subagent bridge exited; inspect mutations before retrying. ${this.stderr}`)));
-      const env = Object.fromEntries(this.runtime.baseEnvKeys.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
+      const env = Object.fromEntries(this.runtime.scopeEnvKeys.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
       const result = await this.rpc("initialize", { cwd: this.ctx.cwd, label: "Pi subagents", ...(this.scope ? { scope: this.scope } : {}) }, undefined, { source: { env,
         project_trust: { cwd: realpathSync(this.ctx.cwd), trusted: this.ctx.isProjectTrusted() }, parent: {
         kind: "pi", session_id: this.ctx.sessionManager.getSessionId(), agent_dir: this.agentDir,

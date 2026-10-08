@@ -29,9 +29,13 @@ DELIVERY_OPS = frozenset({'wait','result','inspect','soft_interrupt'})
 # carries credentials. PI_CODING_AGENT_DIR is a non-secret LOCATION the child Pi
 # resolves itself (like HOME), so it is forwarded; CODEX_HOME is captured by the
 # scope snapshot too but stays out of this set because the daemon resolves that
-# source itself. The scope snapshot captures these plus CODEX_HOME.
+# source itself. The scope snapshot also captures proxy keys and CODEX_HOME.
 BASE_ENV_KEYS = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR', 'SHELL', 'USER',
                  'LOGNAME', 'PI_CODING_AGENT_DIR')
+# Network routing follows the opening client, not the daemon. Proxy URLs may
+# contain credentials: unlike BASE_ENV_KEYS these values must never be persisted.
+PROXY_ENV_KEYS = ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+                  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')
 
 class AgentError(Exception):
     def __init__(self, code: str, message: str, **details):
