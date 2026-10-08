@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import { metisConfigPath } from "../metis-config.ts";
 
 export interface SubagentTool {
   name: string; description: string; inputSchema: TSchema; outputSchema: TSchema;
@@ -112,7 +113,7 @@ export class SubagentClient {
   private connect(): Promise<void> {
     return this.ready ??= (async () => {
       if (this.ended) throw new Error("Subagent frontend closed; reload to reconnect");
-      const child = this.child = spawn("python3", [join(this.runtime.root, "bin/subagent-pi"), "--home", join(this.agentDir, "subagent-pi"), "pi-host"], { cwd: this.ctx.cwd, stdio: "pipe" });
+      const child = this.child = spawn("python3", [join(this.runtime.root, "bin/subagent-pi"), "--home", join(this.agentDir, "subagent-pi"), "pi-host"], { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } });
       child.stdout.on("data", (chunk: Buffer) => this.receive(chunk));
       child.stderr.on("data", (chunk: Buffer) => { this.stderr = (this.stderr + chunk.toString("utf8")).slice(-2048); });
       child.on("error", error => this.fail(new Error(`Subagents require Linux and Python 3.11+: ${error.message}`)));

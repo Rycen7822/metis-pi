@@ -1,24 +1,47 @@
 from __future__ import annotations
 import os
+import json
+import re
+from copy import deepcopy
 from pathlib import Path
 import shutil
 import tomllib
-from .common import AgentError, MAX_WAIT_SECONDS, text
+from .common import AgentError, text
 
-DEFAULT = {
-    'max_resident_agents': 4, 'max_agents_per_scope': 16,
-    'rpc_timeout_seconds': 20, 'startup_timeout_seconds': 30,
-    'default_idle_timeout_seconds': 1800, 'max_wait_seconds': MAX_WAIT_SECONDS,
-    'resident_idle_timeout_seconds': 1800,
-    'event_max_count_per_agent': 20000,
-    'inheritance': {'enabled': True, 'skills': True, 'mcp': True, 'codex_home': None, 'child_env': [], 'mcp_protocol_mode': 'auto'},
-    'profiles': {
-        'default': {'extensions': [], 'skills': [], 'ambient_extensions': True,
-                    'ambient_skills': True, 'tools': ['read','bash','edit','write','grep','find','ls']},
-        'reader': {'extensions': [], 'skills': [], 'ambient_extensions': True,
-                   'ambient_skills': True, 'tools': ['read','grep','find','ls']},
-    }
-}
+# The packaged TOML owns defaults AND canonical field names; runtime uses snake_case.
+BUNDLED = tomllib.loads((Path(__file__).resolve().parents[4]/'metis-pi.toml').read_text(encoding='utf-8-sig'))['subagents']
+PROFILE_FIELDS = set(BUNDLED['profiles']['default']) | {'model', 'provider', 'thinking', 'env'}
+
+def snake_key(key):
+    return re.sub(r'[A-Z]', lambda match: '_'+match[0].lower(), key)
+
+def translate_table(raw, fields, name):
+    if not isinstance(raw, dict): raise AgentError('invalid_config', f'{name} must be a table')
+    unknown = set(raw) - set(fields)
+    if unknown: raise AgentError('invalid_config', f'Unknown {name} keys: {sorted(unknown)}')
+    return {snake_key(key): value for key, value in raw.items()}
+
+def native_config(raw):
+    result = translate_table(raw, BUNDLED, 'subagents')
+    if not isinstance(result.pop('enabled', True), bool): raise AgentError('invalid_config', 'subagents.enabled must be a boolean')
+    if 'inheritance' in result:
+        result['inheritance'] = translate_table(result['inheritance'], BUNDLED['inheritance'], 'subagents.inheritance')
+        if result['inheritance'].get('codex_home') == '': result['inheritance']['codex_home'] = None
+    if 'profiles' in result:
+        if not isinstance(result['profiles'], dict): raise AgentError('invalid_config', 'subagents.profiles must be a table')
+        result['profiles'] = {name: translate_table(profile, PROFILE_FIELDS, f'subagents.profiles.{name}')
+                              for name, profile in result['profiles'].items()}
+    return result
+
+DEFAULT = native_config(BUNDLED)
+PROFILE_KEYS = {snake_key(key) for key in PROFILE_FIELDS}
+
+def metis_config_path():
+    explicit = os.environ.get('METIS_PI_CONFIG')
+    if explicit: return Path(explicit).expanduser().resolve()
+    # --home/PI_AGENTS_HOME select state, not another preferences source.
+    agent_dir = Path(os.environ.get('PI_CODING_AGENT_DIR', str(Path.home()/'.pi/agent'))).expanduser().resolve()
+    return agent_dir / 'metis-pi.toml'
 # Pi's built-in tools (dist/core/tools/index.js `allToolNames`). A profile's
 # `tools` is its ALLOWED built-in surface, applied by extensions/managed-surface.ts
 # because both CLI filters are wrong for it: --tools is an allowlist over
@@ -27,12 +50,26 @@ DEFAULT = {
 # under a built-in name.
 PI_BUILTIN_TOOLS = ('read','bash','powershell','edit','write','grep','find','ls')
 
+def read_document(path, parser):
+    try:
+        document = parser(path.read_text(encoding='utf-8-sig'))
+        if not isinstance(document, dict): raise ValueError('not a table')
+        return document
+    except FileNotFoundError: return None
+    except (OSError, ValueError) as error:
+        raise AgentError('invalid_config', f'Cannot read subagent configuration at {path}: {type(error).__name__}') from error
+
 def load_config(home: Path):
-    result = dict(DEFAULT)
-    result['profiles'] = {k:dict(v) for k,v in DEFAULT['profiles'].items()}
-    file = home/'config.toml'
-    if file.exists():
-        with file.open('rb') as f: raw = tomllib.load(f)
+    result = deepcopy(DEFAULT)
+    native = metis_config_path()
+    raw = read_document(native, tomllib.loads)
+    if raw is None:
+        result['pi_command'] = [os.environ.get('PI_AGENTS_PI', 'pi')]
+        former = read_document(native.parent/'subagents.json', json.loads)
+        if former is not None and 'maxConcurrent' in former: result['max_resident_agents'] = former['maxConcurrent']
+        raw = read_document(home/'config.toml', tomllib.loads)
+    else: raw = native_config(raw.get('subagents', {}))
+    if raw is not None:
         # Existing config values now specify inactivity, never total runtime.
         if 'default_run_timeout_seconds' in raw:
             old = raw.pop('default_run_timeout_seconds')
@@ -64,9 +101,8 @@ def load_config(home: Path):
                     merged['codex_home'] = str(resolved)
                 result['inheritance'] = merged
             else: result[key] = value
-    result.setdefault('pi_command', [os.environ.get('PI_AGENTS_PI', 'pi')])
     for k in DEFAULT:
-        if k in ('profiles','inheritance'): continue
+        if k in ('profiles','inheritance','pi_command'): continue
         v = result[k]
         if isinstance(v,bool) or not isinstance(v,int) or not 1 <= v <= 10_000_000:
             raise AgentError('invalid_config', f'{k} must be a positive bounded integer')
@@ -101,10 +137,10 @@ def managed_context_argv(argv):
 def launch_spec(config, profile_name, model, cwd, access, thinking=None, host=None):
     if profile_name not in config['profiles']: raise AgentError('profile_not_found',f'Unknown profile: {profile_name}')
     p = config['profiles'][profile_name]
-    unknown = set(p) - {'extensions','skills','ambient_extensions','ambient_skills','tools','model','provider','thinking','env'}
+    unknown = set(p) - PROFILE_KEYS
     if unknown: raise AgentError('invalid_config',f'Unknown profile keys: {sorted(unknown)}')
     executable = host['node_path'] if host else shutil.which(config['pi_command'][0])
-    if not executable: raise AgentError('pi_not_found','Pi executable not found; set pi_command in config.toml or PI_AGENTS_PI')
+    if not executable: raise AgentError('pi_not_found','Pi executable not found; set subagents.piCommand in metis-pi.toml or PI_AGENTS_PI (legacy bridge only)')
     tools = p.get('tools',[])
     if not isinstance(tools,list) or any(t not in PI_BUILTIN_TOOLS for t in tools):
         raise AgentError('invalid_config','tools must be a list of Pi builtin names')

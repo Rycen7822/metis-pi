@@ -13,10 +13,15 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 | MCP 策略 | `[mcp]` | 默认关闭；`/mcp reload` 刷新。服务器和凭据仍由 Pi 管理。 |
 | condense / OCC | `[contextPrune]` 及子表 | `/pruner settings`、相关命令写全局；手动编辑后 `/reload`；见 [condense](features/condense.md)。 |
 | 动态全局指令 | `[dynamicAgents]` / `[[dynamicAgents.groups]]` | 策略 Markdown 相对全局配置目录；下一正式 run 读取，见 [动态指令](features/dynamic-agents.md)。 |
+| 子代理 | `[subagents]` / `inheritance` / `profiles` | native 入口启用开关、后端容量/超时/profile；后端启动读取，须安全 drain/stop 后重新连接。 |
 | goal / 结束摘要 | Pi session custom entries | 会话状态不是配置；摘要持久化由 `appearance.summary.persist` 控制。 |
 | 原文、图片、命令日志 | 会话旁 `<sessionId>-blobs/` | 恢复数据不搬入 TOML，复制或清理会话时一并处理。 |
 
-首次升级运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`，生成完整配置和同目录说明。不覆盖已有 TOML/说明，不删除旧 JSON。新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧配置。请先迁移，别直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
+首次升级运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项及 `subagent-pi/config.toml`，生成完整配置和同目录说明。不覆盖已有 TOML/说明，不删除旧 JSON。新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧配置。请先迁移，别直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
+
+已有上一版 TOML 用 **`/metis-config migrate`**，备份当前文件及旧输入后补齐缺失项并刷新说明；保留现有个性化值，旧执行快捷键仅修复仍为默认值的项。旧 provider 的无效选项明确提示，不生成伪配置。命令不删除原文件、不停止任务；确认新版 frontend/backend 都已使用 TOML 后再将旧 Metis 文件移入备份，不能删除 Pi settings 或子代理数据目录。
+
+归属审计边界：Metis 自有显示、执行、MCP 策略、动态指令、condense/OCC、子代理偏好都在 TOML。`pi-fff.json`/LSP/其他插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
 
 TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。损坏 TOML 不回退旧 JSON，也不允许保存覆盖；显示层记录 problem 并回退，condense 使用默认关闭值，执行/MCP 按自身错误边界报错。初始化和命令保存按包内模板回填分区/参数注释，并保留未知字段；个人自定义注释不保留，可写在旁边说明中。原子 rename 避免半文件，多进程同时保存仍是最后写入者胜出。
 

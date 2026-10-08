@@ -11,7 +11,7 @@
 #   - 密钥、MCP 服务器、Pi 模型/主题/packages 仍由 Pi 管理，不写进本文件。
 #   - 显示和快捷键修改后重启；condense 用 /reload，MCP 用 /mcp reload。
 #
-# 分区：1 显示界面 · 2 执行工具 · 3 MCP · 4 动态指令 · 5 历史精简
+# 分区：1 显示界面 · 2 执行工具 · 3 MCP · 4 动态指令 · 5 历史精简 · 6 子代理
 
 
 # =============================================================================
@@ -252,3 +252,64 @@ targetPerCallTokens = 96
 # 仅 OCC 通过受支持的自定义指令请求；0 不附加目标。
 # 不降低 Pi/provider 硬 cap，也不自动注入普通 Pi 原生压缩路径。
 nativeTargetTokens = 16384
+
+
+# =============================================================================
+# 6. 子代理 / Native subagents
+# =============================================================================
+# Metis 原生 Pi 子代理的唯一配置入口；数据库/日志/会话仍在 subagent-pi/。
+# 后端在启动时读取；修改后先等待任务结束、关闭驻留子代理，再正常停止 daemon。
+# 不要 --force 停止正在运行的任务。managed child 固定禁止递归创建子代理。
+[subagents]
+enabled = true
+# 同一 daemon 的驻留 Pi 进程上限 / 每个父会话 scope 的活跃代理上限。
+# 含清理未验证的 worker；完成且空闲者可正常停驻，历史记录不占此上限。
+maxResidentAgents = 4
+maxAgentsPerScope = 16
+# 单位秒：worker RPC / SDK 启动握手 / 默认无进展超时 / wait 请求上限。
+rpcTimeoutSeconds = 20
+startupTimeoutSeconds = 30
+defaultIdleTimeoutSeconds = 1800
+maxWaitSeconds = 3600
+# 驻留空闲回收时间（秒），以及每个代理最多保留的事件数量。
+residentIdleTimeoutSeconds = 1800
+eventMaxCountPerAgent = 20000
+# 本包 CLI 的 Pi argv；native Pi 使用父进程 SDK/Node，不使用此启动路径。
+piCommand = ["pi"]
+
+# 本包 Codex CLI/MCP 兼容入口的继承控制；native Pi 仅使用 childEnv。
+# native skills/扩展由 profile 控制，MCP/凭据由 Pi 管理，不使用下面的 Codex 开关。
+[subagents.inheritance]
+enabled = true
+skills = true
+mcp = true
+# Codex CLI 兼容来源目录；空字符串自动选择。native Pi 不使用此目录。
+codexHome = ""
+# 显式允许传递到 child 的环境变量名，禁止把令牌直接写入 TOML。
+childEnv = []
+# Codex 兼容 MCP：auto / legacy_2025_06_18 / modern_2026_07_28。
+mcpProtocolMode = "auto"
+
+# profiles 定义子代理的工具表面、扩展和 skills；任务可按名称选择 profile。
+# extensions/skills 路径使用现有执行器规则；read 权限仍执行额外只读限制。
+[subagents.profiles.default]
+extensions = []
+skills = []
+ambientExtensions = true
+ambientSkills = true
+tools = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+
+[subagents.profiles.reader]
+extensions = []
+skills = []
+ambientExtensions = true
+ambientSkills = true
+tools = ["read", "grep", "find", "ls"]
+
+# 可选自定义 profile（取消注释后生效）：model/provider/thinking 为可选覆写。
+# [subagents.profiles.review]
+# model = "provider/model-id"
+# thinking = "medium"
+# ambientExtensions = true
+# ambientSkills = true
+# tools = ["read", "grep", "find", "ls"]

@@ -4,11 +4,13 @@
 
 所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。不再读取项目 `.pi/metis-pi.json` / `.pi/metis-pi.toml`，也不再使用显示层单独的 `PI_AGENT_DIR` 覆盖。
 
-包内同目录的 `metis-pi.toml` 列出全部默认值，且是运行时默认值来源。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，旧 JSON 不删除，便于回退旧版代码。
+包内同目录的 `metis-pi.toml` 列出全部默认值，且是运行时默认值来源。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项和 `subagent-pi/config.toml`，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，旧文件不删除，便于回退旧版代码。
 
-读取本身不写文件。TOML 不存在时兼容读取旧全局配置；TOML 一旦存在，旧 JSON 不再叠加，未填字段只取包内默认值。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
+已有上一版 TOML 时运行 **`/metis-config migrate`**：先把当前 TOML、说明及迁移输入备份到 `<agentDir>/backups/metis-config-…/`，再补齐遗漏 section，并更新参数说明。现有 TOML 值优先；旧执行快捷键仅覆盖仍为默认值的对应项，个性化冲突保留 TOML 并提示。原文件仍保留；确认使用新版代码及新后端后，可将这些旧 Metis 文件移入备份目录，不要保留两套同步配置。命令不会停止 daemon 或后台任务。
 
-Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。独立 subagent 服务的 `config.toml` 也不属于本包偏好。
+读取本身不写文件。TOML 不存在时兼容读取旧全局配置；TOML 一旦存在，旧 JSON 不再叠加，未填字段只取包内默认值。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
+
+Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`subagent-pi/` 只保存账本、日志和会话。另行安装的 Codex 插件及 `@ff-labs/pi-fff`、LSP 等其他插件配置不归本包所有，不迁移；`.codex/config.toml` 是可选的外部继承来源，不是 Metis 参数文件。
 
 修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件，同一进程写操作串行；多个 Pi 进程同时保存仍是最后写入者胜出。
 
@@ -141,3 +143,40 @@ exclude = []
 `G=max(minGainTokens,ceil(minGainFraction×B))`，`R=min(maxProxyTokens,B-K-G)`，`Q=min(maxProxyTokens,targetBaseTokens+targetPerCallTokens×N)`。B 仅为实际被替换结果，K 为真实 stub/预览/路径；目标至少保留空包装加 256 tokens 的正文余地。不足时保留原文/pending，frontier 不跨缺口。手动请求只绕过压力，不绕过输出/收益预算。机械去重/packing 只需实测正收益。
 
 这些是用户可调策略，不是所有算法内部常量的配置化。局部 o200k proxy 不等同 provider `maxTokens`、native 容量信用或账单，不能保证语义质量或经济回本；所有备用模型受同一最终消息校验，输出预算拒绝不继续换模型。完整行为与恢复边界见包内 `docs/features/condense.md`。
+
+## `[subagents]`（native Pi / 本包 CLI 后端）
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否注册 native Pi 子代理入口；关闭不终止已运行任务，CLI 仍可管理状态。 |
+| `maxResidentAgents` | `4` | 每个 daemon 同时驻留的 worker 上限，含前/后台任务。 |
+| `maxAgentsPerScope` | `16` | 每个父会话 scope 的活跃/清理未验证 worker 上限；历史不占容量。 |
+| `rpcTimeoutSeconds` | `20` | worker RPC 请求秒数。 |
+| `startupTimeoutSeconds` | `30` | SDK 启动握手秒数。 |
+| `defaultIdleTimeoutSeconds` | `1800` | 无进展超时，任务参数可覆写；不是任务总时长上限。 |
+| `maxWaitSeconds` | `3600` | 后端 wait 轮询上限秒数；不扩大工具 schema 本身的上限。 |
+| `residentIdleTimeoutSeconds` | `1800` | 已结束/空闲的驻留 worker 回收时间秒数。 |
+| `eventMaxCountPerAgent` | `20000` | 单代理最多保留的事件数。 |
+| `piCommand` | `["pi"]` | 本包 CLI 的启动 argv；native Pi 使用父进程 SDK/Node，此值不覆写父模型或 Pi 安装。 |
+
+容量、超时和事件数均为整数 1–10000000，不接受 0/false/文本。后端在启动时载入配置；更改后先等待工作结束、关闭驻留 children，再用管理 CLI 正常停止 daemon，重新连接。`/reload` 不终止旧 daemon，也不会修改它已加载的参数。不要强停后台工作；源码指纹不一致会明确报 `version_mismatch`。`--home` / `PI_AGENTS_HOME` 选择状态目录，**不选择另一份偏好文件**；本包 CLI 仍使用 Pi 全局 agentDir 的 TOML。
+
+### `[subagents.inheritance]`
+
+`enabled=true`、`skills=true`、`mcp=true`、`codexHome=""`、`mcpProtocolMode="auto"` 是本包 Codex CLI/MCP 兼容入口的继承设置；`codexHome` 非空时须为存在目录，空字符串自动选择；协议模式为 `auto` / `legacy_2025_06_18` / `modern_2026_07_28`。**native Pi 不使用这些 Codex 开关**，ambient skills/扩展使用 profile/Pi 设置，MCP 及凭据仍由 Pi 管理。
+
+`childEnv=[]` 是允许传给子代理的环境变量名（native Pi 也使用），凭据值来自父环境，不应直接写入 TOML。基本进程环境自动保留；运行绑定、租约、bootstrap FD 等内部环境变量是协议状态，不是另一份用户配置。
+
+### `[subagents.profiles.<name>]`
+
+默认 `default`/`reader` 都使用 `extensions=[]`、`skills=[]`、`ambientExtensions=true`、`ambientSkills=true`。default 的 `tools=["read","bash","edit","write","grep","find","ls"]`；reader 为 `["read","grep","find","ls"]`。自定义 profile 继承 default，再覆写自己的字段；可添加 `model`、`provider`、`thinking`（不写表示继承现有模型/思考设置），或非秘密字符串 `env` 表。`tools` 只能填 Pi 内置名称，read access 仍额外禁止写入、shell 和递归子代理，不是操作系统沙箱。
+
+### 旧插件字段不是当前 native 配置
+
+`subagents.json.maxConcurrent` 迁为 `maxResidentAgents`；原生后端 `subagent-pi/config.toml` 的已有值更优先。其他旧字段明确提示、保留于备份，但不生成无效开关：
+
+- `maxConcurrentForeground`：native 无前/后台容量分池，统一受驻留上限约束。
+- `maxSubagentDepth`：managed child 固定禁止递归，不能通过配置放开。
+- `workflowsEnabled`、`toolDescriptionMode`、`joinMode`、`outputTranscript`、`widgetMode`：旧独立 provider 的工作流/描述/汇总/输出/widget 选项不适用于 native 的工具、交付回执、历史读取和活跃树契约。
+
+移入备份不等于删去功能数据：策略 Markdown、子代理 SQLite/WAL/SHM、日志、session、归档、MCP cache/auth 仍留原处。不要删除 `subagent-pi/` 或整个 Pi `settings.json`。

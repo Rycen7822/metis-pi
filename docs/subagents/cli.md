@@ -2,7 +2,12 @@
 
 Run `python3 src/subagents/core/bin/subagent-pi --help` from the metis checkout
 (or use the corresponding installed package path). Native Pi state is stored
-in the effective Pi agent directory under `subagent-pi`.
+in the effective Pi agent directory under `subagent-pi`. Preferences are global
+`<agentDir>/metis-pi.toml` under `[subagents]`, including capacity, timeouts,
+profiles and inheritance. See the adjacent [parameter guide](../../metis-pi-config.md).
+`--home` changes state, not the global preferences source. Legacy state-home
+`config.toml` is read only while global TOML is absent; use `/metis-config init`,
+or `/metis-config migrate` to back up and upgrade an already-created TOML.
 
 Pass `--home <state directory>` before the subcommand. `list`, `inspect`, `result`,
 `wait` and `doctor` read the existing state. Management operations such as
@@ -50,7 +55,8 @@ ID. Task acceptance and question answers still require a deliberate decision.
 conversation. With no agents, it shows a short empty-state message.
 `stop <agent>`, `continue <agent> <task>` and
 `answer <agent>` provide explicit controls. Closing a question dialog does not
-answer it. Another enabled subagent provider makes this entry stand down; choose
+answer it. `[subagents] enabled = false` disables native registration without stopping existing
+work or disabling management CLI. Another enabled subagent provider makes this entry stand down; choose
 one provider with `pi config` and reload.
 
 Subagent tool rows show compact operation, target and status summaries by default.

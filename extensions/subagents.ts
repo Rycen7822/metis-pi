@@ -3,14 +3,21 @@ import { fileURLToPath } from "node:url";
 import { runtimePackage } from "../src/subagents/client.ts";
 import { SubagentSession } from "../src/subagents/session.ts";
 import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/rendering.ts";
+import { readMetisConfig } from "../src/metis-config.ts";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
-  pi.registerMessageRenderer("metis-subagent-attention", subagentAttentionRenderer);
   const agentDir = getAgentDir();
   let runtime: ReturnType<typeof runtimePackage>;
-  try { runtime = runtimePackage(); }
-  catch (error) { pi.on("session_start", (_event, ctx) => { ctx.ui.notify(`Metis subagents unavailable: ${String(error)}`, "warning"); }); return; }
+  try {
+    const enabled = readMetisConfig(agentDir).config["subagents"]["enabled"];
+    if (typeof enabled !== "boolean") throw new Error("subagents.enabled must be a boolean");
+    if (!enabled) return;
+    pi.registerMessageRenderer("metis-subagent-attention", subagentAttentionRenderer);
+    runtime = runtimePackage();
+  } catch (error) {
+    pi.on("session_start", (_event, ctx) => { ctx.ui.notify(`Metis subagents unavailable: ${String(error)}`, "warning"); }); return;
+  }
   let owner: SubagentSession | undefined, blocked = false;
   const ownNames = new Set(runtime.tools.map(tool => tool.name));
   const ownPath = fileURLToPath(import.meta.url);

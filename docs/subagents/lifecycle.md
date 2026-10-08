@@ -55,7 +55,13 @@ is verified from the guard's generation-specific receipt and process ownership.
 If the guard is killed before confirming cleanup, the state remains unknown;
 inspect remaining processes before reopening the workspace.
 
-Runtime upgrades require draining work, closing resident children and waiting
+Backend capacity/timeouts/profiles/inheritance are read from global
+`metis-pi.toml` at daemon startup; reload does not change a resident daemon's loaded
+policy. The packaged TOML participates in its source fingerprint. Old standalone
+provider JSON settings are not native frontend switches; migration reports
+unsupported fields instead of silently pretending to enforce them.
+
+Runtime upgrades and backend policy changes require draining work, closing resident children and waiting
 for the daemon to finish shutting down before reconnecting. A frontend reload
 reconnects the existing daemon and retains the parent session's scope.
 The native frontend checks the loaded backend's source fingerprint, including

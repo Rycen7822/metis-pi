@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 补齐统一配置审计的遗漏：子代理后端容量/超时、profiles 和继承参数改读全局 `[subagents]`，包内 TOML 同时提供 Python/TS 默认值；native 启用开关可配置，state-home 不再选择另一份偏好文件。旧 conversion tools/ui、subagents 可映射并发上限及 backend TOML 可显式迁移；`/metis-config migrate` 先备份再补齐既有 TOML，保留个性化值并报告旧 provider 的不支持字段。更新后端须安全 drain/stop，不中断后台任务。
+
 - 全局 TOML 模板改为功能分区、选项就近说明与独立高级预算，提供枚举/单位/特殊值和默认注释的示例；初始化及命令保存回填同一套说明，配置键和默认值保持不变。
 
 - metis 自有偏好集中到全局 `metis-pi.toml`，包内默认模板作为唯一默认值来源，并提供同目录 `metis-pi-config.md` 参数说明；`/metis-config init` 导入旧全局 JSON，保留原文件且不覆盖已有 TOML。取消 metis 项目覆盖和显示层单独目录，Pi 自有配置/服务器/凭据保持原位；原有命令只写 TOML。condense 净收益、完整输出上限、软目标公式、压力 ceiling/增长余量及 OCC 文本目标现可配置。

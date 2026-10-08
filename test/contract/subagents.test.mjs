@@ -9,6 +9,21 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 
+test("native subagent registration honors the global switch without starting backend work", async t => {
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const dir = mkdtempSync(join(root, ".work/metis-subagent-disabled-")), previous = process.env.PI_CODING_AGENT_DIR;
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
+  process.env.PI_CODING_AGENT_DIR = dir;
+  writeFileSync(join(dir, "metis-pi.toml"), "[subagents]\nenabled=false\n");
+  const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: SettingsManager.inMemory({}),
+    additionalExtensionPaths: [join(root, "extensions/subagents.ts")], noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true });
+  await loader.reload();
+  const loaded = loader.getExtensions(); assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.extensions.length, 1);
+  assert.equal(loaded.extensions[0].tools.size, 0);
+  assert.equal(loaded.extensions[0].commands.has("metis-subagents"), false);
+});
+
 function stopDaemon(core, state) {
   execFileSync("python3", [join(core, "bin/subagent-pi"), "--home", state, "daemon", "stop", "--force"], { timeout: 20000 });
   // Shutdown is accepted before guards finish writing their cleanup receipts.
@@ -30,7 +45,8 @@ test("metis owns native direct and codemode subagents with one wait receipt and 
   const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
   mkdirSync(state);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }));
-  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="250"\n[profiles.questioned.env]\nPI_OFFLINE="1"\nPI_MOCK_ASK_PARENT="1"\n[profiles.failed.env]\nPI_OFFLINE="1"\nPI_MOCK_FAIL="1"\nPI_MOCK_STREAM_MS="250"\n');
+  writeFileSync(join(state, "config.toml"), '[broken legacy file must be ignored');
+  writeFileSync(join(dir, "metis-pi.toml"), '[subagents]\nmaxResidentAgents=4\n[subagents.profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="250"\n[subagents.profiles.questioned.env]\nPI_OFFLINE="1"\nPI_MOCK_ASK_PARENT="1"\n[subagents.profiles.failed.env]\nPI_OFFLINE="1"\nPI_MOCK_FAIL="1"\nPI_MOCK_STREAM_MS="250"\n');
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
   const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
   const model = { id: "parent", name: "Offline Parent", provider: "subagent-contract", api: "openai-completions", baseUrl: "http://invalid",
@@ -217,7 +233,7 @@ test("SDK configuration failures preserve identities and result delivery survive
   const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
   mkdirSync(state);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }));
-  writeFileSync(join(state, "config.toml"), '[profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="50"\n[profiles.slow.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="5000"\n');
+  writeFileSync(join(dir, "metis-pi.toml"), '[subagents.profiles.reader.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="50"\n[subagents.profiles.slow.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="5000"\n');
   const ctx = { cwd: dir, model: { provider: "pi-mock-offline", id: "mock" },
     sessionManager: SessionManager.create(dir, dir), isProjectTrusted: () => true };
   const client = new SubagentClient(runtime, ctx, dir, undefined, () => {});

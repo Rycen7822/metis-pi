@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
-import { initializeMetisConfig, readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig } from "../../src/metis-config.ts";
+import { readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig } from "../../src/metis-config.ts";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
@@ -102,38 +102,16 @@ test("readable rendering retains default annotations without changing serialized
   assert.match(rendered, /\[\[dynamicAgents.groups\]\]/);
 });
 
-test("global migration materializes defaults and guide, preserving originals and future sections", t => {
+test("global saves retain defaults, annotations, unknown fields and other owners", t => {
   mkdirSync(".work", { recursive: true });
   const dir = mkdtempSync(join(process.cwd(), ".work/metis-config-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const originals = {
-    "settings.json": '{"theme":"private-theme","contextPrune":{"enabled":true,"autoBudgetThreshold":null}}',
-    "metis-pi.json": '{"thinking":{"peekLines":13},"execution":{"tools":{"viewImageFallback":true}},"mcp":{"enabled":true}}',
-    "dynamic-agents.json": '{"version":1,"groups":[{"id":"x","file":"x.md","include":["x*"],"exclude":[]}]}',
-  };
-  for (const [name, text] of Object.entries(originals)) writeFileSync(join(dir, name), text);
-  assert.equal(readMetisConfig(dir).legacy, true);
-  assert.equal(initializeMetisConfig(dir).created, true);
-  const path = join(dir, "metis-pi.toml");
-  let config = parseMetisConfig(readFileSync(path, "utf8"));
-  assert.equal(config.appearance.thinking.peekLines, 13);
-  assert.equal(config.contextPrune.enabled, true);
-  assert.equal(config.contextPrune.autoBudgetThreshold, false);
-  assert.equal(config.execution.tools.viewImageFallback, true);
-  assert.equal(config.dynamicAgents.enabled, true);
-  assert.equal(config.mcp.enabled, true);
-  assert.deepEqual(Object.keys(config.contextPrune.summaryBudget), Object.keys(defaultMetisConfig().contextPrune.summaryBudget));
-  assert.match(readFileSync(join(dir, "metis-pi-config.md"), "utf8"), /minGainTokens/);
-  for (const [name, text] of Object.entries(originals)) assert.equal(readFileSync(join(dir, name), "utf8"), text);
-  const initial = readFileSync(path, "utf8");
-  assert.equal(initializeMetisConfig(dir).created, false);
-  assert.equal(readFileSync(path, "utf8"), initial);
-  assert.match(initial, /# 1\. 显示界面 \/ Appearance/);
-  assert.match(initial, /# 5a\. 高级摘要预算/);
-  writeFileSync(path, initial + '\n[futureDate]\nday=2026-10-08\nclock=12:30:00\n');
+  const path = join(dir, "metis-pi.toml"), initialConfig = defaultMetisConfig();
+  initialConfig.execution.tools.viewImageFallback = true;
+  writeFileSync(path, renderMetisConfig(initialConfig) + '\n[futureDate]\nday=2026-10-08\nclock=12:30:00\n');
   updateMetisConfig(dir, { future: { opaque: [1, 2] }, execution: { ui: { toolRenaming: false } } });
   updateMetisConfig(dir, { contextPrune: { minBatchChars: 1234 } });
-  config = readMetisConfig(dir).config;
+  const config = readMetisConfig(dir).config;
   assert.deepEqual(config.future.opaque, [1, 2]);
   assert.equal(config.execution.ui.toolRenaming, false);
   assert.equal(config.execution.tools.viewImageFallback, true);
@@ -144,8 +122,4 @@ test("global migration materializes defaults and guide, preserving originals and
   writeFileSync(path, "[broken");
   assert.throws(() => updateMetisConfig(dir, { appearance: { enabled: true } }), /invalid TOML/);
   assert.equal(readFileSync(path, "utf8"), "[broken");
-  rmSync(path);
-  writeFileSync(join(dir, "metis-pi.json"), "{broken");
-  assert.throws(() => initializeMetisConfig(dir), /invalid legacy JSON/);
-  assert.throws(() => readFileSync(path), /ENOENT/);
 });
