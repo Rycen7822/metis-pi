@@ -690,7 +690,7 @@ test("parallel summaries commit in order within a three-record window and reject
   });
 });
 
-test("a tree switch cancels concurrent requests, preserves the durable prefix and restores the suffix", async t => {
+test("a tree switch cancels concurrent requests, preserves the durable prefix and restores the suffix", { timeout: 30_000 }, async t => {
   const f = await fixture(t, { defer: true });
   for (let i = 0; i < 100; i++) f.add(`source-${i}\n` + (i >= 96 ? "界" : "x").repeat(6000), `cat source-${i}.txt`);
   const waitForCalls = async count => {
@@ -710,12 +710,11 @@ test("a tree switch cancels concurrent requests, preserves the durable prefix an
   assert(f.requests.slice(0, attempted).every(r => r.signal.aborted), "cancel propagates to every old provider request");
   let done = false;
   const resumed = f.finish().finally(() => { done = true; });
-  for (let i = 0; i < 600 && !done; i++) {
-    await new Promise(resolve => setTimeout(resolve, 5));
-    f.releaseAll();
-  }
+  // Release each newly scheduled mock request until the actual flush settles,
+  // rather than imposing a three-second throughput target on a large fixture.
+  const releasing = setInterval(() => f.releaseAll(), 5);
+  try { await resumed; } finally { clearInterval(releasing); }
   assert(done, "remaining chunks finish after the switch");
-  await resumed;
   assert(f.calls.slice(attempted).every(call => !JSON.stringify(call).includes('"cat source-0.txt"')));
   assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "summarized");
 });
