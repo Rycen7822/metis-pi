@@ -99,7 +99,7 @@ export interface TranscriptAdapterInput {
    * component. Only ever used to replace the host's OWN collapsed label Text
    * inside its MouseRegion; never applied to an expanded Markdown body.
    */
-  makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number }) => unknown;
+  makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number; paint?: (text: string) => string }) => unknown;
   /**
    * Structural guard: is this node the host's collapsed-label Text? Must be a
    * real class/shape check from the host (e.g. `instanceof Tui.Text`) — never

@@ -13,7 +13,7 @@ import { OutputSpeedTracker } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { formatBeijingTime, installUserTimestamps } from "./message-timestamp.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
-import { HostData, type HostContextLike } from "./host-data.ts";
+import { HostData, type HostContextLike, type UiSurface } from "./host-data.ts";
 import { UsageLedger, sanitizeUsage, usageKeyOf, type RawUsage } from "./usage-ledger.ts";
 import { InteractionOutcomeTracker } from "./interaction-outcome.ts";
 import { createGitChangesTracker } from "./git-changes.ts";
@@ -293,6 +293,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (!enabled || handle?.installed) return;
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
+      definitionPrototype: bindings.interactivePrototype,
       renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps),
       highlightOwnedCommand: (lines) => highlightBashScript(lines, session.colorLevel),
       renderOwnedCommand: bindings.makeShell?.makeShellCall
@@ -327,7 +328,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
           apply: (next) => { input.apply(next); requestRender(); },
         })),
         thinkingPolicy,
-        makeThoughtSummary: bindings.makeThoughtSummary,
+        makeThoughtSummary: bindings.makeThoughtSummary && ((input) => bindings.makeThoughtSummary!({
+          ...input, paint: (text) => {
+            const theme = (hostData.ui as Partial<UiSurface>).theme;
+            return typeof theme?.style === "function" ? theme.style(text, { fg: "thinkingText", italic: true }) : text;
+          },
+        })),
         isCollapsedLabel: bindings.isCollapsedLabel,
         enabled: () => enabled,
       });

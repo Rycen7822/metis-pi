@@ -113,6 +113,12 @@ Writer exclusivity checks declared cwd overlap at admission. It does not restric
 write/edit/bash, MCP or extensions to that directory; disjoint cwd declarations
 do not provide filesystem isolation.
 
+### Managed child tool selectors
+
+Profile `tools` restricts only Pi's built-in surface; it is not a complete tool allowlist. The managed SDK bootstrap separately preserves strict MCP permissions when launch arguments explicitly supply `--tools`: unnamed `mcp__*` tools and the `list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource` gateways are excluded, even if the host would otherwise retain them for codemode or tool search. A resource gateway explicitly named in the list remains allowed.
+
+Explicit `mcp__` names/globs use the loaded SDK's matcher (Pi 1.0 takes exact names; Pi 1.1 also expands `*`). Original `--exclude-tools` entries always remain in force. Managed allowlists reject non-`mcp__` wildcard selectors such as `*` or `read*` before loading services: use exact ordinary tool names plus explicit `mcp__` names/globs instead. This avoids guessing a wildcard's MCP authorization scope. Omitted `--tools`, `defaultTools`, and modifier-only selections on SDKs supporting `+name`/`-name` retain the host's policy; empty allowlists and `--no-tools` retain its disabling behavior. This boundary does not change the parent Pi host policy or sandbox capabilities of loaded extensions.
+
 Git installs and updates prepare the tool schema during `npm install`. For a
 development checkout installed with `--ignore-scripts`, run
 `npm run prepare:subagents`. `npm pack` also prepares the schema payload;

@@ -37,6 +37,20 @@ for (const key of Object.keys(args)) {
 if (args.messages.length || args.fileArgs.length || args.diagnostics.some(d => d.type === 'error')) {
   throw new Error('Managed child accepts tasks only through its protocol; invalid Pi command arguments');
 }
+// An explicit managed allowlist bounds MCP registration too, even on SDKs
+// that otherwise retain unnamed MCP tools for codemode/tool_search. Defaults
+// and modifier-only selections are not allowlists; leave those to the host.
+if (args.tools?.length && !args.tools.every(name => /^[+-]/.test(name))) {
+  const ambiguous = args.tools.find(name => name.includes('*') && !name.startsWith('mcp__'));
+  if (ambiguous) throw new Error(`Unsupported managed tool allowlist pattern: ${ambiguous}; use exact ordinary tool names and explicit mcp__ names or globs`);
+  if (!args.tools.some(name => name.startsWith('mcp__'))) {
+    // 1.0 treats mcp__* literally (the allowlist already excludes MCP); 1.1
+    // matches it. Resource gateways also need explicit permission by name.
+    const denied = ['mcp__*', 'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']
+      .filter(name => !args.tools.includes(name));
+    args.excludeTools = [...(args.excludeTools ?? []), ...denied];
+  }
+}
 if (args.offline) process.env.PI_OFFLINE = '1';
 const report = (error) => {
   output({ type: 'extension_error', originRunId: queue.context.getStore()?.id, error: String(error?.error ?? error) });

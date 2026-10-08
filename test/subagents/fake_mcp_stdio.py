@@ -19,6 +19,8 @@ if MODE in ('ignore_term_no_init','ignore_term_after_eof'):
 CLOSE_AFTER_CALL = os.environ.get('FAKE_MCP_CLOSE_AFTER_CALL') == '1'
 CALL_LOG = os.environ.get('FAKE_MCP_CALL_LOG')
 EVENTS = os.environ.get('FAKE_MCP_EVENTS')
+RESOURCES = os.environ.get('FAKE_MCP_RESOURCES') == '1'
+CAPABILITIES = {'tools': {'listChanged': True}, **({'resources': {}} if RESOURCES else {})}
 PAGED = os.environ.get('FAKE_MCP_PAGED') == '1'
 MANY = os.environ.get('FAKE_MCP_MANY') == '1'
 DYNAMIC = os.environ.get('FAKE_MCP_DYNAMIC') == '1'
@@ -192,14 +194,14 @@ for raw in sys.stdin:
             print(json.dumps({"jsonrpc": "2.0", "id": rid, "error": DISCOVER_ERROR}), flush=True)
         else:
             reply(req, {"resultType": "server", "supportedVersions": ["2026-07-28"],
-                        "capabilities": {"tools": {"listChanged": True}},
+                        "capabilities": CAPABILITIES,
                         "serverInfo": {"name": "fake-stdio", "version": "1.0"}})
     elif method == 'initialize':
         event('initialize-received')
         if MODE == 'ignore_term_no_init':
             while True: time.sleep(1)
         reply(req, {"protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {"listChanged": True}},
+                    "capabilities": CAPABILITIES,
                     "serverInfo": {"name": "fake-stdio", "version": "1.0"}})
         if MODE == 'die_after_init':
             sys.exit(3)
@@ -249,6 +251,14 @@ for raw in sys.stdin:
         if MUTATE and list_count == 1:
             print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}), flush=True)
             event('list-changed-sent')
+    elif RESOURCES and method == 'resources/list':
+        event('resources-list-received')
+        reply(req, {'resources': [{'uri': 'memory://compat/info', 'name': 'compat info', 'mimeType': 'text/plain'}]})
+    elif RESOURCES and method == 'resources/templates/list':
+        reply(req, {'resourceTemplates': []})
+    elif RESOURCES and method == 'resources/read':
+        event('resource-read-received')
+        reply(req, {'contents': [{'uri': 'memory://compat/info', 'mimeType': 'text/plain', 'text': 'local fixture'}]})
     elif method == 'tools/call':
         params = req.get('params') or {}
         if MODE == 'die_during_call':

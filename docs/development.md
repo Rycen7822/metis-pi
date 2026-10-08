@@ -34,7 +34,7 @@ core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接
 
 严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
 
-CI 使用锁文件安装的 Pi 执行严格 PTY。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
+CI 在 Pi 1.0.0 / 1.1.0 双版本矩阵执行 verify 与严格 PTY，并断言四个宿主包版本一致；1.1 job 在锁文件安装后仅使用未保存的开发依赖覆盖，不改变锁文件或已发布的运行依赖。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
 
 | Journey | 验证 |
 | --- | --- |

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { installAdapter, OWNED_EXECUTION_ENTRY } from "../../src/adapter.ts";
 import { makeRenderers, TOOL_NAMES } from "../../src/renderers.ts";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, InteractiveMode, createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
 import { toolInfo, bindings, deepFreeze, theme, sessionStub } from "../helpers.mjs";
 
@@ -139,6 +139,69 @@ test("an earlier patch on ANY intercepted method prevents installation, atomical
     assert.equal(handle.installed, false, key);
     assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), before, key);
   }
+});
+
+test("empty native sessions recover pre-bind history without claiming resolved overlays", (t) => {
+  const definitionPrototype = {};
+  for (const key of ["session", "getRegisteredToolDefinition"]) Object.defineProperty(definitionPrototype, key,
+    Object.getOwnPropertyDescriptor(InteractiveMode.prototype, key));
+  let reads = 0;
+  const runtimeHost = { session: { getToolDefinition() { reads++; return createReadToolDefinition(process.cwd()); },
+    extensionRunner: { resolveToolRenderers: (_name, base) => base() } } };
+  const owner = Object.create(definitionPrototype, { runtimeHost: { value: runtimeHost } });
+  const original = Object.getOwnPropertyDescriptors(definitionPrototype);
+  const first = setup(t, undefined, { definitionPrototype });
+  assert.equal(owner.session, runtimeHost.session); // Normal native command/session access, no tool history.
+  assert.equal(reads, 0);
+  first.handle.dispose();
+  assert.deepEqual(Object.getOwnPropertyDescriptors(definitionPrototype), original);
+  const native = owner.getRegisteredToolDefinition("read");
+  const stock = new first.Host("read", native, { path: "recovered.ts" });
+  const foreignCall = () => bindings.makeText("UNCLAIMED OVERLAY");
+  const foreign = new first.Host("read", { ...native, renderCall: foreignCall }, { path: "recovered.ts" });
+  const children = [...stock.children];
+  const next = setup(t, undefined, { definitionPrototype }, first.Host);
+  assert.equal(next.handle.installed, true);
+  stock.render(80);
+  assert.equal(stock.getCallRenderer(), next.renderers.read.renderCall);
+  assert.equal(foreign.getCallRenderer(), foreignCall);
+  assert.deepEqual(stock.children, children);
+  next.handle.dispose();
+  assert.deepEqual(Object.getOwnPropertyDescriptors(definitionPrototype), original);
+});
+
+test("unknown or sealed renderer lookup prevents takeover atomically", () => {
+  for (const definitionPrototype of [
+    { getRegisteredToolDefinition() { return { renderCall() {} }; } },
+    Object.freeze({ getRegisteredToolDefinition: InteractiveMode.prototype.getRegisteredToolDefinition }),
+  ]) {
+    const Host = isolatedToolHost();
+    const toolDescriptors = Object.getOwnPropertyDescriptors(Host.prototype);
+    const lookupDescriptors = Object.getOwnPropertyDescriptors(definitionPrototype);
+    const handle = installAdapter(Host.prototype, { getTools: () => [], enabled: () => true, renderers: ownRenderers(), definitionPrototype });
+    assert.equal(handle.installed, false);
+    assert.match(handle.reason, /renderer lookup/);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), toolDescriptors);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(definitionPrototype), lookupDescriptors);
+  }
+});
+
+test("a frozen lookup retains only an inert owned wrapper after disposal", (t) => {
+  const definitionPrototype = {};
+  Object.defineProperty(definitionPrototype, "getRegisteredToolDefinition",
+    Object.getOwnPropertyDescriptor(InteractiveMode.prototype, "getRegisteredToolDefinition"));
+  const { handle } = setup(t, undefined, { definitionPrototype });
+  assert.equal(handle.installed, true);
+  const retained = definitionPrototype.getRegisteredToolDefinition;
+  Object.freeze(definitionPrototype);
+  handle.dispose();
+  let reads = 0;
+  const definition = { name: "read", renderCall: () => bindings.makeText("retained native") };
+  const owner = { session: { getToolDefinition() { reads++; return definition; },
+    extensionRunner: { resolveToolRenderers: (_name, base) => base() } } };
+  assert.equal(definitionPrototype.getRegisteredToolDefinition, retained);
+  assert.equal(retained.call(owner, "read").renderCall, definition.renderCall);
+  assert.equal(reads, 1, "inactive wrapper only invokes the original lookup");
 });
 
 test("sealed prototypes and unrecognized host versions fail closed", (t) => {

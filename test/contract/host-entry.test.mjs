@@ -44,14 +44,142 @@ function entry(t) {
     assert.deepEqual(Object.getOwnPropertyDescriptors(prototype), descriptors, "entry releases the host prototype");
     assert.deepEqual(Object.getOwnPropertyDescriptors(Core.InteractiveMode.prototype), interactiveDescriptors, "entry releases user timestamp decoration");
   });
-  handlers.get("session_start")({}, { hasUI: true, ui: { notify(text) { throw new Error(text); } } });
+  const ctx = { hasUI: true, ui: { notify(text) { throw new Error(text); } } };
+  handlers.get("session_start")({}, ctx);
   const ui = { requestRender() {} };
   const nativeCall = () => new Text("NATIVE", 0, 0);
-  const row = (name, id, args, definition = { name, renderCall: nativeCall }, cwd = process.cwd()) =>
-    new Core.ToolExecutionComponent(name, id, args, { showImages: false }, definition, ui, cwd);
+  const row = (name, id, args, definition, cwd = process.cwd()) => {
+    definition ??= name === "edit" ? Core.createEditToolDefinition(cwd) : { name, renderCall: nativeCall };
+    const owner = Object.create(Core.InteractiveMode.prototype, { session: { value: {
+      getToolDefinition: () => definition, extensionRunner: { resolveToolRenderers: (_name, base) => base() },
+    } } });
+    return new Core.ToolExecutionComponent(name, id, args, { showImages: false }, owner.getRegisteredToolDefinition(name), ui, cwd);
+  };
   const fire = (event, ctx = { cwd: process.cwd() }) => handlers.get(event.type)(event, ctx);
-  return { handlers, commands, definitions, nativeCall, row, fire };
+  return { handlers, commands, definitions, nativeCall, row, fire, ctx };
 }
+
+test("thought summaries follow the live host theme across native rebuilds", (t) => {
+  const h = entry(t);
+  let color = "FIRST", calls = 0;
+  const theme = { style(text, options) {
+    assert.equal(this, theme);
+    assert.deepEqual(options, { fg: "thinkingText", italic: true });
+    calls++;
+    return `${color}::${text}`;
+  } };
+  h.ctx.ui.theme = theme;
+  const message = { role: "assistant", content: [] };
+  h.fire({ type: "message_start", message }, h.ctx);
+  const component = new Core.AssistantMessageComponent(message);
+  message.content = [{ type: "thinking", thinking: "HIDDEN EVIDENCE" }, { type: "text", text: "Answer" }];
+  h.fire({ type: "message_update", message }, h.ctx);
+  h.fire({ type: "message_end", message }, h.ctx);
+  component.updateContent(message, false);
+  assert.match(plain(component.render(80)), /FIRST::Thought/);
+  assert.doesNotMatch(plain(component.render(80)), /HIDDEN EVIDENCE/);
+  color = "NEXT";
+  component.invalidate();
+  assert.match(plain(component.render(80)), /NEXT::Thought/);
+  h.ctx.ui = { ...h.ctx.ui, theme: { style: text => `REBOUND::${text}` } };
+  component.invalidate();
+  assert.match(plain(component.render(80)), /REBOUND::Thought/);
+  h.ctx.ui = { ...h.ctx.ui, theme: {} };
+  component.invalidate();
+  assert.match(plain(component.render(80)), /Thought/);
+  assert.doesNotMatch(plain(component.render(80)), /REBOUND::/);
+  assert.ok(calls > 1);
+});
+
+test("native renderer resolution preserves independent overlays and still compacts stock tools", async (t) => {
+  const originalLookup = Object.getOwnPropertyDescriptor(Core.InteractiveMode.prototype, "getRegisteredToolDefinition");
+  const h = entry(t);
+  const dir = temporaryDirectory(t, "metis-renderer-owner-");
+  let overlay = "stock", supported = false;
+  const call = () => new Text("RESOLVER CALL", 0, 0);
+  const result = () => new Text("RESOLVER RESULT", 0, 0);
+  const loader = new Core.DefaultResourceLoader({ cwd: dir, agentDir: dir,
+    settingsManager: Core.SettingsManager.inMemory({ packages: [], extensions: [] }),
+    extensionFactories: [{ name: "renderer-owner-test", factory(pi) {
+      supported = typeof pi.registerToolRenderer === "function";
+      if (supported) pi.registerToolRenderer((_name, next) => {
+        const base = next();
+        if (overlay === "partial") return { renderCall: call, renderResult: result, renderShell: "self" };
+        if (overlay === "spread") return { ...base, renderCall: call, renderResult: result };
+        if (overlay === "mutate") return Object.assign(base, { renderCall: call, renderResult: result });
+        if (overlay === "shell") return { ...base, renderShell: "self" };
+        return base;
+      });
+    } }],
+  });
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  assert.deepEqual(loaded.errors, []);
+  const runner = new Core.ExtensionRunner(loaded.extensions, loaded.runtime, dir, Core.SessionManager.inMemory(dir), {});
+  let definitions = new Map([["read", Core.createReadToolDefinition(dir)], ["bash", Core.createBashToolDefinition(dir)]]);
+  const owner = Object.create(Core.InteractiveMode.prototype, { session: { value: {
+    getToolDefinition: name => definitions.get(name), extensionRunner: runner,
+  } } });
+  const create = (name = "read") => {
+    const resolved = owner.getRegisteredToolDefinition(name);
+    const args = name === "read" ? { path: "owned.ts" } : { command: "echo replay" };
+    const row = new Core.ToolExecutionComponent(name, `resolver-${name}`, args, { showImages: false }, resolved,
+      { requestRender() {} }, dir);
+    row.updateResult({ content: [{ type: "text", text: "NATIVE BODY" }], details: undefined, isError: false });
+    return row;
+  };
+  const stock = create();
+  const stockDefinition = stock.toolDefinition;
+  assert.match(plain(stock.render(80)), /Read owned\.ts/);
+  assert.notEqual(stock.getCallRenderer(), stockDefinition.renderCall, "stock renderer is still compacted");
+  if (supported) for (const mode of ["partial", "spread", "mutate", "shell"]) {
+    overlay = mode;
+    const row = create(), definition = row.toolDefinition, children = [...row.children];
+    const frame = plain(row.render(80));
+    if (mode !== "shell") assert.match(frame, /RESOLVER CALL[\s\S]*RESOLVER RESULT/, mode);
+    assert.equal(row.getCallRenderer(), definition.renderCall, mode);
+    assert.equal(row.getResultRenderer(), definition.renderResult, mode);
+    assert.equal(row.getRenderShell(), definition.renderShell ?? "default", mode);
+    assert.deepEqual(row.children, children, mode);
+  }
+  // The real host tears down the lease, rebuilds history, then binds its next
+  // session. New bash definitions have new closure identities on both SDKs.
+  for (const reason of ["resume", "fork"]) {
+    overlay = "stock";
+    create(); // Observe this actual native owner before invalidation.
+    h.handlers.get("session_shutdown")({ reason }, {});
+    definitions = new Map([["read", Core.createReadToolDefinition(dir)], ["bash", Core.createBashToolDefinition(dir)]]);
+    const history = [create(), create("bash")];
+    const foreign = [];
+    if (supported) for (const mode of ["partial", "spread", "mutate", "shell"]) {
+      overlay = mode;
+      foreign.push([mode, create()]);
+    }
+    h.handlers.get("session_start")({}, { hasUI: true, ui: { notify() {} } });
+    for (const row of history) {
+      row.render(80);
+      assert.notEqual(row.getCallRenderer(), row.toolDefinition.renderCall, `${reason}: ${row.toolName} stays compact`);
+    }
+    for (const [mode, row] of foreign) {
+      row.render(80);
+      assert.equal(row.getCallRenderer(), row.toolDefinition.renderCall, `${reason}: ${mode}`);
+      assert.equal(row.getResultRenderer(), row.toolDefinition.renderResult, `${reason}: ${mode}`);
+      assert.equal(row.getRenderShell(), row.toolDefinition.renderShell ?? "default", `${reason}: ${mode}`);
+    }
+  }
+  // A later foreign lookup disables takeover without being removed on shutdown.
+  const prototype = Core.InteractiveMode.prototype;
+  const retained = prototype.getRegisteredToolDefinition;
+  const later = function (name) { return retained.call(this, name); };
+  prototype.getRegisteredToolDefinition = later;
+  const row = create();
+  row.render(80);
+  assert.equal(row.getCallRenderer(), row.toolDefinition.renderCall);
+  h.handlers.get("session_shutdown")({}, {});
+  assert.equal(prototype.getRegisteredToolDefinition, later);
+  // This test owns the later patch, so restore the original native descriptor.
+  Object.defineProperty(prototype, "getRegisteredToolDefinition", originalLookup);
+});
 
 test("user timestamps use message time through replay, resize and output padding changes", (t) => {
   entry(t);

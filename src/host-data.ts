@@ -1,5 +1,5 @@
 // Narrow, explicit bridge from Pi's real ExtensionContext to this extension's
-// stable display snapshot. Verified against Pi v0.85.1 types:
+// stable display snapshot, checked against the supported public Pi types:
 //   ctx.model: {id, name, provider, contextWindow} | undefined
 //   ctx.thinkingLevel: ThinkingLevel | undefined   ("off" is a real level)
 //   ctx.getContextUsage(): {tokens, contextWindow, percent} | undefined
@@ -7,6 +7,8 @@
 // All reads go through the LIVE context: its getters stay dynamic, so a
 // model/effort switch shows up without a restart. Values are validated at the
 // boundary — no unknown/as-any escape, invalid pieces degrade to "unknown".
+
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 export interface ModelSnapshot {
   /** Real model id (always present on a valid host model). */
@@ -43,26 +45,14 @@ export interface HostContextLike {
   ui?: Record<string, unknown>;
 }
 
-/** The public UI surface we rely on (verified against Pi v0.85.1 types). */
-export interface UiSurface {
-  setEditorComponent: (factory: unknown) => void;
-  getEditorComponent: () => unknown;
-  setFooter: (factory: unknown) => void;
-  setHeader: (factory: unknown) => void;
-  setWidget: (key: string, content: unknown, options?: unknown) => void;
-  setWorkingMessage: (message?: string) => void;
-  setWorkingVisible: (visible: boolean) => void;
-  setWorkingIndicator: (options?: unknown) => void;
-  setStatus: (key: string, text: string | undefined) => void;
-}
-
-/** Which members of UiSurface the LIVE ctx.ui actually provides. */
-export type UiAvailable = Partial<Record<keyof UiSurface, boolean>>;
-
-const UI_SURFACE_METHODS: ReadonlyArray<keyof UiSurface> = [
+const UI_SURFACE_METHODS = [
   "setEditorComponent", "getEditorComponent", "setFooter", "setHeader",
   "setWidget", "setWorkingMessage", "setWorkingVisible", "setWorkingIndicator", "setStatus",
-];
+] as const satisfies readonly (keyof ExtensionUIContext)[];
+
+/** Host-owned signatures; only the method names are maintained here. */
+export type UiSurface = Pick<ExtensionUIContext, typeof UI_SURFACE_METHODS[number] | "theme">;
+export type UiAvailable = Partial<Record<typeof UI_SURFACE_METHODS[number], boolean>>;
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;

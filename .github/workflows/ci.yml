@@ -4,8 +4,13 @@ permissions:
   contents: read
 jobs:
   test:
+    name: Pi ${{ matrix.pi }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        pi: ['1.0.0', '1.1.0']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,6 +21,21 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install -r test/subagents/requirements.txt
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Select newer host SDK without changing the lockfile
+        if: matrix.pi != '1.0.0'
+        run: npm install --no-save --package-lock=false --ignore-scripts --legacy-peer-deps --no-audit --no-fund @earendil-works/pi-agent-core@${{ matrix.pi }} @earendil-works/pi-ai@${{ matrix.pi }} @earendil-works/pi-coding-agent@${{ matrix.pi }} @earendil-works/pi-tui@${{ matrix.pi }}
+      - name: Verify selected host packages
+        env:
+          EXPECTED_PI_VERSION: ${{ matrix.pi }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          for (const name of ['pi-agent-core', 'pi-ai', 'pi-coding-agent', 'pi-tui']) {
+            const manifest = JSON.parse(readFileSync(`node_modules/@earendil-works/${name}/package.json`, 'utf8'));
+            assert.equal(manifest.version, process.env.EXPECTED_PI_VERSION, name);
+          }
+          NODE
       - run: npm run verify
       - run: sudo apt-get update -qq
       - run: sudo apt-get install -y -qq tmux

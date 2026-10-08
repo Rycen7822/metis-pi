@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve Pi 1.1 independent builtin tool-renderer overlays by proving call/result/shell ownership against the session's registered definition before display takeover; retain guarded lookup restoration and native fallback.
+- Keep managed child explicit tool allowlists strict for MCP tools and resources on Pi 1.0/1.1, preserve explicit exclusions and MCP opt-ins, and reject ambiguous ordinary wildcard allowlists before service startup.
+- Verify source, SDK contracts, and terminal journeys against both Pi 1.0.0 and 1.1.0 in CI.
+- Delegate thought-label colors and UI signatures to Pi's public theme/types, preserving plain no-color labels; consolidate display patch leases into one ownership table.
+
 - 补齐统一配置审计的遗漏：子代理后端容量/超时、profiles 和继承参数改读全局 `[subagents]`，包内 TOML 同时提供 Python/TS 默认值；native 启用开关可配置，state-home 不再选择另一份偏好文件。旧 conversion tools/ui、subagents 可映射并发上限及 backend TOML 可显式迁移；`/metis-config migrate` 先备份再补齐既有 TOML，保留个性化值并报告旧 provider 的不支持字段。更新后端须安全 drain/stop，不中断后台任务。
 
 - 全局 TOML 模板改为功能分区、选项就近说明与独立高级预算，提供枚举/单位/特殊值和默认注释的示例；初始化及命令保存回填同一套说明，配置键和默认值保持不变。

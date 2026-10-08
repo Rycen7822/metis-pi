@@ -11,8 +11,14 @@ export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fu
 const SLOT = Symbol.for("Rycen7822.metis-pi.tool-view.v2");
 const SELECTORS = ["getCallRenderer", "getResultRenderer", "getRenderShell"] as const;
 const METHODS = [...SELECTORS, "render"] as const;
-type Method = typeof METHODS[number];
 type UiMethod = (this: unknown, ...args: any[]) => any;
+type Hook = { target: object; original: PropertyDescriptor; patched: PropertyDescriptor };
+// Session replacement renders history before the next display lease is bound.
+// Retain only a weak native lookup context, never an extension ctx or session.
+const CONTEXTS_KEY = Symbol.for("metis-pi.native-renderer-contexts.v1");
+const shared = globalThis as unknown as Record<symbol, unknown>;
+const LOOKUP_CONTEXTS = (shared[CONTEXTS_KEY] ??= new WeakMap<object, WeakRef<object>>()) as WeakMap<object, WeakRef<object>>;
+type RegisteredRenderers = { name: string; call: unknown; result: unknown; shell: unknown };
 const EXPECTED = {
   getCallRenderer: "returnthis.toolDefinition?.renderCall;",
   getResultRenderer: "returnthis.toolDefinition?.renderResult;",
@@ -22,6 +28,8 @@ export interface AdapterOptions {
   getTools(): readonly unknown[];
   enabled(): boolean;
   renderers: Record<ToolName, Renderers>;
+  /** Native InteractiveMode lookup: prove resolved renderers still belong to the registered tool. */
+  definitionPrototype?: object;
   /** Paint only command text; the owned tool retains grouping and execution state. */
   highlightOwnedCommand?: (lines: readonly string[]) => string[];
   renderOwnedCommand?: (command: string, state: "running" | "done", expanded: boolean, theme: Palette, context: ViewContext) => Component;
@@ -40,7 +48,7 @@ function methodBody(fn: Function): string {
 
 export function installAdapter(prototype: object, options: AdapterOptions): AdapterHandle {
   if (Object.prototype.hasOwnProperty.call(prototype, SLOT)) return skipped("Another copy is already installed");
-  const originals = new Map<Method, PropertyDescriptor>();
+  const hooks = new Map<string, Hook>();
   for (const key of METHODS) {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
     if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
@@ -56,17 +64,62 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         return skipped("Unrecognized or already modified Pi tool-row render method");
       }
     }
-    originals.set(key, descriptor);
+    hooks.set(key, { target: prototype, original: descriptor, patched: { ...descriptor } });
   }
   if (!Object.isExtensible(prototype) || typeof asRecord(prototype).updateDisplay !== "function") {
     return skipped("Pi UI prototype is sealed or its display updater is unavailable");
   }
-  const wrappers = new Map<Method, UiMethod>();
+  const definitionPrototype = options.definitionPrototype;
+  const lookup = definitionPrototype && Object.getOwnPropertyDescriptor(definitionPrototype, "getRegisteredToolDefinition");
+  if (definitionPrototype && (!lookup || typeof lookup.value !== "function" || !lookup.configurable || !lookup.writable
+      || ![
+        "returnwithBuiltInRenderers(toolName,this.session.getToolDefinition(toolName));",
+        "returnthis.session.extensionRunner.resolveToolRenderers(toolName,()=>withBuiltInRenderers(toolName,this.session.getToolDefinition(toolName)));",
+      ].includes(methodBody(lookup.value)))) {
+    return skipped("Unrecognized or already modified Pi renderer lookup");
+  }
+  const sessionGetter = definitionPrototype && Object.getOwnPropertyDescriptor(definitionPrototype, "session");
+  if (sessionGetter && (!sessionGetter.configurable || typeof sessionGetter.get !== "function"
+      || methodBody(sessionGetter.get) !== "returnthis.runtimeHost.session;")) {
+    return skipped("Unrecognized or already modified Pi session lookup");
+  }
+  const captureContext = function (this: object): unknown {
+    if (active) LOOKUP_CONTEXTS.set(definitionPrototype!, new WeakRef(this));
+    return sessionGetter!.get!.call(this);
+  };
+  const registered = new WeakMap<object, RegisteredRenderers>();
+  const registeredRenderers = (context: unknown, name: string): RegisteredRenderers | undefined => {
+    try {
+      const session = asRecord(asRecord(context).session);
+      const definition = typeof session.getToolDefinition === "function" ? session.getToolDefinition(name) : undefined;
+      if (!definition) return;
+      const base = asRecord(definition);
+      return { name, call: base.renderCall, result: base.renderResult, shell: base.renderShell ?? "default" };
+    } catch { /* A stale/disposed native context cannot prove ownership. */ }
+  };
+  const lookupWrapper = function (this: object, name: string): unknown {
+    if (!active) return lookup!.value.call(this, name);
+    LOOKUP_CONTEXTS.set(definitionPrototype!, new WeakRef(this));
+    // Snapshot BEFORE resolution, including resolvers that mutate next().
+    const snapshot = registeredRenderers(this, name);
+    const resolved = lookup!.value.call(this, name);
+    if (snapshot && resolved && typeof resolved === "object") registered.set(resolved, snapshot);
+    return resolved;
+  };
+  if (definitionPrototype) hooks.set("getRegisteredToolDefinition", {
+    target: definitionPrototype, original: lookup!, patched: { ...lookup!, value: lookupWrapper },
+  });
+  if (sessionGetter) hooks.set("session", {
+    target: definitionPrototype!, original: sessionGetter, patched: { ...sessionGetter, get: captureContext },
+  });
   const displayed = new WeakMap<object, boolean>();
-  const knownRows = new WeakSet<object>();
   const rows = new Set<WeakRef<object>>();
   let active = true;
-  const ownsMethods = () => METHODS.every((key) => Object.getOwnPropertyDescriptor(prototype, key)?.value === wrappers.get(key));
+  const ownsHook = (key: string, hook: Hook) => {
+    const current = Object.getOwnPropertyDescriptor(hook.target, key);
+    return current?.value === hook.patched.value && current?.get === hook.patched.get;
+  };
+  const ownsMethods = () => [...hooks].every(([key, hook]) => ownsHook(key, hook));
 
   function replacement(row: unknown): Renderers | undefined {
     if (!active || !ownsMethods() || !options.enabled()) return;
@@ -75,6 +128,12 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (typeof name !== "string") return;
     const definition = asRecord(current.toolDefinition);
     if (Object.keys(definition).length === 0) return;
+    if (definitionPrototype) {
+      const base = registered.get(definition)
+        ?? registeredRenderers(LOOKUP_CONTEXTS.get(definitionPrototype)?.deref(), name);
+      if (!base || base.name !== name || base.call !== definition.renderCall || base.result !== definition.renderResult
+          || base.shell !== (definition.renderShell ?? "default")) return;
+    }
     // Respect FFF/LSP/etc. even when they override the SAME builtin name.
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
@@ -109,16 +168,10 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (rendering.has(row)) return active && ownsMethods() && options.enabled() ? rendering.get(row) : undefined;
     try { return replacement(row); } catch { return undefined; }
   }
-  function remember(row: object): void {
-    if (knownRows.has(row)) return;
-    knownRows.add(row);
-    rows.add(new WeakRef(row));
-    // Do not retain transcript rows strongly. Sweep dead weak refs occasionally.
-    if (rows.size % 256 === 0) for (const ref of rows) if (!ref.deref()) rows.delete(ref);
-  }
   for (const key of SELECTORS) {
-    const original = originals.get(key)!.value as UiMethod;
-    wrappers.set(key, function (this: unknown): unknown {
+    const hook = hooks.get(key)!;
+    const original = hook.original.value as UiMethod;
+    hook.patched.value = function (this: unknown): unknown {
       const renderers = select(this);
       if (renderers) {
         if (key === "getCallRenderer") return renderers.renderCall;
@@ -132,10 +185,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         if (typeof this === "object" && this !== null && displayed.get(this)) return "self";
       }
       return original.call(this);
-    });
+    };
   }
-  const originalRender = originals.get("render")!.value as UiMethod;
-  wrappers.set("render", function (this: unknown, width: number): unknown {
+  const renderHook = hooks.get("render")!;
+  const originalRender = renderHook.original.value as UiMethod;
+  renderHook.patched.value = function (this: unknown, width: number): unknown {
     const nested = rendering.has(this), previousSelection = rendering.get(this);
     rendering.set(this, select(this));
     try {
@@ -143,8 +197,12 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         const next = rendering.get(this) !== undefined;
         const previous = displayed.get(this) ?? false;
         if (next !== previous) {
+          if (!displayed.has(this)) {
+            rows.add(new WeakRef(this));
+            // Keep rows weak; sweep dead refs occasionally.
+            if (rows.size % 256 === 0) for (const ref of rows) if (!ref.deref()) rows.delete(ref);
+          }
           displayed.set(this, next);
-          remember(this);
           const refresh = asRecord(this).updateDisplay;
           if (typeof refresh === "function") {
             try { refresh.call(this); } catch {
@@ -182,15 +240,13 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       if (nested) rendering.set(this, previousSelection);
       else rendering.delete(this);
     }
-  });
+  };
   const owner = {};
   function restoreOwned(): void {
-    for (const key of METHODS) {
+    for (const [key, hook] of hooks) {
       try {
-        if (Object.getOwnPropertyDescriptor(prototype, key)?.value === wrappers.get(key)) {
-          Object.defineProperty(prototype, key, originals.get(key)!);
-        }
-      } catch { /* A frozen prototype keeps an inert wrapper rather than throwing. */ }
+        if (ownsHook(key, hook)) Object.defineProperty(hook.target, key, hook.original);
+      } catch { /* A frozen target keeps an inactive wrapper. */ }
     }
     try {
       if (Object.getOwnPropertyDescriptor(prototype, SLOT)?.value === owner) Reflect.deleteProperty(prototype, SLOT);
@@ -198,7 +254,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
   }
   try {
     Object.defineProperty(prototype, SLOT, { value: owner, configurable: true });
-    for (const key of METHODS) Object.defineProperty(prototype, key, { ...originals.get(key)!, value: wrappers.get(key) });
+    for (const [key, hook] of hooks) Object.defineProperty(hook.target, key, hook.patched);
   } catch {
     active = false;
     restoreOwned();

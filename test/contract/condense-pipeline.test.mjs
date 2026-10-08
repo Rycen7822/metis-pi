@@ -835,6 +835,12 @@ test("manual progress uses the same packed/semantic runs as execution", async t 
   f.add("unpackable semantic evidence ".repeat(1000), "unknown-command", "semantic-run");
   const flushing = f.commands.get("pruner").handler("now", f.ctx);
   await waitForSummarizer(f);
+  // Paid work is scheduled ahead of ordered commits; provider start alone
+  // cannot prove that the preceding packed batch has committed.
+  const packed = () => f.sm.getBranch().some(e => e.type === "custom_message" && e.details?.representation === "packed");
+  const deadline = Date.now() + 3000;
+  while (!packed() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(packed(), "packed work must commit while the semantic provider is still pending");
   const create = f.widgets.findLast(([, value]) => typeof value === "function")[1];
   const widget = create({ requestRender() {} }, { fg: (_color, text) => text });
   const pending = widget.render(120);

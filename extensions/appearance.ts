@@ -43,29 +43,6 @@ function appearanceVersion(): string {
   }
 }
 
-/**
- * Painter for the collapsed thought summary: italic + the active theme's
- * `thinkingText` when the host exposes `getResolvedThemeColors` (deep theme
- * imports are blocked by the package exports map and pi 0.85.1 does not
- * re-export the resolver), otherwise this theme's muted #a3a3a3. No-color
- * terminals get plain text.
- */
-function thoughtPainter(): (text: string) => string {
-  const level = colorLevelOnce();
-  if (level.kind === "none") return (text) => text;
-  let hex = "#a3a3a3"; // this theme's thinkingText (muted) — the fallback
-  try {
-    const colors = (Pi as unknown as { getResolvedThemeColors?: () => Record<string, string> }).getResolvedThemeColors?.();
-    if (colors && typeof colors.thinkingText === "string" && /^#[0-9a-f]{6}$/i.test(colors.thinkingText)) hex = colors.thinkingText;
-  } catch { /* fall back to the muted default */ }
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return (text) => `\x1b[3m\x1b[38;2;${r};${g};${b}m${text}\x1b[39m\x1b[23m`;
-}
-
-let thoughtPaint: ((text: string) => string) | undefined;
-
 /** Default entry: compact Codex-style transcript, without changing tool data. */
 export default function codexAppearance(pi: AppearanceAPI): void {
   const prototype = Pi.ToolExecutionComponent?.prototype;
@@ -138,11 +115,10 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     ),
     // Collapsed thinking run: a real Tui.Text so selection-copy mirrors it
     // like any other host label (the hidden reasoning body is not rendered
-    // anywhere and can never be copied). Painter memoized — label building
-    // must stay O(1).
+    // anywhere and can never be copied). The host owns theme styling.
     makeThoughtSummary: (input) => {
-      thoughtPaint ??= thoughtPainter();
-      return new Tui.Text(thoughtPaint(thoughtSummaryText(input.durationMs)), input.paddingX, 0);
+      const text = thoughtSummaryText(input.durationMs);
+      return new Tui.Text(colorLevel.kind === "none" ? text : input.paint?.(text) ?? text, input.paddingX, 0);
     },
     isCollapsedLabel: (node) => node instanceof Tui.Text,
     makeWriteCall: (input) => {
