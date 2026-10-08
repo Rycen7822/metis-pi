@@ -27,6 +27,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Long histories](docs/features/interface.md#全屏历史与留白) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |
 | [Goals](docs/features/goal.md) | Use `/goal` to set persistent objectives, timers, and budgets, with continuation across turns based on goal status. |
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
+| [ast-grep skill](docs/features/skills.md#随包-skills) | Bundled structural code-search guidance and rule reference, discovered by Pi and updated with Metis. Requires `ast-grep` on PATH; no automatic CLI installation or extra service. |
 | [MCP](docs/configuration.md#mcp) | Optional Pi-native MCP integration: cached directory, lazy connections and idle shutdown; shares native CLI/OAuth and tool permissions. Disabled by default. |
 | [Subagents](docs/subagents/cli.md) | Metis-owned durable Pi children, native tools/codemode, explicit questions and completion wakeups. Linux/WSL with Python 3.11+; choose one subagent provider in Pi config. |
 | [Execution tools](docs/execution.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |

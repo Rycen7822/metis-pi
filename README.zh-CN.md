@@ -27,6 +27,7 @@ pi install .
 | [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |
 | [goal](docs/features/goal.md) | `/goal` 设定持久目标、计时与预算，按目标状态跨轮续跑。 |
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
+| [ast-grep skill](docs/features/skills.md#随包-skills) | 随 Metis 安装和更新的结构搜索指导及规则参考，由 Pi 原生发现；需要 PATH 中已有 `ast-grep`，不自动安装 CLI 或增加服务。 |
 | [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
 | [子代理](docs/subagents/cli.md) | metis 原生维护持久 Pi 子代理，支持原生工具/codemode、明确问题和完成唤醒。Linux/WSL 需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
 | [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 与原图工具；provider 和登录由 Pi 提供。 |

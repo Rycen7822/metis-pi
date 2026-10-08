@@ -16,7 +16,7 @@ test("theme removes tool backgrounds through the supported palette mechanism", (
   }
 });
 
-test("package exposes display, goal, condense, dynamic-agents and execution entries", () => {
+test("package exposes extensions, themes and portable skills with their references", () => {
   const pkg = load("package.json");
   assert.deepEqual(pkg.pi.extensions, ["./extensions/*.ts"]);
   const packed = Object.values(JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
@@ -28,6 +28,7 @@ test("package exposes display, goal, condense, dynamic-agents and execution entr
   }
   for (const path of [
     "CHANGELOG.md", "metis-pi.toml", "metis-pi-config.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
+    "skills/ast-grep/SKILL.md", "skills/ast-grep/references/rule_reference.md",
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/view-image/linux-x64/view_image",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
@@ -40,6 +41,6 @@ test("package exposes display, goal, condense, dynamic-agents and execution entr
   assert.deepEqual(pkg.pi.themes, ["./themes/metis-pi.json"]);
   // The copy-provenance lexer must see the same token stream as the host.
   assert.equal(pkg.dependencies.marked, load("node_modules/@earendil-works/pi-tui/package.json").dependencies.marked);
-  assert.equal(pkg.pi.skills, undefined);
+  assert.deepEqual(pkg.pi.skills, ["./skills"]);
   assert.equal(pkg.pi.prompts, undefined);
 });

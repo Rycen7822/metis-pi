@@ -14,6 +14,9 @@
     ],
     "themes": [
       "./themes/metis-pi.json"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "scripts": {
@@ -62,6 +65,7 @@
     "metis-pi-config.md",
     "extensions",
     "src",
+    "skills",
     "themes",
     "README.md",
     "README.zh-CN.md",

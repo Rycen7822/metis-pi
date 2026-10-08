@@ -1,11 +1,12 @@
 // Skill discovery uses isolated directories, never the user's HOME or settings.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { createSkillMux } from "../../src/skill-mux.ts";
-import { loadSkills, parseSkillBlock, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, SettingsManager, loadSkills, parseSkillBlock, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function writeSkill(root: string, dirName: string, name: string, body: string) {
   const dir = join(root, dirName);
@@ -54,4 +55,43 @@ test("Pi-loaded skill resources drive expansion and stay current after resource 
   assert.match(mux.expand("/skill:alpha /skill:beta")!, /^\/skill:alpha\n\n<skill name="beta"/);
   commands.push({ ...commands[0]!, name: "skill:offskill", source: "extension" });
   assert.match(mux.expand("/skill:offskill /skill:beta")!, /^\/skill:offskill\n\n<skill name="beta"/);
+});
+
+test("Metis package skills load with local references and obey Pi resource filters on reload", async (t) => {
+  const root = temporaryDirectory(t);
+  const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const entry = { source: packageRoot, extensions: [], prompts: [], themes: [] };
+  const settingsManager = SettingsManager.inMemory({ packages: [entry] });
+  const loader = new DefaultResourceLoader({ cwd: root, agentDir: join(root, "agent"), settingsManager,
+    noExtensions: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+  await loader.reload();
+  const { skills, diagnostics } = loader.getSkills();
+  assert.deepEqual(diagnostics, []);
+  const skill = skills.find(skill => skill.name === "ast-grep");
+  assert.ok(skill, "discover the declared package resource, not a user-directory copy");
+  assert.equal(skill.filePath, join(packageRoot, "skills/ast-grep/SKILL.md"));
+  assert.equal(skill.sourceInfo.origin, "package");
+  assert.match(readFileSync(join(skill.baseDir, "references/rule_reference.md"), "utf8"), /Relational Rules/);
+  const mux = createSkillMux({ getCommands: () => loader.getSkills().skills.map(skill => ({
+    name: `skill:${skill.name}`, description: skill.description, source: "skill", sourceInfo: skill.sourceInfo,
+  })) });
+  assert.equal(mux.expand("/skill:ast-grep inspect calls"), null, "the host owns a lone native skill invocation");
+  const expanded = mux.expand("￥ast-grep inspect calls");
+  assert.ok(expanded);
+  assert.match(expanded, /References are relative to .*skills[\\/]ast-grep/);
+  assert.match(expanded, /Structural Search/);
+  assert.ok(expanded.endsWith("\n\ninspect calls"));
+
+  settingsManager.setPackages([{ ...entry, skills: ["-skills/ast-grep/SKILL.md"] }]);
+  await loader.reload();
+  assert.deepEqual(loader.getSkills().diagnostics, []);
+  assert.ok(!mux.listSkills().some(skill => skill.name === "ast-grep"));
+  assert.equal(mux.expand("￥ast-grep inspect calls"), null, "no private scan bypasses package filtering");
+
+  settingsManager.setPackages([{ ...entry, skills: [] }]);
+  await loader.reload();
+  assert.ok(!loader.getSkills().skills.some(skill => skill.name === "ast-grep"));
+  settingsManager.setPackages([entry]);
+  await loader.reload();
+  assert.ok(mux.expand("￥ast-grep inspect calls"));
 });
