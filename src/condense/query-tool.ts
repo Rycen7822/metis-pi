@@ -2,6 +2,7 @@ import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { auxiliaryToolRenderers, displayRecord } from "../execution/ui/auxiliary-tool.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
 import { QUERY_TOOL_NAME, type ToolCallRecord } from "./types.ts";
 
@@ -72,6 +73,16 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
     description: "Omit toolCallIds to list the evidence directory, then recover archived tool outputs by short refs (t12) or raw tool call IDs. Set component=arguments to recover full original parameters, or sourceEntryIds to recover historical message/compaction/summary entries from this branch. Returns JSON pages with exact text, byte offsets, completeness, and nextCursor. Repeat the same toolCallIds with nextCursor until eof. Reused IDs return every indexed occurrence. These are historical captured tool outputs, not current file contents or necessarily unfiltered process logs. Missing archives are explicit errors.",
     promptSnippet: "Retrieve archived tool outputs by tool ref or chain block ID (b1), following nextCursor for subsequent pages",
     promptGuidelines: ["Use context_tree_query to recover evidence omitted from pruner summaries. Follow nextCursor until the needed range or eof; incomplete pages and archive errors are not complete original outputs."],
+    renderShell: "self",
+    ...auxiliaryToolRenderers("History query failed", (args, result) => {
+      const data = displayRecord(result?.details);
+      const refs = args.toolCallIds ?? args.sourceEntryIds;
+      return {
+        active: "Querying tool history", complete: "Queried tool history",
+        target: Array.isArray(refs) ? refs.join(", ") : typeof args.parentToolCallId === "string" ? args.parentToolCallId : "Evidence directory",
+        summary: Array.isArray(data.results) ? `${data.results.length} archived result(s)${data.nextCursor ? " · more available" : ""}` : undefined,
+      };
+    }),
     parameters: Type.Object({
       toolCallIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 64 })),
       parentToolCallId: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "Recover the nested calls of this parent, including calls omitted from Pi's bounded nestedCalls." })),

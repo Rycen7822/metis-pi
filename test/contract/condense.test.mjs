@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createEventBus, DefaultResourceLoader, initTheme, ModelRuntime, SessionManager, SettingsManager, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { disableNetwork, captureRegistration, modelNamed, FAKE_API_KEY } from "../helpers/native-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
 
@@ -71,6 +73,66 @@ test("real host loads one built-in tool, preserves settings, and uses one token-
   assert.equal(h.statuses.get("metis-condense-cost"), undefined);
   assert.equal(runner.getAllRegisteredTools().filter((x) => x.definition.name === "context_tree_query").length, 1);
   assert.deepEqual(h.errors, []);
+});
+
+test("recovery output folds compact JSON, expands by native controls and never changes its data", async (t) => {
+  initTheme("dark", false);
+  const archive = Array.from({ length: 200 }, (_, i) => `ARCHIVE_${i} 中文😀 historical output for display`).join("\n") + "\nARCHIVE_TAIL_MARKER";
+  const h = await loadHost(t, { extraEntries: [sm => sm.appendCustomEntry("context-prune-index", { toolCalls: [record("archived", archive)] })] });
+  const tool = h.session.extensionRunner.getAllRegisteredTools().find(x => x.definition.name === "context_tree_query").definition;
+  const args = { toolCallIds: ["archived"] };
+  const result = await tool.execute("query", args, undefined, undefined, { sessionManager: h.sm });
+  assert.equal(JSON.parse(result.content[0].text).results[0].text, archive);
+  assert.equal(result.content[0].text.split("\n").length, 1);
+  const original = JSON.stringify(result);
+  const row = new ToolExecutionComponent(tool.name, "query", args, { showImages: false }, tool, { requestRender() {} }, process.cwd());
+  row.updateResult(result, false);
+  for (const width of [40, 80, 120]) {
+    row.setExpanded(false);
+    const collapsed = row.render(width);
+    assert.ok(collapsed.length <= 8, `collapsed recovery must stay compact at width ${width}, got ${collapsed.length} rows`);
+    assert.doesNotMatch(stripVTControlCharacters(collapsed.join("\n")), /ARCHIVE_TAIL_MARKER/);
+    row.setExpanded(true);
+    const expanded = row.render(width);
+    assert.ok(expanded.length > collapsed.length);
+    assert.match(stripVTControlCharacters(expanded.join("\n")), /ARCHIVE_TAIL_MARKER/);
+    assert.ok([...collapsed, ...expanded].every(line => visibleWidth(line) <= width));
+  }
+  row.setExpanded(false);
+  const collapsed = row.render(80);
+  const hint = collapsed.findIndex(line => stripVTControlCharacters(line).includes("to expand"));
+  assert.ok(hint >= 0, "folded output keeps the host's expand-key hint");
+  assert.equal(row.handleMouse({ type: "click", button: "left", x: 3, y: hint, width: 80, height: collapsed.length }).handled, true);
+  assert.match(stripVTControlCharacters(row.render(80).join("\n")), /ARCHIVE_TAIL_MARKER/);
+  row.setExpanded(false);
+  assert.ok(row.render(80).length <= 8, "native collapse remains reversible after a mouse expansion");
+  assert.equal(JSON.stringify(result), original, "display-only rendering must preserve content, details and cursor bytes");
+});
+
+test("recovery errors remain visible and single-line fallback previews stay bounded", async (t) => {
+  initTheme("dark", false);
+  const h = await loadHost(t);
+  const tool = h.session.extensionRunner.getAllRegisteredTools().find(x => x.definition.name === "context_tree_query").definition;
+  const args = { toolCallIds: ["missing"] };
+  const result = await tool.execute("query", args, undefined, undefined, { sessionManager: h.sm });
+  assert.equal(result.isError, true);
+  const row = new ToolExecutionComponent(tool.name, "query", args, { showImages: false }, tool, { requestRender() {} }, process.cwd());
+  row.updateResult(result, false);
+  assert.match(stripVTControlCharacters(row.render(80).join("\n")), /Not found/);
+  const failure = { content: [{ type: "text", text: "READ_FAILURE_MARKER " + "x".repeat(20000) + " ERROR_TAIL_MARKER" }], details: undefined, isError: true };
+  row.updateResult(failure, false);
+  for (const width of [40, 80, 120]) {
+    row.setExpanded(false);
+    const collapsed = stripVTControlCharacters(row.render(width).join("\n"));
+    assert.ok(collapsed.split("\n").length <= 10);
+    assert.match(collapsed, /READ_FAILURE_MARKER/);
+    assert.doesNotMatch(collapsed, /ERROR_TAIL_MARKER/);
+    row.setExpanded(true);
+    assert.match(stripVTControlCharacters(row.render(width).join("\n")), /ERROR_TAIL_MARKER/);
+  }
+  row.updateResult({ content: [{ type: "text", text: "PARTIAL_ARCHIVE_MARKER" }], details: undefined }, true);
+  row.setExpanded(false);
+  assert.doesNotMatch(stripVTControlCharacters(row.render(80).join("\n")), /PARTIAL_ARCHIVE_MARKER/);
 });
 
 test("external owner is detected after discovery, before built-in handlers register", async (t) => {
