@@ -323,8 +323,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         makePeek: bindings.makePeek,
         makeClickable: bindings.makeClickable && ((input) => bindings.makeClickable!({
           ...input,
-          // A single click resolves after the mouse event. The host has already
-          // rendered that event, so the delayed view change needs its own frame.
+          // Repaint the rebuilt host subtree after a view change.
           apply: (next) => { input.apply(next); requestRender(); },
         })),
         thinkingPolicy,

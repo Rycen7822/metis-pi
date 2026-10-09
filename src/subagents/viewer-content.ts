@@ -40,12 +40,11 @@ class ThinkingBlock implements Component {
     this.child = new CodexThinkingClickableComponent(child, this.control, view, () => { this.rebuild(); this.changed(); });
   }
   setExpanded(expanded: boolean) {
-    this.control.cancel(); this.control = createThinkingViewControl(); this.fallback = expanded ? "full" : "collapsed"; this.rebuild();
+    this.control = createThinkingViewControl(); this.fallback = expanded ? "full" : "collapsed"; this.rebuild();
   }
   render(width: number) { return this.child.render(width); }
   handleMouse(event: Parameters<NonNullable<Component["handleMouse"]>>[0]) { return this.child.handleMouse?.(event); }
   invalidate() { this.child.invalidate(); }
-  dispose() { this.control.cancel(); }
 }
 
 interface Entry { component: Component; bytes: number; tool?: ToolExecutionComponent; thought?: ThinkingBlock }
@@ -105,12 +104,12 @@ export class ViewerContent {
     }
     let bytes = this.entries.reduce((sum, entry) => sum + entry.bytes, 0);
     while (this.entries.length > 256 || bytes > 524288) {
-      const entry = this.entries.shift()!; bytes -= entry.bytes; entry.thought?.dispose();
+      const entry = this.entries.shift()!; bytes -= entry.bytes;
       for (const [id, item] of this.tools) if (item === entry) this.tools.delete(id);
       this.truncated = true;
     }
   }
   toggleTools() { this.toolsExpanded = !this.toolsExpanded; for (const entry of this.entries) entry.tool?.setExpanded(this.toolsExpanded); }
   toggleThinking() { this.thinkingExpanded = !(this.thinkingExpanded ?? this.config.completed === "full"); for (const entry of this.entries) entry.thought?.setExpanded(this.thinkingExpanded); }
-  dispose() { for (const entry of this.entries) entry.thought?.dispose(); this.entries.length = 0; this.tools.clear(); this.truncated = false; }
+  dispose() { this.entries.length = 0; this.tools.clear(); this.truncated = false; }
 }

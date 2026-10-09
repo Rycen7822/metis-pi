@@ -5,30 +5,15 @@
 //  peek       the newest `peekLines` rendered rows, wheel-scrollable
 //  full       the whole rendered body
 //
-// Click gestures are ONE rule set for streaming and completed runs:
-//  single click  collapsed ↔ peek, full → collapsed
-//  double click  peek ↔ full, collapsed → full
-//
-// The single action is DELAYED by DOUBLE_CLICK_MS for one reason: the host
-// recognizes a double click by COMPONENT IDENTITY, and every rebuild makes a
-// new wrapper (streaming rebuilds on every chunk). Acting on the first click
-// would both reset that identity and shrink the block before the second click
-// lands. Holding the single action keeps the geometry and the gesture intact;
-// the pending click is cancelled by the second click (double), by dispose, and
-// by a session reset (no timers outlive their transcript).
+// Immediate gestures are identical for streaming and completed runs:
+//  left click   collapsed ↔ peek; full stays full
+//  right click  collapsed/peek → full; full → collapsed
 
 export type ThinkingView = "collapsed" | "peek" | "full";
 
-/** A lone click waits this long for a possible second one (Pi's own
- * double-click window is 500ms; 300ms keeps single clicks responsive). */
-export const DOUBLE_CLICK_MS = 300;
-
-export function singleClickTarget(from: ThinkingView): ThinkingView {
-  return from === "collapsed" ? "peek" : "collapsed";
-}
-
-export function doubleClickTarget(from: ThinkingView): ThinkingView {
-  return from === "full" ? "peek" : "full";
+export function thinkingClickTarget(from: ThinkingView, button: "left" | "right"): ThinkingView {
+  if (button === "right") return from === "full" ? "collapsed" : "full";
+  return from === "full" ? "full" : from === "collapsed" ? "peek" : "collapsed";
 }
 
 /** Visible window of one run's body: `top` is the first rendered row, `above`
@@ -85,13 +70,13 @@ export class PeekScroll {
 }
 
 /** One-line affordance above a clipped window. Always says what is hidden and
- * both ways out (wheel / double click); never claims a count it cannot see. */
+ * both ways out (wheel / right click); never claims a count it cannot see. */
 export function peekHintText(above: number, below: number, total: number): string {
   const hidden: string[] = [];
   if (above > 0) hidden.push(`${above} above`);
   if (below > 0) hidden.push(`${below} below`);
   const clipped = hidden.length > 0 ? `${hidden.join(", ")} of ${total}` : `${total}`;
-  return `… ${clipped} lines (scroll · double-click for all)`;
+  return `… ${clipped} lines (scroll · right-click for all)`;
 }
 
 /** Display state of one reasoning run, shared across host rebuilds.
@@ -109,73 +94,31 @@ export interface ThinkingViewControl {
    * the host rebuilds the subtree many times, and a fold that re-ran on every
    * rebuild would erase a click the user made after the run finished. */
   foldOnEnd(): void;
-  /** One left click. A lone click applies singleClickTarget() after
-   * DOUBLE_CLICK_MS; a second click within the window applies
-   * doubleClickTarget() immediately. `apply` is called on the next frame the
-   * gesture needs a rebuild for. */
+  /** Apply a button to the visible shape immediately. `fallback` is the
+   * current render, which may differ from userView after a host global toggle. */
   handleClick(
-    click: { at: number; x: number; y: number },
+    button: "left" | "right",
     context: { fallback: ThinkingView; apply: (next: ThinkingView) => void },
   ): void;
-  /** Drop a pending single click (dispose, session reset). */
-  cancel(): void;
   readonly scroll: PeekScroll;
 }
 
 export function createThinkingViewControl(): ThinkingViewControl {
-  const scroll = new PeekScroll();
   let userView: ThinkingView | undefined;
   let folded = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let pending: { at: number; x: number; y: number; from: ThinkingView } | undefined;
-
-  const clearPending = (): void => {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = undefined;
-    pending = undefined;
-  };
-  const applyView = (next: ThinkingView, apply: (next: ThinkingView) => void): void => {
-    if (userView === next) return;
-    userView = next;
-    apply(next);
-  };
-
   return {
+    scroll: new PeekScroll(),
     userView: () => userView,
     foldOnEnd: () => {
       if (folded) return;
       folded = true;
       userView = undefined;
     },
-    handleClick: (click, context) => {
-      const previous = pending;
-      if (previous) {
-        const doubled = click.at - previous.at <= DOUBLE_CLICK_MS
-          && Math.abs(click.x - previous.x) <= 1
-          && Math.abs(click.y - previous.y) <= 1;
-        clearPending();
-        if (doubled) {
-          applyView(doubleClickTarget(previous.from), context.apply);
-          return;
-        }
-        // Two independent clicks: land the first one NOW — through this
-        // render's apply, which belongs to the same run's live component —
-        // so no click is ever dropped just because the next one arrived.
-        applyView(singleClickTarget(previous.from), context.apply);
-      }
-      const from = userView ?? context.fallback;
-      pending = { at: click.at, x: click.x, y: click.y, from };
-      timer = setTimeout(() => {
-        const held = pending;
-        pending = undefined;
-        timer = undefined;
-        if (held) applyView(singleClickTarget(held.from), context.apply);
-      }, DOUBLE_CLICK_MS);
-      (timer as unknown as { unref?: () => void }).unref?.();
-    },
-    cancel: clearPending,
-    get scroll() {
-      return scroll;
+    handleClick: (button, context) => {
+      const next = thinkingClickTarget(context.fallback, button);
+      if (next === context.fallback) return;
+      userView = next;
+      context.apply(next);
     },
   };
 }

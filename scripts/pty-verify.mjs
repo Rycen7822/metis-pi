@@ -258,22 +258,15 @@ const sgrSeq = (button, x, y, release) => {
   const s = `\x1b[<${button};${x};${y}${release ? "m" : "M"}`;
   return [...Buffer.from(s, "utf8")].map((b) => b.toString(16).padStart(2, "0"));
 };
-/** Left click on a viewport row (0-based within the live screen). */
-const clickRow = (rowIndex0, col) => {
-  sendKeys(["-H", ...sgrSeq(0, col, rowIndex0 + 1)]);
-  sendKeys(["-H", ...sgrSeq(0, col, rowIndex0 + 1, true)]);
+/** Click on a viewport row (0-based; SGR button 0 = left, 2 = right). */
+const clickRow = (rowIndex0, col, button = 0) => {
+  sendKeys(["-H", ...sgrSeq(button, col, rowIndex0 + 1)]);
+  sendKeys(["-H", ...sgrSeq(button, col, rowIndex0 + 1, true)]);
 };
 /** Wheel over a viewport row (64 = up / older, 65 = down / newer). */
 const wheelRow = (rowIndex0, col, up = true) => {
   sendKeys(["-H", ...sgrSeq(up ? 64 : 65, col, rowIndex0 + 1)]);
 };
-/** Two left clicks inside the double-click window: ONE gesture for the plugin. */
-const doubleClickRow = async (rowIndex0, col) => {
-  clickRow(rowIndex0, col);
-  await delay(80);
-  clickRow(rowIndex0, col);
-};
-
 const visibleText = () => visibleRows(capture()).join("\n");
 const waitForVisible = (pattern, timeoutMs, label) =>
   waitUntil((frame) => pattern.test(visibleRows(frame).join("\n")) ? frame : undefined,
@@ -385,36 +378,49 @@ try {
     submit("please PCX_THINK now");
     await waitFor(/thinking \d+s/, 30_000, "live thinking timer");
     // Screen-only checks keep old scrollback hints from satisfying a live peek.
-    const livePeek = await waitForVisible(/scroll · double-click for all/, 30_000, "live thinking peek window");
+    const livePeek = await waitForVisible(/scroll · right-click for all/, 30_000, "live thinking peek window");
     assert.ok(!visibleRows(livePeek).some((l) => l.includes("PCX_THINK_HEAD")), "peek follows the newest rows (head clipped away)");
     // Wheel input waits for the settled block so its target row stays stable.
     await waitForAfter(/thought for \d+s/, "PCX_THINK_DONE", 30_000, "closed thinking in summary");
     assert.equal(lastUserText(), "please PCX_THINK now");
 
-    // One click, one wheel event and one double-click exercise terminal routing.
+    // Single left/right clicks and one wheel event exercise terminal routing.
     const collapsed = await waitFor(/Thought for \d+s/, 30_000, "auto-collapsed thinking label");
     assert.ok(!visibleRows(collapsed).some((l) => l.includes("PCX_THINK_TAIL")), "reasoning body hidden while collapsed");
 
     const summaryRow = rowOf(/Thought for \d+s/);
     assert.ok(summaryRow >= 0, "collapsed thinking is visible before one click");
     clickRow(summaryRow, 3);
-    const peeked = await waitForVisible(/scroll · double-click for all/, 25_000, "one click opens peek");
+    const peeked = await waitForVisible(/scroll · right-click for all/, 25_000, "one click opens peek");
     assert.ok(!visibleRows(peeked).some((l) => l.includes("PCX_THINK_HEAD")), "peek window clips the head of the reasoning");
     assert.ok(visibleRows(peeked).some((l) => l.includes("PCX_THINK_TAIL")), "peek window shows the newest rows");
+    clickRow(rowOf(/scroll · right-click for all/), 3);
+    await waitGone(/scroll · right-click for all/, 10_000, "left closes peek");
+    assert.ok(!visibleText().includes("PCX_THINK_TAIL"));
+    clickRow(rowOf(/Thought for \d+s/), 3);
+    await waitForVisible(/scroll · right-click for all/, 10_000, "left reopens peek");
 
     // One input only: retries would hide a missed terminal gesture.
-    const hint = rowOf(/scroll · double-click for all/);
+    const hint = rowOf(/scroll · right-click for all/);
     assert.ok(hint >= 0, "peek hint is visible before the wheel input");
     wheelRow(hint + 1, 40, true);
     const scrolled = await waitForVisible(/below of \d+ lines/, 10_000, "one wheel-up moves the peek window");
     assert.ok(!visibleRows(scrolled).some((line) => line.includes("PCX_THINK_HEAD")));
 
-    const peekRow = rowOf(/scroll · double-click for all/);
-    assert.ok(peekRow >= 0, "peek is visible before one double-click");
-    // The rail avoids Pi's separate word-selection gesture on Markdown text.
-    await doubleClickRow(peekRow, 3);
-    await waitForVisible(/PCX_THINK_HEAD/, 30_000, "one double-click opens full thinking");
-    assert.ok(!/scroll · double-click for all/.test(visibleText()), "fully expanded body carries no peek hint");
+    const peekRow = rowOf(/scroll · right-click for all/);
+    assert.ok(peekRow >= 0, "peek is visible before one right click");
+    clickRow(peekRow, 3, 2);
+    await waitForVisible(/PCX_THINK_HEAD/, 30_000, "right opens full thinking from peek");
+    assert.ok(!/scroll · right-click for all/.test(visibleText()), "fully expanded body carries no peek hint");
+    clickRow(rowOf(/PCX_THINK_HEAD/), 3);
+    await waitStableFrame();
+    assert.ok(visibleText().includes("PCX_THINK_HEAD"), "left leaves full thinking unchanged");
+    clickRow(rowOf(/PCX_THINK_HEAD/), 3, 2);
+    await waitGone(/PCX_THINK_HEAD|PCX_THINK_TAIL/, 10_000, "right closes full thinking");
+    clickRow(rowOf(/Thought for \d+s/), 3, 2);
+    await waitForVisible(/PCX_THINK_HEAD/, 10_000, "right opens full thinking from collapsed");
+    clickRow(rowOf(/PCX_THINK_HEAD/), 3, 2);
+    await waitGone(/PCX_THINK_HEAD|PCX_THINK_TAIL/, 10_000, "right closes directly expanded thinking");
 
   }
   if (selected.has("E4")) {

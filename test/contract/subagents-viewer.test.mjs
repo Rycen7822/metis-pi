@@ -27,21 +27,29 @@ test("conversation popup keeps native click folds through refresh and scrolling"
   t.after(() => viewer.dispose());
   await delay(0);
   const rows = () => viewer.render(90).map(stripVTControlCharacters);
-  const click = label => {
+  const click = (label, button = "left") => {
     const y = rows().findIndex(row => row.includes(label)); assert.ok(y >= 0, label);
-    return viewer.handleMouse({ type: "click", button: "left", x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 });
+    return viewer.handleMouse({ type: "click", button, x: 3, y, screenX: 3, screenY: y, width: 90, height: 56 });
   };
   assert.ok(!rows().some(row => row.includes("OUTPUT_7")));
   assert.equal(click("Ran").handled, true);
   assert.ok(rows().some(row => row.includes("OUTPUT_7")));
   click("Ran"); assert.ok(!rows().some(row => row.includes("OUTPUT_7")));
-  click("Thought"); await delay(320);
-  assert.ok(rows().some(row => row.includes("THINK_18")), "single click opens the same tail preview as the main transcript");
+  click("Thought");
+  assert.ok(rows().some(row => row.includes("THINK_18")), "left click opens the same tail preview immediately as the main transcript");
   assert.ok(!rows().some(row => row.includes("THINK_1 ")));
-  click("THINK_18"); await delay(320);
+  click("THINK_18");
   assert.ok(!rows().some(row => row.includes("THINK_18")));
-  click("Thought"); click("Thought");
-  assert.ok(rows().some(row => row.includes("THINK_1 ")), "double click opens full thought text");
+  click("Thought"); click("THINK_18", "right");
+  assert.ok(rows().some(row => row.includes("THINK_1 ")), "right click turns the preview into full thought text");
+  const full = rows(); click("THINK_1 ");
+  assert.deepEqual(rows(), full, "left leaves full thoughts unchanged");
+  click("THINK_1 ", "right");
+  assert.ok(!rows().some(row => row.includes("THINK_18")));
+  click("Thought", "right");
+  assert.ok(rows().some(row => row.includes("THINK_1 ")), "right also opens a collapsed thought directly");
+  click("THINK_1 ", "right");
+  assert.ok(!rows().some(row => row.includes("THINK_18")));
   viewer.handleInput("\u0014"); viewer.handleInput("\u0014"); click("Ran");
   const before = rows();
   while (refreshes < 2) await delay(20);

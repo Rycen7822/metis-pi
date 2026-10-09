@@ -21,7 +21,7 @@ pi install .
 | 功能 | 行为与说明 |
 | --- | --- |
 | [工具转录](docs/features/display.md) | 内建工具的紧凑标题、探索分组、流式 write 预览与 edit/write diff；第三方工具保留自己的 renderer。 |
-| [思考显示](docs/features/display.md#思考块) | 流式显示最新 6 行，结束后折叠；单击折叠/窥视，双击窥视/全展开，Ctrl+T 保留宿主行为。 |
+| [思考显示](docs/features/display.md#思考块) | 流式显示最新 6 行，结束后折叠；左键切换折叠/可滚动窥视，右键切换全展开/关闭；全展开时左键不变，Ctrl+T 保留宿主行为。 |
 | [输入与状态](docs/features/interface.md#输入区) | 灰色输入面、模型/上下文信息；[Working/footer](docs/features/interface.md#统计口径) 显示运行阶段、实测输出速度、用量和未提交改动量。 |
 | [选区复制](docs/features/selection-copy.md) | fullscreen 下将所选显示内容按来源映射还原为逻辑文本；无法验证的行回退原生提取。 |
 | [长历史](docs/features/interface.md#全屏历史与留白) | 最多保留 5,000 显示行的窗口，按需翻页并释放派生缓存；原始会话记录保留。 |

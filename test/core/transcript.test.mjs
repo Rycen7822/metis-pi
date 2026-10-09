@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { TranscriptState, renderedThinkingRuns, assistantHasVisibleThinking } from "../../src/transcript-state.ts";
 import { makeRenderers } from "../../src/renderers.ts";
+import { createThinkingViewControl } from "../../src/thinking-view.ts";
 import { theme, FakeText, sessionStub } from "../helpers.mjs";
 
 const IMAGE_NAMES = ["first.png", "second.png", "third.png"];
@@ -14,8 +15,7 @@ test("message identity and thinking controls survive finalization, duplicate end
   state.apply({ type: "message_start", message: source }, source);
   state.apply({ type: "message_update", message: source }, source);
   const key = state.identityOf(source);
-  let cancelled = 0;
-  const control = { cancel: () => { cancelled++; } };
+  const control = createThinkingViewControl();
   state.thinkingViewControl(key, 0, () => control);
   now = 30;
   state.apply({ type: "message_end", message: source }, source);
@@ -28,10 +28,11 @@ test("message identity and thinking controls survive finalization, duplicate end
   assert.equal(state.thinkingViewControl(key, 0, () => { throw new Error("control replaced"); }), control);
   assert.equal(state.registerFinalizedMessage(structuredClone(source), false), key);
   state.resetSession("next");
-  assert.equal(cancelled, 1);
   assert.equal(state.identityOf(source), undefined);
   state.apply({ type: "message_start", message: source }, source);
-  assert.notEqual(state.identityOf(source), key, "an object reused after a session reset gets a fresh identity");
+  const nextKey = state.identityOf(source);
+  assert.notEqual(nextKey, key, "an object reused after a session reset gets a fresh identity");
+  assert.notEqual(state.thinkingViewControl(nextKey, 0, createThinkingViewControl), control, "a new session does not reuse a discarded thinking control");
 });
 
 test("renderedThinkingRuns: semantic typing, empty runs, barriers and boundaries", () => {

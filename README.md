@@ -21,7 +21,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | Feature | Behavior |
 | --- | --- |
 | [Tool transcripts](docs/features/display.md) | Compact headers for built-in tools, grouped exploration, streaming write previews, and edit/write diffs. Third-party tools retain their own renderers. |
-| [Thinking display](docs/features/display.md#思考块) | Shows the latest 6 lines while streaming, then collapses. Single-click toggles collapsed/peek; double-click toggles peek/expanded. Ctrl+T retains the host behavior. |
+| [Thinking display](docs/features/display.md#思考块) | Shows the latest 6 lines while streaming, then collapses. Left-click toggles collapsed/scrollable preview; right-click toggles fully expanded/closed. Fully expanded ignores left-click. Ctrl+T retains the host behavior. |
 | [Composer and status](docs/features/interface.md#输入区) | Gray input area with model and context information. The [Working indicator and footer](docs/features/interface.md#统计口径) show the execution phase, measured output speed, usage, and the amount of uncommitted changes. |
 | [Selection copy](docs/features/selection-copy.md) | In fullscreen mode, maps selected display content back to logical source text. Falls back to native extraction for lines that cannot be verified. |
 | [Long histories](docs/features/interface.md#全屏历史与留白) | Keeps a window of up to 5,000 display lines, loads pages on demand, and releases derived caches. Original session records are retained. |

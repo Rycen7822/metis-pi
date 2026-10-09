@@ -317,11 +317,9 @@ export class CodexThinkingPeekComponent implements Component {
 }
 
 /**
- * Click layer around a thinking block (rail and peek inside it). A click never
- * rewrites itself into a toggle here: the run control owns the gesture, so a
- * single click (delayed by the double-click window) folds or opens the peek
- * window while a double click switches between peek and full — the same rule
- * while streaming and after completion. Renders nothing of its own.
+ * Click layer around a thinking block (rail and peek inside it). The run
+ * control applies left/right gestures immediately, with the same rules while
+ * streaming and after completion. Renders nothing of its own.
  */
 export class CodexThinkingClickableComponent implements Component {
   readonly #child: TranscriptChild;
@@ -341,9 +339,12 @@ export class CodexThinkingClickableComponent implements Component {
   }
 
   handleMouse(event: TranscriptMouseEvent): TranscriptMouseResult {
-    if (event.type === "click" && event.button === "left") {
+    // Pi synthesizes a right click only when its press has a component target.
+    // Claim it without rebuilding; leave left presses to native selection.
+    if (event.type === "press" && event.button === "right") return { handled: true };
+    if (event.type === "click" && (event.button === "left" || event.button === "right")) {
       this.#control.handleClick(
-        { at: Date.now(), x: event.screenX, y: event.screenY },
+        event.button,
         { fallback: this.#fallback, apply: this.#apply },
       );
       return { handled: true };

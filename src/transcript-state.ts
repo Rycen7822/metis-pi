@@ -268,10 +268,6 @@ export class TranscriptState {
   }
 
   resetSession(sessionKey = "default"): void {
-    // Pending single clicks die with their transcript (no timers outlive a session).
-    for (const plan of this.messagePlans.values()) {
-      for (const run of plan.thinkingRuns) run.viewControl?.cancel();
-    }
     this.generation += 1;
     this.sessionKey = sessionKey;
     this.groups.clear();

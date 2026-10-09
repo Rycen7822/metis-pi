@@ -146,12 +146,7 @@ test("native peek gestures open the body, fold once on completion and survive la
   });
   const body = Array.from({ length: 12 }, (_, i) => `reasoning row ${i}`).join("\n\n");
   const { component, message, update } = streamingAssistant(state, [{ type: "thinking", thinking: body }]);
-  const doubleClick = () => {
-    const event = { type: "click", button: "left", x: 4, y: 4, screenX: 4, screenY: 4, width: 80, height: 8 };
-    clickRegion(event);
-    t.mock.timers.tick(80);
-    clickRegion(event);
-  };
+  const mouse = (button) => clickRegion({ type: "click", button, x: 4, y: 4, screenX: 4, screenY: 4, width: 80, height: 8 });
   const clickRegion = (event) => {
     const region = regionsOf(component)[0];
     assert.ok(region.child instanceof CodexThinkingClickableComponent);
@@ -160,21 +155,71 @@ test("native peek gestures open the body, fold once on completion and survive la
   update();
   assert.match(regionText(regionsOf(component)[0]), /reasoning row 11/);
   assert.doesNotMatch(regionText(regionsOf(component)[0]), /reasoning row 0\b/, "streaming starts in the real tail window");
-  doubleClick();
+  mouse("right");
   assert.notEqual(component.thinkingVisibilityOverrides.get(0), true, "a shown run needs no override entry");
   component.updateContent(message, true);
-  assert.match(regionText(regionsOf(component)[0]), /reasoning row 0\b/, "double click reveals the full body");
+  assert.match(regionText(regionsOf(component)[0]), /reasoning row 0\b/, "right click reveals the full body immediately");
+  const full = regionText(regionsOf(component)[0]);
+  mouse("left");
+  assert.equal(regionText(regionsOf(component)[0]), full, "left does not change a full streaming run");
 
-  t.mock.timers.tick(2_920);
+  t.mock.timers.tick(3_000);
   update([...message.content, { type: "text", text: "out" }]);
   assert.equal(component.thinkingVisibilityOverrides.get(0), true, "completion folds the user's streaming choice once");
   assert.match(regionText(regionsOf(component)[0]), /Thought for 3s/);
   assert.doesNotMatch(regionText(regionsOf(component)[0]), /reasoning row/);
   t.mock.timers.tick(1_000);
-  doubleClick();
+  mouse("left");
+  assert.doesNotMatch(regionText(regionsOf(component)[0]), /reasoning row 0\b/);
+  assert.match(regionText(regionsOf(component)[0]), /reasoning row 11/);
+  mouse("left");
+  assert.match(regionText(regionsOf(component)[0]), /Thought for 3s/);
+  mouse("left");
+  mouse("right");
   for (let i = 0; i < 3; i += 1) component.updateContent(message, true);
   assert.equal(component.thinkingVisibilityOverrides.get(0), false, "rebuilds preserve the post-completion choice");
   assert.match(regionText(regionsOf(component)[0]), /reasoning row 0\b[\s\S]*reasoning row 11/);
+  mouse("left");
+  assert.match(regionText(regionsOf(component)[0]), /reasoning row 0\b/, "full completed runs ignore left clicks too");
+  mouse("right");
+  assert.match(regionText(regionsOf(component)[0]), /Thought for 3s/);
+  mouse("right");
+  assert.match(regionText(regionsOf(component)[0]), /reasoning row 0\b/, "collapsed can open directly to full");
+  mouse("right");
+  assert.match(regionText(regionsOf(component)[0]), /Thought for 3s/);
+});
+
+test("active collapsed thinking routes both buttons and host global toggles keep their visible meaning", (t) => {
+  const state = new TranscriptState();
+  setup(t, state, { streaming: "collapsed", completed: "collapsed" }, {
+    makePeek: ({ inner, control, windowLines, onScroll }) =>
+      new CodexThinkingPeekComponent(inner, control, windowLines, (text) => text, onScroll),
+    makeClickable: ({ inner, control, fallback, apply }) =>
+      new CodexThinkingClickableComponent(inner, control, fallback, apply),
+  });
+  const body = Array.from({ length: 12 }, (_, i) => `ACTIVE_${i}`).join("\n\n");
+  const { component, message, update } = streamingAssistant(state, [{ type: "thinking", thinking: body }]);
+  update();
+  const mouse = button => {
+    const region = regionsOf(component)[0];
+    assert.ok(region.child instanceof CodexThinkingClickableComponent);
+    assert.equal(region.handleMouse({ type: "click", button, x: 3, y: 0, screenX: 3, screenY: 0 }).handled, true);
+  };
+  mouse("left");
+  assert.doesNotMatch(regionText(regionsOf(component)[0]), /ACTIVE_0\b/);
+  assert.match(regionText(regionsOf(component)[0]), /ACTIVE_11/);
+  mouse("right");
+  assert.match(regionText(regionsOf(component)[0]), /ACTIVE_0\b/);
+  component.setHideThinkingBlock(true);
+  assert.doesNotMatch(regionText(regionsOf(component)[0]), /ACTIVE_11/);
+  mouse("right");
+  assert.match(regionText(regionsOf(component)[0]), /ACTIVE_0\b/, "right reopens a globally hidden run with a remembered full choice");
+  mouse("right");
+  component.setHideThinkingBlock(false);
+  component.updateContent(message, true);
+  assert.match(regionText(regionsOf(component)[0]), /ACTIVE_0\b/);
+  mouse("left");
+  assert.match(regionText(regionsOf(component)[0]), /ACTIVE_0\b/, "left leaves a globally shown full body alone");
 });
 
 test("native history construction collapses without invented timing, and its click restores the body", (t) => {

@@ -94,8 +94,10 @@ messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the
 overlay without stopping the agent or consuming its notification. The overlay reads
 bounded saved conversation history, with command highlighting and the same tool
 and thinking fold controls as the main conversation. Click tools to expand or
-collapse; click thoughts for a short preview or to collapse, and double-click for
-full text. Ctrl+O toggles tools and Ctrl+T toggles thoughts. Choices survive refresh.
+collapse. Left-click thoughts to toggle a scrollable preview and closed view;
+right-click to open full text from either view, or close it completely. Left-click
+leaves fully expanded thoughts unchanged. Ctrl+O toggles tools and Ctrl+T toggles
+thoughts. Choices survive refresh.
 Reasoning is displayed only in the overlay, never added to parent tool results.
 Token-by-token streaming and images are not displayed.
 

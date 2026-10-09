@@ -66,9 +66,8 @@ export interface TranscriptAdapterInput {
    */
   makeRail: ((child: unknown) => unknown) | undefined;
   /**
-   * Wrap a thinking body so left clicks drive the run's view state: a single
-   * click folds/peeks, a double click toggles peek ↔ full (the control owns the
-   * gesture and its pending click). Applied OUTSIDE the rail.
+   * Wrap a thinking body so left clicks toggle collapsed/peek and right clicks
+   * toggle full/collapsed. Full ignores left clicks. Applied OUTSIDE the rail.
    */
   makeClickable?: (input: {
     inner: unknown;
@@ -451,13 +450,15 @@ function coordinateSubtree(input: TranscriptAdapterInput, { component: record, p
           }
         }
       } else {
-        if (!input.makeThoughtSummary || !input.isCollapsedLabel?.(inner) || !ended) continue;
-        const paddingX = typeof record.outputPad === "number" ? record.outputPad : 1;
-        const summary = input.makeThoughtSummary({ durationMs: plan?.thinkingMs, runIndex: ordinal ?? 0, ended: true, paddingX });
-        if (!summary || typeof summary !== "object") continue;
-        ((summary as Record<symbol, unknown>))[THOUGHT_LABEL] = true;
-        node = summary;
-        decorated = true;
+        if (!input.isCollapsedLabel?.(inner)) continue;
+        if (ended && input.makeThoughtSummary) {
+          const paddingX = typeof record.outputPad === "number" ? record.outputPad : 1;
+          const summary = input.makeThoughtSummary({ durationMs: plan?.thinkingMs, runIndex: ordinal ?? 0, ended: true, paddingX });
+          if (!summary || typeof summary !== "object") continue;
+          ((summary as Record<symbol, unknown>))[THOUGHT_LABEL] = true;
+          node = summary;
+          decorated = true;
+        }
       }
 
       // The click layer sits OUTSIDE the rail/peek/label: a click anywhere on
