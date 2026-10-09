@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Deliver subagent attention at completed thinking/commentary stream boundaries on Pi 1.0/1.1 by claiming the existing receipt and yielding only the current provider request; show question arrivals immediately, preserve user cancellation/provider errors, and never preempt or replay already-emitted tools.
 - Park verified zero-work subagent daemons after a five-second grace and wake durable sessions on demand; keep passive watches quiet, preserve unread results and authenticated reconnect ownership, and pause failed automatic synchronization after one warning without hiding explicit errors.
 - Preserve Pi 1.1 independent builtin tool-renderer overlays by proving call/result/shell ownership against the session's registered definition before display takeover; retain guarded lookup restoration and native fallback.
 - Keep managed child explicit tool allowlists strict for MCP tools and resources on Pi 1.0/1.1, preserve explicit exclusions and MCP opt-ins, and reject ambiguous ordinary wildcard allowlists before service startup.
