@@ -120,8 +120,11 @@ asyncio.run(daemon.serve(Path(sys.argv[1])))
             writer=None
             try:
                 end=asyncio.get_running_loop().time()+5
-                while not path.exists() and asyncio.get_running_loop().time()<end: await asyncio.sleep(.01)
-                reader,writer=await asyncio.open_unix_connection(str(path),limit=1024)
+                while writer is None:
+                    try: reader,writer=await asyncio.open_unix_connection(str(path),limit=1024)
+                    except (FileNotFoundError,ConnectionRefusedError):
+                        if asyncio.get_running_loop().time()>=end: raise
+                        await asyncio.sleep(.01)
                 writer.transport.pause_reading()
                 from subagent_pi import PROTOCOL_VERSION
                 writer.write((dumps({'v':PROTOCOL_VERSION,'op':'doctor','params':{}})+'\n').encode())
@@ -132,7 +135,11 @@ asyncio.run(daemon.serve(Path(sys.argv[1])))
                 self.assertGreater(len(partial),0)
                 self.assertLess(len(partial),1024*1024,'unread reply was not bounded')
                 self.assertFalse(partial.endswith(b'\n'))
-                await request(home,'shutdown',{'force':True},autostart=False)
+                try: await request(home,'shutdown',{'force':True},autostart=False)
+                except AgentError as exc:
+                    # A zero-work daemon may park after the unread reply has
+                    # closed. All deadline/partial-output assertions above stay.
+                    self.assertIn(exc.code,{'daemon_unavailable','daemon_idle'})
                 await asyncio.wait_for(proc.wait(),3)
                 self.assertEqual(proc.returncode,0,(await proc.stderr.read()).decode())
             finally:

@@ -1,9 +1,8 @@
 # Subagent lifecycle
 
-Metis owns the runtime under `src/subagents/core`. Each parent Pi session has its
-own scope. Reload reconnects the frontend; closing the parent does not silently
-kill background tasks. An interrupt stops the current work; close terminates the
-owned worker; respawn reuses its durable session without replaying old input.
+Metis owns the runtime under `src/subagents/core`. Each parent Pi session has its own scope. Reload reconnects the frontend; closing the parent does not silently kill background tasks. An interrupt stops the current work; close terminates the owned worker; respawn reuses its durable session without replaying old input.
+
+After five consecutive seconds without active, queued or input-waiting runs, the shared daemon closes admission and parks its settled workers with verified cleanup, then exits. In-flight requests and notification sends finish first; unknown cleanup or active tools prevent automatic exit. Durable sessions, results and unread attention remain in the ledger. Explicit spawn/follow-up and other requested reads restart the daemon on demand; a passive watch or automatic parent synchronization does not keep an otherwise unused daemon alive or create a restart loop. The native frontend also releases an unused IPC helper without surrendering its logical session lease; reconnect cannot replace a later frontend owner.
 
 Managed children cannot replace, fork, reload or navigate their own sessions.
 Access is a tool policy, not an operating system sandbox. Writer admission rejects
@@ -58,7 +57,7 @@ inspect remaining processes before reopening the workspace.
 Children inherit the opening client's standard HTTP_PROXY, HTTPS_PROXY, ALL_PROXY,
 NO_PROXY and lowercase equivalents, even with `childEnv=[]` or Codex inheritance
 disabled. These routing values stay in the scope's memory, never its persisted
-base environment or launches; after a daemon restart the parent must rebind them.
+base environment or launches. Native Pi requests automatically rebind the authenticated parent's authorized environment and project trust after an idle restart; standalone clients must explicitly rebind their scope.
 Other credential/environment names still require explicit `childEnv` authorization.
 Profile environment overrides remain authoritative. Managed SDK startup configures
 proxy-aware HTTP and WebSocket globals through public Undici APIs before extensions
@@ -71,9 +70,6 @@ policy. The packaged TOML participates in its source fingerprint. Old standalone
 provider JSON settings are not native frontend switches; migration reports
 unsupported fields instead of silently pretending to enforce them.
 
-Runtime upgrades and backend policy changes require draining work, closing resident children and waiting
-for the daemon to finish shutting down before reconnecting. A frontend reload
-reconnects the existing daemon and retains the parent session's scope.
-The native frontend checks the loaded backend's source fingerprint, including
-updates within the same package version. A mismatch reports `version_mismatch`
-instead of silently using stale code; it never interrupts background work.
+Runtime upgrades and backend policy changes require letting work finish and waiting for verified idle shutdown, or closing resident children and stopping the daemon without `--force`, before reconnecting. Older daemons may lack automatic exit and must be stopped explicitly. A frontend reload reconnects and retains the parent session's scope; it does not upgrade a still-running daemon.
+
+The native frontend checks the loaded backend's source fingerprint before every request, including updates within the same package version. A mismatch reports `version_mismatch` instead of silently using stale code; it never interrupts background work. A real automatic synchronization failure produces one warning and pauses watch/boundary/settlement RPCs for that frontend; explicit tools still report errors. A normal idle exit is silent and foreground activity resumes watching. Unknown mutation outcomes remain uncertain and are never automatically retried.

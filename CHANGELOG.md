@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Park verified zero-work subagent daemons after a five-second grace and wake durable sessions on demand; keep passive watches quiet, preserve unread results and authenticated reconnect ownership, and pause failed automatic synchronization after one warning without hiding explicit errors.
 - Preserve Pi 1.1 independent builtin tool-renderer overlays by proving call/result/shell ownership against the session's registered definition before display takeover; retain guarded lookup restoration and native fallback.
 - Keep managed child explicit tool allowlists strict for MCP tools and resources on Pi 1.0/1.1, preserve explicit exclusions and MCP opt-ins, and reject ambiguous ordinary wildcard allowlists before service startup.
 - Verify source, SDK contracts, and terminal journeys against both Pi 1.0.0 and 1.1.0 in CI.

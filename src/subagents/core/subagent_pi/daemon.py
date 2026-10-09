@@ -11,6 +11,9 @@ from .runtime import Runtime
 from .schema import validate_op
 from . import PROTOCOL_VERSION
 
+IDLE_SHUTDOWN_SECONDS = 5
+PASSIVE_OPS = frozenset({'ping','doctor','pi_watch','pi_claim','pi_observe','pi_release','pi_uncertain','pi_detach'})
+
 async def serve(home: Path):
     if not sys.platform.startswith('linux'): raise AgentError('unsupported_platform','Version 0.1 supports Linux/WSL2 only')
     private_dir(home)
@@ -20,12 +23,14 @@ async def serve(home: Path):
         os.close(fd); return
     sock=socket_path(home)
     runtime=None
-    clients=set(); operations=set()
+    clients={}; operations=set(); idle_since=None
     try:
         runtime=Runtime(home)
+        notifications=runtime.parent_notifications.pi  # One idle-drain fact for admission and watchers.
         sock.unlink(missing_ok=True)
         async def handle(reader,writer):
-            current=asyncio.current_task(); clients.add(current)
+            nonlocal idle_since
+            current=asyncio.current_task(); clients[current]=None
             job=None; disconnected=None; reservation=None; delivered=None; op=None
             try:
                 try:
@@ -35,6 +40,10 @@ async def serve(home: Path):
                     if req.get('v')!=PROTOCOL_VERSION: raise AgentError('version_mismatch','Client/daemon protocol versions differ; drain and restart the daemon')
                     op=req.get('op'); params=req.get('params',{})
                     validate_op(op,params)
+                    if notifications.draining:
+                        raise AgentError('daemon_idle','Idle daemon stopped admission before dispatch; reconnect when needed')
+                    clients[current]=op
+                    if op not in PASSIVE_OPS: idle_since=None
                     source=req.get('source')
                     if source is not None:
                         # Trusted-adapter channel: never model arguments or logs.
@@ -73,14 +82,35 @@ async def serve(home: Path):
             finally:
                 if disconnected: disconnected.cancel()
                 runtime.parent_notifications.release_delivery(reservation,op,delivered)
-                clients.discard(current)
-                await close_writer(writer)
+                try: await close_writer(writer)
+                finally: clients.pop(current,None)
         server=await asyncio.start_unix_server(handle,str(sock),limit=MAX_FRAME)
         os.chmod(sock,0o600)
         loop=asyncio.get_running_loop()
         for sig in (signal.SIGINT,signal.SIGTERM): loop.add_signal_handler(sig,runtime.shutdown_requested.set)
         runtime.notify()  # Deliver durable pending attention, including restart reconciliation.
-        watchdog=asyncio.create_task(runtime.idle_loop())
+        async def monitor():
+            nonlocal idle_since
+            while not runtime.closing:
+                await asyncio.sleep(.5)
+                await runtime.check_idle()
+                if not runtime.can_idle_shutdown() or any(op not in PASSIVE_OPS for op in clients.values()):
+                    idle_since=None
+                    continue
+                stamp=loop.time()
+                if idle_since is None: idle_since=stamp
+                if stamp-idle_since<IDLE_SHUTDOWN_SECONDS: continue
+                # Passive status queries do not refresh the grace period, but
+                # even their replies must finish before admission is closed.
+                if any(op!='pi_watch' for op in clients.values()): continue
+                # No await between the final check and closing admission: a
+                # newly admitted mutation can never race a zero-work snapshot.
+                notifications.draining=True
+                server.close()
+                runtime.notify()  # Wake passive watches with a normal idle signal.
+                runtime.shutdown_requested.set()
+                return
+        watchdog=asyncio.create_task(monitor())
         async with server:
             await runtime.shutdown_requested.wait()
         # New mutations stop at socket close. Give admitted operations a bounded drain window.

@@ -74,6 +74,15 @@ class Runtime:
                       self.config['rpc_timeout_seconds'],self.config['default_idle_timeout_seconds'],
                       self.spawn_task,self.on_event,self.fail_worker,self.worker_exited,self.retire_worker)
 
+    def can_idle_shutdown(self):
+        """Only settled owned residents or verified parked history may exit."""
+        if self.admission.locked() or self.parent_notifications.deliveries or self.store.one("SELECT 1 FROM runs WHERE state NOT IN ('completed','failed','interrupted','crashed','cancelled','timed_out') LIMIT 1"):
+            return False
+        idle = {aid for _,aid,_,_ in self.evictable()}
+        if any(not w.closed and (aid not in idle or w.active_tools) for aid,w in self.workers.items()):
+            return False
+        return not any(a['id'] not in idle for a in self.store.all("SELECT id FROM agents WHERE generation>0 AND cleanup!='verified'"))
+
     def retire_worker(self, w):
         if self.workers.get(w.agent['id']) is w:
             del self.workers[w.agent['id']]
@@ -656,7 +665,7 @@ class Runtime:
             else:
                 sid=new_id('scope_')
                 self.store.execute('INSERT INTO scopes(id,cwd,label,created) VALUES(?,?,?,?)',(sid,cwd,text(p.get('label','Codex Pi delegation'),'label',160),now()))
-            parent.bind(self.store,sid,source)
+            parent.bind(self.store,sid,source,allow_new=not (source or {}).get('reconnect',False))
             self.bindings.bind_scope_source(sid,p,source)
             self.notify()
             return {'scope':sid,'cwd':cwd, 'outstanding':self.views.outstanding(sid),'parent_notifications':parent.status(self.store,sid)}
@@ -673,12 +682,12 @@ class Runtime:
             if p.get('inheritance'): report['inheritance']=self.bindings.doctor()
             return report
         sid=identifier(p.get('scope'),'scope'); scope=self.store.scope(sid)
-        if ((source or {}).get('parent') or {}).get('kind')=='pi':
-            parent.bind(self.store,sid,source,allow_new=False)
-            self.bindings.remember_pi_trust(sid,source)
+        native=((source or {}).get('parent') or {}).get('kind')=='pi'
+        mutation=op in {'spawn','send','message','followup','interrupt','soft_interrupt','close','respawn','answer'}
+        if native or mutation: parent.bind(self.store,sid,source,allow_new=False)
+        if native: self.bindings.remember_pi_source(sid,source)  # Authenticated memory restore, not a persistent rebind.
         if op=='spawn' and 'cwd' not in p: p={**p,'cwd':scope['cwd']}
-        if op in {'spawn','send','message','followup','interrupt','soft_interrupt','close','respawn','answer'}:
-            parent.bind(self.store,sid,source,allow_new=False)
+        if mutation:
             key=identifier(p.get('request_id'),'request_id')
             async with self.request_locks[(sid,key)]:
                 previous=self.store.request_begin(sid,key,op,p)

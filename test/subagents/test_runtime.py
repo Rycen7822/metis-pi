@@ -35,6 +35,57 @@ cwd = "servers/dir with space"
 '''
 
 class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
+    async def test_idle_shutdown_requires_no_queued_work_and_verified_residents(self):
+        self.assertTrue(self.rt.can_idle_shutdown())
+        gate=self.root/'release-idle-test'
+        a=await self.spawn(f'gate={gate}|first')
+        b=await self.rt.send_input(self.rt.store.agent(self.scope,a['agent_id']),{'mode':'follow_up','message':'queued second'})
+        self.assertFalse(self.rt.can_idle_shutdown())
+        self.assertEqual(self.rt.store.run(self.scope,b['run_id'])['state'],'queued')
+        gate.touch()
+        await self.until(lambda: all(self.rt.store.run(self.scope,rid)['state']=='completed' for rid in (a['run_id'],b['run_id'])))
+        await self.until(self.rt.can_idle_shutdown)
+        w=self.rt.workers[a['agent_id']]
+        w.active_tools['test']={'name':'test'}
+        self.assertFalse(self.rt.can_idle_shutdown()); w.active_tools.clear()
+        self.rt.parent_notifications.deliveries['test']=object()
+        self.assertFalse(self.rt.can_idle_shutdown()); self.rt.parent_notifications.deliveries.clear()
+        await self.mutation('close',a['agent_id'])
+        self.assertTrue(self.rt.can_idle_shutdown())
+        self.rt.store.execute("UPDATE agents SET cleanup='unknown' WHERE id=?",(a['agent_id'],))
+        self.assertFalse(self.rt.can_idle_shutdown())
+        self.rt.store.execute("UPDATE agents SET cleanup='verified' WHERE id=?",(a['agent_id'],))
+
+    async def test_idle_shutdown_does_not_abandon_a_pending_question(self):
+        a=await self.spawn('UI_CONFIRM')
+        await self.until(lambda: bool(self.rt.workers[a['agent_id']].ui))
+        self.assertFalse(self.rt.can_idle_shutdown())
+
+    async def test_native_reconnect_restores_only_authorized_memory_after_lease_validation(self):
+        from subagent_pi.binding import ScopeBindings
+        self.rt.config['inheritance']['child_env']=['IDLE_TEST_AUTH']
+        source={'env':{'PATH':'/bin','HTTPS_PROXY':'http://127.0.0.1:7897','IDLE_TEST_AUTH':'idle-test-secret','UNAPPROVED_SECRET':'denied'},
+            'project_trust':{'cwd':str(self.workspace),'trusted':True},
+            'parent':{'kind':'pi','session_id':'idle-test','agent_dir':str(self.root),'session_file':'','sdk_path':str(self.root/'index.js'),
+                'node_path':sys.executable,'lease':'lease_idle_test','model':None}}
+        sid=(await self.rt.dispatch('scope_open',{'cwd':str(self.workspace)},source))['scope']
+        self.rt.bindings=ScopeBindings(self.rt.store,self.rt.config)
+        spec={'profile':'default','access':'read','cwd':str(self.workspace)}
+        self.assertNotIn('IDLE_TEST_AUTH',self.rt.bindings.child_env(sid,spec))
+        source['env']['PATH']='/authenticated-memory-only'
+        await self.rt.dispatch('list',{'scope':sid},source)
+        env=self.rt.bindings.child_env(sid,spec)
+        self.assertEqual(env['PATH'],'/authenticated-memory-only')
+        self.assertEqual(json.loads(self.rt.store.scope(sid)['base_env'])['PATH'],'/bin','ordinary native reads do not persistently rebind base environment')
+        self.assertEqual(env['HTTPS_PROXY'],'http://127.0.0.1:7897')
+        self.assertEqual(env['IDLE_TEST_AUTH'],'idle-test-secret')
+        self.assertEqual(env['PI_AGENTS_PROJECT_TRUST'],'1'); self.assertNotIn('UNAPPROVED_SECRET',env)
+        stale={**source,'env':{'IDLE_TEST_AUTH':'must-not-bind'},'parent':{**source['parent'],'lease':'lease_stale'}}
+        with self.assertRaises(AgentError) as caught: await self.rt.dispatch('list',{'scope':sid},stale)
+        self.assertEqual(caught.exception.code,'parent_stale')
+        self.assertEqual(self.rt.bindings.child_env(sid,spec)['IDLE_TEST_AUTH'],'idle-test-secret')
+        self.assertNotIn(b'idle-test-secret',(self.home/'registry.sqlite').read_bytes())
+
     async def test_proxy_environment_follows_each_scope_and_never_persists(self):
         from subagent_pi.binding import ScopeBindings
         from subagent_pi.common import BASE_ENV_KEYS, PROXY_ENV_KEYS

@@ -3,7 +3,7 @@ import { realpathSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { hasTrustRequiringProjectResources, ProjectTrustStore, type AgentBeforeSettleEvent, type TurnEndEvent, type ExtensionAPI, type ExtensionContext, type ToolDefinition, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
+import { isDaemonIdle, RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
 import { SubagentViewer, type AgentInspection } from "./viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, type WidgetAgent } from "./widget.ts";
 import { loadConfig } from "../config.ts";
@@ -24,6 +24,9 @@ export class SubagentSession {
   private readonly client: SubagentClient;
   private readonly watchAbort = new AbortController();
   private watching?: Promise<void>;
+  private syncState: "active" | "parked" | "failed" = "active";
+  private attentionPending = false;
+  private activity = 0;
   private closed = false;
   private deliveries = new Map<string, Delivery>();
   private agents: WidgetAgent[] = [];
@@ -34,6 +37,7 @@ export class SubagentSession {
   private widgetRefresh?: () => void;
   private viewerAbort?: AbortController;
   private observed = new Set<string>();
+  private claims = new Set<string>();
 
   constructor(pi: ExtensionAPI, runtime: RuntimePackage, ctx: ExtensionContext, agentDir: string) {
     this.pi = pi; this.agentDir = agentDir;
@@ -43,7 +47,7 @@ export class SubagentSession {
     this.client = new SubagentClient(runtime, ctx, agentDir, scope, scope => {
       if (!this.closed) pi.appendEntry(BINDING, { sessionId: this.sessionId, scope });
     });
-    if (scope) this.startWatching();
+    this.startWatching();
   }
   update(ctx: ExtensionContext) { if (ctx.sessionManager.getSessionId() === this.sessionId) { this.ctx = ctx; this.client.update(ctx); } }
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
@@ -104,9 +108,11 @@ export class SubagentSession {
     }
     for (const receipt of receipts) {
       if (this.observed.has(receipt)) continue;
-      await this.client.call("pi_observe", { receipt });
+      await this.client.call("pi_observe", { receipt }, undefined, { passive: !this.hasAttention() });
       this.observed.add(receipt);
+      if (this.syncState === "parked") this.resume();
     }
+    for (const receipt of this.claims) if (this.observed.has(receipt)) this.claims.delete(receipt);
     const saved = new Set<string>();
     for (const [id, delivery] of this.deliveries) if (delivery.ticket.receipts.every(receipt => this.observed.has(receipt))) {
       for (const receipt of delivery.ticket.receipts) if (!saved.has(receipt)) {
@@ -115,33 +121,65 @@ export class SubagentSession {
       this.deliveries.delete(id);
     }
   }
+  private synchronizationFailed(error: unknown, activity = this.activity) {
+    if (!this.valid()) return;
+    if (isDaemonIdle(error)) {
+      if (this.syncState !== "failed" && activity === this.activity) this.syncState = "parked";
+    } else if (this.syncState !== "failed") {
+      this.syncState = "failed";
+      this.ctx.ui.notify(`Subagent synchronization stopped: ${String(error)}`, "warning");
+    }
+    this.agents = []; this.renderWidget();
+  }
+  private hasAttention() { return this.attentionPending || this.deliveries.size || this.claims.size; }
+  private canSynchronize() { return this.valid() && this.client.scope && this.syncState !== "failed" && (this.syncState === "active" || this.hasAttention()); }
+  private resume(explicit = false) {
+    if (!explicit && this.syncState === "failed") return;
+    this.syncState = "active"; this.activity++; this.startWatching();
+  }
+  private synchronize<T>(fn: () => Promise<T>) {
+    if (!this.canSynchronize()) return;
+    return this.serialize(async () => {
+      if (!this.canSynchronize()) return;
+      const activity = this.activity;
+      try { return await fn(); } catch (error) { this.synchronizationFailed(error, activity); }
+    });
+  }
   private startWatching() {
-    if (this.watching || this.closed) return;
+    if (this.watching || !this.canSynchronize()) return;
     this.watching = (async () => {
-      let cursor: unknown;
+      let cursor: unknown, activity = this.activity;
       try {
-        await this.serialize(() => this.reconcile());
-        while (this.valid()) {
-          const result = await this.client.call("pi_watch", { ...(cursor ? { after: cursor } : {}) }, this.watchAbort.signal);
-          if (!this.valid()) return;
+        await this.synchronize(() => this.reconcile());
+        while (this.canSynchronize()) {
+          activity = this.activity;
+          const result = await this.client.call("pi_watch", { ...(cursor ? { after: cursor } : {}) }, this.watchAbort.signal, { passive: true });
+          if (!this.canSynchronize()) return;
           cursor = result.cursor; this.agents = result.agents as typeof this.agents;
+          this.attentionPending = (result.notifications as unknown[]).length > 0;
           this.renderWidget();
-          if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.serialize(() => this.deliverIdle());
+          if (this.ctx.isIdle() && !this.ctx.hasPendingMessages()) await this.synchronize(() => this.deliverIdle());
         }
-      } catch (error) {
-        if (this.valid()) {
-          this.agents = []; this.renderWidget();
-          this.ctx.ui.notify(`Subagent watch stopped: ${String(error)}`, "warning");
-        }
+      } catch (error) { this.synchronizationFailed(error, activity); }
+      finally {
+        try { if (this.syncState !== "active") await this.client.park(); }
+        catch (error) { this.synchronizationFailed(error, activity); }
+        this.watching = undefined;
+        // Foreground activity may have won the race with an old idle watch.
+        if (this.valid() && this.syncState === "active") this.startWatching();
       }
     })();
   }
   private async claim() {
     await this.reconcile();
     if (!this.valid()) return;
-    const claim = await this.client.call("pi_claim", {});
+    const waking = this.syncState === "parked";
+    const claim = await this.client.call("pi_claim", {}, undefined, { passive: !this.hasAttention() });
+    this.attentionPending = false;
     const events = claim.events as Attention[];
+    if (waking || events.length) this.resume();
     if (!events.length) return;
+    this.claims.add(claim.id as string);
     return { receipt: claim.id as string, events, runs: claim.runs as unknown[], questions: claim.questions as QuestionIdentity[] };
   }
   private message(claim: Claim) {
@@ -152,29 +190,33 @@ export class SubagentSession {
   private async deliverIdle() {
     if (!this.valid() || !this.ctx.isIdle() || this.ctx.hasPendingMessages()) return;
     const claim = await this.claim(); if (!claim) return;
-    if (!this.valid() || !this.ctx.isIdle() || this.ctx.hasPendingMessages()) { await this.client.call("pi_release", { receipt: claim.receipt }); return; }
+    if (!this.valid() || !this.ctx.isIdle() || this.ctx.hasPendingMessages()) { await this.client.call("pi_release", { receipt: claim.receipt }); this.claims.delete(claim.receipt); return; }
     try { this.pi.sendMessage(this.message(claim), { triggerTurn: true }); }
-    catch (error) { await this.client.call("pi_uncertain", { receipt: claim.receipt }); throw error; }
+    catch (error) { await this.client.call("pi_uncertain", { receipt: claim.receipt }); this.claims.delete(claim.receipt); throw error; }
     await this.reconcile();
   }
   async boundary(event: AgentBeforeSettleEvent | TurnEndEvent, ctx: ExtensionContext) {
     this.update(ctx);
-    return this.serialize(async () => {
-      if (!this.client.scope || !this.valid()) return;
+    return this.synchronize(async () => {
       if (event.outcome !== "completed") { await this.reconcile(); return; }
       const claim = await this.claim(); if (!claim) return;
-      if (!this.valid()) { await this.client.call("pi_release", { receipt: claim.receipt }); return; }
+      if (!this.valid()) { await this.client.call("pi_release", { receipt: claim.receipt }); this.claims.delete(claim.receipt); return; }
       return { entries: [...event.entries, { type: "custom_message" as const, ...this.message(claim) }], continue: true };
     });
   }
   async settled(ctx: ExtensionContext, final = false) {
     this.update(ctx);
-    if (!this.client.scope || !this.valid()) return;
-    await this.serialize(async () => {
+    await this.synchronize(async () => {
       await this.reconcile();
-      if (final) for (const [id, delivery] of this.deliveries) {
-        for (const receipt of delivery.ticket.receipts) await this.client.call("pi_uncertain", { receipt });
-        this.deliveries.delete(id);
+      if (final) {
+        for (const [id, delivery] of this.deliveries) {
+          for (const receipt of delivery.ticket.receipts) await this.client.call("pi_uncertain", { receipt });
+          this.deliveries.delete(id);
+        }
+        for (const receipt of this.claims) {
+          await this.client.call("pi_uncertain", { receipt }); this.claims.delete(receipt);
+        }
+        if (this.syncState === "parked") this.resume();
       }
       await this.deliverIdle();
     });
@@ -264,6 +306,7 @@ export class SubagentSession {
       if (!this.valid() || signal?.aborted) throw new Error("Subagent call cancelled before dispatch");
       dispatched = true;
       result = await this.client.call(name, params, signal, extra);
+      this.resume(true);
       if (mutation) result.request_id = params.request_id;
     }
     catch (error) {
@@ -292,7 +335,7 @@ export class SubagentSession {
       throw new Error(`Subagent result belongs to a detached parent session${mutation ? `; request_id=${params.request_id}; inspect before retrying` : ""}`);
     }
     if (ticket) this.deliveries.set(id, { ticket, delivered: false, isError });
-    if (this.client.scope) this.startWatching();
+    this.startWatching();
     const content = [{ type: "text" as const, text: JSON.stringify(result) }];
     return { content, structuredContent: result as Awaited<ReturnType<ToolDefinition["execute"]>>["structuredContent"], isError,
       details: { ...(ticket ? { metisSubagentReceipt: { ...ticket, sessionId: this.sessionId, scope: this.client.scope!, digest: digest(content), isError } satisfies ReceiptProof } : {}) } };
@@ -332,11 +375,14 @@ export class SubagentSession {
         else if (question.method === "editor") answer = await ctx.ui.editor(title, question.prefill);
         else if (question.method === "input") answer = await ctx.ui.input(title, question.placeholder);
         else throw new Error("Unsupported question type; use pi_answer_agent with an explicit answer");
-        if (answer !== undefined && this.valid()) await this.client.call("pi_answer_agent", { agent_id: target, ui_request_id: question.id, answer, request_id: randomUUID() });
+        if (answer !== undefined && this.valid()) {
+          await this.client.call("pi_answer_agent", { agent_id: target, ui_request_id: question.id, answer, request_id: randomUUID() }); this.resume(true);
+        }
       } finally { if (ticket && this.valid()) await Promise.all(ticket.receipts.map(receipt => this.client.call("pi_release", { receipt }))); }
       return;
     }
-    const snapshot = await this.client.call("pi_list_agents", {}, undefined, { consume: false }); this.startWatching();
+    const snapshot = await this.client.call("pi_list_agents", {}, undefined, { consume: false });
+    this.resume(true);
     if (!this.valid()) return;
     const agents = snapshot.agents as typeof this.agents;
     if (!agents.length) { ctx.ui.notify("No subagents in this session", "info"); return; }

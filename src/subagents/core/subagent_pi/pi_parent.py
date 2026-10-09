@@ -57,6 +57,7 @@ class PiNotifications:
     def __init__(self, store, worker_for, changed):
         self.store, self.worker_for, self.changed = store, worker_for, changed
         self.waits = {}
+        self.draining = False
 
     def reserve_delivery(self, op, params, source):
         from .views import wait_run_ids
@@ -122,6 +123,8 @@ class PiNotifications:
             until = asyncio.get_running_loop().time()+25
             async with self.changed:
                 while True:
+                    if self.draining:
+                        raise AgentError('daemon_idle','Idle daemon is parked; background watching does not wake it')
                     parent = bound_parent(self.store,sid)
                     if parent['lease'] != lease: raise AgentError('parent_stale','Parent lease replaced')
                     notifications = self.pending(sid)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import contextlib
+import fcntl
 import os
 from pathlib import Path
 import subprocess
@@ -51,11 +52,27 @@ async def connect_daemon(home,autostart):
             log.replace(home/'daemon.previous.log')
         entry=Path(__file__).resolve().parent.parent/'bin/subagent-pi'
         env=os.environ.copy(); env['PI_AGENTS_HOME']=str(home)
-        with log.open('ab') as f:
-            subprocess.Popen([sys.executable,str(entry),'daemon','run'],stdin=subprocess.DEVNULL,
-                             stdout=f,stderr=f,start_new_session=True,env=env,close_fds=True)
-        until=time.monotonic()+8
+        until=time.monotonic()+boot_budget(home)
+        started=False
         while True:
+            # A parked daemon closes its socket before verified worker cleanup
+            # releases the lock. Do not spawn a replacement that loses that
+            # lock and exits, leaving the waiting caller unable to wake it.
+            if not started:
+                fd=os.open(home/'daemon.lock',os.O_RDWR|os.O_CREAT,0o600)
+                try:
+                    try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    except BlockingIOError: pass
+                    else:
+                        # Probe only. The child must acquire its own lease even
+                        # if the parent is descheduled immediately after spawn.
+                        fcntl.flock(fd,fcntl.LOCK_UN)
+                        with log.open('ab') as f:
+                            subprocess.Popen([sys.executable,str(entry),'daemon','run'],stdin=subprocess.DEVNULL,
+                                             stdout=f,stderr=f,start_new_session=True,env=env,close_fds=True)
+                        started=True
+                        until=time.monotonic()+8
+                finally: os.close(fd)
             try: reader,writer=await connect(); break
             except (FileNotFoundError,ConnectionRefusedError):
                 if time.monotonic()>until: raise AgentError('daemon_start_failed',f'Cannot start daemon; inspect {log}')

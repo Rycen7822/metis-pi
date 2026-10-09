@@ -15,19 +15,11 @@ HOST_OPS=frozenset({'pi_watch','pi_view','pi_claim','pi_observe','pi_release','p
 
 async def serve_pi(home):
     io=await Stdio().open()
-    tasks={}; source=None; scope=None
-    async def dispatch(msg):
-        nonlocal source,scope
-        rid=msg['id']; prepared=None
-        try:
-            op=msg.get('operation'); p=msg.get('params',{})
-            if not isinstance(p,dict): raise AgentError('invalid_argument','params must be an object')
-            if op=='initialize':
-                if source is not None: raise AgentError('already_initialized','Pi bridge is already bound')
-                candidate=msg.get('source')
-                if not isinstance(candidate,dict) or not isinstance(candidate.get('env'),dict) or not isinstance(candidate.get('parent'),dict) or candidate['parent'].get('kind')!='pi':
-                    raise AgentError('invalid_parent','Trusted Pi initialization is required')
-                ping=await request(home,'ping',{})
+    tasks={}; source=None; scope=None; parked=False
+    async def backend(op,p,*,passive=False,source=None,on_result=None):
+        for attempt in range(2):
+            try:
+                ping=await request(home,'ping',{},autostart=not passive)
                 if ping.get('pi_host')!=1:
                     raise AgentError('version_mismatch','Running daemon lacks Pi host support; drain and restart it explicitly')
                 if ping.get('runtime_revision')!=RUNTIME_REVISION:
@@ -35,10 +27,35 @@ async def serve_pi(home):
                         'Running subagent daemon has older or different source code. Reload cannot upgrade it. '
                         'Let work finish, close resident children, stop the daemon without --force, then reload. '
                         'Background work has not been interrupted.')
+                return await request(home,op,p,timeout=call_timeout(op,p,home),autostart=False,source=source,on_result=on_result)
+            except AgentError as e:
+                if e.code not in {'daemon_unavailable','daemon_idle'}: raise
+                if passive: raise AgentError('daemon_idle','No active daemon; background synchronization is parked')
+                if attempt: raise
+                # Only known pre-admission rejection can be retried. Lost
+                # replies/timeouts remain uncertain, including mutations.
+                await asyncio.sleep(.05)
+
+    async def dispatch(msg):
+        nonlocal source,scope
+        rid=msg['id']; prepared=None
+        try:
+            op=msg.get('operation'); p=msg.get('params',{})
+            if not isinstance(p,dict): raise AgentError('invalid_argument','params must be an object')
+            passive=msg.get('passive',False)
+            if not isinstance(passive,bool): raise AgentError('invalid_argument','passive must be a boolean')
+            if op=='initialize':
+                if source is not None: raise AgentError('already_initialized','Pi bridge is already bound')
+                candidate=msg.get('source')
+                if not isinstance(candidate,dict) or not isinstance(candidate.get('env'),dict) or not isinstance(candidate.get('parent'),dict) or candidate['parent'].get('kind')!='pi':
+                    raise AgentError('invalid_parent','Trusted Pi initialization is required')
                 config=load_config(home)
                 extra={k:os.environ[k] for k in config['inheritance'].get('child_env',[]) if k in os.environ}
-                candidate={**candidate,'env':{**candidate['env'],**extra}}
-                result=await request(home,'scope_open',p,source=candidate)
+                reconnect=msg.get('reconnect',False)
+                if not isinstance(reconnect,bool): raise AgentError('invalid_argument','reconnect must be a boolean')
+                if reconnect and not p.get('scope'): raise AgentError('invalid_argument','reconnect requires an existing scope')
+                candidate={**candidate,'env':{**candidate['env'],**extra},'reconnect':reconnect}
+                result=await backend('scope_open',p,passive=passive,source=candidate)
                 result['boot_timeout']=call_timeout('spawn',{},home)
                 source=candidate; scope=result['scope']
             else:
@@ -68,9 +85,9 @@ async def serve_pi(home):
                         nonlocal prepared
                         prepared=value.get('_pi_delivery')
                         await io.output({'id':rid,'ok':True,'result':value})
-                    await request(home,op,p,timeout=call_timeout(op,p,home),source=current,on_result=output)
+                    await backend(op,p,passive=passive,source=current,on_result=output)
                     return
-                result=await request(home,op,p,timeout=call_timeout(op,p,home),source=current)
+                result=await backend(op,p,passive=passive,source=current)
             await io.output({'id':rid,'ok':True,'result':result})
         except AgentError as e:
             with contextlib.suppress(OutputClosed):
@@ -100,6 +117,9 @@ async def serve_pi(home):
             try: msg=json.loads(line)
             except (ValueError,UnicodeError): break
             if not isinstance(msg,dict): break
+            if msg=={'park':True}:
+                parked=True
+                continue
             if 'cancel' in msg:
                 key=msg['cancel']
                 if isinstance(key,str) and key in tasks: tasks[key].cancel()
@@ -114,7 +134,7 @@ async def serve_pi(home):
         pending=list(tasks.values())
         for task in pending: task.cancel()
         await asyncio.gather(*pending,return_exceptions=True)
-        if source and scope:
+        if source and scope and not parked:
             with contextlib.suppress(AgentError,OSError,TimeoutError):
                 await request(home,'pi_detach',{'scope':scope},timeout=2,autostart=False,source=source)
         io.close()

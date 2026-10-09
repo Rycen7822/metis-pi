@@ -16,7 +16,12 @@ class ScopeBindings:
         self.scope_env = {}  # bound secrets stay in memory
         self.pi_trust = {}  # session-only approvals, never persisted in launches
 
-    def remember_pi_trust(self, sid, source):
+    def remember_pi_source(self, sid, source):
+        """Restore authenticated session-only state; scope_open alone persists base keys."""
+        env=(source or {}).get('env')
+        if env is not None:
+            names=BASE_ENV_KEYS + PROXY_ENV_KEYS + tuple(self.config['inheritance'].get('child_env',[]))
+            self.scope_env[sid]={k:v for k,v in env.items() if k in names}
         trust=(source or {}).get('project_trust')
         if trust is None: return
         if not isinstance(trust,dict) or set(trust)!={'cwd','trusted'} or not isinstance(trust['trusted'],bool):
@@ -87,11 +92,9 @@ class ScopeBindings:
         scope=self.store.scope(sid)
         env = source.get('env') if isinstance(source,dict) else None
         if ((source or {}).get('parent') or {}).get('kind')=='pi':
-            self.remember_pi_trust(sid,source)
+            self.remember_pi_source(sid,source)
             self.store.execute('UPDATE scopes SET inheritance=0 WHERE id=?',(sid,))
-            if env is not None:
-                self.scope_env[sid]={k:v for k,v in env.items() if k in BASE_ENV_KEYS + PROXY_ENV_KEYS or k in inh.get('child_env',[])}
-                self.remember_base_env(sid,self.scope_env[sid])
+            if env is not None: self.remember_base_env(sid,self.scope_env[sid])
             return
         master_enabled = bool(inh.get('enabled',True))
         explicit_home = p.get('codex_home')
