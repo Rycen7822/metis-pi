@@ -1,4 +1,5 @@
 import { asRecord, safeText, type Component, type Highlight, type Palette, type Renderers, type TextFactory, type ViewContext } from "./tool-names.ts";
+import { shellTitle } from "./renderers.ts";
 import { productFor, publishRows, registerProduct, releaseCopyCache, type ChildPlacement } from "./selection-copy/model.ts";
 
 interface NestedView {
@@ -118,6 +119,8 @@ export function makeCodemodeRenderers(input: {
     renderResult(result, options, theme, context) {
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
+      const history = asRecord(value.nestedCalls);
+      const historicalArgs = new Map((Array.isArray(history.calls) ? history.calls.map(asRecord) : []).map((call) => [call.id, call]));
       const live = input.store.entries(context.toolCallId ?? "");
       const byId = new Map(recorded.map((call) => [call.id, call]));
       const pending = new Map<string, number>();
@@ -144,26 +147,33 @@ export function makeCodemodeRenderers(input: {
         if (typeof call.id !== "string" || typeof call.name !== "string") continue;
         const captured = input.store.get(context.toolCallId ?? "", call.id);
         if (call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined) missingResults = true;
+        const saved = historicalArgs.get(call.id);
         let args = captured?.args;
+        if (args === undefined && saved?.name === call.name) args = saved.arguments;
         if (args === undefined && typeof call.args === "string") {
           try { args = JSON.parse(call.args); } catch { /* Display summary, never guess truncated args. */ }
         }
         const rawResult = asRecord(captured?.result);
         // Native callbacks receive content/details only; final event isError is authoritative.
         const viewResult = captured?.result === undefined ? undefined : { content: rawResult.content, details: rawResult.details };
-        const renderers = args !== undefined && call.name !== "codemode" && !call.id.endsWith("/?")
-          ? input.resolve(call.name, viewResult) : undefined;
-        if (!renderers) {
-          parts.push(input.makeText(summary(call, theme, options.expanded === true)));
+        const renderers = call.name !== "codemode" && !call.id.endsWith("/?") ? input.resolve(call.name, viewResult) : undefined;
+        const partial = captured?.isPartial ?? call.status === "running";
+        const isError = captured?.isError ?? ["error", "cancelled"].includes(String(call.status));
+        if (!renderers || args === undefined) {
+          if (renderers === input.shell) {
+            // The builtin owner/status is known, but a truncated command isn't.
+            const { bullet, title } = shellTitle({ isPartial: partial, isError }, theme);
+            parts.push(input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`));
+            if (options.expanded && call.error) parts.push(input.makeText(theme.fg("error", safeText(String(call.error)))));
+          } else parts.push(input.makeText(summary(call, theme, options.expanded === true)));
           continue;
         }
         let slot = slots.get(call.id);
         if (!slot) { slot = { state: {} }; slots.set(call.id, slot); }
-        const partial = captured?.isPartial ?? call.status === "running";
         const nestedContext: ViewContext = {
           ...context, args, toolCallId: call.id, state: slot.state,
           executionStarted: true, argsComplete: true, isPartial: partial,
-          isError: captured?.isError ?? ["error", "cancelled"].includes(String(call.status)),
+          isError,
           hasResult: !partial, lastComponent: slot.call,
         };
         try {

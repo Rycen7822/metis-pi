@@ -111,6 +111,47 @@ test("parallel running calls use real lifecycle ids and independent callback sta
   assert.equal(results.at(-1), true);
 });
 
+test("reloaded bash uses persisted complete arguments instead of the truncated preview", (t) => {
+  const { row } = setup(t);
+  const command = ["printf HISTORY_HEAD", ...Array(20).fill("printf middle"), "printf HISTORY_TAIL"].join("\n");
+  const args = { command }, preview = JSON.stringify(args).slice(0, 197) + "...";
+  const result = deepFreeze({ content: [], details: { calls: [{ ...call(1, "bash", args), args: preview }] },
+    nestedCalls: { complete: true, calls: [{ id: `${parent}/1`, name: "bash", arguments: args, status: "ok" }] } });
+  row.updateResult(result, false);
+  assert.match(plain(row), /Ran printf HISTORY_HEAD/);
+  assert.doesNotMatch(plain(row), /✓ bash|HISTORY_TAIL/);
+  assert.match(plain(row), /Nested results unavailable/, "full args do not invent a missing result");
+  row.setExpanded(true);
+  assert.match(plain(row), /HISTORY_TAIL/);
+  assert.equal(result.nestedCalls.calls[0].arguments.command, command);
+});
+
+test("live bash retains Running and Ran independently of parent script status", (t) => {
+  const { row, capture } = setup(t);
+  const args = { command: "printf LIVE_COMMAND" };
+  capture(1, "bash", args);
+  row.updateResult({ content: [], details: { calls: [{ id: `${parent}/?`, name: "bash", args: JSON.stringify(args), status: "running" }] } }, true);
+  assert.match(plain(row), /Running printf LIVE_COMMAND/);
+  capture(1, "bash", args, { content: [{ type: "text", text: "finished" }], details: {} });
+  row.updateResult({ content: [], details: { calls: [call(1, "bash", args)] }, isError: true }, false);
+  assert.match(plain(row), /Ran printf LIVE_COMMAND/);
+  assert.doesNotMatch(plain(row), /Running printf LIVE_COMMAND/);
+});
+
+test("unavailable or mismatched history arguments keep a builtin bash phase without guessing", (t) => {
+  const { row } = setup(t);
+  for (const record of [
+    { id: `${parent}/1`, name: "bash", argumentsBytes: 10000 },
+    { id: `${parent}/1`, name: "read", arguments: { command: "WRONG_NAME" } },
+    { id: `${parent}/2`, name: "bash", arguments: { command: "WRONG_ID" } },
+  ]) {
+    row.updateResult({ content: [], details: { calls: [{ ...call(1, "bash", {}), args: '{"command":"TRUNCATED...' }] },
+      nestedCalls: { complete: false, calls: [record] } }, false);
+    assert.match(plain(row), /Ran.*command unavailable/);
+    assert.doesNotMatch(plain(row), /✓ bash|TRUNCATED|WRONG_NAME|WRONG_ID/);
+  }
+});
+
 test("uncached history keeps summaries, errors, model cost, computed output and archive path", (t) => {
   const { row, handle } = setup(t);
   row.updateResult({ content: [{ type: "text", text: "computed independent output" }], details: {

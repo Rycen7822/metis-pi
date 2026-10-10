@@ -159,7 +159,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
       };
     }
-    if (name === "codemode" && source.source === "builtin" && source.path === "builtin:codemode") return codemode;
+    if (name === "codemode" && source.source === "builtin" && source.path === "builtin:codemode" && codemode) return {
+      renderCall: codemode.renderCall,
+      // Native render callbacks omit the persisted nested-call argument ledger.
+      renderResult: (value, opts, theme, ctx) => codemode.renderResult({ ...asRecord(value), nestedCalls: asRecord(current.result).nestedCalls }, opts, theme, ctx),
+    };
     if (!TOOL_NAMES.includes(name as ToolName)) return;
     if (source.source !== "builtin" || source.path !== `builtin:${name}`) return;
     // An EXACT builtin self-shell (edit renders its own rows) takes the same
