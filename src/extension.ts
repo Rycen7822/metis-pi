@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
+import { CodemodeViewStore, makeCodemodeRenderers } from "./codemode-view.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import { installStartupWarningFilter } from "./startup-warning-filter.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
@@ -111,6 +112,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   const replyTimes = new WeakMap<object, number>();
   const transcript = new TranscriptState();
   const tracker = new WriteDiffTracker();
+  const codemodeViews = new CodemodeViewStore();
   const session = {
     colorLevel: bindings.colorLevel ?? detectColorLevel(),
     writeChanges: new Map<string, WriteDiff>(),
@@ -260,6 +262,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   });
 
   pi.on("session_start", (_event, ctx) => {
+    codemodeViews.clear();
     const full = ctx as unknown as HostContextLike & { hasUI?: boolean; ui?: Record<string, unknown> };
     chrome.invalidate();
     chrome.restore();
@@ -291,10 +294,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       });
     }
     if (!enabled || handle?.installed) return;
+    const renderers = makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps);
     handle = installAdapter(bindings.prototype, {
       getTools: () => pi.getAllTools(), enabled: () => enabled,
       definitionPrototype: bindings.interactivePrototype,
-      renderers: makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps),
+      renderers,
+      makeCodemode: (resolve) => makeCodemodeRenderers({ makeText: bindings.makeText, highlight: bindings.highlight,
+        store: codemodeViews, shell: renderers.bash, expandHint: bindings.expandHint, resolve }),
       highlightOwnedCommand: (lines) => highlightBashScript(lines, session.colorLevel),
       renderOwnedCommand: bindings.makeShell?.makeShellCall
         ? (command, state, expanded, theme, context) => bindings.makeShell!.makeShellCall!({
@@ -436,6 +442,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled) return;
     const info = sourceInfoFor(event.toolName);
+    const source = info as { source?: string; path?: string } | undefined;
+    codemodeViews.start(event, event.toolName === "codemode" && source?.source === "builtin" && source.path === "builtin:codemode");
     tracker.trackStart(event.toolCallId, event.toolName, event.args, info, (path) => resolveNativeMutationPath(ctx.cwd, path));
     if (!event.parentToolCallId) transcript.apply({ type: "tool_execution_start", toolCallId: event.toolCallId, toolName: event.toolName });
     if (chromeEnabled) metrics.toolStart(event.toolCallId, event.toolName);
@@ -445,6 +453,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (!enabled) return;
     // A tool error is a DIAGNOSTIC count only — it never sets the verdict.
     if (event.isError === true && chromeEnabled) outcome.toolError();
+    // End outcomes have passed result hooks; never cache pre-redaction partials.
+    codemodeViews.finish(event);
     const info = sourceInfoFor(event.toolName);
     const change = tracker.trackEnd(event.toolCallId, event.toolName, info, event.isError);
     if (change) {
@@ -586,6 +596,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     chrome.restore();
     gitChanges.dispose();
     session.writeChanges.clear();
+    codemodeViews.clear();
     transcript.resetSession();
     metrics.reset();
     outcome.reset();

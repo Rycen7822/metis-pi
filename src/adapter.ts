@@ -2,6 +2,7 @@ import { asRecord, TOOL_NAMES, type Component, type Palette, type Renderers, typ
 import { decorationRow, productFor, publishRows, publishedRowsOf, registerProduct } from "./selection-copy/model.ts";
 import { fileURLToPath } from "node:url";
 import { fusionRenderers } from "./fusion-view.ts";
+import type { NestedRendererLookup } from "./codemode-view.ts";
 
 export const OWNED_EXECUTION_ENTRY = fileURLToPath(new URL("../extensions/execution.ts", import.meta.url));
 export const OWNED_FUSION_ENTRY = fileURLToPath(new URL("../extensions/action-fusion.ts", import.meta.url));
@@ -28,6 +29,7 @@ export interface AdapterOptions {
   getTools(): readonly unknown[];
   enabled(): boolean;
   renderers: Record<ToolName, Renderers>;
+  makeCodemode?: (resolve: NestedRendererLookup) => Renderers;
   /** Native InteractiveMode lookup: prove resolved renderers still belong to the registered tool. */
   definitionPrototype?: object;
   /** Paint only command text; the owned tool retains grouping and execution state. */
@@ -157,12 +159,28 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
       };
     }
+    if (name === "codemode" && source.source === "builtin" && source.path === "builtin:codemode") return codemode;
     if (!TOOL_NAMES.includes(name as ToolName)) return;
     if (source.source !== "builtin" || source.path !== `builtin:${name}`) return;
     // An EXACT builtin self-shell (edit renders its own rows) takes the same
     // renderer as every other text tool; third-party self-shells back off above.
     return options.renderers[name as ToolName];
   }
+  const codemode = options.makeCodemode?.((name, result) => {
+    if (!active || !ownsMethods() || !options.enabled() || name === "codemode") return;
+    const context = definitionPrototype && LOOKUP_CONTEXTS.get(definitionPrototype)?.deref();
+    if (!context) return;
+    const definition = lookupWrapper.call(context, name);
+    if (!definition || typeof definition !== "object") return;
+    const owned = replacement({ toolName: name, toolDefinition: definition, result });
+    if (owned) return owned;
+    const { renderCall, renderResult } = asRecord(definition);
+    if (typeof renderCall !== "function" || typeof renderResult !== "function") return;
+    return {
+      renderCall: (args, theme, ctx) => renderCall(args, theme, ctx),
+      renderResult: (value, opts, theme, ctx) => renderResult(value, opts, theme, ctx),
+    };
+  });
   const rendering = new Map<unknown, Renderers | undefined>();
   function select(row: unknown): Renderers | undefined {
     if (rendering.has(row)) return active && ownsMethods() && options.enabled() ? rendering.get(row) : undefined;
