@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { subagentTheme } from "../helpers/subagent-theme.mjs";
 import { SubagentSession } from "../../src/subagents/session.ts";
 import { RuntimeError, SubagentClient } from "../../src/subagents/client.ts";
 
@@ -38,6 +39,34 @@ function heldWatch(signal) {
     signal.addEventListener("abort", () => reject(new Error("closed test watch")), { once: true }),
   );
 }
+
+test("the widget refreshes at 20 FPS without backend polling and stops when closed", async t => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let watches = 0;
+  const f = fixture(t, async (op, _params, signal) => {
+    if (op !== "pi_watch") return {};
+    if (watches++) return heldWatch(signal);
+    return { cursor: 1, agents: [{ id: "spinner", name: "worker", state: "running" }], notifications: [] };
+  });
+  let renders = 0, widget;
+  f.ctx.mode = "tui";
+  f.ctx.ui.setWidget = (_key, factory) => {
+    widget = factory?.({ requestRender: () => { renders++; } }, subagentTheme);
+  };
+  await until(() => widget && watches === 2);
+  const calls = f.operations.length;
+  t.mock.timers.tick(49);
+  assert.equal(renders, 0);
+  t.mock.timers.tick(1);
+  assert.equal(renders, 1);
+  t.mock.timers.tick(950);
+  assert.equal(renders, 20);
+  assert.equal(f.operations.length, calls, "animation ticks do not query the backend");
+  await f.owner.close();
+  assert.equal(widget, undefined);
+  t.mock.timers.tick(1000);
+  assert.equal(renders, 20, "closed sessions no longer request animation frames");
+});
 
 for (const error of [
   new RuntimeError({ code: "version_mismatch", message: "controlled stale daemon" }),

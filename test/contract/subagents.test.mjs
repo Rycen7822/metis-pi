@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -15,6 +16,26 @@ import {
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
+import { subagentWidget } from "../../src/subagents/widget.ts";
+import { subagentTheme } from "../helpers/subagent-theme.mjs";
+
+test("subagent spinner changes every 50ms while preserving its 2.5-second cycle", (t) => {
+  let now = 0;
+  t.mock.method(Date, "now", () => now);
+  const widget = subagentWidget(subagentTheme, () => [{ id: "spinner", name: "worker", state: "running" }], () => {});
+  const frames = [];
+  for (now = 0; now < 2500; now += 50) {
+    const rows = widget.render(80);
+    assert.ok(rows.every(row => visibleWidth(row) <= 80));
+    frames.push(rows[1]);
+  }
+  for (let i = 0; i < frames.length; i++) {
+    assert.notEqual(frames[i], frames[(i + 1) % frames.length], "each refresh has a visible transition");
+  }
+  const original = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  assert.deepEqual(frames.filter((_frame, i) => i % 5 === 0).map(frame => stripVTControlCharacters(frame)[3]), original);
+  assert.equal(widget.render(80)[1], frames[0], "the cycle still repeats after 2.5 seconds");
+});
 
 test("native subagent registration honors the global switch without starting backend work", async (t) => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -357,7 +378,7 @@ test(
             assert.equal(widget.handleMouse({ type: "click", button: "left", y: 2 }).handled, true);
           }
         };
-        widget = content({ requestRender: render }, { fg: (_color, text) => text, bold: (text) => text });
+        widget = content({ requestRender: render }, subagentTheme);
         render();
       },
       custom(factory, options) {

@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { isDaemonIdle, RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
 import { SubagentViewer, type AgentInspection } from "./viewer.ts";
-import { activeAgents, cleanLabel as cleanName, subagentWidget, type WidgetAgent } from "./widget.ts";
+import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "./widget.ts";
 import { loadConfig } from "../config.ts";
 import { installSamplingMailbox } from "./sampling.ts";
 
@@ -171,7 +171,7 @@ export class SubagentSession {
       },
       { placement: "aboveEditor" },
     );
-    this.widgetTimer = setInterval(() => this.widgetRefresh?.(), 250);
+    this.widgetTimer = setInterval(() => this.widgetRefresh?.(), WIDGET_FRAME_MS);
     this.widgetTimer.unref();
   }
   private async openViewer(agentId: string) {

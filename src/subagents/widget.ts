@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
+import { foregroundAnsi, mixColors, MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface WidgetAgent {
   id: string; name: string; state: string; started?: number;
@@ -10,6 +10,18 @@ export interface WidgetAgent {
 export const cleanLabel = (text: string) => stripVTControlCharacters(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
 const ACTIVE = new Set(["starting", "running", "needs_input", "stopping"]);
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+export const WIDGET_FRAME_MS = 50;
+const SPINNER_CYCLE_MS = 2500;
+
+function spinnerFrames(theme: Theme): string[] {
+  const shades = [0, 0.1, 0.2, 0.1, 0.05].map(amount =>
+    foregroundAnsi(mixColors(theme.colors.accent, theme.colors.muted, amount), theme.getColorMode()));
+  return SPINNER.flatMap((current, index) => {
+    const next = SPINNER[(index + 1) % SPINNER.length];
+    const between = String.fromCodePoint(current.codePointAt(0)! | next.codePointAt(0)!);
+    return [current, current, between, next, next].map((glyph, step) => `${shades[step]}${glyph}\x1b[39m`);
+  });
+}
 const ACTIONS: Record<string, string> = {
   read: "reading", bash: "running command", exec_command: "running command", write_stdin: "waiting for command",
   edit: "editing", write: "writing", apply_patch: "applying patch", grep: "searching", find: "finding files", ls: "listing",
@@ -19,6 +31,7 @@ export const activeAgents = (agents: WidgetAgent[]) => agents.filter(agent => AC
 
 /** Live rows and their mouse targets come from the same rendered snapshot. */
 export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: (id: string) => void) {
+  const frames = spinnerFrames(theme);
   let targets: Array<string | undefined> = [];
   return new MouseRegion({
     render(width) {
@@ -27,7 +40,7 @@ export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: 
       const active = activeAgents(agents()).sort((a, b) => Number(b.state === "needs_input") - Number(a.state === "needs_input"));
       if (!active.length) return [];
       const shown = active.slice(0, 5), overflow = active.length - shown.length;
-      const now = Date.now(), frame = SPINNER[Math.floor(now / 250) % SPINNER.length];
+      const now = Date.now(), frame = frames[Math.floor((now % SPINNER_CYCLE_MS) / WIDGET_FRAME_MS)];
       const lines = [theme.fg("accent", `● Subagents · ${active.length} active`)];
       targets.push(undefined);
       for (const [index, agent] of shown.entries()) {
