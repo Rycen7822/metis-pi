@@ -1,8 +1,7 @@
+import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import type { complete, Api, Message, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync } from "node:fs";
 import { findModelWithProviderRouting, isModelInScope } from "./summary-model-scope.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 import { awaitWithAbort } from "./abortable.ts";
 
 const OUTPUT_TOKENS = 2_000;
@@ -25,21 +24,8 @@ interface AnswerModelSelector {
 }
 
 function loadConfiguredAnswerModel(): AnswerModelSelector | undefined {
-	const configPath = getWebSearchConfigPath();
-	if (!existsSync(configPath)) return undefined;
-
-	let raw: unknown;
-	try {
-		raw = JSON.parse(readFileSync(configPath, "utf8"));
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${configPath}: ${message}`);
-	}
-
-	const root = raw && typeof raw === "object" && !Array.isArray(raw)
-		? raw as Record<string, unknown>
-		: undefined;
-	const fetchConfig = root?.fetch;
+	const configPath = getWebAccessConfigPath();
+	const fetchConfig = loadWebAccessConfig().fetch;
 	if (!fetchConfig || typeof fetchConfig !== "object" || Array.isArray(fetchConfig)) return undefined;
 	const values = fetchConfig as Record<string, unknown>;
 	const hasProvider = Object.hasOwn(values, "answerProvider");
@@ -78,7 +64,10 @@ function resolveModel(ctx: ExtensionContext, override?: string, configured?: Ans
 	if (!model) {
 		if (override) throw new Error(`Answer model not found: ${override}`);
 		if (configured) {
-			throw new Error(`Answer model not found: ${configured.provider}/${configured.id} (from fetch.answerProvider/fetch.answerModel in ${getWebSearchConfigPath()})`);
+			throw new Error(
+				`Answer model not found: ${configured.provider}/${configured.id} ` +
+				`(from fetch.answerProvider/fetch.answerModel in ${getWebAccessConfigPath()})`,
+			);
 		}
 		throw new Error("No current model available for page answering");
 	}

@@ -109,7 +109,7 @@ test("blocked-page guidance enables Jina with only the remote-hosted opt-in when
 	const output = await runExtract({});
 	const hint = output.result.error.split("\n").find(line => line.includes(JINA_HINT));
 	assert.ok(hint, output.result.error);
-	assert.match(hint, /set fetchRouting\.allowRemoteHostedProviders to true in .*web-search\.json/);
+	assert.match(hint, /set fetchRouting\.allowRemoteHostedProviders to true in .*metis-pi\.toml/);
 	assert.match(hint, /Jina is already in your fetch provider order/);
 	assert.match(hint, /also allows the other hosted providers/);
 	assert.ok(hint.includes(JINA_PRIVACY), hint);

@@ -739,8 +739,10 @@ test("Bright Data Web Unlocker failures stay visible in fetch_content guidance",
 	);
 	assert.match(
 		output.error,
-		/Set brightdataApiKey and brightdataUnlockerZone in .*web-search\.json or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE/,
+		/Set brightdataApiKey in .*web-search\.json/,
 	);
+	assert.match(output.error, /webAccess\.brightdataUnlockerZone in .*metis-pi\.toml/);
+	assert.match(output.error, /or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE/);
 	assert.equal(output.error.includes("bd-secret"), false);
 });
 
@@ -768,7 +770,7 @@ test("Bright Data Web Unlocker rejects a malformed zone and a malformed config r
 	assert.equal(badZoneOutput.fetchCalls, 0);
 	assert.match(
 		badZoneOutput.message,
-		/Invalid Bright Data Unlocker zone: brightdataUnlockerZone in .*web-search\.json/,
+		/Invalid Bright Data Unlocker zone: brightdataUnlockerZone in .*metis-pi\.toml/,
 	);
 
 	const badRoot = await mkdtemp(join(tmpdir(), "pi-web-access-brightdata-"));

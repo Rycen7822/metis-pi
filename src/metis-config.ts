@@ -2,6 +2,7 @@ import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSyn
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parse, stringify } from "smol-toml";
+import { readLegacyWebAccess, splitWebAccessConfig, WEB_CREDENTIALS_FILE } from "./web-access-config.ts";
 
 export const METIS_CONFIG_FILE = "metis-pi.toml";
 export const METIS_CONFIG_GUIDE = "metis-pi-config.md";
@@ -169,6 +170,7 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
   const sessionRecall = typeof recallModel?.["provider"] === "string" && recallModel["provider"]
     && typeof recallModel["id"] === "string" && recallModel["id"]
     ? { queryModel: `${recallModel["provider"]}/${recallModel["id"]}` } : {};
+  const web = readLegacyWebAccess(agentDir, path => readText(path, read));
   const imported = {
     appearance,
     execution,
@@ -177,11 +179,12 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
     contextPrune: object(pi?.["contextPrune"]) ? encodePruneConfig(pi["contextPrune"]) : {},
     dynamicAgents: dynamic ? { ...dynamic, enabled: dynamic["enabled"] !== false } : {},
     sessionRecall,
+    webAccess: web?.preferences ?? {},
   };
   return {
     imported,
     notes,
-    present: !!(old || pi?.["contextPrune"] || dynamic || conversion || formerAgents || recall || backendText !== undefined),
+    present: !!(old || pi?.["contextPrune"] || dynamic || conversion || formerAgents || recall || web || backendText !== undefined),
   };
 }
 /** Read-only bridge until the single global TOML exists. Never read project metis settings. */
@@ -205,6 +208,36 @@ export function readMetisConfig(
     legacy: legacy.present,
     notes: legacy.notes,
   };
+}
+
+let cachedWebToml: { path: string; text: string; config: ObjectValue } | undefined;
+export function readWebAccessConfig(agentDir: string): ObjectValue {
+  try {
+    const path = metisConfigPath(agentDir), text = readText(path, optionalRead);
+    const legacy = readLegacyWebAccess(agentDir, optionalRead);
+    if (text !== undefined && (cachedWebToml?.path !== path || cachedWebToml.text !== text)) {
+      cachedWebToml = { path, text, config: parseMetisConfig(text, path) };
+    }
+    const config = text === undefined ? legacy?.preferences ?? {} : cachedWebToml!.config["webAccess"] ?? {};
+    if (!object(config)) throw new MetisConfigError(metisConfigPath(agentDir), "webAccess must be a table");
+    const { preferences, credentials } = splitWebAccessConfig(config);
+    if (text !== undefined && Object.keys(credentials).length) {
+      throw new MetisConfigError(metisConfigPath(agentDir), `webAccess credentials belong in ${WEB_CREDENTIALS_FILE}`);
+    }
+    return structuredClone({
+      ...defaultMetisConfig()["webAccess"], ...preferences,
+      ...(legacy ? splitWebAccessConfig(legacy.config).credentials : {}),
+    });
+  } catch (error) {
+    if (error instanceof MetisConfigError) throw new Error(`Failed to parse ${error.path}: ${error.reason}`, { cause: error });
+    throw error;
+  }
+}
+
+export function updateWebAccessConfig(agentDir: string, patch: ObjectValue): void {
+  const { preferences, credentials } = splitWebAccessConfig(patch);
+  if (Object.keys(credentials).length) throw new Error(`Store Web Access credentials in ${WEB_CREDENTIALS_FILE}`);
+  updateMetisConfig(agentDir, { webAccess: preferences });
 }
 function installGuide(agentDir: string, replace = false): void {
   try {
@@ -232,10 +265,25 @@ function atomicWrite(path: string, text: string, exclusive = false): boolean {
   }
   finally { try { unlinkSync(temp); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
+
+function persistWebCredentials(agentDir: string, backup?: string): void {
+  const legacy = readLegacyWebAccess(agentDir, optionalRead);
+  if (!legacy) return;
+  const { preferences, credentials } = splitWebAccessConfig(legacy.config);
+  const target = join(agentDir, WEB_CREDENTIALS_FILE);
+  if (legacy.path === target && !Object.keys(preferences).length) return;
+  if (legacy.path === target) {
+    const directory = backup ?? join(agentDir, "backups", `web-search-${Date.now()}-${randomBytes(3).toString("hex")}`);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!backup) copyFileSync(target, join(directory, WEB_CREDENTIALS_FILE));
+  } else if (!Object.keys(credentials).length) return;
+  atomicWrite(target, `${JSON.stringify(credentials, null, 2)}\n`, legacy.path !== target);
+}
 /** All in-process writers use one synchronous read/merge/atomic-write boundary. */
 export function updateMetisConfig(agentDir: string, patch: ObjectValue): void {
-  const current = readMetisConfig(agentDir).config;
-  atomicWrite(metisConfigPath(agentDir), renderMetisConfig(mergeMetisConfig(current, patch)));
+  const current = readMetisConfig(agentDir);
+  atomicWrite(metisConfigPath(agentDir), renderMetisConfig(mergeMetisConfig(current.config, patch)));
+  if (current.legacy) persistWebCredentials(agentDir);
   // A documentation failure must not report a successfully persisted setting as lost.
   try { installGuide(agentDir); } catch { /* /metis-config init can retry guide installation */ }
 }
@@ -254,20 +302,24 @@ export function migrateMetisConfig(agentDir: string): { path: string; backup: st
   }
   const backup = join(agentDir, "backups", `metis-config-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`);
   mkdirSync(backup, { recursive: true, mode: 0o700 });
-  for (const name of [METIS_CONFIG_FILE, METIS_CONFIG_GUIDE, ...legacyJsonFiles, legacyBackendFile]) {
+  for (const name of [METIS_CONFIG_FILE, METIS_CONFIG_GUIDE, ...legacyJsonFiles, legacyBackendFile, WEB_CREDENTIALS_FILE]) {
     const target = join(backup, name); mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     try { copyFileSync(join(agentDir, name), target); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
+  const web = readLegacyWebAccess(agentDir, optionalRead);
+  if (web && web.path !== join(agentDir, WEB_CREDENTIALS_FILE)) copyFileSync(web.path, join(backup, "legacy-web-search.json"));
   atomicWrite(path, renderMetisConfig(config));
+  persistWebCredentials(agentDir, backup);
   installGuide(agentDir, true);
   return { path, backup, notes: legacy.notes };
 }
-/** Explicit initialization; legacy files remain intact for rollback to old code. */
+/** Explicit initialization; mixed credential JSON is backed up before splitting. */
 export function initializeMetisConfig(agentDir: string): { created: boolean; legacy: boolean; path: string; notes: string[] } {
   const state = readMetisConfig(agentDir), path = metisConfigPath(agentDir);
   // The snapshot identifies absence; exclusive publication also guards another process's init.
   const created = (!state.present || state.legacy) && atomicWrite(path, renderMetisConfig(state.config), true);
+  if (created) persistWebCredentials(agentDir);
   installGuide(agentDir);
   return { created, legacy: created && state.legacy, path, notes: created ? state.notes : [] };
 }

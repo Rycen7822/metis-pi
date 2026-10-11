@@ -263,7 +263,7 @@ test("a malformed zone is rejected before the request instead of becoming an opa
 	assert.equal(output.fetchCalls, 0);
 	// The error names the setting that is wrong, quotes what it found, and says
 	// which zone type is required.
-	assert.match(output.error, /brightdataSerpZone in .*web-search\.json must be a zone name/);
+	assert.match(output.error, /brightdataSerpZone in .*metis-pi\.toml must be a zone name/);
 	assert.match(output.error, /https:\/\/not-a-zone\//);
 	assert.match(output.error, /must be of Bright Data type `serp`/);
 });

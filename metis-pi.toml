@@ -322,3 +322,27 @@ tools = ["read", "grep", "find", "ls"]
 # session_query 使用的模型；"default" 跟随当前会话，或填写已注册的 "provider/model-id"。
 # 例如 "openai/gpt-6.1-sol"；模型找不到时回退当前会话。每次查询重读，session_search 不调用模型。
 queryModel = "default"
+
+# =============================================================================
+# 8. 网页访问 / Web access
+# =============================================================================
+[webAccess]
+# 普通选项沿用上游字段名；未填写时沿用各功能的默认值。全部字段见 metis-pi-config.md。
+# /websearch 和 /curator 保存到本表。provider 与 searchRouting 不预填，保留自动模型路由。
+# provider = "auto"
+# workflow = "summary-review"         # none / summary-review / auto-summary
+# summaryModel = "openai/gpt-6.1-sol"
+# autoOpenBrowser = false
+# proxy = "http://127.0.0.1:7890"      # 含用户名或密码的代理放入同目录 web-search.json
+# cacheRoot = "/path/to/cache"         # 缓存另建 web-search-cache 子目录
+# [webAccess.searchRouting]
+# providers = ["parallel", "exa"]
+# useCurrentModel = false
+# fallbackOn = ["transient", "quota", "network", "invalid-response", "unsupported"]
+# [webAccess.fetch]
+# defaultMode = "readable"             # readable / raw / answer
+# timeout = 30                        # 秒
+# [webAccess.pdf]
+# enabled = true
+# provider = "auto"
+# API key/token、认证请求头保留在同目录 web-search.json，可继续用 $ENV / !command；不要写在 TOML。

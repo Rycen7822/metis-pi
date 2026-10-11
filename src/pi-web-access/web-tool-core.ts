@@ -1,10 +1,10 @@
+import { getWebSearchConfigPath, loadWebAccessConfig, getWebAccessConfigPath, runWithProxy } from "./utils.ts";
 // Host-neutral execution core for web_search (non-curator path), fetch_content,
 // get_search_content, and source_check. The Pi extension (index.ts) and the MCP
 // server both run tools through createWebToolCore; everything that differs per
 // host (session persistence, background notifications, Pi model access) is a
 // WebToolCoreHost hook. This module must stay free of runtime imports from
 // index.ts, curator/summary/activation modules, and @earendil-works/* packages.
-import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import pLimit from "p-limit";
@@ -21,7 +21,6 @@ import {
 } from "./gemini-search.ts";
 import { isOpenAISearchAvailable } from "./openai-search.ts";
 import type { SearchResult } from "./perplexity.ts";
-import { getWebSearchConfigPath, runWithProxy } from "./utils.ts";
 import { deleteResult, generateId, getResult, storeResult, type QueryResultData, type StoredSearchData } from "./storage.ts";
 import {
 	buildResearchArtifact,
@@ -44,7 +43,7 @@ import type {
 	WebToolResult,
 } from "./web-tool-contract.ts";
 
-export const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
+export const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
 
 export interface WebSearchConfig {
 	anysearchApiKey?: unknown;
@@ -103,23 +102,8 @@ export interface WebSearchConfig {
 	};
 }
 
-export function parseConfigRoot(raw: string): Record<string, unknown> {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH}: ${message}`);
-	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`Invalid config in ${WEB_SEARCH_CONFIG_PATH}: expected a JSON object`);
-	}
-	return parsed as Record<string, unknown>;
-}
-
 export function loadConfig(): WebSearchConfig {
-	if (!existsSync(WEB_SEARCH_CONFIG_PATH)) return {};
-	return parseConfigRoot(readFileSync(WEB_SEARCH_CONFIG_PATH, "utf-8")) as WebSearchConfig;
+	return loadWebAccessConfig() as WebSearchConfig;
 }
 
 export type ToolNames = {
@@ -1432,7 +1416,8 @@ async function standaloneProviderRejection(requested: unknown): Promise<string |
 			return undefined; // The core reports the same configuration error.
 		}
 		if (!available) {
-			return `OpenAI search over MCP needs an API key: set openaiApiKey in ${WEB_SEARCH_CONFIG_PATH} or OPENAI_API_KEY. ChatGPT/Codex sign-in, openaiUseProviderBaseUrl, and Pi model credentials work only inside Pi.`;
+			return `OpenAI search over MCP needs an API key: set openaiApiKey in ${getWebSearchConfigPath()} or OPENAI_API_KEY. ` +
+				"ChatGPT/Codex sign-in, openaiUseProviderBaseUrl, and Pi model credentials work only inside Pi.";
 		}
 	}
 	return undefined;

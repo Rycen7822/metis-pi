@@ -10,6 +10,15 @@ reference material and is neither tracked nor used for installation.
 
 Local compatibility changes:
 
+- Ordinary preferences are maintained in the existing global `metis-pi.toml`
+  under `[webAccess]`. Credentials, authentication headers and authenticated
+  proxies retain JSON/env/command sources; `web-search.json` shares the TOML
+  directory. Metis initialization/migration backs up legacy mixed JSON and
+  relocates credentials without removing external originals.
+- Pi tools, provider adapters and standalone MCP share the Metis configuration
+  owner. Bundles retain external imports of the shared TS modules so packaged
+  template paths stay correct; the Metis Node >=22.19 engine supports them.
+
 - Summary generation and the model picker include the preferred Luna and Terra
   models under both `openai` and `openai-codex`.
 - Search accepts either provider name for `openai-codex-responses`, while keeping
@@ -30,5 +39,5 @@ The standalone MCP bundle includes `typebox` 1.3.27; its license is retained in
 When adopting a new upstream version, compare it against the pinned commit,
 preserve these compatibility changes, update the entrypoint provenance comment,
 and run the relevant upstream tests plus the Metis package/loader checks before
-rebuilding the bundles. Retain existing web-search settings, authentication, and
-cache paths.
+rebuilding the bundles. Preserve Metis preferences and authentication sources;
+migration preserves legacy cache locations via cacheRoot without moving cached data.

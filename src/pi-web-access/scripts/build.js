@@ -10,7 +10,7 @@
 // The standalone MCP bin (dist/mcp-cli.js) bundles typebox: it stays a
 // pi-hosted peer for the extension, but the bin must run without Pi installed.
 import { chmodSync, readFileSync } from "node:fs";
-import { buildSync } from "esbuild";
+import { build } from "esbuild";
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const externals = [
@@ -19,7 +19,19 @@ const externals = [
   "@earendil-works/*",
 ];
 
-const options = { bundle: true, format: "esm", platform: "node", target: "node20", outdir: "dist", outbase: ".", logLevel: "info" };
-buildSync({ ...options, entryPoints: ["index.ts"], external: externals });
-buildSync({ ...options, entryPoints: ["mcp-cli.ts"], external: externals.filter((name) => name !== "typebox") });
+const configModules = {
+  name: "metis-config-origin",
+  setup(build) {
+    build.onResolve({ filter: /^\.\.\/(metis-config|web-access-config)\.ts$/ }, ({ path }) => ({
+      path: `../../${path.slice(3)}`,
+      external: true,
+    }));
+  },
+};
+const options = {
+  bundle: true, format: "esm", platform: "node", target: "node22.19",
+  outdir: "dist", outbase: ".", logLevel: "info", plugins: [configModules],
+};
+await build({ ...options, entryPoints: ["index.ts"], external: externals });
+await build({ ...options, entryPoints: ["mcp-cli.ts"], external: externals.filter((name) => name !== "typebox") });
 chmodSync("dist/mcp-cli.js", 0o755);

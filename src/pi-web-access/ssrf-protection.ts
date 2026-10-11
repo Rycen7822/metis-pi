@@ -1,7 +1,14 @@
+import {
+	loadWebAccessConfig,
+	getActiveProxy,
+	getWebAccessConfigPath,
+	hasScopedProxyDecision,
+	isProxyBypassedUrl,
+	loadConfiguredProxy,
+	normalizeProxyUrl,
+} from "./utils.ts";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { existsSync, readFileSync, statSync } from "node:fs";
 import net from "node:net";
-import { getActiveProxy, getWebSearchConfigPath, hasScopedProxyDecision, isProxyBypassedUrl, loadConfiguredProxy, normalizeProxyUrl } from "./utils.ts";
 
 const DEFAULT_MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -13,45 +20,10 @@ export type LookupAddress = { address: string; family: number };
 export type Lookup = (hostname: string) => Promise<LookupAddress[]>;
 type Fetch = typeof fetch;
 
-const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
-
-let cachedConfigRoot: { signature: string; value: Record<string, unknown> | null } | null = null;
+const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
 
 function loadConfigRoot(): Record<string, unknown> | null {
-	if (!existsSync(WEB_SEARCH_CONFIG_PATH)) return null;
-
-	let signature: string;
-	try {
-		const stat = statSync(WEB_SEARCH_CONFIG_PATH);
-		signature = `${stat.mtimeMs}:${stat.size}`;
-	} catch {
-		return null;
-	}
-
-	if (cachedConfigRoot?.signature === signature) return cachedConfigRoot.value;
-
-	let raw: string;
-	try {
-		raw = readFileSync(WEB_SEARCH_CONFIG_PATH, "utf-8");
-	} catch {
-		// Do not memoize read failures: a chmod fix changes neither mtime nor size,
-		// so a cached failure would permanently fail-open the domain policy.
-		return null;
-	}
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH}: ${message}`);
-	}
-
-	const value = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-		? parsed as Record<string, unknown>
-		: null;
-	cachedConfigRoot = { signature, value };
-	return value;
+	return loadWebAccessConfig();
 }
 
 export interface SsrfConfig {

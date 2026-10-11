@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -109,6 +109,11 @@ test("resolveGeminiFetch falls back to the ambient global fetch when undici is n
 		for (const f of ["gemini-web.ts", "chrome-cookies.ts", "gemini-web-config.ts", "utils.ts"]) {
 			copyFileSync(join(import.meta.dirname, "..", f), join(dir, f));
 		}
+		const utils = join(dir, "utils.ts");
+		writeFileSync(utils, readFileSync(utils, "utf8").replace(
+			/from "\.\.\/(metis-config|web-access-config)\.ts"/g,
+			(_, name) => `from "${new URL(`../../${name}.ts`, import.meta.url).href}"`,
+		));
 		const script = [
 			"import { resolveGeminiFetch } from './gemini-web.ts';",
 			"const f = await resolveGeminiFetch();",

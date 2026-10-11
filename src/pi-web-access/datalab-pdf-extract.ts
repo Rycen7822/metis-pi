@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { loadWebAccessConfig } from "./utils.ts";
 import {
 	hasCredentialSource,
 	resolveCredential,
 	redactCredential,
 } from "./credential-source.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 const DEFAULT_API_HOST = "https://www.datalab.to";
 const API_PREFIX = "/api/v1";
@@ -13,8 +12,6 @@ const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 300;
 const CLEANUP_TIMEOUT_MS = 5_000;
-const CONFIG_PATH = getWebSearchConfigPath();
-
 export type DatalabMode = "fast" | "balanced" | "accurate";
 export type DatalabProcessingLocation = "eu" | "us";
 
@@ -33,25 +30,14 @@ export const DEFAULT_DATALAB_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 
 interface DatalabConfig {
 	datalabApiKey?: unknown;
+	datalabApiBase?: unknown;
+	datalabProcessingLocation?: unknown;
 }
 
 let cachedConfig: DatalabConfig | null = null;
 
 function loadConfig(): DatalabConfig {
-	if (cachedConfig) return cachedConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedConfig = {};
-		return cachedConfig;
-	}
-
-	const rawText = readFileSync(CONFIG_PATH, "utf-8");
-	try {
-		cachedConfig = JSON.parse(rawText) as DatalabConfig;
-		return cachedConfig;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-	}
+	return cachedConfig ??= loadWebAccessConfig() as DatalabConfig;
 }
 
 function normalizeString(value: unknown): string | null {
@@ -85,7 +71,7 @@ export async function getDatalabApiKey(
 }
 
 export function getDatalabApiBase(): string {
-	const normalized = normalizeString(process.env.DATALAB_API_BASE)?.replace(
+	const normalized = (normalizeString(process.env.DATALAB_API_BASE) ?? normalizeString(loadConfig().datalabApiBase))?.replace(
 		/\/+$/,
 		"",
 	);
@@ -103,6 +89,7 @@ export function getDatalabApiBase(): string {
 export function getDatalabProcessingLocation(): DatalabProcessingLocation {
 	const value =
 		normalizeString(process.env.DATALAB_PROCESSING_LOCATION) ??
+		normalizeString(loadConfig().datalabProcessingLocation) ??
 		DEFAULT_PROCESSING_LOCATION;
 	const normalized = value.toLowerCase() as DatalabProcessingLocation;
 	if (!DATALAB_LOCATION_VALUES.has(normalized)) {

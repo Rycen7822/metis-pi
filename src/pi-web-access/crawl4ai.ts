@@ -1,9 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./extract.ts";
 import { fetchRemoteUrl, loadSsrfConfig, validateRemoteUrl, type Lookup, type SsrfConfig } from "./ssrf-protection.ts";
-import { getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
 const EXTRACT_TIMEOUT_MS = 60_000;
@@ -21,24 +20,7 @@ interface Crawl4aiConfig {
 let cachedConfig: Crawl4aiConfig | null = null;
 
 function loadConfig(): Crawl4aiConfig {
-	if (cachedConfig) return cachedConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedConfig = {};
-		return cachedConfig;
-	}
-	const raw = readFileSync(CONFIG_PATH, "utf8");
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`Invalid config in ${CONFIG_PATH}: expected a JSON object`);
-	}
-	cachedConfig = parsed as Crawl4aiConfig;
-	return cachedConfig;
+	return cachedConfig ??= loadWebAccessConfig() as Crawl4aiConfig;
 }
 
 export function clearCrawl4aiConfigCache(): void {
@@ -53,13 +35,13 @@ function normalizeBaseUrl(value: unknown): string | null {
 	try {
 		parsed = new URL(trimmed);
 	} catch {
-		throw new Error(`Invalid Crawl4AI base URL in ${CONFIG_PATH}: expected an HTTP or HTTPS URL`);
+		throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
 	}
 	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-		throw new Error(`Invalid Crawl4AI base URL in ${CONFIG_PATH}: expected an HTTP or HTTPS URL`);
+		throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
 	}
 	if (parsed.username || parsed.password) {
-		throw new Error(`Invalid Crawl4AI base URL in ${CONFIG_PATH}: URL credentials are not allowed`);
+		throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
 	}
 	parsed.pathname = parsed.pathname.replace(/\/+$/, "");
 	parsed.search = "";
@@ -76,7 +58,7 @@ function requireBaseUrl(): string {
 	if (!baseUrl) {
 		throw new Error(
 			"Crawl4AI base URL not configured. Either:\n" +
-			`  1. Set crawl4aiBaseUrl in ${CONFIG_PATH}\n` +
+			`  1. Set crawl4aiBaseUrl in ${getWebAccessConfigPath()}\n` +
 			"  2. Set CRAWL4AI_BASE_URL environment variable",
 		);
 	}

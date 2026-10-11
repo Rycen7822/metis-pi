@@ -13,10 +13,11 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const webTools = ["web_search", "source_check", "fetch_content", "get_search_content", "web_enable"];
 const recallTools = ["session_search", "session_query"];
 
-async function loadManaged(t, disabled = []) {
+async function loadManaged(t, disabled = [], webAccess) {
   const dir = mkdtempSync(join(tmpdir(), "metis-managed-plugins-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
+  if (webAccess) writeFileSync(join(dir, "metis-pi.toml"), stringify({ webAccess }));
   t.after(() => {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -55,6 +56,15 @@ test("Pi package filters disable web access while retaining session recall", asy
   const extensions = await loadManaged(t, ["-extensions/web-access.ts"]);
   assert.deepEqual(extensions.map((extension) => extension.path), [join(root, "extensions/session-recall.ts")]);
   assert.deepEqual([...extensions[0].tools.keys()].sort(), recallTools.slice().sort());
+});
+
+test("owned web entrypoint registers tools from the existing Metis TOML", async (t) => {
+  const extensions = await loadManaged(t, [], {
+    toolActivation: "eager", toolNames: { webSearch: "lookup_web" }, tools: { sourceCheck: { enabled: false } },
+  });
+  assert.deepEqual(extensions.flatMap(extension => [...extension.tools.keys()]).sort(), [
+    "lookup_web", "fetch_content", "get_search_content", ...recallTools,
+  ].sort());
 });
 
 test("session_query reads its model from global TOML at each call", async (t) => {

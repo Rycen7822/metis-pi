@@ -1,9 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 const MISTRAL_CONVERSATIONS_URL = "https://api.mistral.ai/v1/conversations";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -28,31 +27,13 @@ interface DomainFilters {
 let cachedConfig: WebSearchConfig | null = null;
 
 function loadConfig(): WebSearchConfig {
-	if (cachedConfig) return cachedConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedConfig = {};
-		return cachedConfig;
-	}
-
-	const raw = readFileSync(CONFIG_PATH, "utf-8");
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`Invalid config in ${CONFIG_PATH}: expected a JSON object`);
-	}
-	cachedConfig = parsed as WebSearchConfig;
-	return cachedConfig;
+	return cachedConfig ??= loadWebAccessConfig() as WebSearchConfig;
 }
 
 function resolveSearchModel(value: unknown): string {
 	if (value === undefined) return DEFAULT_SEARCH_MODEL;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`mistralSearchModel in ${CONFIG_PATH} must be a non-empty string`);
+		throw new Error(`mistralSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
 	}
 	return value.trim();
 }
@@ -60,7 +41,7 @@ function resolveSearchModel(value: unknown): string {
 function resolveSearchTool(value: unknown): MistralSearchTool {
 	if (value === undefined) return DEFAULT_SEARCH_TOOL;
 	if (value !== "web_search" && value !== "web_search_premium") {
-		throw new Error(`mistralSearchTool in ${CONFIG_PATH} must be either web_search or web_search_premium`);
+		throw new Error(`mistralSearchTool in ${getWebAccessConfigPath()} must be either web_search or web_search_premium`);
 	}
 	return value;
 }

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtractedContent } from "./extract.ts";
 import type { SearchResult } from "./perplexity.ts";
-import { getWebSearchConfigDir } from "./utils.ts";
+import { getWebSearchConfigDir, loadWebAccessConfig } from "./utils.ts";
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const FETCH_CACHE_DIR = "web-search-cache";
@@ -78,7 +78,11 @@ export function generateId(): string {
 export function getFetchCacheDir(): string {
 	// Always append our own folder: pruning deletes stale *.json files, so the override must
 	// never point pruning at a directory that holds user files.
-	return join(process.env.PI_WEB_ACCESS_CACHE_ROOT || getWebSearchConfigDir(), FETCH_CACHE_DIR);
+	const configured = process.env.PI_WEB_ACCESS_CACHE_ROOT || loadWebAccessConfig().cacheRoot;
+	if (configured !== undefined && (typeof configured !== "string" || !configured.trim())) {
+		throw new Error("webAccess.cacheRoot must be a non-empty directory path");
+	}
+	return join(configured || getWebSearchConfigDir(), FETCH_CACHE_DIR);
 }
 
 function fetchCachePath(key: string): string | null {

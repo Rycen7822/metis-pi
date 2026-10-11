@@ -1,3 +1,4 @@
+import { saveWebAccessConfig, formatSeconds, resolveCuratorNetworkConfig, runWithProxy } from "./utils.ts";
 // Maintained by metis-pi. Upstream: https://github.com/nicobailon/pi-web-access
 // Source version: 0.38.0; commit: 7e6e2386dc9a31d5e2a448172060dd1339c604f7
 // Local changes retain OpenAI / OpenAI Codex provider compatibility. See METIS.md.
@@ -12,7 +13,6 @@ import { rewriteSearchQuery } from "./query-rewrite.ts";
 import { clearCloneCache, releaseClonesUnusedSince, touchClones } from "./github-extract.ts";
 import { ALL_SEARCH_PROVIDERS, getAllowedSearchProviders, getConfiguredSearchRouting, providerLabel, RESOLVED_SEARCH_PROVIDERS, search, type AttributedSearchResponse, type ProviderAvailability, type SearchProvider, type SearchProviderSelection, type ResolvedSearchProvider } from "./gemini-search.ts";
 export type { ProviderAvailability } from "./gemini-search.ts";
-import { formatSeconds, getWebSearchConfigDir, resolveCuratorNetworkConfig, runWithProxy } from "./utils.ts";
 import {
 	deleteHeldResult,
 	generateId,
@@ -37,7 +37,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { platform } from "node:os";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isPerplexityAvailable } from "./perplexity.ts";
 import { isExaAvailable } from "./exa.ts";
@@ -96,7 +96,6 @@ import {
 	normalizeProviderInput,
 	normalizeQueryList,
 	normalizeRecencyFilter,
-	parseConfigRoot,
 	registeredFetchToolNames,
 	resolveFetchModeConfig,
 	resolveRequestedProvider,
@@ -183,15 +182,7 @@ interface CuratorBootstrap {
 }
 
 function saveConfig(updates: Partial<WebSearchConfig>): void {
-	let config: Record<string, unknown> = {};
-	if (existsSync(WEB_SEARCH_CONFIG_PATH)) {
-		config = parseConfigRoot(readFileSync(WEB_SEARCH_CONFIG_PATH, "utf-8"));
-	}
-
-	Object.assign(config, updates);
-	const dir = getWebSearchConfigDir();
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	writeFileSync(WEB_SEARCH_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+	saveWebAccessConfig(updates);
 }
 
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;

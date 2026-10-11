@@ -1,11 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 // GLM Coding Plan keys are issued per site, so the user picks the matching endpoint.
 const MCP_URLS = {
@@ -14,18 +13,10 @@ const MCP_URLS = {
 } as const;
 const RECENCY = { day: "oneDay", week: "oneWeek", month: "oneMonth", year: "oneYear" } as const;
 const SEARCH_TIMEOUT_MS = 60_000;
-const CONFIG_PATH = getWebSearchConfigPath();
+const CONFIG_PATH = getWebAccessConfigPath();
 
 function loadConfig(): Record<string, unknown> {
-	if (!existsSync(CONFIG_PATH)) return {};
-	try {
-		const parsed: unknown = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-		return parsed as Record<string, unknown>;
-	} catch {
-		// JSON parser errors may include a fragment containing a literal key.
-		throw new Error(`Invalid configuration in ${CONFIG_PATH}: expected a JSON object`);
-	}
+	return loadWebAccessConfig();
 }
 
 function credentialOptions(config: Record<string, unknown>) {
@@ -35,7 +26,7 @@ function credentialOptions(config: Record<string, unknown>) {
 function endpointUrl(config: Record<string, unknown>): string {
 	const endpoint = config.zaiEndpoint ?? "global";
 	if (endpoint !== "global" && endpoint !== "china") {
-		throw new Error(`zaiEndpoint in ${CONFIG_PATH} must be "global" or "china"`);
+		throw new Error(`zaiEndpoint in ${getWebAccessConfigPath()} must be "global" or "china"`);
 	}
 	return MCP_URLS[endpoint];
 }

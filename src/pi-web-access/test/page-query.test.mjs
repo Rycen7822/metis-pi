@@ -182,7 +182,7 @@ test("answerFromPage rejects partial configured answer defaults", async () => {
 			{ question: "Which model?", pageText: "Content", sourceUrl: "https://example.com" },
 			contextFor([]).ctx,
 		),
-		/answerProvider and fetch\.answerModel.*web-search\.json/,
+		/answerProvider and fetch\.answerModel.*metis-pi\.toml/,
 	);
 });
 
@@ -197,7 +197,7 @@ test("answerFromPage rejects blank and non-string configured answer defaults", a
 				{ question: "Which model?", pageText: "Content", sourceUrl: "https://example.com" },
 				contextFor([]).ctx,
 			),
-			/fetch\.answer(?:Provider|Model).*web-search\.json.*non-empty string/,
+			/fetch\.answer(?:Provider|Model).*metis-pi\.toml.*non-empty string/,
 		);
 	}
 });
@@ -210,7 +210,7 @@ test("answerFromPage rejects an unknown configured answer model", async () => {
 			{ question: "Which model?", pageText: "Content", sourceUrl: "https://example.com" },
 			contextFor([]).ctx,
 		),
-		/Answer model not found: test\/missing-model.*web-search\.json/,
+		/Answer model not found: test\/missing-model.*metis-pi\.toml/,
 	);
 });
 

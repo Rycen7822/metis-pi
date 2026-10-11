@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 // xAI's Agent Tools API: hosted `web_search` and opt-in `x_search` tools on an
 // OpenAI-compatible Responses endpoint. The search runs inside xAI's own inference, so — unlike
@@ -55,26 +54,13 @@ interface XaiAuth {
 let cachedConfig: WebSearchConfig | null = null;
 
 function loadConfig(): WebSearchConfig {
-	if (cachedConfig) return cachedConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedConfig = {};
-		return cachedConfig;
-	}
-
-	const raw = readFileSync(CONFIG_PATH, "utf-8");
-	try {
-		cachedConfig = JSON.parse(raw) as WebSearchConfig;
-		return cachedConfig;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-	}
+	return cachedConfig ??= loadWebAccessConfig() as WebSearchConfig;
 }
 
 function resolveConfiguredSearchModel(value: unknown): string | undefined {
 	if (value == null) return undefined;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`xaiSearchModel in ${CONFIG_PATH} must be a non-empty string`);
+		throw new Error(`xaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
 	}
 	return value.trim();
 }
@@ -82,16 +68,16 @@ function resolveConfiguredSearchModel(value: unknown): string | undefined {
 function resolveConfiguredSearchTools(value: unknown): XaiSearchTool[] {
 	if (value === undefined) return [...DEFAULT_XAI_SEARCH_TOOLS];
 	if (!Array.isArray(value) || value.length === 0) {
-		throw new Error(`xaiSearchTools in ${CONFIG_PATH} must be a non-empty array containing only web_search or x_search`);
+		throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must be a non-empty array containing only web_search or x_search`);
 	}
 
 	const tools: XaiSearchTool[] = [];
 	for (const tool of value) {
 		if (tool !== "web_search" && tool !== "x_search") {
-			throw new Error(`xaiSearchTools in ${CONFIG_PATH} may only contain web_search or x_search`);
+			throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} may only contain web_search or x_search`);
 		}
 		if (tools.includes(tool)) {
-			throw new Error(`xaiSearchTools in ${CONFIG_PATH} must not contain duplicates: ${tool}`);
+			throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must not contain duplicates: ${tool}`);
 		}
 		tools.push(tool);
 	}

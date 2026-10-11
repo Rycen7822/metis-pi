@@ -4,15 +4,15 @@
 
 所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。不再读取项目 `.pi/metis-pi.json` / `.pi/metis-pi.toml`，也不再使用显示层单独的 `PI_AGENT_DIR` 覆盖。
 
-包内同目录的 `metis-pi.toml` 列出全部默认值，且是运行时默认值来源。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项、`subagent-pi/config.toml` 和 `session-recall.json` 的查询模型，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，旧文件不删除，便于回退旧版代码。
+包内同目录的 `metis-pi.toml` 是默认值来源；网页选项不预填，继续采用各功能的原有默认值，见下文 `[webAccess]`。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项、`subagent-pi/config.toml`、`session-recall.json` 的查询模型及 `web-search.json` 的普通选项，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，外部旧文件不删除；同目录网页混合 JSON 拆分前备份，便于回退旧版代码。
 
 已有上一版 TOML 时运行 **`/metis-config migrate`**：先把当前 TOML、说明及迁移输入备份到 `<agentDir>/backups/metis-config-…/`，再补齐遗漏 section，并更新参数说明。现有 TOML 值优先；旧执行快捷键仅覆盖仍为默认值的对应项，个性化冲突保留 TOML 并提示。原文件仍保留；确认使用新版代码及新后端后，可将这些旧 Metis 文件移入备份目录，不要保留两套同步配置。命令不会停止 daemon 或后台任务。
 
-读取本身不写文件。TOML 不存在时兼容读取旧全局配置；TOML 一旦存在，旧 JSON 不再叠加，未填字段只取包内默认值。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
+读取本身不写文件。TOML 不存在时兼容读取旧全局配置；TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
 
 Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`subagent-pi/` 只保存账本、日志和会话。另行安装的 Codex 插件及 `@ff-labs/pi-fff`、LSP 等其他插件配置不归本包所有，不迁移；`.codex/config.toml` 是可选的外部继承来源，不是 Metis 参数文件。
 
-修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件，同一进程写操作串行；多个 Pi 进程同时保存仍是最后写入者胜出。
+修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件，同一进程写操作串行；多个 Pi 进程同时保存仍是最后写入者胜出。
 
 TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapThresholdTokens` 用 `false` 关闭；`maxImagesPerRequest = false` 表示采用 API 默认。这是配置语法，不是字符串 `"false"`。其他字段用正确的 boolean/string/number/array/table；错误值按所属模块的校验回退或报错，不会修复你的文件。
 
@@ -192,3 +192,66 @@ exclude = []
 旧 `session-recall.json` 的 `queryModel.provider` / `id` 由 `/metis-config init`
 或 `/metis-config migrate` 合并为这个字段；已有 TOML 值优先，迁移保留原文件
 并备份。TOML 存在后不再叠加旧 JSON；损坏 TOML 会返回查询配置错误。
+
+## `[webAccess]`
+
+普通字段沿用 Web Access 的名字和校验规则，统一加上 `webAccess` 表前缀。
+未填写时保持原默认行为，模板不强行指定 provider 或 searchRouting，避免
+改变当前模型的搜索路由。下面各行的嵌套字段可写成 TOML 子表。
+
+| 普通字段（相对 webAccess） | 用法 |
+| --- | --- |
+| `provider` / `searchProvider` | provider 名称、名称数组或 `"auto"`；`searchProvider` 优先。 |
+| `searchModel` | Gemini 搜索模型 ID；其他 provider 使用各自的模型字段。 |
+| `searchRouting.providers` / `useCurrentModel` / `fallbackOn` | 显式 provider 顺序；当前模型搜索开关；允许回退的错误分类。 |
+| `webSearch.enabled` / `allowedProviders` | 搜索总开关、允许的 provider 名称列表。 |
+| `workflow` | `"none"` / `"summary-review"` / `"auto-summary"`；默认 none。 |
+| `summaryModel` / `summaryInstructions` | 摘要模型选择与额外指令；未指定模型采用原模型选择逻辑。 |
+| `summaryGenerationDeadlineMs` | 摘要期限，毫秒；默认 30000，最大 600000。 |
+| `curatorTimeoutSeconds` / `autoOpenBrowser` / `curatorRemote` | 等待秒数、是否自动打开浏览器、远程绑定开关或 `{ host, bind }`。 |
+| `toolActivation` | `"auto"` / `"dynamic"` / `"eager"`；默认 auto。 |
+| `tools.<name>.enabled` / `toolNames.<name>` | name 为 webSearch、sourceCheck、fetchContent、getSearchContent；启用开关与工具名称。 |
+| `commands.<name>.enabled` | name 为 websearch、curator、search、google-account。 |
+| `shortcuts.curate` / `shortcuts.activity` | Pi 快捷键字符串；默认 ctrl+shift+s / ctrl+shift+w。 |
+| `fetch.defaultMode` / `allowedModes` | readable、raw、answer；模式必须在允许列表中，默认 readable。 |
+| `fetch.timeout` | 正数秒，默认 30。 |
+| `fetch.answerProvider` / `answerModel` | 必须同时填写；answer 模式的模型选择。 |
+| `fetchRouting.providers` / `allowRemoteHostedProviders` | 抓取器顺序与远程托管抓取开关。 |
+| `maxInlineContentChars` | 内联内容字符上限；保留原模块的默认和边界规则。 |
+| `proxy` | 不含用户名密码的 HTTP(S)/SOCKS 代理；含认证信息时放 JSON。 |
+| `cacheRoot` | 缓存父目录，始终另建 web-search-cache 子目录；PI_WEB_ACCESS_CACHE_ROOT 可覆盖。 |
+| `ssrf.allowRanges` / `trustEnvProxy` | CIDR 例外与环境代理策略。 |
+| `fetchContent.domainPolicy.allow` / `deny` | 抓取域名允许和拒绝列表。 |
+| `allowBrowserCookies` / `browserCookies.browser` / `profile` | Cookie 读取许可、浏览器 preset 和 profile 目录名；不是 Cookie 值。 |
+| `authFetch.<profile>.hosts` / `chromeProfile` / `redirects` / `cache` | 认证抓取的域名范围、profile、same-origin 重定向和 session/off 缓存策略。 |
+| `pdf.enabled` / `maxSizeMB` / `maxPages` / `provider` | PDF 开关、大小/页数限制和提取器。 |
+| `pdf.datalabMode` / `datalabTimeoutMs` | fast/balanced/accurate 与 Datalab 超时毫秒。 |
+| `datalabApiBase` / `datalabProcessingLocation` | API 地址、us/eu；对应 DATALAB_API_BASE / DATALAB_PROCESSING_LOCATION 优先。 |
+| `youtube.enabled` / `preferredModel` | YouTube 开关和模型选择。 |
+| `video.enabled` / `preferredModel` / `maxSizeMB` / `image.enabled` | 视频开关、模型、大小限制与图片开关。 |
+| `githubClone.enabled` / `maxRepoSizeMB` / `cloneTimeoutSeconds` / `clonePath` | 仓库提取开关、大小、超时秒数和 clone 目录。 |
+| `githubPrIssue.enabled` | GitHub issue/PR 提取开关。 |
+| `openaiResponsesUrl` / `openaiUseProviderBaseUrl` / `openaiUseAlphaSearch` | OpenAI Responses 地址、Pi provider 地址和 Alpha Search 开关。 |
+| `openaiSearchModel` / `openaiSearchProviders` | OpenAI 搜索模型和搜索后端列表。 |
+| `braveBaseUrl` / `exaBaseUrl` / `tavilyBaseUrl` / `searxngBaseUrl` / `crawl4aiBaseUrl` | 对应服务的 API 地址；原环境变量覆盖继续有效。 |
+| `firecrawlBaseUrl` / `firecrawlApiVersion` / `firecrawlFreshScrape` / `firecrawlPdfMaxPages` | Firecrawl 地址、API 版本、fresh 抓取和 PDF 页数。 |
+| `degoogBaseUrl` / `degoogEngines` | Degoog 地址和引擎。 |
+| `geminiAuth` / `geminiProject` / `geminiLocation` / `geminiBaseUrl` | Gemini 认证模式、项目、地区和 API 地址；实际密钥不写 TOML。 |
+| `serpdiveModel` / `xaiSearchModel` / `xaiSearchTools` / `mistralSearchModel` / `mistralSearchTool` | 对应 provider 的模型/工具选择。 |
+| `brightdataSerpZone` / `brightdataUnlockerZone` / `zaiEndpoint` | Bright Data zone；Z.ai 的 global/china 站点。 |
+
+API key/token 字段、自定义 `searxngHeaders` / `degoogHeaders`（可能含认证信息）
+及带认证的 proxy 保存在 **`<agentDir>/web-search.json`**，与现有 TOML 同目录。
+密钥仍支持原字符串、`$ENV`、`!command` 及 provider 环境变量；Google ADC、
+Pi 登录和浏览器 Cookie 值由原认证系统保存。TOML 中误写密钥字段会报错。
+JSON 中的普通字段在 TOML 存在后失效；凭据 JSON 中的认证代理优先于 TOML proxy。
+
+新安装用 `/metis-config init`，已有 TOML 用 `/metis-config migrate`。
+迁移优先 agent 目录 JSON，然后是旧 XDG/pi 和 ~/.pi；显式指定 agent 目录
+时不读取别处的 JSON。现有 TOML 字段优先，外部旧文件原样保留；同目录混合
+JSON 在备份后拆为仅凭据的 JSON，新写入文件的权限为 0600。读取不写文件、不执行密钥命令。
+`/websearch` 和 `/curator` 保存到现有 TOML。手动修改后的工具注册、快捷键、
+provider 缓存用 `/reload` 刷新；独立 MCP 需重启。普通环境变量覆盖继续有效。
+
+从旧 ~/.pi 或 XDG 目录迁移时，原缓存父目录写入 `webAccess.cacheRoot`，
+旧会话的缓存引用继续有效；不会搬动或删除缓存数据。

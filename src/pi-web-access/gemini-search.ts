@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
 import { CredentialResolutionError } from "./credential-source.ts";
@@ -48,7 +48,6 @@ import { isKeenableAvailable, searchWithKeenable } from "./keenable.ts";
 import { isCeramicAvailable, searchWithCeramic } from "./ceramic.ts";
 import { isKimiSearchAvailable, searchWithKimi } from "./kimi-search.ts";
 import { isMistralAvailable, searchWithMistral } from "./mistral-search.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 export const RESOLVED_SEARCH_PROVIDERS = ["openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "you", "firecrawl", "jina", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "exa", "serpdive", "kagi", "ollama", "anysearch", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "bocha", "xcrawl", "baizhi", "zai", "keenable", "ceramic"] as const;
 export const SEARCH_PROVIDERS = ["auto", "all", ...RESOLVED_SEARCH_PROVIDERS] as const;
@@ -132,43 +131,28 @@ let cachedSearchConfig: SearchConfig | null = null;
 
 function getSearchConfig(): SearchConfig {
 	if (cachedSearchConfig) return cachedSearchConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedSearchConfig = { searchProvider: "auto", searchProviderConfigured: false };
-		return cachedSearchConfig;
-	}
-
-	const rawText = readFileSync(CONFIG_PATH, "utf-8");
-	let raw: Record<string, unknown>;
-	try {
-		const parsed: unknown = JSON.parse(rawText);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error("expected a JSON object");
-		}
-		raw = parsed as Record<string, unknown>;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-	}
+	const raw = loadWebAccessConfig();
+	const path = getWebAccessConfigPath();
 
 	const searchModel = normalizeSearchModel(raw.searchModel);
 	const webSearch = raw.webSearch;
 	if (webSearch !== undefined && (!webSearch || typeof webSearch !== "object" || Array.isArray(webSearch))) {
-		throw new Error(`webSearch in ${CONFIG_PATH} must be an object`);
+		throw new Error(`webSearch in ${path} must be an object`);
 	}
 	const allowedProviders = webSearch && Object.hasOwn(webSearch, "allowedProviders")
-		? normalizeResolvedProviderList((webSearch as Record<string, unknown>).allowedProviders, `webSearch.allowedProviders in ${CONFIG_PATH}`)
+		? normalizeResolvedProviderList((webSearch as Record<string, unknown>).allowedProviders, `webSearch.allowedProviders in ${path}`)
 		: undefined;
 	const searchProviderConfigured = Object.hasOwn(raw, "searchProvider") || Object.hasOwn(raw, "provider");
-	const searchProvider = normalizeSearchProviderSelection(raw.searchProvider ?? raw.provider, `provider in ${CONFIG_PATH}`);
+	const searchProvider = normalizeSearchProviderSelection(raw.searchProvider ?? raw.provider, `provider in ${path}`);
 	const searchRouting = Object.hasOwn(raw, "searchRouting") ? normalizeSearchRouting(raw.searchRouting) : undefined;
 	if (allowedProviders) {
 		if (Object.hasOwn(raw, "searchProvider")) {
-			assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.searchProvider), `searchProvider in ${CONFIG_PATH}`, allowedProviders);
+			assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.searchProvider), `searchProvider in ${path}`, allowedProviders);
 		}
 		if (Object.hasOwn(raw, "provider")) {
-			assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.provider), `provider in ${CONFIG_PATH}`, allowedProviders);
+			assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.provider), `provider in ${path}`, allowedProviders);
 		}
-		if (searchRouting) assertSearchProviderSelectionAllowed(searchRouting.providers, `searchRouting.providers in ${CONFIG_PATH}`, allowedProviders);
+		if (searchRouting) assertSearchProviderSelectionAllowed(searchRouting.providers, `searchRouting.providers in ${path}`, allowedProviders);
 	}
 	cachedSearchConfig = {
 		searchProvider,
@@ -181,22 +165,23 @@ function getSearchConfig(): SearchConfig {
 }
 
 function normalizeSearchRouting(value: unknown): SearchRoutingConfig {
+	const path = getWebAccessConfigPath();
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		throw new Error(`searchRouting in ${CONFIG_PATH} must be an object`);
+		throw new Error(`searchRouting in ${path} must be an object`);
 	}
 	const raw = value as Record<string, unknown>;
-	const providers = normalizeResolvedProviderList(raw.providers, `searchRouting.providers in ${CONFIG_PATH}`);
+	const providers = normalizeResolvedProviderList(raw.providers, `searchRouting.providers in ${path}`);
 	const useCurrentModel = raw.useCurrentModel;
 	if (useCurrentModel !== undefined && typeof useCurrentModel !== "boolean") {
-		throw new Error(`searchRouting.useCurrentModel in ${CONFIG_PATH} must be a boolean`);
+		throw new Error(`searchRouting.useCurrentModel in ${path} must be a boolean`);
 	}
 	if (!Array.isArray(raw.fallbackOn) || raw.fallbackOn.length === 0) {
-		throw new Error(`searchRouting.fallbackOn in ${CONFIG_PATH} must be a non-empty array`);
+		throw new Error(`searchRouting.fallbackOn in ${path} must be a non-empty array`);
 	}
 	const fallbackOn: SearchRoutingConfig["fallbackOn"] = [];
 	for (const kind of raw.fallbackOn) {
 		if (typeof kind !== "string" || !VALID_ROUTING_KINDS.includes(kind as typeof VALID_ROUTING_KINDS[number])) {
-			throw new Error(`searchRouting.fallbackOn in ${CONFIG_PATH} may only contain transient, quota, network, invalid-response, or unsupported`);
+			throw new Error(`searchRouting.fallbackOn in ${path} may only contain transient, quota, network, invalid-response, or unsupported`);
 		}
 		if (!fallbackOn.includes(kind as SearchRoutingConfig["fallbackOn"][number])) {
 			fallbackOn.push(kind as SearchRoutingConfig["fallbackOn"][number]);
@@ -848,7 +833,9 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	throw new Error(
 		"No search provider available. Either:\n" +
 		"  1. Use /login to sign in with a Codex subscription for OpenAI web search\n" +
-		`  2. Set openaiApiKey, braveApiKey, parallelApiKey, tinyfishApiKey, search1apiApiKey, searchinfinityApiKey, queritApiKey, tavilyApiKey, firecrawlBaseUrl, jinaApiKey, serpdiveApiKey, kagiApiKey, ollamaApiKey, searxngBaseUrl, perplexityApiKey, exaApiKey, geminiApiKey, bochaApiKey, or cloudflareApiKey in ${CONFIG_PATH}\n` +
+		"  2. Set openaiApiKey, braveApiKey, parallelApiKey, tinyfishApiKey, search1apiApiKey, searchinfinityApiKey, " +
+		"queritApiKey, tavilyApiKey, jinaApiKey, serpdiveApiKey, kagiApiKey, ollamaApiKey, perplexityApiKey, exaApiKey, " +
+		`geminiApiKey, bochaApiKey, or cloudflareApiKey in ${CONFIG_PATH}\n` +
 		"  3. Set OPENAI_API_KEY, BRAVE_API_KEY, PARALLEL_API_KEY, TINYFISH_API_KEY, SEARCH1API_KEY, SEARCHINFINITY_API_KEY, QUERIT_API_KEY, TAVILY_API_KEY, FIRECRAWL_BASE_URL, JINA_API_KEY, SERPDIVE_API_KEY, KAGI_API_KEY, BOCHA_API_KEY, OLLAMA_API_KEY, SEARXNG_BASE_URL, EXA_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, or CLOUDFLARE_API_KEY env vars\n" +
 		"  4. Set GOOGLE_GEMINI_BASE_URL with CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing\n" +
 		"  5. Sign into gemini.google.com in a supported Chromium-based browser\n" +

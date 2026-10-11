@@ -102,7 +102,7 @@ test("fetch.timeout accepts seconds and rounds fractional milliseconds up", asyn
 test("invalid fetch.timeout values fail closed with the config path", async () => {
 	for (const timeout of [0, -1, null, "2", {}]) {
 		const output = await runResolver({ fetch: { timeout } });
-		assert.match(output.error, /Invalid fetch\.timeout .*web-search\.json/);
+		assert.match(output.error, /Invalid fetch\.timeout .*metis-pi\.toml/);
 	}
 });
 
@@ -110,7 +110,7 @@ test("fetch.timeout rejects seconds that overflow safe millisecond conversion", 
 	assert.deepEqual(await runResolver({ fetch: { timeout: 2147483.647 } }), { timeoutMs: 2147483647 });
 	for (const timeout of [2147483.648, 1e308, Number.MAX_SAFE_INTEGER]) {
 		const output = await runResolver({ fetch: { timeout } });
-		assert.match(output.error, /Invalid fetch\.timeout .*web-search\.json/);
+		assert.match(output.error, /Invalid fetch\.timeout .*metis-pi\.toml/);
 		assert.match(output.error, /finite safe integer/);
 		assert.match(output.error, /2147483647/);
 	}
@@ -141,7 +141,7 @@ test("explicit timeoutMs takes precedence over invalid fetch.timeout config", as
 test("Jina does not swallow invalid timeout configuration", async () => {
 	const output = await runJina(jinaConfig(0));
 	assert.deepEqual(output.calls, []);
-	assert.match(output.result.error, /Invalid fetch\.timeout .*web-search\.json/);
+	assert.match(output.result.error, /Invalid fetch\.timeout .*metis-pi\.toml/);
 });
 
 test("positive sub-millisecond fetch.timeout values use a nonzero budget", async () => {

@@ -1,11 +1,10 @@
+import { getWebAccessConfigPath, loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -118,20 +117,7 @@ interface NormalizedDomainFilters {
 let cachedConfig: WebSearchConfig | null = null;
 
 function loadConfig(): WebSearchConfig {
-	if (cachedConfig) return cachedConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedConfig = {};
-		return cachedConfig;
-	}
-
-	const raw = readFileSync(CONFIG_PATH, "utf-8");
-	try {
-		cachedConfig = JSON.parse(raw) as WebSearchConfig;
-		return cachedConfig;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-	}
+	return cachedConfig ??= loadWebAccessConfig() as WebSearchConfig;
 }
 
 function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters | null {
@@ -191,19 +177,19 @@ function extractAccountId(token: string): string | undefined {
 function resolveConfiguredResponsesUrl(value: unknown): string {
 	if (value === undefined) return OPENAI_RESPONSES_URL;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`openaiResponsesUrl in ${CONFIG_PATH} must be an absolute http(s) URL`);
+		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
 	}
 	let url: URL;
 	try {
 		url = new URL(value.trim());
 	} catch {
-		throw new Error(`openaiResponsesUrl in ${CONFIG_PATH} must be an absolute http(s) URL`);
+		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
 	}
 	if (url.protocol !== "https:" && url.protocol !== "http:") {
-		throw new Error(`openaiResponsesUrl in ${CONFIG_PATH} must use http or https`);
+		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use http or https`);
 	}
 	if (url.hostname === "opencode.ai" && url.protocol !== "https:") {
-		throw new Error(`openaiResponsesUrl in ${CONFIG_PATH} must use HTTPS for opencode.ai`);
+		throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use HTTPS for opencode.ai`);
 	}
 	return url.toString();
 }
@@ -213,7 +199,7 @@ function resolveUseProviderBaseUrl(config: WebSearchConfig): boolean {
 	const value = config.openaiUseProviderBaseUrl;
 	if (value === undefined) return false;
 	if (typeof value !== "boolean") {
-		throw new Error(`openaiUseProviderBaseUrl in ${CONFIG_PATH} must be a boolean`);
+		throw new Error(`openaiUseProviderBaseUrl in ${getWebAccessConfigPath()} must be a boolean`);
 	}
 	return value;
 }
@@ -244,7 +230,7 @@ function resolveProviderResponsesUrl(baseUrl: unknown, useCodexEndpoint: boolean
 function resolveConfiguredSearchProviders(value: unknown): readonly string[] {
 	if (value === undefined) return DEFAULT_SEARCH_PROVIDERS;
 	if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.trim().length === 0)) {
-		throw new Error(`openaiSearchProviders in ${CONFIG_PATH} must be an array of non-empty Pi provider ids`);
+		throw new Error(`openaiSearchProviders in ${getWebAccessConfigPath()} must be an array of non-empty Pi provider ids`);
 	}
 	return value.map((entry) => entry.trim());
 }
@@ -252,7 +238,7 @@ function resolveConfiguredSearchProviders(value: unknown): readonly string[] {
 function resolveConfiguredSearchModel(value: unknown): string | undefined {
 	if (value == null) return undefined;
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`openaiSearchModel in ${CONFIG_PATH} must be a non-empty string`);
+		throw new Error(`openaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
 	}
 	return value.trim();
 }
@@ -304,7 +290,10 @@ async function resolvePiAuth(ctx: ExtensionContext, responsesUrl: string, provid
 		// "Sign in with ChatGPT" access tokens, which are ChatGPT JWTs but not Codex credentials.
 		const useCodexEndpoint = provider === "openai-codex" || (!isOfficialBaseUrl && isCodexJwt(resolved.apiKey));
 		if (!hasExplicitResponsesUrl && !useProviderBaseUrl && !useCodexEndpoint && baseUrl !== undefined && !isOfficialBaseUrl) {
-			throw new CustomOpenAIBaseUrlError(`OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. Set openaiResponsesUrl in ${CONFIG_PATH} to the full Responses endpoint for this credential.`);
+			throw new CustomOpenAIBaseUrlError(
+				"OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. " +
+				`Set openaiResponsesUrl in ${getWebAccessConfigPath()} to the full Responses endpoint for this credential.`,
+			);
 		}
 		let providerResponsesUrl = responsesUrl;
 		if (useProviderBaseUrl) {
@@ -626,7 +615,7 @@ function isAlphaSearchEnabled(): boolean {
 	const value = loadConfig().openaiUseAlphaSearch;
 	if (value === undefined) return false;
 	if (typeof value !== "boolean") {
-		throw new Error(`openaiUseAlphaSearch in ${CONFIG_PATH} must be a boolean`);
+		throw new Error(`openaiUseAlphaSearch in ${getWebAccessConfigPath()} must be a boolean`);
 	}
 	return value;
 }

@@ -1,39 +1,30 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
-import { homedir, hostname, tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-
-let cachedWebSearchConfigDir: string | undefined;
+import { metisConfigPath, readWebAccessConfig, updateWebAccessConfig } from "../metis-config.ts";
+import { webAccessAgentDir, WEB_CREDENTIALS_FILE } from "../web-access-config.ts";
 
 export function getWebSearchConfigDir(): string {
-	if (cachedWebSearchConfigDir) return cachedWebSearchConfigDir;
-
-	const explicitDir = process.env.PI_CODING_AGENT_DIR;
-	if (explicitDir) return cachedWebSearchConfigDir = explicitDir;
-
-	const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-	if (xdgConfigHome) {
-		const xdgDir = join(xdgConfigHome, "pi");
-		if (existsSync(join(xdgDir, "web-search.json"))) return cachedWebSearchConfigDir = xdgDir;
-
-		const legacyDir = join(homedir(), ".pi");
-		if (existsSync(join(legacyDir, "web-search.json"))) return cachedWebSearchConfigDir = legacyDir;
-		return cachedWebSearchConfigDir = xdgDir;
-	}
-	const agentDir = join(homedir(), ".pi", "agent");
-	if (existsSync(join(agentDir, "web-search.json"))) return cachedWebSearchConfigDir = agentDir;
-
-	const legacyDir = join(homedir(), ".pi");
-	if (existsSync(join(legacyDir, "web-search.json"))) return cachedWebSearchConfigDir = legacyDir;
-
-	return cachedWebSearchConfigDir = agentDir;
+	return webAccessAgentDir();
 }
 
 export function getWebSearchConfigPath(): string {
-	return join(getWebSearchConfigDir(), "web-search.json");
+	return join(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
+}
+
+export function getWebAccessConfigPath(): string {
+	return metisConfigPath(getWebSearchConfigDir());
+}
+
+export function loadWebAccessConfig(): Record<string, any> {
+	return readWebAccessConfig(getWebSearchConfigDir());
+}
+
+export function saveWebAccessConfig(patch: Record<string, unknown>): void {
+	updateWebAccessConfig(getWebSearchConfigDir(), patch);
 }
 
 interface ApiBaseUrlOptions {
@@ -58,7 +49,7 @@ export function resolveApiBaseUrl(options: ApiBaseUrlOptions): string {
 
 	const source = fromEnvironment
 		? options.environmentKey
-		: `${options.configKey} in ${getWebSearchConfigPath()}`;
+		: `webAccess.${options.configKey} in ${getWebAccessConfigPath()}`;
 	if (typeof value !== "string" || value.trim().length === 0) {
 		throw new Error(`${source} must be an absolute HTTP(S) URL`);
 	}
@@ -147,18 +138,7 @@ function trimmedString(value: unknown): string | undefined {
 
 /** Resolves the curator server bind address and URL host from `curatorRemote`. */
 export function resolveCuratorNetworkConfig(): CuratorNetworkConfig {
-	const configPath = getWebSearchConfigPath();
-	if (!existsSync(configPath)) return LOCAL_CURATOR_NETWORK_DEFAULTS;
-
-	let raw: unknown;
-	try {
-		raw = JSON.parse(readFileSync(configPath, "utf-8"));
-	} catch {
-		return LOCAL_CURATOR_NETWORK_DEFAULTS;
-	}
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return LOCAL_CURATOR_NETWORK_DEFAULTS;
-
-	const curatorRemote = (raw as Record<string, unknown>).curatorRemote;
+	const curatorRemote = loadWebAccessConfig().curatorRemote;
 	if (curatorRemote === true) return { enabled: true, host: hostname(), bind: "0.0.0.0" };
 
 	if (curatorRemote && typeof curatorRemote === "object" && !Array.isArray(curatorRemote)) {
@@ -250,20 +230,9 @@ function redactProxyUrl(value: string): string {
 }
 
 export function loadConfiguredProxy(): string | null {
-	let configured: unknown;
-	const path = getWebSearchConfigPath();
-	if (existsSync(path)) {
-		let raw: unknown;
-		try {
-			raw = JSON.parse(readFileSync(path, "utf-8"));
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`Failed to load proxy config from ${path}: ${message}`);
-		}
-		if (raw && typeof raw === "object" && !Array.isArray(raw)) configured = (raw as { proxy?: unknown }).proxy;
-	}
+	const configured = loadWebAccessConfig().proxy;
 	if (configured === undefined) return null;
-	return normalizeProxyUrl(configured, `proxy in ${getWebSearchConfigPath()}`);
+	return normalizeProxyUrl(configured, "webAccess.proxy");
 }
 
 export function runWithProxy<T>(proxy: string | undefined, fn: () => T): T {

@@ -15,8 +15,11 @@ Metis 内置维护两个上游扩展：
 `npm:@ogulcancelik/pi-session-recall`，避免重复注册同名工具。Metis 不自动
 修改其他机器上的个人配置。旧 npm 安装目录可保留。
 
-网页搜索、抓取、摘要沿用上游功能及 `web-search.json`。会话查询模型统一由
-`metis-pi.toml` 的 `[sessionRecall]` 管理；登录信息、缓存和历史会话继续使用。
+网页搜索、抓取、摘要的普通选项统一放入现有 `metis-pi.toml` 的 `[webAccess]`；
+会话查询模型由同一文件的 `[sessionRecall]` 管理。Web Access 的 API key/token、
+自定义认证请求头以及带密码的代理继续用 `web-search.json`，文件位于 TOML
+同目录，保留 `$ENV` / `!command` 及环境变量的原有取值方式。
+登录信息、缓存和历史会话继续使用。
 `openai` 与 `openai-codex` 兼容修改随 Metis 源码维护；实际 API 决定是否
 启用 Codex 专用路由，官方 `openai-responses` 保持普通调用路径。
 
@@ -31,7 +34,36 @@ queryModel = "openai/gpt-6.1-sol"
 每次 `session_query` 重读配置，`session_search` 不调用模型。模型定义与认证
 仍由 Pi 管理。新 TOML 不存在时 `/metis-config init` 导入旧
 `session-recall.json`；已有 TOML 用 `/metis-config migrate` 备份并补齐，现有
-TOML 值优先。旧 JSON 保留，TOML 存在后不再作为查询配置读取。
+TOML 值优先。旧 recall JSON 保留，TOML 存在后不再作为查询配置读取。
+
+网页配置示例（编辑同一份 `metis-pi.toml`）：
+
+```toml
+[webAccess]
+workflow = "auto-summary"
+autoOpenBrowser = false
+
+[webAccess.searchRouting]
+providers = ["parallel", "exa"]
+useCurrentModel = false
+
+[webAccess.fetch]
+defaultMode = "readable"
+timeout = 30
+```
+
+现有网页 JSON 的字段名保持不变，普通字段加上 `webAccess` 表前缀。
+`/websearch` 和 `/curator` 只把选择写回 TOML。其他手动修改建议 `/reload`，
+工具名称、快捷键和启用开关须重载扩展后生效；独立 MCP 需重启进程。
+
+`/metis-config init` 或 `migrate` 同时迁移网页配置：优先读取 agent 目录的
+旧 JSON，缺失时兼容旧 XDG `pi/web-search.json` 和 `~/.pi/web-search.json`。
+设置了 `PI_CODING_AGENT_DIR` 时只读取指定目录，不借用其他目录的密钥。
+迁移普通字段时保留 TOML 中的显式值；凭据 JSON 写到 TOML 同目录，新写入文件的权限
+为 `0600`。外部旧文件不删除；同目录的旧混合 JSON 拆分前有备份。
+读取过程不改文件。TOML 存在后，JSON 里的普通字段不再参与配置，
+API key/token 等凭据仍从 JSON 或环境变量读取。
+旧 ~/.pi/XDG 缓存目录通过 `webAccess.cacheRoot` 保留，历史缓存引用继续有效。
 
 可分别用 Pi 包入口过滤关闭：
 

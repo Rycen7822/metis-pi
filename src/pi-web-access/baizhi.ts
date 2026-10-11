@@ -1,28 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
+import { loadWebAccessConfig } from "./utils.ts";
 import { isIP } from "node:net";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 const MCP_URL = "https://agent-toolkit.app.baizhi.cloud/mcp";
 const SEARCH_TIMEOUT_MS = 60_000;
-const CONFIG_PATH = getWebSearchConfigPath();
-
 function credentialOptions() {
-	let config: Record<string, unknown> = {};
-	if (existsSync(CONFIG_PATH)) {
-		try {
-			const parsed: unknown = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-			config = parsed as Record<string, unknown>;
-		} catch {
-			// JSON parser errors may include a fragment containing a literal key.
-			throw new Error(`Invalid configuration in ${CONFIG_PATH}: expected a JSON object`);
-		}
-	}
+	const config = loadWebAccessConfig();
 	return { provider: "Baizhi", configuredValue: config.baizhiApiKey, environmentValue: process.env.BAIZHI_API_KEY };
 }
 

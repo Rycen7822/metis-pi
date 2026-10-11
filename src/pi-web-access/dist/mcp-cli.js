@@ -14,250 +14,26 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// activity.ts
-var ActivityMonitor, activityMonitor;
-var init_activity = __esm({
-  "activity.ts"() {
-    ActivityMonitor = class {
-      entries = [];
-      maxEntries = 10;
-      listeners = /* @__PURE__ */ new Set();
-      rateLimitInfo = { used: 0, max: 10, oldestTimestamp: null, windowMs: 6e4 };
-      nextId = 1;
-      logStart(partial) {
-        const id = `act-${this.nextId++}`;
-        const entry = {
-          ...partial,
-          id,
-          startTime: Date.now(),
-          status: null
-        };
-        this.entries.push(entry);
-        if (this.entries.length > this.maxEntries) {
-          this.entries.shift();
-        }
-        this.notify();
-        return id;
-      }
-      logComplete(id, status) {
-        const entry = this.entries.find((e) => e.id === id);
-        if (entry) {
-          entry.endTime = Date.now();
-          entry.status = status;
-          this.notify();
-        }
-      }
-      logError(id, error) {
-        const entry = this.entries.find((e) => e.id === id);
-        if (entry) {
-          entry.endTime = Date.now();
-          entry.error = error;
-          this.notify();
-        }
-      }
-      getEntries() {
-        return this.entries;
-      }
-      getRateLimitInfo() {
-        return this.rateLimitInfo;
-      }
-      updateRateLimit(info) {
-        this.rateLimitInfo = info;
-        this.notify();
-      }
-      onUpdate(callback) {
-        this.listeners.add(callback);
-        return () => this.listeners.delete(callback);
-      }
-      clear() {
-        this.entries = [];
-        this.rateLimitInfo = { used: 0, max: 10, oldestTimestamp: null, windowMs: 6e4 };
-        this.notify();
-      }
-      notify() {
-        for (const cb of this.listeners) {
-          try {
-            cb();
-          } catch {
-          }
-        }
-      }
-    };
-    activityMonitor = new ActivityMonitor();
-  }
-});
-
-// credential-source.ts
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
-function redactCredential(text4, credential) {
-  return credential ? text4.split(credential).join("[redacted]") : text4;
-}
-function normalize(value) {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-function commandEnvironment(source) {
-  const environment = {};
-  for (const name of COMMAND_ENVIRONMENT_NAMES) {
-    const value = source[name];
-    if (value !== void 0) environment[name] = value;
-  }
-  for (const [name, value] of Object.entries(source)) {
-    if (value !== void 0 && OP_SESSION_NAME.test(name)) environment[name] = value;
-  }
-  return environment;
-}
-function configuredSource(options) {
-  return normalize(options.configuredValue);
-}
-function explicitEnvironmentName(source) {
-  const match = source.match(ENV_SOURCE);
-  return match ? match[1] ?? match[2] : null;
-}
-function escapedSource(source) {
-  if (source.startsWith("$$") || source.startsWith("$!")) return source.slice(1);
-  return null;
-}
-function isMalformedExplicitSource(source) {
-  return source.startsWith("$") && escapedSource(source) === null && explicitEnvironmentName(source) === null;
-}
-async function defaultRunCommand(command, options) {
-  const result = await execAsync(command, {
-    encoding: "utf8",
-    env: options.environment,
-    maxBuffer: options.maxOutputBytes + 1,
-    signal: options.signal,
-    timeout: options.timeoutMs,
-    windowsHide: true
-  });
-  return { stdout: result.stdout };
-}
-function commandFailureCategory(error, signal) {
-  if (signal?.aborted) return "command-aborted";
-  if (error && typeof error === "object") {
-    const code = error.code;
-    if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "command-output-too-large";
-    if (error.killed || code === "ETIMEDOUT") return "command-timeout";
-  }
-  return "command-failed";
-}
-function hasCredentialSource(options) {
-  const source = configuredSource(options);
-  if (source?.startsWith("!")) return true;
-  if (source?.startsWith("$")) return true;
-  return normalize(options.environmentValue) !== null || source !== null;
-}
-async function resolveCredential(options) {
-  const source = configuredSource(options);
-  const escaped = source ? escapedSource(source) : null;
-  if (escaped !== null) return escaped;
-  if (source?.startsWith("!")) {
-    const command = source.slice(1).trim();
-    if (!command) throw new CredentialResolutionError(options.provider, "invalid-source");
-    let result;
-    try {
-      result = await (options.runCommand ?? defaultRunCommand)(command, {
-        signal: options.signal,
-        timeoutMs: COMMAND_TIMEOUT_MS,
-        maxOutputBytes: MAX_CREDENTIAL_BYTES,
-        environment: commandEnvironment(options.environment ?? process.env)
-      });
-    } catch (error) {
-      throw new CredentialResolutionError(options.provider, commandFailureCategory(error, options.signal));
-    }
-    const stdout = Buffer.isBuffer(result.stdout) ? result.stdout.toString("utf8") : result.stdout;
-    if (Buffer.byteLength(stdout, "utf8") > MAX_CREDENTIAL_BYTES) {
-      throw new CredentialResolutionError(options.provider, "command-output-too-large");
-    }
-    const value = stdout.trim();
-    if (!value) throw new CredentialResolutionError(options.provider, "command-empty");
-    if (/[\0-\x1f\x7f]/.test(value)) {
-      throw new CredentialResolutionError(options.provider, "command-invalid-output");
-    }
-    return value;
-  }
-  if (source && isMalformedExplicitSource(source)) {
-    throw new CredentialResolutionError(options.provider, "invalid-source");
-  }
-  if (source?.startsWith("$")) {
-    const name = explicitEnvironmentName(source);
-    if (!name) throw new CredentialResolutionError(options.provider, "invalid-source");
-    const value = normalize((options.environment ?? process.env)[name]);
-    if (!value) throw new CredentialResolutionError(options.provider, "environment-empty");
-    return value;
-  }
-  return normalize(options.environmentValue) ?? source;
-}
-var execAsync, COMMAND_TIMEOUT_MS, MAX_CREDENTIAL_BYTES, ENV_SOURCE, OP_SESSION_NAME, COMMAND_ENVIRONMENT_NAMES, CredentialResolutionError;
-var init_credential_source = __esm({
-  "credential-source.ts"() {
-    execAsync = promisify(exec);
-    COMMAND_TIMEOUT_MS = 5e3;
-    MAX_CREDENTIAL_BYTES = 16384;
-    ENV_SOURCE = /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/;
-    OP_SESSION_NAME = /^OP_SESSION_[A-Za-z0-9_]+$/;
-    COMMAND_ENVIRONMENT_NAMES = [
-      "HOME",
-      "USER",
-      "LOGNAME",
-      "OP_SERVICE_ACCOUNT_TOKEN",
-      "PATH",
-      "LANG",
-      "LC_ALL",
-      "LC_CTYPE",
-      "TERM",
-      "TMPDIR",
-      "XDG_CONFIG_HOME",
-      "XDG_RUNTIME_DIR",
-      "DBUS_SESSION_BUS_ADDRESS",
-      "SSH_AUTH_SOCK",
-      "WSL_DISTRO_NAME",
-      "WSL_INTEROP"
-    ];
-    CredentialResolutionError = class extends Error {
-      provider;
-      category;
-      constructor(provider, category) {
-        const suffix = category === "command-aborted" ? "aborted" : category === "oauth-credential-rejected" ? "OAuth token exchange rejected the credentials" : category;
-        super(`${provider} credential resolution failed: ${suffix}`);
-        this.name = "CredentialResolutionError";
-        this.provider = provider;
-        this.category = category;
-      }
-    };
-  }
-});
-
 // utils.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
-import { homedir, hostname, tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { metisConfigPath, readWebAccessConfig, updateWebAccessConfig } from "../../metis-config.ts";
+import { webAccessAgentDir, WEB_CREDENTIALS_FILE } from "../../web-access-config.ts";
 function getWebSearchConfigDir() {
-  if (cachedWebSearchConfigDir) return cachedWebSearchConfigDir;
-  const explicitDir = process.env.PI_CODING_AGENT_DIR;
-  if (explicitDir) return cachedWebSearchConfigDir = explicitDir;
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-  if (xdgConfigHome) {
-    const xdgDir = join(xdgConfigHome, "pi");
-    if (existsSync(join(xdgDir, "web-search.json"))) return cachedWebSearchConfigDir = xdgDir;
-    const legacyDir2 = join(homedir(), ".pi");
-    if (existsSync(join(legacyDir2, "web-search.json"))) return cachedWebSearchConfigDir = legacyDir2;
-    return cachedWebSearchConfigDir = xdgDir;
-  }
-  const agentDir = join(homedir(), ".pi", "agent");
-  if (existsSync(join(agentDir, "web-search.json"))) return cachedWebSearchConfigDir = agentDir;
-  const legacyDir = join(homedir(), ".pi");
-  if (existsSync(join(legacyDir, "web-search.json"))) return cachedWebSearchConfigDir = legacyDir;
-  return cachedWebSearchConfigDir = agentDir;
+  return webAccessAgentDir();
 }
 function getWebSearchConfigPath() {
-  return join(getWebSearchConfigDir(), "web-search.json");
+  return join(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
+}
+function getWebAccessConfigPath() {
+  return metisConfigPath(getWebSearchConfigDir());
+}
+function loadWebAccessConfig() {
+  return readWebAccessConfig(getWebSearchConfigDir());
 }
 function isLoopbackHostname(hostnameValue) {
   const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
@@ -267,7 +43,7 @@ function resolveApiBaseUrl(options) {
   const fromEnvironment = options.environmentValue !== void 0;
   const value = fromEnvironment ? options.environmentValue : options.configuredValue;
   if (value === void 0) return options.defaultValue;
-  const source = fromEnvironment ? options.environmentKey : `${options.configKey} in ${getWebSearchConfigPath()}`;
+  const source = fromEnvironment ? options.environmentKey : `webAccess.${options.configKey} in ${getWebAccessConfigPath()}`;
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${source} must be an absolute HTTP(S) URL`);
   }
@@ -383,20 +159,9 @@ function redactProxyUrl(value) {
   return parsed.toString();
 }
 function loadConfiguredProxy() {
-  let configured;
-  const path = getWebSearchConfigPath();
-  if (existsSync(path)) {
-    let raw;
-    try {
-      raw = JSON.parse(readFileSync(path, "utf-8"));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Failed to load proxy config from ${path}: ${message}`);
-    }
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) configured = raw.proxy;
-  }
+  const configured = loadWebAccessConfig().proxy;
   if (configured === void 0) return null;
-  return normalizeProxyUrl(configured, `proxy in ${getWebSearchConfigPath()}`);
+  return normalizeProxyUrl(configured, "webAccess.proxy");
 }
 function runWithProxy(proxy, fn) {
   if (proxy === void 0) {
@@ -645,7 +410,7 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
   Object.defineProperty(response, "redirected", { value: redirected, configurable: true });
   return response;
 }
-var cachedWebSearchConfigDir, API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, proxyStorage, CurlTransportError;
+var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, proxyStorage, CurlTransportError;
 var init_utils = __esm({
   "utils.ts"() {
     API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
@@ -657,29 +422,229 @@ var init_utils = __esm({
   }
 });
 
+// activity.ts
+var ActivityMonitor, activityMonitor;
+var init_activity = __esm({
+  "activity.ts"() {
+    ActivityMonitor = class {
+      entries = [];
+      maxEntries = 10;
+      listeners = /* @__PURE__ */ new Set();
+      rateLimitInfo = { used: 0, max: 10, oldestTimestamp: null, windowMs: 6e4 };
+      nextId = 1;
+      logStart(partial) {
+        const id = `act-${this.nextId++}`;
+        const entry = {
+          ...partial,
+          id,
+          startTime: Date.now(),
+          status: null
+        };
+        this.entries.push(entry);
+        if (this.entries.length > this.maxEntries) {
+          this.entries.shift();
+        }
+        this.notify();
+        return id;
+      }
+      logComplete(id, status) {
+        const entry = this.entries.find((e) => e.id === id);
+        if (entry) {
+          entry.endTime = Date.now();
+          entry.status = status;
+          this.notify();
+        }
+      }
+      logError(id, error) {
+        const entry = this.entries.find((e) => e.id === id);
+        if (entry) {
+          entry.endTime = Date.now();
+          entry.error = error;
+          this.notify();
+        }
+      }
+      getEntries() {
+        return this.entries;
+      }
+      getRateLimitInfo() {
+        return this.rateLimitInfo;
+      }
+      updateRateLimit(info) {
+        this.rateLimitInfo = info;
+        this.notify();
+      }
+      onUpdate(callback) {
+        this.listeners.add(callback);
+        return () => this.listeners.delete(callback);
+      }
+      clear() {
+        this.entries = [];
+        this.rateLimitInfo = { used: 0, max: 10, oldestTimestamp: null, windowMs: 6e4 };
+        this.notify();
+      }
+      notify() {
+        for (const cb of this.listeners) {
+          try {
+            cb();
+          } catch {
+          }
+        }
+      }
+    };
+    activityMonitor = new ActivityMonitor();
+  }
+});
+
+// credential-source.ts
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+function redactCredential(text4, credential) {
+  return credential ? text4.split(credential).join("[redacted]") : text4;
+}
+function normalize(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+function commandEnvironment(source) {
+  const environment = {};
+  for (const name of COMMAND_ENVIRONMENT_NAMES) {
+    const value = source[name];
+    if (value !== void 0) environment[name] = value;
+  }
+  for (const [name, value] of Object.entries(source)) {
+    if (value !== void 0 && OP_SESSION_NAME.test(name)) environment[name] = value;
+  }
+  return environment;
+}
+function configuredSource(options) {
+  return normalize(options.configuredValue);
+}
+function explicitEnvironmentName(source) {
+  const match = source.match(ENV_SOURCE);
+  return match ? match[1] ?? match[2] : null;
+}
+function escapedSource(source) {
+  if (source.startsWith("$$") || source.startsWith("$!")) return source.slice(1);
+  return null;
+}
+function isMalformedExplicitSource(source) {
+  return source.startsWith("$") && escapedSource(source) === null && explicitEnvironmentName(source) === null;
+}
+async function defaultRunCommand(command, options) {
+  const result = await execAsync(command, {
+    encoding: "utf8",
+    env: options.environment,
+    maxBuffer: options.maxOutputBytes + 1,
+    signal: options.signal,
+    timeout: options.timeoutMs,
+    windowsHide: true
+  });
+  return { stdout: result.stdout };
+}
+function commandFailureCategory(error, signal) {
+  if (signal?.aborted) return "command-aborted";
+  if (error && typeof error === "object") {
+    const code = error.code;
+    if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "command-output-too-large";
+    if (error.killed || code === "ETIMEDOUT") return "command-timeout";
+  }
+  return "command-failed";
+}
+function hasCredentialSource(options) {
+  const source = configuredSource(options);
+  if (source?.startsWith("!")) return true;
+  if (source?.startsWith("$")) return true;
+  return normalize(options.environmentValue) !== null || source !== null;
+}
+async function resolveCredential(options) {
+  const source = configuredSource(options);
+  const escaped = source ? escapedSource(source) : null;
+  if (escaped !== null) return escaped;
+  if (source?.startsWith("!")) {
+    const command = source.slice(1).trim();
+    if (!command) throw new CredentialResolutionError(options.provider, "invalid-source");
+    let result;
+    try {
+      result = await (options.runCommand ?? defaultRunCommand)(command, {
+        signal: options.signal,
+        timeoutMs: COMMAND_TIMEOUT_MS,
+        maxOutputBytes: MAX_CREDENTIAL_BYTES,
+        environment: commandEnvironment(options.environment ?? process.env)
+      });
+    } catch (error) {
+      throw new CredentialResolutionError(options.provider, commandFailureCategory(error, options.signal));
+    }
+    const stdout = Buffer.isBuffer(result.stdout) ? result.stdout.toString("utf8") : result.stdout;
+    if (Buffer.byteLength(stdout, "utf8") > MAX_CREDENTIAL_BYTES) {
+      throw new CredentialResolutionError(options.provider, "command-output-too-large");
+    }
+    const value = stdout.trim();
+    if (!value) throw new CredentialResolutionError(options.provider, "command-empty");
+    if (/[\0-\x1f\x7f]/.test(value)) {
+      throw new CredentialResolutionError(options.provider, "command-invalid-output");
+    }
+    return value;
+  }
+  if (source && isMalformedExplicitSource(source)) {
+    throw new CredentialResolutionError(options.provider, "invalid-source");
+  }
+  if (source?.startsWith("$")) {
+    const name = explicitEnvironmentName(source);
+    if (!name) throw new CredentialResolutionError(options.provider, "invalid-source");
+    const value = normalize((options.environment ?? process.env)[name]);
+    if (!value) throw new CredentialResolutionError(options.provider, "environment-empty");
+    return value;
+  }
+  return normalize(options.environmentValue) ?? source;
+}
+var execAsync, COMMAND_TIMEOUT_MS, MAX_CREDENTIAL_BYTES, ENV_SOURCE, OP_SESSION_NAME, COMMAND_ENVIRONMENT_NAMES, CredentialResolutionError;
+var init_credential_source = __esm({
+  "credential-source.ts"() {
+    execAsync = promisify(exec);
+    COMMAND_TIMEOUT_MS = 5e3;
+    MAX_CREDENTIAL_BYTES = 16384;
+    ENV_SOURCE = /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/;
+    OP_SESSION_NAME = /^OP_SESSION_[A-Za-z0-9_]+$/;
+    COMMAND_ENVIRONMENT_NAMES = [
+      "HOME",
+      "USER",
+      "LOGNAME",
+      "OP_SERVICE_ACCOUNT_TOKEN",
+      "PATH",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+      "TERM",
+      "TMPDIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR",
+      "DBUS_SESSION_BUS_ADDRESS",
+      "SSH_AUTH_SOCK",
+      "WSL_DISTRO_NAME",
+      "WSL_INTEROP"
+    ];
+    CredentialResolutionError = class extends Error {
+      provider;
+      category;
+      constructor(provider, category) {
+        const suffix = category === "command-aborted" ? "aborted" : category === "oauth-credential-rejected" ? "OAuth token exchange rejected the credentials" : category;
+        super(`${provider} credential resolution failed: ${suffix}`);
+        this.name = "CredentialResolutionError";
+        this.provider = provider;
+        this.category = category;
+      }
+    };
+  }
+});
+
 // gemini-adc.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createSign } from "node:crypto";
-import { homedir as homedir2 } from "node:os";
+import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 function loadConfig() {
-  if (cachedConfig) return cachedConfig;
-  if (!existsSync2(CONFIG_PATH)) {
-    cachedConfig = {};
-    return cachedConfig;
-  }
-  const raw = readFileSync2(CONFIG_PATH, "utf-8");
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("config root must be an object");
-    }
-    cachedConfig = parsed;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
-  }
-  return cachedConfig;
+  return cachedConfig ??= loadWebAccessConfig();
 }
 function normalizeIdentifier(value, envName) {
   if (typeof value === "string") {
@@ -764,10 +729,10 @@ function parseTokenExchangeResponse(text4, context) {
 }
 async function loadAdcFile() {
   const path = getAdcPath();
-  if (!path || !existsSync2(path)) {
+  if (!path || !existsSync(path)) {
     throw new Error(`Google Application Default Credentials file not found at ${path}`);
   }
-  const raw = readFileSync2(path, "utf-8");
+  const raw = readFileSync(path, "utf-8");
   try {
     return parseAdcFile(raw);
   } catch (err) {
@@ -856,7 +821,7 @@ function isGeminiAdcAvailable() {
   if (hasGeminiApiKeySource()) return false;
   if (hasExplicitApiBase()) return false;
   if (!getAdcProject() || !getAdcLocation()) return false;
-  return existsSync2(getAdcPath());
+  return existsSync(getAdcPath());
 }
 function hasGeminiApiKeySource() {
   const configured = loadConfig().geminiApiKey;
@@ -870,13 +835,12 @@ function hasExplicitApiBase() {
   const configured = loadConfig().geminiBaseUrl;
   return typeof configured === "string" && configured.trim().length > 0;
 }
-var CONFIG_PATH, DEFAULT_ADC_PATH, TOKEN_ENDPOINT, VERTEX_HOST, VERTEX_API_VERSION, REFRESH_SKEW_MS, cachedConfig, cachedToken, OAUTH_CREDENTIAL_REJECTION_STATUSES;
+var DEFAULT_ADC_PATH, TOKEN_ENDPOINT, VERTEX_HOST, VERTEX_API_VERSION, REFRESH_SKEW_MS, cachedConfig, cachedToken, OAUTH_CREDENTIAL_REJECTION_STATUSES;
 var init_gemini_adc = __esm({
   "gemini-adc.ts"() {
     init_utils();
     init_credential_source();
-    CONFIG_PATH = getWebSearchConfigPath();
-    DEFAULT_ADC_PATH = join2(homedir2(), ".config", "gcloud", "application_default_credentials.json");
+    DEFAULT_ADC_PATH = join2(homedir(), ".config", "gcloud", "application_default_credentials.json");
     TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
     VERTEX_HOST = "https://aiplatform.googleapis.com";
     VERTEX_API_VERSION = "v1";
@@ -888,21 +852,8 @@ var init_gemini_adc = __esm({
 });
 
 // gemini-api.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3 } from "node:fs";
 function loadConfig2() {
-  if (cachedConfig2) return cachedConfig2;
-  if (!existsSync3(CONFIG_PATH2)) {
-    cachedConfig2 = {};
-    return cachedConfig2;
-  }
-  const raw = readFileSync3(CONFIG_PATH2, "utf-8");
-  try {
-    cachedConfig2 = JSON.parse(raw);
-    return cachedConfig2;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH2}: ${message}`);
-  }
+  return cachedConfig2 ??= loadWebAccessConfig();
 }
 function withTimeout(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -1042,7 +993,7 @@ async function queryGeminiApiWithInlineData(prompt, data, mimeType, options = {}
   if (!apiKey && !isGatewayConfigured() && !isGeminiAdcAvailable()) {
     throw new Error(
       `Gemini API not configured. Either:
-  1. Configure geminiApiKey in ${CONFIG_PATH2} or set GEMINI_API_KEY
+  1. Configure geminiApiKey in ${CONFIG_PATH} or set GEMINI_API_KEY
   2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing
   3. Set geminiAuth to "adc" with a Google Cloud ADC (GOOGLE_APPLICATION_CREDENTIALS) + project/location`
     );
@@ -1085,7 +1036,7 @@ async function queryGeminiApiWithVideo(prompt, videoUri, options = {}) {
   if (!apiKey && !isGatewayConfigured()) {
     throw new Error(
       `Gemini API not configured. Either:
-  1. Configure geminiApiKey in ${CONFIG_PATH2} or set GEMINI_API_KEY
+  1. Configure geminiApiKey in ${CONFIG_PATH} or set GEMINI_API_KEY
   2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing`
     );
   }
@@ -1119,16 +1070,16 @@ async function queryGeminiApiWithVideo(prompt, videoUri, options = {}) {
   if (!text4) throw new Error("Gemini API returned empty response");
   return text4;
 }
-var DEFAULT_API_HOST, API_VERSION, API_BASE, CONFIG_PATH2, DEFAULT_MODEL, cachedConfig2, responseCredentials;
+var DEFAULT_API_HOST, API_VERSION, API_BASE, CONFIG_PATH, DEFAULT_MODEL, cachedConfig2, responseCredentials;
 var init_gemini_api = __esm({
   "gemini-api.ts"() {
-    init_credential_source();
     init_utils();
+    init_credential_source();
     init_gemini_adc();
     DEFAULT_API_HOST = "https://generativelanguage.googleapis.com";
     API_VERSION = "v1beta";
     API_BASE = `${DEFAULT_API_HOST}/${API_VERSION}`;
-    CONFIG_PATH2 = getWebSearchConfigPath();
+    CONFIG_PATH = getWebSearchConfigPath();
     DEFAULT_MODEL = "gemini-3.6-flash";
     cachedConfig2 = null;
     responseCredentials = /* @__PURE__ */ new WeakMap();
@@ -1136,7 +1087,6 @@ var init_gemini_api = __esm({
 });
 
 // gemini-web-config.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
 function normalizeChromeProfile(value) {
   if (typeof value !== "string") return void 0;
   const normalized = value.trim();
@@ -1145,47 +1095,36 @@ function normalizeChromeProfile(value) {
 function parseBrowserCookies(value) {
   if (value === void 0) return void 0;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`browserCookies in ${CONFIG_PATH3} must be an object`);
+    throw new Error(`browserCookies in ${getWebAccessConfigPath()} must be an object`);
   }
   const raw = value;
   if ("profilePath" in raw) {
-    throw new Error(`browserCookies.profilePath is not supported; use a browser preset and profile directory name in ${CONFIG_PATH3}`);
+    throw new Error(`browserCookies.profilePath is not supported; use a browser preset and profile directory name in ${getWebAccessConfigPath()}`);
   }
   let browser;
   if (raw.browser !== void 0) {
-    if (typeof raw.browser !== "string") throw new Error(`browserCookies.browser in ${CONFIG_PATH3} must be a supported browser name`);
+    if (typeof raw.browser !== "string") throw new Error(`browserCookies.browser in ${getWebAccessConfigPath()} must be a supported browser name`);
     const normalized = raw.browser.trim().toLowerCase();
     const preset = BROWSER_COOKIE_PRESETS.find((candidate) => candidate === normalized);
     if (!preset) {
-      throw new Error(`Unsupported browserCookies.browser ${JSON.stringify(raw.browser)} in ${CONFIG_PATH3}`);
+      throw new Error(`Unsupported browserCookies.browser ${JSON.stringify(raw.browser)} in ${getWebAccessConfigPath()}`);
     }
     browser = preset;
   }
   if (raw.profile !== void 0 && typeof raw.profile !== "string") {
-    throw new Error(`browserCookies.profile in ${CONFIG_PATH3} must be a profile directory name`);
+    throw new Error(`browserCookies.profile in ${getWebAccessConfigPath()} must be a profile directory name`);
   }
   const profile = normalizeChromeProfile(raw.profile);
   if (profile && (profile === "." || profile === ".." || profile.includes("/") || profile.includes("\\"))) {
-    throw new Error(`browserCookies.profile in ${CONFIG_PATH3} must be a profile directory name, not a path`);
+    throw new Error(`browserCookies.profile in ${getWebAccessConfigPath()} must be a profile directory name, not a path`);
   }
   return { ...browser ? { browser } : {}, ...profile ? { profile } : {} };
 }
 function loadConfig3() {
   if (cachedConfig3) return cachedConfig3;
-  if (!existsSync4(CONFIG_PATH3)) {
-    cachedConfig3 = {};
-    return cachedConfig3;
-  }
-  const rawText = readFileSync4(CONFIG_PATH3, "utf-8");
-  let raw;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH3}: ${message}`);
-  }
+  const raw = loadWebAccessConfig();
   if (raw.chromeProfile !== void 0) {
-    throw new Error(`chromeProfile in ${CONFIG_PATH3} is no longer supported; use browserCookies.profile`);
+    throw new Error(`chromeProfile in ${getWebAccessConfigPath()} is no longer supported; use browserCookies.profile`);
   }
   cachedConfig3 = {
     browserCookies: parseBrowserCookies(raw.browserCookies),
@@ -1197,25 +1136,15 @@ function getBrowserCookieSelectionFromConfig() {
   return { ...loadConfig3().browserCookies };
 }
 function isBrowserCookieAccessAllowed() {
-  if (process.env.PI_ALLOW_BROWSER_COOKIES === "1" || process.env.FEYNMAN_ALLOW_BROWSER_COOKIES === "1") {
-    return true;
-  }
-  if (!existsSync4(CONFIG_PATH3)) return false;
-  const rawText = readFileSync4(CONFIG_PATH3, "utf-8");
-  let raw;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH3}: ${message}`);
-  }
+  if (process.env.PI_ALLOW_BROWSER_COOKIES === "1" || process.env.FEYNMAN_ALLOW_BROWSER_COOKIES === "1") return true;
+  const raw = loadWebAccessConfig();
   return raw.allowBrowserCookies === true;
 }
-var CONFIG_PATH3, BROWSER_COOKIE_PRESETS, cachedConfig3;
+var CONFIG_PATH2, BROWSER_COOKIE_PRESETS, cachedConfig3;
 var init_gemini_web_config = __esm({
   "gemini-web-config.ts"() {
     init_utils();
-    CONFIG_PATH3 = getWebSearchConfigPath();
+    CONFIG_PATH2 = getWebAccessConfigPath();
     BROWSER_COOKIE_PRESETS = ["helium", "chrome", "brave", "arc", "chromium", "edge"];
     cachedConfig3 = null;
   }
@@ -1224,8 +1153,8 @@ var init_gemini_web_config = __esm({
 // chrome-cookies.ts
 import { execFile } from "node:child_process";
 import { pbkdf2Sync, createDecipheriv } from "node:crypto";
-import { copyFileSync, existsSync as existsSync5, mkdtempSync, readdirSync, readFileSync as readFileSync5, realpathSync, rmSync } from "node:fs";
-import { tmpdir as tmpdir2, homedir as homedir3 } from "node:os";
+import { copyFileSync, existsSync as existsSync2, mkdtempSync, readdirSync, readFileSync as readFileSync2, realpathSync, rmSync } from "node:fs";
+import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
 import { isAbsolute, join as join3, sep } from "node:path";
 function getLastGoogleCookieDiagnostic() {
   return lastCookieDiagnostic;
@@ -1276,7 +1205,7 @@ async function getBrowserCookiesForHosts(options) {
     return null;
   }
   const attempts = [];
-  const home = currentPlatform === "win32" ? process.env.USERPROFILE || homedir3() : homedir3();
+  const home = currentPlatform === "win32" ? process.env.USERPROFILE || homedir2() : homedir2();
   let sawCookieDatabase = false;
   let sawRequiredCookies = false;
   let sawAnyHostCookie = false;
@@ -1463,9 +1392,9 @@ function resolveProfilePath(home, config, profile) {
 }
 function cookieDatabasePath(profilePath, config) {
   const networkCookies = join3(profilePath, "Network", "Cookies");
-  if (config.usesLocalAppData && existsSync5(networkCookies)) return networkCookies;
+  if (config.usesLocalAppData && existsSync2(networkCookies)) return networkCookies;
   const legacyCookies = join3(profilePath, "Cookies");
-  return existsSync5(legacyCookies) ? legacyCookies : null;
+  return existsSync2(legacyCookies) ? legacyCookies : null;
 }
 function browserBasePath(home, config) {
   return config.usesLocalAppData ? join3(process.env.LOCALAPPDATA || join3(home, "AppData", "Local"), config.baseDir) : join3(home, config.baseDir);
@@ -1480,7 +1409,7 @@ function normalizeHosts(hosts) {
 }
 function listBrowserProfiles(home, config) {
   const basePath = browserBasePath(home, config);
-  if (!existsSync5(basePath)) return ["Default"];
+  if (!existsSync2(basePath)) return ["Default"];
   const profiles = /* @__PURE__ */ new Set();
   try {
     for (const entry of readdirSync(basePath, { withFileTypes: true })) {
@@ -1561,7 +1490,7 @@ function readBrowserPasswords(config, currentPlatform) {
 }
 async function readWindowsEncryptionKey(config, home) {
   try {
-    const localState = JSON.parse(readFileSync5(join3(browserBasePath(home, config), "Local State"), "utf8"));
+    const localState = JSON.parse(readFileSync2(join3(browserBasePath(home, config), "Local State"), "utf8"));
     const encodedKey = localState.os_crypt?.encrypted_key;
     if (typeof encodedKey !== "string") return null;
     const protectedKey = Buffer.from(encodedKey, "base64");
@@ -1779,7 +1708,7 @@ function domainCookieHosts(host) {
 }
 function copySidecar(srcDb, targetDb, suffix) {
   const sidecar = `${srcDb}${suffix}`;
-  if (!existsSync5(sidecar)) return;
+  if (!existsSync2(sidecar)) return;
   try {
     copyFileSync(sidecar, `${targetDb}${suffix}`);
   } catch {
@@ -1837,7 +1766,7 @@ var init_chrome_cookies = __esm({
 });
 
 // gemini-web.ts
-import { readFileSync as readFileSync6 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 import { basename } from "node:path";
 function createGeminiFetch(undiciImpl) {
   const agent = new undiciImpl.EnvHttpProxyAgent({
@@ -1978,7 +1907,7 @@ async function fetchWithCookieRedirects(url, cookieHeader, maxRedirects, signal)
   throw new Error(`Too many redirects (>${maxRedirects})`);
 }
 async function uploadFile(file, cookieHeader, signal) {
-  const data = readFileSync6(file.path);
+  const data = readFileSync3(file.path);
   const fileName = basename(file.path);
   const boundary = "----FormBoundary" + Math.random().toString(36).slice(2);
   const header = `--${boundary}\r
@@ -2112,21 +2041,8 @@ var init_search_answer_formatting = __esm({
 });
 
 // perplexity.ts
-import { existsSync as existsSync6, readFileSync as readFileSync7 } from "node:fs";
 function loadConfig4() {
-  if (cachedConfig4) return cachedConfig4;
-  if (!existsSync6(CONFIG_PATH4)) {
-    cachedConfig4 = {};
-    return cachedConfig4;
-  }
-  const content = readFileSync7(CONFIG_PATH4, "utf-8");
-  try {
-    cachedConfig4 = JSON.parse(content);
-    return cachedConfig4;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH4}: ${message}`);
-  }
+  return cachedConfig4 ??= loadWebAccessConfig();
 }
 async function getApiKey2(signal) {
   const key = await resolveCredential({
@@ -2138,7 +2054,7 @@ async function getApiKey2(signal) {
   if (!key) {
     throw new Error(
       `Perplexity API key not found. Either:
-  1. Create ${CONFIG_PATH4} with { "perplexityApiKey": "your-key" }
+  1. Create ${CONFIG_PATH3} with { "perplexityApiKey": "your-key" }
   2. Set PERPLEXITY_API_KEY environment variable
 Get a key at https://perplexity.ai/settings/api`
     );
@@ -2256,16 +2172,16 @@ async function askPerplexity(prompt, options = {}) {
   const content = data.choices?.[0]?.message?.content;
   return typeof content === "string" ? content : "";
 }
-var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH4, RATE_LIMIT, requestTimestamps, cachedConfig4;
+var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH3, RATE_LIMIT, requestTimestamps, cachedConfig4;
 var init_perplexity = __esm({
   "perplexity.ts"() {
+    init_utils();
     init_activity();
     init_credential_source();
     init_search_answer_formatting();
-    init_utils();
     PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
     PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
-    CONFIG_PATH4 = getWebSearchConfigPath();
+    CONFIG_PATH3 = getWebSearchConfigPath();
     RATE_LIMIT = {
       maxRequests: 10,
       windowMs: 60 * 1e3
@@ -2306,21 +2222,8 @@ var init_search_result_count_normalization = __esm({
 });
 
 // parallel.ts
-import { existsSync as existsSync10, readFileSync as readFileSync11 } from "node:fs";
 function loadConfig8() {
-  if (cachedConfig8) return cachedConfig8;
-  if (!existsSync10(CONFIG_PATH8)) {
-    cachedConfig8 = {};
-    return cachedConfig8;
-  }
-  const raw = readFileSync11(CONFIG_PATH8, "utf-8");
-  try {
-    cachedConfig8 = JSON.parse(raw);
-    return cachedConfig8;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH8}: ${message}`);
-  }
+  return cachedConfig8 ??= loadWebAccessConfig();
 }
 function normalizeApiKey2(value) {
   if (typeof value !== "string") return null;
@@ -2364,7 +2267,7 @@ async function getApiKey5(signal) {
   if (!key) {
     throw new Error(
       `Parallel API key not found. Either:
-  1. Create ${CONFIG_PATH8} with { "parallelApiKey": "your-key" }
+  1. Create ${CONFIG_PATH7} with { "parallelApiKey": "your-key" }
   2. Set PARALLEL_API_KEY environment variable
 Get a key at https://platform.parallel.ai`
     );
@@ -2572,16 +2475,16 @@ async function parallelFetch(url, body, signal) {
     throw new Error(`Parallel API returned invalid JSON: ${errorMessage(err)}`);
   }
 }
-var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH8, MIN_PARALLEL_API_KEY_LENGTH, MIN_USEFUL_CONTENT, SEARCH_TIMEOUT_MS3, PLACEHOLDER_API_KEY_DENYLIST, cachedConfig8;
+var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH7, MIN_PARALLEL_API_KEY_LENGTH, MIN_USEFUL_CONTENT, SEARCH_TIMEOUT_MS3, PLACEHOLDER_API_KEY_DENYLIST, cachedConfig8;
 var init_parallel = __esm({
   "parallel.ts"() {
+    init_utils();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
-    init_utils();
     PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search";
     PARALLEL_EXTRACT_URL = "https://api.parallel.ai/v1/extract";
-    CONFIG_PATH8 = getWebSearchConfigPath();
+    CONFIG_PATH7 = getWebSearchConfigPath();
     MIN_PARALLEL_API_KEY_LENGTH = 8;
     MIN_USEFUL_CONTENT = 500;
     SEARCH_TIMEOUT_MS3 = 6e4;
@@ -2678,7 +2581,7 @@ async function callParallelMcp(toolName, args, signal) {
   const safeBody = apiKey ? redactCredential(body, apiKey) : body;
   if (!response.ok) {
     if (response.status === 429) {
-      throw new Error(`Parallel MCP rate limit reached (429). Add parallelApiKey to ${CONFIG_PATH9} or set PARALLEL_API_KEY for higher limits: ${safeBody.slice(0, 200)}`);
+      throw new Error(`Parallel MCP rate limit reached (429). Add parallelApiKey to ${CONFIG_PATH8} or set PARALLEL_API_KEY for higher limits: ${safeBody.slice(0, 200)}`);
     }
     throw new Error(`Parallel MCP error ${response.status}: ${safeBody.slice(0, 300)}`);
   }
@@ -2796,7 +2699,7 @@ async function extractWithParallelMcp(url, signal, options = {}) {
     throw err;
   }
 }
-var PARALLEL_MCP_URL, CONFIG_PATH9, REQUEST_TIMEOUT_MS;
+var PARALLEL_MCP_URL, CONFIG_PATH8, REQUEST_TIMEOUT_MS;
 var init_parallel_mcp = __esm({
   "parallel-mcp.ts"() {
     init_activity();
@@ -2804,27 +2707,14 @@ var init_parallel_mcp = __esm({
     init_parallel();
     init_utils();
     PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
-    CONFIG_PATH9 = getWebSearchConfigPath();
+    CONFIG_PATH8 = getWebSearchConfigPath();
     REQUEST_TIMEOUT_MS = 6e4;
   }
 });
 
 // tinyfish.ts
-import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
 function loadConfig9() {
-  if (cachedConfig9) return cachedConfig9;
-  if (!existsSync11(CONFIG_PATH10)) {
-    cachedConfig9 = {};
-    return cachedConfig9;
-  }
-  const raw = readFileSync12(CONFIG_PATH10, "utf-8");
-  try {
-    cachedConfig9 = JSON.parse(raw);
-    return cachedConfig9;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH10}: ${message}`);
-  }
+  return cachedConfig9 ??= loadWebAccessConfig();
 }
 async function getApiKey6(signal) {
   const key = await resolveCredential({
@@ -2836,7 +2726,7 @@ async function getApiKey6(signal) {
   if (!key) {
     throw new Error(
       `TinyFish API key not found. Either:
-  1. Create ${CONFIG_PATH10} with { "tinyfishApiKey": "your-key" }
+  1. Create ${CONFIG_PATH9} with { "tinyfishApiKey": "your-key" }
   2. Set TINYFISH_API_KEY environment variable
 Get a key at https://agent.tinyfish.ai/api-keys`
     );
@@ -3072,18 +2962,18 @@ async function extractWithTinyFish(url, signal, options = {}) {
     throw redactedError;
   }
 }
-var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH10, SEARCH_TIMEOUT_MS4, FETCH_TIMEOUT_MS, MAX_FETCH_URLS, MAX_FETCH_PER_URL_TIMEOUT_MS, cachedConfig9;
+var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH9, SEARCH_TIMEOUT_MS4, FETCH_TIMEOUT_MS, MAX_FETCH_URLS, MAX_FETCH_PER_URL_TIMEOUT_MS, cachedConfig9;
 var init_tinyfish = __esm({
   "tinyfish.ts"() {
+    init_utils();
     init_activity();
     init_domain_filter_normalization();
     init_search_answer_formatting();
     init_search_result_count_normalization();
     init_credential_source();
-    init_utils();
     TINYFISH_SEARCH_URL = "https://api.search.tinyfish.ai";
     TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
-    CONFIG_PATH10 = getWebSearchConfigPath();
+    CONFIG_PATH9 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS4 = 6e4;
     FETCH_TIMEOUT_MS = 15e4;
     MAX_FETCH_URLS = 10;
@@ -3093,26 +2983,8 @@ var init_tinyfish = __esm({
 });
 
 // search1api.ts
-import { existsSync as existsSync12, readFileSync as readFileSync13 } from "node:fs";
 function loadConfig10() {
-  if (cachedConfig10) return cachedConfig10;
-  if (!existsSync12(CONFIG_PATH11)) {
-    cachedConfig10 = {};
-    return cachedConfig10;
-  }
-  const raw = readFileSync13(CONFIG_PATH11, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH11}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH11}: expected a JSON object`);
-  }
-  cachedConfig10 = parsed;
-  return cachedConfig10;
+  return cachedConfig10 ??= loadWebAccessConfig();
 }
 async function getApiKey7(signal) {
   const key = await resolveCredential({
@@ -3124,7 +2996,7 @@ async function getApiKey7(signal) {
   if (!key) {
     throw new Error(
       `Search1API key not found. Either:
-  1. Create ${CONFIG_PATH11} with { "search1apiApiKey": "your-key" }
+  1. Create ${CONFIG_PATH10} with { "search1apiApiKey": "your-key" }
   2. Set SEARCH1API_KEY environment variable
 Create a key at https://dashboard.search1api.com`
     );
@@ -3295,18 +3167,18 @@ async function extractWithSearch1API(url, signal, options = {}) {
     throw redactedError;
   }
 }
-var SEARCH1API_SEARCH_URL, SEARCH1API_CRAWL_URL, CONFIG_PATH11, SEARCH_TIMEOUT_MS5, CRAWL_TIMEOUT_MS, cachedConfig10;
+var SEARCH1API_SEARCH_URL, SEARCH1API_CRAWL_URL, CONFIG_PATH10, SEARCH_TIMEOUT_MS5, CRAWL_TIMEOUT_MS, cachedConfig10;
 var init_search1api = __esm({
   "search1api.ts"() {
+    init_utils();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
     init_search_answer_formatting();
     init_search_result_count_normalization();
-    init_utils();
     SEARCH1API_SEARCH_URL = "https://api.search1api.com/search";
     SEARCH1API_CRAWL_URL = "https://api.search1api.com/crawl";
-    CONFIG_PATH11 = getWebSearchConfigPath();
+    CONFIG_PATH10 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS5 = 6e4;
     CRAWL_TIMEOUT_MS = 6e4;
     cachedConfig10 = null;
@@ -3314,26 +3186,8 @@ var init_search1api = __esm({
 });
 
 // querit.ts
-import { existsSync as existsSync14, readFileSync as readFileSync15 } from "node:fs";
 function loadConfig12() {
-  if (cachedConfig12) return cachedConfig12;
-  if (!existsSync14(CONFIG_PATH13)) {
-    cachedConfig12 = {};
-    return cachedConfig12;
-  }
-  const raw = readFileSync15(CONFIG_PATH13, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH13}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH13}: expected a JSON object`);
-  }
-  cachedConfig12 = parsed;
-  return cachedConfig12;
+  return cachedConfig12 ??= loadWebAccessConfig();
 }
 async function getApiKey9(signal) {
   const key = await resolveCredential({
@@ -3345,7 +3199,7 @@ async function getApiKey9(signal) {
   if (!key) {
     throw new Error(
       `Querit API key not found. Either:
-  1. Create ${CONFIG_PATH13} with { "queritApiKey": "your-key" }
+  1. Create ${CONFIG_PATH12} with { "queritApiKey": "your-key" }
   2. Set QUERIT_API_KEY environment variable
 Create a key at https://www.querit.ai/en/dashboard/api-keys`
     );
@@ -3587,18 +3441,18 @@ async function extractWithQuerit(url, signal, options = {}) {
     throw redactedError;
   }
 }
-var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH13, SEARCH_TIMEOUT_MS7, CONTENTS_TIMEOUT_MS, MAX_CONTENT_URLS, cachedConfig12;
+var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH12, SEARCH_TIMEOUT_MS7, CONTENTS_TIMEOUT_MS, MAX_CONTENT_URLS, cachedConfig12;
 var init_querit = __esm({
   "querit.ts"() {
+    init_utils();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
     init_search_answer_formatting();
     init_search_result_count_normalization();
-    init_utils();
     QUERIT_SEARCH_URL = "https://api.querit.ai/v1/search";
     QUERIT_CONTENTS_URL = "https://api.querit.ai/v1/contents";
-    CONFIG_PATH13 = getWebSearchConfigPath();
+    CONFIG_PATH12 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS7 = 6e4;
     CONTENTS_TIMEOUT_MS = 6e4;
     MAX_CONTENT_URLS = 10;
@@ -3608,34 +3462,9 @@ var init_querit = __esm({
 
 // ssrf-protection.ts
 import { lookup as dnsLookup } from "node:dns/promises";
-import { existsSync as existsSync17, readFileSync as readFileSync18, statSync } from "node:fs";
 import net from "node:net";
 function loadConfigRoot() {
-  if (!existsSync17(WEB_SEARCH_CONFIG_PATH)) return null;
-  let signature;
-  try {
-    const stat = statSync(WEB_SEARCH_CONFIG_PATH);
-    signature = `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return null;
-  }
-  if (cachedConfigRoot?.signature === signature) return cachedConfigRoot.value;
-  let raw;
-  try {
-    raw = readFileSync18(WEB_SEARCH_CONFIG_PATH, "utf-8");
-  } catch {
-    return null;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH}: ${message}`);
-  }
-  const value = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-  cachedConfigRoot = { signature, value };
-  return value;
+  return loadWebAccessConfig();
 }
 function loadFetchContentDomainPolicy() {
   const parsed = loadConfigRoot();
@@ -3982,7 +3811,7 @@ function bytesMatchPrefix(addr, network, prefix) {
   }
   return true;
 }
-var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, REMOTE_DNS_PROXY_PROTOCOLS, WEB_SEARCH_CONFIG_PATH, cachedConfigRoot, DEFAULT_DOMAIN_POLICY;
+var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, REMOTE_DNS_PROXY_PROTOCOLS, WEB_SEARCH_CONFIG_PATH, DEFAULT_DOMAIN_POLICY;
 var init_ssrf_protection = __esm({
   "ssrf-protection.ts"() {
     init_utils();
@@ -3990,33 +3819,14 @@ var init_ssrf_protection = __esm({
     REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     LOOPBACK_ALLOW_RANGES = ["127.0.0.0/8", "::1", "::ffff:127.0.0.0/104"];
     REMOTE_DNS_PROXY_PROTOCOLS = /* @__PURE__ */ new Set(["http:", "https:", "socks4a:", "socks5h:"]);
-    WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
-    cachedConfigRoot = null;
+    WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
     DEFAULT_DOMAIN_POLICY = { allow: [], deny: [] };
   }
 });
 
 // firecrawl.ts
-import { existsSync as existsSync18, readFileSync as readFileSync19 } from "node:fs";
 function loadConfig15() {
-  if (cachedConfig15) return cachedConfig15;
-  if (!existsSync18(CONFIG_PATH16)) {
-    cachedConfig15 = {};
-    return cachedConfig15;
-  }
-  const raw = readFileSync19(CONFIG_PATH16, "utf8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH16}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH16}: expected a JSON object`);
-  }
-  cachedConfig15 = parsed;
-  return cachedConfig15;
+  return cachedConfig15 ??= loadWebAccessConfig();
 }
 function normalizeBaseUrl2(value) {
   if (typeof value !== "string") return null;
@@ -4026,13 +3836,13 @@ function normalizeBaseUrl2(value) {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid Firecrawl base URL in ${CONFIG_PATH16}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Invalid Firecrawl base URL in ${CONFIG_PATH16}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.username || parsed.password) {
-    throw new Error(`Invalid Firecrawl base URL in ${CONFIG_PATH16}: URL credentials are not allowed`);
+    throw new Error(`Invalid Firecrawl base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.search = "";
@@ -4047,7 +3857,7 @@ function requireBaseUrl() {
   if (!baseUrl) {
     throw new Error(
       `Firecrawl base URL not configured. Either:
-  1. Set firecrawlBaseUrl in ${CONFIG_PATH16}
+  1. Set firecrawlBaseUrl in ${getWebAccessConfigPath()}
   2. Set FIRECRAWL_BASE_URL environment variable`
     );
   }
@@ -4058,7 +3868,7 @@ function getApiVersion() {
   const raw = environmentValue || loadConfig15().firecrawlApiVersion;
   if (raw === void 0 || raw === null) return DEFAULT_API_VERSION;
   if (typeof raw !== "string") {
-    throw new Error(`firecrawlApiVersion in ${CONFIG_PATH16} must be a string ("v1" or "v2")`);
+    throw new Error(`firecrawlApiVersion in ${getWebAccessConfigPath()} must be a string ("v1" or "v2")`);
   }
   const normalized = raw.trim().toLowerCase();
   if (!normalized) return DEFAULT_API_VERSION;
@@ -4072,18 +3882,18 @@ function allowFreshScrape() {
   if (environmentValue !== void 0) return environmentValue === "1" || environmentValue.toLowerCase() === "true";
   const configured = loadConfig15().firecrawlFreshScrape;
   if (configured === void 0 || configured === null) return false;
-  if (typeof configured !== "boolean") throw new Error(`firecrawlFreshScrape in ${CONFIG_PATH16} must be a boolean`);
+  if (typeof configured !== "boolean") throw new Error(`firecrawlFreshScrape in ${getWebAccessConfigPath()} must be a boolean`);
   return configured;
 }
 function pdfParserOptions() {
   const configured = loadConfig15().firecrawlPdfMaxPages;
   if (configured === void 0 || configured === null) return {};
   if (typeof configured !== "number" || !Number.isInteger(configured) || configured < 1) {
-    throw new Error(`firecrawlPdfMaxPages in ${CONFIG_PATH16} must be a positive integer`);
+    throw new Error(`firecrawlPdfMaxPages in ${getWebAccessConfigPath()} must be a positive integer`);
   }
   if (getApiVersion() === "v1") {
     throw new Error(
-      `firecrawlPdfMaxPages in ${CONFIG_PATH16} requires Firecrawl API v2; v1 has no PDF page cap. Use firecrawlApiVersion "v2" or remove firecrawlPdfMaxPages`
+      `firecrawlPdfMaxPages in ${getWebAccessConfigPath()} requires Firecrawl API v2; v1 has no PDF page cap. Use firecrawlApiVersion "v2" or remove firecrawlPdfMaxPages`
     );
   }
   return { parsers: [{ type: "pdf", maxPages: configured }] };
@@ -4327,17 +4137,17 @@ async function extractWithFirecrawl(url, signal, options) {
   const title = typeof metadataTitle === "string" && metadataTitle.trim() ? metadataTitle.trim() : typeof scrape.title === "string" ? scrape.title.trim() : "";
   return { url, title, content: withPdfTruncationNotice(content, scrape.metadata), error: null };
 }
-var CONFIG_PATH16, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, DEFAULT_MAX_REDIRECTS2, REDIRECT_STATUSES2, SUPPORTED_API_VERSIONS, cachedConfig15;
+var CONFIG_PATH15, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, DEFAULT_MAX_REDIRECTS2, REDIRECT_STATUSES2, SUPPORTED_API_VERSIONS, cachedConfig15;
 var init_firecrawl = __esm({
   "firecrawl.ts"() {
+    init_utils();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
     init_search_answer_formatting();
     init_search_result_count_normalization();
     init_ssrf_protection();
-    init_utils();
-    CONFIG_PATH16 = getWebSearchConfigPath();
+    CONFIG_PATH15 = getWebSearchConfigPath();
     DEFAULT_API_VERSION = "v2";
     EXTRACT_TIMEOUT_MS = 6e4;
     SEARCH_TIMEOUT_MS10 = 6e4;
@@ -4349,26 +4159,8 @@ var init_firecrawl = __esm({
 });
 
 // kagi.ts
-import { existsSync as existsSync21, readFileSync as readFileSync22 } from "node:fs";
 function loadConfig18() {
-  if (cachedConfig18) return cachedConfig18;
-  if (!existsSync21(CONFIG_PATH19)) {
-    cachedConfig18 = {};
-    return cachedConfig18;
-  }
-  const raw = readFileSync22(CONFIG_PATH19, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH19}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH19}: expected a JSON object`);
-  }
-  cachedConfig18 = parsed;
-  return cachedConfig18;
+  return cachedConfig18 ??= loadWebAccessConfig();
 }
 async function getApiKey14(signal) {
   return resolveCredential({
@@ -4383,7 +4175,7 @@ async function requireApiKey5(signal) {
   if (!apiKey) {
     throw new Error(
       `Kagi API key not found. Either:
-  1. Create ${CONFIG_PATH19} with { "kagiApiKey": "your-key" }
+  1. Create ${CONFIG_PATH18} with { "kagiApiKey": "your-key" }
   2. Set KAGI_API_KEY environment variable
 Create a key at https://kagi.com/settings?p=api`
     );
@@ -4562,44 +4354,26 @@ async function extractWithKagi(url, signal, options = {}) {
   activityMonitor.logComplete(activityId, response.status);
   return parsed;
 }
-var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH19, SEARCH_TIMEOUT_MS13, cachedConfig18;
+var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH18, SEARCH_TIMEOUT_MS13, cachedConfig18;
 var init_kagi = __esm({
   "kagi.ts"() {
+    init_utils();
     init_activity();
     init_search_answer_formatting();
     init_search_result_count_normalization();
     init_credential_source();
     init_ssrf_protection();
-    init_utils();
     KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
     KAGI_EXTRACT_URL = "https://kagi.com/api/v1/extract";
-    CONFIG_PATH19 = getWebSearchConfigPath();
+    CONFIG_PATH18 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS13 = 6e4;
     cachedConfig18 = null;
   }
 });
 
 // ollama.ts
-import { existsSync as existsSync23, readFileSync as readFileSync24 } from "node:fs";
 function loadConfig20() {
-  if (cachedConfig20) return cachedConfig20;
-  if (!existsSync23(CONFIG_PATH21)) {
-    cachedConfig20 = {};
-    return cachedConfig20;
-  }
-  const raw = readFileSync24(CONFIG_PATH21, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH21}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH21}: expected a JSON object`);
-  }
-  cachedConfig20 = parsed;
-  return cachedConfig20;
+  return cachedConfig20 ??= loadWebAccessConfig();
 }
 async function getApiKey16(signal) {
   return resolveCredential({
@@ -4614,7 +4388,7 @@ async function requireApiKey7(signal) {
   if (!apiKey) {
     throw new Error(
       `Ollama API key not found. Either:
-  1. Create ${CONFIG_PATH21} with { "ollamaApiKey": "your-key" }
+  1. Create ${CONFIG_PATH20} with { "ollamaApiKey": "your-key" }
   2. Set OLLAMA_API_KEY environment variable
 Create a key at https://ollama.com/settings/keys`
     );
@@ -4755,24 +4529,23 @@ async function extractWithOllama(url, signal, options = {}) {
   if (!content) return null;
   return { url, title: data.title, content, error: null };
 }
-var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH21, SEARCH_TIMEOUT_MS15, cachedConfig20;
+var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH20, SEARCH_TIMEOUT_MS15, cachedConfig20;
 var init_ollama = __esm({
   "ollama.ts"() {
+    init_utils();
     init_activity();
     init_search_answer_formatting();
     init_credential_source();
     init_ssrf_protection();
-    init_utils();
     OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
     OLLAMA_FETCH_URL = "https://ollama.com/api/web_fetch";
-    CONFIG_PATH21 = getWebSearchConfigPath();
+    CONFIG_PATH20 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS15 = 6e4;
     cachedConfig20 = null;
   }
 });
 
 // auth-fetch.ts
-import { existsSync as existsSync41, readFileSync as readFileSync42 } from "node:fs";
 function resolveAuthFetchProfile(request) {
   const profiles = loadAuthFetchProfiles();
   if (profiles.length === 0) {
@@ -4810,17 +4583,7 @@ function authFetchRedirectGuard(profile, from, to) {
   }
 }
 function loadAuthFetchProfiles() {
-  if (!existsSync41(WEB_SEARCH_CONFIG_PATH2)) return [];
-  const raw = readFileSync42(WEB_SEARCH_CONFIG_PATH2, "utf-8");
-  let parsed;
-  try {
-    const value = JSON.parse(raw);
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected a JSON object");
-    parsed = value;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH2}: ${message}`);
-  }
+  const parsed = loadWebAccessConfig();
   if (parsed.authFetch === void 0 || parsed.authFetch === null) return [];
   if (typeof parsed.authFetch !== "object" || Array.isArray(parsed.authFetch)) {
     throw new Error(`authFetch in ${WEB_SEARCH_CONFIG_PATH2} must be an object`);
@@ -4895,7 +4658,7 @@ var WEB_SEARCH_CONFIG_PATH2, AUTH_PROFILE_NAME_PATTERN;
 var init_auth_fetch = __esm({
   "auth-fetch.ts"() {
     init_utils();
-    WEB_SEARCH_CONFIG_PATH2 = getWebSearchConfigPath();
+    WEB_SEARCH_CONFIG_PATH2 = getWebAccessConfigPath();
     AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
   }
 });
@@ -5211,21 +4974,8 @@ var init_rsc_extract = __esm({
 });
 
 // datalab-pdf-extract.ts
-import { existsSync as existsSync42, readFileSync as readFileSync44 } from "node:fs";
 function loadConfig36() {
-  if (cachedConfig35) return cachedConfig35;
-  if (!existsSync42(CONFIG_PATH39)) {
-    cachedConfig35 = {};
-    return cachedConfig35;
-  }
-  const rawText = readFileSync44(CONFIG_PATH39, "utf-8");
-  try {
-    cachedConfig35 = JSON.parse(rawText);
-    return cachedConfig35;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH39}: ${message}`);
-  }
+  return cachedConfig35 ??= loadWebAccessConfig();
 }
 function normalizeString(value) {
   if (typeof value !== "string") return null;
@@ -5252,14 +5002,14 @@ async function getDatalabApiKey(signal) {
   });
 }
 function getDatalabApiBase() {
-  const normalized = normalizeString(process.env.DATALAB_API_BASE)?.replace(
+  const normalized = (normalizeString(process.env.DATALAB_API_BASE) ?? normalizeString(loadConfig36().datalabApiBase))?.replace(
     /\/+$/,
     ""
   );
   return normalized || `${DEFAULT_API_HOST2}${API_PREFIX}`;
 }
 function getDatalabProcessingLocation() {
-  const value = normalizeString(process.env.DATALAB_PROCESSING_LOCATION) ?? DEFAULT_PROCESSING_LOCATION;
+  const value = normalizeString(process.env.DATALAB_PROCESSING_LOCATION) ?? normalizeString(loadConfig36().datalabProcessingLocation) ?? DEFAULT_PROCESSING_LOCATION;
   const normalized = value.toLowerCase();
   if (!DATALAB_LOCATION_VALUES.has(normalized)) {
     throw new Error(
@@ -5571,11 +5321,11 @@ async function readResponseText(response) {
 function datalabFilename(title) {
   return title.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "document";
 }
-var DEFAULT_API_HOST2, API_PREFIX, DEFAULT_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, MAX_RESPONSE_BYTES, MAX_ERROR_BODY_BYTES, CLEANUP_TIMEOUT_MS, CONFIG_PATH39, DATALAB_MODE_VALUES, DATALAB_LOCATION_VALUES, DEFAULT_DATALAB_MODE, DEFAULT_PROCESSING_LOCATION, DEFAULT_DATALAB_TIMEOUT_MS, cachedConfig35;
+var DEFAULT_API_HOST2, API_PREFIX, DEFAULT_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, MAX_RESPONSE_BYTES, MAX_ERROR_BODY_BYTES, CLEANUP_TIMEOUT_MS, DATALAB_MODE_VALUES, DATALAB_LOCATION_VALUES, DEFAULT_DATALAB_MODE, DEFAULT_PROCESSING_LOCATION, DEFAULT_DATALAB_TIMEOUT_MS, cachedConfig35;
 var init_datalab_pdf_extract = __esm({
   "datalab-pdf-extract.ts"() {
-    init_credential_source();
     init_utils();
+    init_credential_source();
     DEFAULT_API_HOST2 = "https://www.datalab.to";
     API_PREFIX = "/api/v1";
     DEFAULT_TIMEOUT_MS = 12e4;
@@ -5583,7 +5333,6 @@ var init_datalab_pdf_extract = __esm({
     MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
     MAX_ERROR_BODY_BYTES = 300;
     CLEANUP_TIMEOUT_MS = 5e3;
-    CONFIG_PATH39 = getWebSearchConfigPath();
     DATALAB_MODE_VALUES = /* @__PURE__ */ new Set([
       "fast",
       "balanced",
@@ -5686,30 +5435,11 @@ var init_gemini_pdf_extract = __esm({
 });
 
 // pdf-extract.ts
-import { existsSync as existsSync43, readFileSync as readFileSync45 } from "node:fs";
 import { writeFile as writeFile2, mkdir } from "node:fs/promises";
 import { join as join5, basename as basename2 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 function loadPDFConfig() {
-  if (!existsSync43(CONFIG_PATH40)) {
-    return {
-      enabled: true,
-      maxSizeMB: DEFAULT_PDF_MAX_SIZE_MB,
-      maxPages: DEFAULT_MAX_PAGES,
-      provider: "auto",
-      datalabMode: normalizeDatalabMode(process.env.DATALAB_MODE),
-      datalabTimeoutMs: DEFAULT_DATALAB_TIMEOUT_MS
-    };
-  }
-  const rawText = readFileSync45(CONFIG_PATH40, "utf-8");
-  let raw;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH40}: ${message}`);
-  }
-  const root = raw && typeof raw === "object" ? raw : {};
+  const root = loadWebAccessConfig();
   const pdf = root.pdf && typeof root.pdf === "object" ? root.pdf : {};
   const enabled = pdf.enabled !== false;
   const configured = pdf.maxSizeMB;
@@ -5916,14 +5646,14 @@ function isPDF(url, contentType) {
     return false;
   }
 }
-var PDF_PROVIDER_VALUES, DEFAULT_PDF_MAX_SIZE_MB, MAX_PDF_MAX_SIZE_MB, MAX_DATALAB_TIMEOUT_MS, DEFAULT_MAX_PAGES, DEFAULT_OUTPUT_DIR, CONFIG_PATH40, PAGE_MARKER_PATTERN2;
+var PDF_PROVIDER_VALUES, DEFAULT_PDF_MAX_SIZE_MB, MAX_PDF_MAX_SIZE_MB, MAX_DATALAB_TIMEOUT_MS, DEFAULT_MAX_PAGES, DEFAULT_OUTPUT_DIR, PAGE_MARKER_PATTERN2;
 var init_pdf_extract = __esm({
   "pdf-extract.ts"() {
+    init_utils();
     init_credential_source();
     init_datalab_pdf_extract();
     init_gemini_api();
     init_gemini_pdf_extract();
-    init_utils();
     PDF_PROVIDER_VALUES = /* @__PURE__ */ new Set([
       "auto",
       "gemini",
@@ -5935,7 +5665,6 @@ var init_pdf_extract = __esm({
     MAX_DATALAB_TIMEOUT_MS = 3e5;
     DEFAULT_MAX_PAGES = 100;
     DEFAULT_OUTPUT_DIR = join5(tmpdir3(), "pi-web-pdf");
-    CONFIG_PATH40 = getWebSearchConfigPath();
     PAGE_MARKER_PATTERN2 = /^<!-- Page (\d+) -->$/gm;
   }
 });
@@ -6113,7 +5842,7 @@ var init_github_api = __esm({
 });
 
 // github-extract.ts
-import { chmodSync, closeSync as closeSync2, constants as fsConstants, existsSync as existsSync44, lstatSync as lstatSync2, mkdirSync as mkdirSync2, mkdtempSync as mkdtempSync2, openSync as openSync2, readFileSync as readFileSync46, readSync, readdirSync as readdirSync3, realpathSync as realpathSync2, rmSync as rmSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync, closeSync as closeSync2, constants as fsConstants, existsSync as existsSync3, lstatSync as lstatSync2, mkdirSync as mkdirSync2, mkdtempSync as mkdtempSync2, openSync as openSync2, readFileSync as readFileSync5, readSync, readdirSync as readdirSync3, realpathSync as realpathSync2, rmSync as rmSync2, statSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { lstat as lstatAsync, open as openAsync, opendir as opendirAsync, readFile as readFileAsync, realpath as realpathAsync, rm as rmAsync } from "node:fs/promises";
 import { execFile as execFile3, spawn as spawn2 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
@@ -6149,18 +5878,7 @@ function loadGitHubConfig() {
     cloneTimeoutSeconds: 30,
     clonePath: "/tmp/pi-github-repos"
   };
-  if (!existsSync44(CONFIG_PATH41)) {
-    cachedConfig36 = defaults2;
-    return cachedConfig36;
-  }
-  const rawText = readFileSync46(CONFIG_PATH41, "utf-8");
-  let raw;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH41}: ${message}`);
-  }
+  const raw = loadWebAccessConfig();
   const gc = raw.githubClone ?? {};
   cachedConfig36 = {
     enabled: normalizeEnabled(gc.enabled, defaults2.enabled),
@@ -6219,7 +5937,7 @@ function cacheKey(owner, repo, ref) {
 }
 function readLinuxBootId() {
   try {
-    const bootId = readFileSync46("/proc/sys/kernel/random/boot_id", "utf-8").trim();
+    const bootId = readFileSync5("/proc/sys/kernel/random/boot_id", "utf-8").trim();
     return bootId.length > 0 ? bootId : null;
   } catch {
     return null;
@@ -6244,7 +5962,7 @@ function parseLinuxProcessInfo(stat) {
 }
 function readLinuxProcessInfo(pid) {
   try {
-    return parseLinuxProcessInfo(readFileSync46(`/proc/${pid}/stat`, "utf-8"));
+    return parseLinuxProcessInfo(readFileSync5(`/proc/${pid}/stat`, "utf-8"));
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
       return { state: "", startTime: null, dead: true };
@@ -6582,7 +6300,7 @@ function resolveWithinRepo(rootPath, relativePath) {
     const rootPrefix = normalizedRoot.endsWith(pathSep) ? normalizedRoot : normalizedRoot + pathSep;
     if (!candidate.startsWith(rootPrefix)) return null;
   }
-  if (!existsSync44(candidate)) return candidate;
+  if (!existsSync3(candidate)) return candidate;
   try {
     const realRoot = realpathSync2(normalizedRoot);
     const realCandidate = realpathSync2(candidate);
@@ -6595,7 +6313,7 @@ function resolveWithinRepo(rootPath, relativePath) {
 }
 function readTextFile(path) {
   try {
-    return readFileSync46(path, "utf-8");
+    return readFileSync5(path, "utf-8");
   } catch {
     return null;
   }
@@ -6621,7 +6339,7 @@ function buildTree(rootPath) {
       }
       let stat;
       try {
-        stat = statSync2(safePath);
+        stat = statSync(safePath);
       } catch {
         continue;
       }
@@ -6662,7 +6380,7 @@ function buildDirListing(rootPath, subPath) {
       continue;
     }
     try {
-      const stat = statSync2(safePath);
+      const stat = statSync(safePath);
       if (stat.isDirectory()) {
         lines.push(`  ${item}/`);
       } else {
@@ -6678,9 +6396,9 @@ function readReadme(localPath) {
   const candidates = ["README.md", "readme.md", "README", "README.txt", "README.rst"];
   for (const name of candidates) {
     const readmePath = join6(localPath, name);
-    if (existsSync44(readmePath)) {
+    if (existsSync3(readmePath)) {
       try {
-        const content = readFileSync46(readmePath, "utf-8");
+        const content = readFileSync5(readmePath, "utf-8");
         return content.length > 8192 ? content.slice(0, 8192) + "\n\n[README truncated at 8K chars]" : content;
       } catch {
         continue;
@@ -6709,7 +6427,7 @@ function generateContent(localPath, info) {
   if (info.type === "tree") {
     const dirPath = info.path || "";
     const fullDirPath = resolveWithinRepo(localPath, dirPath);
-    if (!fullDirPath || !existsSync44(fullDirPath)) {
+    if (!fullDirPath || !existsSync3(fullDirPath)) {
       lines.push(`Path \`${dirPath}\` not found in clone. Showing repository root instead.`);
       lines.push("");
       lines.push("## Structure");
@@ -6725,7 +6443,7 @@ function generateContent(localPath, info) {
   if (info.type === "blob") {
     const filePath = info.path || "";
     const fullFilePath = resolveWithinRepo(localPath, filePath);
-    if (!fullFilePath || !existsSync44(fullFilePath)) {
+    if (!fullFilePath || !existsSync3(fullFilePath)) {
       lines.push(`Path \`${filePath}\` not found in clone. Showing repository root instead.`);
       lines.push("");
       lines.push("## Structure");
@@ -6736,7 +6454,7 @@ function generateContent(localPath, info) {
     }
     let stat;
     try {
-      stat = statSync2(fullFilePath);
+      stat = statSync(fullFilePath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       lines.push(`Could not inspect \`${filePath}\`: ${message}`);
@@ -6887,13 +6605,12 @@ async function extractGitHub(url, signal, forceClone) {
   const title = info.path ? `${owner}/${repo} - ${info.path}` : `${owner}/${repo}`;
   return { url, title, content, error: null };
 }
-var CONFIG_PATH41, BINARY_EXTENSIONS, NOISE_DIRS, MAX_INLINE_FILE_CHARS2, MAX_TREE_ENTRIES2, CLONE_RUNTIME_OWNER_FILENAME, CLONE_RUNTIME_OWNER_VERSION, MAX_CLONE_RUNTIME_OWNER_BYTES, cloneCache, startedCloneRuntimeCleanups, cachedConfig36, cloneRuntime, NON_CODE_SEGMENTS, PROCESS_KILL_GRACE_MS;
+var BINARY_EXTENSIONS, NOISE_DIRS, MAX_INLINE_FILE_CHARS2, MAX_TREE_ENTRIES2, CLONE_RUNTIME_OWNER_FILENAME, CLONE_RUNTIME_OWNER_VERSION, MAX_CLONE_RUNTIME_OWNER_BYTES, cloneCache, startedCloneRuntimeCleanups, cachedConfig36, cloneRuntime, NON_CODE_SEGMENTS, PROCESS_KILL_GRACE_MS;
 var init_github_extract = __esm({
   "github-extract.ts"() {
+    init_utils();
     init_activity();
     init_github_api();
-    init_utils();
-    CONFIG_PATH41 = getWebSearchConfigPath();
     BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
       ".png",
       ".jpg",
@@ -7020,25 +6737,12 @@ var init_github_extract = __esm({
 
 // github-issue-pr.ts
 import { execFile as execFile4 } from "node:child_process";
-import { existsSync as existsSync45, readFileSync as readFileSync47 } from "node:fs";
 function loadConfig37() {
   if (cachedConfig37) return cachedConfig37;
-  const defaults2 = { enabled: true };
-  if (!existsSync45(CONFIG_PATH42)) {
-    cachedConfig37 = defaults2;
-    return cachedConfig37;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync47(CONFIG_PATH42, "utf-8"));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH42}: ${message}`);
-  }
-  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  const root = loadWebAccessConfig();
   const value = root.githubPrIssue;
   if (value !== void 0 && (typeof value !== "object" || value === null || Array.isArray(value))) {
-    throw new Error(`githubPrIssue in ${CONFIG_PATH42} must be an object`);
+    throw new Error(`githubPrIssue in ${getWebAccessConfigPath()} must be an object`);
   }
   const enabled = typeof value?.enabled === "boolean" ? value.enabled : true;
   cachedConfig37 = { enabled };
@@ -7606,13 +7310,13 @@ async function extractGitHubIssuePr(url, signal, options) {
   if ("data" in fallback) return renderGitHubPrIssue(fallback.data);
   return fallback;
 }
-var CONFIG_PATH42, GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMENT_INLINE_CHARS, MAX_INLINE_COMMENTS, MAX_INLINE_REVIEWS, MAX_INLINE_CHECKS, MAX_INLINE_FILES, MAX_INLINE_COMMITS, MAX_INLINE_REVIEW_THREADS, REST_HEADERS, PR_SUBPATHS, PR_FIELDS, PR_CORE_FIELDS, ISSUE_FIELDS, ISSUE_CORE_FIELDS, cachedConfig37;
+var CONFIG_PATH35, GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMENT_INLINE_CHARS, MAX_INLINE_COMMENTS, MAX_INLINE_REVIEWS, MAX_INLINE_CHECKS, MAX_INLINE_FILES, MAX_INLINE_COMMITS, MAX_INLINE_REVIEW_THREADS, REST_HEADERS, PR_SUBPATHS, PR_FIELDS, PR_CORE_FIELDS, ISSUE_FIELDS, ISSUE_CORE_FIELDS, cachedConfig37;
 var init_github_issue_pr = __esm({
   "github-issue-pr.ts"() {
+    init_utils();
     init_github_api();
     init_ssrf_protection();
-    init_utils();
-    CONFIG_PATH42 = getWebSearchConfigPath();
+    CONFIG_PATH35 = getWebAccessConfigPath();
     GH_TIMEOUT_MS = 1e4;
     GH_TOTAL_TIMEOUT_MS = 2e4;
     MAX_DOC_CHARS = 15e4;
@@ -7698,16 +7402,8 @@ var init_github_issue_pr = __esm({
 });
 
 // feature-config.ts
-import { existsSync as existsSync46, readFileSync as readFileSync48 } from "node:fs";
 function loadFeatureConfig() {
-  if (!existsSync46(CONFIG_PATH43)) return {};
-  try {
-    const raw = JSON.parse(readFileSync48(CONFIG_PATH43, "utf-8"));
-    return raw && typeof raw === "object" ? raw : {};
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH43}: ${message}`);
-  }
+  return loadWebAccessConfig();
 }
 function isImageEnabled() {
   return loadFeatureConfig().image?.enabled !== false;
@@ -7719,17 +7415,14 @@ function canAttachImages() {
     return false;
   }
 }
-var CONFIG_PATH43;
 var init_feature_config = __esm({
   "feature-config.ts"() {
     init_utils();
-    CONFIG_PATH43 = getWebSearchConfigPath();
   }
 });
 
 // youtube-extract.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync47, readFileSync as readFileSync49 } from "node:fs";
 function errorMessage29(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -7750,18 +7443,7 @@ function normalizeEnabled2(value, fallback) {
 }
 function loadYouTubeConfig() {
   if (cachedConfig38) return cachedConfig38;
-  if (!existsSync47(CONFIG_PATH44)) {
-    cachedConfig38 = { ...defaults };
-    return cachedConfig38;
-  }
-  const rawText = readFileSync49(CONFIG_PATH44, "utf-8");
-  let raw;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH44}: ${message}`);
-  }
+  const raw = loadWebAccessConfig();
   const yt = raw.youtube ?? {};
   cachedConfig38 = {
     enabled: normalizeEnabled2(yt.enabled, defaults.enabled),
@@ -7959,17 +7641,16 @@ ${answer}
     return null;
   }
 }
-var CONFIG_PATH44, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig38;
+var YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig38;
 var init_youtube_extract = __esm({
   "youtube-extract.ts"() {
+    init_utils();
     init_activity();
     init_feature_config();
     init_gemini_web();
     init_gemini_api();
     init_perplexity();
     init_extract();
-    init_utils();
-    CONFIG_PATH44 = getWebSearchConfigPath();
     YOUTUBE_PROMPT = `Extract the complete content of this YouTube video. Include:
 1. Video title, channel name, and duration
 2. A brief summary (2-3 sentences)
@@ -8081,26 +7762,8 @@ URL: `;
 });
 
 // crawl4ai.ts
-import { existsSync as existsSync48, readFileSync as readFileSync50 } from "node:fs";
 function loadConfig38() {
-  if (cachedConfig39) return cachedConfig39;
-  if (!existsSync48(CONFIG_PATH45)) {
-    cachedConfig39 = {};
-    return cachedConfig39;
-  }
-  const raw = readFileSync50(CONFIG_PATH45, "utf8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH45}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH45}: expected a JSON object`);
-  }
-  cachedConfig39 = parsed;
-  return cachedConfig39;
+  return cachedConfig39 ??= loadWebAccessConfig();
 }
 function normalizeBaseUrl5(value) {
   if (typeof value !== "string") return null;
@@ -8110,13 +7773,13 @@ function normalizeBaseUrl5(value) {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid Crawl4AI base URL in ${CONFIG_PATH45}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Invalid Crawl4AI base URL in ${CONFIG_PATH45}: expected an HTTP or HTTPS URL`);
+    throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: expected an HTTP or HTTPS URL`);
   }
   if (parsed.username || parsed.password) {
-    throw new Error(`Invalid Crawl4AI base URL in ${CONFIG_PATH45}: URL credentials are not allowed`);
+    throw new Error(`Invalid Crawl4AI base URL in ${getWebAccessConfigPath()}: URL credentials are not allowed`);
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.search = "";
@@ -8131,7 +7794,7 @@ function requireBaseUrl4() {
   if (!baseUrl) {
     throw new Error(
       `Crawl4AI base URL not configured. Either:
-  1. Set crawl4aiBaseUrl in ${CONFIG_PATH45}
+  1. Set crawl4aiBaseUrl in ${getWebAccessConfigPath()}
   2. Set CRAWL4AI_BASE_URL environment variable`
     );
   }
@@ -8230,14 +7893,14 @@ async function extractWithCrawl4ai(url, signal, options) {
     throw err;
   }
 }
-var CONFIG_PATH45, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
+var CONFIG_PATH36, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
   "crawl4ai.ts"() {
+    init_utils();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
-    init_utils();
-    CONFIG_PATH45 = getWebSearchConfigPath();
+    CONFIG_PATH36 = getWebSearchConfigPath();
     EXTRACT_TIMEOUT_MS2 = 6e4;
     MARKDOWN_FILTER = "fit";
     cachedConfig39 = null;
@@ -8245,30 +7908,8 @@ var init_crawl4ai = __esm({
 });
 
 // brightdata-unlocker.ts
-import { existsSync as existsSync49, readFileSync as readFileSync51 } from "node:fs";
-function parseFailureDetail(err) {
-  const message = err instanceof Error ? err.message : String(err);
-  const position = message.match(/at position \d+(?: \(line \d+ column \d+\))?/);
-  return position ? `invalid JSON ${position[0]}` : "invalid JSON";
-}
 function loadConfig39() {
-  if (cachedConfig40) return cachedConfig40;
-  if (!existsSync49(CONFIG_PATH46)) {
-    cachedConfig40 = {};
-    return cachedConfig40;
-  }
-  const raw = readFileSync51(CONFIG_PATH46, "utf8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Failed to parse ${CONFIG_PATH46}: ${parseFailureDetail(err)}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH46}: expected a JSON object`);
-  }
-  cachedConfig40 = parsed;
-  return cachedConfig40;
+  return cachedConfig40 ??= loadWebAccessConfig();
 }
 function normalizeZone2(value) {
   if (typeof value !== "string") return null;
@@ -8280,7 +7921,9 @@ function zoneSetting() {
   const fromEnv = process.env.BRIGHTDATA_UNLOCKER_ZONE;
   if (typeof fromEnv === "string" && fromEnv.trim()) return { raw: fromEnv.trim(), label: "BRIGHTDATA_UNLOCKER_ZONE" };
   const configured = loadConfig39().brightdataUnlockerZone;
-  if (typeof configured === "string" && configured.trim()) return { raw: configured.trim(), label: `brightdataUnlockerZone in ${CONFIG_PATH46}` };
+  if (typeof configured === "string" && configured.trim()) {
+    return { raw: configured.trim(), label: `brightdataUnlockerZone in ${getWebAccessConfigPath()}` };
+  }
   return null;
 }
 function getZone() {
@@ -8298,7 +7941,7 @@ function requireZone() {
   }
   throw new Error(
     `Bright Data Web Unlocker zone not configured. Either:
-  1. Set brightdataUnlockerZone in ${CONFIG_PATH46}
+  1. Set brightdataUnlockerZone in ${getWebAccessConfigPath()}
   2. Set BRIGHTDATA_UNLOCKER_ZONE environment variable
 The zone must be of type "unblocker"; a SERP zone will not serve Web Unlocker requests.`
   );
@@ -8313,7 +7956,7 @@ async function getApiKey27(signal) {
   if (!apiKey) {
     throw new Error(
       `Bright Data API key not found. Either:
-  1. Create ${CONFIG_PATH46} with { "brightdataApiKey": "your-key" }
+  1. Create ${CONFIG_PATH37} with { "brightdataApiKey": "your-key" }
   2. Set BRIGHTDATA_API_KEY environment variable
 Get a key at https://brightdata.com/cp/setting/users`
     );
@@ -8422,14 +8065,14 @@ async function extractWithBrightDataUnlocker(url, signal, options) {
   if (!content) return null;
   return { url, title: headingTitle(content), content, error: null };
 }
-var CONFIG_PATH46, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, DEFAULT_MAX_REDIRECTS3, REDIRECT_STATUSES3, ZONE_PATTERN2, cachedConfig40;
+var CONFIG_PATH37, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, DEFAULT_MAX_REDIRECTS3, REDIRECT_STATUSES3, ZONE_PATTERN2, cachedConfig40;
 var init_brightdata_unlocker = __esm({
   "brightdata-unlocker.ts"() {
+    init_utils();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
-    init_utils();
-    CONFIG_PATH46 = getWebSearchConfigPath();
+    CONFIG_PATH37 = getWebSearchConfigPath();
     BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request";
     EXTRACT_TIMEOUT_MS3 = 6e4;
     DEFAULT_MAX_REDIRECTS3 = 5;
@@ -8441,7 +8084,7 @@ var init_brightdata_unlocker = __esm({
 
 // video-extract.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync50, readFileSync as readFileSync52, readdirSync as readdirSync4, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync4, readdirSync as readdirSync4, statSync as statSync2 } from "node:fs";
 import { readFile as readFile2 } from "node:fs/promises";
 import { resolve, extname as extname2, basename as basename4, join as join7, dirname as dirname2 } from "node:path";
 function shouldRethrow3(err) {
@@ -8462,18 +8105,7 @@ function normalizeMaxSizeMB(value, fallback) {
 }
 function loadVideoConfig() {
   if (cachedVideoConfig) return cachedVideoConfig;
-  if (!existsSync50(CONFIG_PATH47)) {
-    cachedVideoConfig = { ...VIDEO_CONFIG_DEFAULTS };
-    return cachedVideoConfig;
-  }
-  const rawText = readFileSync52(CONFIG_PATH47, "utf-8");
-  let raw;
-  try {
-    raw = JSON.parse(rawText);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH47}: ${message}`);
-  }
+  const raw = loadWebAccessConfig();
   const v = raw.video ?? {};
   cachedVideoConfig = {
     enabled: normalizeEnabled3(v.enabled, VIDEO_CONFIG_DEFAULTS.enabled),
@@ -8502,7 +8134,7 @@ function isVideoFile(input) {
   if (!absolutePath) return null;
   let stat;
   try {
-    stat = statSync3(absolutePath);
+    stat = statSync2(absolutePath);
   } catch {
     return null;
   }
@@ -8518,10 +8150,10 @@ function isVideoFile(input) {
 }
 function resolveFilePath(filePath) {
   const absolutePath = resolve(filePath);
-  if (existsSync50(absolutePath)) return absolutePath;
+  if (existsSync4(absolutePath)) return absolutePath;
   const dir = dirname2(absolutePath);
   const base = basename4(absolutePath);
-  if (!existsSync50(dir)) return null;
+  if (!existsSync4(dir)) return null;
   try {
     const normalizedBase = normalizeSpaces(base);
     const match = readdirSync4(dir).find((f) => normalizeSpaces(f) === normalizedBase);
@@ -8719,16 +8351,15 @@ function deleteGeminiFile(fileName, apiKey) {
 function extractVideoTitle(text4, filePath) {
   return extractHeadingTitle(text4) ?? basename4(filePath, extname2(filePath));
 }
-var CONFIG_PATH47, DEFAULT_VIDEO_PROMPT, VIDEO_EXTENSIONS, VIDEO_CONFIG_DEFAULTS, cachedVideoConfig;
+var DEFAULT_VIDEO_PROMPT, VIDEO_EXTENSIONS, VIDEO_CONFIG_DEFAULTS, cachedVideoConfig;
 var init_video_extract = __esm({
   "video-extract.ts"() {
+    init_utils();
     init_activity();
     init_feature_config();
     init_gemini_web();
     init_gemini_api();
     init_extract();
-    init_utils();
-    CONFIG_PATH47 = getWebSearchConfigPath();
     DEFAULT_VIDEO_PROMPT = `Extract the complete content of this video. Include:
 1. Video title (infer from content if not explicit), duration
 2. A brief summary (2-3 sentences)
@@ -9213,20 +8844,9 @@ __export(extract_exports, {
   readPDFResponseBuffer: () => readPDFResponseBuffer,
   resolveFetchTimeoutMs: () => resolveFetchTimeoutMs
 });
-import { existsSync as existsSync51, readFileSync as readFileSync53 } from "node:fs";
 import pLimit from "p-limit";
 function loadFetchTimeoutMs() {
-  if (!existsSync51(WEB_SEARCH_CONFIG_PATH3)) return DEFAULT_TIMEOUT_MS3;
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync53(WEB_SEARCH_CONFIG_PATH3, "utf-8"));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH3}: ${message}`);
-  }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`Invalid config in ${WEB_SEARCH_CONFIG_PATH3}: expected a JSON object`);
-  }
+  const raw = loadWebAccessConfig();
   const fetchConfig = raw.fetch;
   if (fetchConfig === void 0) return DEFAULT_TIMEOUT_MS3;
   if (!fetchConfig || typeof fetchConfig !== "object" || Array.isArray(fetchConfig)) {
@@ -9350,20 +8970,7 @@ async function fetchAuthenticatedRemoteUrl(url, init, validationOptions, profile
   throw new Error(`Too many redirects fetching ${current.toString()}`);
 }
 function loadFetchRouting() {
-  if (!existsSync51(WEB_SEARCH_CONFIG_PATH3)) {
-    return { providers: DEFAULT_FETCH_PROVIDER_ORDER, allowRemoteHostedProviders: false };
-  }
-  let raw;
-  try {
-    const parsed = JSON.parse(readFileSync53(WEB_SEARCH_CONFIG_PATH3, "utf-8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("expected a JSON object");
-    }
-    raw = parsed;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH3}: ${message}`);
-  }
+  const raw = loadWebAccessConfig();
   if (!Object.hasOwn(raw, "fetchRouting")) {
     return { providers: DEFAULT_FETCH_PROVIDER_ORDER, allowRemoteHostedProviders: false };
   }
@@ -9711,9 +9318,14 @@ async function extractContent(url, signal, options) {
     try {
       const result = await extractVideo(localVideo.info, signal, options);
       if (signal?.aborted) return abortedResult(url);
-      return result ?? { url, title: "", content: "", error: `Video analysis requires Gemini access. Either:
+      return result ?? {
+        url,
+        title: "",
+        content: "",
+        error: `Video analysis requires Gemini access. Either:
   1. Sign into gemini.google.com in Chrome (free, uses cookies)
-  2. Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH3}` };
+  2. Set geminiApiKey in ${getWebSearchConfigPath()} or GEMINI_API_KEY`
+      };
     } catch (err) {
       if (isAbortError5(err)) return abortedResult(url);
       return { url, title: "", content: "", error: errorMessage32(err) };
@@ -10027,14 +9639,14 @@ async function extractContent(url, signal, options) {
     ...jinaHint ? [jinaHint] : [],
     `  \u2022 Set firecrawlBaseUrl in ${WEB_SEARCH_CONFIG_PATH3} to a self-hosted Firecrawl instance`,
     `  \u2022 Set crawl4aiBaseUrl in ${WEB_SEARCH_CONFIG_PATH3} to a self-hosted Crawl4AI instance`,
-    `  \u2022 Set tinyfishApiKey in ${WEB_SEARCH_CONFIG_PATH3} or TINYFISH_API_KEY`,
-    `  \u2022 Set search1apiApiKey in ${WEB_SEARCH_CONFIG_PATH3} or SEARCH1API_KEY`,
-    `  \u2022 Set queritApiKey in ${WEB_SEARCH_CONFIG_PATH3} or QUERIT_API_KEY`,
-    `  \u2022 Set kagiApiKey in ${WEB_SEARCH_CONFIG_PATH3} or KAGI_API_KEY`,
-    `  \u2022 Set ollamaApiKey in ${WEB_SEARCH_CONFIG_PATH3} or OLLAMA_API_KEY`,
-    `  \u2022 Set parallelApiKey in ${WEB_SEARCH_CONFIG_PATH3} or PARALLEL_API_KEY`,
-    `  \u2022 Set brightdataApiKey and brightdataUnlockerZone in ${WEB_SEARCH_CONFIG_PATH3} or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
-    `  \u2022 Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH3}`,
+    `  \u2022 Set tinyfishApiKey in ${getWebSearchConfigPath()} or TINYFISH_API_KEY`,
+    `  \u2022 Set search1apiApiKey in ${getWebSearchConfigPath()} or SEARCH1API_KEY`,
+    `  \u2022 Set queritApiKey in ${getWebSearchConfigPath()} or QUERIT_API_KEY`,
+    `  \u2022 Set kagiApiKey in ${getWebSearchConfigPath()} or KAGI_API_KEY`,
+    `  \u2022 Set ollamaApiKey in ${getWebSearchConfigPath()} or OLLAMA_API_KEY`,
+    `  \u2022 Set parallelApiKey in ${getWebSearchConfigPath()} or PARALLEL_API_KEY`,
+    `  \u2022 Set brightdataApiKey in ${getWebSearchConfigPath()} and webAccess.brightdataUnlockerZone in ${WEB_SEARCH_CONFIG_PATH3}, or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
+    `  \u2022 Set geminiApiKey in ${getWebSearchConfigPath()} or GEMINI_API_KEY`,
     "  \u2022 Sign into gemini.google.com in Chrome",
     ...searchToolName ? [`  \u2022 Use ${searchToolName} to find content about this topic`] : []
   ].join("\n");
@@ -10406,6 +10018,7 @@ async function fetchAllContent(urls, signal, options) {
 var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_SEARCH_CONFIG_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, REDIRECT_STATUSES4, turndownInstance, fetchLimit, JINA_READER_BASE, DEFAULT_RANGE_FRAMES, MIN_FRAME_INTERVAL, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
 var init_extract = __esm({
   "extract.ts"() {
+    init_utils();
     init_activity();
     init_rsc_extract();
     init_pdf_extract();
@@ -10427,7 +10040,6 @@ var init_extract = __esm({
     init_video_extract();
     init_declared_web_links();
     init_ssrf_protection();
-    init_utils();
     init_feature_config();
     init_auth_fetch();
     init_chrome_cookies();
@@ -10436,7 +10048,7 @@ var init_extract = __esm({
     DEFAULT_TIMEOUT_MS3 = 3e4;
     MAX_CONFIGURED_TIMEOUT_MS = 2147483647;
     CONCURRENT_LIMIT = 3;
-    WEB_SEARCH_CONFIG_PATH3 = getWebSearchConfigPath();
+    WEB_SEARCH_CONFIG_PATH3 = getWebAccessConfigPath();
     NON_RECOVERABLE_ERRORS = ["Unsupported content type", "Response too large", "PDF extraction is disabled", "Image fetching is disabled"];
     MIN_USEFUL_CONTENT2 = 500;
     SUPPORTED_IMAGE_TYPES = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
@@ -19030,39 +18642,26 @@ __export(value_exports, {
 });
 
 // gemini-search.ts
+init_utils();
 init_activity();
 init_credential_source();
 init_gemini_api();
 init_gemini_adc();
 init_gemini_web();
 init_perplexity();
-import { existsSync as existsSync40, readFileSync as readFileSync41 } from "node:fs";
 
 // exa.ts
+init_utils();
 init_activity();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync7, readFileSync as readFileSync8 } from "node:fs";
 var EXA_API_BASE_URL = "https://api.exa.ai";
 var EXA_MCP_URL = "https://mcp.exa.ai/mcp";
-var CONFIG_PATH5 = getWebSearchConfigPath();
+var CONFIG_PATH4 = getWebSearchConfigPath();
 var EXA_MCP_ADVANCED_TOOL = "web_search_advanced_exa";
 var EXA_MCP_BASIC_TOOL = "web_search_exa";
 var cachedConfig5 = null;
 function loadConfig5() {
-  if (cachedConfig5) return cachedConfig5;
-  if (!existsSync7(CONFIG_PATH5)) {
-    cachedConfig5 = {};
-    return cachedConfig5;
-  }
-  const raw = readFileSync8(CONFIG_PATH5, "utf-8");
-  try {
-    cachedConfig5 = JSON.parse(raw);
-    return cachedConfig5;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH5}: ${message}`);
-  }
+  return cachedConfig5 ??= loadWebAccessConfig();
 }
 async function getApiKey3(signal) {
   return resolveCredential({
@@ -19196,7 +18795,7 @@ async function callExaMcp(toolName, args, signal) {
     const errorText = await response.text();
     if (response.status === 429) {
       throw new Error(
-        `Exa MCP rate limit reached (429). Add "exaApiKey" to ${CONFIG_PATH5} for unthrottled Exa search: ${errorText.slice(0, 200)}`
+        `Exa MCP rate limit reached (429). Add "exaApiKey" to ${CONFIG_PATH4} for unthrottled Exa search: ${errorText.slice(0, 200)}`
       );
     }
     throw new Error(`Exa MCP error ${response.status}: ${errorText.slice(0, 300)}`);
@@ -19410,8 +19009,8 @@ async function searchWithExa(query, options = {}) {
 }
 
 // brave.ts
+init_utils();
 init_activity();
-import { existsSync as existsSync8, readFileSync as readFileSync9 } from "node:fs";
 
 // brave-rate-limit.ts
 var DEFAULT_SAFETY_MARGIN_MS = 100;
@@ -19557,26 +19156,13 @@ var BraveRateLimitCoordinator = class {
 init_domain_filter_normalization();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
 var BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1";
-var CONFIG_PATH6 = getWebSearchConfigPath();
+var CONFIG_PATH5 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS = 3e4;
 var braveRateLimit = new BraveRateLimitCoordinator();
 var cachedConfig6 = null;
 function loadConfig6() {
-  if (cachedConfig6) return cachedConfig6;
-  if (!existsSync8(CONFIG_PATH6)) {
-    cachedConfig6 = {};
-    return cachedConfig6;
-  }
-  const raw = readFileSync9(CONFIG_PATH6, "utf-8");
-  try {
-    cachedConfig6 = JSON.parse(raw);
-    return cachedConfig6;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH6}: ${message}`);
-  }
+  return cachedConfig6 ??= loadWebAccessConfig();
 }
 async function getApiKey4(signal) {
   return resolveCredential({
@@ -19648,7 +19234,7 @@ async function searchWithBrave(query, options = {}) {
   if (!apiKey) {
     throw new Error(
       `Brave Search API key not found. Either:
-  1. Create ${CONFIG_PATH6} with { "braveApiKey": "your-key" }
+  1. Create ${CONFIG_PATH5} with { "braveApiKey": "your-key" }
   2. Set BRAVE_API_KEY environment variable
 Get a key at https://brave.com/search/api/`
     );
@@ -19734,15 +19320,14 @@ Source: ${result.title} (${result.url})`;
 }
 
 // openai-search.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_credential_source();
-init_utils();
 import { randomUUID } from "node:crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync10 } from "node:fs";
 var OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 var CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-var CONFIG_PATH7 = getWebSearchConfigPath();
+var CONFIG_PATH6 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS2 = 6e4;
 var EXCLUDED_MODEL_SEGMENTS = /* @__PURE__ */ new Set(["pro", "ultra"]);
 var MODEL_PREFERENCE = [
@@ -19793,19 +19378,7 @@ function isCurrentModelHostedSearchEligible(ctx) {
 }
 var cachedConfig7 = null;
 function loadConfig7() {
-  if (cachedConfig7) return cachedConfig7;
-  if (!existsSync9(CONFIG_PATH7)) {
-    cachedConfig7 = {};
-    return cachedConfig7;
-  }
-  const raw = readFileSync10(CONFIG_PATH7, "utf-8");
-  try {
-    cachedConfig7 = JSON.parse(raw);
-    return cachedConfig7;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH7}: ${message}`);
-  }
+  return cachedConfig7 ??= loadWebAccessConfig();
 }
 function normalizeDomainFilters2(domainFilter) {
   if (!domainFilter?.length) return null;
@@ -19855,19 +19428,19 @@ function extractAccountId(token) {
 function resolveConfiguredResponsesUrl(value) {
   if (value === void 0) return OPENAI_RESPONSES_URL;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`openaiResponsesUrl in ${CONFIG_PATH7} must be an absolute http(s) URL`);
+    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
   }
   let url;
   try {
     url = new URL(value.trim());
   } catch {
-    throw new Error(`openaiResponsesUrl in ${CONFIG_PATH7} must be an absolute http(s) URL`);
+    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must be an absolute http(s) URL`);
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(`openaiResponsesUrl in ${CONFIG_PATH7} must use http or https`);
+    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use http or https`);
   }
   if (url.hostname === "opencode.ai" && url.protocol !== "https:") {
-    throw new Error(`openaiResponsesUrl in ${CONFIG_PATH7} must use HTTPS for opencode.ai`);
+    throw new Error(`openaiResponsesUrl in ${getWebAccessConfigPath()} must use HTTPS for opencode.ai`);
   }
   return url.toString();
 }
@@ -19876,7 +19449,7 @@ function resolveUseProviderBaseUrl(config) {
   const value = config.openaiUseProviderBaseUrl;
   if (value === void 0) return false;
   if (typeof value !== "boolean") {
-    throw new Error(`openaiUseProviderBaseUrl in ${CONFIG_PATH7} must be a boolean`);
+    throw new Error(`openaiUseProviderBaseUrl in ${getWebAccessConfigPath()} must be a boolean`);
   }
   return value;
 }
@@ -19905,14 +19478,14 @@ function resolveProviderResponsesUrl(baseUrl, useCodexEndpoint) {
 function resolveConfiguredSearchProviders(value) {
   if (value === void 0) return DEFAULT_SEARCH_PROVIDERS;
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.trim().length === 0)) {
-    throw new Error(`openaiSearchProviders in ${CONFIG_PATH7} must be an array of non-empty Pi provider ids`);
+    throw new Error(`openaiSearchProviders in ${getWebAccessConfigPath()} must be an array of non-empty Pi provider ids`);
   }
   return value.map((entry) => entry.trim());
 }
 function resolveConfiguredSearchModel(value) {
   if (value == null) return void 0;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`openaiSearchModel in ${CONFIG_PATH7} must be a non-empty string`);
+    throw new Error(`openaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
   }
   return value.trim();
 }
@@ -19957,7 +19530,9 @@ async function resolvePiAuth(ctx, responsesUrl, providers, modelOverride, hasExp
     const isOfficialBaseUrl = isOfficialOpenAIBaseUrl(baseUrl);
     const useCodexEndpoint = provider === "openai-codex" || !isOfficialBaseUrl && isCodexJwt(resolved.apiKey);
     if (!hasExplicitResponsesUrl && !useProviderBaseUrl && !useCodexEndpoint && baseUrl !== void 0 && !isOfficialBaseUrl) {
-      throw new CustomOpenAIBaseUrlError(`OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. Set openaiResponsesUrl in ${CONFIG_PATH7} to the full Responses endpoint for this credential.`);
+      throw new CustomOpenAIBaseUrlError(
+        `OpenAI web search cannot reuse Pi credentials with a custom baseUrl by default. Set openaiResponsesUrl in ${getWebAccessConfigPath()} to the full Responses endpoint for this credential.`
+      );
     }
     let providerResponsesUrl = responsesUrl;
     if (useProviderBaseUrl) {
@@ -20231,7 +19806,7 @@ function isAlphaSearchEnabled() {
   const value = loadConfig7().openaiUseAlphaSearch;
   if (value === void 0) return false;
   if (typeof value !== "boolean") {
-    throw new Error(`openaiUseAlphaSearch in ${CONFIG_PATH7} must be a boolean`);
+    throw new Error(`openaiUseAlphaSearch in ${getWebAccessConfigPath()} must be a boolean`);
   }
   return value;
 }
@@ -20388,7 +19963,7 @@ async function searchWithOpenAI(query, options = {}, ctx) {
     throw new Error(
       `OpenAI web search unavailable. Either:
   1. Use /login to sign in with a Codex subscription
-  2. Create ${CONFIG_PATH7} with { "openaiApiKey": "your-key" }
+  2. Create ${CONFIG_PATH6} with { "openaiApiKey": "your-key" }
   3. Set OPENAI_API_KEY environment variable`
     );
   }
@@ -20407,36 +19982,18 @@ init_tinyfish();
 init_search1api();
 
 // searchinfinity.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_credential_source();
 init_search_answer_formatting();
 init_search_result_count_normalization();
-init_utils();
-import { existsSync as existsSync13, readFileSync as readFileSync14 } from "node:fs";
 var SEARCHINFINITY_SEARCH_URL = "https://torchlight.byteintlapi.com/search_api/web_search";
-var CONFIG_PATH12 = getWebSearchConfigPath();
+var CONFIG_PATH11 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS6 = 3e4;
 var cachedConfig11 = null;
 function loadConfig11() {
-  if (cachedConfig11) return cachedConfig11;
-  if (!existsSync13(CONFIG_PATH12)) {
-    cachedConfig11 = {};
-    return cachedConfig11;
-  }
-  const raw = readFileSync14(CONFIG_PATH12, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH12}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH12}: expected a JSON object`);
-  }
-  cachedConfig11 = parsed;
-  return cachedConfig11;
+  return cachedConfig11 ??= loadWebAccessConfig();
 }
 async function getApiKey8(signal) {
   const key = await resolveCredential({
@@ -20448,7 +20005,7 @@ async function getApiKey8(signal) {
   if (!key) {
     throw new Error(
       `Searchinfinity API key not found. Either:
-  1. Create ${CONFIG_PATH12} with { "searchinfinityApiKey": "your-key" }
+  1. Create ${CONFIG_PATH11} with { "searchinfinityApiKey": "your-key" }
   2. Set SEARCHINFINITY_API_KEY environment variable
 Create a key at https://console.byteplus.com/search-infinity/api-key`
     );
@@ -20587,30 +20144,17 @@ async function searchWithSearchinfinity(query, options = {}) {
 init_querit();
 
 // tavily.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync15, readFileSync as readFileSync16 } from "node:fs";
 var TAVILY_API_BASE_URL = "https://api.tavily.com";
-var CONFIG_PATH14 = getWebSearchConfigPath();
+var CONFIG_PATH13 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS8 = 6e4;
 var cachedConfig13 = null;
 function loadConfig13() {
-  if (cachedConfig13) return cachedConfig13;
-  if (!existsSync15(CONFIG_PATH14)) {
-    cachedConfig13 = {};
-    return cachedConfig13;
-  }
-  const raw = readFileSync16(CONFIG_PATH14, "utf-8");
-  try {
-    cachedConfig13 = JSON.parse(raw);
-    return cachedConfig13;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH14}: ${message}`);
-  }
+  return cachedConfig13 ??= loadWebAccessConfig();
 }
 async function getApiKey10(signal) {
   return resolveCredential({
@@ -20645,7 +20189,7 @@ async function requireApiKey(signal) {
   if (!apiKey) {
     throw new Error(
       `Tavily API key not found. Either:
-  1. Create ${CONFIG_PATH14} with { "tavilyApiKey": "your-key" }
+  1. Create ${CONFIG_PATH13} with { "tavilyApiKey": "your-key" }
   2. Set TAVILY_API_KEY environment variable
 Get a key at https://app.tavily.com/`
     );
@@ -20797,36 +20341,18 @@ async function tavilyRequest(apiUrl, apiKey, body, signal) {
 }
 
 // you.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync16, readFileSync as readFileSync17 } from "node:fs";
 var YOU_SEARCH_URL = "https://ydc-index.io/v1/search";
-var CONFIG_PATH15 = getWebSearchConfigPath();
+var CONFIG_PATH14 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS9 = 6e4;
 var cachedConfig14 = null;
 function loadConfig14() {
-  if (cachedConfig14) return cachedConfig14;
-  if (!existsSync16(CONFIG_PATH15)) {
-    cachedConfig14 = {};
-    return cachedConfig14;
-  }
-  const raw = readFileSync17(CONFIG_PATH15, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH15}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH15}: expected a JSON object`);
-  }
-  cachedConfig14 = parsed;
-  return cachedConfig14;
+  return cachedConfig14 ??= loadWebAccessConfig();
 }
 async function requireApiKey2(signal) {
   const apiKey = await resolveCredential({
@@ -20838,7 +20364,7 @@ async function requireApiKey2(signal) {
   if (!apiKey) {
     throw new Error(
       `You.com API key not found. Either:
-  1. Create ${CONFIG_PATH15} with { "youApiKey": "your-key" }
+  1. Create ${CONFIG_PATH14} with { "youApiKey": "your-key" }
   2. Set YDC_API_KEY environment variable
 Get a key at https://you.com/platform/api-keys`
     );
@@ -20948,34 +20474,17 @@ async function searchWithYou(query, options = {}) {
 init_firecrawl();
 
 // jina-search.ts
+init_utils();
 init_activity();
 init_credential_source();
 init_search_answer_formatting();
 init_search_result_count_normalization();
-init_utils();
-import { existsSync as existsSync19, readFileSync as readFileSync20 } from "node:fs";
 var JINA_SEARCH_BASE_URL = "https://s.jina.ai/";
-var CONFIG_PATH17 = getWebSearchConfigPath();
+var CONFIG_PATH16 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS11 = 6e4;
 var cachedConfig16 = null;
 function loadConfig16() {
-  if (cachedConfig16) return cachedConfig16;
-  if (!existsSync19(CONFIG_PATH17)) {
-    cachedConfig16 = {};
-    return cachedConfig16;
-  }
-  const raw = readFileSync20(CONFIG_PATH17, "utf8");
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("expected a JSON object");
-    }
-    cachedConfig16 = parsed;
-    return cachedConfig16;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH17}: ${message}`);
-  }
+  return cachedConfig16 ??= loadWebAccessConfig();
 }
 async function getApiKey12(signal) {
   return resolveCredential({
@@ -20990,7 +20499,7 @@ async function requireApiKey3(signal) {
   if (!apiKey) {
     throw new Error(
       `Jina Search API key not found. Either:
-  1. Create ${CONFIG_PATH17} with { "jinaApiKey": "your-key" }
+  1. Create ${CONFIG_PATH16} with { "jinaApiKey": "your-key" }
   2. Set JINA_API_KEY environment variable
 Get a key at https://jina.ai/api-dashboard`
     );
@@ -21168,32 +20677,19 @@ async function searchWithJina(query, options = {}) {
 }
 
 // serpdive.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync20, readFileSync as readFileSync21 } from "node:fs";
 var SERPDIVE_API_URL = "https://api.serpdive.com/v1/search";
-var CONFIG_PATH18 = getWebSearchConfigPath();
+var CONFIG_PATH17 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS12 = 6e4;
 var MODELS = ["krill", "mako", "moby"];
 var DEFAULT_MODEL2 = "krill";
 var cachedConfig17 = null;
 function loadConfig17() {
-  if (cachedConfig17) return cachedConfig17;
-  if (!existsSync20(CONFIG_PATH18)) {
-    cachedConfig17 = {};
-    return cachedConfig17;
-  }
-  const raw = readFileSync21(CONFIG_PATH18, "utf-8");
-  try {
-    cachedConfig17 = JSON.parse(raw);
-    return cachedConfig17;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH18}: ${message}`);
-  }
+  return cachedConfig17 ??= loadWebAccessConfig();
 }
 async function getApiKey13(signal) {
   return resolveCredential({
@@ -21208,7 +20704,7 @@ async function requireApiKey4(signal) {
   if (!apiKey) {
     throw new Error(
       `SERPdive API key not found. Either:
-  1. Create ${CONFIG_PATH18} with { "serpdiveApiKey": "your-key" }
+  1. Create ${CONFIG_PATH17} with { "serpdiveApiKey": "your-key" }
   2. Set SERPDIVE_API_KEY environment variable
 Get a key at https://serpdive.com/dashboard/keys`
     );
@@ -21373,35 +20869,17 @@ async function searchWithSerpdive(query, options = {}) {
 init_kagi();
 
 // bocha.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync22, readFileSync as readFileSync23 } from "node:fs";
 var BOCHA_SEARCH_URL = "https://api.bochaai.com/v1/web-search";
-var CONFIG_PATH20 = getWebSearchConfigPath();
+var CONFIG_PATH19 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS14 = 6e4;
 var cachedConfig19 = null;
 function loadConfig19() {
-  if (cachedConfig19) return cachedConfig19;
-  if (!existsSync22(CONFIG_PATH20)) {
-    cachedConfig19 = {};
-    return cachedConfig19;
-  }
-  const raw = readFileSync23(CONFIG_PATH20, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH20}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH20}: expected a JSON object`);
-  }
-  cachedConfig19 = parsed;
-  return cachedConfig19;
+  return cachedConfig19 ??= loadWebAccessConfig();
 }
 async function getApiKey15(signal) {
   return resolveCredential({
@@ -21416,7 +20894,7 @@ async function requireApiKey6(signal) {
   if (!apiKey) {
     throw new Error(
       `Bocha API key not found. Either:
-  1. Create ${CONFIG_PATH20} with { "bochaApiKey": "your-key" }
+  1. Create ${CONFIG_PATH19} with { "bochaApiKey": "your-key" }
   2. Set BOCHA_API_KEY environment variable
 Create a key at https://open.bochaai.com/`
     );
@@ -21556,29 +21034,16 @@ async function searchWithBocha(query, options = {}) {
 init_ollama();
 
 // searxng.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_ssrf_protection();
 init_search_result_count_normalization();
-init_utils();
-import { existsSync as existsSync24, readFileSync as readFileSync25 } from "node:fs";
-var CONFIG_PATH22 = getWebSearchConfigPath();
+var CONFIG_PATH21 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS16 = 3e4;
 var cachedConfig21 = null;
 function loadConfig21() {
-  if (cachedConfig21) return cachedConfig21;
-  if (!existsSync24(CONFIG_PATH22)) {
-    cachedConfig21 = {};
-    return cachedConfig21;
-  }
-  const raw = readFileSync25(CONFIG_PATH22, "utf-8");
-  try {
-    cachedConfig21 = JSON.parse(raw);
-    return cachedConfig21;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH22}: ${message}`);
-  }
+  return cachedConfig21 ??= loadWebAccessConfig();
 }
 function normalizeBaseUrl3(value) {
   if (typeof value !== "string") return null;
@@ -21638,7 +21103,7 @@ function requireBaseUrl2() {
   if (!baseUrl) {
     throw new Error(
       `SearXNG base URL is invalid or missing. Either:
-  1. Create ${CONFIG_PATH22} with { "searxngBaseUrl": "https://search.example.com" }
+  1. Create ${CONFIG_PATH21} with { "searxngBaseUrl": "https://search.example.com" }
   2. Set SEARXNG_BASE_URL to an HTTP(S) URL`
     );
   }
@@ -21740,37 +21205,19 @@ Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.ur
 }
 
 // degoog.ts
+init_utils();
 init_activity();
 init_credential_source();
 init_domain_filter_normalization();
 init_ssrf_protection();
 init_search_answer_formatting();
 init_search_result_count_normalization();
-init_utils();
-import { existsSync as existsSync25, readFileSync as readFileSync26 } from "node:fs";
-var CONFIG_PATH23 = getWebSearchConfigPath();
+var CONFIG_PATH22 = getWebSearchConfigPath();
 var DEFAULT_BASE_URL = "https://degoog.org";
 var SEARCH_TIMEOUT_MS17 = 3e4;
 var cachedConfig22 = null;
 function loadConfig22() {
-  if (cachedConfig22) return cachedConfig22;
-  if (!existsSync25(CONFIG_PATH23)) {
-    cachedConfig22 = {};
-    return cachedConfig22;
-  }
-  const raw = readFileSync26(CONFIG_PATH23, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH23}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH23}: expected a JSON object`);
-  }
-  cachedConfig22 = parsed;
-  return cachedConfig22;
+  return cachedConfig22 ??= loadWebAccessConfig();
 }
 function normalizeBaseUrl4(value) {
   if (typeof value !== "string") return null;
@@ -21839,7 +21286,7 @@ function requireBaseUrl3() {
   if (!baseUrl) {
     throw new Error(
       `degoog base URL is invalid or missing. Either:
-  1. Create ${CONFIG_PATH23} with { "degoogBaseUrl": "https://degoog.example.com" }
+  1. Create ${CONFIG_PATH22} with { "degoogBaseUrl": "https://degoog.example.com" }
   2. Set DEGOOG_URL to an HTTP(S) URL
   3. Remove the override to use the public instance at https://degoog.org`
     );
@@ -21942,7 +21389,7 @@ async function searchWithDegoog(query, options = {}) {
       const errorText = redactSecrets(await response.text(), secrets).slice(0, 300);
       if (response.status === 401) {
         throw new Error(
-          `degoog search error 401: this instance protects search routes. Set degoogApiKey in ${CONFIG_PATH23} or DEGOOG_API_KEY. ${errorText.slice(0, 200)}`
+          `degoog search error 401: this instance protects search routes. Set degoogApiKey in ${CONFIG_PATH22} or DEGOOG_API_KEY. ${errorText.slice(0, 200)}`
         );
       }
       throw new Error(`degoog search error ${response.status}: ${errorText}`);
@@ -22088,35 +21535,16 @@ Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.ur
 }
 
 // anysearch.ts
+init_utils();
 init_activity();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync26, readFileSync as readFileSync27 } from "node:fs";
 var ANYSEARCH_API_URL = "https://api.anysearch.com/v1/search";
-var CONFIG_PATH24 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS19 = 3e4;
 var cachedConfig23 = null;
 function loadConfig23() {
-  if (cachedConfig23) return cachedConfig23;
-  if (!existsSync26(CONFIG_PATH24)) {
-    cachedConfig23 = {};
-    return cachedConfig23;
-  }
-  const raw = readFileSync27(CONFIG_PATH24, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH24}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH24}: expected a JSON object`);
-  }
-  cachedConfig23 = parsed;
-  return cachedConfig23;
+  return cachedConfig23 ??= loadWebAccessConfig();
 }
 async function getApiKey17(signal) {
   return resolveCredential({
@@ -22227,36 +21655,18 @@ async function searchWithAnySearch(query, options = {}) {
 }
 
 // xcrawl.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync27, readFileSync as readFileSync28 } from "node:fs";
 var XCRAWL_API_URL = "https://run.xcrawl.com/v1/serp";
-var CONFIG_PATH25 = getWebSearchConfigPath();
+var CONFIG_PATH23 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS20 = 6e4;
 var cachedConfig24 = null;
 function loadConfig24() {
-  if (cachedConfig24) return cachedConfig24;
-  if (!existsSync27(CONFIG_PATH25)) {
-    cachedConfig24 = {};
-    return cachedConfig24;
-  }
-  const raw = readFileSync28(CONFIG_PATH25, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH25}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH25}: expected a JSON object`);
-  }
-  cachedConfig24 = parsed;
-  return cachedConfig24;
+  return cachedConfig24 ??= loadWebAccessConfig();
 }
 async function getApiKey18(signal) {
   return resolveCredential({
@@ -22351,7 +21761,7 @@ async function searchWithXCrawl(query, options = {}) {
   const numResults = normalizeSearchResultCount(options.numResults);
   if (!apiKey) {
     throw new Error(
-      "XCrawl search requires an API key. Set xcrawlApiKey in " + CONFIG_PATH25 + " or export XCRAWL_API_KEY. Get one at https://dash.xcrawl.com/"
+      "XCrawl search requires an API key. Set xcrawlApiKey in " + CONFIG_PATH23 + " or export XCRAWL_API_KEY. Get one at https://dash.xcrawl.com/"
     );
   }
   const body = { engine: "google_search", q: query };
@@ -22414,52 +21824,39 @@ async function searchWithXCrawl(query, options = {}) {
 }
 
 // xai-search.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync28, readFileSync as readFileSync29 } from "node:fs";
 var XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
-var CONFIG_PATH26 = getWebSearchConfigPath();
+var CONFIG_PATH24 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS21 = 6e4;
 var WEB_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.5", "grok-4.3", "grok-build-0.1"];
 var X_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.6", ...WEB_SEARCH_AUTH_MODEL_CANDIDATES];
 var DEFAULT_XAI_SEARCH_TOOLS = ["web_search"];
 var cachedConfig25 = null;
 function loadConfig25() {
-  if (cachedConfig25) return cachedConfig25;
-  if (!existsSync28(CONFIG_PATH26)) {
-    cachedConfig25 = {};
-    return cachedConfig25;
-  }
-  const raw = readFileSync29(CONFIG_PATH26, "utf-8");
-  try {
-    cachedConfig25 = JSON.parse(raw);
-    return cachedConfig25;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH26}: ${message}`);
-  }
+  return cachedConfig25 ??= loadWebAccessConfig();
 }
 function resolveConfiguredSearchModel2(value) {
   if (value == null) return void 0;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`xaiSearchModel in ${CONFIG_PATH26} must be a non-empty string`);
+    throw new Error(`xaiSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
   }
   return value.trim();
 }
 function resolveConfiguredSearchTools(value) {
   if (value === void 0) return [...DEFAULT_XAI_SEARCH_TOOLS];
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`xaiSearchTools in ${CONFIG_PATH26} must be a non-empty array containing only web_search or x_search`);
+    throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must be a non-empty array containing only web_search or x_search`);
   }
   const tools = [];
   for (const tool of value) {
     if (tool !== "web_search" && tool !== "x_search") {
-      throw new Error(`xaiSearchTools in ${CONFIG_PATH26} may only contain web_search or x_search`);
+      throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} may only contain web_search or x_search`);
     }
     if (tools.includes(tool)) {
-      throw new Error(`xaiSearchTools in ${CONFIG_PATH26} must not contain duplicates: ${tool}`);
+      throw new Error(`xaiSearchTools in ${getWebAccessConfigPath()} must not contain duplicates: ${tool}`);
     }
     tools.push(tool);
   }
@@ -22656,7 +22053,7 @@ async function searchWithXai(query, options = {}, ctx) {
     throw new Error(
       `xAI search unavailable. Either:
   1. Use /login to sign in with a SuperGrok or X Premium subscription
-  2. Create ${CONFIG_PATH26} with { "xaiApiKey": "your-key" }
+  2. Create ${CONFIG_PATH24} with { "xaiApiKey": "your-key" }
   3. Set XAI_API_KEY environment variable`
     );
   }
@@ -22712,15 +22109,14 @@ async function searchWithXai(query, options = {}, ctx) {
 }
 
 // brightdata.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync29, readFileSync as readFileSync30 } from "node:fs";
 var BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
-var CONFIG_PATH27 = getWebSearchConfigPath();
+var CONFIG_PATH25 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS22 = 6e4;
 var ZONE_PATTERN = /^[A-Za-z0-9_-]+$/;
 var RECENCY_TBS = {
@@ -22730,28 +22126,8 @@ var RECENCY_TBS = {
   year: "qdr:y"
 };
 var cachedConfig26 = null;
-function configParseDetail(err) {
-  const position = errorMessage18(err).match(/at position \d+(?: \(line \d+ column \d+\))?/i);
-  return position ? `not valid JSON, ${position[0]}` : "not valid JSON";
-}
 function loadConfig26() {
-  if (cachedConfig26) return cachedConfig26;
-  if (!existsSync29(CONFIG_PATH27)) {
-    cachedConfig26 = {};
-    return cachedConfig26;
-  }
-  const raw = readFileSync30(CONFIG_PATH27, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Failed to parse ${CONFIG_PATH27}: ${configParseDetail(err)}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH27}: expected a JSON object`);
-  }
-  cachedConfig26 = parsed;
-  return cachedConfig26;
+  return cachedConfig26 ??= loadWebAccessConfig();
 }
 async function getApiKey19(signal) {
   return resolveCredential({
@@ -22766,7 +22142,7 @@ async function requireApiKey8(signal) {
   if (!apiKey) {
     throw new Error(
       `Bright Data API key not found. Either:
-  1. Create ${CONFIG_PATH27} with { "brightdataApiKey": "your-key" }
+  1. Create ${CONFIG_PATH25} with { "brightdataApiKey": "your-key" }
   2. Set BRIGHTDATA_API_KEY environment variable
 Get a key at https://brightdata.com/cp/setting/users`
     );
@@ -22786,7 +22162,7 @@ function serpZoneSetting() {
   }
   const configured = loadConfig26().brightdataSerpZone;
   if (typeof configured === "string" && configured.trim()) {
-    return { raw: configured.trim(), label: `brightdataSerpZone in ${CONFIG_PATH27}` };
+    return { raw: configured.trim(), label: `brightdataSerpZone in ${getWebAccessConfigPath()}` };
   }
   return null;
 }
@@ -22807,7 +22183,7 @@ Create or rename one at https://brightdata.com/cp/zones`
   }
   throw new Error(
     `Bright Data SERP zone is invalid or missing. Either:
-  1. Create ${CONFIG_PATH27} with { "brightdataSerpZone": "your_serp_zone" }
+  1. Create ${CONFIG_PATH25} with { "brightdataSerpZone": "your_serp_zone" }
   2. Set BRIGHTDATA_SERP_ZONE environment variable
 The zone must be of Bright Data type \`serp\`; a Web Unlocker zone is a different product and does not return SERP JSON.
 Create one at https://brightdata.com/cp/zones`
@@ -23010,14 +22386,13 @@ async function searchWithBrightData(query, options = {}) {
 }
 
 // serpbase.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync30, readFileSync as readFileSync31 } from "node:fs";
 var SERPBASE_API_URL = "https://api.serpbase.dev/google/search";
-var CONFIG_PATH28 = getWebSearchConfigPath();
+var CONFIG_PATH26 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS23 = 6e4;
 var RECENCY_TBS2 = {
   day: "qdr:d",
@@ -23027,24 +22402,7 @@ var RECENCY_TBS2 = {
 };
 var cachedConfig27 = null;
 function loadConfig27() {
-  if (cachedConfig27) return cachedConfig27;
-  if (!existsSync30(CONFIG_PATH28)) {
-    cachedConfig27 = {};
-    return cachedConfig27;
-  }
-  const raw = readFileSync31(CONFIG_PATH28, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH28}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH28}: expected a JSON object`);
-  }
-  cachedConfig27 = parsed;
-  return cachedConfig27;
+  return cachedConfig27 ??= loadWebAccessConfig();
 }
 async function getApiKey20(signal) {
   return resolveCredential({
@@ -23059,7 +22417,7 @@ async function requireApiKey9(signal) {
   if (!apiKey) {
     throw new Error(
       `SerpBase API key not found. Either:
-  1. Create ${CONFIG_PATH28} with { "serpbaseApiKey": "your-key" }
+  1. Create ${CONFIG_PATH26} with { "serpbaseApiKey": "your-key" }
   2. Set SERPBASE_API_KEY environment variable
 Get a key at https://serpbase.dev`
     );
@@ -23178,15 +22536,14 @@ async function searchWithSerpBase(query, options = {}) {
 }
 
 // serpapi.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync31, readFileSync as readFileSync32 } from "node:fs";
 var SERPAPI_SEARCH_URL = "https://serpapi.com/search.json";
-var CONFIG_PATH29 = getWebSearchConfigPath();
+var CONFIG_PATH27 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS24 = 6e4;
 var RECENCY_TBS3 = {
   day: "qdr:d",
@@ -23196,24 +22553,7 @@ var RECENCY_TBS3 = {
 };
 var cachedConfig28 = null;
 function loadConfig28() {
-  if (cachedConfig28) return cachedConfig28;
-  if (!existsSync31(CONFIG_PATH29)) {
-    cachedConfig28 = {};
-    return cachedConfig28;
-  }
-  const raw = readFileSync32(CONFIG_PATH29, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH29}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH29}: expected a JSON object`);
-  }
-  cachedConfig28 = parsed;
-  return cachedConfig28;
+  return cachedConfig28 ??= loadWebAccessConfig();
 }
 async function getApiKey21(signal) {
   return resolveCredential({
@@ -23228,7 +22568,7 @@ async function requireApiKey10(signal) {
   if (!apiKey) {
     throw new Error(
       `SerpApi API key not found. Either:
-  1. Create ${CONFIG_PATH29} with { "serpapiApiKey": "your-key" }
+  1. Create ${CONFIG_PATH27} with { "serpapiApiKey": "your-key" }
   2. Set SERPAPI_KEY environment variable
 Get a key at https://serpapi.com/manage-api-key`
     );
@@ -23346,15 +22686,14 @@ async function searchWithSerpApi(query, options = {}) {
 }
 
 // serper.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync32, readFileSync as readFileSync33 } from "node:fs";
 var SERPER_SEARCH_URL = "https://google.serper.dev/search";
-var CONFIG_PATH30 = getWebSearchConfigPath();
+var CONFIG_PATH28 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS25 = 6e4;
 var RECENCY_TBS4 = {
   day: "qdr:d",
@@ -23364,24 +22703,7 @@ var RECENCY_TBS4 = {
 };
 var cachedConfig29 = null;
 function loadConfig29() {
-  if (cachedConfig29) return cachedConfig29;
-  if (!existsSync32(CONFIG_PATH30)) {
-    cachedConfig29 = {};
-    return cachedConfig29;
-  }
-  const raw = readFileSync33(CONFIG_PATH30, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH30}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH30}: expected a JSON object`);
-  }
-  cachedConfig29 = parsed;
-  return cachedConfig29;
+  return cachedConfig29 ??= loadWebAccessConfig();
 }
 async function getApiKey22(signal) {
   return resolveCredential({
@@ -23396,7 +22718,7 @@ async function requireApiKey11(signal) {
   if (!apiKey) {
     throw new Error(
       `Serper API key not found. Either:
-  1. Create ${CONFIG_PATH30} with { "serperApiKey": "your-key" }
+  1. Create ${CONFIG_PATH28} with { "serperApiKey": "your-key" }
   2. Set SERPER_API_KEY environment variable
 Get a key at https://serper.dev`
     );
@@ -23507,15 +22829,14 @@ async function searchWithSerper(query, options = {}) {
 }
 
 // serply.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync33, readFileSync as readFileSync34 } from "node:fs";
 var SERPLY_SEARCH_URL = "https://api.serply.io/v1/search";
-var CONFIG_PATH31 = getWebSearchConfigPath();
+var CONFIG_PATH29 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS26 = 6e4;
 var RECENCY_TBS5 = {
   day: "qdr:d",
@@ -23525,24 +22846,7 @@ var RECENCY_TBS5 = {
 };
 var cachedConfig30 = null;
 function loadConfig30() {
-  if (cachedConfig30) return cachedConfig30;
-  if (!existsSync33(CONFIG_PATH31)) {
-    cachedConfig30 = {};
-    return cachedConfig30;
-  }
-  const raw = readFileSync34(CONFIG_PATH31, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH31}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH31}: expected a JSON object`);
-  }
-  cachedConfig30 = parsed;
-  return cachedConfig30;
+  return cachedConfig30 ??= loadWebAccessConfig();
 }
 async function getApiKey23(signal) {
   return resolveCredential({
@@ -23557,7 +22861,7 @@ async function requireApiKey12(signal) {
   if (!apiKey) {
     throw new Error(
       `Serply API key not found. Either:
-  1. Create ${CONFIG_PATH31} with { "serplyApiKey": "your-key" }
+  1. Create ${CONFIG_PATH29} with { "serplyApiKey": "your-key" }
   2. Set SERPLY_API_KEY environment variable
 Get a key at https://serply.io`
     );
@@ -23675,27 +22979,16 @@ async function searchWithSerply(query, options = {}) {
 }
 
 // baizhi.ts
+init_utils();
 init_activity();
 init_credential_source();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
-init_utils();
-import { existsSync as existsSync34, readFileSync as readFileSync35 } from "node:fs";
 import { isIP as isIP2 } from "node:net";
 var MCP_URL = "https://agent-toolkit.app.baizhi.cloud/mcp";
 var SEARCH_TIMEOUT_MS27 = 6e4;
-var CONFIG_PATH32 = getWebSearchConfigPath();
 function credentialOptions() {
-  let config = {};
-  if (existsSync34(CONFIG_PATH32)) {
-    try {
-      const parsed = JSON.parse(readFileSync35(CONFIG_PATH32, "utf8"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-      config = parsed;
-    } catch {
-      throw new Error(`Invalid configuration in ${CONFIG_PATH32}: expected a JSON object`);
-    }
-  }
+  const config = loadWebAccessConfig();
   return { provider: "Baizhi", configuredValue: config.baizhiApiKey, environmentValue: process.env.BAIZHI_API_KEY };
 }
 function isBaizhiAvailable() {
@@ -23787,29 +23080,21 @@ async function searchWithBaizhi(query, options = {}) {
 }
 
 // zai.ts
+init_utils();
 init_activity();
 init_credential_source();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
-init_utils();
-import { existsSync as existsSync35, readFileSync as readFileSync36 } from "node:fs";
 var MCP_URLS = {
   global: "https://api.z.ai/api/mcp/web_search_prime/mcp",
   china: "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp"
 };
 var RECENCY = { day: "oneDay", week: "oneWeek", month: "oneMonth", year: "oneYear" };
 var SEARCH_TIMEOUT_MS28 = 6e4;
-var CONFIG_PATH33 = getWebSearchConfigPath();
+var CONFIG_PATH30 = getWebAccessConfigPath();
 function loadConfig31() {
-  if (!existsSync35(CONFIG_PATH33)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync36(CONFIG_PATH33, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-    return parsed;
-  } catch {
-    throw new Error(`Invalid configuration in ${CONFIG_PATH33}: expected a JSON object`);
-  }
+  return loadWebAccessConfig();
 }
 function credentialOptions2(config) {
   return { provider: "Z.ai", configuredValue: config.zaiApiKey, environmentValue: process.env.ZAI_API_KEY };
@@ -23817,7 +23102,7 @@ function credentialOptions2(config) {
 function endpointUrl(config) {
   const endpoint = config.zaiEndpoint ?? "global";
   if (endpoint !== "global" && endpoint !== "china") {
-    throw new Error(`zaiEndpoint in ${CONFIG_PATH33} must be "global" or "china"`);
+    throw new Error(`zaiEndpoint in ${getWebAccessConfigPath()} must be "global" or "china"`);
   }
   return MCP_URLS[endpoint];
 }
@@ -23930,38 +23215,20 @@ async function searchWithZai(query, options = {}) {
 }
 
 // valyu.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync36, readFileSync as readFileSync37 } from "node:fs";
 var VALYU_SEARCH_URL = "https://api.valyu.ai/v1/search";
-var CONFIG_PATH34 = getWebSearchConfigPath();
+var CONFIG_PATH31 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS29 = 6e4;
 var MAX_SNIPPET_CHARS = 2500;
 var MAX_CONTENT_CHARS = 4e3;
 var cachedConfig31 = null;
 function loadConfig32() {
-  if (cachedConfig31) return cachedConfig31;
-  if (!existsSync36(CONFIG_PATH34)) {
-    cachedConfig31 = {};
-    return cachedConfig31;
-  }
-  const raw = readFileSync37(CONFIG_PATH34, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH34}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH34}: expected a JSON object`);
-  }
-  cachedConfig31 = parsed;
-  return cachedConfig31;
+  return cachedConfig31 ??= loadWebAccessConfig();
 }
 async function getApiKey24(signal) {
   return resolveCredential({
@@ -23976,7 +23243,7 @@ async function requireApiKey13(signal) {
   if (!apiKey) {
     throw new Error(
       `Valyu API key not found. Either:
-  1. Create ${CONFIG_PATH34} with { "valyuApiKey": "your-key" }
+  1. Create ${CONFIG_PATH31} with { "valyuApiKey": "your-key" }
   2. Set VALYU_API_KEY environment variable
 Get a key at https://platform.valyu.ai`
     );
@@ -24082,17 +23349,15 @@ async function searchWithValyu(query, options = {}) {
 }
 
 // keenable.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync37, readFileSync as readFileSync38 } from "node:fs";
 var KEENABLE_SEARCH_URL = "https://api.keenable.ai/v1/search";
 var KEENABLE_PUBLIC_SEARCH_URL = "https://api.keenable.ai/v1/search/public";
 var KEENABLE_CLIENT_TITLE = "pi-web-access";
-var CONFIG_PATH35 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS30 = 3e4;
 var MAX_REQUEST_RESULTS = 50;
 var MAX_SNIPPET_CHARS2 = 500;
@@ -24104,24 +23369,7 @@ var RECENCY_DAYS = {
 };
 var cachedConfig32 = null;
 function loadConfig33() {
-  if (cachedConfig32) return cachedConfig32;
-  if (!existsSync37(CONFIG_PATH35)) {
-    cachedConfig32 = {};
-    return cachedConfig32;
-  }
-  const raw = readFileSync38(CONFIG_PATH35, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH35}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH35}: expected a JSON object`);
-  }
-  cachedConfig32 = parsed;
-  return cachedConfig32;
+  return cachedConfig32 ??= loadWebAccessConfig();
 }
 async function getApiKey25(signal) {
   return resolveCredential({
@@ -24263,39 +23511,21 @@ async function searchWithKeenable(query, options = {}) {
 }
 
 // ceramic.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync38, readFileSync as readFileSync39 } from "node:fs";
 var CERAMIC_SEARCH_URL = "https://api.ceramic.ai/search";
-var CONFIG_PATH36 = getWebSearchConfigPath();
+var CONFIG_PATH32 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS31 = 3e4;
 var MAX_REQUEST_RESULTS2 = 20;
 var REQUEST_DESCRIPTION_CHARS = 1e3;
 var MAX_SNIPPET_CHARS3 = 500;
 var cachedConfig33 = null;
 function loadConfig34() {
-  if (cachedConfig33) return cachedConfig33;
-  if (!existsSync38(CONFIG_PATH36)) {
-    cachedConfig33 = {};
-    return cachedConfig33;
-  }
-  const raw = readFileSync39(CONFIG_PATH36, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH36}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH36}: expected a JSON object`);
-  }
-  cachedConfig33 = parsed;
-  return cachedConfig33;
+  return cachedConfig33 ??= loadWebAccessConfig();
 }
 async function requireApiKey14(signal) {
   const apiKey = await resolveCredential({
@@ -24307,7 +23537,7 @@ async function requireApiKey14(signal) {
   if (!apiKey) {
     throw new Error(
       `Ceramic API key not found. Either:
-  1. Create ${CONFIG_PATH36} with { "ceramicApiKey": "your-key" }
+  1. Create ${CONFIG_PATH32} with { "ceramicApiKey": "your-key" }
   2. Set CERAMIC_API_KEY environment variable
 Get a key at https://platform.ceramic.ai/keys`
     );
@@ -24617,49 +23847,31 @@ async function searchWithKimi(query, options = {}, ctx) {
 }
 
 // mistral-search.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_credential_source();
-init_utils();
-import { existsSync as existsSync39, readFileSync as readFileSync40 } from "node:fs";
 var MISTRAL_CONVERSATIONS_URL = "https://api.mistral.ai/v1/conversations";
-var CONFIG_PATH37 = getWebSearchConfigPath();
+var CONFIG_PATH33 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS33 = 6e4;
 var DEFAULT_SEARCH_MODEL = "mistral-small-latest";
 var DEFAULT_SEARCH_TOOL = "web_search";
 var MAX_RESULTS = 20;
 var cachedConfig34 = null;
 function loadConfig35() {
-  if (cachedConfig34) return cachedConfig34;
-  if (!existsSync39(CONFIG_PATH37)) {
-    cachedConfig34 = {};
-    return cachedConfig34;
-  }
-  const raw = readFileSync40(CONFIG_PATH37, "utf-8");
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH37}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${CONFIG_PATH37}: expected a JSON object`);
-  }
-  cachedConfig34 = parsed;
-  return cachedConfig34;
+  return cachedConfig34 ??= loadWebAccessConfig();
 }
 function resolveSearchModel(value) {
   if (value === void 0) return DEFAULT_SEARCH_MODEL;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`mistralSearchModel in ${CONFIG_PATH37} must be a non-empty string`);
+    throw new Error(`mistralSearchModel in ${getWebAccessConfigPath()} must be a non-empty string`);
   }
   return value.trim();
 }
 function resolveSearchTool(value) {
   if (value === void 0) return DEFAULT_SEARCH_TOOL;
   if (value !== "web_search" && value !== "web_search_premium") {
-    throw new Error(`mistralSearchTool in ${CONFIG_PATH37} must be either web_search or web_search_premium`);
+    throw new Error(`mistralSearchTool in ${getWebAccessConfigPath()} must be either web_search or web_search_premium`);
   }
   return value;
 }
@@ -24773,7 +23985,7 @@ async function getApiKey26(signal) {
   if (!apiKey) {
     throw new Error(
       `Mistral API key not found. Either:
-  1. Create ${CONFIG_PATH37} with { "mistralApiKey": "your-key" }
+  1. Create ${CONFIG_PATH33} with { "mistralApiKey": "your-key" }
   2. Set MISTRAL_API_KEY environment variable
 Get a key at https://console.mistral.ai/api-keys`
     );
@@ -24846,7 +24058,6 @@ async function searchWithMistral(query, options = {}) {
 }
 
 // gemini-search.ts
-init_utils();
 var RESOLVED_SEARCH_PROVIDERS = ["openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "you", "firecrawl", "jina", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "exa", "serpdive", "kagi", "ollama", "anysearch", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "bocha", "xcrawl", "baizhi", "zai", "keenable", "ceramic"];
 var SEARCH_PROVIDERS = ["auto", "all", ...RESOLVED_SEARCH_PROVIDERS];
 var SearchProviderError = class extends Error {
@@ -24863,46 +24074,32 @@ var SearchProviderError = class extends Error {
     this.causeError = cause;
   }
 };
-var CONFIG_PATH38 = getWebSearchConfigPath();
+var CONFIG_PATH34 = getWebSearchConfigPath();
 var DEFAULT_SEARCH_MODEL2 = "gemini-3.6-flash";
 var ALL_SEARCH_PROVIDERS = ["searxng", "openai", "exa", "brave", "parallel", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "firecrawl", "jina", "serpdive", "kagi", "ollama", "perplexity", "gemini", "bocha"];
 var VALID_ROUTING_KINDS = ["transient", "quota", "network", "invalid-response", "unsupported"];
 var cachedSearchConfig = null;
 function getSearchConfig() {
   if (cachedSearchConfig) return cachedSearchConfig;
-  if (!existsSync40(CONFIG_PATH38)) {
-    cachedSearchConfig = { searchProvider: "auto", searchProviderConfigured: false };
-    return cachedSearchConfig;
-  }
-  const rawText = readFileSync41(CONFIG_PATH38, "utf-8");
-  let raw;
-  try {
-    const parsed = JSON.parse(rawText);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("expected a JSON object");
-    }
-    raw = parsed;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${CONFIG_PATH38}: ${message}`);
-  }
+  const raw = loadWebAccessConfig();
+  const path = getWebAccessConfigPath();
   const searchModel = normalizeSearchModel(raw.searchModel);
   const webSearch = raw.webSearch;
   if (webSearch !== void 0 && (!webSearch || typeof webSearch !== "object" || Array.isArray(webSearch))) {
-    throw new Error(`webSearch in ${CONFIG_PATH38} must be an object`);
+    throw new Error(`webSearch in ${path} must be an object`);
   }
-  const allowedProviders = webSearch && Object.hasOwn(webSearch, "allowedProviders") ? normalizeResolvedProviderList(webSearch.allowedProviders, `webSearch.allowedProviders in ${CONFIG_PATH38}`) : void 0;
+  const allowedProviders = webSearch && Object.hasOwn(webSearch, "allowedProviders") ? normalizeResolvedProviderList(webSearch.allowedProviders, `webSearch.allowedProviders in ${path}`) : void 0;
   const searchProviderConfigured = Object.hasOwn(raw, "searchProvider") || Object.hasOwn(raw, "provider");
-  const searchProvider = normalizeSearchProviderSelection(raw.searchProvider ?? raw.provider, `provider in ${CONFIG_PATH38}`);
+  const searchProvider = normalizeSearchProviderSelection(raw.searchProvider ?? raw.provider, `provider in ${path}`);
   const searchRouting = Object.hasOwn(raw, "searchRouting") ? normalizeSearchRouting(raw.searchRouting) : void 0;
   if (allowedProviders) {
     if (Object.hasOwn(raw, "searchProvider")) {
-      assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.searchProvider), `searchProvider in ${CONFIG_PATH38}`, allowedProviders);
+      assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.searchProvider), `searchProvider in ${path}`, allowedProviders);
     }
     if (Object.hasOwn(raw, "provider")) {
-      assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.provider), `provider in ${CONFIG_PATH38}`, allowedProviders);
+      assertSearchProviderSelectionAllowed(normalizeSearchProviderSelection(raw.provider), `provider in ${path}`, allowedProviders);
     }
-    if (searchRouting) assertSearchProviderSelectionAllowed(searchRouting.providers, `searchRouting.providers in ${CONFIG_PATH38}`, allowedProviders);
+    if (searchRouting) assertSearchProviderSelectionAllowed(searchRouting.providers, `searchRouting.providers in ${path}`, allowedProviders);
   }
   cachedSearchConfig = {
     searchProvider,
@@ -24914,22 +24111,23 @@ function getSearchConfig() {
   return cachedSearchConfig;
 }
 function normalizeSearchRouting(value) {
+  const path = getWebAccessConfigPath();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`searchRouting in ${CONFIG_PATH38} must be an object`);
+    throw new Error(`searchRouting in ${path} must be an object`);
   }
   const raw = value;
-  const providers = normalizeResolvedProviderList(raw.providers, `searchRouting.providers in ${CONFIG_PATH38}`);
+  const providers = normalizeResolvedProviderList(raw.providers, `searchRouting.providers in ${path}`);
   const useCurrentModel = raw.useCurrentModel;
   if (useCurrentModel !== void 0 && typeof useCurrentModel !== "boolean") {
-    throw new Error(`searchRouting.useCurrentModel in ${CONFIG_PATH38} must be a boolean`);
+    throw new Error(`searchRouting.useCurrentModel in ${path} must be a boolean`);
   }
   if (!Array.isArray(raw.fallbackOn) || raw.fallbackOn.length === 0) {
-    throw new Error(`searchRouting.fallbackOn in ${CONFIG_PATH38} must be a non-empty array`);
+    throw new Error(`searchRouting.fallbackOn in ${path} must be a non-empty array`);
   }
   const fallbackOn = [];
   for (const kind of raw.fallbackOn) {
     if (typeof kind !== "string" || !VALID_ROUTING_KINDS.includes(kind)) {
-      throw new Error(`searchRouting.fallbackOn in ${CONFIG_PATH38} may only contain transient, quota, network, invalid-response, or unsupported`);
+      throw new Error(`searchRouting.fallbackOn in ${path} may only contain transient, quota, network, invalid-response, or unsupported`);
     }
     if (!fallbackOn.includes(kind)) {
       fallbackOn.push(kind);
@@ -25116,7 +24314,7 @@ async function searchWithResolvedProvider(provider, query, options, useCurrentMo
     if (result2) return { ...result2, provider };
     throw new Error(
       `Gemini search unavailable. Either:
-  1. Configure geminiApiKey in ${CONFIG_PATH38} or set GEMINI_API_KEY
+  1. Configure geminiApiKey in ${CONFIG_PATH34} or set GEMINI_API_KEY
   2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing
   3. Set geminiAuth to "adc" in web-search.json with a Google Cloud ADC + project/location
   4. Sign into gemini.google.com in a supported Chromium-based browser`
@@ -25480,7 +24678,7 @@ async function search(query, options = {}) {
   throw new Error(
     `No search provider available. Either:
   1. Use /login to sign in with a Codex subscription for OpenAI web search
-  2. Set openaiApiKey, braveApiKey, parallelApiKey, tinyfishApiKey, search1apiApiKey, searchinfinityApiKey, queritApiKey, tavilyApiKey, firecrawlBaseUrl, jinaApiKey, serpdiveApiKey, kagiApiKey, ollamaApiKey, searxngBaseUrl, perplexityApiKey, exaApiKey, geminiApiKey, bochaApiKey, or cloudflareApiKey in ${CONFIG_PATH38}
+  2. Set openaiApiKey, braveApiKey, parallelApiKey, tinyfishApiKey, search1apiApiKey, searchinfinityApiKey, queritApiKey, tavilyApiKey, jinaApiKey, serpdiveApiKey, kagiApiKey, ollamaApiKey, perplexityApiKey, exaApiKey, geminiApiKey, bochaApiKey, or cloudflareApiKey in ${CONFIG_PATH34}
   3. Set OPENAI_API_KEY, BRAVE_API_KEY, PARALLEL_API_KEY, TINYFISH_API_KEY, SEARCH1API_KEY, SEARCHINFINITY_API_KEY, QUERIT_API_KEY, TAVILY_API_KEY, FIRECRAWL_BASE_URL, JINA_API_KEY, SERPDIVE_API_KEY, KAGI_API_KEY, BOCHA_API_KEY, OLLAMA_API_KEY, SEARXNG_BASE_URL, EXA_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, or CLOUDFLARE_API_KEY env vars
   4. Set GOOGLE_GEMINI_BASE_URL with CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing
   5. Sign into gemini.google.com in a supported Chromium-based browser
@@ -25757,7 +24955,7 @@ function createMcpServer(core2, info, enabledTools) {
 }
 
 // web-tool-core.ts
-import { existsSync as existsSync52, readFileSync as readFileSync54 } from "node:fs";
+init_utils();
 import pLimit2 from "p-limit";
 
 // fetch-params.ts
@@ -26057,11 +25255,8 @@ Showing 0 of ${matches.length} matches.`;
   return formatRanges(ranges, true, omitted);
 }
 
-// web-tool-core.ts
-init_utils();
-
 // storage.ts
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync as readFileSync43, readdirSync as readdirSync2, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync as readFileSync4, readdirSync as readdirSync2, renameSync, unlinkSync, writeFileSync } from "node:fs";
 init_utils();
 import { join as join4 } from "node:path";
 var CACHE_TTL_MS = 60 * 60 * 1e3;
@@ -26078,7 +25273,11 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 function getFetchCacheDir() {
-  return join4(process.env.PI_WEB_ACCESS_CACHE_ROOT || getWebSearchConfigDir(), FETCH_CACHE_DIR);
+  const configured = process.env.PI_WEB_ACCESS_CACHE_ROOT || loadWebAccessConfig().cacheRoot;
+  if (configured !== void 0 && (typeof configured !== "string" || !configured.trim())) {
+    throw new Error("webAccess.cacheRoot must be a non-empty directory path");
+  }
+  return join4(configured || getWebSearchConfigDir(), FETCH_CACHE_DIR);
 }
 function fetchCachePath(key) {
   if (!CACHE_KEY_PATTERN.test(key)) return null;
@@ -26222,7 +25421,7 @@ function readCachedFetchData(data) {
     const opened = openRegularFile(path);
     fd = opened.fd;
     enforceMode(fd, 384);
-    const parsed = JSON.parse(readFileSync43(fd, "utf8"));
+    const parsed = JSON.parse(readFileSync4(fd, "utf8"));
     if (!isValidStoredData(parsed) || parsed.type !== "fetch" || parsed.id !== data.id || !isInlineFetchData(parsed)) {
       return unavailableFetchData(data, "Cached fetched content is invalid");
     }
@@ -26437,23 +25636,9 @@ function getResearchArtifact(id) {
 }
 
 // web-tool-core.ts
-var WEB_SEARCH_CONFIG_PATH4 = getWebSearchConfigPath();
-function parseConfigRoot(raw) {
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH4}: ${message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Invalid config in ${WEB_SEARCH_CONFIG_PATH4}: expected a JSON object`);
-  }
-  return parsed;
-}
+var WEB_SEARCH_CONFIG_PATH4 = getWebAccessConfigPath();
 function loadConfig40() {
-  if (!existsSync52(WEB_SEARCH_CONFIG_PATH4)) return {};
-  return parseConfigRoot(readFileSync54(WEB_SEARCH_CONFIG_PATH4, "utf-8"));
+  return loadWebAccessConfig();
 }
 var DEFAULT_TOOL_NAMES = {
   webSearch: "web_search",
@@ -27561,7 +26746,7 @@ async function standaloneProviderRejection(requested) {
       return void 0;
     }
     if (!available) {
-      return `OpenAI search over MCP needs an API key: set openaiApiKey in ${WEB_SEARCH_CONFIG_PATH4} or OPENAI_API_KEY. ChatGPT/Codex sign-in, openaiUseProviderBaseUrl, and Pi model credentials work only inside Pi.`;
+      return `OpenAI search over MCP needs an API key: set openaiApiKey in ${getWebSearchConfigPath()} or OPENAI_API_KEY. ChatGPT/Codex sign-in, openaiUseProviderBaseUrl, and Pi model credentials work only inside Pi.`;
     }
   }
   return void 0;

@@ -1,7 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 
-const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
+const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
 const AUTH_PROFILE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 export type AuthFetchRequest = true | string;
@@ -13,10 +12,6 @@ export interface AuthFetchProfile {
 	chromeProfile?: string;
 	redirects: "same-origin";
 	cache: AuthFetchCache;
-}
-
-interface AuthFetchConfigRoot {
-	authFetch?: unknown;
 }
 
 export function resolveAuthFetchProfile(request: AuthFetchRequest): AuthFetchProfile {
@@ -59,17 +54,7 @@ export function authFetchRedirectGuard(profile: AuthFetchProfile, from: URL, to:
 }
 
 function loadAuthFetchProfiles(): AuthFetchProfile[] {
-	if (!existsSync(WEB_SEARCH_CONFIG_PATH)) return [];
-	const raw = readFileSync(WEB_SEARCH_CONFIG_PATH, "utf-8");
-	let parsed: AuthFetchConfigRoot;
-	try {
-		const value: unknown = JSON.parse(raw);
-		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected a JSON object");
-		parsed = value as AuthFetchConfigRoot;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${WEB_SEARCH_CONFIG_PATH}: ${message}`);
-	}
+	const parsed = loadWebAccessConfig();
 	if (parsed.authFetch === undefined || parsed.authFetch === null) return [];
 	if (typeof parsed.authFetch !== "object" || Array.isArray(parsed.authFetch)) {
 		throw new Error(`authFetch in ${WEB_SEARCH_CONFIG_PATH} must be an object`);

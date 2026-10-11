@@ -11,6 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createMcpServer } from "../mcp-server.ts";
+import { initializeMetisConfig } from "../../metis-config.ts";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const TOOL_NAMES = ["fetch_content", "get_search_content", "source_check", "web_search"];
@@ -191,13 +192,22 @@ async function builtBinDir() {
 	assert.equal(build.status, 0, `${build.stdout}${build.stderr}`);
 	const dir = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-bin-"));
 	await writeFile(join(dir, "package.json"), JSON.stringify({ type: "module" }));
-	await copyFile(join(repoRoot, "dist", "mcp-cli.js"), join(dir, "mcp-cli.js"));
+	const cliDir = join(dir, "src", "pi-web-access", "dist");
+	await mkdir(cliDir, { recursive: true });
+	await copyFile(join(repoRoot, "dist", "mcp-cli.js"), join(cliDir, "mcp-cli.js"));
+	for (const name of ["metis-config.ts", "web-access-config.ts"]) {
+		await copyFile(join(repoRoot, "..", name), join(dir, "src", name));
+	}
+	for (const name of ["metis-pi.toml", "metis-pi-config.md"]) {
+		await copyFile(join(repoRoot, "..", "..", name), join(dir, name));
+	}
 	await writeFile(join(dir, "mock-fetch.mjs"), fetchMock);
 	const modules = join(dir, "node_modules");
 	await mkdir(modules);
-	for (const entry of await readdir(join(repoRoot, "node_modules"))) {
+	const dependencies = join(repoRoot, "..", "..", "node_modules");
+	for (const entry of await readdir(dependencies)) {
 		if (entry === "typebox" || entry === "@earendil-works" || entry.startsWith(".")) continue;
-		await symlink(join(repoRoot, "node_modules", entry), join(modules, entry));
+		await symlink(join(dependencies, entry), join(modules, entry));
 	}
 	binDir = dir;
 	return dir;
@@ -208,11 +218,12 @@ async function startBin(t, config) {
 	const dir = await builtBinDir();
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-home-"));
 	await writeFile(join(home, "web-search.json"), JSON.stringify(config));
+	initializeMetisConfig(home);
 	const requestLog = join(home, "requests.log");
 	await writeFile(requestLog, "");
 	const transport = new StdioClientTransport({
 		command: process.execPath,
-		args: ["--import", join(dir, "mock-fetch.mjs"), join(dir, "mcp-cli.js")],
+		args: ["--import", join(dir, "mock-fetch.mjs"), join(dir, "src", "pi-web-access", "dist", "mcp-cli.js")],
 		cwd: dir,
 		env: { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key", MCP_TEST_REQUEST_LOG: requestLog },
 		stderr: "pipe",
@@ -275,7 +286,7 @@ test("built pi-web-access-mcp bin runs the real tools over stdio without Pi pack
 	assert.deepEqual(bin.transportErrors, [], bin.stderr());
 });
 
-test("built bin lists only the tools enabled in web-search.json", { timeout: 30_000 }, async (t) => {
+test("built bin lists only the tools enabled in metis-pi.toml", { timeout: 30_000 }, async (t) => {
 	const { client } = await startBin(t, { webSearch: { enabled: false } });
 	assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["fetch_content", "get_search_content"]);
 	await assert.rejects(client.callTool({ name: "web_search", arguments: { query: "q" } }), /Unknown tool: web_search/);

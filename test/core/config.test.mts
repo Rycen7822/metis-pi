@@ -4,11 +4,50 @@ import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
 import {
   readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig,
   initializeMetisConfig, migrateMetisConfig,
+  readWebAccessConfig, updateWebAccessConfig,
 } from "../../src/metis-config.ts";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
 const legacyReader = (text: string) => (path: string) => path.endsWith("metis-pi.json") ? text : undefined;
+
+test("web migration preserves TOML preferences and keeps credentials in adjacent JSON", (t) => {
+  const dir = mkdtempSync(join(process.cwd(), ".work", "web-config-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const jsonPath = join(dir, "web-search.json"), tomlPath = join(dir, "metis-pi.toml");
+  const credentials = {
+    openaiApiKey: "$METIS_TEST_OPENAI_KEY", tinyfishApiKey: "!printf synthetic-key",
+    degoogHeaders: { Authorization: "Bearer synthetic-token" }, proxy: "http://user:synthetic-password@localhost:8080",
+  };
+  const original = JSON.stringify({ ...credentials, provider: "brave", workflow: "auto-summary", pdf: { enabled: false } });
+  writeFileSync(jsonPath, original);
+  assert.equal(readWebAccessConfig(dir)["provider"], "brave");
+  const previous = '[webAccess]\nprovider="parallel"\n[sessionRecall]\nqueryModel="openai/recall"\n';
+  writeFileSync(tomlPath, previous);
+  assert.equal(readWebAccessConfig(dir)["workflow"], undefined);
+  updateMetisConfig(dir, { appearance: { enabled: false } });
+  assert.equal(readFileSync(jsonPath, "utf8"), original);
+  const snapshot = readFileSync(tomlPath, "utf8");
+  const migration = migrateMetisConfig(dir);
+  assert.equal(readFileSync(join(migration.backup, "web-search.json"), "utf8"), original);
+  assert.equal(readFileSync(join(migration.backup, "metis-pi.toml"), "utf8"), snapshot);
+  const web = readWebAccessConfig(dir);
+  assert.equal(web["provider"], "parallel");
+  assert.equal(web["workflow"], "auto-summary");
+  assert.equal(web["pdf"]["enabled"], false);
+  assert.deepEqual(JSON.parse(readFileSync(jsonPath, "utf8")), credentials);
+  assert.equal(statSync(jsonPath).mode & 0o777, 0o600);
+  assert.doesNotMatch(readFileSync(tomlPath, "utf8"), /METIS_TEST_OPENAI_KEY|synthetic-(key|token|password)|openaiApiKey|degoogHeaders/);
+  updateWebAccessConfig(dir, { provider: "exa", workflow: "none" });
+  assert.equal(readWebAccessConfig(dir)["provider"], "exa");
+  assert.equal(readMetisConfig(dir).config["sessionRecall"]["queryModel"], "openai/recall");
+  assert.deepEqual(JSON.parse(readFileSync(jsonPath, "utf8")), credentials);
+  assert.throws(() => updateWebAccessConfig(dir, { openaiApiKey: "synthetic-key" }), /web-search.json/);
+  writeFileSync(jsonPath, JSON.stringify({ ...credentials, provider: "brave" }));
+  assert.equal(readWebAccessConfig(dir)["provider"], "exa");
+  writeFileSync(tomlPath, '[webAccess]\nopenaiApiKey="synthetic-key"\n');
+  assert.throws(() => readWebAccessConfig(dir), /credentials belong in web-search.json/);
+});
 
 test("missing file yields defaults", () => {
   const { config, problems } = loadConfig(undefined, () => undefined);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -29,220 +29,40 @@ function runChild(script, env) {
 	});
 }
 
-test("web-search config path uses PI_CODING_AGENT_DIR before XDG_CONFIG_HOME", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-config-path-"));
-	const agentDir = join(root, "agent-dir");
-	const xdgDir = join(root, "xdg");
-	const home = join(root, "home");
-	await mkdir(agentDir, { recursive: true });
-	await mkdir(join(home, ".pi"), { recursive: true });
-	await mkdir(join(xdgDir, "pi"), { recursive: true });
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ perplexityApiKey: "pplx-from-agent" }) + "\n", "utf8");
-	await writeFile(join(home, ".pi", "web-search.json"), JSON.stringify({ perplexityApiKey: "pplx-from-legacy" }) + "\n", "utf8");
-	await writeFile(join(xdgDir, "pi", "web-search.json"), JSON.stringify({}) + "\n", "utf8");
-
-	const child = runChild(`
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		const { isPerplexityAvailable } = await import(${JSON.stringify(perplexityUrl)});
-		console.log(JSON.stringify({
-			dir: getWebSearchConfigDir(),
-			path: getWebSearchConfigPath(),
-			available: isPerplexityAvailable(),
+test("web credentials share the Metis directory after migrating legacy or XDG settings", async (t) => {
+	for (const source of ["explicit", "agent", "legacy", "xdg", "absent"]) {
+		const root = await mkdtemp(join(tmpdir(), "pi-web-access-config-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const home = join(root, "home"), xdg = join(root, "xdg");
+		const agent = source === "explicit" ? join(root, "custom") : join(home, ".pi", "agent");
+		const origin = source === "xdg" ? join(xdg, "pi") : source === "legacy" ? join(home, ".pi") : agent;
+		await mkdir(origin, { recursive: true });
+		if (source !== "absent") await writeFile(join(origin, "web-search.json"), JSON.stringify({
+			perplexityApiKey: "synthetic-key", workflow: "none",
 		}));
-	`, {
-		PI_CODING_AGENT_DIR: agentDir,
-		XDG_CONFIG_HOME: xdgDir,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		dir: agentDir,
-		path: join(agentDir, "web-search.json"),
-		available: true,
-	});
-});
-
-test("web-search config path prefers the Pi agent directory over legacy config", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-agent-config-path-"));
-	const home = join(root, "home");
-	const agentDir = join(home, ".pi", "agent");
-	await mkdir(agentDir, { recursive: true });
-	await writeFile(join(home, ".pi", "web-search.json"), JSON.stringify({ perplexityApiKey: "pplx-from-legacy" }) + "\n", "utf8");
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ geminiApiKey: "gemini-from-agent" }) + "\n", "utf8");
-
-	const child = runChild(`
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		const { isGeminiApiAvailable } = await import(${JSON.stringify(geminiApiUrl)});
-		console.log(JSON.stringify({
-			dir: getWebSearchConfigDir(),
-			path: getWebSearchConfigPath(),
-			available: isGeminiApiAvailable(),
-		}));
-	`, {
-		PI_CODING_AGENT_DIR: undefined,
-		XDG_CONFIG_HOME: undefined,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		dir: agentDir,
-		path: join(agentDir, "web-search.json"),
-		available: true,
-	});
-});
-
-test("web-search config path falls back to legacy ~/.pi when agent config is absent", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-legacy-fallback-"));
-	const home = join(root, "home");
-	await mkdir(join(home, ".pi"), { recursive: true });
-	await writeFile(join(home, ".pi", "web-search.json"), JSON.stringify({ perplexityApiKey: "pplx-from-legacy" }) + "\n", "utf8");
-
-	const child = runChild(`
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		const { isPerplexityAvailable } = await import(${JSON.stringify(perplexityUrl)});
-		console.log(JSON.stringify({
-			dir: getWebSearchConfigDir(),
-			path: getWebSearchConfigPath(),
-			available: isPerplexityAvailable(),
-		}));
-	`, {
-		PI_CODING_AGENT_DIR: undefined,
-		XDG_CONFIG_HOME: undefined,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		dir: join(home, ".pi"),
-		path: join(home, ".pi", "web-search.json"),
-		available: true,
-	});
-});
-
-test("web-search config path defaults to the Pi agent directory when both files are absent", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-absent-config-"));
-	const home = join(root, "home");
-
-	const child = runChild(`
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		console.log(JSON.stringify({
-			dir: getWebSearchConfigDir(),
-			path: getWebSearchConfigPath(),
-		}));
-	`, {
-		PI_CODING_AGENT_DIR: undefined,
-		XDG_CONFIG_HOME: undefined,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		dir: join(home, ".pi", "agent"),
-		path: join(home, ".pi", "agent", "web-search.json"),
-	});
-});
-
-test("web-search config path uses XDG_CONFIG_HOME pi directory when agent dir is unset", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-xdg-config-"));
-	const home = join(root, "home");
-	const xdgDir = join(root, "xdg");
-	await mkdir(join(home, ".pi"), { recursive: true });
-	await mkdir(join(xdgDir, "pi"), { recursive: true });
-	await writeFile(join(home, ".pi", "web-search.json"), JSON.stringify({ perplexityApiKey: "pplx-from-legacy" }) + "\n", "utf8");
-	await writeFile(join(xdgDir, "pi", "web-search.json"), JSON.stringify({ geminiApiKey: "gemini-from-xdg" }) + "\n", "utf8");
-
-	const child = runChild(`
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		const { isGeminiApiAvailable } = await import(${JSON.stringify(geminiApiUrl)});
-		console.log(JSON.stringify({
-			dir: getWebSearchConfigDir(),
-			path: getWebSearchConfigPath(),
-			available: isGeminiApiAvailable(),
-		}));
-	`, {
-		PI_CODING_AGENT_DIR: undefined,
-		XDG_CONFIG_HOME: xdgDir,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		dir: join(xdgDir, "pi"),
-		path: join(xdgDir, "pi", "web-search.json"),
-		available: true,
-	});
-});
-
-test("web-search config path keeps the legacy fallback stable after XDG config is created", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-stable-config-"));
-	const home = join(root, "home");
-	const xdgDir = join(root, "xdg");
-	const xdgConfigPath = join(xdgDir, "pi", "web-search.json");
-	await mkdir(join(home, ".pi"), { recursive: true });
-	await mkdir(join(xdgDir, "pi"), { recursive: true });
-	await writeFile(join(home, ".pi", "web-search.json"), JSON.stringify({ perplexityApiKey: "pplx-from-legacy" }) + "\n", "utf8");
-
-	const child = runChild(`
-		import { writeFile } from "node:fs/promises";
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		const { isPerplexityAvailable } = await import(${JSON.stringify(perplexityUrl)});
-		const available = isPerplexityAvailable();
-		const before = { dir: getWebSearchConfigDir(), path: getWebSearchConfigPath() };
-		await writeFile(${JSON.stringify(xdgConfigPath)}, JSON.stringify({ geminiApiKey: "gemini-created-later" }) + "\\n", "utf8");
-		const after = { dir: getWebSearchConfigDir(), path: getWebSearchConfigPath() };
-		console.log(JSON.stringify({ before, after, available }));
-	`, {
-		PI_CODING_AGENT_DIR: undefined,
-		XDG_CONFIG_HOME: xdgDir,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		before: {
-			dir: join(home, ".pi"),
-			path: join(home, ".pi", "web-search.json"),
-		},
-		available: true,
-		after: {
-			dir: join(home, ".pi"),
-			path: join(home, ".pi", "web-search.json"),
-		},
-	});
-});
-
-test("web-search config path keeps XDG_CONFIG_HOME as the new-config target when both files are absent", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-xdg-new-config-"));
-	const home = join(root, "home");
-	const xdgDir = join(root, "xdg");
-	await mkdir(join(xdgDir, "pi"), { recursive: true });
-
-	const child = runChild(`
-		const { getWebSearchConfigDir, getWebSearchConfigPath } = await import(${JSON.stringify(utilsUrl)});
-		console.log(JSON.stringify({
-			dir: getWebSearchConfigDir(),
-			path: getWebSearchConfigPath(),
-		}));
-	`, {
-		PI_CODING_AGENT_DIR: undefined,
-		XDG_CONFIG_HOME: xdgDir,
-		HOME: home,
-		USERPROFILE: home,
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout), {
-		dir: join(xdgDir, "pi"),
-		path: join(xdgDir, "pi", "web-search.json"),
-	});
+		const child = runChild(`
+			import { readFileSync, existsSync } from "node:fs";
+			const utils = await import(${JSON.stringify(utilsUrl)});
+			const { getFetchCacheDir } = await import(${JSON.stringify(new URL("../storage.ts", import.meta.url).href)});
+			const { migrateMetisConfig } = await import(${JSON.stringify(new URL("../../metis-config.ts", import.meta.url).href)});
+			const { isPerplexityAvailable } = await import(${JSON.stringify(perplexityUrl)});
+			const dir = utils.getWebSearchConfigDir(), available = isPerplexityAvailable();
+			migrateMetisConfig(dir);
+			const path = utils.getWebSearchConfigPath();
+			console.log(JSON.stringify({ dir, path, available,
+				keys: existsSync(path) ? Object.keys(JSON.parse(readFileSync(path, "utf8"))) : [],
+				workflow: utils.loadWebAccessConfig().workflow,
+				cache: getFetchCacheDir(),
+				originKept: existsSync(${JSON.stringify(join(origin, "web-search.json"))}),
+			}));
+		`, { PI_CODING_AGENT_DIR: source === "explicit" ? agent : undefined,
+			XDG_CONFIG_HOME: xdg, HOME: home, USERPROFILE: home });
+		assert.equal(child.status, 0, child.stderr);
+		assert.deepEqual(JSON.parse(child.stdout), { dir: agent, path: join(agent, "web-search.json"),
+			available: source !== "absent", keys: source === "absent" ? [] : ["perplexityApiKey"],
+			cache: join(source === "legacy" || source === "xdg" ? origin : agent, "web-search-cache"),
+			...(source === "absent" ? {} : { workflow: "none" }), originKept: source !== "absent" });
+	}
 });
 
 test("Gemini base URL and Cloudflare auth use env before config", async () => {

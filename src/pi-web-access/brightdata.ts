@@ -1,11 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
 
 const BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -53,44 +52,8 @@ interface BrightDataSearchOptions extends SearchOptions {
 
 let cachedConfig: WebSearchConfig | null = null;
 
-// `web-search.json` is a credential store: its own text is the secret. V8 quotes a
-// window of the source it choked on back inside the `JSON.parse` message — with a
-// short file, the whole file — so `{"brightdataApiKey": bd-real-token}` (quotes
-// forgotten around a pasted token) produces
-// `Unexpected token 'b', "{"brightdataApiKey": bd-real-token}" is not valid JSON`.
-// There is no credential to redact against at this point, because the credential is
-// what the file was being read for, so the parser's text is dropped entirely and only
-// its position is kept. That position is also the only part that cannot carry a
-// status-shaped phrase into `providerErrorStatus`.
-//
-// This is a deliberate divergence from `serpdive.ts:59-62`, `brave.ts:33-36`,
-// `anysearch.ts:48-51` and `firecrawl.ts:50-53`, which all quote the parser message
-// verbatim. They have the same leak; fixing it for every provider is a separate
-// change, and this module is not going to copy the bug forward to justify symmetry.
-function configParseDetail(err: unknown): string {
-	const position = errorMessage(err).match(/at position \d+(?: \(line \d+ column \d+\))?/i);
-	return position ? `not valid JSON, ${position[0]}` : "not valid JSON";
-}
-
 function loadConfig(): WebSearchConfig {
-	if (cachedConfig) return cachedConfig;
-	if (!existsSync(CONFIG_PATH)) {
-		cachedConfig = {};
-		return cachedConfig;
-	}
-
-	const raw = readFileSync(CONFIG_PATH, "utf-8");
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (err) {
-		throw new Error(`Failed to parse ${CONFIG_PATH}: ${configParseDetail(err)}`);
-	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`Invalid config in ${CONFIG_PATH}: expected a JSON object`);
-	}
-	cachedConfig = parsed as WebSearchConfig;
-	return cachedConfig;
+	return cachedConfig ??= loadWebAccessConfig() as WebSearchConfig;
 }
 
 async function getApiKey(signal?: AbortSignal): Promise<string | null> {
@@ -149,7 +112,7 @@ function serpZoneSetting(): ZoneSetting | null {
 	}
 	const configured = loadConfig().brightdataSerpZone;
 	if (typeof configured === "string" && configured.trim()) {
-		return { raw: configured.trim(), label: `brightdataSerpZone in ${CONFIG_PATH}` };
+		return { raw: configured.trim(), label: `brightdataSerpZone in ${getWebAccessConfigPath()}` };
 	}
 	return null;
 }
@@ -311,7 +274,7 @@ const QUOTA_SHAPED_PATTERN = /rate limit|quota|too many requests/gi;
 // (c) Neither parser message is quoted at all, so neither needs a filter or a cap. V8
 //     embeds a *prefix* of the offending input in its message, and `redactCredential`
 //     substitutes whole values, so a prefix cannot be redacted out of it. Dropping the
-//     message removes the leak by construction — see `configParseDetail` and the
+//     message removes the leak by construction — see the shared configuration reader and the
 //     `JSON.parse` catch on the response path.
 
 // Truncation happens BEFORE the rewrite, and the order is the whole point.
