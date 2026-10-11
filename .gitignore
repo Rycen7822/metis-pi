@@ -5,7 +5,8 @@ coverage/
 *.log
 .work/
 
-# Local agent state index (per-machine working notes, not part of the repo).
+# Local agent instructions and state (not part of the repo).
+/AGENTS.md
 CODEX_STATE.md
 /references/
 
