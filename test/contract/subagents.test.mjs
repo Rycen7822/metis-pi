@@ -17,24 +17,28 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 import { subagentWidget } from "../../src/subagents/widget.ts";
-import { subagentTheme } from "../helpers/subagent-theme.mjs";
+import { makeSubagentTheme, subagentTheme } from "../helpers/subagent-theme.mjs";
 
-test("subagent spinner changes every 50ms while preserving its 2.5-second cycle", (t) => {
+test("subagent spinner changes glyph every 50ms in truecolor and 256color", (t) => {
   let now = 0;
   t.mock.method(Date, "now", () => now);
-  const widget = subagentWidget(subagentTheme, () => [{ id: "spinner", name: "worker", state: "running" }], () => {});
-  const frames = [];
-  for (now = 0; now < 2500; now += 50) {
-    const rows = widget.render(80);
-    assert.ok(rows.every(row => visibleWidth(row) <= 80));
-    frames.push(rows[1]);
+  const themes = [subagentTheme, makeSubagentTheme("256color")];
+  for (const theme of themes) {
+    const widget = subagentWidget(theme, () => [{ id: "spinner", name: "worker", state: "running" }], () => {});
+    const frames = [];
+    for (now = 0; now < 2500; now += 50) {
+      const rows = widget.render(80);
+      assert.ok(rows.every(row => visibleWidth(row) <= 80));
+      frames.push(stripVTControlCharacters(rows[1])[3]);
+    }
+    for (let i = 0; i < frames.length; i++) {
+      assert.notEqual(frames[i], frames[(i + 1) % frames.length], `${theme.getColorMode()}: adjacent glyphs must change, not just ANSI color`);
+      assert.equal(visibleWidth(frames[i]), 1, "animation keeps one terminal cell");
+    }
+    const original = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    assert.deepEqual(frames.filter((_frame, i) => i % 5 === 0), original);
+    assert.equal(stripVTControlCharacters(widget.render(80)[1])[3], frames[0], "the cycle still repeats after 2.5 seconds");
   }
-  for (let i = 0; i < frames.length; i++) {
-    assert.notEqual(frames[i], frames[(i + 1) % frames.length], "each refresh has a visible transition");
-  }
-  const original = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-  assert.deepEqual(frames.filter((_frame, i) => i % 5 === 0).map(frame => stripVTControlCharacters(frame)[3]), original);
-  assert.equal(widget.render(80)[1], frames[0], "the cycle still repeats after 2.5 seconds");
 });
 
 test("native subagent registration honors the global switch without starting backend work", async (t) => {

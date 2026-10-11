@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { foregroundAnsi, mixColors, MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
+import { MouseRegion, truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface WidgetAgent {
   id: string; name: string; state: string; started?: number;
@@ -13,13 +13,15 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 export const WIDGET_FRAME_MS = 50;
 const SPINNER_CYCLE_MS = 2500;
 
-function spinnerFrames(theme: Theme): string[] {
-  const shades = [0, 0.1, 0.2, 0.1, 0.05].map(amount =>
-    foregroundAnsi(mixColors(theme.colors.accent, theme.colors.muted, amount), theme.getColorMode()));
-  return SPINNER.flatMap((current, index) => {
-    const next = SPINNER[(index + 1) % SPINNER.length];
-    const between = String.fromCodePoint(current.codePointAt(0)! | next.codePointAt(0)!);
-    return [current, current, between, next, next].map((glyph, step) => `${shades[step]}${glyph}\x1b[39m`);
+function spinnerFrames(): string[] {
+  return SPINNER.flatMap((glyph, index) => {
+    const current = glyph.codePointAt(0)! & 0xff;
+    const next = SPINNER[(index + 1) % SPINNER.length].codePointAt(0)! & 0xff;
+    // Sweep the two bottom braille dots through the transition, then thin the
+    // next pose. Unlike tint-only frames, every step (including the wrap) is
+    // a different one-cell glyph even when terminal colors are quantized.
+    return [current, current | 0x40, current | next | 0xc0, next | 0x80, next & (next - 1)]
+      .map(mask => String.fromCodePoint(0x2800 | mask));
   });
 }
 const ACTIONS: Record<string, string> = {
@@ -31,7 +33,7 @@ export const activeAgents = (agents: WidgetAgent[]) => agents.filter(agent => AC
 
 /** Live rows and their mouse targets come from the same rendered snapshot. */
 export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: (id: string) => void) {
-  const frames = spinnerFrames(theme);
+  const frames = spinnerFrames();
   let targets: Array<string | undefined> = [];
   return new MouseRegion({
     render(width) {
