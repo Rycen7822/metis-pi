@@ -11,7 +11,7 @@
 #   - 密钥、MCP 服务器、Pi 模型/主题/packages 仍由 Pi 管理，不写进本文件。
 #   - 显示和快捷键修改后重启；condense 用 /reload，MCP 用 /mcp reload。
 #
-# 分区：1 显示界面 · 2 执行工具 · 3 MCP · 4 动态指令 · 5 历史精简 · 6 子代理
+# 分区：1 显示界面 · 2 执行工具 · 3 MCP · 4 动态指令 · 5 历史精简 · 6 子代理 · 7 会话回忆
 
 
 # =============================================================================
@@ -314,3 +314,11 @@ tools = ["read", "grep", "find", "ls"]
 # ambientExtensions = true
 # ambientSkills = true
 # tools = ["read", "grep", "find", "ls"]
+
+# =============================================================================
+# 7. 会话回忆 / Session recall
+# =============================================================================
+[sessionRecall]
+# session_query 使用的模型；"default" 跟随当前会话，或填写已注册的 "provider/model-id"。
+# 例如 "openai/gpt-6.1-sol"；模型找不到时回退当前会话。每次查询重读，session_search 不调用模型。
+queryModel = "default"

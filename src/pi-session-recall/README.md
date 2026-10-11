@@ -62,18 +62,24 @@ For a session larger than the model's context window, it keeps the beginning, en
 
 ## Configuration
 
-To use a dedicated model for `session_query`, create or edit `~/.pi/agent/session-recall.json`:
+The Metis-maintained version reads `~/.pi/agent/metis-pi.toml` (following
+`PI_CODING_AGENT_DIR`). To use a dedicated model for `session_query`:
 
-```json
-{
-  "queryModel": {
-    "provider": "anthropic",
-    "id": "claude-haiku-4-5"
-  }
-}
+```toml
+[sessionRecall]
+queryModel = "openai/gpt-6.1-sol"
 ```
 
-If no model is configured (or the configured model isn't available), it falls back to whatever model is active in your current session.
+`queryModel = "default"` follows the current session model. Missing, invalid, or
+unregistered model selections also fall back to that model. The setting is read
+at each query; `session_search` does not call a model. Model definitions and
+authentication remain managed by Pi.
+
+`/metis-config init` imports the upstream `session-recall.json` when no TOML
+exists. If you already have a TOML file, `/metis-config migrate` backs up and
+imports the old selection while preserving any explicit TOML value. The old
+JSON is left intact; once TOML exists it is not read during queries. Malformed
+TOML is reported as a configuration error, without falling back to old JSON.
 
 ## Requirements
 

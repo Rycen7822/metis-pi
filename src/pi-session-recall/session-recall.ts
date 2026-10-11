@@ -1,6 +1,6 @@
 // Maintained by metis-pi. Upstream: https://github.com/ogulcancelik/pi-extensions/tree/main/packages/pi-session-recall
 // Source version: 1.0.7; commit: 92964e4c7023ae88788181bb2eeea4497a97de9d
-// Local changes retain OpenAI / OpenAI Codex provider compatibility. See METIS.md.
+// Local changes use Metis TOML configuration and retain OpenAI / OpenAI Codex compatibility. See METIS.md.
 
 /**
  * Session Recall Extension - Search and query past pi sessions
@@ -44,38 +44,21 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { readMetisConfig } from "../metis-config.ts";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-interface SessionRecallConfig {
-	queryModel?: {
-		provider: string;
-		id: string;
-	};
-}
-
-function getConfigPath(): string {
-	return join(getAgentDir(), "session-recall.json");
-}
-
-function loadConfig(): SessionRecallConfig {
-	const configPath = getConfigPath();
-	if (!existsSync(configPath)) return {};
-	try {
-		return JSON.parse(readFileSync(configPath, "utf-8"));
-	} catch {
-		return {};
-	}
-}
-
 /**
- * Resolve the query model from config → fallback to current session model.
+ * Resolve the query model from Metis TOML → fallback to current session model.
  */
 function resolveQueryModel(ctx: ExtensionContext): Model<Api> | undefined {
-	const config = loadConfig();
-	if (config.queryModel) {
-		const found = ctx.modelRegistry.find(config.queryModel.provider, config.queryModel.id);
-		if (found) return found;
+	const identifier = readMetisConfig(getAgentDir()).config["sessionRecall"]?.["queryModel"];
+	if (typeof identifier === "string" && identifier !== "default") {
+		const slash = identifier.indexOf("/");
+		if (slash > 0 && slash < identifier.length - 1) {
+			const found = ctx.modelRegistry.find(identifier.slice(0, slash), identifier.slice(slash + 1));
+			if (found) return found;
+		}
 	}
 	// Fallback: current session model
 	return ctx.model;
@@ -776,12 +759,16 @@ export default function sessionRecallExtension(pi: ExtensionAPI) {
 				};
 			}
 
-			// Resolve query model: user config → current session model
-			const queryModel = resolveQueryModel(ctx);
+			let queryModel: Model<Api> | undefined;
+			try {
+				queryModel = resolveQueryModel(ctx);
+			} catch (err) {
+				return errorResult(`Error reading session recall configuration: ${err}`);
+			}
 			if (!queryModel) {
 				return errorResult(
 					"Error: No model available to analyze the session. " +
-						"Configure queryModel in session-recall.json or set up API keys.",
+					"Configure sessionRecall.queryModel in metis-pi.toml or set up API keys.",
 				);
 			}
 

@@ -4,7 +4,7 @@
 
 所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。不再读取项目 `.pi/metis-pi.json` / `.pi/metis-pi.toml`，也不再使用显示层单独的 `PI_AGENT_DIR` 覆盖。
 
-包内同目录的 `metis-pi.toml` 列出全部默认值，且是运行时默认值来源。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项和 `subagent-pi/config.toml`，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，旧文件不删除，便于回退旧版代码。
+包内同目录的 `metis-pi.toml` 列出全部默认值，且是运行时默认值来源。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项、`subagent-pi/config.toml` 和 `session-recall.json` 的查询模型，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，旧文件不删除，便于回退旧版代码。
 
 已有上一版 TOML 时运行 **`/metis-config migrate`**：先把当前 TOML、说明及迁移输入备份到 `<agentDir>/backups/metis-config-…/`，再补齐遗漏 section，并更新参数说明。现有 TOML 值优先；旧执行快捷键仅覆盖仍为默认值的对应项，个性化冲突保留 TOML 并提示。原文件仍保留；确认使用新版代码及新后端后，可将这些旧 Metis 文件移入备份目录，不要保留两套同步配置。命令不会停止 daemon 或后台任务。
 
@@ -180,3 +180,15 @@ exclude = []
 - `workflowsEnabled`、`toolDescriptionMode`、`joinMode`、`outputTranscript`、`widgetMode`：旧独立 provider 的工作流/描述/汇总/输出/widget 选项不适用于 native 的工具、交付回执、历史读取和活跃树契约。
 
 移入备份不等于删去功能数据：策略 Markdown、子代理 SQLite/WAL/SHM、日志、session、归档、MCP cache/auth 仍留原处。不要删除 `subagent-pi/` 或整个 Pi `settings.json`。
+
+## `[sessionRecall]`
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `queryModel` | `"default"` | `session_query` 跟随当前会话；可指定已注册的 `provider/model-id`，例如 `openai/gpt-6.1-sol`。 |
+
+每次查询重读，无需重启；值无效或模型不在 Pi 注册表中时回退当前会话。
+`session_search` 不调用模型。模型定义与认证仍由 Pi 管理。
+旧 `session-recall.json` 的 `queryModel.provider` / `id` 由 `/metis-config init`
+或 `/metis-config migrate` 合并为这个字段；已有 TOML 值优先，迁移保留原文件
+并备份。TOML 存在后不再叠加旧 JSON；损坏 TOML 会返回查询配置错误。

@@ -16,7 +16,13 @@ normal Pi completion path. Transient Codex session cleanup is preserved.
 Schema construction uses Metis's existing `typebox` peer, rather than relying on
 Pi's legacy `@sinclair/typebox` virtual alias.
 
-Keep `session_search`, `session_query`, existing session files and
-`~/.pi/agent/session-recall.json` unchanged when updating this module. Compare
-against the pinned upstream commit, preserve the API-aware compatibility check,
-update the provenance comment, and verify tool registration and query transport.
+The query model is managed by `[sessionRecall].queryModel` in Metis's global
+`metis-pi.toml`: `"default"` follows the current session, while `"provider/model-id"`
+selects a registered model. Each query rereads the setting. The shared Metis
+init/migrate commands import the upstream `session-recall.json`; migration backs
+it up and leaves the original intact. An existing TOML is authoritative.
+
+Keep `session_search`, `session_query` and existing session files intact when
+updating this module. Compare against the pinned upstream commit, preserve the
+API-aware compatibility check and TOML integration, update the provenance
+comment, and verify tool registration, model selection and query transport.

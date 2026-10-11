@@ -5,7 +5,10 @@ import { parse, stringify } from "smol-toml";
 
 export const METIS_CONFIG_FILE = "metis-pi.toml";
 export const METIS_CONFIG_GUIDE = "metis-pi-config.md";
-const legacyJsonFiles = ["metis-pi.json", "settings.json", "dynamic-agents.json", "pi-codex-conversion.json", "subagents.json"];
+const legacyJsonFiles = [
+  "metis-pi.json", "settings.json", "dynamic-agents.json",
+  "pi-codex-conversion.json", "subagents.json", "session-recall.json",
+];
 const legacyBackendFile = "subagent-pi/config.toml";
 type ObjectValue = Record<string, any>;
 export type ReadConfigFile = (path: string) => string | undefined;
@@ -135,7 +138,7 @@ function legacySubagentBackend(raw: ObjectValue): ObjectValue {
 function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
   const base = defaultMetisConfig(),
     notes: string[] = [];
-  const [old, pi, dynamic, conversion, formerAgents] = legacyJsonFiles.map((name) =>
+  const [old, pi, dynamic, conversion, formerAgents, recall] = legacyJsonFiles.map((name) =>
     readJson(join(agentDir, name), read),
   );
   const backendPath = join(agentDir, legacyBackendFile),
@@ -162,6 +165,10 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
     { tools: conversion?.["tools"] ?? {}, ui: conversion?.["ui"] ?? {} },
     old?.["execution"] ?? {},
   );
+  const recallModel = recall?.["queryModel"];
+  const sessionRecall = typeof recallModel?.["provider"] === "string" && recallModel["provider"]
+    && typeof recallModel["id"] === "string" && recallModel["id"]
+    ? { queryModel: `${recallModel["provider"]}/${recallModel["id"]}` } : {};
   const imported = {
     appearance,
     execution,
@@ -169,11 +176,12 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
     subagents,
     contextPrune: object(pi?.["contextPrune"]) ? encodePruneConfig(pi["contextPrune"]) : {},
     dynamicAgents: dynamic ? { ...dynamic, enabled: dynamic["enabled"] !== false } : {},
+    sessionRecall,
   };
   return {
     imported,
     notes,
-    present: !!(old || pi?.["contextPrune"] || dynamic || conversion || formerAgents || backendText !== undefined),
+    present: !!(old || pi?.["contextPrune"] || dynamic || conversion || formerAgents || recall || backendText !== undefined),
   };
 }
 /** Read-only bridge until the single global TOML exists. Never read project metis settings. */

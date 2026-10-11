@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
-import { readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig } from "../../src/metis-config.ts";
+import {
+  readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig,
+  initializeMetisConfig, migrateMetisConfig,
+} from "../../src/metis-config.ts";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
@@ -121,4 +124,27 @@ test("global saves retain defaults, annotations, unknown fields and other owners
   writeFileSync(path, "[broken");
   assert.throws(() => updateMetisConfig(dir, { appearance: { enabled: true } }), /invalid TOML/);
   assert.equal(readFileSync(path, "utf8"), "[broken");
+});
+
+test("recall init and migration preserve originals and explicit TOML preferences", t => {
+  mkdirSync(".work", { recursive: true });
+  const dir = mkdtempSync(join(process.cwd(), ".work/metis-recall-config-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const legacyPath = join(dir, "session-recall.json"), configPath = join(dir, "metis-pi.toml");
+  const legacy = JSON.stringify({ queryModel: { provider: "openai-codex", id: "recall/variant" } });
+  writeFileSync(legacyPath, legacy);
+  assert.equal(readMetisConfig(dir).legacy, true);
+  assert.equal(initializeMetisConfig(dir).legacy, true);
+  assert.equal(readMetisConfig(dir).legacy, false);
+  assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, "openai-codex/recall/variant");
+  for (const selection of [undefined, "openai/current-choice", "default"]) {
+    const original = selection === undefined ? "" : stringify({ sessionRecall: { queryModel: selection } });
+    writeFileSync(configPath, original);
+    assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "default");
+    const migrated = migrateMetisConfig(dir);
+    assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "openai-codex/recall/variant");
+    assert.equal(readFileSync(join(migrated.backup, "metis-pi.toml"), "utf8"), original);
+    assert.equal(readFileSync(join(migrated.backup, "session-recall.json"), "utf8"), legacy);
+  }
+  assert.equal(readFileSync(legacyPath, "utf8"), legacy);
 });
