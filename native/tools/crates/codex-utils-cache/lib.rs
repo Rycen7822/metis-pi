@@ -8,7 +8,6 @@ use sha1::Sha1;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
 
-/// A minimal LRU cache protected by a Tokio mutex.
 /// Calls outside a Tokio runtime are no-ops.
 pub struct BlockingLruCache<K, V> {
     inner: Mutex<LruCache<K, V>>,
@@ -18,7 +17,6 @@ impl<K, V> BlockingLruCache<K, V>
 where
     K: Eq + Hash,
 {
-    /// Creates a cache with the provided non-zero capacity.
     #[must_use]
     pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
@@ -36,7 +34,6 @@ where
                 return v.clone();
             }
             let v = value();
-            // Insert and return a clone to keep ownership in the cache.
             guard.put(key, v.clone());
             return v;
         }
@@ -63,13 +60,11 @@ where
         value()
     }
 
-    /// Builds a cache if `capacity` is non-zero, returning `None` otherwise.
     #[must_use]
     pub fn try_with_capacity(capacity: usize) -> Option<Self> {
         NonZeroUsize::new(capacity).map(Self::new)
     }
 
-    /// Returns a clone of the cached value corresponding to `key`, if present.
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -80,13 +75,11 @@ where
         guard.get(key).cloned()
     }
 
-    /// Inserts `value` for `key`, returning the previous entry if it existed.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = lock_if_runtime(&self.inner)?;
         guard.put(key, value)
     }
 
-    /// Removes the entry for `key` if it exists, returning it.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -96,14 +89,12 @@ where
         guard.pop(key)
     }
 
-    /// Clears all entries from the cache.
     pub fn clear(&self) {
         if let Some(mut guard) = lock_if_runtime(&self.inner) {
             guard.clear();
         }
     }
 
-    /// Executes `callback` with a mutable reference to the underlying cache.
     pub fn with_mut<R>(&self, callback: impl FnOnce(&mut LruCache<K, V>) -> R) -> R {
         if let Some(mut guard) = lock_if_runtime(&self.inner) {
             callback(&mut guard)

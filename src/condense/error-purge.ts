@@ -29,10 +29,8 @@ export function purgeErroredArgs(messages: any[], config: ErrorPurgeConfig): any
   let turnCount = 0;
   for (const msg of messages) {
     if (msg.role === "assistant") {
-      // Count each assistant turn; toolResults referencing the turn come next.
       turnCount++;
     } else if (msg.role === "toolResult" && msg.isError === true && !hasProtectedNestedResults(msg.details)) {
-      // Record the turn this errored call belongs to for cooldown comparison.
       erroredAtTurn.set(msg.toolCallId, turnCount);
     }
   }
@@ -41,7 +39,6 @@ export function purgeErroredArgs(messages: any[], config: ErrorPurgeConfig): any
 
   const currentTurnIndex = turnCount;
 
-  // Pass 2: rewrite AssistantMessages whose toolCall args should be purged.
   let anyModified = false;
   const result = messages.map((msg) => {
     if (msg.role !== "assistant") return msg;

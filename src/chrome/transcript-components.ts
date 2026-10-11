@@ -17,7 +17,6 @@ import { renderWritePreview } from "../write-preview.ts";
 import type { WritePreviewInput } from "../renderers.ts";
 import type { Component, DiffLayoutOps } from "../tool-names.ts";
 
-/** The slice of a pi-tui mouse event these wrappers inspect. */
 export interface TranscriptMouseEvent {
   type?: string;
   button?: string;
@@ -28,10 +27,8 @@ export interface TranscriptMouseEvent {
   wheelDelta?: number;
 }
 
-/** The slice of a pi-tui mouse result these wrappers return. */
 export type TranscriptMouseResult = { handled?: boolean; render?: boolean } | undefined;
 
-/** The slice of a host component a wrapper renders and forwards to. */
 export type TranscriptChild = Component;
 
 /** Separator before assistant text that follows tool activity: a light
@@ -214,8 +211,6 @@ export class CodexThinkingRailComponent implements Component {
   }
 }
 
-/** Forward a mouse event to a wrapped component (undefined when it cannot
- * receive one). Used by every wrapper whose own interest is clicks or wheels. */
 function childHandleMouse(child: unknown, event: TranscriptMouseEvent): TranscriptMouseResult {
   const target = child as { handleMouse?: (event: TranscriptMouseEvent) => TranscriptMouseResult };
   return typeof target?.handleMouse === "function" ? target.handleMouse(event) : undefined;

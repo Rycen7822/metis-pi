@@ -54,9 +54,7 @@ export interface InteractionSummaryData {
 export interface TurnSummaryDeps {
   /** Public API: append a custom entry (never present in --no-session). */
   appendEntry?: (customType: string, data?: unknown) => void;
-  /** Public API: register the renderer for our custom entry. */
   registerEntryRenderer?: (customType: string, renderer: unknown) => void;
-  /** Persist gate (config summary.persist). */
   persist: boolean;
   /** Wall clock. */
   wall: () => number;
@@ -130,7 +128,6 @@ export class TurnSummary {
     const interactionId = `i${snapshot.startedAt ?? 0}`;
     if (this.#written.has(interactionId)) return;
     this.#written.add(interactionId);
-    // Bound the set: keep the last 32 interaction ids.
     if (this.#written.size > 32) {
       const first = this.#written.values().next().value;
       if (first !== undefined) this.#written.delete(first);

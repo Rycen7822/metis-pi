@@ -1,4 +1,3 @@
-// Input rewriting and completion policy; resolution of skill bodies is external.
 import type { InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
 import { SKILL_TOKEN_EOL, splitLeadingSkillHeads } from "./skill-tokens.ts";
@@ -9,13 +8,11 @@ export interface SkillSummary {
 }
 
 export interface SkillInput {
-  /** pi.on("input") handler: transform multi-skill input, continue otherwise. */
   onInput(event: InputEvent): InputEventResult;
   /** Expand a text for tests; null means "no transform" (host handles it). */
   expand(text: string): string | null;
 }
 
-/** Does the text open with a skill trigger? Single char check, no regex. */
 const opensWithSkill = (text: string): boolean => {
   const first = text.charCodeAt(0);
   return (first === 0x2f && text.startsWith("/skill:")) || first === 0xffe5;
@@ -92,7 +89,6 @@ export function createSkillInput(resolveBlock: (name: string) => string | null):
 export interface SkillContext {
   /** The exact partial token text before the cursor (this is the replace prefix). */
   partial: string;
-  /** Which trigger form the replacement should use. */
   trigger: "/" | "￥";
   /** Lowercase-free name needle for filtering (trigger and `skill:` stripped). */
   needle: string;

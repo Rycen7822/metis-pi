@@ -1,4 +1,3 @@
-// config.test.mts — namespaced config loading with SAFE defaults.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";

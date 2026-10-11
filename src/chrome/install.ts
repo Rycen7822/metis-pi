@@ -1,6 +1,3 @@
-// Codex chrome lifecycle: the install state machine for the editor, footer,
-// header and Working widgets, plus the shutdown restore.
-//
 // Install goes through PUBLIC host APIs only. Every step degrades to the
 // native host surface on failure, and the whole path is best-effort: a chrome
 // install must never take the session down. The five chrome modules are
@@ -22,7 +19,6 @@ export const SUMMARY_STATUS_KEY = "metis-pi:summary";
 type ChromeMods = typeof import("./editor.ts") & typeof import("./footer.ts") & typeof import("./header.ts")
   & typeof import("./working.ts");
 
-/** Which chrome widgets are installed on the live UI right now. */
 export interface ChromeState {
   /** Invalidates late async installs: a preload resolving after shutdown or a
    * new session must not touch the new UI. */
@@ -42,7 +38,6 @@ export interface ChromeState {
   tui: { requestRender?: () => void } | undefined;
 }
 
-/** Explicit dependencies of the chrome lifecycle — one named field each. */
 export interface ChromeDeps {
   config: AppearanceConfig;
   hostData: HostData;
@@ -50,7 +45,6 @@ export interface ChromeDeps {
   colorLevel: ColorLevel;
   editorHost: { CustomEditor: unknown } | undefined;
   surface: CodexSurfaceOps | undefined;
-  /** Real versions for the header identity line. */
   appearanceVersion: string | undefined;
   piVersion: string | undefined;
   /** Snapshot source; read lazily (built after this lifecycle). */
@@ -68,13 +62,11 @@ export interface ChromeDeps {
 export interface ChromeLifecycle {
   /** Mutable install state (diagnostics reads it; events write `tui`). */
   readonly state: ChromeState;
-  /** Install everything public-API-installable for this session. */
   install(available: UiAvailable, generation: number): Promise<void>;
   /** Drop late installs from a previous session (preload in flight). */
   invalidate(): void;
   /** Remove OUR factories only (identity checked) — a successor's stay. */
   restore(): void;
-  /** Show/hide the above-editor Working widget (undefined = hide). */
   setWidgetVisible(visible: boolean): void;
 }
 
@@ -116,7 +108,6 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
     tui: undefined,
   };
 
-  /** The ctx.ui slice chrome installs into (public API only). */
   const uiOf = () => hostData.ui as Partial<{
     setEditorComponent: (factory: unknown) => void;
     getEditorComponent: () => unknown;
@@ -195,7 +186,6 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       }
     }
 
-    // Footer: model/effort/provider · cwd/branch · context · I/O · cache · speed.
     if (available.setFooter && config.footer.enabled) {
       try {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
@@ -210,7 +200,6 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       } catch { /* footer stays native */ }
     }
 
-    // Header: real identity line with real versions.
     if (available.setHeader) {
       try {
         ui.setHeader?.((_tui: unknown, theme: { fg?: (k: string, t: string) => string } | undefined) =>
@@ -227,7 +216,6 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
       } catch { /* header stays native */ }
     }
 
-    // Working: the standalone above-editor widget with the Codex rhythm.
     // The native loader row is hidden ONLY after the widget installed; without
     // setWidget the old message-based fallback stays (never two Working rows).
     if (available.setWidget) {

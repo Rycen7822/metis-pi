@@ -21,7 +21,6 @@
 export interface OutputSpeedSample {
   tokensPerSecond: number;
   outputTokens: number;
-  /** Real observation window the rate was computed over, ms. */
   windowMs: number;
   /** "live" = in-flight response (streamed cumulative usage), "final" =
    * confirmed at message_end. */
@@ -30,7 +29,6 @@ export interface OutputSpeedSample {
 
 /** Below this the window says nothing about a rate (one batched delta). */
 export const SPEED_MIN_WINDOW_MS = 300;
-/** A response with no confirmed output tokens has no speed to report. */
 const SPEED_MIN_TOKENS = 1;
 /** Sanity rails: outside these the sample is a measurement artifact rather
  * than a rate — below the floor a response emits less than one token per 10 s
@@ -40,7 +38,6 @@ export const SPEED_MAX_PLAUSIBLE = 5000;
 
 export const SPEED_UNIT = "tok/s";
 
-/** Real rate or undefined — the single place the ratio is decided. */
 export function computeSpeed(outputTokens: number, windowMs: number): number | undefined {
   if (!Number.isFinite(outputTokens) || outputTokens < SPEED_MIN_TOKENS) return undefined;
   if (!Number.isFinite(windowMs) || windowMs < SPEED_MIN_WINDOW_MS) return undefined;
@@ -57,7 +54,6 @@ export function formatSpeedValue(tps: number | undefined): string {
   return text === "0" ? "" : text;
 }
 
-/** Full label ("38.5 tok/s"); "" when unmeasurable. */
 export function formatSpeed(tps: number | undefined): string {
   const value = formatSpeedValue(tps);
   return value ? `${value} ${SPEED_UNIT}` : "";
@@ -132,7 +128,6 @@ export class OutputSpeedTracker {
     this.#previewTokens = 0;
   }
 
-  /** Live sample when the provider publishes cumulative output mid-stream. */
   #liveSample(): OutputSpeedSample | undefined {
     if (this.#requestStartMs === undefined || this.#outputStartMs === undefined) return undefined;
     if (this.#previewTokens < SPEED_MIN_TOKENS) return undefined;

@@ -1,6 +1,3 @@
-// Shared skill-token parsing for the multi-skill composer, plus the shared
-// host-prototype patch guard the two skill entry points rely on.
-//
 // Dependency-free on purpose: src/chrome/editor.ts (the Codex composer, which
 // must never import the host package) needs the exact same token definition as
 // src/skill-mux.ts (the completion/expansion side). Both go through this
@@ -19,15 +16,11 @@ export const SKILL_HEAD_TOKEN = new RegExp(`^${SKILL_TRIGGER}(\\S+)\\s+`);
 export const SKILL_TOKEN_EOL = new RegExp(`^${SKILL_TRIGGER}(\\S+)(\\s+|$)`);
 
 export interface LeadingSkillHeads {
-  /** How many complete skill tokens the text opens with. */
   count: number;
-  /** Their names, in order. */
   names: string[];
-  /** Everything after the last one. */
   rest: string;
 }
 
-/** Split off every complete leading skill token: `/skill:a ￥b …` → 2, ["a","b"], "…". */
 export function splitLeadingSkillHeads(text: string): LeadingSkillHeads {
   const names: string[] = [];
   let rest = text;
@@ -56,13 +49,11 @@ export function isSkillPrefixOnly(text: string): boolean {
   return count > 0 && /^\s*$/.test(rest);
 }
 
-/** What happened when a host prototype patch was installed. */
 export type SkillPatchResult = "patched" | "already" | "missing";
 
 /** Any host method we wrap: called with the host component as `this`. */
 type HostMethod = (...args: never[]) => unknown;
 
-/** Prototypes this process patched, and which of their methods. */
 const patchedHosts = new WeakMap<object, Set<string>>();
 
 /**

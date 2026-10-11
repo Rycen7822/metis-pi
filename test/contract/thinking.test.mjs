@@ -1,4 +1,3 @@
-// Native assistant reconstruction, thinking policy and selection contracts.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
@@ -119,13 +118,11 @@ test("two native runs fold once independently, copy visible content and preserve
   update([...message.content, { type: "text", text: "Answer." }]);
   assert.equal(regionsOf(component)[1].child.text, "Thought for 3s", "second run uses its own clock");
 
-  // Native toggle: click the summary → the full body returns (with rail).
   click(regionsOf(component)[0]);
   assert.equal(component.thinkingVisibilityOverrides.get(0), false, "host map owns the manual state");
   assert.ok(regionText(regionsOf(component)[0]).includes("deep thought"), "body restored verbatim");
   assert.match(select(copyFrame(regionsOf(component)[0].child, 80)).text, /deep thought/);
   assert.equal(regionsOf(component)[1].child.text, "Thought for 3s", "opening the first run leaves the second collapsed");
-  // Click the expanded body → collapsed again; the policy stays out of the way.
   click(regionsOf(component)[0]);
   assert.deepEqual(regionsOf(component).map(({ child }) => child.text), ["Thought for 7s", "Thought for 3s"]);
   component.setHideThinkingBlock(false);

@@ -1,4 +1,3 @@
-/** Newline JSON-RPC and ownership of an inherited MCP process tree. */
 import { readFileSync, readdirSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { McpConnection, CancelledError, LEGACY_INIT, rpcResult, classifyProtocolError, assertDiscoverResult,
@@ -49,7 +48,7 @@ function descendantsOf(root: ProcessIdentity): ProcessIdentity[] {
 function signalIfSame(proc: ProcessIdentity, signal: NodeJS.Signals): void {
   const current = procStat(proc.pid);
   if (current?.startTime !== proc.startTime || current.state === "Z") return;
-  try { process.kill(proc.pid, signal); } catch { /* already gone or inaccessible */ }
+  try { process.kill(proc.pid, signal); } catch {}
 }
 
 export class StdioConnection extends McpConnection {
@@ -156,7 +155,7 @@ export class StdioConnection extends McpConnection {
     if (this.buffer.length > MAX_LINE) {
       this.buffer = "";
       this.failPending("stdio server emitted an oversized unframed line");
-      try { this.proc?.kill("SIGKILL"); } catch { /* ignore */ }
+      try { this.proc?.kill("SIGKILL"); } catch {}
       return;
     }
     let idx: number;
@@ -201,7 +200,7 @@ export class StdioConnection extends McpConnection {
       const onAbort = () => {
         if (!this.pending.has(id)) return;
         finish(new CancelledError(true));
-        try { this.sendFrame({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } }); } catch { /* best-effort */ }
+        try { this.sendFrame({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } }); } catch {}
       };
       const timer = setTimeout(() => {
         finish(new Error(`${method} timed out after ${timeoutSec}s`));
@@ -259,11 +258,11 @@ export class StdioConnection extends McpConnection {
     this.proc = null;
     this.failPending(reason);
     if (child) {
-      try { child.stdin?.destroy(); } catch { /* ignore */ }
-      try { child.stdout?.destroy(); child.stderr?.destroy(); } catch { /* ignore */ }
+      try { child.stdin?.destroy(); } catch {}
+      try { child.stdout?.destroy(); child.stderr?.destroy(); } catch {}
       for (const proc of descendants) signalIfSame(proc, "SIGTERM");
       if (root) signalIfSame(root, "SIGTERM");
-      else try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      else try { child.kill("SIGTERM"); } catch {}
       // A misbehaving MCP server must not survive failed initialization or
       // shutdown indefinitely. Keep ownership until exit, then release it.
       if (child.pid && (descendants.length || child.exitCode === null && child.signalCode === null)) {
@@ -271,7 +270,7 @@ export class StdioConnection extends McpConnection {
           for (const proc of descendants) signalIfSame(proc, "SIGKILL");
           if (child.exitCode === null && child.signalCode === null) {
             if (root) signalIfSame(root, "SIGKILL");
-            else try { child.kill("SIGKILL"); } catch { /* already gone */ }
+            else try { child.kill("SIGKILL"); } catch {}
           }
         }, 1000);
         kill.unref();

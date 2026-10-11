@@ -37,12 +37,10 @@ export function deriveLiveTurnIndex(branch: SessionEntry[]): number {
   return count - 1;
 }
 
-/** True for SessionEntry shapes that project into an AgentMessage-like object (see projectBranchMessages). */
 function isProjectableEntry(e: any): boolean {
   return (e.type === "message" && e.message) || e.type === "custom_message";
 }
 
-/** Projects a single custom_message SessionEntry into its role "custom" message shape. */
 function projectCustomMessageEntry(e: any): any {
   return {
     role: "custom",
@@ -54,7 +52,6 @@ function projectCustomMessageEntry(e: any): any {
   };
 }
 
-/** Joins the text blocks of a ToolResultMessage into a single string. */
 export function extractToolResultText(msg: any): string {
   const content: any[] = Array.isArray(msg?.content) ? msg.content : [];
   return content
@@ -97,11 +94,6 @@ export function captureToolResult(
   };
 }
 
-/**
- * Converts turn_end event data into a CapturedBatch.
- * @param message      AssistantMessage (content: Array of TextContent|ThinkingContent|ToolCall)
- * @param toolResults  ToolResultMessage[]
- */
 export function captureBatch(
   message: any,
   toolResults: any[],
@@ -110,14 +102,12 @@ export function captureBatch(
 ): CapturedBatch {
   const content: any[] = Array.isArray(message?.content) ? message.content : [];
 
-  // Collect assistant prose text
   const assistantText = content
     .filter((block: any) => block.type === "text")
     .map((block: any) => block.text)
     .join("\n")
     .trim();
 
-  // Collect tool calls, matching each to its result
   const toolCalls: CapturedToolCall[] = content
     .filter((block: any) => block.type === "toolCall")
     .map((block: any) => {
@@ -198,7 +188,6 @@ export function captureUnindexedBatchesFromSession(
     const content = Array.isArray(msg.content) ? msg.content : [];
     const toolCallBlocks = content.filter((c: any) => c.type === "toolCall");
 
-    // Find tool calls that have results in this branch and are not yet summarized
     const readyToPrune = toolCallBlocks.filter((tc: any) => {
       const id = tc.id;
       if (!id) return false;

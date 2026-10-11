@@ -25,7 +25,7 @@ function writeReceipt(fdEnv: string | undefined, payload: Record<string, unknown
   try {
     writeSync(fd, JSON.stringify(payload) + "\n");
   } catch { /* parent went away; nothing sensible to do */ }
-  try { closeSync(fd); } catch { /* already closed */ }
+  try { closeSync(fd); } catch {}
 }
 
 function readBootstrap(): { payload?: Bootstrap; error?: string } {
@@ -53,7 +53,7 @@ function readBootstrap(): { payload?: Bootstrap; error?: string } {
       if (parsed?.v !== 1 || !Array.isArray(parsed?.mcp?.servers)) throw new Error("bootstrap payload malformed");
       result = { payload: parsed };
     } catch (err) {
-      try { closeSync(fd); } catch { /* already closed */ }
+      try { closeSync(fd); } catch {}
       result = { error: `bootstrap failed: ${((err as Error).message || "unknown error").slice(0, 200)}` };
     }
   }

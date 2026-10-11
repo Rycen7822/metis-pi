@@ -41,7 +41,6 @@ export interface DecorationFeature {
 export interface DecorationHandle {
   readonly installed: boolean;
   readonly features: readonly DecorationFeature[];
-  /** Visibility transitions the policy has applied so far (diagnostics). */
   readonly thinkingAutoApplied: () => number;
   dispose(): void;
 }
@@ -532,7 +531,6 @@ function applyThinkingView(component: object, runIndex: number, view: ThinkingVi
   rebuild(component);
 }
 
-/** Resolve the stable message key for the component's current message. */
 function resolveMessagePlan(
   input: TranscriptAdapterInput,
   component: object,

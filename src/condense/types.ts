@@ -46,7 +46,6 @@ import { defaultMetisConfig, decodePruneConfig } from "../metis-config.ts";
 
 import type { FallbackController } from "./summarizer-fallback.ts";
 
-// ── Constants ──────────────────────────────────────────────────────────────
 
 /** customType for summary custom_message entries (appear in LLM context) */
 export const CUSTOM_TYPE_SUMMARY = "context-prune-summary";
@@ -107,14 +106,9 @@ export interface DiagnosticEntryData {
  * grace checks in pruner.ts / chain-compressor.ts cannot drift from registration. */
 export const QUERY_TOOL_NAME = "context_tree_query";
 
-/** Footer status widget ID */
 export const STATUS_WIDGET_ID = "context-prune";
 
-/**
- * Widget ID for the live /pruner now progress panel shown above the editor.
- */
 export const PROGRESS_WIDGET_ID = "context-prune-progress";
-// ── Config ─────────────────────────────────────────────────────────────────
 
 /**
  * When summarization (and context pruning) is triggered.
@@ -132,10 +126,8 @@ export type PruneOn = "on-demand" | "agent-message";
  */
 export type BatchingMode = "turn" | "agent-message";
 
-/** Thinking/reasoning level requested for summarizer LLM calls. */
 export type SummarizerThinking = "default" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-/** Choices for the summarizer thinking setting (used by commands and settings overlay) */
 export const SUMMARIZER_THINKING_LEVELS: { value: SummarizerThinking; label: string }[] = [
   { value: "default", label: "Default" },
   { value: "off", label: "Off" },
@@ -146,7 +138,6 @@ export const SUMMARIZER_THINKING_LEVELS: { value: SummarizerThinking; label: str
   { value: "xhigh", label: "XHigh" },
 ];
 
-/** Cycling presets for the `purgeErrors.cooldownTurns` setting. */
 export const PURGE_COOLDOWN_PRESETS: { value: string; label: string }[] = [
   { value: "1", label: "1" },
   { value: "2", label: "2 (default)" },
@@ -155,7 +146,6 @@ export const PURGE_COOLDOWN_PRESETS: { value: string; label: string }[] = [
   { value: "10", label: "10" },
 ];
 
-/** Cycling presets for the `purgeErrors.minArgChars` setting. */
 export const PURGE_MIN_ARG_PRESETS: { value: string; label: string }[] = [
   { value: "100", label: "100" },
   { value: "500", label: "500 (default)" },
@@ -163,7 +153,6 @@ export const PURGE_MIN_ARG_PRESETS: { value: string; label: string }[] = [
   { value: "5000", label: "5000" },
 ];
 
-/** Choices for the batching-mode setting (used by commands and settings overlay) */
 export const BATCHING_MODES: { value: BatchingMode; label: string }[] = [
   { value: "turn", label: "Per turn" },
   { value: "agent-message", label: "Per agent message" },
@@ -247,7 +236,6 @@ export const AUTO_BUDGET_PRESETS: { value: string; label: string }[] = [
   { value: "0.9", label: "90%" },
 ];
 
-/** Choices for the prune-on setting (used by commands and settings overlay) */
 export const PRUNE_ON_MODES: { value: PruneOn; label: string }[] = [
   { value: "agent-message", label: "On agent message" },
   { value: "on-demand", label: "On demand" },
@@ -259,11 +247,9 @@ export interface ContextPruneConfig {
   summaryBudget: SummaryBudgetPolicy;
   /** Opt in to shared rewrite buffering and ordinary-Pi opportunistic compaction. */
   opportunisticCompaction: boolean;
-  /** Whether to prune raw tool outputs from future LLM context */
   enabled: boolean;
   /** Whether to show the prune footer status line and queued turn messages */
   showPruneStatusLine: boolean;
-  /** Whether to show the persistent OCC footer status line */
   showOccStatusLine: boolean;
   /** Additional output-token ceiling for Pi compaction summaries; 0 keeps Pi's native limit. */
   compactionSummaryMaxTokens: number;
@@ -275,9 +261,7 @@ export interface ContextPruneConfig {
   summarizerModel: string;
   /** Ordered provider/model-id outage fallbacks; the session model is always last. */
   summarizerFallbackModels: string[];
-  /** Thinking/reasoning level to request for summarizer calls. */
   summarizerThinking: SummarizerThinking;
-  /** When to trigger summarization and pruning */
   pruneOn: PruneOn;
   /**
    * Granularity of each pruning batch.
@@ -364,9 +348,7 @@ export interface ContextPruneConfig {
    * Kill switch: set protectedPaths = [] in global metis-pi.toml [contextPrune].
    */
   protectedPaths: string[];
-  /** Chain-level range compression for old closed chains beyond the rolling window. */
   chainCompression: ChainCompressionConfig;
-  /** Replace failed toolCall argument bodies with compact stubs after a cooldown window. */
   purgeErrors: ErrorPurgeConfig;
   /**
    * Exact SHA-256 (toolName, resultText) identity against previously covered
@@ -579,9 +561,6 @@ export interface ErrorPurgeConfig {
 
 export const DEFAULT_CONFIG = decodePruneConfig(defaultMetisConfig().contextPrune) as ContextPruneConfig;
 
-// ── Captured batch ─────────────────────────────────────────────────────────
-
-/** A single tool call + its result as captured from turn_end */
 export interface CapturedToolCall {
   /** Original assistant turn, retained across budget splitting and queue retries. */
   sourceTurn?: { turnIndex: number; timestamp: number };
@@ -630,7 +609,6 @@ export interface CapturedToolCall {
 export interface CapturedBatch {
   turnIndex: number;
   timestamp: number;
-  /** Any non-tool-call text from the assistant message (may be empty) */
   assistantText: string;
   toolCalls: CapturedToolCall[];
   /**
@@ -644,7 +622,6 @@ export interface CapturedBatch {
   userTurnGroup?: number;
 }
 
-// ── Index record ───────────────────────────────────────────────────────────
 
 /**
  * A single tool call record stored in the runtime index.
@@ -676,7 +653,6 @@ export interface ToolCallRecord {
   resultTimestamp?: number;
   /** Absolute path to the sidecar blob holding the full body (set only when the result was spilled). */
   spillPath?: string;
-  /** Full byte length of the spilled body. */
   spillBytes?: number;
   /** Head preview kept inline when spilled (resultText is "" in that case). */
   resultPreview?: string;
@@ -684,7 +660,6 @@ export interface ToolCallRecord {
   contentHash?: string;
 }
 
-// ── Session persistence types ──────────────────────────────────────────────
 
 /**
  * Data stored via pi.appendEntry(CUSTOM_TYPE_INDEX, data).
@@ -733,10 +708,6 @@ export interface SummaryToolCallRef {
   resultTimestamp?: number;
 }
 
-/**
- * Details stored in the custom summary message's `details` field.
- * Machine-readable metadata so renderers and extensions can inspect summaries.
- */
 export interface SummaryMessageDetails {
   toolCallRefs: SummaryToolCallRef[];
   toolNames: string[];
@@ -767,7 +738,6 @@ export const DEFERRED_REASON_LABELS: Record<DeferredReason, string> = {
   "no-gain": "replacement would not reduce context tokens",
 };
 
-/** Payload of CUSTOM_TYPE_FLUSH_METRICS. */
 export interface FlushMetricsEntry {
   ts: number;
   trigger: FlushTrigger;
@@ -803,7 +773,6 @@ export interface FlushMetricsEntry {
   metrics: ContextMetricsSnapshot;
 }
 
-// ── Summarizer stats ────────────────────────────────────────────────────────
 
 /**
  * Cumulative token stats for summarizer LLM calls and chain compression.
@@ -811,15 +780,11 @@ export interface FlushMetricsEntry {
  * restarts and branch navigation.
  */
 export interface SummarizerStats {
-  /** Cumulative input tokens across all summarizer calls */
   totalInputTokens: number;
-  /** Cumulative output tokens across all summarizer calls */
   totalOutputTokens: number;
   /** Number of completed summarizer calls with reported usage */
   callCount: number;
-  /** Cumulative number of chains range-compressed across all flushes */
   chainsCompressed: number;
-  /** Cumulative number of chains given a fused LLM range summary */
   rangesSummarized: number;
 }
 
@@ -829,7 +794,6 @@ export interface LiveReclaim {
   afterChars: number;
 }
 
-/** Outcome of the most recent completed prune attempt. */
 export type PruneFrontierOutcome =
   | "summarized"
   | "skipped-oversized"
@@ -844,25 +808,16 @@ export type PruneFrontierOutcome =
  * failures do not advance the frontier.
  */
 export interface PruneFrontier {
-  /** Last tool call included in the completed prune attempt */
   lastAttemptedToolCallId: string;
   /** Occurrence identity when a tool ID is reused within a captured turn. */
   lastAttemptedResultTimestamp?: number;
-  /** Name of the last tool call included in the completed prune attempt */
   lastAttemptedToolName: string;
-  /** Assistant turn index containing the last attempted tool call */
   lastAttemptedTurnIndex: number;
-  /** Timestamp captured when that last attempted tool call batch was recorded */
   lastAttemptedTimestamp: number;
-  /** Number of batches included in the completed prune attempt */
   attemptedBatchCount: number;
-  /** Number of tool calls included in the completed prune attempt */
   attemptedToolCallCount: number;
-  /** Character count of the raw tool-result text that was eligible for pruning */
   rawCharCount: number;
-  /** Character count of the rendered summary text that was produced */
   summaryCharCount: number;
-  /** Whether the attempt actually pruned or was skipped for being oversized */
   outcome: PruneFrontierOutcome;
 }
 
@@ -877,7 +832,6 @@ export type ProgressCallback = (
   stage: "start" | "done" | "skipped",
 ) => void;
 
-/** Live text-progress callback for a batch currently being summarized. */
 export type BatchTextProgressCallback = (
   index: number,
   total: number,
@@ -885,7 +839,6 @@ export type BatchTextProgressCallback = (
   receivedChars: number,
 ) => void;
 
-/** Options accepted by `flushPending`. */
 export type FlushResult =
   | {
       ok: true;
@@ -955,7 +908,6 @@ export interface FlushOptions {
   closingMessage?: any;
 }
 
-/** Options for a single summarizeBatch() call. */
 export interface SummarizeBatchOptions {
   /** Reports a discarded result's cause without putting it in model context. */
   onFailure?: (message: string, reason?: "input-budget" | "output-budget") => void;
@@ -967,7 +919,6 @@ export interface SummarizeBatchOptions {
   onUsage?: (usage: Usage) => void;
   /** Invoked only when a provider stream is about to be requested. */
   onModelAttempt?: () => void;
-  /** Receives the number of summary text characters streamed so far. */
   onTextProgress?: (receivedChars: number) => void;
   /**
    * Abort signal — when fired the in-flight stream call is cancelled and the
@@ -982,11 +933,7 @@ export interface SummarizeBatchOptions {
   controller?: FallbackController;
 }
 
-/**
- * Result of a summarization call — the summary text plus LLM usage data.
- */
 export interface SummarizeResult {
   summaryText: string;
-  /** Usage data from the LLM response (tokens + cost) */
   usage: Usage;
 }

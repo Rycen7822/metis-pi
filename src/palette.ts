@@ -204,7 +204,6 @@ export function sanitizeShellLine(text: string): string {
     const char = text[index]!;
     if (char === "\x1b") {
       const rest = text.slice(index);
-      // Any CSI sequence: keep it only when it is a plain SGR color (…m).
       const csi = SAFE_SGR.exec(rest);
       if (csi && isSafeSgr(csi[0])) { out += csi[0]; index += csi[0].length; continue; }
       if (csi) { index += csi[0].length; continue; }

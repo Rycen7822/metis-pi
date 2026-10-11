@@ -36,9 +36,7 @@ import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export interface GitChangeStat {
-  /** Uncommitted additions in the work tree right now. */
   readonly additions: number;
-  /** Uncommitted deletions in the work tree right now. */
   readonly deletions: number;
   /** Changed paths in the sample: tracked diff rows + counted untracked files. */
   readonly files: number;
@@ -49,7 +47,6 @@ export interface ChangeCounts {
   readonly deletions: number;
 }
 
-/** One read of the work tree relative to a fixed revision. */
 export interface ChangeSample {
   /** `git diff --numstat <rev>` rows, keyed by path (renames → the new path). */
   readonly tracked: ReadonlyMap<string, ChangeCounts>;
@@ -341,9 +338,7 @@ export interface GitChangesTracker {
   start(): void;
   /** Disarm and forget the sample. */
   dispose(): void;
-  /** Diagnostics: the base revision of the last sample and how many ran. */
   session(): GitChangesSession;
-  /** True while the interval is armed. */
   readonly running: boolean;
 }
 
@@ -352,7 +347,6 @@ function sameStat(a: GitChangeStat | undefined, b: GitChangeStat | undefined): b
   return a.additions === b.additions && a.deletions === b.deletions && a.files === b.files;
 }
 
-/** Totals of one sample: the work tree's uncommitted delta right now. */
 function statOf(sample: ChangeSample): GitChangeStat {
   let additions = 0;
   let deletions = 0;

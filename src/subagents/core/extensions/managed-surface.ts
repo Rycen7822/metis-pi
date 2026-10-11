@@ -1,6 +1,4 @@
 /**
- * Managed-child built-in tool surface for a daemon-booted Pi worker.
- *
  * A managed child loads Pi's OWN configuration (global/project extensions,
  * packages, skills, prompts, settings) exactly like a normal `pi` session, so
  * the daemon never passes `--tools` (a strict allowlist over built-in, extension
@@ -24,12 +22,9 @@
  * line for every profile that restricts the built-in surface and fails the
  * launch when it is missing or not ok, so a built-in restriction is never
  * claimed without evidence.
- *
- * No runtime dependency beyond Pi's own extension API. No files, no network.
  */
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 
-/** Pi's marker for a tool it implements itself (dist/core/tools). */
 const BUILTIN_SOURCE_PREFIX = "builtin:";
 
 function sourcePath(tool: ToolInfo): string | undefined {
@@ -37,8 +32,6 @@ function sourcePath(tool: ToolInfo): string | undefined {
   return typeof path === "string" ? path : undefined;
 }
 
-/** Built-in identity is Pi's, never the tool NAME: an extension may shadow a
- * built-in name, and such a tool is Pi's own business, not the profile's. */
 function isBuiltin(tool: ToolInfo): boolean {
   const path = sourcePath(tool);
   return path === `${BUILTIN_SOURCE_PREFIX}${tool.name}`;
@@ -85,8 +78,6 @@ export default async function (pi: ExtensionAPI) {
     const builtinNames = new Set(tools.filter(managedBuiltin).map((tool) => tool.name));
     const unidentified = tools.filter((tool) => sourcePath(tool) === undefined).map((tool) => tool.name).sort();
     const expected = [...builtinNames].filter((name) => allowedSet.has(name)).sort();
-    // Extension/custom tools keep Pi's decision — this includes tools that
-    // shadow a built-in name, which are NOT built-ins here.
     const kept = pi.getActiveTools().filter((name) => !builtinNames.has(name));
     const target = [...kept, ...expected].filter((name, index, all) => all.indexOf(name) === index);
     let failure = "";

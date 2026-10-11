@@ -31,8 +31,6 @@ function colorLevelOnce(): ReturnType<typeof resolveColorContext> {
   return (cachedColorLevel ??= resolveColorContext({ terminalTrueColor: Tui.getCapabilities?.()?.trueColor === true }));
 }
 
-/** Real package version, read once from the repo-root package.json —
- * never hardcoded (diagnostics and the header show this value). */
 function appearanceVersion(): string {
   try {
     const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
@@ -43,7 +41,6 @@ function appearanceVersion(): string {
   }
 }
 
-/** Default entry: compact Codex-style transcript, without changing tool data. */
 export default function codexAppearance(pi: AppearanceAPI): void {
   const prototype = Pi.ToolExecutionComponent?.prototype;
   const assistantComponent = Pi.AssistantMessageComponent as unknown as { prototype: object } | undefined;
@@ -66,7 +63,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     (text) => `\x1b[38;2;${CODEX_CYAN_RGB}m${text}\x1b[39m`,
     (text) => `\x1b[2m${text}\x1b[22m`,
   );
-  // Config access shared by activate() and the write-preview budget below.
   // Every module uses Pi's agent dir (PI_CODING_AGENT_DIR); no appearance-only override.
   const getAgentDir = (): string => Pi.getAgentDir();
   const readFile = (path: string): string | undefined => {
@@ -77,7 +73,6 @@ export default function codexAppearance(pi: AppearanceAPI): void {
       throw error;
     }
   };
-  // One boot-time read from the same path activate() resolves.
   const bootWritePreview = loadConfig(getAgentDir(), readFile).config.writePreview;
 
   activate(pi, {

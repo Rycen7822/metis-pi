@@ -40,7 +40,6 @@ export interface InteractionSnapshot {
   thinkingMs: number; // union of intervals
   thinkingOpen: boolean;
   usage: UsageTotals;
-  /** Active tool calls (undefined when none). */
   tools: ActiveTools | undefined;
 }
 
@@ -59,7 +58,6 @@ export interface UiMetricsOptions {
 
 const OPEN_END = undefined;
 
-/** Union of possibly-overlapping closed intervals, in ms. */
 function unionMs(intervals: ThinkingInterval[], nowMs: number): number {
   const closed = intervals
     .map((i) => ({ start: i.startMs, end: i.endMs === OPEN_END ? nowMs : i.endMs }))
@@ -188,7 +186,6 @@ export class UiMetrics {
     if (toolCallId) this.#activeTools.delete(toolCallId);
   }
 
-  /** write args streaming detected (toolCall blocks in a message_update). */
   writeStreaming(): void {
     if (this.active && this.#phase !== "waiting-for-input") this.setPhase("writing");
   }

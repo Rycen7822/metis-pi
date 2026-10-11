@@ -60,7 +60,6 @@ export function renderExplorationImages(count: number, colorLevel: ColorLevel, s
   return `${dim}    ${count} image${count === 1 ? "" : "s"}${suffix}\x1b[39m`;
 }
 
-/** All-in-one render for ungrouped calls: header + own rows. */
 export function renderExplorationLines(
   render: ExplorationRender,
   colorLevel: ColorLevel,

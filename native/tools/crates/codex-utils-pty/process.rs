@@ -107,7 +107,6 @@ impl fmt::Debug for PtyHandles {
 /// there is no local `PtyHandles` instance to resize directly.
 type ResizeFn = Box<dyn FnMut(TerminalSize) -> anyhow::Result<()> + Send>;
 
-/// Handle for driving an interactive process (PTY or pipe).
 pub struct ProcessHandle {
     writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
@@ -172,12 +171,10 @@ impl ProcessHandle {
         writer_tx
     }
 
-    /// True if the child process has exited.
     pub fn has_exited(&self) -> bool {
         self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Returns the exit code if known.
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code.lock().ok().and_then(|guard| *guard)
     }
@@ -209,7 +206,6 @@ impl ProcessHandle {
         }
     }
 
-    /// Close the child's stdin channel.
     pub fn close_stdin(&self) {
         if let Ok(mut writer_tx) = self.writer_tx.lock() {
             writer_tx.take();
@@ -275,7 +271,6 @@ impl Drop for ProcessHandle {
     }
 }
 
-/// Adapts a closure into a `ChildTerminator` implementation.
 struct ClosureTerminator {
     inner: Option<Box<dyn FnMut() + Send + Sync>>,
     #[cfg(windows)]
@@ -315,7 +310,6 @@ fn resize_raw_pty(raw_fd: RawFd, size: TerminalSize) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Combine split stdout/stderr receivers into a single broadcast receiver.
 pub fn combine_output_receivers(
     mut stdout_rx: mpsc::Receiver<Vec<u8>>,
     mut stderr_rx: mpsc::Receiver<Vec<u8>>,
@@ -350,7 +344,6 @@ pub fn combine_output_receivers(
     combined_rx
 }
 
-/// Return value from PTY or pipe spawn helpers.
 #[derive(Debug)]
 pub struct SpawnedProcess {
     pub session: ProcessHandle,
@@ -373,7 +366,6 @@ pub struct ProcessDriver {
     pub tty: bool,
 }
 
-/// Build a `SpawnedProcess` from a driver that supplies stdin/output/exit channels.
 pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
     let ProcessDriver {
         writer_tx,

@@ -54,7 +54,6 @@ test("failure output is visible even when collapsed", () => {
   const text = formatResult("write", result("permission denied"), {}, theme, { isError: true });
   assert.match(text, /permission denied/);
   assert.match(formatResult("edit", result(""), {}, theme, { isError: true }), /Tool failed/);
-  // Multiple text blocks all survive formatting.
   const multi = formatResult("read", { content: [{ type: "text", text: "ONE" }, { type: "text", text: "TWO" }] }, { expanded: true }, theme, {});
   assert.match(multi, /ONE/);
   assert.match(multi, /TWO/);
@@ -163,6 +162,5 @@ test("syntax highlighting failures fall back without suppressing the command", (
   const paint = () => { throw new Error("unsupported language"); };
   const r = makeRenderers(text => new FakeText(text), () => "expand", paint);
   assert.match(r.bash.renderCall({ command: "echo hello" }, theme, { isPartial: false }).render(80).join("\n"), /echo hello/);
-  // Native PowerShell commands receive the same compact execution view.
   assert.match(call("powershell", { command: "Get-Location" }, { isPartial: false }), /• Ran Get-Location/);
 });

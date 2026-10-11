@@ -12,7 +12,6 @@ export function isPerBatchSummaryMessage(msg: any): boolean {
   return msg.role === "custom" && msg.customType === CUSTOM_TYPE_SUMMARY;
 }
 
-/** Refs a per-batch summary message carries, as (toolCallId, resultTimestamp) pairs. */
 function summaryRefs(msg: any): { toolCallId: string; resultTimestamp?: number }[] {
   return msg.details?.toolCallRefs ?? [];
 }
@@ -124,7 +123,6 @@ export function applyChainCompressions(
     }
   }
 
-  // 1. resolve every entry to a range; unresolved entries contribute nothing
   const resolved: { entry: SingleChainCompressionEntry; startIndex: number; endIndex: number }[] = [];
   for (const entry of chainEntries) {
     const range = resolveRange(entry, messages);
@@ -139,8 +137,6 @@ export function applyChainCompressions(
     resolved.push({ entry, ...range });
   }
 
-  // 2. drop entries nested inside another entry's range, and de-duplicate
-  //    entries that resolved to the same startIndex (one synthetic per slot)
   const accepted: typeof resolved = [];
   const claimedStart = new Set<number>();
   for (const candidate of resolved) {
@@ -167,7 +163,6 @@ export function applyChainCompressions(
 
   if (accepted.length === 0) return messages;
 
-  // 3. index sets + per-entry facts
   const dropIndices = new Set<number>();
   const stripAtIndex = new Set<number>();
   const insertAfterIndex = new Map<number, { synthetic: any; blockId: string }>();

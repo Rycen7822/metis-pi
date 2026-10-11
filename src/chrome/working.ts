@@ -45,13 +45,11 @@ export const WORKING_WIDGET_KEY = "metis-pi:working";
 export const INTERRUPT_HINT = "esc to interrupt";
 
 export interface WorkingFrame {
-  /** Phase label inside the parens. */
   message: string;
   details: string[];
   tool: string | undefined;
 }
 
-/** Pure segment builder (testable, no colors). */
 export function workingFrame(s: WorkingSnapshotWithUsage, show: WorkingShow): WorkingFrame {
   const message = s.phase === "writing" ? "Writing" : s.phase === "waiting-for-input" ? "Waiting for input" : "Working";
   const details: string[] = [];
@@ -85,10 +83,9 @@ export interface WorkingSnapshotWithUsage extends WorkingSnapshot {
 // sub-cell intensity flow — high frame rate ≠ fast sweep.
 const SHIMMER_TRAIL = 5; // comet trail length in cells behind the head
 const SHIMMER_CELLS_PER_FRAME = 0.25; // sweep speed (4 frames per cell @32ms)
-const SHIMMER_PAUSE_FRAMES = 16; // rest frames after the wave exits
+const SHIMMER_PAUSE_FRAMES = 16;
 const BULLET_STEP_FRAMES = 2; // bullet brightness holds ~2 frames
 
-/** Head→trail gradient ramp (truecolor; blue accent, 8 levels). */
 const SHIMMER_RAMP: ReadonlyArray<readonly [number, number, number]> = [
   [205, 228, 255],
   [178, 210, 254],
@@ -139,9 +136,7 @@ export interface WorkingComponentInput {
   getAnimation: () => WorkingAnimation;
   /** Request a host frame from the animation timer (never in render). */
   requestRender: () => void;
-  /** Color level kind for the degradation ladder. */
   colorKind: "truecolor" | "ansi256" | "ansi16" | "none";
-  /** Bullet/message painters (accent/dim). */
   paint: (text: string, tone: "accent" | "dim" | "normal") => string;
   /** Injectable scheduler for tests (default: setInterval + unref). */
   schedule?: (fn: () => void, ms: number) => () => void;
@@ -199,11 +194,8 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
       const f = workingFrame(snapshot, input.getShow());
       const { bulletStep, head } = shimmerPhase(frame, f.message.length);
 
-      // Bullet: subtle intensity pulse (truecolor only; else static accent).
       const animated = input.colorKind === "truecolor" && input.getAnimation().enabled;
       const bullet = animated ? bulletPulse(bulletStep) : input.paint("•", "accent");
-      // Message word with a 3-cell brightness window sweeping left→right
-      // (truecolor only); static accent-adjacent text otherwise.
       const message = animated ? shimmerText(f.message, head, input.paint) : input.paint(f.message, "normal");
 
       // Codex rhythm: `• Working (details) · tool` — each span painted
@@ -239,7 +231,6 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
 }
 
 function bulletPulse(step: number): string {
-  // 3 brightness steps around the accent hue — restrained, no rainbow.
   const shades = ["\x1b[38;2;124;130;150m", "\x1b[38;2;137;180;250m", "\x1b[38;2;180;190;254m", "\x1b[38;2;137;180;250m"];
   const shade = shades[step] ?? "\x1b[38;2;137;180;250m";
   return `${shade}•\x1b[39m`;

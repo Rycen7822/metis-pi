@@ -1,4 +1,3 @@
-// Goal entry: commands, tools, refresh ownership, accounting and continuation.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createEventBus } from "@earendil-works/pi-coding-agent";

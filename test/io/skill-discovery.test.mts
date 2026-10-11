@@ -1,4 +1,3 @@
-// Skill discovery uses isolated directories, never the user's HOME or settings.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";

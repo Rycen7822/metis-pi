@@ -37,7 +37,6 @@ export interface FooterSnapshot {
   speed: OutputSpeedSample | undefined;
   /** Working-tree change counts vs HEAD; undefined = not a repo / unreadable. */
   changes: GitChangeStat | undefined;
-  /** Snapshot revision. */
   revision: number;
 }
 
@@ -96,7 +95,6 @@ function wrapFields(fields: Segment[][], width: number): Segment[][] {
   return rows;
 }
 
-/** Pure layout: model → effort → provider → cwd → context → I/O → cache. */
 export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: number, branch: string | undefined): Segment[][] {
   if (!Number.isFinite(width) || width <= 2) return [];
 
@@ -152,8 +150,6 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
 
   return wrapFields(fields, width);
 }
-
-// ---------- component ----------
 
 export function createFooterComponent(
   deps: FooterDeps,

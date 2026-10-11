@@ -42,7 +42,6 @@ export interface ExplorationPlan {
 /** Stable identity of one logical assistant message in this display stream. */
 export type MessageViewKey = string;
 
-/** One contiguous run of same-kind content (text or thinking) in a message. */
 export interface TextRunPlan {
   readonly separatorBefore: boolean;
 }
@@ -112,13 +111,11 @@ export function assistantHasVisibleText(message: TranscriptEvent["message"]): bo
   return message.content.some((block) => block.type === "text" && !!block.text?.trim());
 }
 
-/** True when a message contains any visible thinking content. */
 export function assistantHasVisibleThinking(message: TranscriptEvent["message"]): boolean {
   if (!message || message.role !== "assistant") return false;
   return message.content.some((block) => block.type === "thinking" && !!block.thinking?.trim());
 }
 
-/** Content-shape runs of one message: contiguous same-kind blocks. */
 export interface ThinkingRunSlot {
   readonly runIndex: number;
   readonly firstContentIndex: number;
@@ -137,7 +134,6 @@ export interface ContentBlockLike {
 
 export interface SemanticRun {
   kind: "text" | "thinking";
-  /** Index of the run's first content block. */
   firstContentIndex: number;
   /** The run has visible content: a non-empty text block (text run) or at
    * least one non-empty thinking block (thinking run). */
@@ -482,7 +478,6 @@ export class TranscriptState {
     };
   }
 
-  /** One thinking run's lifecycle for a message (host runIndex semantics). */
   thinkingRunPlan(messageKey: MessageViewKey, runIndex: number): ThinkingRunPlan | undefined {
     const plan = this.messagePlans.get(messageKey);
     const state = plan?.thinkingRuns[runIndex];

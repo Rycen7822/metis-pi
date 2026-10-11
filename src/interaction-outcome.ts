@@ -44,7 +44,6 @@ const OUTCOME_BY_STOP: Record<string, { outcome: Exclude<InteractionOutcome, "un
 
 export class InteractionOutcomeTracker {
   #attempt = 0;
-  /** attempt seq → terminal outcome for that attempt. */
   #terminals = new Map<number, { outcome: Exclude<InteractionOutcome, "unknown">; evidence: TerminalEvidence }>();
   #toolErrors = 0;
   #frozen: OutcomeVerdict | undefined;

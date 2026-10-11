@@ -1,5 +1,3 @@
-// Multi-skill input uses Pi's loaded resource registry. Input parsing, folding,
-// unknown-token preservation and the plain-input fast path live in skill-input.
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { stripFrontmatter, type ExtensionAPI } from "@earendil-works/pi-coding-agent";

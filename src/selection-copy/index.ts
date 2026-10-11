@@ -378,12 +378,7 @@ function scrollContentLinesOf(tui: AltScreenLike, scrollView: unknown): readonly
   return box?.scrollContentLines;
 }
 
-// ---------------------------------------------------------------------------
-// Editor Ctrl+C routing
-// ---------------------------------------------------------------------------
-
 export interface SelectionCopyEditorHost {
-  /** Host keybindings manager (structural access). */
   keybindings?: { matches?: (data: string, action: string) => boolean };
   /** The live TUI instance (Editor stores it as `tui`). */
   tui?: AltScreenLike;

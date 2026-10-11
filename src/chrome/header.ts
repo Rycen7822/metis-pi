@@ -34,10 +34,8 @@ export function createHeaderComponent(deps: HeaderDeps, theme: { fg?: (key: stri
       return headerLines(deps).map((line) => painter("dim", clipLine(line, width)));
     },
     invalidate(): void {
-      // static
     },
     dispose(): void {
-      // static
     },
   };
 }

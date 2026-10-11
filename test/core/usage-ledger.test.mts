@@ -1,5 +1,3 @@
-// usage-ledger.test.mts — session-scope usage ledger: scope math, dedup,
-// replacement, rebuild. Spec 11.2.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { UsageLedger, cacheHitRate, sanitizeUsage } from "../../src/usage-ledger.ts";
@@ -22,14 +20,12 @@ test("one ledger owns confirmations, corrections, weighted totals and session re
     assert.equal(totals.cacheRead, cacheRead);
     assert.equal(ledger.confirmedCount, 1, "replays and final corrections replace one request");
   }
-  // r2: input=4000 output=200 cacheRead=1000 cacheWrite=0
   ledger.confirm("test:r2", U(4000, 200, 1000, 0));
   const totals = ledger.totals();
   assert.deepEqual(
     { input: totals.input, output: totals.output, cacheRead: totals.cacheRead, cacheWrite: totals.cacheWrite },
     { input: 5000, output: 300, cacheRead: 10000, cacheWrite: 0 },
   );
-  // cache(last) = 1000/(4000+1000) = 20%
   assert.equal(Math.round(ledger.cacheRateLast()! * 10) / 10, 20);
   // cache(session) = 10000/15000 = 66.7% (weighted — NOT the 55% average)
   assert.equal(Math.round(cacheHitRate(ledger.totals())! * 10) / 10, 66.7);
@@ -39,7 +35,6 @@ test("one ledger owns confirmations, corrections, weighted totals and session re
   assert.equal(ledger.totals().input, 6000, "an earlier request can be corrected after totals were read");
   assert.equal(ledger.cacheRateLast(), 20, "correcting an older request does not make it the latest");
 
-  // Rebuild replaces a live ledger, excludes custom entries and includes compaction usage.
   ledger.rebuild([
     { type: "custom", customType: SUMMARY_CUSTOM_TYPE, id: "c1", usage: U(9999, 9999) },
     { type: "custom", customType: "someone-else:state", id: "c2", usage: U(9999, 9999) },

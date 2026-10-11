@@ -1,4 +1,3 @@
-/** Streamable HTTP: one deadline across redirects, response body and parsing. */
 import { McpConnection, CancelledError, MODERN_VERSION, LEGACY_INIT, MAX_RESULT_TEXT,
   encodeMcpHeaderValue, rpcResult, assertDiscoverResult, classifyProtocolError, RpcError, HttpRpcError, StaleSessionError,
   type JsonRpcResponse, type HeaderPlanEntry } from "./connection.ts";
@@ -42,7 +41,7 @@ export class HttpConnection extends McpConnection {
       if (method) headers["mcp-method"] = method;
       if (method === "tools/call" && toolName) headers["mcp-name"] = encodeMcpHeaderValue(toolName);
     } else {
-      if (this.negotiatedVersion) headers["mcp-protocol-version"] = this.negotiatedVersion;  // negotiated at initialize
+      if (this.negotiatedVersion) headers["mcp-protocol-version"] = this.negotiatedVersion;
       if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
     }
     if (paramHeaders) Object.assign(headers, paramHeaders);  // Mcp-Param-* from the tool's x-mcp-header plan
@@ -62,7 +61,7 @@ export class HttpConnection extends McpConnection {
         yield value;
       }
     } finally {
-      try { await reader.cancel(); } catch { /* ignore */ }
+      try { await reader.cancel(); } catch {}
     }
   }
 
@@ -75,7 +74,7 @@ export class HttpConnection extends McpConnection {
   }
 
   private async discard(response: Response): Promise<void> {
-    try { await response.body?.cancel(); } catch { /* already consumed or closed */ }
+    try { await response.body?.cancel(); } catch {}
   }
 
   private async parseSse(response: Response, id: number): Promise<unknown> {
@@ -324,7 +323,7 @@ export class HttpConnection extends McpConnection {
           redirect: "manual",  // session termination must never leak to another origin
           signal: AbortSignal.timeout(2000),
         }).then(r => { void r.body?.cancel(); }).catch(() => { });
-      } catch { /* ignore */ }
+      } catch {}
     }
     this.sessionId = null;
   }

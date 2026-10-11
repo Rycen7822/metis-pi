@@ -5,7 +5,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { InteractionOutcomeTracker } from "../../src/interaction-outcome.ts";
 
-// Literal terminal verdicts; each row is one or two actual assistant attempts.
 for (const [stops, outcome, evidence, toolErrors] of [
   [["stop"], "completed", "assistant-stop", 1],
   [["error"], "failed", "assistant-error", 0],
@@ -34,6 +33,6 @@ test("settled with no assistant evidence → unknown, never guessed success", ()
   const t = new InteractionOutcomeTracker();
   assert.equal(t.freeze().outcome, "unknown");
   const t2 = new InteractionOutcomeTracker();
-  t2.messageStart("user"); // user messages are not attempts
+  t2.messageStart("user");
   assert.equal(t2.freeze().outcome, "unknown");
 });

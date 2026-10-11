@@ -1,4 +1,3 @@
-// Copy resource contracts: rebuild budgets and no additional native render pass.
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
@@ -48,7 +47,7 @@ test("container alignment resolves child products WITHOUT re-rendering children"
     new Tui.Markdown("steady child content", 0, 0, theme, undefined, {}),
     new Tui.Text("a label", 1, 0),
   ));
-  chat.render(60); // first pass: builds products
+  chat.render(60);
 
   // Observe both leaves in the same frame; node:test restores both prototype methods.
   const renders = [Tui.Markdown, Tui.Text].map((Component) => t.mock.method(Component.prototype, "render"));

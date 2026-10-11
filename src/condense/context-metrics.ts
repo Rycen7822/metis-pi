@@ -46,7 +46,6 @@ export function computeContextMetrics(
     return { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
   }
 
-  // ── Open segment: strictly after the last text-only assistant ──────────
   let lastTextOnlyIdx = -1;
   for (let i = 0; i < branch.length; i++) {
     if (isTextOnlyAssistant(branch[i])) lastTextOnlyIdx = i;
@@ -63,7 +62,6 @@ export function computeContextMetrics(
   }
   const openCycleThinkingTokens = Math.round(thinkingChars / 4);
 
-  // ── Largest chain share ─────────────────────────────────────────────────
   const branchChars = branch.map(charsOf);
   const sumChars = (start: number, end: number): number => {
     let sum = 0;
@@ -105,7 +103,6 @@ export function computeContextMetrics(
   const numerator = Math.max(largestClosedChainChars, openSegmentChars);
   const largestChainSharePct = totalChars === 0 ? 0 : Math.round((100 * numerator) / totalChars);
 
-  // ── Frontier gap ─────────────────────────────────────────────────────────
   // Exclusion is positional: only toolResults belonging to the boundary turn's
   // own calls (up to and including the last-attempted call) are excluded.
   // Ids are only unique per turn (see occurrence-key.ts), so a later turn may

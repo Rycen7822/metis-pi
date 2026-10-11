@@ -1,4 +1,3 @@
-// Fullscreen contracts own gutters, native hit geometry and layout leases.
 import test from "node:test";
 import assert from "node:assert/strict";
 

@@ -50,15 +50,9 @@ export interface DiagnosticsDeps {
   hasSurfaceBinding: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Small formatting primitives
-
 const fmt = (v: unknown): string => (v === undefined || v === null ? "—" : String(v));
 const pct = (x: number): number => Math.round(x * 10) / 10;
 const seconds = (ms: number): number => Math.round(ms / 1000);
-
-// ---------------------------------------------------------------------------
-// Section builders (each returns one line unless named ...Lines)
 
 const composerLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
   const surface = deps.chrome.surfaceApplied
@@ -331,8 +325,6 @@ const FOOTER_SOURCES_LINE =
   "  footer: model source=live ctx (composer surface) context " +
   "source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd " +
   "source=ctx.cwd";
-
-// ---------------------------------------------------------------------------
 
 /** Register the `/codex-ui` command (best-effort: absent host API → no-op). */
 export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {

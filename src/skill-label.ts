@@ -28,13 +28,11 @@ import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
 const NESTED_SKILL = /<skill\s+name="([^"]+)"/g;
 const LABEL_TOKEN = "[skill]";
 
-/** The slice of the host component this patch relies on. */
 export interface SkillLabelComponent {
   skillBlock?: { name?: unknown; content?: unknown };
   children?: unknown[];
 }
 
-/** A pi-tui Text/Markdown child: the patch needs both halves of the text API. */
 interface LabelChild {
   text?: unknown;
   setText?: (text: string) => void;
@@ -47,7 +45,6 @@ interface LabelChild {
  */
 const MAX_LABEL_DEPTH = 3;
 
-/** Children of a pi-tui node: containers expose `children`, `MouseRegion` exposes `child`. */
 function childNodes(node: unknown): unknown[] {
   if (node === null || typeof node !== "object") return [];
   const children = (node as { children?: unknown }).children;

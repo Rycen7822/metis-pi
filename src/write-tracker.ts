@@ -24,7 +24,6 @@ export interface WriteDiff {
   readonly reason?: string;
 }
 
-/** Guardrails: bounded reads and bounded diffs (Codex highlight limits). */
 const MAX_SNAPSHOT_BYTES = 512 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
 const MAX_DIFF_LINES = 10_000;
@@ -286,7 +285,6 @@ export function buildDiffRows(beforeText: string, afterText: string): { rows: Di
   };
 }
 
-/** All-insert rows for a new file (Codex FileChange::Add). */
 export function buildAddRows(content: string): readonly DiffRow[] {
   const lines = toLines(normalizeLf(content));
   return lines.map((text, index) => ({ kind: "add" as const, newNumber: index + 1, lineNumber: index + 1, content: text }));

@@ -32,7 +32,6 @@ export class PeekScroll {
   #top = 0;
   #rendered: PeekWindow = { top: 0, above: 0, below: 0 };
 
-  /** Resolve the window for a render of `total` rows. */
   resolve(total: number, windowLines: number): PeekWindow {
     const window = Math.max(1, Math.trunc(windowLines));
     const max = Math.max(0, total - window);

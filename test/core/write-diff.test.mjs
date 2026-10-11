@@ -1,4 +1,3 @@
-// Diff rules and resource bounds use literal snapshots and independently counted minimal edits.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { computeWriteDiff, buildDiffRows } from "../../src/write-tracker.ts";

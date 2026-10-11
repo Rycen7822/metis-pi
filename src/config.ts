@@ -10,7 +10,6 @@ export interface AppearanceConfig {
   /** Working widget segments + animation. `elapsed:false` removes ONLY the
    * duration — thought/tool keep updating. */
   working: { elapsed: boolean; thought: boolean; tool: boolean; tokens: boolean; animation: boolean; animationIntervalMs: number };
-  /** Footer detail lines. */
   footer: { enabled: boolean; details: boolean; showCache: boolean; showChanges: boolean; showSpeed: boolean };
   summary: { enabled: boolean; persist: boolean };
   /** Selection copy (fullscreen TUI). Ctrl+C copies the selection instead of
@@ -30,7 +29,6 @@ export interface ConfigLoadResult {
   config: AppearanceConfig;
   /** Human-readable problems with the user's file (empty when pristine/default). */
   problems: string[];
-  /** Whether a user file existed at all. */
   present: boolean;
 }
 
@@ -137,7 +135,6 @@ function validateConfig(raw: unknown, problems: string[]): AppearanceConfig {
   return cfg;
 }
 
-/** Load the config from the agent dir. `readFile` is injectable for tests. */
 export function loadConfig(
   agentDir: string | undefined,
   readFile: (path: string) => string | undefined = () => undefined,

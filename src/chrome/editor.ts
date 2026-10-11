@@ -16,7 +16,6 @@ import { CODEX_CYAN_RGB } from "../palette.ts";
 import { isSkillPrefixOnly } from "../skill-tokens.ts";
 import { CURSOR_MARKER } from "../surface.ts";
 
-/** Minimal structural types for the host pieces we touch (no imports). */
 export interface CodexEditorRowHost {
   borderColor: (str: string) => string;
   paddingX: number;
@@ -110,7 +109,7 @@ function revealCursorCharacter(row: string): string {
 function forceSkillCompletion(editor: CodexEditorRowHost, data: string): void {
   if (data !== "/") return;
   if (typeof editor.tryTriggerAutocomplete !== "function") return;
-  if (editor.isShowingAutocomplete?.() === true) return; // menu already live
+  if (editor.isShowingAutocomplete?.() === true) return;
   const cursor = editor.getCursor?.();
   const line = cursor ? (editor.getLines?.() ?? [])[cursor.line] : undefined;
   if (cursor === undefined || line === undefined) return;

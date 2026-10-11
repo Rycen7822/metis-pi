@@ -255,7 +255,6 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
         if (next !== previous) {
           if (!displayed.has(this)) {
             rows.add(new WeakRef(this));
-            // Keep rows weak; sweep dead refs occasionally.
             if (rows.size % 256 === 0) for (const ref of rows) if (!ref.deref()) rows.delete(ref);
           }
           displayed.set(this, next);

@@ -237,7 +237,6 @@ export async function compressEligible(
 
   const skipped: CompressEligibleResult["skipped"] = [];
 
-  // Report already-compressed closed chains for observability.
   for (const chain of chains) {
     if (chain.finalAssistantTimestamp !== null && alreadyCompressedTimestamps.has(chain.startUserTimestamp)) {
       skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "already-compressed" });

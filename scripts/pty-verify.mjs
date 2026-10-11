@@ -66,7 +66,6 @@ const ISOLATED_ENV = { ...process.env, HOME: HOME_DIR };
 const toolCall = (id, name, args, index = 0) => ({
   index, id, type: "function", function: { name, arguments: JSON.stringify(args) },
 });
-// ---------- mock provider ----------
 // Journeys supply response data; this transport never interprets prompts or tool history.
 let lastRequest;
 const responses = [];
@@ -141,7 +140,6 @@ const server = http.createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const PORT = server.address().port;
 
-// ---------- isolated agent config ----------
 fs.writeFileSync(path.join(AGENT_DIR, "models.json"), JSON.stringify({
   providers: {
     "pcx-mock": {
@@ -182,7 +180,6 @@ execFileSync(PI_BIN, ["install", path.resolve(new URL("..", import.meta.url).pat
   stdio: "pipe",
 });
 
-// ---------- tmux driving ----------
 const SESSION = `pcx-pty-${process.pid}`;
 const tmux = (args, options) => execFileSync("tmux", ["-L", SESSION, ...args], options);
 /** Both views capture the same scrollback; ANSI is needed only for visual attributes. */
@@ -235,11 +232,9 @@ const paneSize = () => {
 };
 const visibleRows = (frame) =>
   (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n").slice(-paneSize().h);
-/** Wait until `pattern` is no longer on screen (inverse of waitFor). */
 const waitGone = (pattern, timeoutMs, label) =>
   waitUntil((frame) => !pattern.test(visibleRows(frame).join("\n")) ? true : undefined,
     timeoutMs, `${label} to disappear`, 200);
-/** Wait until two consecutive captures are identical (streaming output settled). */
 const waitStableFrame = (timeoutMs = 15_000) => {
   let previous;
   return waitUntil((frame) => {
@@ -274,7 +269,7 @@ const waitForVisible = (pattern, timeoutMs, label) =>
 
 /** Start a fresh TUI for each journey using one isolated tmux session. */
 const bootPi = () => {
-  try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* not running */ }
+  try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { }
   tmux(["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
   tmux(["set-option", "-g", "mouse", "on"]);
   tmux(["set-option", "-g", "extended-keys", "on"]);
@@ -550,7 +545,7 @@ try {
   console.log(`PASS: ${[...selected].join(", ")}`);
   if (selected.has("E4")) console.log(`  clipboard: isolated sink received ${copiedChars} exact characters`);
 } finally {
-  try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { /* already gone */ }
+  try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { }
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });
 }

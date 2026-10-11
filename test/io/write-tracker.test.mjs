@@ -1,4 +1,3 @@
-// Write-tracker tests: honest diffs across all lifecycle and edge cases.
 // The tracker must never fabricate a diff — uncertainty is "unavailable".
 // New-API contract: trackStart/trackEnd carry the tool's sourceInfo; "write"
 // with anything but exact builtin ownership is never tracked.
@@ -65,7 +64,6 @@ test("binary pre-images and post-write deletion never produce a garbage diff", (
   const binChange = end("c");
   assert.equal(binChange.kind, "unavailable");
   assert.match(binChange.reason, /binary/);
-  // file deleted between write and end
   const goneTarget = file("gone.txt", "old\n");
   start("c2", goneTarget, "x\n");
   fs.rmSync(goneTarget);

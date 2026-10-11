@@ -27,7 +27,6 @@ export type ScalarValue = boolean | number | string | null;
 export type ScalarKind = "boolean" | "enum" | "integer" | "fraction";
 
 export interface ScalarRow {
-  /** SettingsList item id. */
   readonly id: string;
   /** Config location: a top-level key or "group.key". */
   readonly path: string;
@@ -461,12 +460,10 @@ export function scalarRow(id: string): ScalarRow {
   return row;
 }
 
-/** Option values in display order (the SettingsList cycle / legal command values). */
 export function optionValues(row: ScalarRow): string[] {
   return row.options.map((option) => option.value);
 }
 
-/** Display label of a field's current value (falls back to the raw value). */
 export function optionLabel(id: string, value: string): string {
   return scalarRow(id).options.find((option) => option.value === value)?.label ?? value;
 }
@@ -513,7 +510,6 @@ export function rowDescription(row: ScalarRow, config: ContextPruneConfig): stri
   return typeof row.description === "function" ? row.description(config) : row.description;
 }
 
-/** Resolve a "group.key" (or top-level key) path against a config object. */
 function pathValue(config: ContextPruneConfig, path: string): ScalarValue {
   const dot = path.indexOf(".");
   if (dot === -1) return config[path as keyof ContextPruneConfig] as ScalarValue;
@@ -521,7 +517,6 @@ function pathValue(config: ContextPruneConfig, path: string): ScalarValue {
   return group[path.slice(dot + 1)]!;
 }
 
-/** Preset whose value equals `value`, else the first preset. */
 function defaultPreset(options: readonly FieldOption[], value: ScalarValue): string {
   return options.find((option) => option.value === String(value))?.value ?? options[0]!.value;
 }

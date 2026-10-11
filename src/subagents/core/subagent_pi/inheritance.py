@@ -129,7 +129,7 @@ def collect_skills(codex_home: Path, raw: dict, project_cwd: str | None,
                 continue
             real = entry.resolve()
             if real in by_real:
-                continue  # already provided by project/profile source
+                continue
             label = entry.name
             if (entry / 'agents').is_dir():
                 diagnostics.append(Diagnostic('skills', label,
@@ -197,7 +197,7 @@ def scope_source_snapshot(home: Path, environ: dict) -> dict:
     MCP adapter). With the inheritance master switch off this binds only the
     worker environment/proxies: no Codex directory is read, so an invalid or missing
     CODEX_HOME cannot break a normal worker start."""
-    from .config import load_config  # local import: config owns the state home layout
+    from .config import load_config
     cfg = load_config(home)
     inh = cfg['inheritance']
     child_env = inh.get('child_env', [])

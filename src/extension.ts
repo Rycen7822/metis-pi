@@ -46,12 +46,10 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   assistantPrototype?: object;
   /** Pi InteractiveMode prototype (user message creation retains timestamps). */
   interactivePrototype?: object;
-  /** Build the live write call component (header + stage + preview body). */
   makeWriteCall?: (input: WritePreviewInput & { headerText: string }) => import("./tool-names.ts").Component | undefined;
 
   /** Host CustomEditor class for the chrome editor factory (index.ts only). */
   editorHost?: { CustomEditor: unknown };
-  /** Gray composer surface painters (index.ts, from real Tui helpers). */
   surface?: CodexSurfaceOps;
   /** The full ExtensionAPI object (for appendEntry / registerEntryRenderer / registerCommand). */
   api?: unknown;
@@ -61,15 +59,11 @@ export interface Bindings extends Partial<Pick<TranscriptAdapterInput,
   piVersion?: string;
   /** Read the agent config dir (host getAgentDir or ~/.pi/agent). */
   getAgentDir?: () => string | undefined;
-  /** Read a file (config loading; injected to keep tests filesystem-free). */
   readFile?: (path: string) => string | undefined;
-  /** Host TUI classes/primitives for the selection-copy system (index.ts). */
   selectionCopyHost?: SelectionCopyHost;
-  /** Native layout primitives for fullscreen gutters and bounded history. */
   fullscreenHost?: FullscreenLayoutHost;
 }
 
-/** Bounded store for completed write diffs (entry + total budget). */
 const MAX_WRITE_CHANGES = 64;
 
 /** Extract image-block count from a tool result WITHOUT copying payloads. */
@@ -83,7 +77,6 @@ function countImageBlocks(result: unknown): number {
   }
 }
 
-/** Normalize a host message into the state machine's read-only shape. */
 function toStateMessage(message: unknown): TranscriptEvent["message"] {
   if (!message || typeof message !== "object") return undefined;
   const record = message as Record<string, unknown>;
@@ -119,12 +112,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     transcript,
   };
 
-  // Data bridge + ledgers (all display data flows through these).
   const hostData = new HostData();
   const ledger = new UsageLedger();
   const outcome = new InteractionOutcomeTracker();
-  // Output speed: one measured window per assistant response (see
-  // output-speed.ts for the exact scope of the number).
   const outputSpeed = new OutputSpeedTracker({ now: () => performance.now() });
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
 
@@ -364,7 +354,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         makePeek: bindings.makePeek,
         makeClickable: bindings.makeClickable && ((input) => bindings.makeClickable!({
           ...input,
-          // Repaint the rebuilt host subtree after a view change.
           apply: (next) => { input.apply(next); requestRender(); },
         })),
         thinkingPolicy,
@@ -405,7 +394,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     hasSurfaceBinding: bindings.surface !== undefined,
   });
 
-  /** Look up a tool entry's sourceInfo (exact builtin ownership checks). */
   function sourceInfoFor(toolName: string): unknown {
     try {
       const entry = pi.getAllTools().find((tool) =>
@@ -499,7 +487,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         if (oldest !== undefined) session.writeChanges.delete(oldest);
       }
     }
-    // Image count from the real result content blocks (count only, no copy).
     const images = countImageBlocks(event.result);
     if (!event.parentToolCallId)
       transcript.apply({
@@ -522,7 +509,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (isUserMessage(message)) metrics.uiPromptEnd();
     const role = (message as Record<string, unknown> | undefined)?.role;
     if (typeof role === "string") outcome.messageStart(role);
-    // One speed window per assistant response (request sent → message_end).
     if (role === "assistant") outputSpeed.requestStart();
   });
   pi.on("message_update", (event) => {

@@ -72,7 +72,7 @@ class HostHarness:
             env[k] = v
         proc = subprocess.Popen([sys.executable, str(HERE / 'fake_mcp_http.py'), str(port)],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True)
-        proc.stdout.readline()  # ready
+        proc.stdout.readline()
         self.procs.append(proc)
         return {'proc': proc, 'log': Path(env['FAKE_MCP_HTTP_CALL_LOG']),
                 'events': Path(env['FAKE_MCP_HTTP_EVENTS']), 'url': f'http://127.0.0.1:{port}/mcp'}
@@ -175,7 +175,6 @@ class BridgeHostTests(BridgeHostCase):
         self.assertTrue(notice)
         self.assertNotIn('\ufffd', body)
 
-    # ---- happy paths ----
     def test_stdio_list_describe_call(self):
         srv = self.h.start_stdio()
         out = self.h.run_host([stdio_cfg(server_env=srv['env'])], [
@@ -183,7 +182,7 @@ class BridgeHostTests(BridgeHostCase):
             {'name': 'describe', 'action': 'describe', 'server': 'local', 'tool': 'echo'},
             {'name': 'call', 'action': 'call', 'server': 'local', 'tool': 'echo', 'args': {'text': 'abc', 'count': 2}, 'confirm': True},
         ])
-        self.assertEqual(out['receipt']['state'], 'ready')  # optional servers stay lazy
+        self.assertEqual(out['receipt']['state'], 'ready')
         self.assertTrue(out['registered'] and out['registered']['name'] == 'codex_mcp')
         listing = json.loads(next(r for r in out['results'] if r['step'] == 'list')['text'])
         self.assertEqual(listing['servers'][0]['policy']['approval_default'], 'prompt')
@@ -204,12 +203,11 @@ class BridgeHostTests(BridgeHostCase):
             {'name': 'call', 'action': 'call', 'server': 'web', 'tool': 'search', 'args': {'query': 'x'}, 'confirm': True},
         ])
         self.assertEqual(out['receipt']['state'], 'ready')
-        self.assertEqual(out['confirm_count'], 1)  # parent auto cannot waive the child confirmation
+        self.assertEqual(out['confirm_count'], 1)
         called = next(r for r in out['results'] if r['step'] == 'call')
         self.assertEqual(called['kind'], 'result')
         self.assertIn('handled', called['text'])
 
-    # ---- stdio failure modes (F03) ----
     def test_stdio_deadline_rejects_once(self):
         srv = self.h.start_stdio(mode='no_answer')
         out = self.h.run_host([stdio_cfg(server_env=srv['env'], tool_timeout_sec=2)], [
@@ -219,7 +217,6 @@ class BridgeHostTests(BridgeHostCase):
         err = out['results'][0]
         self.assertEqual(err['kind'], 'error')
         self.assertIn('timed out', err['message'])
-        # Exactly one request reached the server: no retry, no duplicate.
         self.assertEqual(len(self.h.calls(srv['log'])), 1)
     def test_stdio_rejects_matching_id_without_rpc_result(self):
         srv = self.h.start_stdio(mode='invalid_call_response')
@@ -291,7 +288,6 @@ class BridgeHostTests(BridgeHostCase):
         entry = next(s for s in out['receipt']['servers'] if s['name'] == 'core')
         self.assertEqual(entry['status'], 'failed')
         self.assertTrue(entry['required'])
-        # The broken server is not callable either.
         self.assertEqual(out['results'][0]['kind'], 'error')
     def test_http_hang_bounded(self):
         srv = self.h.start_http(mode='headers_then_hang')
@@ -303,7 +299,6 @@ class BridgeHostTests(BridgeHostCase):
         self.assertLess(elapsed, 20)  # deadline bounds the whole exchange
         self.assertEqual(out['results'][0]['kind'], 'error')
 
-    # ---- policy (F06) ----
     def test_confirmation_flow_and_child_overrides(self):
         srv = self.h.start_stdio()
         cfg = stdio_cfg(server_env=srv['env'], approval_default='prompt',
@@ -321,7 +316,6 @@ class BridgeHostTests(BridgeHostCase):
         self.assertEqual(by['auto_tool']['kind'], 'result')  # per-tool auto needs no confirm
         self.assertIn('denied', by['confirm_rejected']['text'])
         self.assertEqual(by['confirm_accepted']['kind'], 'result')
-        # delete_file was never sent; echo went out exactly once.
         calls = self.h.calls(srv['log'])
         self.assertNotIn('delete_file', ' '.join(calls))
         self.assertEqual([c for c in calls if c.startswith('echo:')], ['echo:{"text": "yes"}'])
@@ -346,7 +340,7 @@ class BridgeHostTests(BridgeHostCase):
         ])
         by = {r['step']: r for r in out['results']}
         self.assertEqual(by['describe_hidden']['kind'], 'error')
-        self.assertEqual(by['describe_denied']['kind'], 'error')  # not in allowlist
+        self.assertEqual(by['describe_denied']['kind'], 'error')
         self.assertEqual(by['describe_ok']['kind'], 'result')
     def test_recursion_refused_by_bridge(self):
         # F12 belt-and-braces: the bridge itself refuses the management binary.
@@ -372,9 +366,9 @@ class ReadChildPolicyTests(BridgeHostCase):
         srv, out = self.run_case({'allowed_tools': ['delete_file'], 'approval_default': 'auto'}, [
             {'name': 'call', 'action': 'call', 'server': 'local', 'tool': 'delete_file', 'args': {'path': 'x'}},
         ])
-        self.assertEqual(out['results'][0]['kind'], 'error')  # not callable at all
-        self.assertEqual(out['confirm_count'], 0)             # not even a confirmation offer
-        self.assertEqual(self.h.calls(srv['log']), [])        # zero server executions
+        self.assertEqual(out['results'][0]['kind'], 'error')
+        self.assertEqual(out['confirm_count'], 0)
+        self.assertEqual(self.h.calls(srv['log']), [])
 
     def test_read_child_per_tool_auto_without_readonly_hint(self):
         srv, out = self.run_case({'allowed_tools': ['unannounced'], 'approval_default': 'prompt',
@@ -399,9 +393,9 @@ class ReadChildPolicyTests(BridgeHostCase):
         by = {r['step']: r for r in out['results']}
         self.assertIn('denied', by['rejected']['text'])
         self.assertEqual(by['accepted']['kind'], 'result')
-        self.assertEqual(out['confirm_count'], 2)             # parent auto offered no waiver
+        self.assertEqual(out['confirm_count'], 2)
         calls = [c for c in self.h.calls(srv['log']) if c.startswith('status')]
-        self.assertEqual(len(calls), 1)                       # exactly the accepted one
+        self.assertEqual(len(calls), 1)
 
     def test_read_child_deny_and_empty_allowlist(self):
         for policy, expected_names in (
@@ -472,7 +466,7 @@ class DiscoveryFlowTests(BridgeHostCase):
         ], access='write')
         described = next(r for r in out2['results'] if r['step'] == 'describe')
         schema = described['details']['inputSchema']
-        self.assertEqual(schema['required'], ['text'])  # params built from the discovered schema
+        self.assertEqual(schema['required'], ['text'])
         called = next(r for r in out2['results'] if r['step'] == 'call')
         self.assertEqual(called['kind'], 'result')
         self.assertIn('hello', called['text'])
@@ -528,7 +522,7 @@ class DiscoveryFlowTests(BridgeHostCase):
         out = self.h.run_host([cfg], [{'name': 'catalog', 'action': 'list', 'server': 'local'}], access='read')
         catalog = json.loads(next(r for r in out['results'])['text'])
         names = [t['name'] for t in catalog['tools']]
-        self.assertNotIn('echo', names)      # denied
+        self.assertNotIn('echo', names)
         self.assertNotIn('delete_file', names)  # read child: not readOnly
         self.assertIn('status', names)       # readOnly + allowed
         srv_empty = self.h.start_stdio(hide='echo,delete_file,status,unannounced')
@@ -554,7 +548,7 @@ class DiscoveryFlowTests(BridgeHostCase):
         after_names = {t['name'] for t in after['tools']}
         self.assertIn('delete_file', before_names)
         self.assertNotIn('transferred', before_names)
-        self.assertIn('transferred', after_names)   # fresh fetch after the notification
+        self.assertIn('transferred', after_names)
         self.assertNotIn('delete_file', after_names)
 
     def test_single_server_failure_is_deterministic_and_isolated(self):
@@ -604,8 +598,8 @@ class HttpExchangeLifecycleTests(BridgeHostCase):
     def assert_reached_body_phase(self, srv):
         events = self.h.events(srv['events'])
         kinds = [e['event'] for e in events]
-        self.assertIn('call-received', kinds)   # the request actually arrived
-        self.assertIn('headers-sent', kinds)    # and headers were flushed
+        self.assertIn('call-received', kinds)
+        self.assertIn('headers-sent', kinds)
         return kinds
 
     def test_json_body_hang_hits_deadline(self):
@@ -620,10 +614,10 @@ class HttpExchangeLifecycleTests(BridgeHostCase):
         err = out['results'][0]
         self.assertEqual(err['kind'], 'error')
         self.assertIn('timed out', err['message'])
-        self.assertIn('outcome is unknown', err['message'])  # the call WAS sent
+        self.assertIn('outcome is unknown', err['message'])
         self.assertLess(elapsed, 6)                # deadline bound, not the test timeout
         self.assertGreaterEqual(elapsed, 0.9)      # it really waited for the exchange
-        self.assertEqual(len(self.h.calls(srv['log'])), 1)  # sent once, never retried
+        self.assertEqual(len(self.h.calls(srv['log'])), 1)
 
     def test_sse_body_hang_hits_deadline(self):
         srv = self.h.start_http(mode='hang_body_sse')
@@ -673,7 +667,7 @@ class HttpExchangeLifecycleTests(BridgeHostCase):
         self.assertEqual(err['name'], 'CancelledError')
         self.assertIn('outcome is unknown', err['message'])
         self.assertLess(elapsed, 5)
-        self.assertEqual(len(self.h.calls(srv['log'])), 1)  # cancel is not a retry
+        self.assertEqual(len(self.h.calls(srv['log'])), 1)
 
     def test_connection_close_ends_body_wait_and_rejects_until_reconnect(self):
         srv = self.h.start_http(mode='hang_body_json')
@@ -705,7 +699,7 @@ class HttpExchangeLifecycleTests(BridgeHostCase):
         by = {r['step']: r for r in out['results']}
         self.assertEqual(by['a']['kind'], 'error')
         self.assertIn('connection was closed', by['a']['message'])
-        self.assertEqual(len(self.h.calls(srv['log'])), 1)  # the call reached the server once, never replayed
+        self.assertEqual(len(self.h.calls(srv['log'])), 1)
         kinds = [e['event'] for e in self.h.events(srv['events'])]
         self.assertIn('call-received', kinds)
         self.assertIn('headers-sent', kinds)  # the body phase was already hanging when close fired
@@ -766,13 +760,13 @@ class StdioTransportFailureTests(BridgeHostCase):
              'args': {'text': 'x'}, 'confirm': True},
         ], access='write', timeout=60)
         events = [e['event'] for e in self.h.events(srv['events'])]
-        self.assertIn('initialize-received', events)   # handshake got this far
-        self.assertIn('closing-stdin', events)         # the server really closed its read end
+        self.assertIn('initialize-received', events)
+        self.assertIn('closing-stdin', events)
         err = out['results'][0]
-        self.assertEqual(err['kind'], 'error')         # deterministic transport error
+        self.assertEqual(err['kind'], 'error')
         self.assertTrue('transport broken' in err['message'] or 'failed to send' in err['message']
                         or 'exited' in err['message'], err['message'])
-        self.assertEqual(self.h.calls(srv['log']), [])  # the tool call never reached the server
+        self.assertEqual(self.h.calls(srv['log']), [])
 
     def test_stdin_closed_after_catalog_makes_next_call_fail_deterministically(self):
         srv = self.h.start_stdio(mode='close_stdin_after_list')
@@ -787,7 +781,7 @@ class StdioTransportFailureTests(BridgeHostCase):
         self.assertEqual(err['kind'], 'error')
         self.assertTrue('transport broken' in err['message'] or 'failed to send' in err['message'],
                         err['message'])
-        self.assertEqual(self.h.calls(srv['log']), [])  # the call never reached the server
+        self.assertEqual(self.h.calls(srv['log']), [])
 
     def test_cancel_notification_epipe_stays_a_cancellation(self):
         # The server holds the call, closes its read end, and the client's
@@ -801,7 +795,7 @@ class StdioTransportFailureTests(BridgeHostCase):
             {'name': 'await', 'awaitPending': True},
         ], access='write', timeout=60)
         events = [e['event'] for e in self.h.events(srv['events'])]
-        self.assertIn('call-received', events)         # the call WAS delivered
+        self.assertIn('call-received', events)
         self.assertIn('closing-stdin', events)         # read end closed before the cancel write
         err = out['results'][0]
         self.assertEqual(err['kind'], 'error')
@@ -819,9 +813,9 @@ class StdioTransportFailureTests(BridgeHostCase):
         err = out['results'][0]
         self.assertEqual(err['kind'], 'error')
         self.assertEqual(err['name'], 'CancelledError')
-        self.assertIn('outcome is unknown', err['message'])  # not reported as success
+        self.assertIn('outcome is unknown', err['message'])
         events = [e['event'] for e in self.h.events(srv['events'])]
-        self.assertIn('cancelled-notification-received', events)  # best-effort notice arrived
+        self.assertIn('cancelled-notification-received', events)
 
     def test_server_exit_during_pending_call(self):
         srv = self.h.start_stdio(mode='die_during_call')
@@ -833,7 +827,7 @@ class StdioTransportFailureTests(BridgeHostCase):
         err = out['results'][0]
         self.assertEqual(err['kind'], 'error')
         self.assertIn('exited', err['message'])
-        self.assertEqual(self.h.calls(srv['log']), [])  # business counter untouched by the crash
+        self.assertEqual(self.h.calls(srv['log']), [])
 
     def test_close_during_pending_request_is_idempotent(self):
         srv = self.h.start_stdio(mode='no_answer')
@@ -948,9 +942,9 @@ class ModernProtocolTests(BridgeHostCase):
         self.assertEqual(res[0]['kind'], 'error')
         self.assertIn('outcome is unknown', res[0]['message'])
         kinds = [e['event'] for e in self.h.events(srv['events'])]
-        self.assertIn('call-received', kinds)   # the request actually arrived
-        self.assertIn('headers-sent', kinds)    # and headers were flushed
-        self.assertEqual(len(self.h.calls(srv['log'])), 1)  # exactly one server-side execution
+        self.assertIn('call-received', kinds)
+        self.assertIn('headers-sent', kinds)
+        self.assertEqual(len(self.h.calls(srv['log'])), 1)
 
     def test_bare_x_mcp_header_argument_is_an_ordinary_body_param(self):
         srv = self.h.start_http('modern')
@@ -1001,7 +995,7 @@ class XMcHeaderTests(BridgeHostCase):
         self.assertIn('hdr', names); self.assertIn('search', names)
         self.assertEqual(by['d']['kind'], 'error')
         self.assertIn('x-mcp-header', by['d']['message'])
-        self.assertEqual(by['c']['kind'], 'result')  # the server itself stays usable
+        self.assertEqual(by['c']['kind'], 'result')
         self.assertEqual([e for e in self.h.events(srv['events']) if e['event'] == 'strict-rejected'], [])
 
     def test_unsafe_integer_is_refused_and_control_value_is_encoded(self):
@@ -1013,12 +1007,12 @@ class XMcHeaderTests(BridgeHostCase):
              'args': {'trace_id': 'a\nb'}}], access='write')['results']
         by = {r['step']: r for r in res}
         self.assertEqual(by['n']['kind'], 'error'); self.assertIn('safe integer', by['n']['message'])
-        self.assertEqual(self.h.calls(srv['log']), ['hdr:{"trace_id": "a\\nb"}'])  # only the encoded call was sent
+        self.assertEqual(self.h.calls(srv['log']), ['hdr:{"trace_id": "a\\nb"}'])
         check = next(e for e in self.h.events(srv['events']) if e['event'] == 'hdr-check')
         self.assertTrue(check['match'])  # the newline value arrived as a decoded sentinel, body unchanged
 
     def test_legacy_connection_ignores_the_plan(self):
-        srv = self.h.start_http('legacy_only')  # auto falls back to the legacy handshake
+        srv = self.h.start_http('legacy_only')
         res = self.h.run_host([self.http_cfg(srv)], [
             {'name': 'call', 'action': 'call', 'server': 'web', 'tool': 'hdr',
              'args': {'trace_id': 't'}}], access='write')['results']
@@ -1212,10 +1206,10 @@ class HeaderE2eTests(BridgeHostCase):
         evs = self.h.events(srv['events'])
         check = next(e for e in evs if e['event'] == 'hdr-check')
         self.assertEqual(check['header'], 'mcp-param-region')
-        self.assertEqual(check['decoded'], 'us-west1')  # plain ASCII travels raw
+        self.assertEqual(check['decoded'], 'us-west1')
         self.assertTrue(check['match'])
         call = next(e for e in evs if e['event'] == 'call-received')
-        self.assertEqual(call['args'], args)  # the body keeps every argument unchanged
+        self.assertEqual(call['args'], args)
 
     def test_header_values_are_encoded_per_the_2026_spec(self):
         srv = self.h.start_http('modern')
@@ -1241,9 +1235,9 @@ class HeaderE2eTests(BridgeHostCase):
         req = next(e for e in self.h.events(srv['events'])
                    if e['event'] == 'request' and e['method'] == 'tools/call')
         self.assertEqual(req['mcp_name_header'],
-                         '=?base64?' + base64.b64encode('搜索'.encode()).decode() + '?=')  # header is the sentinel
+                         '=?base64?' + base64.b64encode('搜索'.encode()).decode() + '?=')
         call = next(e for e in self.h.events(srv['events']) if e['event'] == 'call-received')
-        self.assertEqual(call['tool'], '搜索')  # the body keeps the raw name
+        self.assertEqual(call['tool'], '搜索')
         self.assertNotIn('strict-rejected', [e['event'] for e in self.h.events(srv['events'])])
 
     def test_runtime_type_mismatch_is_refused_before_sending(self):
@@ -1255,7 +1249,7 @@ class HeaderE2eTests(BridgeHostCase):
         by = {r['step']: r for r in out}
         self.assertEqual(by['s']['kind'], 'error'); self.assertIn('is not a string', by['s']['message'])
         self.assertEqual(by['b']['kind'], 'error'); self.assertIn('is not a boolean', by['b']['message'])
-        self.assertEqual(self.h.calls(srv['log']), [])  # neither mismatched call reached the server
+        self.assertEqual(self.h.calls(srv['log']), [])
 
     def test_annotation_under_items_excludes_only_that_tool(self):
         srv = self.h.start_http('modern', extra={'FAKE_MCP_HEADER_TOOLS': '1'})
@@ -1267,11 +1261,11 @@ class HeaderE2eTests(BridgeHostCase):
             access='write')['results']
         by = {r['step']: r for r in out}
         names = [t['name'] for t in json.loads(by['l']['text'])['tools']]
-        self.assertNotIn('badhdr_items_nested', names)  # excluded from the catalog
+        self.assertNotIn('badhdr_items_nested', names)
         for step in ('d', 'c'):
             self.assertEqual(by[step]['kind'], 'error', step)
             self.assertIn('invalid x-mcp-header', by[step]['message'], step)
-        self.assertEqual(by['ok']['kind'], 'result')  # the server and its other tools stay usable
+        self.assertEqual(by['ok']['kind'], 'result')
 
 
 class RedirectTests(BridgeHostCase):
@@ -1289,9 +1283,9 @@ class RedirectTests(BridgeHostCase):
         self.assertEqual(out[0]['kind'], 'error')
         self.assertIn('cross-origin redirect', out[0]['message'])
         self.assertIn('no headers or body were sent', out[0]['message'])
-        self.assertEqual(self.h.events(b['events']), [])  # B received ZERO requests
-        self.assertEqual(self.h.calls(b['log']), [])  # tool body canary never reached B
-        self.assertEqual(self.h.calls(a['log']), [])  # A redirected before executing anything
+        self.assertEqual(self.h.events(b['events']), [])
+        self.assertEqual(self.h.calls(b['log']), [])
+        self.assertEqual(self.h.calls(a['log']), [])
         self.assertEqual([e for e in self.h.events(a['events']) if e['event'] == 'redirect-sent'][0]['status'], 307)
 
     def test_second_hop_cross_origin_is_rejected(self):
@@ -1302,7 +1296,7 @@ class RedirectTests(BridgeHostCase):
             access='write')['results']
         self.assertEqual(out[0]['kind'], 'error')
         self.assertIn('cross-origin redirect', out[0]['message'])
-        self.assertEqual(self.h.events(b['events']), [])  # the second hop never happened
+        self.assertEqual(self.h.events(b['events']), [])
         self.assertEqual(self.h.calls(a['log']), [])
 
     def test_redirect_loop_is_detected(self):
@@ -1321,15 +1315,15 @@ class RedirectTests(BridgeHostCase):
         self.assertEqual(out[0]['kind'], 'error')  # the fixture answers the GET with an error
         evs = [e['event'] for e in self.h.events(a['events'])]
         self.assertIn('redirect-sent', evs)
-        self.assertIn('get-received', evs)  # 303 was followed as GET
-        self.assertEqual(self.h.calls(a['log']), [])  # the tool body was dropped, never executed
+        self.assertIn('get-received', evs)
+        self.assertEqual(self.h.calls(a['log']), [])
 
     def test_same_origin_307_redirect_completes_and_executes_once(self):
         a = self.h.start_http('modern', extra={'FAKE_MCP_REDIRECT_PLAN': '307:/mcp2'})
         out = self.h.run_host([self.http_cfg(a)], [
             {'action': 'call', 'server': 'web', 'tool': 'search', 'args': {'query': 'x'}}], access='write')['results']
         self.assertEqual(out[0]['kind'], 'result', out[0].get('message'))
-        self.assertEqual(self.h.calls(a['log']), ['search:{"query": "x"}'])  # executed exactly once, not replayed
+        self.assertEqual(self.h.calls(a['log']), ['search:{"query": "x"}'])
         self.assertEqual(len([e for e in self.h.events(a['events']) if e['event'] == 'redirect-sent']), 1)
 
     def test_redirect_with_unfinished_body_releases_each_socket(self):
@@ -1350,5 +1344,5 @@ class RedirectTests(BridgeHostCase):
             {'action': 'call', 'server': 'web', 'tool': 'publish', 'args': {'body': 'b'}, 'confirm': True}],
             access='write')['results']
         self.assertEqual(out[0]['kind'], 'error')
-        self.assertIn('timed out', out[0]['message'])  # the shared deadline expired across the hop
-        self.assertEqual(self.h.calls(a['log']), ['publish:{"body": "b"}'])  # executed once, never replayed
+        self.assertIn('timed out', out[0]['message'])
+        self.assertEqual(self.h.calls(a['log']), ['publish:{"body": "b"}'])

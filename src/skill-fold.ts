@@ -28,14 +28,12 @@
 
 import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
 
-/** The slice of the host component this patch relies on. */
 export interface SkillFoldComponent {
   expanded: boolean;
   setExpanded(expanded: boolean): void;
   invalidate?(): void;
 }
 
-/** The slice of a pi-tui mouse event this patch inspects. */
 export interface SkillFoldMouseEvent {
   type?: string;
   button?: string;
@@ -48,7 +46,6 @@ export type SkillFoldMouseResult = { handled: true } | undefined;
 
 type MouseHandler = (this: SkillFoldComponent, event?: SkillFoldMouseEvent) => SkillFoldMouseResult;
 
-/** True when the event should toggle rather than select text. */
 const isToggleGesture = (event?: SkillFoldMouseEvent): boolean =>
   event?.button === "left" && event.shift !== true && event.ctrl !== true && event.alt !== true;
 

@@ -11,7 +11,6 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 export interface ModelSnapshot {
-  /** Real model id (always present on a valid host model). */
   id: string;
   /** Optional display name; id remains the default display. */
   name?: string;
@@ -201,7 +200,6 @@ export class HostData {
     return typeof this.#ctx?.sessionManager?.getEntries === "function";
   }
 
-  /** Live UI surface record (empty object when unbound). */
   get ui(): Record<string, unknown> {
     return this.#ctx?.ui ?? {};
   }

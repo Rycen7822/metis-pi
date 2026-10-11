@@ -112,13 +112,13 @@ class SkillCollection(unittest.TestCase):
         s=make_skill(self.home/'skills','alpha')
         selected,diag=collect_skills(self.home,{},None,[])
         self.assertEqual([Path(p) for p in selected],[s])
-        self.assertTrue((selected[0].startswith(str(self.home))))  # original location
+        self.assertTrue((selected[0].startswith(str(self.home))))
     def test_project_and_profile_dedup_by_realpath(self):
         proj=make_skill(self.base/'proj'/'.agents'/'skills','alpha')
         link=self.home/'skills'/'alpha'
         link.symlink_to(proj)
         selected,diag=collect_skills(self.home,{},str(self.base/'proj'),[str(proj)])
-        self.assertEqual(selected,[str(proj)])  # same real path stays single entry
+        self.assertEqual(selected,[str(proj)])
     def test_name_conflict_refuses_ambiguity(self):
         make_skill(self.home/'skills','alpha',front_name='dup')
         proj=make_skill(self.base/'proj'/'.agents'/'skills','beta',front_name='dup')
@@ -212,7 +212,7 @@ API_KEY = "k"
         self.assertEqual(len(servers),1)
         s=servers[0]
         self.assertEqual(s['protocol_mode'],'modern_2026_07_28')
-        self.assertNotIn('CODEX_MCP_PROTOCOL_VERSION',s['static_env'])  # marker consumed, never forwarded
+        self.assertNotIn('CODEX_MCP_PROTOCOL_VERSION',s['static_env'])
         self.assertEqual(s['static_env'],{'API_KEY':'k'})
         self.assertTrue(all('legacy' not in d.reason for d in diag))
 
@@ -249,8 +249,8 @@ command = "srv"
 CODEX_MCP_PROTOCOL_VERSION = "2026-07-28"
 '''
         servers,diag=parse_mcp_servers(self.home,tomllib.loads(config),'legacy_2025_06_18')
-        self.assertEqual(servers[0]['protocol_mode'],'legacy_2025_06_18')  # global override wins for the era
-        self.assertNotIn('CODEX_MCP_PROTOCOL_VERSION',servers[0]['static_env'])  # but the marker is still stripped
+        self.assertEqual(servers[0]['protocol_mode'],'legacy_2025_06_18')
+        self.assertNotIn('CODEX_MCP_PROTOCOL_VERSION',servers[0]['static_env'])
         self.assertTrue(any('legacy_2025_06_18 keeps this stdio server' in d.reason for d in diag))
 
     def test_timeout_fields_accept_floating_point_seconds(self):
@@ -308,7 +308,7 @@ tool_timeout_sec = "soon"
         servers,diag=self.parse(config)
         dispo={s['name']:s['disposition'] for s in servers}
         self.assertEqual(dispo['bad'],'failed'); self.assertEqual(dispo['off'],'disabled')
-        self.assertEqual(dispo['web'],'ok')  # unaffected servers continue
+        self.assertEqual(dispo['web'],'ok')
         self.assertTrue(any('unsupported config keys' in d.reason and d.name=='bad' for d in diag))
         self.assertTrue(any(d.name=='off' and 'disabled in codex config' in d.reason for d in diag))
     def test_oauth_and_helper_rejected(self):
@@ -388,7 +388,7 @@ output_token_limit = 100
 approval_mode = "banana"
 '''
         default,tools,denied,budgets=policy(cfg3)
-        self.assertNotIn('limited',denied)  # output_token_limit is now mapped, not denied
+        self.assertNotIn('limited',denied)
         self.assertEqual(budgets.get('limited'),400)  # 100 tokens -> conservative 4 bytes/token
         self.assertIn('weird',denied)
         self.assertEqual(tools,{})
@@ -406,7 +406,7 @@ approval_mode = "banana"
         self.assertEqual(cm.exception.code,'inheritance_required_server_failed')
         self.assertIn('core',cm.exception.message)  # message carries server names, not values
         self.assertIn('MISSING_VAR',servers[0]['reasons'][0])
-        self.assertEqual(servers[0]['disposition'],'failed')  # disposition recorded before raising
+        self.assertEqual(servers[0]['disposition'],'failed')
     def test_optional_missing_env_excluded_with_named_diagnostic(self):
         config='[mcp_servers.opt]\ncommand = "x"\nenv_vars = ["ABSENT_VAR"]\n'
         servers,_=self.parse(config)
@@ -419,7 +419,7 @@ approval_mode = "banana"
         self.assertEqual(servers[0]['bearer_token'],'tok')
         self.assertEqual(servers[0]['headers'],{'X-Static':'sv','X-Trace':'tr-1'})
     def test_read_child_diagnostics_do_not_mutate_policy(self):
-        servers,_=self.parse(HTTP_TOML)  # has explicit allowlist
+        servers,_=self.parse(HTTP_TOML)
         self.assertEqual(read_access_diagnostics(servers,'read'),[])
         no_list,_=self.parse('[mcp_servers.open]\ncommand = "x"\n')
         before=dumps(no_list)
@@ -431,7 +431,7 @@ approval_mode = "banana"
     def test_diagnostics_are_str_only(self):
         # F10: missing default skills dir previously put a Path object into the diagnostic.
         skills,diag=collect_skills(self.home,{},None,[])
-        dumps([d.as_dict() for d in diag])  # must not raise
+        dumps([d.as_dict() for d in diag])
         self.assertTrue(all(isinstance(d.as_dict()['name'],str) for d in diag))
     def test_capture_scope_env_is_minimal(self):
         (self.home/'config.toml').write_text(STDIO_TOML+'[mcp_servers.w2]\nurl="https://e.example"\nbearer_token_env_var="BT"\n')
@@ -504,7 +504,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cm.exception.code,'inheritance_required_server_failed')
         self.assertTrue(all(r[0] not in ('starting','running','queued') for r in self.run_rows()),
                         f'runs not terminal: {self.run_rows()}')
-        self.assertTrue(all(w.closed for w in self.rt.workers.values()))  # half-started workers are terminated
+        self.assertTrue(all(w.closed for w in self.rt.workers.values()))
         self.assertEqual(self.fake_prompt_count(),before+1)  # the failed run is recorded, never sent
         (self.codex/'config.toml').write_text(STDIO_TOML)
     def fake_prompt_count(self):
@@ -551,7 +551,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any('TOKEN_VAR' in d.get('reason','') for x in diag_events for d in x.get('diagnostics',[])))
         # No inherited configuration landed on disk; the codex source tree is untouched.
         after_codex=self.snapshot(self.codex)
-        self.assertEqual(before_codex,after_codex)  # codex source tree untouched
+        self.assertEqual(before_codex,after_codex)
         await self.mutation_close(s['agent_id'])
     async def mutation_close(self,aid):
         return await self.rt.dispatch('close',{'scope':self.scope,'agent_id':aid,'request_id':self.key()})
@@ -568,7 +568,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         return [json.loads(r['payload']) for r in self.rt.store.all(
             "SELECT payload FROM events WHERE agent_id=? AND type=? ORDER BY rowid",(aid,kind))]
     async def test_pi_skill_owns_a_duplicate_name_and_the_boot_records_it(self):
-        ambient=self.add_ambient_profile('alpha')  # same declared name as the codex skill
+        ambient=self.add_ambient_profile('alpha')
         s=await self.spawn(profile='ambient'); aid=s['agent_id']
         # Pi resolves the collision itself: its own skill is registered, the
         # inherited path was passed but never entered the registry. The record
@@ -614,7 +614,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         report=self.events_of(aid,'tool_surface')[-1]
         self.assertTrue(report['ok'])
         self.assertEqual(report['allowed'],'find,grep,ls,read')
-        self.assertEqual(report['builtins'],'find,grep,ls,read')   # applied == allowed, read back
+        self.assertEqual(report['builtins'],'find,grep,ls,read')
         self.assertEqual(report['expected'],report['builtins'])
         await self.mutation_close(aid)
     async def test_full_builtin_profile_needs_no_surface_report(self):
@@ -638,7 +638,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         report=self.events_of(aid,'tool_surface')[-1]
         self.assertFalse(report['ok']); self.assertEqual(report['reason'],'no-report')
         self.assertEqual(self.rt.store.agent(self.scope,aid)['state'],'crashed')
-        self.assertTrue(all(w.closed for w in self.rt.workers.values()))  # no unverified worker survives
+        self.assertTrue(all(w.closed for w in self.rt.workers.values()))
     async def test_mismatched_surface_report_fails_the_launch(self):
         with self.assertRaises(AgentError) as cm:
             await self.spawn(profile=self.restricted_profile(PI_TEST_SURFACE='mismatch'))
@@ -646,7 +646,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         aid=cm.exception.details['agent_id']
         report=self.events_of(aid,'tool_surface')[-1]
         self.assertFalse(report['ok'])
-        self.assertEqual(report['builtins'],'find,grep,ls')   # the child's real state, not the wish
+        self.assertEqual(report['builtins'],'find,grep,ls')
         self.assertEqual(report['expected'],'find,grep,ls,read')
         self.assertTrue(all(w.closed for w in self.rt.workers.values()))
     async def test_malformed_surface_report_fails_the_launch(self):
@@ -671,7 +671,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         s = await self.spawn(profile="reader-ext")
         aid = s["agent_id"]
         argv = json.loads((self.home / "agents" / aid / "launch.json").read_text())["argv"]
-        self.assertIn(str(ext), argv)  # profile extension loads in a read child
+        self.assertIn(str(ext), argv)
         await self.mutation_close(aid)
 
     async def test_canary_never_reaches_disk(self):
@@ -746,8 +746,8 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         )
         launch = json.loads((self.home / "agents" / s["agent_id"] / "launch.json").read_text())
         self.assertNotIn("--skill", launch["argv"])
-        self.assertNotIn(str(BRIDGE), launch["argv"])  # no inherited bridge
-        self.assertIn(str(SURFACE), launch["argv"])  # profile tool surface stays
+        self.assertNotIn(str(BRIDGE), launch["argv"])
+        self.assertIn(str(SURFACE), launch["argv"])
         await self.rt.dispatch("close", {"scope": self.scope, "agent_id": s["agent_id"], "request_id": self.key()})
 
     async def test_source_conflict_requires_explicit_rebind(self):
@@ -904,7 +904,6 @@ class RealPiBridge(unittest.IsolatedAsyncioTestCase):
         aid=s['agent_id']
         stderr=(self.home/'agents'/aid/'stderr.log').read_text()
         self.assertIn('subagent-pi-bridge ready servers=1',stderr)
-        # The daemon accepted the bridge receipt for this agent/generation.
         events=[json.loads(e['payload']) for e in self.rt.store.all(
             "SELECT payload FROM events WHERE agent_id=? AND type='bridge_receipt'",(aid,))]
         self.assertTrue(any(x.get('state')=='ready' and x.get('agent')==aid for x in events))
@@ -1058,11 +1057,11 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
             )
         ][-1]
         names = {p["name"]: p["path"] for p in record["pi_skills"]}
-        self.assertIn("pi-only", names)  # the directory the client bound was opened
+        self.assertIn("pi-only", names)
         self.assertIn("dup", names)
         for path in names.values():
             self.assertTrue(path.startswith(str(self.agent_dir)), path)
-        self.assertNotIn("fallback-only", names)  # HOME/.pi/agent was not the directory Pi used
+        self.assertNotIn("fallback-only", names)
         dup = [i for i in record["inherited"] if i["name"] == "dup"][0]
         self.assertEqual(dup["state"], "skipped")
         self.assertEqual(dup["kept"], str((self.agent_dir / "skills" / "dup" / "SKILL.md").resolve()))
@@ -1076,13 +1075,13 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
         probe_ext = self.write_probe_extension(override=("bash",))
         baseline = self.plain_pi_probe()
         self.assertIn("bash", self.active_tools(baseline))
-        self.assertEqual(self.tool_path(baseline, "bash"), str(probe_ext))  # the override really wins in ordinary Pi
+        self.assertEqual(self.tool_path(baseline, "bash"), str(probe_ext))
         s = await self.spawn("live-override-2")
         aid = s["agent_id"]
         stderr = self.stderr_of(aid)
         probe = json.loads(stderr.split("PROBE_TOOLS ", 1)[1].splitlines()[0])
         self.assertEqual(self.tool_path(probe, "bash"), str(probe_ext))
-        self.assertIn("bash", self.active_tools(probe))  # ... and the managed child keeps it
+        self.assertIn("bash", self.active_tools(probe))
         for name in ("edit", "write"):  # real built-ins stay restricted
             self.assertEqual(self.tool_path(probe, name), f"builtin:{name}")
             self.assertNotIn(name, self.active_tools(probe))
@@ -1106,7 +1105,7 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(name, self.active_tools(probe))  # ... but not usable
         for name in ("read", "grep", "find", "ls"):
             self.assertIn(name, self.active_tools(probe))
-        self.assertIn("codex_mcp", self.active_tools(probe))  # Pi's own extension tool kept
+        self.assertIn("codex_mcp", self.active_tools(probe))
         evidence = parse_surface(stderr)
         self.assertEqual(evidence["ok"], "true")
         self.assertEqual(sorted(evidence["builtins"].split(",")), ["find", "grep", "ls", "read"])
@@ -1154,9 +1153,9 @@ class CliCodexParsing(unittest.TestCase):
         self.assertEqual(split_codex_cwd(['--cd','/tmp x']),('/tmp x',['--cd','/tmp x']))
         self.assertEqual(split_codex_cwd(['--cd=/a b','exec']),('/a b',['--cd=/a b','exec']))
         self.assertEqual(split_codex_cwd(['-C/attached','run']),('/attached',['-C/attached','run']))
-        self.assertEqual(split_codex_cwd(['--','--cd','/x']),(None,['--','--cd','/x']))  # after -- untouched
+        self.assertEqual(split_codex_cwd(['--','--cd','/x']),(None,['--','--cd','/x']))
         self.assertEqual(split_codex_cwd(['exec','--profile','p']),(None,['exec','--profile','p']))
-        self.assertEqual(split_codex_cwd(['-C','/a','-C','/b']),('/b',['-C','/a','-C','/b']))  # last wins
+        self.assertEqual(split_codex_cwd(['-C','/a','-C','/b']),('/b',['-C','/a','-C','/b']))
         self.assertEqual(split_codex_cwd(['--cd','/中文 目录','run']),('/中文 目录',['--cd','/中文 目录','run']))
 
 class BootstrapStress(unittest.IsolatedAsyncioTestCase):
@@ -1291,7 +1290,7 @@ class RealPiParserProbe(unittest.TestCase):
         config=self.config()
         config['profiles']['skilly']={'tools':['read'],'skills':dirs}
         parsed=self.probe(launch_spec(config,'skilly','test/model',str(ROOT),'read')['argv'])
-        self.assertEqual(parsed['skills'],dirs)  # repeatable, inherited flags append without merging
+        self.assertEqual(parsed['skills'],dirs)
 
 class CodexLauncherProcess(unittest.TestCase):
     """F02 layer-3: a real launcher subprocess must forward Codex's arguments
@@ -1353,7 +1352,7 @@ class ScopeEnvIsolation(unittest.IsolatedAsyncioTestCase):
         )
         self.rt = Runtime(self.home)
         self.canary = "PI_TEST_ENV_CANARY"
-        os.environ[self.canary] = "daemon-only"  # present in the daemon environ
+        os.environ[self.canary] = "daemon-only"
         self.addAsyncCleanup(os.environ.pop, self.canary, None)
 
     async def asyncTearDown(self):
@@ -1381,7 +1380,7 @@ class ScopeEnvIsolation(unittest.IsolatedAsyncioTestCase):
             state = await w.rpc("get_state")
             probe = state.get("env_probe", {})
             self.assertEqual(probe.get("PI_TEST_HOME_TAG"), tag)
-            self.assertNotIn(self.canary, probe)  # daemon-only canary never reaches any child
+            self.assertNotIn(self.canary, probe)
             await self.rt.dispatch("close", {"scope": scope, "agent_id": aid, "request_id": f"close-{tag}"})
 
     async def test_control_plane_has_no_env_values(self):
@@ -1617,8 +1616,8 @@ class EnvironmentBindingChain(unittest.TestCase):
         )
         data, state, env, cli, tmp_s = self._scenario(cfg, "fifo", "A")
         try:
-            self.assertTrue(data["has_auth"])  # authorized auth name still delivered
-            self.assertFalse(data["has_daemon_only"])  # daemon-only canary did NOT reach the child
+            self.assertTrue(data["has_auth"])
+            self.assertFalse(data["has_daemon_only"])
             # No inheritance import happened: the FIFO was never opened (no block,
             # no error) and launch argv carries no bridge/skill flags.
             launches = list((state / "agents").glob("*/launch.json"))
@@ -1651,7 +1650,7 @@ class EnvironmentBindingChain(unittest.TestCase):
             tmp_a.cleanup()
         data_b, state_b, env_b, cli_b, tmp_b = self._scenario(cfg, None, "B")
         try:
-            self.assertEqual(data_b["home_tag"], "B")  # not scope A's value
+            self.assertEqual(data_b["home_tag"], "B")
         finally:
             stop_daemon(cli_b, env_b)
             tmp_b.cleanup()
@@ -1691,7 +1690,6 @@ class EnvironmentBindingChain(unittest.TestCase):
             launches = list((state / "agents").glob("*/launch.json"))
             argv = json.loads(launches[0].read_text())["argv"]
             self.assertNotIn(str(BRIDGE), argv)  # master off: no import
-            # Flip the master switch on and rebind: import comes back.
             (state / "config.toml").write_text(
                 "pi_command = "
                 + fake_pi_command()
@@ -1706,15 +1704,15 @@ class EnvironmentBindingChain(unittest.TestCase):
             self._cli(cli, env, "scope", "open", "--cwd", str(ws), "--label", "chain", "--scope", scope_id)
             doc = self._cli(cli, env, "doctor", "--inheritance")
             sc = json.loads(doc.stdout)["inheritance"]["scopes"][0]
-            self.assertEqual(sc["codex_home"], str(codex))  # rebind bound the client's source
+            self.assertEqual(sc["codex_home"], str(codex))
             spawn = self._cli(
                 cli, env, "spawn", "--scope", scope_id, "--cwd", str(ws), "--task", "simple", "--access", "read"
             )
             agent_id = json.loads(spawn.stdout)["agent_id"]
             argv2 = json.loads((state / "agents" / agent_id / "launch.json").read_text())["argv"]
-            self.assertIn("--extension", argv2)  # inheritance restored end to end
+            self.assertIn("--extension", argv2)
             self.assertIn("--skill", argv2)
-            self.assertIn("alpha", " ".join(argv2))  # the codex skill path is referenced in place
+            self.assertIn("alpha", " ".join(argv2))
         finally:
             stop_daemon(cli, env)
             tmp.cleanup()
@@ -1748,7 +1746,7 @@ output_token_limit = 50
         self.assertTrue(any('supports_parallel_tool_calls' in r for r in reasons))
         self.assertTrue(any('legacy name label' in r for r in reasons))
         self.assertEqual(servers[0]['tool_output_limits'].get('t'),200)  # 50 tokens * 4 bytes, tighten-only
-        self.assertEqual(servers[0]['protocol_mode'],'legacy_2025_06_18')  # stdio stays legacy
+        self.assertEqual(servers[0]['protocol_mode'],'legacy_2025_06_18')
 
     def test_unsupported_fields_required_vs_optional(self):
         for field,value in [('oauth','true'),('scopes',"['a']"),('oauth_resource','"https://x"'),

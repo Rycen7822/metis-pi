@@ -1,5 +1,3 @@
-// Reasoning view: immediate left/right gestures, tail following, scroll pinning
-// and once-only completion folding. Mouse choices are display-only.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createThinkingViewControl, PeekScroll } from "../../src/thinking-view.ts";

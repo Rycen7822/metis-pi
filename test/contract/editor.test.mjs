@@ -1,4 +1,3 @@
-// Native editor contracts own surface, IME and completion.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";

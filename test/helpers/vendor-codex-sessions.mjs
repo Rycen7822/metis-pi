@@ -51,7 +51,6 @@ export function checkpointSession({ model, kept = [], tail = [], retainNone = fa
 	return { sm, preId, keptIds, compactionId, tailIds };
 }
 
-/** `latestNativeCompaction` argument for `buildNativeCompactionInput`. */
 export function latestCheckpointFor(entries, compaction) {
 	const index = entries.findIndex((entry) => entry.id === compaction.id);
 	assert.ok(index >= 0, "the checkpoint entry must be part of the branch");

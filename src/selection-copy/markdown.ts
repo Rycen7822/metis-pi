@@ -375,10 +375,6 @@ function renderQuoteMirror(ctx: MirrorContext, token: MarkdownToken, width: numb
   });
 }
 
-// ---------------------------------------------------------------------------
-// Row assembly + verification
-// ---------------------------------------------------------------------------
-
 interface MirrorOutput {
   styledRows: string[];
   copyRows: CopyRow[];
@@ -438,10 +434,6 @@ function assembleRows(
   }
   return { styledRows, copyRows };
 }
-
-// ---------------------------------------------------------------------------
-// Prototype wrappers
-// ---------------------------------------------------------------------------
 
 export interface WrapDeps {
   fns: AdapterHostFns;
@@ -567,7 +559,6 @@ function buildMarkdownProduct(
     logicalLines.push(...renderTokenMirror(ctx, tokens[i]!, contentWidth, tokens[i + 1]?.type, styleContext));
   }
   const output = assembleRows(ctx, logicalLines, contentWidth, deps.hostWrap);
-  // Verify positionally against the host's real rows.
   const padY = instance.paddingY;
   const padX = instance.paddingX;
   if (hostRows.length !== padY * 2 + output.styledRows.length) {

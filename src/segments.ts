@@ -14,7 +14,6 @@ export interface Segment {
 
 export const SEG_SEP: Segment = { text: " · ", tone: "dim" };
 
-/** Join with dim separators, dropping empty parts. */
 export function joined(parts: Array<Segment | undefined>): Segment[] {
   const list = parts.filter((p): p is Segment => p !== undefined && p.text.length > 0);
   const out: Segment[] = [];

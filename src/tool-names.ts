@@ -1,5 +1,3 @@
-// Shared display-only types and small helpers used across renderer modules.
-
 export const TOOL_NAMES = ["bash", "powershell", "read", "grep", "find", "ls", "edit", "write"] as const;
 export type ToolName = typeof TOOL_NAMES[number];
 export type RecordValue = Readonly<Record<string, unknown>>;

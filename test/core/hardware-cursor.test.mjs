@@ -27,7 +27,7 @@ test("hardware cursor lease restores visibility and terminal shape on release an
   assert.equal(first.getShowHardwareCursor(), false);
   assert.equal(first.writes.at(-1), "\x1b[0 q");
   assert.equal(isNextActive(), true);
-  next.setShowHardwareCursor(false); // host settings override: do not hide all cursors
+  next.setShowHardwareCursor(false);
   assert.equal(isNextActive(), false);
   cursor.release();
   assert.equal(next.getShowHardwareCursor(), false);

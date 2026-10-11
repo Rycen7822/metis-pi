@@ -14,7 +14,6 @@ export interface DiffComponentInput {
   readonly expandHint: string;
 }
 
-/** Render rows at a concrete terminal width (layout ops from the live host). */
 export function renderCodexDiffComponent(
   input: DiffComponentInput,
   width: number,

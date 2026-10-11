@@ -128,13 +128,11 @@ type RunOutcome =
   | { kind: "unusable" }
   | { kind: "transient"; message: string; timedOut?: boolean };
 
-/** Human label for a model in notify text: prefer name, fall back to provider/id. */
 function modelLabel(model: any): string {
   if (!model) return "unknown model";
   return model.name || `${model.provider}/${model.id}`;
 }
 
-/** Combines any present abort signals into one; undefined if none are given. */
 function combineSignals(...signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
   const present = signals.filter((s): s is AbortSignal => !!s);
   if (present.length === 0) return undefined;
@@ -315,7 +313,6 @@ async function runSummarization(
   ctx: ExtensionContext,
   options: SummarizeBatchOptions
 ): Promise<SummarizeResult | null> {
-  // Fast-fail if already aborted before we even start.
   if (options.signal?.aborted) throw new Error("summarize: aborted before start");
 
   const chain = resolveModelChain(config, ctx);

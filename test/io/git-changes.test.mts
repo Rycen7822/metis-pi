@@ -1,4 +1,3 @@
-// Real Git worktree/HEAD behavior and filesystem line-count/cache contracts.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -33,7 +32,7 @@ test("one real repository tracks WIP, partial commits, renames and a damaged HEA
   writeFileSync(join(dir, "notes.md"), "alpha\nbeta\ngamma\n");
   const tracker = trackedRepo(t, dir);
   await refreshAndExpectSample(tracker, 4, 0, 2); // existing tracked +1 and untracked +3
-  await refreshAndExpectSample(tracker, 4, 0, 2); // unchanged reads do not accumulate
+  await refreshAndExpectSample(tracker, 4, 0, 2);
 
   git(dir, "add", "a.txt");
   appendFileSync(file, "five\n");
@@ -83,7 +82,7 @@ test("real git: untracked text counts; ignored, binary and oversized do not", as
   // file with no line counts — exactly what git reports.
   rmSync(join(dir, "a.txt"));
   writeFileSync(join(dir, "b.bin"), Buffer.from([0, 1, 2, 3]));
-  await refreshAndExpectSample(tracker, 3, 3, 3); // −3 a.txt, 0/0 b.bin, +3 text.md
+  await refreshAndExpectSample(tracker, 3, 3, 3);
 });
 
 test("real git: an unborn HEAD counts staged new files and their unstaged edits", async (t) => {
@@ -91,8 +90,8 @@ test("real git: an unborn HEAD counts staged new files and their unstaged edits"
   git(dir, "init", "-q");
   assert.deepEqual(await resolveHead(dir), { kind: "unborn" }, "a live branch with no commits");
   writeFileSync(join(dir, "staged.txt"), "a\nb\nc\n");
-  git(dir, "add", "staged.txt");                     // staged new file
-  appendFileSync(join(dir, "staged.txt"), "d\ne\n"); // unstaged edits on top
+  git(dir, "add", "staged.txt");
+  appendFileSync(join(dir, "staged.txt"), "d\ne\n");
   writeFileSync(join(dir, "untracked.txt"), "x\ny\n");
   const tracker = trackedRepo(t, dir);
   await refreshAndExpectSample(tracker, 7, 0, 2);

@@ -1,4 +1,3 @@
-// Presentation rules run without activation, native editor or a Git repository.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { layoutFooter } from "../../src/chrome/footer.ts";

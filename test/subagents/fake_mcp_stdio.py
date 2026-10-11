@@ -239,9 +239,9 @@ for raw in sys.stdin:
         if MUTATE:
             list_count += 1
             if list_count == 1:
-                page = {'tools': TOOLS}  # original catalog
+                page = {'tools': TOOLS}
             else:
-                page = {'tools': TOOLS_MUTATED}  # after list_changed
+                page = {'tools': TOOLS_MUTATED}
         reply(req, page)
         if MODE == 'stall_stdin_after_list':
             event('stdin-stalled')

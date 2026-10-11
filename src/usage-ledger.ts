@@ -25,7 +25,6 @@ export function usageKeyOf(record: Record<string, unknown>): { key: string; iden
   return undefined;
 }
 
-/** Narrow structural usage shape (matches the host Usage fields we sum). */
 export interface RawUsage {
   input?: unknown;
   output?: unknown;
@@ -144,7 +143,6 @@ export class UsageLedger {
     this.#totals = undefined;
   }
 
-  /** Diagnostics: how many distinct requests are confirmed. */
   get confirmedCount(): number {
     return this.#confirmed.size;
   }

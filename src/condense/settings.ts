@@ -73,7 +73,6 @@ export async function openPrunerSettings(
   const config = currentConfig.value;
   const availableModels = ctx.modelRegistry?.getAvailable() ?? [];
 
-  /** One row from the shared scalar-field table (identity, options, text). */
   const itemOf = (row: ScalarRow): SettingItem => ({
     id: row.id,
     label: row.label,
@@ -89,7 +88,7 @@ export async function openPrunerSettings(
     {
       id: "summarizerModel",
       label: "Summarizer model",
-      values: [config.summarizerModel], // show current value as the cycling option
+      values: [config.summarizerModel],
       currentValue: config.summarizerModel,
       description: "Model used for summarizing tool outputs — press Enter to browse models",
       submenu: (currentValue: string, done: (newValue?: string) => void) => {
@@ -175,12 +174,10 @@ export async function openPrunerSettings(
     10,
     getSettingsListTheme(),
     onChange,
-    () => closeSettingsOverlay(), // onCancel — close the custom overlay
+    () => closeSettingsOverlay(),
     { enableSearch: false },
   );
 
-  // Use ctx.ui.custom() to show the settings list as an overlay.
-  // The factory receives (tui, theme, keybindings, done) and returns a Component.
   // Wire Escape through the SettingsList constructor's onCancel callback instead
   // of mutating private SettingsList fields.
   await ctx.ui.custom(

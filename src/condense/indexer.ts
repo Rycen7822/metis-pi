@@ -166,9 +166,6 @@ export class ToolCallIndexer {
     return !!record && !record.archiveOnly;
   }
 
-  /**
-   * Returns the full runtime index map.
-   */
   getIndex(): Map<string, ToolCallRecord> {
     return this.index;
   }
@@ -191,12 +188,6 @@ export class ToolCallIndexer {
       }
     }
   }
-
-  /**
-   * Allocates short aliases for a batch's tool calls and registers them in the
-   * runtime alias map.
-   */
-
 
   /**
    * Resolve a short alias, a duplicate's occurrence key, or a full occurrence
@@ -245,10 +236,6 @@ export class ToolCallIndexer {
     return this.index.get(resolved);
   }
 
-  /**
-   * Looks up multiple tool call records by occurrence key / short alias.
-   * Skips any not found.
-   */
   lookupToolCalls(toolCallIds: string[]): ToolCallRecord[] {
     const results: ToolCallRecord[] = [];
     for (const id of toolCallIds) {
@@ -384,7 +371,6 @@ export class ToolCallIndexer {
     }
   }
 
-  /** Returns true if at least one stored summary covers any of the given toolCallIds. */
   hasPerBatchSummaryCoveringAny(toolCallIds: string[]): boolean {
     if (toolCallIds.length === 0) return false;
     const idSet = new Set(toolCallIds);
@@ -406,11 +392,6 @@ export class ToolCallIndexer {
     return [...texts];
   }
 
-  /**
-   * Returns the concatenated summary text for all per-batch summaries whose
-   * toolCallIds overlap the given set, joined with "\n\n".
-   * Used by chain-range-prune to build the synthetic chain message body.
-   */
   getPerBatchSummaryTextForToolCallIds(toolCallIds: string[]): string {
     return this.getPerBatchSummariesForToolCallIds(toolCallIds).join("\n\n");
   }
@@ -423,10 +404,6 @@ export class ToolCallIndexer {
     return [...new Set(summaries.map(s => s.text))].join("\n\n");
   }
 
-  /**
-   * Returns the short t<N> refs for the given toolCallIds.
-   * Skips ids with no registered short ref (tool calls not yet summarized).
-   */
   getToolRefsForToolCallIds(toolCallIds: string[]): string[] {
     const refs: string[] = [];
     for (const id of toolCallIds) {
@@ -441,12 +418,10 @@ export class ToolCallIndexer {
     this.chainRegistry.set(entry.blockId, entry);
   }
 
-  /** Returns all compressed chain entries sorted by startUserTimestamp ascending. */
   getChainEntries(): ChainCompressionEntry[] {
     return [...this.chainRegistry.values()].sort((a, b) => chainMembers(a)[0].startUserTimestamp - chainMembers(b)[0].startUserTimestamp);
   }
 
-  /** O(n) scan over the chain registry by blockId. Registry is small (bounded by session chain count). */
   findChainEntryByBlockId(blockId: string): ChainCompressionEntry | undefined {
     return this.chainRegistry.get(blockId);
   }

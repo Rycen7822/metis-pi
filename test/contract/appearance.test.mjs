@@ -1,5 +1,3 @@
-// Session contracts own activation, installed UI slots and teardown.
-// Host data uses Pi's actual model/context/usage shapes.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { activate } from "../../src/extension.ts";

@@ -1,4 +1,3 @@
-// Literal parser and HEAD decision contracts; no filesystem or child processes.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseNumstatZ, resolveHead, type GitExec } from "../../src/git-changes.ts";

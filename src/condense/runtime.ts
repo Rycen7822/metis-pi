@@ -92,7 +92,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       );
   };
 
-  // Shared stats accumulator — tracks cumulative token usage for summarizer calls
   const statsAccum = new StatsAccumulator();
 
   // Session-scoped summarizer outage-fallback controller (in-memory; reset on session_start).
@@ -115,7 +114,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // session_start / session_tree the cold floor re-activates everything.
   const supersede = createSupersedeState();
 
-  // Pending batches — accumulated until the prune trigger fires
   const pendingBatches: CapturedBatch[] = [];
   let lifecycle = 0;
   const tokenEstimator = new TokenEstimator();
@@ -203,7 +201,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const currentFrontier = frontier.get();
     let toolCalls = batch.toolCalls;
 
-    // The indexer tells us what was successfully summarized earlier.
     toolCalls = toolCalls.filter((tc) => !indexer.isSummarized(occKey(tc.toolCallId, tc.resultTimestamp)));
     if (toolCalls.length === 0) return null;
 
@@ -228,7 +225,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     pendingBatches.unshift(...batches);
   };
 
-  // ── Helper: capture + trim + group pending batches (no LLM work) ──────────
   // Exposed to commands.ts via registerCommands so /pruner now can preview the
   // queue before opening the multi-row progress overlay.
   // `rethrow` is for the reload rearm probe only (session_start/session_tree):
@@ -742,7 +738,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "empty" };
       }
 
-      // ── Pre-flush content-hash dedup pass ────────────────────────────
       // A content-hash hit means an identical (toolName, exact resultText)
       // pair was summarized in an earlier flush: register the duplicate as
       // an alias of the original (pruneMessages then stub-replaces its
@@ -1108,7 +1103,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         : "deferred";
 
       if (processedBatches.length === 0) {
-        // Nothing was persisted (all calls failed or first call failed)
         if (modelAttempted) {
           try {
             appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats());
@@ -1278,8 +1272,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
   };
 
-  // ── session_start: restore config + index + stats ────────────────────────────────
-  /** Rebuild the branch-scoped index, chain-id counter and stats accumulator. */
   const rebuildBranchIndex = (ctx: ExtensionContext): void => {
     indexer.reconstructFromSession(ctx);
     blockRefs.rebuildFrom(indexer.getChainEntries().map((e) => e.blockId));
@@ -1294,10 +1286,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     supersede.activated.clear();
     supersede.floor = 0;
 
-    // Rebuild prune frontier from persisted session entries
     frontier.reconstructFromSession(ctx);
 
-    // Clear any batches queued before the branch/session change
     pendingBatches.length = 0;
     previousFraction = null;
     rearmedPending = false;
@@ -1309,7 +1299,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
     }
 
-    // Update footer status
     updatePruneStatus(ctx);
   };
 
@@ -1387,7 +1376,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     supersede.floor = 0;
   });
 
-  // ── turn_end: capture batch, flush immediately or queue ──────────────────
   pi.on("turn_end", async (event, ctx) => {
     const version = lifecycle;
     const appendArchive = (type: string, data?: unknown) => {
@@ -1486,7 +1474,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         pushedBatch = true;
         pendingBatches.push(batch);
 
-        // Let the user know a batch is queued
         const n = pendingBatches.length;
         const trigger = currentConfig.value.pruneOn === "agent-message"
           ? "agent's next final text response"
@@ -1550,7 +1537,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     }
   });
 
-  // ── message_end: flush after the final assistant response in agent-message mode ──
   // A final assistant message is the earliest reliable boundary where the agent has
   // finished using the raw tool results. flushPending captures the SessionManager
   // before awaiting summarization so print-mode shutdown cannot invalidate the
@@ -1564,7 +1550,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       ? event.message.timestamp : undefined;
   });
 
-  // ── agent_end: last-chance cleanup only ─────────────────────────────────────
   // agent-message normally flushes on message_end. By agent_end, print-mode Pi may
   // already be disposing the session, so avoid starting a best-effort LLM call here.
   pi.on("agent_end", async (_event, ctx) => {
@@ -1578,7 +1563,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     queuedSummaryKeys.clear();
   });
 
-  // ── context: prune summarized tool results from next LLM call ─────────────
   const projectContext = (input: any[], api?: string, ctx?: ExtensionContext,
     chainViews?: SingleChainCompressionEntry[], probe = false, chainFloor?: number) => {
     let messages = input;
@@ -2017,10 +2001,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return result.changed ? { messages: result.messages } : undefined;
   });
 
-  // ── Register context_tree_query tool ──────────────────────────────────────
   registerQueryTool(pi, indexer);
 
-  // ── Register /pruner command + summary message renderer ────────────
   const compactChains = async (ctx: any) => {
     if (isFlushing || isArchiving || isCompactingChains || occ.isRunning())
       throw new Error("Another context rewrite is running; retry after it settles");

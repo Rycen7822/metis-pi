@@ -72,7 +72,6 @@ test("partial chain settings keep defaults, accept zero window and reject invali
   }
 });
 
-/** Opens the real overlay and hands back its row list plus the save/refresh recorders. */
 async function openSettings(overrides = {}) {
   initTheme("dark", false);
   const current = { value: { ...structuredClone(DEFAULT_CONFIG), ...overrides } };

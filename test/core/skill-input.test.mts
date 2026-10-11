@@ -1,4 +1,3 @@
-// Token rewriting and completion consume explicit body data; no discovery IO.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillInput, createSkillAutocompleteWrapper } from "../../src/skill-input.ts";

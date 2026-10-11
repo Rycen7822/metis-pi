@@ -1,7 +1,3 @@
-// output-speed.test.mts — the footer's tokens/s number.
-// The scope rules ARE the feature: one window per assistant response, real
-// confirmed output tokens, real observed window, nothing shown when the
-// response is unmeasurable (no estimate, no 0.0 tok/s placeholder).
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -43,7 +39,6 @@ test("live rate finalizes once and remains visible across a later response witho
   now = 1_400;
   assert.equal(tracker.preview(20), true, "cumulative count advanced");
   assert.deepEqual(tracker.snapshot(), { scope: "live", outputTokens: 20, windowMs: 1_000, tokensPerSecond: 20 });
-  // A repeated/older count must not re-open a frame.
   assert.equal(tracker.preview(20), false);
   assert.equal(tracker.preview(10), false, "counts never go backwards");
   now = 2_400;
@@ -59,7 +54,6 @@ test("live rate finalizes once and remains visible across a later response witho
   assert.deepEqual(tracker.snapshot(), final, "missing usage preserves the entire last measured sample");
 });
 
-// Independent bounds include zero output, invalid clocks, stalled output and exact rails.
 for (const [tokens, ms, expected] of [
   [0, 10_000, undefined], [10, Number.NaN, undefined],
   [1, 60_000, undefined], [2, 4_000, 0.5], [Number.MAX_SAFE_INTEGER, 1_000, undefined],

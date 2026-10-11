@@ -25,8 +25,6 @@ import {
 } from "./setting-fields.ts";
 import { normalizeSummaryToolCallRefs } from "./summary-refs.ts";
 
-// ── Status widget text ──────────────────────────────────────────────────────
-
 export function pruneStatusText(
   config: ContextPruneConfig,
   reclaim?: LiveReclaim,
@@ -67,8 +65,6 @@ export function setPruneStatusWidget(
   // sections, load-order independent.
   ctx.ui.setStatus(STATUS_WIDGET_ID, `\u2502 ${text} \u00b7 usage: ${usageTokens} tokens`);
 }
-
-// ── Subcommand list (for completions & interactive picker) ──────────────────
 
 const SUBCOMMANDS = [
   { value: "settings", label: "settings  — interactive settings overlay" },
@@ -111,8 +107,6 @@ function parseModelAndThinkingArg(
   }
   return { model, thinking: thinking as ContextPruneConfig["summarizerThinking"] };
 }
-
-// ── Help text ───────────────────────────────────────────────────────────────
 
 const HELP_TEXT = `pruner — automatically summarizes tool-call outputs to keep context lean.
 
@@ -207,8 +201,6 @@ ${
   "settings and installs metis-pi-config.md. Advanced gain/output/pressure " +
   "constants are configurable in [contextPrune.summaryBudget]."
 }`;
-
-// ── Pruner progress widget ────────────────────────────────────────────────────
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const SPINNER_INTERVAL_MS = 120;
@@ -327,8 +319,6 @@ function startPrunerWidget(
   };
 }
 
-// ── Command registration ────────────────────────────────────────────────────
-
 export function registerCommands(
   pi: ExtensionAPI,
   currentConfig: { value: ContextPruneConfig },
@@ -344,24 +334,20 @@ export function registerCommands(
   refreshOccStatus?: (ctx: ExtensionCommandContext) => void,
   getUsageTokens: () => number = () => 0,
 ): void {
-  // Register the /pruner command
   pi.registerCommand("pruner", {
     description: "Context-prune settings and commands",
     getArgumentCompletions(prefix: string) {
       return SUBCOMMANDS.filter((s) => s.value.startsWith(prefix));
     },
     async handler(args: string, ctx: ExtensionCommandContext) {
-      // Parse subcommand and remaining args from the raw argument string
       const parts = args.trim().split(/\s+/);
       let subcommand = parts[0] || undefined;
-      const subArgs = parts.slice(1); // e.g. ["model", "anthropic/claude-haiku-3-5"] or ["on"])
+      const subArgs = parts.slice(1);
 
-      // ── Bare /pruner → interactive picker ──
       if (!subcommand) {
         const options = SUBCOMMANDS.map((s) => s.label);
         const choice = await ctx.ui.select("pruner — choose a subcommand", options);
         if (!choice) return;
-        // Extract the value (first word) from the label like "settings — interactive settings overlay"
         subcommand = choice.split(/\s+/)[0];
       }
 
@@ -372,7 +358,6 @@ export function registerCommands(
       };
 
       switch (subcommand) {
-        // ── /pruner settings ── interactive overlay ──
         case "settings": {
           await openPrunerSettings(ctx, currentConfig, save, (config) => {
             refreshOccStatus?.(ctx);
@@ -381,7 +366,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner on | off ──
         case "on":
         case "off": {
           const enabled = subcommand === "on";
@@ -391,7 +375,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner status ──
         case "status": {
           const cfg = currentConfig.value;
           const mode = optionLabel("pruneOn", cfg.pruneOn);
@@ -449,7 +432,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner stats ──
         case "stats": {
           const s = getStats();
           if (s.callCount === 0 && s.chainsCompressed === 0) {
@@ -470,7 +452,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner model [value] ──
         case "model": {
           const modelArg = subArgs[0];
           if (!modelArg) {
@@ -501,7 +482,6 @@ export function registerCommands(
           break;
         }
 
-        // ── Enum scalars: shared dispatch, distinct query/selection/report policy ──
         case "thinking":
         case "prune-on":
         case "batching": {
@@ -541,7 +521,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner compact ──
         // Runs regardless of chainCompression.enabled — that flag gates automatic compression;
         // the user invoking /pruner compact is explicit intent.
         case "compact": {
@@ -569,7 +548,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner now ──
         case "now": {
           if (!currentConfig.value.enabled) {
             ctx.ui.notify("Context pruning is disabled. Run /pruner on first.", "warning");
@@ -597,7 +575,6 @@ export function registerCommands(
             break;
           }
 
-          // Open the progress widget above the editor — one row per batch.
           const { updateRow, clearWidget } = startPrunerWidget(ctx, batches);
 
           const result = await flushPending(ctx, {
@@ -617,7 +594,6 @@ export function registerCommands(
             },
           });
 
-          // Remove the widget and restore the normal footer status.
           clearWidget();
           setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
 
@@ -722,7 +698,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner protected-tools [list] ──
         // Bare form opens ctx.ui.input() so the user can edit the list
         // interactively (pre-filled with the current value).  Argument form
         // accepts a comma- and/or whitespace-separated list, or the sentinels
@@ -800,7 +775,6 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner dedup [on|off|status] ──
         // Bare form shows current state; `on`/`off` flip and persist;
         // `status` is an explicit synonym for bare.
         case "dedup": {
@@ -821,12 +795,10 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner help ──
         case "help":
           ctx.ui.notify(HELP_TEXT);
           break;
 
-        // ── Unknown subcommand ──
         default:
           ctx.ui.notify(
             `Unknown subcommand: "${subcommand}". Run /pruner help for usage.`,
@@ -835,7 +807,6 @@ export function registerCommands(
     },
   });
 
-  // Register custom renderer for context-prune-summary messages
   pi.registerMessageRenderer("context-prune-summary", (message, { expanded }, theme) => {
     const details = message.details as {
       toolCallRefs?: { shortId: string; toolCallId: string }[];

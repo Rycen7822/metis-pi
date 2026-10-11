@@ -1,4 +1,3 @@
-// Transcript state and renderer projections need no native component/theme.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TranscriptState, renderedThinkingRuns, assistantHasVisibleThinking } from "../../src/transcript-state.ts";

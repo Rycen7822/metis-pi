@@ -1,4 +1,3 @@
-// Real Markdown/Text mirror parity, foreign serializer ownership and logical selection.
 import test from "node:test";
 import assert from "node:assert/strict";
 

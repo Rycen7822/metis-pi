@@ -28,8 +28,6 @@ function isWhitespace(char: string): boolean {
 interface RawSpan { text: string; token: MochaToken | "plain" }
 
 /**
- * Tokenize one command line.
- *
  * Command position = first word of the line or a word right after
  * `;` `&&` `||` `|` `(` `&`. Words there classify as builtin/executable.
  */
@@ -42,7 +40,6 @@ export function tokenizeBashLine(line: string): BashSpan[] {
     else raw.push({ text, token });
   };
 
-  // Lexer state.
   let quote: "none" | "single" | "double" = "none";
   let escape = false;
   let inComment = false;

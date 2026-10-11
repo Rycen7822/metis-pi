@@ -15,8 +15,6 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { execSync } from 'node:child_process';
 
-// Locate the installed Pi distribution (only used as a fallback for jiti/
-// typebox when the project's pinned devDependencies are absent).
 function findPiDir() {
   if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
   try {

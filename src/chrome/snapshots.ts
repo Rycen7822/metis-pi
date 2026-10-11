@@ -26,13 +26,10 @@ export interface SnapshotSourceDeps {
 export interface SnapshotSource {
   /** Config-gated footer segments (read fresh per render). */
   footerShow(): FooterShow;
-  /** Config-gated working segments. */
   workingShow(): WorkingShow;
-  /** Working animation knobs. */
   workingAnimation(): WorkingAnimation;
   /** Interaction-scoped working snapshot (active phase, tools, uncached I/O). */
   getWorkingSnapshot(): WorkingSnapshotWithUsage;
-  /** Footer snapshot: identity, cwd, context, session totals, cache, speed, changes. */
   getFooterSnapshot(): FooterSnapshot;
 }
 

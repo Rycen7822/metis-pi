@@ -179,7 +179,6 @@ function textSeparator(text) {
   return transcript.textRunPlan(transcript.messageKeyFor(message))?.separatorBefore ? SEPARATOR_LINE : "";
 }
 const sep1 = textSeparator("compare");
-// bash segment
 transcript.apply({ type: "tool_execution_start", toolCallId: "pvbash", toolName: "bash" });
 transcript.apply({ type: "tool_execution_end", toolCallId: "pvbash", toolName: "bash", isError: false });
 const sep2 = textSeparator("next");
@@ -210,7 +209,6 @@ const examples = [
       details: { aggregatedOutput: "src/adapter.ts:73:  // 略过 non-builtin tool rows\n1 match" },
     }),
   ),
-  // Regular test run.
   lifecycle("bash", { command: "npm test" }, result(testOutput, { details: { aggregatedOutput: testOutput } })),
   // Golden command 3: python3 heredoc.
   lifecycle(
@@ -267,7 +265,6 @@ const examples = [
       writeChanges: { path: "docs/legacy.md", kind: "unavailable", reason: "no pre-image snapshot" },
     },
   ),
-  // Failed write.
   lifecycle(
     "write",
     { path: "/protected/config.json", content: "{}\n" },
@@ -306,7 +303,6 @@ const examples = [
       .filter(Boolean)
       .join("\n\n"),
   ],
-  // Running + error rows.
   lifecycle("bash", { command: "npm run check" }, result("Checking TypeScript..."), { isPartial: true }),
   lifecycle(
     "bash",

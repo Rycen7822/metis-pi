@@ -1,7 +1,3 @@
-// ui-metrics.test.mts — the single interaction clock and phase machine.
-// Focused on the semantics the prompt demands: agent_start opens the clock
-// once, agent_end inside a chain does NOT reset it, agent_settled closes and
-// finalizes, and phases derive ONLY from real content kinds (3.5).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { UiMetrics, type InteractionSnapshot } from "../../src/ui-metrics.ts";
@@ -38,7 +34,7 @@ test("writing and thinking share one retry clock; settlement resets the next int
   metrics.agentEnd(); // a retry/compaction boundary, not interaction completion
   advance(1_000);
   metrics.agentStart();
-  metrics.recordUsage("req-1", { input: 100, output: 50 }); // replay across the retry
+  metrics.recordUsage("req-1", { input: 100, output: 50 });
   metrics.thinkingStart();
   advance(2_000);
   metrics.thinkingEnd();

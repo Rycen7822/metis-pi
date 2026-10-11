@@ -91,7 +91,6 @@ export function pruneMessages(
   editedToolIds: ReadonlySet<string> = new Set(),
   chainViews?: SingleChainCompressionEntry[],
 ): { messages: any[]; pruned: boolean; beforeChars: number; afterChars: number } {
-  // Phase 1: stub-replace summarized tool results
   let pruned = false;
   const inGrace = inGraceRecoveryToolCallIds(messages, recoveryGraceTurns);
   const next = messages.map((msg) => {
@@ -129,7 +128,6 @@ export function pruneMessages(
 
   let current: any[] = pruned ? next : messages;
 
-  // Phase 1b: supersede older protected reads of a re-read path
   if (supersede) {
     const afterSupersede = applySupersede(current, supersede.state, supersede.isProtected);
     if (afterSupersede !== current) {
@@ -138,7 +136,6 @@ export function pruneMessages(
     }
   }
 
-  // Phase 2: error purge — replace failed toolCall arg bodies after cooldown
   if (errorPurge?.enabled) {
     const afterPurge = purgeErroredArgs(current, errorPurge);
     if (afterPurge !== current) {
@@ -147,7 +144,6 @@ export function pruneMessages(
     }
   }
 
-  // Phase 3: chain range prune — drop closed chains beyond the rolling window
   // enabled schedules automatic compression; committed ranges remain active
   // after it is switched off, including explicit /pruner compact results.
   if (chainCompression) {
