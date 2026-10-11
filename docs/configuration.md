@@ -19,12 +19,13 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 | goal / 结束摘要 | Pi session custom entries | 会话状态不是配置；摘要持久化由 `appearance.summary.persist` 控制。 |
 | 原文、图片、命令日志 | 会话旁 `<sessionId>-blobs/` | 恢复数据不搬入 TOML，复制或清理会话时一并处理。 |
 
-首次升级运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项及 `subagent-pi/config.toml`，生成完整配置和同目录说明。
+尚无全局 TOML 时运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项及 `subagent-pi/config.toml`，生成完整配置和同目录说明。
 `session-recall.json` 的独立查询模型也迁为 `[sessionRecall].queryModel`。
 `web-search.json` 的普通字段迁为 `[webAccess]`，API key/token、认证请求头和带密码的代理保留 JSON，并归到 TOML 同目录；旧混合 JSON 拆分前备份，外部旧文件不删除。
-不覆盖已有 TOML/说明。新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧偏好，网页 JSON 仅提供凭据。请先迁移，别直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
+不覆盖已有 TOML/说明。新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧偏好，网页 JSON 仅提供凭据。不要直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
 
-已有上一版 TOML 用 **`/metis-config migrate`**，备份当前文件及旧输入后补齐缺失项并刷新说明；保留现有个性化值，旧执行快捷键仅修复仍为默认值的项。旧 provider 的无效选项明确提示，不生成伪配置。命令不删除原文件、不停止任务；确认新版 frontend/backend 都已使用 TOML 后再将旧 Metis 文件移入备份，不能删除 Pi settings 或子代理数据目录。
+已有 TOML 直接编辑需要修改的字段，未填写的选项沿用包内默认值。
+`/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有文件。
 
 归属审计边界：Metis 自有显示、执行、MCP 策略、动态指令、condense/OCC、子代理、网页访问与会话回忆偏好都在 TOML。`pi-fff.json`/LSP/其他插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
 

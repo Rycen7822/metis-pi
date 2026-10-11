@@ -76,8 +76,8 @@ at each query; `session_search` does not call a model. Model definitions and
 authentication remain managed by Pi.
 
 `/metis-config init` imports the upstream `session-recall.json` when no TOML
-exists. If you already have a TOML file, `/metis-config migrate` backs up and
-imports the old selection while preserving any explicit TOML value. The old
+exists. If you already have a TOML file, edit `[sessionRecall].queryModel`
+directly. The old
 JSON is left intact; once TOML exists it is not read during queries. Malformed
 TOML is reported as a configuration error, without falling back to old JSON.
 

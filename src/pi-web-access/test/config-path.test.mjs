@@ -29,7 +29,7 @@ function runChild(script, env) {
 	});
 }
 
-test("web credentials share the Metis directory after migrating legacy or XDG settings", async (t) => {
+test("web init keeps credentials beside Metis TOML and preserves legacy cache paths", async (t) => {
 	for (const source of ["explicit", "agent", "legacy", "xdg", "absent"]) {
 		const root = await mkdtemp(join(tmpdir(), "pi-web-access-config-"));
 		t.after(() => rm(root, { recursive: true, force: true }));
@@ -44,10 +44,10 @@ test("web credentials share the Metis directory after migrating legacy or XDG se
 			import { readFileSync, existsSync } from "node:fs";
 			const utils = await import(${JSON.stringify(utilsUrl)});
 			const { getFetchCacheDir } = await import(${JSON.stringify(new URL("../storage.ts", import.meta.url).href)});
-			const { migrateMetisConfig } = await import(${JSON.stringify(new URL("../../metis-config.ts", import.meta.url).href)});
+			const { initializeMetisConfig } = await import(${JSON.stringify(new URL("../../metis-config.ts", import.meta.url).href)});
 			const { isPerplexityAvailable } = await import(${JSON.stringify(perplexityUrl)});
 			const dir = utils.getWebSearchConfigDir(), available = isPerplexityAvailable();
-			migrateMetisConfig(dir);
+			initializeMetisConfig(dir);
 			const path = utils.getWebSearchConfigPath();
 			console.log(JSON.stringify({ dir, path, available,
 				keys: existsSync(path) ? Object.keys(JSON.parse(readFileSync(path, "utf8"))) : [],

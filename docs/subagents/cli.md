@@ -6,8 +6,8 @@ in the effective Pi agent directory under `subagent-pi`. Preferences are global
 `<agentDir>/metis-pi.toml` under `[subagents]`, including capacity, timeouts,
 profiles and inheritance. See the adjacent [parameter guide](../../metis-pi-config.md).
 `--home` changes state, not the global preferences source. Legacy state-home
-`config.toml` is read only while global TOML is absent; use `/metis-config init`,
-or `/metis-config migrate` to back up and upgrade an already-created TOML.
+`config.toml` is read only while global TOML is absent; use `/metis-config init`
+to initialize it, or edit `[subagents]` directly when TOML already exists.
 
 Pass `--home <state directory>` before the subcommand. `list`, `inspect`, `result`,
 `wait` and `doctor` read the existing state. Management operations such as

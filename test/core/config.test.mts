@@ -3,15 +3,15 @@ import assert from "node:assert/strict";
 import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
 import {
   readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig,
-  initializeMetisConfig, migrateMetisConfig,
+  initializeMetisConfig,
   readWebAccessConfig, updateWebAccessConfig,
 } from "../../src/metis-config.ts";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
 const legacyReader = (text: string) => (path: string) => path.endsWith("metis-pi.json") ? text : undefined;
 
-test("web migration preserves TOML preferences and keeps credentials in adjacent JSON", (t) => {
+test("web init imports preferences and backs up mixed JSON before separating credentials", (t) => {
   const dir = mkdtempSync(join(process.cwd(), ".work", "web-config-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const jsonPath = join(dir, "web-search.json"), tomlPath = join(dir, "metis-pi.toml");
@@ -22,29 +22,29 @@ test("web migration preserves TOML preferences and keeps credentials in adjacent
   const original = JSON.stringify({ ...credentials, provider: "brave", workflow: "auto-summary", pdf: { enabled: false } });
   writeFileSync(jsonPath, original);
   assert.equal(readWebAccessConfig(dir)["provider"], "brave");
-  const previous = '[webAccess]\nprovider="parallel"\n[sessionRecall]\nqueryModel="openai/recall"\n';
-  writeFileSync(tomlPath, previous);
-  assert.equal(readWebAccessConfig(dir)["workflow"], undefined);
-  updateMetisConfig(dir, { appearance: { enabled: false } });
-  assert.equal(readFileSync(jsonPath, "utf8"), original);
-  const snapshot = readFileSync(tomlPath, "utf8");
-  const migration = migrateMetisConfig(dir);
-  assert.equal(readFileSync(join(migration.backup, "web-search.json"), "utf8"), original);
-  assert.equal(readFileSync(join(migration.backup, "metis-pi.toml"), "utf8"), snapshot);
+  assert.equal(initializeMetisConfig(dir).created, true);
+  const backups = readdirSync(join(dir, "backups"));
+  assert.equal(backups.length, 1);
+  assert.equal(readFileSync(join(dir, "backups", backups[0]!, "web-search.json"), "utf8"), original);
   const web = readWebAccessConfig(dir);
-  assert.equal(web["provider"], "parallel");
+  assert.equal(web["provider"], "brave");
   assert.equal(web["workflow"], "auto-summary");
   assert.equal(web["pdf"]["enabled"], false);
   assert.deepEqual(JSON.parse(readFileSync(jsonPath, "utf8")), credentials);
   assert.equal(statSync(jsonPath).mode & 0o777, 0o600);
   assert.doesNotMatch(readFileSync(tomlPath, "utf8"), /METIS_TEST_OPENAI_KEY|synthetic-(key|token|password)|openaiApiKey|degoogHeaders/);
+  updateMetisConfig(dir, { sessionRecall: { queryModel: "openai/recall" } });
   updateWebAccessConfig(dir, { provider: "exa", workflow: "none" });
   assert.equal(readWebAccessConfig(dir)["provider"], "exa");
   assert.equal(readMetisConfig(dir).config["sessionRecall"]["queryModel"], "openai/recall");
   assert.deepEqual(JSON.parse(readFileSync(jsonPath, "utf8")), credentials);
   assert.throws(() => updateWebAccessConfig(dir, { openaiApiKey: "synthetic-key" }), /web-search.json/);
-  writeFileSync(jsonPath, JSON.stringify({ ...credentials, provider: "brave" }));
+  const mixed = JSON.stringify({ ...credentials, provider: "brave", workflow: "auto-summary" });
+  writeFileSync(jsonPath, mixed);
+  updateMetisConfig(dir, { appearance: { enabled: false } });
+  assert.equal(readFileSync(jsonPath, "utf8"), mixed);
   assert.equal(readWebAccessConfig(dir)["provider"], "exa");
+  assert.equal(readWebAccessConfig(dir)["workflow"], "none");
   writeFileSync(tomlPath, '[webAccess]\nopenaiApiKey="synthetic-key"\n');
   assert.throws(() => readWebAccessConfig(dir), /credentials belong in web-search.json/);
 });
@@ -165,7 +165,7 @@ test("global saves retain defaults, annotations, unknown fields and other owners
   assert.equal(readFileSync(path, "utf8"), "[broken");
 });
 
-test("recall init and migration preserve originals and explicit TOML preferences", t => {
+test("recall init preserves originals and leaves existing TOML preferences unchanged", t => {
   mkdirSync(".work", { recursive: true });
   const dir = mkdtempSync(join(process.cwd(), ".work/metis-recall-config-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -180,10 +180,9 @@ test("recall init and migration preserve originals and explicit TOML preferences
     const original = selection === undefined ? "" : stringify({ sessionRecall: { queryModel: selection } });
     writeFileSync(configPath, original);
     assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "default");
-    const migrated = migrateMetisConfig(dir);
-    assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "openai-codex/recall/variant");
-    assert.equal(readFileSync(join(migrated.backup, "metis-pi.toml"), "utf8"), original);
-    assert.equal(readFileSync(join(migrated.backup, "session-recall.json"), "utf8"), legacy);
+    assert.equal(initializeMetisConfig(dir).created, false);
+    assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "default");
+    assert.equal(readFileSync(configPath, "utf8"), original);
   }
   assert.equal(readFileSync(legacyPath, "utf8"), legacy);
 });

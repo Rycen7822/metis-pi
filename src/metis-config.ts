@@ -151,8 +151,7 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
       notes.push(
         "subagents.json." +
           `${key}` +
-          ": old provider option is not a native backend setting; original file kept " +
-          "(migrate also backs it up), not installed as an inert knob",
+          ": old provider option is not a native backend setting; original file kept, not installed as an inert knob",
       );
   }
   if (backendText !== undefined)
@@ -239,12 +238,12 @@ export function updateWebAccessConfig(agentDir: string, patch: ObjectValue): voi
   if (Object.keys(credentials).length) throw new Error(`Store Web Access credentials in ${WEB_CREDENTIALS_FILE}`);
   updateMetisConfig(agentDir, { webAccess: preferences });
 }
-function installGuide(agentDir: string, replace = false): void {
+function installGuide(agentDir: string): void {
   try {
     atomicWrite(
       join(agentDir, METIS_CONFIG_GUIDE),
       readFileSync(new URL("../metis-pi-config.md", import.meta.url), "utf8"),
-      !replace,
+      true,
     );
   } catch (error) {
     throw new Error(
@@ -266,16 +265,16 @@ function atomicWrite(path: string, text: string, exclusive = false): boolean {
   finally { try { unlinkSync(temp); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
 
-function persistWebCredentials(agentDir: string, backup?: string): void {
+function persistWebCredentials(agentDir: string): void {
   const legacy = readLegacyWebAccess(agentDir, optionalRead);
   if (!legacy) return;
   const { preferences, credentials } = splitWebAccessConfig(legacy.config);
   const target = join(agentDir, WEB_CREDENTIALS_FILE);
   if (legacy.path === target && !Object.keys(preferences).length) return;
   if (legacy.path === target) {
-    const directory = backup ?? join(agentDir, "backups", `web-search-${Date.now()}-${randomBytes(3).toString("hex")}`);
+    const directory = join(agentDir, "backups", `web-search-${Date.now()}-${randomBytes(3).toString("hex")}`);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    if (!backup) copyFileSync(target, join(directory, WEB_CREDENTIALS_FILE));
+    copyFileSync(target, join(directory, WEB_CREDENTIALS_FILE));
   } else if (!Object.keys(credentials).length) return;
   atomicWrite(target, `${JSON.stringify(credentials, null, 2)}\n`, legacy.path !== target);
 }
@@ -286,33 +285,6 @@ export function updateMetisConfig(agentDir: string, patch: ObjectValue): void {
   if (current.legacy) persistWebCredentials(agentDir);
   // A documentation failure must not report a successfully persisted setting as lost.
   try { installGuide(agentDir); } catch { /* /metis-config init can retry guide installation */ }
-}
-/** Upgrade an existing TOML without letting old preferences replace current customized values. */
-export function migrateMetisConfig(agentDir: string): { path: string; backup: string; notes: string[] } {
-  const path = metisConfigPath(agentDir), text = readText(path, optionalRead);
-  const raw = text === undefined ? {} : parseMetisConfig(text, path);
-  const defaults = defaultMetisConfig(), legacy = readLegacyMetisConfig(agentDir, optionalRead);
-  const config = mergeMetisConfig(mergeMetisConfig(defaults, legacy.imported), raw);
-  // The predecessor shortcut was omitted by the first migration. Repair only untouched defaults.
-  const oldUi = legacy.imported.execution["ui"], currentUi = raw["execution"]?.["ui"];
-  if (object(oldUi)) for (const [key, value] of Object.entries(oldUi)) {
-    const current = currentUi?.[key], fallback = defaults["execution"]["ui"][key];
-    if (current === undefined || current === fallback) config["execution"]["ui"][key] = value;
-    else if (current !== value) legacy.notes.push(`execution.ui.${key}: kept current TOML override instead of predecessor value`);
-  }
-  const backup = join(agentDir, "backups", `metis-config-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`);
-  mkdirSync(backup, { recursive: true, mode: 0o700 });
-  for (const name of [METIS_CONFIG_FILE, METIS_CONFIG_GUIDE, ...legacyJsonFiles, legacyBackendFile, WEB_CREDENTIALS_FILE]) {
-    const target = join(backup, name); mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-    try { copyFileSync(join(agentDir, name), target); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  }
-  const web = readLegacyWebAccess(agentDir, optionalRead);
-  if (web && web.path !== join(agentDir, WEB_CREDENTIALS_FILE)) copyFileSync(web.path, join(backup, "legacy-web-search.json"));
-  atomicWrite(path, renderMetisConfig(config));
-  persistWebCredentials(agentDir, backup);
-  installGuide(agentDir, true);
-  return { path, backup, notes: legacy.notes };
 }
 /** Explicit initialization; mixed credential JSON is backed up before splitting. */
 export function initializeMetisConfig(agentDir: string): { created: boolean; legacy: boolean; path: string; notes: string[] } {

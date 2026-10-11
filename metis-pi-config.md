@@ -1,12 +1,13 @@
 # metis-pi 配置参数
 
-## 唯一配置文件与迁移
+## 唯一配置文件与初始化
 
 所有 **metis-pi 自有偏好**集中在 `<agentDir>/metis-pi.toml`；通常是 `~/.pi/agent/metis-pi.toml`，跟随 Pi 的 `PI_CODING_AGENT_DIR`。不再读取项目 `.pi/metis-pi.json` / `.pi/metis-pi.toml`，也不再使用显示层单独的 `PI_AGENT_DIR` 覆盖。
 
-包内同目录的 `metis-pi.toml` 是默认值来源；网页选项不预填，继续采用各功能的原有默认值，见下文 `[webAccess]`。不要直接用默认模板覆盖已有个性配置。首次安装新版后运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项、`subagent-pi/config.toml`、`session-recall.json` 的查询模型及 `web-search.json` 的普通选项，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，外部旧文件不删除；同目录网页混合 JSON 拆分前备份，便于回退旧版代码。
+包内同目录的 `metis-pi.toml` 是默认值来源；网页选项不预填，继续采用各功能的原有默认值，见下文 `[webAccess]`。不要直接用默认模板覆盖已有个性配置。尚无全局 TOML 时运行 **`/metis-config init`**：导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项、`subagent-pi/config.toml`、`session-recall.json` 的查询模型及 `web-search.json` 的普通选项，写出完整 TOML，并把本说明放到同一目录。已有 TOML/说明文件不覆盖，外部旧文件不删除；同目录网页混合 JSON 拆分前备份，便于回退旧版代码。
 
-已有上一版 TOML 时运行 **`/metis-config migrate`**：先把当前 TOML、说明及迁移输入备份到 `<agentDir>/backups/metis-config-…/`，再补齐遗漏 section，并更新参数说明。现有 TOML 值优先；旧执行快捷键仅覆盖仍为默认值的对应项，个性化冲突保留 TOML 并提示。原文件仍保留；确认使用新版代码及新后端后，可将这些旧 Metis 文件移入备份目录，不要保留两套同步配置。命令不会停止 daemon 或后台任务。
+已有 TOML 直接编辑需要修改的字段；未填写的选项沿用包内默认值。
+`/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有 TOML。
 
 读取本身不写文件。TOML 不存在时兼容读取旧全局配置；TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
 
@@ -189,9 +190,9 @@ exclude = []
 
 每次查询重读，无需重启；值无效或模型不在 Pi 注册表中时回退当前会话。
 `session_search` 不调用模型。模型定义与认证仍由 Pi 管理。
-旧 `session-recall.json` 的 `queryModel.provider` / `id` 由 `/metis-config init`
-或 `/metis-config migrate` 合并为这个字段；已有 TOML 值优先，迁移保留原文件
-并备份。TOML 存在后不再叠加旧 JSON；损坏 TOML 会返回查询配置错误。
+尚无 TOML 时，`/metis-config init` 将旧 `session-recall.json` 的
+`queryModel.provider` / `id` 合并为这个字段，并保留原文件。
+已有 TOML 直接编辑本字段；旧 JSON 不再叠加。损坏 TOML 会返回查询配置错误。
 
 ## `[webAccess]`
 
@@ -246,9 +247,9 @@ API key/token 字段、自定义 `searxngHeaders` / `degoogHeaders`（可能含�
 Pi 登录和浏览器 Cookie 值由原认证系统保存。TOML 中误写密钥字段会报错。
 JSON 中的普通字段在 TOML 存在后失效；凭据 JSON 中的认证代理优先于 TOML proxy。
 
-新安装用 `/metis-config init`，已有 TOML 用 `/metis-config migrate`。
-迁移优先 agent 目录 JSON，然后是旧 XDG/pi 和 ~/.pi；显式指定 agent 目录
-时不读取别处的 JSON。现有 TOML 字段优先，外部旧文件原样保留；同目录混合
+尚无 TOML 时用 `/metis-config init` 导入旧设置，已有 TOML 直接编辑。
+初始化优先 agent 目录 JSON，然后是旧 XDG/pi 和 ~/.pi；显式指定 agent 目录
+时不读取别处的 JSON。外部旧文件原样保留；同目录混合
 JSON 在备份后拆为仅凭据的 JSON，新写入文件的权限为 0600。读取不写文件、不执行密钥命令。
 `/websearch` 和 `/curator` 保存到现有 TOML。手动修改后的工具注册、快捷键、
 provider 缓存用 `/reload` 刷新；独立 MCP 需重启。普通环境变量覆盖继续有效。

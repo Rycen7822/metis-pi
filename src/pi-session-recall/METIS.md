@@ -19,8 +19,8 @@ Pi's legacy `@sinclair/typebox` virtual alias.
 The query model is managed by `[sessionRecall].queryModel` in Metis's global
 `metis-pi.toml`: `"default"` follows the current session, while `"provider/model-id"`
 selects a registered model. Each query rereads the setting. The shared Metis
-init/migrate commands import the upstream `session-recall.json`; migration backs
-it up and leaves the original intact. An existing TOML is authoritative.
+init command imports the upstream `session-recall.json` when TOML is absent
+and leaves the original intact. An existing TOML is authoritative.
 
 Keep `session_search`, `session_query` and existing session files intact when
 updating this module. Compare against the pinned upstream commit, preserve the
