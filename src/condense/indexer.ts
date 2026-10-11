@@ -399,15 +399,11 @@ export class ToolCallIndexer {
   getPerBatchSummariesForToolCallIds(toolCallIds: string[]): string[] {
     if (toolCallIds.length === 0) return [];
     const idSet = new Set(toolCallIds);
-    const texts: string[] = [];
-    const seen = new Set<string>();
-    for (const s of this.summaryBodies) {
-      if (s.toolCallIds.some((id) => idSet.has(id)) && !seen.has(s.text)) {
-        seen.add(s.text);
-        texts.push(s.text);
-      }
+    const texts = new Set<string>();
+    for (const summary of this.summaryBodies) {
+      if (summary.toolCallIds.some(id => idSet.has(id))) texts.add(summary.text);
     }
-    return texts;
+    return [...texts];
   }
 
   /**

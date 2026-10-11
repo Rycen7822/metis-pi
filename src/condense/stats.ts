@@ -4,19 +4,23 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import type { Usage } from "@earendil-works/pi-ai";
 
+function statsSnapshot(data: Partial<SummarizerStats>): SummarizerStats {
+  return {
+    totalInputTokens: data.totalInputTokens ?? 0,
+    totalOutputTokens: data.totalOutputTokens ?? 0,
+    callCount: data.callCount ?? 0,
+    chainsCompressed: data.chainsCompressed ?? 0,
+    rangesSummarized: data.rangesSummarized ?? 0,
+  };
+}
+
 /**
  * Accumulates cumulative token stats for summarizer LLM calls.
  * Stats are persisted to the session via `pi.appendEntry(CUSTOM_TYPE_STATS, ...)`
  * and reconstructed on `session_start` / `session_tree`.
  */
 export class StatsAccumulator {
-  private stats: SummarizerStats = {
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    callCount: 0,
-    chainsCompressed: 0,
-    rangesSummarized: 0,
-  };
+  private stats: SummarizerStats = statsSnapshot({});
   private baselineTokens = 0;
   private liveReclaim: LiveReclaim | undefined = undefined;
 
@@ -59,26 +63,14 @@ export class StatsAccumulator {
 
   /** Reset all accumulated stats to zero. Produces the same state as a fresh accumulator. */
   reset(): void {
-    this.stats = {
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      callCount: 0,
-      chainsCompressed: 0,
-      rangesSummarized: 0,
-    };
+    this.stats = statsSnapshot({});
     this.baselineTokens = 0;
     this.liveReclaim = undefined;
   }
 
   /** Restore stats from a previously persisted snapshot. */
   fromJSON(data: SummarizerStats): void {
-    this.stats = {
-      totalInputTokens: data.totalInputTokens ?? 0,
-      totalOutputTokens: data.totalOutputTokens ?? 0,
-      callCount: data.callCount ?? 0,
-      chainsCompressed: data.chainsCompressed ?? 0,
-      rangesSummarized: data.rangesSummarized ?? 0,
-    };
+    this.stats = statsSnapshot(data);
   }
 
   /**

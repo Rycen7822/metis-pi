@@ -12,7 +12,7 @@ import shutil
 import sys
 import time
 
-from . import __version__, PROTOCOL_VERSION, RUNTIME_REVISION, views, worker
+from . import __version__, PROTOCOL_VERSION, RUNTIME_REVISION, views, worker, schema
 from .binding import ScopeBindings
 from .common import (TERMINAL, AgentError, RESIDENT_AGENT_STATES, bounded, crop,
     dumps, group_members, identifier, integer, new_id, now, process_identity, text, label)
@@ -683,7 +683,7 @@ class Runtime:
             return report
         sid=identifier(p.get('scope'),'scope'); scope=self.store.scope(sid)
         native=((source or {}).get('parent') or {}).get('kind')=='pi'
-        mutation=op in {'spawn','send','message','followup','interrupt','soft_interrupt','close','respawn','answer'}
+        mutation=op in schema.BY_OP and 'request_id' in schema.BY_OP[op]['inputSchema']['required']
         if native or mutation: parent.bind(self.store,sid,source,allow_new=False)
         if native: self.bindings.remember_pi_source(sid,source)  # Authenticated memory restore, not a persistent rebind.
         if op=='spawn' and 'cwd' not in p: p={**p,'cwd':scope['cwd']}

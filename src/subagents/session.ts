@@ -21,6 +21,7 @@ const digest = (content: unknown) => createHash("sha256").update(JSON.stringify(
 /** Owns one frontend lease. The daemon remains the sole owner of agents and runs. */
 export class SubagentSession {
   private readonly pi: ExtensionAPI;
+  private readonly runtime: RuntimePackage;
   private readonly agentDir: string;
   private readonly client: SubagentClient;
   private readonly watchAbort = new AbortController();
@@ -44,7 +45,7 @@ export class SubagentSession {
   private notifiedQuestions = new Set<string>();
 
   constructor(pi: ExtensionAPI, runtime: RuntimePackage, ctx: ExtensionContext, agentDir: string) {
-    this.pi = pi; this.agentDir = agentDir;
+    this.pi = pi; this.runtime = runtime; this.agentDir = agentDir;
     this.ctx = ctx; this.sessionId = ctx.sessionManager.getSessionId();
     const binding = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === BINDING && (entry.data as { sessionId?: string })?.sessionId === this.sessionId);
     const scope = binding?.type === "custom" ? (binding.data as { scope: string }).scope : undefined;
@@ -297,7 +298,7 @@ export class SubagentSession {
     if (!this.valid()) throw new Error("Subagent parent session changed");
     let result: Record<string, unknown>, isError = false, dispatched = false;
     let question: QuestionIdentity | undefined;
-    const mutation = ["pi_spawn_agent", "pi_answer_agent", "pi_send_message", "pi_followup_task", "pi_interrupt_agent"].includes(name);
+    const mutation = this.runtime.tools.some(tool => tool.name === name && "request_id" in (tool.inputSchema as { properties: Record<string, unknown> }).properties);
     const params = mutation ? { ...args, request_id: args.request_id ?? `pi_${digest([this.sessionId, id])}` } : args;
     try {
       let extra: object | undefined;

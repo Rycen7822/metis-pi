@@ -814,6 +814,33 @@ test("shared chains preserve every endpoint, recover the block and stop deriving
   assert.deepEqual((await f.emit("context", { messages: raw() })).messages, partial);
 });
 
+test("editing or omitting a summary restores its whole source group without changing the archive", async t => {
+  for (const omitted of [false, true]) await t.test(omitted ? "omitted" : "edited", async t => {
+    const f = await fixture(t, { pruneOn: "on-demand" });
+    const sources = [
+      f.add("first semantic evidence ".repeat(1000), "unknown-command", "summary-source-1"),
+      f.add("second semantic evidence ".repeat(1000), "unknown-command", "summary-source-2"),
+    ];
+    await f.commands.get("pruner").handler("now", f.ctx);
+    const summary = f.sm.getBranch().find(e => e.customType === "context-prune-summary");
+    assert.equal(summary.details.toolCallRefs.length, sources.length);
+    const before = (await f.emit("context", { messages: f.sm.buildSessionProjection().messages })).messages;
+    assert.ok(sources.every(source => before.find(m => m.toolCallId === source.id).content[0].text !== source.result.content[0].text),
+      "the summary must authorize real stubs before the edit");
+    f.sm.appendContextEdit(summary.id, omitted ? null : { content: "CORRECTED_SUMMARY_BODY" });
+    const effective = f.sm.buildSessionProjection().messages;
+    const after = (await f.emit("context", { messages: effective }))?.messages ?? effective;
+    for (const source of sources) {
+      assert.deepEqual(after.find(m => m.toolCallId === source.id).content, source.result.content);
+      const recovered = await f.tools.get("context_tree_query").execute("q", { toolCallIds: [source.id] }, undefined, undefined, f.ctx);
+      assert.equal(recovered.details.results[0].text, source.result.content[0].text);
+    }
+    const summaries = after.filter(m => m.customType === "context-prune-summary");
+    assert.deepEqual(summaries.map(m => m.content), omitted ? [] : ["CORRECTED_SUMMARY_BODY"]);
+    assert.equal(f.calls.length, 1, "source edits must not start another summary request");
+  });
+});
+
 test("pruner off silently aborts an active flush, records cancellation and retains raw evidence", async t => {
   const f = await fixture(t, { defer: true });
   const source = f.add("semantic source ".repeat(2000), "unknown-command", "cancelled");

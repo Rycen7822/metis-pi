@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, createCodemodeExtension } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { disableNetwork } from "../helpers/native-provider.mjs";
+import { createExecCommandTool } from "../../src/execution/exec/command-tool.ts";
+import { createWriteStdinTool } from "../../src/execution/exec/write-stdin-tool.ts";
 
 test.beforeEach(disableNetwork);
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -54,4 +56,51 @@ test("Pi owns the provider and tool selection while native codemode calls struct
   const child = children.find(call => call.toolName === "exec_command");
   assert.equal(child.result.structuredContent.output, "native-proof");
   assert.equal(child.result.structuredContent.exit_code, 0);
+});
+
+test("exec and write_stdin preserve partial/final evidence in all three result channels", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "metis-exec-results-")), previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const command = "printf evidence";
+  const partial = Object.freeze({ output: "partial evidence", chunk_id: "partial", wall_time_seconds: 0.25,
+    session_id: 7, exit_code: undefined, interrupted: false, fullOutputPath: "/fixture/archive",
+    fullOutputBytes: 16, fullOutputComplete: false, fullOutputAppendOnly: true });
+  const final = Object.freeze({ output: "final evidence", chunk_id: "final", wall_time_seconds: 0.5,
+    session_id: undefined, exit_code: 0, fullOutputPath: "/fixture/archive",
+    fullOutputBytes: 30, fullOutputComplete: true, fullOutputAppendOnly: true });
+  const deliver = async onUpdate => { onUpdate(partial); return final; };
+  const sessions = {
+    exec: async (_input, _cwd, _signal, onUpdate) => deliver(onUpdate),
+    write: async (_input, _signal, onUpdate) => deliver(onUpdate),
+    getSessionCommand: () => command,
+  };
+  for (const [tool, args] of [[createExecCommandTool(sessions), { cmd: command, shell: "/bin/sh" }],
+    [createWriteStdinTool(sessions), { session_id: 7 }]]) {
+    const updates = [], result = await tool.execute("fixture", args, undefined, value => updates.push(value), { cwd: dir });
+    assert.equal(updates.length, 1, tool.name);
+    for (const [delivery, evidence] of [[updates[0], partial], [result, final]]) {
+      assert.equal(delivery.details, evidence, "the original evidence object is retained");
+      assert.deepEqual(delivery.structuredContent, evidence === partial
+        ? { output: "partial evidence", chunk_id: "partial", wall_time_seconds: 0.25, session_id: 7,
+          interrupted: false, fullOutputPath: "/fixture/archive", fullOutputBytes: 16, fullOutputComplete: false, fullOutputAppendOnly: true }
+        : { output: "final evidence", chunk_id: "final", wall_time_seconds: 0.5, exit_code: 0,
+          fullOutputPath: "/fixture/archive", fullOutputBytes: 30, fullOutputComplete: true, fullOutputAppendOnly: true });
+      assert.equal(delivery.content.length, 1);
+      assert.equal(delivery.content[0].type, "text");
+      assert.ok(delivery.content[0].text.startsWith(`Command: ${command}\nChunk ID: ${evidence.chunk_id}\n`));
+      assert.ok(delivery.content[0].text.endsWith(`\nOutput:\n${evidence.output}`));
+      assert.match(delivery.content[0].text, /Captured output archive: \/fixture\/archive/);
+    }
+  }
+});
+
+test("write_stdin continues to translate session failures at the tool boundary", async () => {
+  const tool = createWriteStdinTool({ getSessionCommand: () => "fixture",
+    write: async () => { throw new Error("session unavailable"); } });
+  await assert.rejects(tool.execute("fixture", { session_id: 7 }, undefined, undefined, {}),
+    { message: "write_stdin failed: session unavailable" });
 });

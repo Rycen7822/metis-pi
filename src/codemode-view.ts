@@ -1,6 +1,6 @@
 import { asRecord, safeText, type Component, type Highlight, type Palette, type Renderers, type TextFactory, type ViewContext } from "./tool-names.ts";
 import { shellTitle } from "./renderers.ts";
-import { productFor, publishRows, registerProduct, releaseCopyCache, type ChildPlacement } from "./selection-copy/model.ts";
+import { stackComponents } from "./copy-stack.ts";
 
 interface NestedView {
   name: string;
@@ -74,25 +74,6 @@ export class CodemodeViewStore {
   get(parent: string, id: string): NestedView | undefined { return this.#parents.get(parent)?.get(id); }
   entries(parent: string): [string, NestedView][] { return [...(this.#parents.get(parent)?.entries() ?? [])]; }
   clear(): void { this.#parents.clear(); this.#bytes = 0; }
-}
-
-function stack(parts: Component[]): Component {
-  return {
-    render(width) {
-      const lines: string[] = [], children: (ChildPlacement | undefined)[] = [];
-      for (const part of parts) {
-        const rows = part.render(width), product = productFor(rows);
-        lines.push(...rows);
-        for (let i = 0; i < rows.length; i++) children.push(product?.children
-          ? product.children[i]
-          : product ? { product, rowIndex: i, colShift: 0 } : undefined);
-      }
-      registerProduct(lines, { componentId: "codemode", width, rows: [], children });
-      publishRows(this, lines);
-      return lines;
-    },
-    invalidate() { for (const part of parts) part.invalidate(); releaseCopyCache(this); },
-  };
 }
 
 export type NestedRendererLookup = (name: string, result: unknown) => Renderers | undefined;
@@ -200,7 +181,7 @@ export function makeCodemodeRenderers(input: {
         }
         if (typeof details.fullOutputPath === "string") parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
-      return stack(parts);
+      return stackComponents(parts, "codemode", "child-placements");
     },
   };
 }

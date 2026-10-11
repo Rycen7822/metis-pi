@@ -1,6 +1,6 @@
 import { fusionReceipt } from "./execution/action-fusion.ts";
-import { asRecord, type Component, type Renderers, type ViewContext } from "./tool-names.ts";
-import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow } from "./selection-copy/model.ts";
+import { asRecord, type Renderers, type ViewContext } from "./tool-names.ts";
+import { stackComponents } from "./copy-stack.ts";
 
 /** Use the mutation's immutable evidence, never the outer command's exit status. */
 export function mutationViewContext(result: unknown, ctx: ViewContext): ViewContext {
@@ -11,23 +11,6 @@ export function mutationViewContext(result: unknown, ctx: ViewContext): ViewCont
     ...(details.metisWriteDiff ? { writeChanges: details.metisWriteDiff } : {}),
     ...(receipt ? { isError: receipt.mutationStatus !== "success", isPartial: false, hasResult: true } : {}),
   };
-}
-
-function stack(components: Component[]): Component {
-  return { render(width) {
-    const lines: string[] = [], rows: CopyRow[] = [];
-    for (const component of components) {
-      const rendered = component.render(width);
-      lines.push(...rendered);
-      rows.push(...(productFor(rendered)?.rows ?? rendered.map(() => ({ spans: [{ colStart: 0, colEnd: width, kind: "unknown" as const }], breakBefore: "hard" as const }))));
-    }
-    registerProduct(lines, { componentId: "action-fusion", width, rows });
-    publishRows(this, lines);
-    return lines;
-  }, invalidate() {
-    for (const component of components) component.invalidate();
-    releaseCopyCache(this);
-  } };
 }
 
 /** Reuse existing mutation and shell components for both folding and copying. */
@@ -46,11 +29,11 @@ export function fusionRenderers(mutation: Renderers, shell: Renderers, currentRe
       const failed = !["running", "succeeded"].includes(receipt.command.status);
       const shellCtx = { ...ctx, args: { command: receipt.command.command }, isError: failed, isPartial: running, hasResult: !running, lastComponent: undefined };
       const commandResult = { content: value.content.slice(receipt.command.outputBlock - 1), isError: failed };
-      return stack([
+      return stackComponents([
         mutation.renderResult(mutationResult, { ...options, isPartial: false }, theme, mutationCtx),
         shell.renderCall(shellCtx.args, theme, shellCtx),
         shell.renderResult(commandResult, { ...options, isPartial: running }, theme, shellCtx),
-      ]);
+      ], "action-fusion", "flat-rows");
     },
   };
 }

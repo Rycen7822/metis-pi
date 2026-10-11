@@ -19,7 +19,10 @@ import { saveConfig, persistConfig } from "./config.ts";
 import { formatTokens, formatCharProgress, formatCompactCount } from "./stats.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { openPrunerSettings, protectedToolsDisplay } from "./settings.ts";
-import { optionLabel, optionValues, parseScalar, rowDescription, scalarRow, writeScalar } from "./setting-fields.ts";
+import {
+  optionLabel, optionValues, parseScalar, rowDescription, scalarRow,
+  type ScalarValue, writeScalar,
+} from "./setting-fields.ts";
 import { buildPruneTree, TreeBrowser } from "./tree-browser.ts";
 import { normalizeSummaryToolCallRefs } from "./summary-refs.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
@@ -354,6 +357,12 @@ export function registerCommands(
         subcommand = choice.split(/\s+/)[0];
       }
 
+      // Commands and the overlay share scalar parsing/path writes, but not input policy.
+      const setScalar = (id: string, value: ScalarValue) => {
+        currentConfig.value = writeScalar(currentConfig.value, scalarRow(id), value);
+        void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
+      };
+
       switch (subcommand) {
         // ── /pruner settings ── interactive overlay ──
         case "settings": {
@@ -368,8 +377,7 @@ export function registerCommands(
         case "on":
         case "off": {
           const enabled = subcommand === "on";
-          currentConfig.value = { ...currentConfig.value, enabled };
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
+          setScalar("enabled", enabled);
           ctx.ui.notify(`Context pruning ${enabled ? "enabled" : "disabled"}.`);
           setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
           break;
@@ -454,70 +462,37 @@ export function registerCommands(
           break;
         }
 
-        // ── /pruner thinking [value] ──
-        case "thinking": {
-          const thinkingArg = subArgs[0];
-          const thinkingField = scalarRow("summarizerThinking");
-          if (!thinkingArg) {
-            ctx.ui.notify(
-              `Current summarizer thinking: ${optionLabel("summarizerThinking", currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`,
-            );
-            return;
-          }
-          const parsedThinking = parseScalar(thinkingField, thinkingArg);
-          if (parsedThinking === undefined) {
-            ctx.ui.notify(
-              `Invalid summarizer thinking level: ${thinkingArg}. Use one of: ${optionValues(thinkingField).join(", ")}.`,
-              "warning",
-            );
-            return;
-          }
-          currentConfig.value = writeScalar(currentConfig.value, thinkingField, parsedThinking);
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(`Summarizer thinking set to: ${currentConfig.value.summarizerThinking}`);
-          break;
-        }
-
-        // ── /pruner prune-on [value] ──
-        case "prune-on": {
-          const modeArg = subArgs[0];
-          const pruneOnField = scalarRow("pruneOn");
-          if (!modeArg) {
-            const options = pruneOnField.options.map((m) => `${m.value} — ${m.label}`);
-            const choice = await ctx.ui.select("pruner — choose when to trigger summarization", options);
-            if (!choice) return;
-            // Extract the value (first word) from "agent-message — On agent message"
-            currentConfig.value = writeScalar(currentConfig.value, pruneOnField, choice.split(/\s+/)[0]);
-          } else {
-            currentConfig.value = writeScalar(currentConfig.value, pruneOnField, modeArg);
-          }
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
-          break;
-        }
-
-        // ── /pruner batching [value] ──
+        // ── Enum scalars: shared dispatch, distinct query/selection/report policy ──
+        case "thinking":
+        case "prune-on":
         case "batching": {
-          const batchArg = subArgs[0];
-          const batchingField = scalarRow("batchingMode");
-          if (!batchArg) {
-            const options = batchingField.options.map((m) => `${m.value} — ${m.label}`);
-            const choice = await ctx.ui.select("pruner — choose batching granularity", options);
-            if (!choice) return;
-            currentConfig.value = writeScalar(currentConfig.value, batchingField, choice.split(/\s+/)[0]);
-          } else {
-            const parsedBatch = parseScalar(batchingField, batchArg);
-            if (parsedBatch === undefined) {
-              ctx.ui.notify(
-                `Invalid batching mode: ${batchArg}. Use one of: ${optionValues(batchingField).join(", ")}.`,
-                "warning",
-              );
+          const thinking = subcommand === "thinking";
+          const trigger = subcommand === "prune-on";
+          const row = scalarRow(thinking ? "summarizerThinking" : trigger ? "pruneOn" : "batchingMode");
+          let raw = subArgs[0];
+          if (!raw) {
+            if (thinking) {
+              ctx.ui.notify(`Current summarizer thinking: ${optionLabel(row.id, currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`);
               return;
             }
-            currentConfig.value = writeScalar(currentConfig.value, batchingField, parsedBatch);
+            const choice = await ctx.ui.select(
+              trigger ? "pruner — choose when to trigger summarization" : "pruner — choose batching granularity",
+              row.options.map((m) => `${m.value} — ${m.label}`),
+            );
+            if (!choice) return;
+            // Interactive selections historically write the first word directly,
+            // even for strict batching. Explicit arguments use the row parser.
+            raw = choice.split(/\s+/)[0];
+          } else if (parseScalar(row, raw) === undefined) {
+            const label = thinking ? "summarizer thinking level" : "batching mode";
+            ctx.ui.notify(`Invalid ${label}: ${raw}. Use one of: ${optionValues(row).join(", ")}.`, "warning");
+            return;
           }
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(`Batching mode set to: ${optionLabel("batchingMode", currentConfig.value.batchingMode)}`);
+          setScalar(row.id, raw);
+          if (trigger) setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
+          else ctx.ui.notify(thinking
+            ? `Summarizer thinking set to: ${currentConfig.value.summarizerThinking}`
+            : `Batching mode set to: ${optionLabel(row.id, currentConfig.value.batchingMode)}`);
           break;
         }
 
@@ -678,6 +653,7 @@ export function registerCommands(
           break;
         }
 
+        // Native limits deliberately do not use the overlay's parseInt parser.
         case "compaction-summary-limit": {
           const arg = subArgs[0];
           if (arg === undefined) {
@@ -689,62 +665,33 @@ export function registerCommands(
             ctx.ui.notify(`Invalid summary limit: "${subArgs.join(" ")}". Expected a non-negative safe integer (0 keeps Pi's limit).`, "warning");
             break;
           }
-          currentConfig.value = writeScalar(currentConfig.value, scalarRow("compactionSummaryMaxTokens"), value);
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
+          setScalar("compactionSummaryMaxTokens", value);
           ctx.ui.notify(`Native summary token limit: ${value || "Pi default"}.`);
           break;
         }
 
-        // ── /pruner min-batch-chars [value] ──
-        // Bare form shows the current value. Numeric form sets it directly
-        // (any non-negative integer accepted; not restricted to the preset
-        // cycle exposed in the SettingsList). `0` disables the pre-flush
-        // guard.
-        case "min-batch-chars": {
-          const arg = subArgs[0];
-          const minBatchField = scalarRow("minBatchChars");
-          if (!arg) {
-            const cur = currentConfig.value.minBatchChars;
-            const state = cur === 0 ? "disabled" : `${cur} chars`;
-            ctx.ui.notify(`Current minBatchChars: ${state}.`);
-            break;
-          }
-          const parsed = parseScalar(minBatchField, arg);
-          if (parsed === undefined) {
-            ctx.ui.notify(`Invalid minBatchChars: "${arg}". Expected a non-negative integer (0 disables).`, "warning");
-            break;
-          }
-          currentConfig.value = writeScalar(currentConfig.value, minBatchField, parsed);
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(
-            parsed === 0
-              ? "minBatchChars set to 0 — pre-flush trivial-batch skipping disabled."
-              : `minBatchChars set to ${parsed}.`,
-          );
-          break;
-        }
-
+        // Integer scalars accept any non-negative parseInt prefix (not just
+        // overlay presets), ignore extra arguments, and disable the guard at 0.
+        case "min-batch-chars":
         case "recovery-grace": {
+          const batch = subcommand === "min-batch-chars";
+          const id = batch ? "minBatchChars" : "recoveryGraceTurns";
           const arg = subArgs[0];
-          const graceField = scalarRow("recoveryGraceTurns");
           if (!arg) {
-            const cur = currentConfig.value.recoveryGraceTurns;
-            const state = cur === 0 ? "disabled" : `${cur} user-turn-group(s)`;
-            ctx.ui.notify(`Current recovery grace: ${state}.`);
+            const cur = currentConfig.value[id];
+            const state = cur === 0 ? "disabled" : `${cur} ${batch ? "chars" : "user-turn-group(s)"}`;
+            ctx.ui.notify(`Current ${batch ? "minBatchChars" : "recovery grace"}: ${state}.`);
             break;
           }
-          const parsed = parseScalar(graceField, arg);
-          if (parsed === undefined) {
-            ctx.ui.notify(`Invalid recovery-grace: "${arg}". Expected a non-negative integer (0 disables).`, "warning");
+          const value = parseScalar(scalarRow(id), arg);
+          if (value === undefined) {
+            ctx.ui.notify(`Invalid ${batch ? "minBatchChars" : "recovery-grace"}: "${arg}". Expected a non-negative integer (0 disables).`, "warning");
             break;
           }
-          currentConfig.value = writeScalar(currentConfig.value, graceField, parsed);
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
-          ctx.ui.notify(
-            parsed === 0
-              ? "recovery-grace set to 0 - context_tree_query output stubs immediately."
-              : `recovery-grace set to ${parsed} user-turn-group(s).`,
-          );
+          setScalar(id, value);
+          ctx.ui.notify(batch
+            ? (value === 0 ? "minBatchChars set to 0 — pre-flush trivial-batch skipping disabled." : `minBatchChars set to ${value}.`)
+            : (value === 0 ? "recovery-grace set to 0 - context_tree_query output stubs immediately." : `recovery-grace set to ${value} user-turn-group(s).`));
           break;
         }
 
@@ -764,8 +711,7 @@ export function registerCommands(
             break;
           }
           const next = arg === "on" || arg === "true";
-          currentConfig.value = writeScalar(currentConfig.value, dedupField, next);
-          void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
+          setScalar(dedupField.id, next);
           ctx.ui.notify(`Content-hash dedup turned ${next ? "ON" : "OFF"}.`);
           break;
         }

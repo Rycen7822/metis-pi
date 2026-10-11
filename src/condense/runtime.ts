@@ -239,7 +239,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // model work. Also leave non-text results intact rather than summarizing
     // only their text and accidentally discarding attachments.
     const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
-    const edited = changedSourceToolIds(ctx);
+    const edited = readSourceEdits(ctx).changedToolIds;
     const visibleKeys = new Set(visible.filter((message: any) => message.role === "toolResult" && !edited.has(message.toolCallId)
       && Array.isArray(message.content) && message.content.every((block: any) => block.type === "text"))
       .map((message: any) => occKey(message.toolCallId, message.timestamp)));
@@ -322,10 +322,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         && JSON.stringify(item.data) === JSON.stringify(data))) throw new Error("Chain evidence was not persisted on the current branch");
       if (type === CUSTOM_TYPE_CHAIN) lowerFloor(supersede, (data as SingleChainCompressionEntry).startUserTimestamp);
     };
-    const backfill = { spillThreshold: currentConfig.value.spillThreshold,
-      spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-      sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
-      assertValid: () => { assertCurrent(version); signal?.throwIfAborted(); } };
+    const backfill = { ...archiveOptions(ctx.sessionManager), assertValid: () => { assertCurrent(version); signal?.throwIfAborted(); } };
     for (const chain of selectEligible(chains, rollingWindow,
       new Set(indexer.getChainEntries().flatMap(chainMembers).map(entry => entry.startUserTimestamp)), inGrace)) {
       const fresh = extractChainRecords(messages, { ...chain, protectedToolCallIds: [] }, key => indexer.getIndex().has(key));
@@ -384,6 +381,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx), currentConfig.value.summaryBudget);
   };
 
+  // Read at each preparation site; delivery and live assertions remain with the writer.
+  const archiveOptions = (manager: ExtensionContext["sessionManager"]) => ({
+    spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+    sessionDir: manager.getSessionDir(), sessionId: manager.getSessionId(),
+  });
+
   // Archive first so aliases, spill previews and recovery paths are real and
   // fixed before paying for a summary. This same renderer is used to publish.
   const prepareReplacement = async (batch: CapturedBatch, ctx: any,
@@ -400,9 +403,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         && (record.contentHash ?? hashToolResult(record.toolName, record.resultText)) === hashToolResult(call.toolName, call.resultText)
         ? { shortId, toolCallId: call.toolCallId, resultTimestamp: call.resultTimestamp } : undefined;
     });
-    const refs = existing.every(ref => ref !== undefined) ? existing : await archiveBatches([batch], { indexer, appendEntry,
-      spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-      sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() });
+    const refs = existing.every(ref => ref !== undefined) ? existing : await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager) });
     signal.throwIfAborted();
     if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)) throw new Error("This extension ctx is stale: summary source changed during archive");
     const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
@@ -544,10 +545,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             && projectArguments(before, [group], effectiveProtection()) !== before);
         const after = projectArguments(before, candidates.map(candidate => candidate.group), effectiveProtection());
         if (after !== before && JSON.stringify(after).length < JSON.stringify(before).length) {
-          await archiveBatches(candidates.map(({ batch }) => batch), { indexer,
-            spillThreshold: currentConfig.value.spillThreshold,
-            spillPreviewBytes: currentConfig.value.spillPreviewBytes, sessionDir: ctx.sessionManager.getSessionDir(),
-            sessionId: ctx.sessionManager.getSessionId(), appendEntry: appendEntry! });
+          await archiveBatches(candidates.map(({ batch }) => batch), { indexer, ...archiveOptions(ctx.sessionManager), appendEntry: appendEntry! });
           const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
           if (currentConfig.value.enabled && JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection)
             && JSON.stringify(current) === JSON.stringify(before)) {
@@ -634,9 +632,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
               // Allocate a durable recovery ref without authorizing hiding.
               // registerDuplicate reuses it only after this exact stub wins.
-              const refs = await archiveBatches([{ ...batch, toolCalls: [tc] }], { indexer, appendEntry: appendEntry!,
-                spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-                sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId() });
+              const refs = await archiveBatches([{ ...batch, toolCalls: [tc] }], { indexer, appendEntry: appendEntry!, ...archiveOptions(ctx.sessionManager) });
               const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
               const message = visible.find((message: any) => message.role === "toolResult" && occKey(message.toolCallId, message.timestamp) === key);
               const archived = indexer.getRecord(key);
@@ -1353,43 +1349,20 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
     // A context edit changes effective evidence, not the immutable archive. Keep
     // edited sources visible and remove stale summaries of the same source group.
-    const editedToolIds = new Set<string>();
-    if (ctx) {
-      const projection = ctx.sessionManager.buildSessionProjection();
-      const editedSummaries = new Set<string>();
-      const summaryIdentity = (message: any) => JSON.stringify([message.timestamp, message.content, message.details]);
-      for (const entry of projection.entries) {
-        if (entry.sourceEntry.type === "custom_message" && entry.sourceEntry.customType === CUSTOM_TYPE_SUMMARY) {
-          const original = entry.sourceEntry;
-          const effective = entry.messages[0];
-          if (entry.messages.length === 1 && effective?.role === "custom"
-            && JSON.stringify([effective.content, effective.details]) === JSON.stringify([original.content, original.details])) continue;
-          for (const ref of normalizeSummaryToolCallRefs(original.details)) editedToolIds.add(bareToolCallId(ref.toolCallId));
-          for (const message of entry.messages) editedSummaries.add(summaryIdentity(message));
-          continue;
-        }
-        if (entry.sourceEntry.type !== "message") continue;
-        const original = entry.sourceEntry.message;
-        if (original.role !== "toolResult" && original.role !== "assistant") continue;
-        const effective = entry.messages[0];
-        if (entry.messages.length === 1 && effective && "content" in effective && JSON.stringify(effective.content) === JSON.stringify(original.content)) continue;
-        if (original.role === "toolResult") editedToolIds.add(original.toolCallId);
-        if (original.role === "assistant" && Array.isArray(original.content)) {
-          for (const block of original.content) if (block.type === "toolCall") editedToolIds.add(block.id);
-        }
-      }
-      const summaryIds = (message: any): string[] => message.customType === CUSTOM_TYPE_SUMMARY
-        ? normalizeSummaryToolCallRefs(message.details).map(ref => bareToolCallId(ref.toolCallId)) : [];
+    const edits = ctx && readSourceEdits(ctx);
+    const editedToolIds = edits?.editedToolIds ?? new Set<string>();
+    if (edits) {
+      const { projection, editedSummaries } = edits;
       // One summary may cover multiple occurrences; preserve the whole group.
       let previousSize = -1;
       while (previousSize !== editedToolIds.size) {
         previousSize = editedToolIds.size;
         for (const message of projection.messages) {
-          const ids = summaryIds(message);
+          const ids = summaryToolIds(message);
           if (ids.some(id => editedToolIds.has(id))) ids.forEach(id => editedToolIds.add(id));
         }
       }
-      const filtered = messages.filter(message => editedSummaries.has(summaryIdentity(message)) || !summaryIds(message).some(id => editedToolIds.has(id)));
+      const filtered = messages.filter(message => editedSummaries.has(summaryIdentity(message)) || !summaryToolIds(message).some(id => editedToolIds.has(id)));
       if (filtered.length !== messages.length) { messages = filtered; changed = true; }
     }
 
@@ -1436,7 +1409,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext): SingleChainCompressionEntry[] {
     const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
     const chains = detectChains(raw, protectionPredicate);
-    const edited = changedSourceToolIds(ctx);
+    const edited = readSourceEdits(ctx).changedToolIds;
     const anchors = ctx.sessionManager.buildSessionProjection().entries;
     return chainMembers(entry).filter((view, i) => {
       const member = entry.members[i]!;
@@ -1453,19 +1426,33 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     });
   }
 
-  function changedSourceToolIds(ctx: ExtensionContext): Set<string> {
-    const changed = new Set<string>();
-    for (const entry of ctx.sessionManager.buildSessionProjection().entries) {
-      const source = entry.sourceEntry;
-      const original: any = source.type === "message" ? source.message : source.type === "custom_message" ? source : undefined;
-      if (!original || (entry.messages.length === 1
-        && JSON.stringify([(entry.messages[0] as any).content, (entry.messages[0] as any).details]) === JSON.stringify([original.content, original.details]))) continue;
-      if (original.role === "toolResult") changed.add(original.toolCallId);
-      if (original.role === "assistant") for (const block of original.content ?? []) if (block.type === "toolCall") changed.add(block.id);
-      if (source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY)
-        for (const ref of normalizeSummaryToolCallRefs(source.details)) changed.add(bareToolCallId(ref.toolCallId));
+  const summaryIdentity = (message: any) => JSON.stringify([message.timestamp, message.content, message.details]);
+  const summaryToolIds = (message: any): string[] => message.customType === CUSTOM_TYPE_SUMMARY
+    ? normalizeSummaryToolCallRefs(message.details).map(ref => bareToolCallId(ref.toolCallId)) : [];
+
+  // A transient read view, never a writer's authorization across awaits.
+  function readSourceEdits(ctx: ExtensionContext) {
+    const projection = ctx.sessionManager.buildSessionProjection();
+    const changedToolIds = new Set<string>(), editedToolIds = new Set<string>(), editedSummaries = new Set<string>();
+    for (const { sourceEntry: source, messages } of projection.entries) {
+      const summary = source.type === "custom_message" && source.customType === CUSTOM_TYPE_SUMMARY;
+      const original: any = source.type === "message" ? source.message : summary ? source : undefined;
+      if (!original || (!summary && original.role !== "toolResult" && original.role !== "assistant")) continue;
+      const effective = messages[0];
+      const sameEvidence = messages.length === 1 && JSON.stringify([(effective as any).content, (effective as any).details])
+        === JSON.stringify([original.content, original.details]);
+      // Prompt protection ignores ordinary execution metadata; source freshness does not.
+      const unchanged = summary ? sameEvidence && effective?.role === "custom"
+        : messages.length === 1 && effective && "content" in effective && JSON.stringify(effective.content) === JSON.stringify(original.content);
+      if (sameEvidence && unchanged) continue;
+      const ids = summary ? summaryToolIds(source) : original.role === "toolResult" ? [original.toolCallId]
+        : (original.content ?? []).filter((block: any) => block.type === "toolCall").map((block: any) => block.id);
+      if (!sameEvidence) ids.forEach((id: string) => changedToolIds.add(id));
+      if (unchanged) continue;
+      ids.forEach((id: string) => editedToolIds.add(id));
+      if (summary) for (const message of messages) editedSummaries.add(summaryIdentity(message));
     }
-    return changed;
+    return { projection, changedToolIds, editedToolIds, editedSummaries };
   }
 
   function sharedShape(before: any[], views: SingleChainCompressionEntry[]): string {
@@ -1560,7 +1547,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const window = currentConfig.value.chainCompression.rollingWindow;
       const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
       const known = new Set(indexer.getChainEntries().flatMap(chainMembers).map(member => member.startUserTimestamp));
-      const edited = changedSourceToolIds(ctx);
+      const edited = readSourceEdits(ctx).changedToolIds;
       const eligible = selectEligible(chains, window, known, grace).filter(chain => chain.finalAssistantTimestamp !== deferredFinal
         && !chain.middleToolCallIds.some(id => edited.has(id)));
       const attempt = source + config + [...known].join(",");
@@ -1602,8 +1589,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const anchors = manager.buildSessionProjection().entries;
       const entry = await prepareSharedChain(eligible, 0, { indexer, blockRefs, messages: raw,
         now: Date.now, appendEntry, diagnostics,
-        backfill: { spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-          sessionDir: manager.getSessionDir(), sessionId: manager.getSessionId(), assertValid } },
+        backfill: { ...archiveOptions(manager), assertValid } },
         (role, timestamp) => anchorId(ctx, role, timestamp, anchors), grace, signal);
       assertValid();
       if (!entry || source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;

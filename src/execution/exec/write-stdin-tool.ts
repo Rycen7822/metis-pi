@@ -1,10 +1,9 @@
-import { EXEC_OUTPUT_SCHEMA, execStructuredContent } from "./results.ts";
+import { EXEC_OUTPUT_SCHEMA, execToolResult, isUnifiedExecResult } from "./results.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { renderWriteStdinCall } from "../ui/rendering.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
-import { formatUnifiedExecResult } from "./format.ts";
 import { renderTerminalOutput } from "./output.ts";
 
 const WRITE_STDIN_PARAMETERS = Type.Object({
@@ -68,14 +67,6 @@ function parseWriteStdinParams(params: unknown): WriteStdinParams {
 	return { session_id: params.session_id, chars, yield_time_ms, max_output_tokens };
 }
 
-function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
-	return typeof details === "object" && details !== null && typeof (details as { output?: unknown }).output === "string";
-}
-
-function createEmptyResultComponent(): Container {
-	return new Container();
-}
-
 export function createWriteStdinTool(sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {}) {
 	const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
 		name: "write_stdin",
@@ -89,21 +80,12 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 			const command = sessions.getSessionCommand(typed.session_id) ?? "";
 			let result: UnifiedExecResult;
 			try {
-				const toToolResult = (partial: UnifiedExecResult) => ({
-					content: [{ type: "text" as const, text: formatUnifiedExecResult(partial, command) }],
-					details: partial,
-				structuredContent: execStructuredContent(partial),
-				});
-				result = await sessions.write(typed, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
+				result = await sessions.write(typed, signal, onUpdate ? (partial) => onUpdate(execToolResult(partial, command)) : undefined);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				throw new Error(`write_stdin failed: ${message}`);
 			}
-			return {
-				content: [{ type: "text", text: formatUnifiedExecResult(result, command) }],
-				details: result,
-				structuredContent: execStructuredContent(result),
-			};
+			return execToolResult(result, command);
 		},
 		renderCall(args, theme) {
 			const inputArgs = args as Partial<WriteStdinParams>;
@@ -115,7 +97,7 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 		renderResult(result, { expanded, isPartial }, theme) {
 			const state = getResultState(result);
 			if (!expanded) {
-				if (!isPartial || !options.showOutputWhenCollapsed) return createEmptyResultComponent();
+				if (!isPartial || !options.showOutputWhenCollapsed) return new Container();
 				const output = renderTerminalOutput(state.output).trimEnd();
 				const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
 				const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;

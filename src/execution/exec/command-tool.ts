@@ -1,4 +1,4 @@
-import { EXEC_OUTPUT_SCHEMA, execStructuredContent } from "./results.ts";
+import { EXEC_OUTPUT_SCHEMA, execToolResult, isUnifiedExecResult } from "./results.ts";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
@@ -7,7 +7,6 @@ import { Type } from "typebox";
 import { getPiConfiguredShellPath } from "../runtime-shell.ts";
 import { renderExecCommandCall } from "../ui/rendering.ts";
 import { getExperimentalToolSampling } from "../tool-sampling.ts";
-import { formatUnifiedExecResult } from "./format.ts";
 import { renderTerminalOutput } from "./output.ts";
 import type { ExecCommandInput, ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { MAX_EXEC_YIELD_TIME_MS } from "./shell.ts";
@@ -66,10 +65,6 @@ function parseExecCommandParams(params: unknown): ExecCommandParams {
 		max_output_tokens: "max_output_tokens" in params && typeof params.max_output_tokens === "number" ? params.max_output_tokens : undefined,
 		login: "login" in params && typeof params.login === "boolean" ? params.login : undefined,
 	};
-}
-
-function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
-	return typeof details === "object" && details !== null && typeof (details as { output?: unknown }).output === "string";
 }
 
 const COLLAPSED_OUTPUT_MAX_VISUAL_LINES = 5;
@@ -171,11 +166,7 @@ export function createExecCommandTool(sessions: ExecSessionManager, options: Exe
 			const input: ExecCommandInput = parsedInput.shell === undefined
 				? { ...parsedInput, defaultShell: getPiConfiguredShellPath(ctx) }
 				: parsedInput;
-			const toToolResult = (partial: UnifiedExecResult) => ({
-				content: [{ type: "text" as const, text: formatUnifiedExecResult(partial, input.cmd) }],
-				details: partial,
-				structuredContent: execStructuredContent(partial),
-			});
+			const toToolResult = (partial: UnifiedExecResult) => execToolResult(partial, input.cmd);
 			const execInput = input.tty
 				? input
 				: {

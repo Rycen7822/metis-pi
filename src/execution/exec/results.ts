@@ -8,6 +8,7 @@ export const EXEC_OUTPUT_SCHEMA = Type.Object({
   fullOutputError: Type.Optional(Type.String()),
 });
 import type { ExecSessionSnapshot, UnifiedExecResult } from "./session-manager.ts";
+import { formatUnifiedExecResult } from "./format.ts";
 import { consumeOutput, generateChunkId, peekOutputSince, peekUnconsumedOutput, type ExecOutputSessionState } from "./output.ts";
 
 export interface ExecResultSessionState extends ExecOutputSessionState {
@@ -55,6 +56,16 @@ export function makeSnapshotResult(session: ExecResultSessionState, waitMs: numb
 
 export function makeSnapshotSince(session: ExecResultSessionState, waitMs: number, baselineOffset: number, maxOutputTokens?: number): UnifiedExecResult {
 	return fromSnapshot(session, waitMs, peekOutputSince(session, baselineOffset, maxOutputTokens), session.buffer.endOffset - baselineOffset);
+}
+
+export function isUnifiedExecResult(details: unknown): details is UnifiedExecResult {
+	return typeof details === "object" && details !== null && typeof (details as { output?: unknown }).output === "string";
+}
+
+/** Preserve the same evidence in model text, renderer details and codemode output. */
+export function execToolResult(result: UnifiedExecResult, command: string) {
+	return { content: [{ type: "text" as const, text: formatUnifiedExecResult(result, command) }],
+		details: result, structuredContent: execStructuredContent(result) };
 }
 
 export function execStructuredContent(result: UnifiedExecResult): Record<string, string | number | boolean> {

@@ -133,3 +133,36 @@ test("recall pages original arguments and branch-owned summaries with content-bo
   assert.match((await query({ sourceEntryIds: ["missing"] })).results[0].error, /Not found/);
   await assert.rejects(query({ sourceEntryIds: [entry.id], ...params }), /Choose sourceEntryIds/);
 });
+
+test("summary readers preserve occurrence ownership, first-seen body order and legacy refs across reload", () => {
+  const { indexer, ctx } = queryFixture([]);
+  const ref = (shortId, toolCallId, resultTimestamp) => ({ shortId, toolCallId, resultTimestamp });
+  const first = ref("t1", "same", 3), second = ref("t2", "same", 5), outside = ref("t3", "outside", 9);
+  for (const [content, details] of [
+    ["EARLY", { toolCallRefs: [first] }],
+    ["LATE", { toolCallRefs: [first] }],
+    ["EARLY", { toolCallRefs: [second] }],
+    [[{ type: "text", text: "MIXED" }], { toolCallRefs: [first, outside] }],
+    ["LEGACY", { toolCallIds: ["legacy"] }],
+  ]) ctx.sessionManager.appendCustomMessageEntry("context-prune-summary", content, false, details);
+
+  const checkReaders = () => {
+    assert.equal(indexer.hasPerBatchSummaryCoveringAny([]), false);
+    assert.equal(indexer.hasPerBatchSummaryCoveringAny(["same@3"]), true);
+    assert.equal(indexer.hasPerBatchSummaryCoveringAny(["same@5"]), true);
+    assert.equal(indexer.hasPerBatchSummaryCoveringAny(["same"]), false, "a bare id is not an occurrence wildcard");
+    assert.deepEqual(indexer.getPerBatchSummariesForToolCallIds(["same@3", "same@5"]), ["EARLY", "LATE", "MIXED"]);
+    assert.deepEqual(indexer.getPerBatchSummariesForToolCallIds(["same@5"]), ["EARLY"]);
+    assert.equal(indexer.getPerBatchSummaryTextForToolCallIds(["same@3"]), "EARLY\n\nLATE\n\nMIXED");
+    assert.equal(indexer.getOwnedSummaryText(["same@3"]), null, "a mixed semantic summary cannot be split by refs");
+    assert.equal(indexer.getOwnedSummaryText(["same@5"]), "EARLY");
+    assert.equal(indexer.getOwnedSummaryText(["same@3", "outside@9"]), "EARLY\n\nLATE\n\nMIXED");
+    assert.equal(indexer.getOwnedSummaryText(["legacy"]), "LEGACY");
+    assert.deepEqual(indexer.getPerBatchSummariesForToolCallIds([]), []);
+    assert.equal(indexer.getOwnedSummaryText(["absent"]), "");
+  };
+  indexer.syncSummaryEntries(ctx);
+  checkReaders();
+  indexer.reconstructFromSession(ctx);
+  checkReaders();
+});
