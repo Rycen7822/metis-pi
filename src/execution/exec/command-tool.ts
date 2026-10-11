@@ -80,108 +80,133 @@ function expandHint(): string {
 	}
 }
 
-function collapsedOutput(result: CollapsedExecOutput, theme: { fg(role: string, text: string): string }): { text: string; truncated: boolean } {
-	let output = renderTerminalOutput(result.output).trimEnd();
-	let truncated = false;
-	if (output.length > COLLAPSED_OUTPUT_MAX_RAW_CHARS) {
-		output = output.slice(-COLLAPSED_OUTPUT_MAX_RAW_CHARS);
-		const newline = output.indexOf("\n");
-		if (newline !== -1) output = output.slice(newline + 1);
-		truncated = true;
-	}
-	const lines = output.split("\n");
-	if (lines.length > COLLAPSED_OUTPUT_MAX_RAW_LINES) {
-		output = lines.slice(-COLLAPSED_OUTPUT_MAX_RAW_LINES).join("\n");
-		truncated = true;
-	}
-	const parts = [output];
-	if (result.session_id !== undefined) parts.push(theme.fg("accent", `Session ${result.session_id} still running`));
-	if (result.exit_code !== undefined && result.exit_code !== 0) parts.push(theme.fg("muted", `Exit code: ${result.exit_code}`));
-	if (typeof result.wall_time_seconds === "number" && parts.some(Boolean)) parts.push(theme.fg("muted", `Took ${result.wall_time_seconds.toFixed(1)}s`));
-	return { text: parts.filter(Boolean).join("\n"), truncated };
+function collapsedOutput(
+  result: CollapsedExecOutput,
+  theme: { fg(role: string, text: string): string },
+): { text: string; truncated: boolean } {
+  let output = renderTerminalOutput(result.output).trimEnd();
+  let truncated = false;
+  if (output.length > COLLAPSED_OUTPUT_MAX_RAW_CHARS) {
+    output = output.slice(-COLLAPSED_OUTPUT_MAX_RAW_CHARS);
+    const newline = output.indexOf("\n");
+    if (newline !== -1) output = output.slice(newline + 1);
+    truncated = true;
+  }
+  const lines = output.split("\n");
+  if (lines.length > COLLAPSED_OUTPUT_MAX_RAW_LINES) {
+    output = lines.slice(-COLLAPSED_OUTPUT_MAX_RAW_LINES).join("\n");
+    truncated = true;
+  }
+  const parts = [output];
+  if (result.session_id !== undefined) parts.push(theme.fg("accent", `Session ${result.session_id} still running`));
+  if (result.exit_code !== undefined && result.exit_code !== 0)
+    parts.push(theme.fg("muted", `Exit code: ${result.exit_code}`));
+  if (typeof result.wall_time_seconds === "number" && parts.some(Boolean))
+    parts.push(theme.fg("muted", `Took ${result.wall_time_seconds.toFixed(1)}s`));
+  return { text: parts.filter(Boolean).join("\n"), truncated };
 }
 
 function renderCollapsedOutput(result: CollapsedExecOutput, theme: { fg(role: string, text: string): string }) {
-	let cached: { width: number; lines: string[]; skipped: number; rawTruncated: boolean } | undefined;
-	return {
-		render(width: number): string[] {
-			if (!cached || cached.width !== width) {
-				const output = collapsedOutput(result, theme);
-				const preview = output.text
-					? truncateToVisualLines(theme.fg("dim", output.text), COLLAPSED_OUTPUT_MAX_VISUAL_LINES, width, 4)
-					: { visualLines: [], skippedCount: 0 };
-				cached = { width, lines: preview.visualLines, skipped: preview.skippedCount, rawTruncated: output.truncated };
-			}
-			if (!cached.rawTruncated && cached.skipped <= 0) return cached.lines;
-			const hint = cached.rawTruncated ? "... (earlier output hidden," : `... (${cached.skipped} earlier lines,`;
-			return [truncateToWidth(`    ${theme.fg("muted", hint)} ${expandHint()}${theme.fg("muted", ")")}`, width, "..."), ...cached.lines];
-		},
-		invalidate(): void { cached = undefined; },
-	};
+  let cached: { width: number; lines: string[]; skipped: number; rawTruncated: boolean } | undefined;
+  return {
+    render(width: number): string[] {
+      if (!cached || cached.width !== width) {
+        const output = collapsedOutput(result, theme);
+        const preview = output.text
+          ? truncateToVisualLines(theme.fg("dim", output.text), COLLAPSED_OUTPUT_MAX_VISUAL_LINES, width, 4)
+          : { visualLines: [], skippedCount: 0 };
+        cached = { width, lines: preview.visualLines, skipped: preview.skippedCount, rawTruncated: output.truncated };
+      }
+      if (!cached.rawTruncated && cached.skipped <= 0) return cached.lines;
+      const hint = cached.rawTruncated ? "... (earlier output hidden," : `... (${cached.skipped} earlier lines,`;
+      return [
+        truncateToWidth(`    ${theme.fg("muted", hint)} ${expandHint()}${theme.fg("muted", ")")}`, width, "..."),
+        ...cached.lines,
+      ];
+    },
+    invalidate(): void {
+      cached = undefined;
+    },
+  };
 }
 
 function renderCall(
-	args: { cmd?: unknown },
-	theme: { fg(role: string, text: string): string; bold(text: string): string },
-	context: ExecCommandRenderContextLike | undefined,
+  args: { cmd?: unknown },
+  theme: { fg(role: string, text: string): string; bold(text: string): string },
+  context: ExecCommandRenderContextLike | undefined,
 ) {
-	const command = typeof args.cmd === "string" ? args.cmd : "";
-	const text = renderExecCommandCall(command, "done", theme, context?.expanded === true);
-	return typeof text === "string" ? new Text(text, 0, 0) : text;
+  const command = typeof args.cmd === "string" ? args.cmd : "";
+  const text = renderExecCommandCall(command, "done", theme, context?.expanded === true);
+  return typeof text === "string" ? new Text(text, 0, 0) : text;
 }
 
 function renderResult(
-	result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown | undefined },
-	renderOptions: { expanded: boolean; isPartial: boolean },
-	theme: { fg(role: string, text: string): string },
-	options: ExecCommandToolOptions,
+  result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown | undefined },
+  renderOptions: { expanded: boolean; isPartial: boolean },
+  theme: { fg(role: string, text: string): string },
+  options: ExecCommandToolOptions,
 ) {
-	const details = isUnifiedExecResult(result.details) ? result.details : undefined;
-	const textContent = result.content.find((item) => item.type === "text");
-	const plainText = textContent?.text ?? "";
-	if (!renderOptions.expanded) {
-		const collapsed = details ?? (plainText ? { output: plainText } : undefined);
-		return options.showOutputWhenCollapsed && collapsed ? renderCollapsedOutput(collapsed, theme) : new Container();
-	}
-	let text = theme.fg("dim", renderTerminalOutput(details?.output ?? plainText) || "(no output)");
-	if (details?.session_id !== undefined) text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
-	if (details?.exit_code !== undefined) text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
-	return new Text(text, 4, 0);
+  const details = isUnifiedExecResult(result.details) ? result.details : undefined;
+  const textContent = result.content.find((item) => item.type === "text");
+  const plainText = textContent?.text ?? "";
+  if (!renderOptions.expanded) {
+    const collapsed = details ?? (plainText ? { output: plainText } : undefined);
+    return options.showOutputWhenCollapsed && collapsed ? renderCollapsedOutput(collapsed, theme) : new Container();
+  }
+  let text = theme.fg("dim", renderTerminalOutput(details?.output ?? plainText) || "(no output)");
+  if (details?.session_id !== undefined)
+    text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
+  if (details?.exit_code !== undefined) text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
+  return new Text(text, 4, 0);
 }
 
 export function createExecCommandTool(sessions: ExecSessionManager, options: ExecCommandToolOptions = {}) {
-	const constrainedSampling = getExperimentalToolSampling("exec_command");
-	const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
-		name: "exec_command",
-		label: "exec_command",
-		description: "Run shell commands; may return session_id",
-		...(options.promptSnippet === false ? {} : { promptSnippet: "Run command" }),
-		parameters: EXEC_COMMAND_PARAMETERS,
-		outputSchema: EXEC_OUTPUT_SCHEMA,
-		...(constrainedSampling ? { constrainedSampling } : {}),
-		prepareArguments: prepareExecCommandArguments,
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			if (signal?.aborted) throw new Error("exec_command aborted");
-			const parsedInput = parseExecCommandParams(params);
-			const input: ExecCommandInput = parsedInput.shell === undefined
-				? { ...parsedInput, defaultShell: getPiConfiguredShellPath(ctx) }
-				: parsedInput;
-			const toToolResult = (partial: UnifiedExecResult) => execToolResult(partial, input.cmd);
-			const execInput = input.tty
-				? input
-				: {
-						...input,
-						max_yield_time_ms: MAX_EXEC_YIELD_TIME_MS,
-					};
-			const sessionDir = ctx.sessionManager?.getSessionDir?.();
-			const archiveDirectory = sessionDir ? join(sessionDir, `${ctx.sessionManager.getSessionId()}-blobs`) : undefined;
-			const result = await sessions.exec({ ...execInput, ...(archiveDirectory ? { archiveDirectory } : {}) }, ctx.cwd, signal, onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined);
-			return toToolResult(result);
-		},
-		...(options.customRendering === false ? {} : {
-			renderCall: ((args: { cmd?: unknown }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ExecCommandRenderContextLike) => renderCall(args, theme, context)) as never,
-			renderResult: ((result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown }, renderOptions: { expanded: boolean; isPartial: boolean }, theme: { fg(role: string, text: string): string }) => renderResult(result, renderOptions, theme, options)) as never,
-		}),
-	};
-	return tool;
+  const constrainedSampling = getExperimentalToolSampling("exec_command");
+  const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
+    name: "exec_command",
+    label: "exec_command",
+    description: "Run shell commands; may return session_id",
+    ...(options.promptSnippet === false ? {} : { promptSnippet: "Run command" }),
+    parameters: EXEC_COMMAND_PARAMETERS,
+    outputSchema: EXEC_OUTPUT_SCHEMA,
+    ...(constrainedSampling ? { constrainedSampling } : {}),
+    prepareArguments: prepareExecCommandArguments,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      if (signal?.aborted) throw new Error("exec_command aborted");
+      const parsedInput = parseExecCommandParams(params);
+      const input: ExecCommandInput =
+        parsedInput.shell === undefined ? { ...parsedInput, defaultShell: getPiConfiguredShellPath(ctx) } : parsedInput;
+      const toToolResult = (partial: UnifiedExecResult) => execToolResult(partial, input.cmd);
+      const execInput = input.tty
+        ? input
+        : {
+            ...input,
+            max_yield_time_ms: MAX_EXEC_YIELD_TIME_MS,
+          };
+      const sessionDir = ctx.sessionManager?.getSessionDir?.();
+      const archiveDirectory = sessionDir ? join(sessionDir, `${ctx.sessionManager.getSessionId()}-blobs`) : undefined;
+      const result = await sessions.exec(
+        { ...execInput, ...(archiveDirectory ? { archiveDirectory } : {}) },
+        ctx.cwd,
+        signal,
+        onUpdate ? (partial) => onUpdate(toToolResult(partial)) : undefined,
+      );
+      return toToolResult(result);
+    },
+    ...(options.customRendering === false
+      ? {}
+      : {
+          renderCall: ((
+            args: { cmd?: unknown },
+            theme: { fg(role: string, text: string): string; bold(text: string): string },
+            context?: ExecCommandRenderContextLike,
+          ) => renderCall(args, theme, context)) as never,
+          renderResult: ((
+            result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown },
+            renderOptions: { expanded: boolean; isPartial: boolean },
+            theme: { fg(role: string, text: string): string },
+          ) => renderResult(result, renderOptions, theme, options)) as never,
+        }),
+  };
+  return tool;
 }

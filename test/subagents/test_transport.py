@@ -23,86 +23,161 @@ from subagent_pi.client import request
 from subagent_pi import PROTOCOL_VERSION
 from subagent_pi.common import AgentError, TERMINAL, group_members, socket_path
 
+
 class McpHarness:
     """MCP stdio boundary over a real daemon, shared by the fake-Pi IPC tests and
     the real-Pi lifecycle tests (which replace pi_command, HOME and the agent dir
     themselves, then run the daemon at the same protocol boundary)."""
-    READ_TIMEOUT=8
+
+    READ_TIMEOUT = 8
+
     async def asyncSetUp(self):
-        self.tmp=tempfile.TemporaryDirectory(prefix='subagent-pi-ipc-')
-        self.root=Path(self.tmp.name); self.home=self.root/'state'; self.home.mkdir()
-        self.workspace=self.root/'workspace'; self.workspace.mkdir()
-        (self.home/'config.toml').write_text('pi_command = '+json.dumps([sys.executable,str(TEST_ROOT/'fake_pi.py')])+'\nrpc_timeout_seconds=8\n[inheritance]\nenabled = false\n')
-        self.mcp=None; self.stderr_task=None; self.reqid=0
-        self.daemons=[]
-        popen=subprocess.Popen
-        def owned_daemon(*args,**kwargs):
-            proc=popen(*args,**kwargs)
-            command=args[0] if args else kwargs.get('args',[])
-            if (isinstance(command,(list,tuple)) and command[-2:]==['daemon','run']
-                    and kwargs.get('env',{}).get('PI_AGENTS_HOME')==str(self.home)):
+        self.tmp = tempfile.TemporaryDirectory(prefix="subagent-pi-ipc-")
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "state"
+        self.home.mkdir()
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
+        (self.home / "config.toml").write_text(
+            "pi_command = "
+            + json.dumps([sys.executable, str(TEST_ROOT / "fake_pi.py")])
+            + "\nrpc_timeout_seconds=8\n[inheritance]\nenabled = false\n"
+        )
+        self.mcp = None
+        self.stderr_task = None
+        self.reqid = 0
+        self.daemons = []
+        popen = subprocess.Popen
+
+        def owned_daemon(*args, **kwargs):
+            proc = popen(*args, **kwargs)
+            command = args[0] if args else kwargs.get("args", [])
+            if (
+                isinstance(command, (list, tuple))
+                and command[-2:] == ["daemon", "run"]
+                and kwargs.get("env", {}).get("PI_AGENTS_HOME") == str(self.home)
+            ):
                 self.daemons.append(proc)
             return proc
-        patcher=mock.patch('subagent_pi.client.subprocess.Popen',side_effect=owned_daemon)
-        patcher.start(); self.addCleanup(patcher.stop)
+
+        patcher = mock.patch("subagent_pi.client.subprocess.Popen", side_effect=owned_daemon)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def asyncTearDown(self):
         if self.mcp and self.mcp.returncode is None:
             self.mcp.stdin.close()
-            try: await asyncio.wait_for(self.mcp.wait(),3)
-            except asyncio.TimeoutError: self.mcp.kill(); await self.mcp.wait()
-        if self.stderr_task: await asyncio.gather(self.stderr_task,return_exceptions=True)
-        with contextlib.suppress(AgentError): await request(self.home,'shutdown',{'force':True},timeout=5,autostart=False)
+            try:
+                await asyncio.wait_for(self.mcp.wait(), 3)
+            except asyncio.TimeoutError:
+                self.mcp.kill()
+                await self.mcp.wait()
+        if self.stderr_task:
+            await asyncio.gather(self.stderr_task, return_exceptions=True)
+        with contextlib.suppress(AgentError):
+            await request(self.home, "shutdown", {"force": True}, timeout=5, autostart=False)
         for proc in self.daemons:
-            if proc.poll() is None: proc.terminate()
-            try: await asyncio.to_thread(proc.wait,45)
+            if proc.poll() is None:
+                proc.terminate()
+            try:
+                await asyncio.to_thread(proc.wait, 45)
             except subprocess.TimeoutExpired:
-                proc.kill(); await asyncio.to_thread(proc.wait)
+                proc.kill()
+                await asyncio.to_thread(proc.wait)
                 self.tmp._finalizer.detach()
-                self.fail(f'Owned daemon {proc.pid} did not shut down; diagnostic state retained at {self.home}')
+                self.fail(f"Owned daemon {proc.pid} did not shut down; diagnostic state retained at {self.home}")
         self.tmp.cleanup()
+
     async def open_scope(self):
-        return (await request(self.home,'scope_open',{'cwd':str(self.workspace)}))['scope']
-    async def spawn(self,sid,task='delay=0.2|transport'):
-        return await request(self.home,'spawn',{'scope':sid,'request_id':'spawn-'+str(self.reqid),'cwd':str(self.workspace),'task':task,'access':'read'})
+        return (await request(self.home, "scope_open", {"cwd": str(self.workspace)}))["scope"]
+
+    async def spawn(self, sid, task="delay=0.2|transport"):
+        return await request(
+            self.home,
+            "spawn",
+            {
+                "scope": sid,
+                "request_id": "spawn-" + str(self.reqid),
+                "cwd": str(self.workspace),
+                "task": task,
+                "access": "read",
+            },
+        )
+
     async def start_mcp(self):
-        env=os.environ.copy(); env['PI_AGENTS_HOME']=str(self.home); env.pop('PI_AGENTS_SCOPE',None)
-        env.pop('CODEX_THREAD_ID',None); env.pop('CODEX_SESSION_ID',None)
-        env.update(getattr(self,'mcp_env',{}))
+        env = os.environ.copy()
+        env["PI_AGENTS_HOME"] = str(self.home)
+        env.pop("PI_AGENTS_SCOPE", None)
+        env.pop("CODEX_THREAD_ID", None)
+        env.pop("CODEX_SESSION_ID", None)
+        env.update(getattr(self, "mcp_env", {}))
         # Start from this fixture so its daemon handle is retained, including
         # failed tests. MCP still uses the real IPC/autostart implementation.
-        with mock.patch.dict(os.environ,env): await request(self.home,'ping',{})
-        self.mcp=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/subagent-pi'),'mcp',
-            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,limit=8*1024*1024)
-        self.stderr_task=asyncio.create_task(self.mcp.stderr.read())
-    async def send(self,method,params=None,rid=None):
-        self.reqid+=1; rid=rid or self.reqid
-        self.mcp.stdin.write((json.dumps({'jsonrpc':'2.0','id':rid,'method':method,'params':params or {}})+'\n').encode()); await self.mcp.stdin.drain(); return rid
-    async def receive(self): return json.loads(await asyncio.wait_for(self.mcp.stdout.readline(),self.READ_TIMEOUT))
-    async def rpc(self,method,params=None):
-        rid=await self.send(method,params); value=await self.receive(); self.assertEqual(value['id'],rid); return value
-    async def initialize(self):
-        await self.start_mcp(); return await self.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'test','version':'1'}})
-    def unpack(self,response): return json.loads(response['result']['content'][0]['text'])
-    async def tool(self,name,args):
-        response=await self.rpc('tools/call',{'name':name,'arguments':args})
-        value=self.unpack(response)
-        self.assertFalse(response['result'].get('isError'),value)
+        with mock.patch.dict(os.environ, env):
+            await request(self.home, "ping", {})
+        self.mcp = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(ROOT / "bin/subagent-pi"),
+            "mcp",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            limit=8 * 1024 * 1024,
+        )
+        self.stderr_task = asyncio.create_task(self.mcp.stderr.read())
+
+    async def send(self, method, params=None, rid=None):
+        self.reqid += 1
+        rid = rid or self.reqid
+        self.mcp.stdin.write(
+            (json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}) + "\n").encode()
+        )
+        await self.mcp.stdin.drain()
+        return rid
+
+    async def receive(self):
+        return json.loads(await asyncio.wait_for(self.mcp.stdout.readline(), self.READ_TIMEOUT))
+
+    async def rpc(self, method, params=None):
+        rid = await self.send(method, params)
+        value = await self.receive()
+        self.assertEqual(value["id"], rid)
         return value
 
-    async def finished_runs(self,run_ids,scope=None,timeout_seconds=8):
+    async def initialize(self):
+        await self.start_mcp()
+        return await self.rpc(
+            "initialize",
+            {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+        )
+
+    def unpack(self, response):
+        return json.loads(response["result"]["content"][0]["text"])
+
+    async def tool(self, name, args):
+        response = await self.rpc("tools/call", {"name": name, "arguments": args})
+        value = self.unpack(response)
+        self.assertFalse(response["result"].get("isError"), value)
+        return value
+
+    async def finished_runs(self, run_ids, scope=None, timeout_seconds=8):
         """Test synchronization through repeated first-event MCP waits."""
-        remaining=list(run_ids); finished={}
-        async with asyncio.timeout(timeout_seconds+1):
+        remaining = list(run_ids)
+        finished = {}
+        async with asyncio.timeout(timeout_seconds + 1):
             while remaining:
-                args={'run_ids':remaining,'timeout_seconds':timeout_seconds}
-                if scope: args['scope']=scope
-                page=await self.tool('pi_wait_agent',args)
-                self.assertFalse(page['timed_out'],page); self.assertFalse(page['questions'],page)
-                ready=[row for row in page['runs'] if row['state'] in TERMINAL]
-                self.assertTrue(ready,page)
-                finished.update((row['id'],row) for row in ready)
-                remaining=[rid for rid in remaining if rid not in finished]
-        return {**page,'runs':[finished[rid] for rid in run_ids]}
+                args = {"run_ids": remaining, "timeout_seconds": timeout_seconds}
+                if scope:
+                    args["scope"] = scope
+                page = await self.tool("pi_wait_agent", args)
+                self.assertFalse(page["timed_out"], page)
+                self.assertFalse(page["questions"], page)
+                ready = [row for row in page["runs"] if row["state"] in TERMINAL]
+                self.assertTrue(ready, page)
+                finished.update((row["id"], row) for row in ready)
+                remaining = [rid for rid in remaining if rid not in finished]
+        return {**page, "runs": [finished[rid] for rid in run_ids]}
 
 
 class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
@@ -221,362 +296,559 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_long_wait_wakes_on_later_completion_or_question(self):
         await self.initialize()
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        for task,reason in [('done','completed'),('UI_CONFIRM','needs_input')]:
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        for task, reason in [("done", "completed"), ("UI_CONFIRM", "needs_input")]:
             with self.subTest(task=task):
-                run=await self.tool('pi_spawn_agent',{'task':'delay=0.5|'+task,'access':'read','request_id':task})
-                args={'run_ids':[run['run_id']]}
-                if task=='UI_CONFIRM': args['timeout_seconds']=3600
-                waitid=await self.send('tools/call',{'name':'pi_wait_agent','arguments':args})
-                pingid=await self.send('ping')
-                responses={}
+                run = await self.tool(
+                    "pi_spawn_agent", {"task": "delay=0.5|" + task, "access": "read", "request_id": task}
+                )
+                args = {"run_ids": [run["run_id"]]}
+                if task == "UI_CONFIRM":
+                    args["timeout_seconds"] = 3600
+                waitid = await self.send("tools/call", {"name": "pi_wait_agent", "arguments": args})
+                pingid = await self.send("ping")
+                responses = {}
                 for _ in range(2):
-                    response=await self.receive(); responses[response['id']]=response
-                self.assertEqual(responses[pingid]['result'],{})
-                result=self.unpack(responses[waitid])
-                self.assertEqual(result['reason'],reason)
-                self.assertFalse(result['timed_out'])
-                if task=='UI_CONFIRM': self.assertEqual(result['questions'][0]['method'],'confirm')
-                else: self.assertIn('Completed: done',result['runs'][0]['result']['text'])
-                await self.tool('pi_close_agent',{'agent_id':run['agent_id'],'request_id':'close-'+task})
+                    response = await self.receive()
+                    responses[response["id"]] = response
+                self.assertEqual(responses[pingid]["result"], {})
+                result = self.unpack(responses[waitid])
+                self.assertEqual(result["reason"], reason)
+                self.assertFalse(result["timed_out"])
+                if task == "UI_CONFIRM":
+                    self.assertEqual(result["questions"][0]["method"], "confirm")
+                else:
+                    self.assertIn("Completed: done", result["runs"][0]["result"]["text"])
+                await self.tool("pi_close_agent", {"agent_id": run["agent_id"], "request_id": "close-" + task})
 
     async def test_ipc_autostart_single_daemon(self):
-        a,b=await asyncio.gather(request(self.home,'ping',{}),request(self.home,'ping',{}))
-        self.assertEqual(a['pid'],b['pid'])
+        a, b = await asyncio.gather(request(self.home, "ping", {}), request(self.home, "ping", {}))
+        self.assertEqual(a["pid"], b["pid"])
+
     async def test_cli_spawn_then_mcp_management_same_ledger(self):
-        sid=await self.open_scope(); await self.initialize()
-        env=os.environ.copy(); env['PI_AGENTS_HOME']=str(self.home)
-        proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/subagent-pi'),'spawn','--scope',sid,'--cwd',str(self.workspace),'--access','read','--task','CLI work','--request-id','cli-work',stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env)
-        stdout,stderr=await proc.communicate(); self.assertEqual(proc.returncode,0,stderr.decode())
-        a=json.loads(stdout)
-        listing=await self.tool('pi_list_agents',{'scope':sid})
-        self.assertEqual(listing['agents'][0]['id'],a['agent_id'])
-        done=await self.tool('pi_wait_agent',{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':4})
-        self.assertFalse(done['timed_out'])
+        sid = await self.open_scope()
+        await self.initialize()
+        env = os.environ.copy()
+        env["PI_AGENTS_HOME"] = str(self.home)
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(ROOT / "bin/subagent-pi"),
+            "spawn",
+            "--scope",
+            sid,
+            "--cwd",
+            str(self.workspace),
+            "--access",
+            "read",
+            "--task",
+            "CLI work",
+            "--request-id",
+            "cli-work",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await proc.communicate()
+        self.assertEqual(proc.returncode, 0, stderr.decode())
+        a = json.loads(stdout)
+        listing = await self.tool("pi_list_agents", {"scope": sid})
+        self.assertEqual(listing["agents"][0]["id"], a["agent_id"])
+        done = await self.tool("pi_wait_agent", {"scope": sid, "run_ids": [a["run_id"]], "timeout_seconds": 4})
+        self.assertFalse(done["timed_out"])
+
     async def test_mcp_initialize_and_list(self):
-        init=await self.initialize(); self.assertEqual(init['result']['protocolVersion'],'2025-06-18')
-        result=await self.rpc('tools/list'); tools=result['result']['tools']
-        self.assertEqual(len(tools),9)
-        self.assertTrue(all('_op' not in t for t in tools))
+        init = await self.initialize()
+        self.assertEqual(init["result"]["protocolVersion"], "2025-06-18")
+        result = await self.rpc("tools/list")
+        tools = result["result"]["tools"]
+        self.assertEqual(len(tools), 9)
+        self.assertTrue(all("_op" not in t for t in tools))
+
     async def test_wait_schema_defaults_to_any_and_accepts_all_at_the_mcp_boundary(self):
         await self.initialize()
-        catalog=(await self.rpc('tools/list'))['result']['tools']
-        spec=next(tool for tool in catalog if tool['name']=='pi_wait_agent')
-        self.assertEqual(spec['inputSchema']['properties']['mode'],
-            {'type':'string','enum':['any','all'],'default':'any'})
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        for mode in ('any','all'):
+        catalog = (await self.rpc("tools/list"))["result"]["tools"]
+        spec = next(tool for tool in catalog if tool["name"] == "pi_wait_agent")
+        self.assertEqual(
+            spec["inputSchema"]["properties"]["mode"], {"type": "string", "enum": ["any", "all"], "default": "any"}
+        )
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        for mode in ("any", "all"):
             with self.subTest(mode=mode):
-                response=await self.tool('pi_wait_agent',{'mode':mode,'timeout_seconds':0})
-                self.assertEqual(response['reason'],'empty')
-        invalid=await self.rpc('tools/call',{'name':'pi_wait_agent',
-            'arguments':{'mode':'invalid','timeout_seconds':0}})
-        self.assertTrue(invalid['result']['isError'])
-        self.assertEqual(self.unpack(invalid)['error']['code'],'invalid_argument')
+                response = await self.tool("pi_wait_agent", {"mode": mode, "timeout_seconds": 0})
+                self.assertEqual(response["reason"], "empty")
+        invalid = await self.rpc(
+            "tools/call", {"name": "pi_wait_agent", "arguments": {"mode": "invalid", "timeout_seconds": 0}}
+        )
+        self.assertTrue(invalid["result"]["isError"])
+        self.assertEqual(self.unpack(invalid)["error"]["code"], "invalid_argument")
 
     async def test_wait_returns_completion_while_another_run_is_gated(self):
         await self.initialize()
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        gate=self.root/'release-slow'
-        slow=await self.tool('pi_spawn_agent',{'task':f'gate={gate}|slow',
-            'access':'read','request_id':'slow'})
-        fast=await self.tool('pi_spawn_agent',{'task':'fast','access':'read','request_id':'fast'})
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        gate = self.root / "release-slow"
+        slow = await self.tool("pi_spawn_agent", {"task": f"gate={gate}|slow", "access": "read", "request_id": "slow"})
+        fast = await self.tool("pi_spawn_agent", {"task": "fast", "access": "read", "request_id": "fast"})
         try:
-            done=await self.tool('pi_wait_agent',{'run_ids':[slow['run_id'],fast['run_id']],
-                'timeout_seconds':3600})
-            self.assertEqual(done['reason'],'completed'); self.assertFalse(done['timed_out'])
-            states={r['id']:r['state'] for r in done['runs']}
-            self.assertEqual(states,{slow['run_id']:'running',fast['run_id']:'completed'})
-            result=await self.tool('pi_agent_result',{'run_id':fast['run_id']})
+            done = await self.tool(
+                "pi_wait_agent", {"run_ids": [slow["run_id"], fast["run_id"]], "timeout_seconds": 3600}
+            )
+            self.assertEqual(done["reason"], "completed")
+            self.assertFalse(done["timed_out"])
+            states = {r["id"]: r["state"] for r in done["runs"]}
+            self.assertEqual(states, {slow["run_id"]: "running", fast["run_id"]: "completed"})
+            result = await self.tool("pi_agent_result", {"run_id": fast["run_id"]})
             gate.touch()
-            remainder=await self.tool('pi_wait_agent',{'run_ids':[slow['run_id']],'timeout_seconds':4})
-            self.assertEqual(remainder['runs'][0]['state'],'completed')
-        finally: gate.touch()
+            remainder = await self.tool("pi_wait_agent", {"run_ids": [slow["run_id"]], "timeout_seconds": 4})
+            self.assertEqual(remainder["runs"][0]["state"], "completed")
+        finally:
+            gate.touch()
 
     async def test_wait_all_requires_every_terminal_run_even_after_failure_or_stop(self):
         await self.initialize()
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        for stopped in (False,True):
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        for stopped in (False, True):
             with self.subTest(stopped=stopped):
-                gate=self.root/f'release-all-{stopped}'
-                pending=await self.tool('pi_spawn_agent',{'task':f'gate={gate}|pending',
-                    'access':'read','request_id':f'all-pending-{stopped}'})
-                task=f'gate={self.root / "never-release"}|stopped' if stopped else 'CRASH'
-                terminal=await self.tool('pi_spawn_agent',{'task':task,'access':'read',
-                    'request_id':f'all-terminal-{stopped}'})
+                gate = self.root / f"release-all-{stopped}"
+                pending = await self.tool(
+                    "pi_spawn_agent",
+                    {"task": f"gate={gate}|pending", "access": "read", "request_id": f"all-pending-{stopped}"},
+                )
+                task = f'gate={self.root / "never-release"}|stopped' if stopped else "CRASH"
+                terminal = await self.tool(
+                    "pi_spawn_agent", {"task": task, "access": "read", "request_id": f"all-terminal-{stopped}"}
+                )
                 try:
                     if stopped:
-                        await self.tool('pi_interrupt_agent',{'agent_id':terminal['agent_id'],
-                            'request_id':'all-interrupt'})
-                    ids=[terminal['run_id'],pending['run_id']]
-                    early=await self.tool('pi_wait_agent',{'run_ids':ids,'timeout_seconds':4})
-                    self.assertEqual(early['reason'],'failed_or_stopped')
-                    self.assertEqual(early['runs'][0]['state'],'interrupted' if stopped else 'crashed')
-                    blocked=await self.tool('pi_wait_agent',{'run_ids':ids,'mode':'all','timeout_seconds':1})
-                    self.assertTrue(blocked['timed_out'],blocked)
-                    self.assertEqual(blocked['runs'][1]['state'],'running')
+                        await self.tool(
+                            "pi_interrupt_agent", {"agent_id": terminal["agent_id"], "request_id": "all-interrupt"}
+                        )
+                    ids = [terminal["run_id"], pending["run_id"]]
+                    early = await self.tool("pi_wait_agent", {"run_ids": ids, "timeout_seconds": 4})
+                    self.assertEqual(early["reason"], "failed_or_stopped")
+                    self.assertEqual(early["runs"][0]["state"], "interrupted" if stopped else "crashed")
+                    blocked = await self.tool("pi_wait_agent", {"run_ids": ids, "mode": "all", "timeout_seconds": 1})
+                    self.assertTrue(blocked["timed_out"], blocked)
+                    self.assertEqual(blocked["runs"][1]["state"], "running")
                     gate.touch()
-                    complete=await self.tool('pi_wait_agent',{'run_ids':ids,'mode':'all','timeout_seconds':4})
-                    self.assertFalse(complete['timed_out'],complete)
-                    self.assertEqual(complete['reason'],'failed_or_stopped')
-                    self.assertEqual(complete['runs'][1]['state'],'completed')
-                    self.assertTrue(all(r.get('result') for r in complete['runs']))
-                finally: gate.touch()
+                    complete = await self.tool("pi_wait_agent", {"run_ids": ids, "mode": "all", "timeout_seconds": 4})
+                    self.assertFalse(complete["timed_out"], complete)
+                    self.assertEqual(complete["reason"], "failed_or_stopped")
+                    self.assertEqual(complete["runs"][1]["state"], "completed")
+                    self.assertTrue(all(r.get("result") for r in complete["runs"]))
+                finally:
+                    gate.touch()
 
     async def test_wait_returns_every_ready_result_in_the_selected_snapshot(self):
         await self.initialize()
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        gate=self.root/'release-pending'
-        pending=await self.tool('pi_spawn_agent',{'task':f'gate={gate}|pending',
-            'access':'read','request_id':'pending'})
-        ready=[]
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        gate = self.root / "release-pending"
+        pending = await self.tool(
+            "pi_spawn_agent", {"task": f"gate={gate}|pending", "access": "read", "request_id": "pending"}
+        )
+        ready = []
         try:
             for i in range(2):
-                run=await self.tool('pi_spawn_agent',{'task':f'ready-{i}','access':'read','request_id':f'ready-{i}'})
-                await self.tool('pi_wait_agent',{'run_ids':[run['run_id']],'timeout_seconds':4})
-                ready.append(run['run_id'])
-            page=await self.tool('pi_wait_agent',{'run_ids':[pending['run_id'],*ready],'timeout_seconds':3600})
-            self.assertFalse(page['timed_out'])
-            self.assertEqual(page['runs'][0]['state'],'running')
-            self.assertEqual([r['id'] for r in page['runs'] if r.get('result')],ready)
+                run = await self.tool(
+                    "pi_spawn_agent", {"task": f"ready-{i}", "access": "read", "request_id": f"ready-{i}"}
+                )
+                await self.tool("pi_wait_agent", {"run_ids": [run["run_id"]], "timeout_seconds": 4})
+                ready.append(run["run_id"])
+            page = await self.tool("pi_wait_agent", {"run_ids": [pending["run_id"], *ready], "timeout_seconds": 3600})
+            self.assertFalse(page["timed_out"])
+            self.assertEqual(page["runs"][0]["state"], "running")
+            self.assertEqual([r["id"] for r in page["runs"] if r.get("result")], ready)
             for rid in ready:
-                self.assertTrue((await self.tool('pi_agent_result',{'run_id':rid}))['result_sha256'])
-        finally: gate.touch()
+                self.assertTrue((await self.tool("pi_agent_result", {"run_id": rid}))["result_sha256"])
+        finally:
+            gate.touch()
 
     async def test_cli_retains_explicit_all_completed_wait(self):
         await self.initialize()
-        sid=(await self.tool('pi_context',{'cwd':str(self.workspace)}))['scope']
-        runs=[await self.tool('pi_spawn_agent',{'task':f'cli-{i}','access':'read','request_id':f'cli-{i}'})
-              for i in range(2)]
-        env={**os.environ,'PI_AGENTS_HOME':str(self.home)}
-        env.pop('CODEX_THREAD_ID',None)
-        proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/subagent-pi'),'wait',
-            *(run['run_id'] for run in runs),'--scope',sid,'--mode','all','--timeout-seconds','4',
-            env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
-        stdout,stderr=await asyncio.wait_for(proc.communicate(),8)
-        self.assertEqual(proc.returncode,0,stderr.decode())
-        result=json.loads(stdout)
-        self.assertFalse(result['timed_out'])
-        self.assertEqual([r['state'] for r in result['runs']],['completed','completed'])
+        sid = (await self.tool("pi_context", {"cwd": str(self.workspace)}))["scope"]
+        runs = [
+            await self.tool("pi_spawn_agent", {"task": f"cli-{i}", "access": "read", "request_id": f"cli-{i}"})
+            for i in range(2)
+        ]
+        env = {**os.environ, "PI_AGENTS_HOME": str(self.home)}
+        env.pop("CODEX_THREAD_ID", None)
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(ROOT / "bin/subagent-pi"),
+            "wait",
+            *(run["run_id"] for run in runs),
+            "--scope",
+            sid,
+            "--mode",
+            "all",
+            "--timeout-seconds",
+            "4",
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), 8)
+        self.assertEqual(proc.returncode, 0, stderr.decode())
+        result = json.loads(stdout)
+        self.assertFalse(result["timed_out"])
+        self.assertEqual([r["state"] for r in result["runs"]], ["completed", "completed"])
 
     async def test_named_agents_keep_labels_across_runs_and_results(self):
         await self.initialize()
-        scope=await self.tool('pi_context',{'cwd':str(self.workspace)})
-        agents=[]
-        for index,name in enumerate(('git-stats-fix','测试审查')):
-            spawned=await self.tool('pi_spawn_agent',{'name':name,'task':name,'access':'read','request_id':f'named-{index}'})
-            self.assertEqual(spawned['name'],name); agents.append(spawned)
-        expected={a['agent_id']:a['name'] for a in agents}
-        done=await self.finished_runs([a['run_id'] for a in agents], timeout_seconds=4)
-        self.assertEqual({r['agent_id']:r['name'] for r in done['runs']},expected)
+        scope = await self.tool("pi_context", {"cwd": str(self.workspace)})
+        agents = []
+        for index, name in enumerate(("git-stats-fix", "测试审查")):
+            spawned = await self.tool(
+                "pi_spawn_agent", {"name": name, "task": name, "access": "read", "request_id": f"named-{index}"}
+            )
+            self.assertEqual(spawned["name"], name)
+            agents.append(spawned)
+        expected = {a["agent_id"]: a["name"] for a in agents}
+        done = await self.finished_runs([a["run_id"] for a in agents], timeout_seconds=4)
+        self.assertEqual({r["agent_id"]: r["name"] for r in done["runs"]}, expected)
         for a in agents:
-            result=await self.tool('pi_agent_result',{'run_id':a['run_id']})
-            self.assertEqual(result['run']['name'],a['name'])
-        listing=await self.tool('pi_list_agents',{})
-        self.assertEqual({r['id']:r['name'] for r in listing['agents']},expected)
-        self.assertEqual(listing['outstanding']['total'],0)
-        resumed=await self.tool('pi_context',{'cwd':str(self.workspace),'scope':scope['scope']})
-        self.assertEqual(resumed['outstanding']['total'],0)
-        conflict=await self.rpc('tools/call',{'name':'pi_spawn_agent','arguments':{'name':agents[0]['name'],
-            'task':'duplicate','access':'read','request_id':'duplicate'}})
-        self.assertEqual(self.unpack(conflict)['error']['code'],'name_conflict')
-        follow=await self.tool('pi_send_input',{'agent_id':agents[0]['agent_id'],'message':'follow-up',
-            'mode':'send','request_id':'next'})
-        self.assertEqual(follow['name'],agents[0]['name'])
-        self.assertNotIn('execution',follow)
-        next_result=await self.tool('pi_wait_agent',{'run_ids':[follow['run_id']],'timeout_seconds':4})
-        self.assertNotEqual(follow['run_id'],agents[0]['run_id'])
-        self.assertEqual(next_result['runs'][0]['name'],agents[0]['name'])
+            result = await self.tool("pi_agent_result", {"run_id": a["run_id"]})
+            self.assertEqual(result["run"]["name"], a["name"])
+        listing = await self.tool("pi_list_agents", {})
+        self.assertEqual({r["id"]: r["name"] for r in listing["agents"]}, expected)
+        self.assertEqual(listing["outstanding"]["total"], 0)
+        resumed = await self.tool("pi_context", {"cwd": str(self.workspace), "scope": scope["scope"]})
+        self.assertEqual(resumed["outstanding"]["total"], 0)
+        conflict = await self.rpc(
+            "tools/call",
+            {
+                "name": "pi_spawn_agent",
+                "arguments": {
+                    "name": agents[0]["name"],
+                    "task": "duplicate",
+                    "access": "read",
+                    "request_id": "duplicate",
+                },
+            },
+        )
+        self.assertEqual(self.unpack(conflict)["error"]["code"], "name_conflict")
+        follow = await self.tool(
+            "pi_send_input",
+            {"agent_id": agents[0]["agent_id"], "message": "follow-up", "mode": "send", "request_id": "next"},
+        )
+        self.assertEqual(follow["name"], agents[0]["name"])
+        self.assertNotIn("execution", follow)
+        next_result = await self.tool("pi_wait_agent", {"run_ids": [follow["run_id"]], "timeout_seconds": 4})
+        self.assertNotEqual(follow["run_id"], agents[0]["run_id"])
+        self.assertEqual(next_result["runs"][0]["name"], agents[0]["name"])
 
     async def test_continuation_receipt_is_not_a_consumption_guarantee(self):
         await self.initialize()
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        agent=await self.tool('pi_spawn_agent',{'name':'reviewer','task':'delay=1|NO_CONSUME',
-            'access':'read','request_id':'spawn'})
-        args={'agent_id':agent['agent_id'],'message':'Inspect only','mode':'steer','request_id':'correction'}
-        receipt=await self.tool('pi_send_input',args)
-        self.assertEqual(receipt['name'],'reviewer')
-        self.assertEqual(receipt['run_id'],agent['run_id'])
-        self.assertEqual(receipt['execution'],'after_current_sdk_call')
-        self.assertEqual(receipt['delivery'],'queued')
-        replay=await self.tool('pi_send_input',args)
-        self.assertTrue(replay['replayed']); self.assertEqual(replay['receipt_id'],receipt['receipt_id'])
-        follow=await self.tool('pi_send_input',{'agent_id':agent['agent_id'],'message':'Next task',
-            'mode':'follow_up','request_id':'next'})
-        self.assertEqual(follow['name'],'reviewer'); self.assertNotEqual(follow['run_id'],agent['run_id'])
-        self.assertEqual(follow['state'],'queued'); self.assertNotIn('execution',follow)
-        done=await self.finished_runs([agent['run_id'], follow['run_id']], timeout_seconds=4)
-        self.assertFalse(done['timed_out'])
-        inspected=await self.tool('pi_inspect_agent',{'agent_id':agent['agent_id']})
-        matching=[r for r in inspected['receipts'] if r['id']==receipt['receipt_id']]
-        self.assertEqual([r['state'] for r in matching],['not_consumed'])
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        agent = await self.tool(
+            "pi_spawn_agent",
+            {"name": "reviewer", "task": "delay=1|NO_CONSUME", "access": "read", "request_id": "spawn"},
+        )
+        args = {"agent_id": agent["agent_id"], "message": "Inspect only", "mode": "steer", "request_id": "correction"}
+        receipt = await self.tool("pi_send_input", args)
+        self.assertEqual(receipt["name"], "reviewer")
+        self.assertEqual(receipt["run_id"], agent["run_id"])
+        self.assertEqual(receipt["execution"], "after_current_sdk_call")
+        self.assertEqual(receipt["delivery"], "queued")
+        replay = await self.tool("pi_send_input", args)
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(replay["receipt_id"], receipt["receipt_id"])
+        follow = await self.tool(
+            "pi_send_input",
+            {"agent_id": agent["agent_id"], "message": "Next task", "mode": "follow_up", "request_id": "next"},
+        )
+        self.assertEqual(follow["name"], "reviewer")
+        self.assertNotEqual(follow["run_id"], agent["run_id"])
+        self.assertEqual(follow["state"], "queued")
+        self.assertNotIn("execution", follow)
+        done = await self.finished_runs([agent["run_id"], follow["run_id"]], timeout_seconds=4)
+        self.assertFalse(done["timed_out"])
+        inspected = await self.tool("pi_inspect_agent", {"agent_id": agent["agent_id"]})
+        matching = [r for r in inspected["receipts"] if r["id"] == receipt["receipt_id"]]
+        self.assertEqual([r["state"] for r in matching], ["not_consumed"])
 
     async def test_mcp_scope_reused_per_workspace(self):
         await self.initialize()
-        a=await self.tool('pi_context',{'cwd':str(self.workspace)})
-        b=await self.tool('pi_context',{'cwd':str(self.workspace)})
-        self.assertEqual(a['scope'],b['scope'])
+        a = await self.tool("pi_context", {"cwd": str(self.workspace)})
+        b = await self.tool("pi_context", {"cwd": str(self.workspace)})
+        self.assertEqual(a["scope"], b["scope"])
+
     async def test_spawn_with_cwd_opens_the_workspace_scope_implicitly(self):
         # Single-step start: pi_context is optional when the spawn carries the
         # workspace cwd; the implicit binding is connection-local like pi_context.
         await self.initialize()
-        first=await self.tool('pi_spawn_agent',{'cwd':str(self.workspace),'task':'implicit scope','access':'read','request_id':'implicit-1'})
-        done=await self.tool('pi_wait_agent',{'run_ids':[first['run_id']],'timeout_seconds':4})
-        self.assertEqual(done['runs'][0]['result']['text'],'Completed: implicit scope')
-        listed=await self.tool('pi_list_agents',{})
-        self.assertEqual(listed['scope'],first['scope'])
-        second=await self.tool('pi_spawn_agent',{'task':'reused scope','access':'read','request_id':'implicit-2'})
-        self.assertEqual(second['scope'],first['scope'])
-        await self.tool('pi_close_agent',{'agent_id':first['agent_id'],'request_id':'implicit-close-1'})
-        await self.tool('pi_close_agent',{'agent_id':second['agent_id'],'request_id':'implicit-close-2'})
+        first = await self.tool(
+            "pi_spawn_agent",
+            {"cwd": str(self.workspace), "task": "implicit scope", "access": "read", "request_id": "implicit-1"},
+        )
+        done = await self.tool("pi_wait_agent", {"run_ids": [first["run_id"]], "timeout_seconds": 4})
+        self.assertEqual(done["runs"][0]["result"]["text"], "Completed: implicit scope")
+        listed = await self.tool("pi_list_agents", {})
+        self.assertEqual(listed["scope"], first["scope"])
+        second = await self.tool(
+            "pi_spawn_agent", {"task": "reused scope", "access": "read", "request_id": "implicit-2"}
+        )
+        self.assertEqual(second["scope"], first["scope"])
+        await self.tool("pi_close_agent", {"agent_id": first["agent_id"], "request_id": "implicit-close-1"})
+        await self.tool("pi_close_agent", {"agent_id": second["agent_id"], "request_id": "implicit-close-2"})
+
     async def test_spawn_without_cwd_or_binding_still_asks_for_a_workspace(self):
         await self.initialize()
-        response=await self.rpc('tools/call',{'name':'pi_spawn_agent','arguments':{'task':'nowhere','access':'read','request_id':'implicit-3'}})
-        self.assertTrue(response['result']['isError'])
-        self.assertIn('cwd',self.unpack(response)['error']['message'])
+        response = await self.rpc(
+            "tools/call",
+            {"name": "pi_spawn_agent", "arguments": {"task": "nowhere", "access": "read", "request_id": "implicit-3"}},
+        )
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("cwd", self.unpack(response)["error"]["message"])
+
     async def test_explicit_scope_spawn_does_not_open_another_scope(self):
         await self.initialize()
-        sid=await self.open_scope()
-        before={s['id'] for s in (await request(self.home,'scope_list',{}))['scopes']}
-        run=await self.tool('pi_spawn_agent',{'scope':sid,'cwd':str(self.workspace),'task':'explicit','access':'read','request_id':'explicit-1'})
-        after={s['id'] for s in (await request(self.home,'scope_list',{}))['scopes']}
-        self.assertEqual(run['scope'],sid); self.assertEqual(before,after)
+        sid = await self.open_scope()
+        before = {s["id"] for s in (await request(self.home, "scope_list", {}))["scopes"]}
+        run = await self.tool(
+            "pi_spawn_agent",
+            {
+                "scope": sid,
+                "cwd": str(self.workspace),
+                "task": "explicit",
+                "access": "read",
+                "request_id": "explicit-1",
+            },
+        )
+        after = {s["id"] for s in (await request(self.home, "scope_list", {}))["scopes"]}
+        self.assertEqual(run["scope"], sid)
+        self.assertEqual(before, after)
+
     async def test_bound_scope_defaults_and_explicit_resume_are_connection_local(self):
         await self.initialize()
-        first=await self.tool('pi_context',{'cwd':str(self.workspace)})
-        run=await self.tool('pi_spawn_agent',{'task':'bound scope','access':'read','request_id':'bound-spawn'})
-        self.assertEqual(run['scope'],first['scope']); self.assertEqual(run['cwd'],str(self.workspace))
-        self.assertEqual(run['name'],run['agent_id'])
-        retry=await self.tool('pi_spawn_agent',{'scope':first['scope'],'cwd':str(self.workspace),'task':'bound scope','access':'read','request_id':'bound-spawn'})
-        self.assertEqual(retry['run_id'],run['run_id'])
-        done=await self.tool('pi_wait_agent',{'run_ids':[run['run_id']],'timeout_seconds':4})
-        result=done['runs'][0]['result']
-        self.assertEqual(result['text'],'Completed: bound scope')
-        self.assertFalse(result['has_more'])
-        await self.tool('pi_close_agent',{'agent_id':run['agent_id'],'request_id':'stop-bound'})
-        self.mcp.stdin.close(); await self.mcp.wait(); await self.stderr_task
+        first = await self.tool("pi_context", {"cwd": str(self.workspace)})
+        run = await self.tool("pi_spawn_agent", {"task": "bound scope", "access": "read", "request_id": "bound-spawn"})
+        self.assertEqual(run["scope"], first["scope"])
+        self.assertEqual(run["cwd"], str(self.workspace))
+        self.assertEqual(run["name"], run["agent_id"])
+        retry = await self.tool(
+            "pi_spawn_agent",
+            {
+                "scope": first["scope"],
+                "cwd": str(self.workspace),
+                "task": "bound scope",
+                "access": "read",
+                "request_id": "bound-spawn",
+            },
+        )
+        self.assertEqual(retry["run_id"], run["run_id"])
+        done = await self.tool("pi_wait_agent", {"run_ids": [run["run_id"]], "timeout_seconds": 4})
+        result = done["runs"][0]["result"]
+        self.assertEqual(result["text"], "Completed: bound scope")
+        self.assertFalse(result["has_more"])
+        await self.tool("pi_close_agent", {"agent_id": run["agent_id"], "request_id": "stop-bound"})
+        self.mcp.stdin.close()
+        await self.mcp.wait()
+        await self.stderr_task
         await self.initialize()
-        unbound=await self.rpc('tools/call',{'name':'pi_list_agents','arguments':{}})
-        self.assertTrue(unbound['result']['isError'])
-        fresh=await self.tool('pi_context',{'cwd':str(self.workspace)})
-        self.assertNotEqual(fresh['scope'],first['scope'])
-        resumed=await self.tool('pi_context',{'cwd':str(self.workspace),'scope':first['scope']})
-        self.assertEqual(resumed['scope'],first['scope'])
-        self.assertEqual((await self.tool('pi_list_agents',{}))['agents'][0]['id'],run['agent_id'])
+        unbound = await self.rpc("tools/call", {"name": "pi_list_agents", "arguments": {}})
+        self.assertTrue(unbound["result"]["isError"])
+        fresh = await self.tool("pi_context", {"cwd": str(self.workspace)})
+        self.assertNotEqual(fresh["scope"], first["scope"])
+        resumed = await self.tool("pi_context", {"cwd": str(self.workspace), "scope": first["scope"]})
+        self.assertEqual(resumed["scope"], first["scope"])
+        self.assertEqual((await self.tool("pi_list_agents", {}))["agents"][0]["id"], run["agent_id"])
 
     async def test_wait_returns_questions_and_stops_without_waiting_for_other_work(self):
         await self.initialize()
-        await self.tool('pi_context',{'cwd':str(self.workspace)})
-        slow=await self.tool('pi_spawn_agent',{'task':'delay=30|slow','access':'read','request_id':'slow'})
-        asking=await self.tool('pi_spawn_agent',{'name':'permission-check','task':'UI_CONFIRM','access':'read','request_id':'ask'})
-        remaining=await self.tool('pi_spawn_agent',{'task':'delay=30|remaining','access':'read','request_id':'remaining'})
-        ids=[slow['run_id'],asking['run_id'],remaining['run_id']]
-        alert=await self.tool('pi_wait_agent', {'run_ids': ids, 'timeout_seconds': 3600})
-        self.assertEqual(alert['reason'],'needs_input'); self.assertFalse(alert['timed_out'])
-        question=alert['questions'][0]
-        self.assertEqual(question['agent_id'],asking['agent_id']); self.assertEqual(question['method'],'confirm')
-        all_alert=await self.tool('pi_wait_agent',{'run_ids':ids,'mode':'all','timeout_seconds':3600})
-        self.assertEqual(all_alert['reason'],'needs_input')
-        self.assertEqual(all_alert['questions'][0]['id'],question['id'])
-        self.assertEqual(question['name'],'permission-check')
-        await self.tool('pi_answer_agent',{'agent_id':asking['agent_id'],'ui_request_id':question['id'],'answer':False,'request_id':'answer'})
-        await self.tool('pi_wait_agent',{'run_ids':[asking['run_id']],'timeout_seconds':4})
-        stopped=await self.tool('pi_close_agent',{'agent_id':slow['agent_id'],'request_id':'stop'})
-        self.assertEqual(stopped['cleanup'],'verified')
-        alert=await self.tool('pi_wait_agent', {'run_ids': ids, 'timeout_seconds': 3600})
-        self.assertEqual(alert['reason'],'failed_or_stopped')
-        self.assertIn(alert['runs'][0]['state'],('cancelled','interrupted'))
-        self.assertEqual(alert['runs'][2]['state'],'running')
+        await self.tool("pi_context", {"cwd": str(self.workspace)})
+        slow = await self.tool("pi_spawn_agent", {"task": "delay=30|slow", "access": "read", "request_id": "slow"})
+        asking = await self.tool(
+            "pi_spawn_agent", {"name": "permission-check", "task": "UI_CONFIRM", "access": "read", "request_id": "ask"}
+        )
+        remaining = await self.tool(
+            "pi_spawn_agent", {"task": "delay=30|remaining", "access": "read", "request_id": "remaining"}
+        )
+        ids = [slow["run_id"], asking["run_id"], remaining["run_id"]]
+        alert = await self.tool("pi_wait_agent", {"run_ids": ids, "timeout_seconds": 3600})
+        self.assertEqual(alert["reason"], "needs_input")
+        self.assertFalse(alert["timed_out"])
+        question = alert["questions"][0]
+        self.assertEqual(question["agent_id"], asking["agent_id"])
+        self.assertEqual(question["method"], "confirm")
+        all_alert = await self.tool("pi_wait_agent", {"run_ids": ids, "mode": "all", "timeout_seconds": 3600})
+        self.assertEqual(all_alert["reason"], "needs_input")
+        self.assertEqual(all_alert["questions"][0]["id"], question["id"])
+        self.assertEqual(question["name"], "permission-check")
+        await self.tool(
+            "pi_answer_agent",
+            {"agent_id": asking["agent_id"], "ui_request_id": question["id"], "answer": False, "request_id": "answer"},
+        )
+        await self.tool("pi_wait_agent", {"run_ids": [asking["run_id"]], "timeout_seconds": 4})
+        stopped = await self.tool("pi_close_agent", {"agent_id": slow["agent_id"], "request_id": "stop"})
+        self.assertEqual(stopped["cleanup"], "verified")
+        alert = await self.tool("pi_wait_agent", {"run_ids": ids, "timeout_seconds": 3600})
+        self.assertEqual(alert["reason"], "failed_or_stopped")
+        self.assertIn(alert["runs"][0]["state"], ("cancelled", "interrupted"))
+        self.assertEqual(alert["runs"][2]["state"], "running")
 
     async def test_mcp_invalid_arguments_are_tool_errors(self):
         await self.initialize()
-        r=await self.rpc('tools/call',{'name':'pi_spawn_agent','arguments':{'task':'missing fields'}})
-        self.assertTrue(r['result']['isError'])
-        self.assertIn('invalid_argument',r['result']['content'][0]['text'])
+        r = await self.rpc("tools/call", {"name": "pi_spawn_agent", "arguments": {"task": "missing fields"}})
+        self.assertTrue(r["result"]["isError"])
+        self.assertIn("invalid_argument", r["result"]["content"][0]["text"])
+
     async def test_mcp_spawn_rejects_unsupported_pi_before_launch(self):
-        old_pi=self.root/'old-pi'
-        (old_pi/'dist/bundle').mkdir(parents=True)
-        (old_pi/'package.json').write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':'0.99.0'}))
-        (old_pi/'dist/index.js').write_text('throw new Error("old SDK must not run");')
-        marker=self.root/'old-pi-ran'
-        cli=old_pi/'dist/bundle/cli'
-        cli.write_text('#!/usr/bin/env python3\nfrom pathlib import Path\nPath('+repr(str(marker))+').touch()\n')
+        old_pi = self.root / "old-pi"
+        (old_pi / "dist/bundle").mkdir(parents=True)
+        (old_pi / "package.json").write_text(
+            json.dumps({"name": "@earendil-works/pi-coding-agent", "version": "0.99.0"})
+        )
+        (old_pi / "dist/index.js").write_text('throw new Error("old SDK must not run");')
+        marker = self.root / "old-pi-ran"
+        cli = old_pi / "dist/bundle/cli"
+        cli.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n")
         cli.chmod(0o755)
-        (self.home/'config.toml').write_text('pi_command = '+json.dumps([str(cli)])+'\n[inheritance]\nenabled = false\n')
+        (self.home / "config.toml").write_text(
+            "pi_command = " + json.dumps([str(cli)]) + "\n[inheritance]\nenabled = false\n"
+        )
         await self.initialize()
-        response=await self.rpc('tools/call',{'name':'pi_spawn_agent','arguments':{
-            'cwd':str(self.workspace),'task':'must not start','access':'read','request_id':'old-pi'}})
-        self.assertTrue(response['result']['isError'])
-        error=self.unpack(response)['error']
-        self.assertEqual(error['code'],'unsupported_pi_version')
-        self.assertIn('0.99.1',error['message'])
-        self.assertIn('0.99.0',error['message'])
+        response = await self.rpc(
+            "tools/call",
+            {
+                "name": "pi_spawn_agent",
+                "arguments": {
+                    "cwd": str(self.workspace),
+                    "task": "must not start",
+                    "access": "read",
+                    "request_id": "old-pi",
+                },
+            },
+        )
+        self.assertTrue(response["result"]["isError"])
+        error = self.unpack(response)["error"]
+        self.assertEqual(error["code"], "unsupported_pi_version")
+        self.assertIn("0.99.1", error["message"])
+        self.assertIn("0.99.0", error["message"])
         self.assertFalse(marker.exists())
 
     async def test_mcp_protocol_errors_and_ping(self):
         await self.initialize()
-        self.mcp.stdin.write(b'not json\n'); await self.mcp.stdin.drain()
-        e=await self.receive(); self.assertEqual(e['error']['code'],-32700)
-        r=await self.rpc('ping'); self.assertEqual(r['result'],{})
-        r=await self.rpc('no/such/method'); self.assertEqual(r['error']['code'],-32601)
+        self.mcp.stdin.write(b"not json\n")
+        await self.mcp.stdin.drain()
+        e = await self.receive()
+        self.assertEqual(e["error"]["code"], -32700)
+        r = await self.rpc("ping")
+        self.assertEqual(r["result"], {})
+        r = await self.rpc("no/such/method")
+        self.assertEqual(r["error"]["code"], -32601)
+
     async def test_mcp_cancel_wait_then_ping_without_killing_agent(self):
         await self.initialize()
-        sid=(await self.tool('pi_context',{'cwd':str(self.workspace)}))['scope']
-        a=await self.tool('pi_spawn_agent',{'scope':sid,'cwd':str(self.workspace),'task':'delay=1|keep-running','access':'read','request_id':'cancel-spawn'})
-        waitid=await self.send('tools/call',{'name':'pi_wait_agent','arguments':{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':3600}})
-        await asyncio.sleep(.05)
-        self.mcp.stdin.write((json.dumps({'jsonrpc':'2.0','method':'notifications/cancelled','params':{'requestId':waitid}})+'\n').encode()); await self.mcp.stdin.drain()
-        self.assertEqual((await self.rpc('ping'))['result'],{})
-        state=await self.tool('pi_list_agents',{'scope':sid})
-        self.assertEqual(state['agents'][0]['state'],'running')
-        done=await self.tool('pi_wait_agent',{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':4})
-        self.assertEqual(done['runs'][0]['state'],'completed')
+        sid = (await self.tool("pi_context", {"cwd": str(self.workspace)}))["scope"]
+        a = await self.tool(
+            "pi_spawn_agent",
+            {
+                "scope": sid,
+                "cwd": str(self.workspace),
+                "task": "delay=1|keep-running",
+                "access": "read",
+                "request_id": "cancel-spawn",
+            },
+        )
+        waitid = await self.send(
+            "tools/call",
+            {"name": "pi_wait_agent", "arguments": {"scope": sid, "run_ids": [a["run_id"]], "timeout_seconds": 3600}},
+        )
+        await asyncio.sleep(0.05)
+        self.mcp.stdin.write(
+            (
+                json.dumps({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": waitid}})
+                + "\n"
+            ).encode()
+        )
+        await self.mcp.stdin.drain()
+        self.assertEqual((await self.rpc("ping"))["result"], {})
+        state = await self.tool("pi_list_agents", {"scope": sid})
+        self.assertEqual(state["agents"][0]["state"], "running")
+        done = await self.tool("pi_wait_agent", {"scope": sid, "run_ids": [a["run_id"]], "timeout_seconds": 4})
+        self.assertEqual(done["runs"][0]["state"], "completed")
+
     async def test_mcp_exit_does_not_stop_worker(self):
         await self.initialize()
-        sid=(await self.tool('pi_context',{'cwd':str(self.workspace)}))['scope']
-        a=await self.tool('pi_spawn_agent',{'scope':sid,'cwd':str(self.workspace),'task':'delay=0.4|survive-adapter','access':'read','request_id':'survive'})
-        self.mcp.stdin.close(); await self.mcp.wait()
-        done=await request(self.home,'wait',{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':4})
-        self.assertEqual(done['runs'][0]['state'],'completed')
+        sid = (await self.tool("pi_context", {"cwd": str(self.workspace)}))["scope"]
+        a = await self.tool(
+            "pi_spawn_agent",
+            {
+                "scope": sid,
+                "cwd": str(self.workspace),
+                "task": "delay=0.4|survive-adapter",
+                "access": "read",
+                "request_id": "survive",
+            },
+        )
+        self.mcp.stdin.close()
+        await self.mcp.wait()
+        done = await request(self.home, "wait", {"scope": sid, "run_ids": [a["run_id"]], "timeout_seconds": 4})
+        self.assertEqual(done["runs"][0]["state"], "completed")
+
     async def test_durable_unseen_result_after_daemon_restart(self):
-        sid=await self.open_scope(); a=await self.spawn(sid)
-        await request(self.home,'wait',{'scope':sid,'run_ids':[a['run_id']],'timeout_seconds':4})
-        first=await request(self.home,'result',{'scope':sid,'run_id':a['run_id']})
-        await request(self.home,'shutdown',{'force':True})
-        until=asyncio.get_running_loop().time()+8
-        while socket_path(self.home).exists() and asyncio.get_running_loop().time()<until: await asyncio.sleep(.05)
-        second=await request(self.home,'result',{'scope':sid,'run_id':a['run_id']})
-        self.assertEqual(first['result_sha256'],second['result_sha256'])
-        listing=await request(self.home,'list',{'scope':sid})
-        self.assertEqual(listing['outstanding']['total'],1)
+        sid = await self.open_scope()
+        a = await self.spawn(sid)
+        await request(self.home, "wait", {"scope": sid, "run_ids": [a["run_id"]], "timeout_seconds": 4})
+        first = await request(self.home, "result", {"scope": sid, "run_id": a["run_id"]})
+        await request(self.home, "shutdown", {"force": True})
+        until = asyncio.get_running_loop().time() + 8
+        while socket_path(self.home).exists() and asyncio.get_running_loop().time() < until:
+            await asyncio.sleep(0.05)
+        second = await request(self.home, "result", {"scope": sid, "run_id": a["run_id"]})
+        self.assertEqual(first["result_sha256"], second["result_sha256"])
+        listing = await request(self.home, "list", {"scope": sid})
+        self.assertEqual(listing["outstanding"]["total"], 1)
+
     async def test_ipc_disconnected_mutation_still_has_idempotent_result(self):
         from subagent_pi.common import dumps
-        sid=await self.open_scope()
-        reader,writer=await asyncio.open_unix_connection(str(socket_path(self.home)))
-        params={'scope':sid,'request_id':'lost-reply','cwd':str(self.workspace),'task':'hello','access':'read'}
-        writer.write((dumps({'v':PROTOCOL_VERSION,'op':'spawn','params':params})+'\n').encode()); await writer.drain(); writer.close(); await writer.wait_closed()
-        await asyncio.sleep(.5)
-        result=await request(self.home,'spawn',params)
-        self.assertTrue(result['replayed'])
-        self.assertEqual((await request(self.home,'list',{'scope':sid}))['total'],1)
+
+        sid = await self.open_scope()
+        reader, writer = await asyncio.open_unix_connection(str(socket_path(self.home)))
+        params = {
+            "scope": sid,
+            "request_id": "lost-reply",
+            "cwd": str(self.workspace),
+            "task": "hello",
+            "access": "read",
+        }
+        writer.write((dumps({"v": PROTOCOL_VERSION, "op": "spawn", "params": params}) + "\n").encode())
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.sleep(0.5)
+        result = await request(self.home, "spawn", params)
+        self.assertTrue(result["replayed"])
+        self.assertEqual((await request(self.home, "list", {"scope": sid}))["total"], 1)
 
     async def test_live_orphan_requires_close_before_respawn(self):
-        (self.home/'config.toml').write_text('pi_command = '+json.dumps([sys.executable,str(TEST_ROOT/'fake_pi.py'),'--hold-eof'])+'\nrpc_timeout_seconds=8\n')
-        sid=await self.open_scope(); a=await self.spawn(sid,'delay=30|orphan')
-        pid=(await request(self.home,'ping',{}))['pid']
-        os.kill(pid,signal.SIGKILL)
-        await asyncio.sleep(.3)
-        listing=await request(self.home,'list',{'scope':sid})
-        self.assertEqual(listing['agents'][0]['state'],'orphaned')
+        (self.home / "config.toml").write_text(
+            "pi_command = "
+            + json.dumps([sys.executable, str(TEST_ROOT / "fake_pi.py"), "--hold-eof"])
+            + "\nrpc_timeout_seconds=8\n"
+        )
+        sid = await self.open_scope()
+        a = await self.spawn(sid, "delay=30|orphan")
+        pid = (await request(self.home, "ping", {}))["pid"]
+        os.kill(pid, signal.SIGKILL)
+        await asyncio.sleep(0.3)
+        listing = await request(self.home, "list", {"scope": sid})
+        self.assertEqual(listing["agents"][0]["state"], "orphaned")
         with self.assertRaises(AgentError) as cm:
-            await request(self.home,'respawn',{'scope':sid,'agent_id':a['agent_id'],'request_id':'unsafe-respawn'})
-        self.assertEqual(cm.exception.code,'orphaned_worker')
-        closed=await request(self.home,'close',{'scope':sid,'agent_id':a['agent_id'],'request_id':'reap'})
-        self.assertEqual(closed['cleanup'],'verified')
-        revived=await request(self.home,'respawn',{'scope':sid,'agent_id':a['agent_id'],'request_id':'revive','message':'recovered'})
-        self.assertEqual(revived['generation'],2)
-        result=await request(self.home,'wait',{'scope':sid,'run_ids':[revived['run_id']],'timeout_seconds':4})
-        self.assertEqual(result['runs'][0]['state'],'completed')
+            await request(
+                self.home, "respawn", {"scope": sid, "agent_id": a["agent_id"], "request_id": "unsafe-respawn"}
+            )
+        self.assertEqual(cm.exception.code, "orphaned_worker")
+        closed = await request(self.home, "close", {"scope": sid, "agent_id": a["agent_id"], "request_id": "reap"})
+        self.assertEqual(closed["cleanup"], "verified")
+        revived = await request(
+            self.home,
+            "respawn",
+            {"scope": sid, "agent_id": a["agent_id"], "request_id": "revive", "message": "recovered"},
+        )
+        self.assertEqual(revived["generation"], 2)
+        result = await request(self.home, "wait", {"scope": sid, "run_ids": [revived["run_id"]], "timeout_seconds": 4})
+        self.assertEqual(result["runs"][0]["state"], "completed")
 
     async def test_base_env_survives_daemon_restart(self):
         """The scope's non-secret base env must outlive the daemon, or a worker

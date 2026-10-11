@@ -1,4 +1,6 @@
-// Width-aware Codex exec-cell layout on a PHYSICAL-ROW model: wrapped VisualRows (each costs exactly 1 screen row) are what get budgeted, so wrap cost and budget can never disagree. Display-only.
+// Width-aware Codex exec-cell layout on a PHYSICAL-ROW model.
+// Wrapped VisualRows each cost exactly one screen row and are what get budgeted.
+// Wrap cost and budget can never disagree. Display-only.
 
 import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./palette.ts";
 import { styleToolOutputLine } from "./output-style.ts";

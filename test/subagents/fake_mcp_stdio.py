@@ -13,7 +13,9 @@ import sys
 import threading
 import time
 
-MODE = os.environ.get('FAKE_MCP_MODE', 'normal')  # normal|no_answer|die_after_init|die_during_call|close_stdin_after_init|close_stdin_after_list|close_after_call|slow
+MODE = os.environ.get(
+    "FAKE_MCP_MODE", "normal"
+)  # normal|no_answer|die_after_init|die_during_call|close_stdin_after_init|close_stdin_after_list|close_after_call|slow
 if MODE in ('ignore_term_no_init','ignore_term_after_eof'):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 CLOSE_AFTER_CALL = os.environ.get('FAKE_MCP_CLOSE_AFTER_CALL') == '1'

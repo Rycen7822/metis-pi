@@ -44,7 +44,14 @@ function isProjectableEntry(e: any): boolean {
 
 /** Projects a single custom_message SessionEntry into its role "custom" message shape. */
 function projectCustomMessageEntry(e: any): any {
-  return { role: "custom", customType: e.customType, content: e.content, display: e.display, details: e.details, timestamp: new Date(e.timestamp).getTime() };
+  return {
+    role: "custom",
+    customType: e.customType,
+    content: e.content,
+    display: e.display,
+    details: e.details,
+    timestamp: new Date(e.timestamp).getTime(),
+  };
 }
 
 /** Joins the text blocks of a ToolResultMessage into a single string. */
@@ -56,17 +63,35 @@ export function extractToolResultText(msg: any): string {
     .join("\n");
 }
 
-export function captureToolResult(toolCallId: string, toolName: string, args: Record<string, unknown>, match: any): CapturedToolCall {
+export function captureToolResult(
+  toolCallId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  match: any,
+): CapturedToolCall {
   const resultTimestamp = match ? resultTimestampOf(match.timestamp) : undefined;
   return {
-    toolCallId, toolName, args, resultText: match ? extractToolResultText(match) : "(no result)",
+    toolCallId,
+    toolName,
+    args,
+    resultText: match ? extractToolResultText(match) : "(no result)",
     isError: (match?.isError ?? false) || match?.details?.metisNested?.hasError === true,
-    ...(hasProtectedNestedResults(match?.details) ? { nestedProtected: true, nestedRootToolCallId: match?.details?.cellParentToolCallId ?? toolCallId } : {}),
-    ...(toolName === "exec_command" && typeof match?.details?.exit_code === "number" ? { exitCode: match.details.exit_code } : {}),
+    ...(hasProtectedNestedResults(match?.details)
+      ? { nestedProtected: true, nestedRootToolCallId: match?.details?.cellParentToolCallId ?? toolCallId }
+      : {}),
+    ...(toolName === "exec_command" && typeof match?.details?.exit_code === "number"
+      ? { exitCode: match.details.exit_code }
+      : {}),
     ...(["bash", "exec_command", "write_stdin"].includes(toolName) && typeof match?.details?.fullOutputPath === "string"
-      ? { outputArchive: { path: match.details.fullOutputPath,
-          ...(typeof match.details.fullOutputBytes === "number" ? { bytes: match.details.fullOutputBytes } : {}),
-          complete: match.details.fullOutputComplete !== false, appendOnly: match.details.fullOutputAppendOnly === true } } : {}),
+      ? {
+          outputArchive: {
+            path: match.details.fullOutputPath,
+            ...(typeof match.details.fullOutputBytes === "number" ? { bytes: match.details.fullOutputBytes } : {}),
+            complete: match.details.fullOutputComplete !== false,
+            appendOnly: match.details.fullOutputAppendOnly === true,
+          },
+        }
+      : {}),
     ...(resultTimestamp !== undefined ? { resultTimestamp } : {}),
     ...captureFusionResult(match),
   };

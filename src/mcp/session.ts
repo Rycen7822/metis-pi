@@ -147,32 +147,65 @@ export class McpServerSession {
     client.onNotification("notifications/resources/list_changed", refresh);
     client.onClose(() => {
       if (this.client !== client) return;
-      this.client = undefined; this.cached = true; this.state = "disconnected"; this.changed();
+      this.client = undefined;
+      this.cached = true;
+      this.state = "disconnected";
+      this.changed();
     });
     let transport: McpTransport | undefined;
     try {
-      transport = "url" in config ? new StreamableHttpTransport({ url: config.url, headers: resolveValues(config.headers),
-        authProvider: this.auth ?? (config.auth ? { token: () => this.context().modelRegistry.getApiKeyForProvider(config.auth!.provider) } : undefined) }) :
-        new StdioTransport({ command: expandHome(config.command), args: config.args?.map(expandHome),
-          cwd: serverCwd(this.entry, this.cwd), env: resolveValues(config.env), stderr: "pipe" });
+      transport =
+        "url" in config
+          ? new StreamableHttpTransport({
+              url: config.url,
+              headers: resolveValues(config.headers),
+              authProvider:
+                this.auth ??
+                (config.auth
+                  ? { token: () => this.context().modelRegistry.getApiKeyForProvider(config.auth!.provider) }
+                  : undefined),
+            })
+          : new StdioTransport({
+              command: expandHome(config.command),
+              args: config.args?.map(expandHome),
+              cwd: serverCwd(this.entry, this.cwd),
+              env: resolveValues(config.env),
+              stderr: "pipe",
+            });
       await client.connect(transport);
       this.assertCurrent();
       this.client = client;
-      directoryChanged = false; await this.updateCatalog(client);
-      if (directoryChanged) { directoryChanged = false; await this.updateCatalog(client); }
+      directoryChanged = false;
+      await this.updateCatalog(client);
+      if (directoryChanged) {
+        directoryChanged = false;
+        await this.updateCatalog(client);
+      }
       this.assertCurrent();
       ready = true;
       if (directoryChanged) refresh();
-      this.state = "connected"; this.error = undefined;
+      this.state = "connected";
+      this.error = undefined;
       this.scheduleIdle();
       return client;
     } catch (error) {
       if (this.client === client) this.client = undefined;
       await this.closeClient(client).catch(() => {});
-      this.state = this.closed ? "closed" : error instanceof McpAuthRequiredError || error instanceof McpOAuthAuthorizationRequiredError ? "needs-auth" : "failed";
-      this.error = this.state === "needs-auth" ? `Sign in with pi mcp login ${this.entry.name}` : `MCP ${this.entry.name}: ${(error as Error).message}`;
-      this.changed(); throw new Error(this.error);
-    } finally { if (this.connecting === client) this.connecting = undefined; this.lifetime.signal.removeEventListener("abort", abort); }
+      this.state = this.closed
+        ? "closed"
+        : error instanceof McpAuthRequiredError || error instanceof McpOAuthAuthorizationRequiredError
+          ? "needs-auth"
+          : "failed";
+      this.error =
+        this.state === "needs-auth"
+          ? `Sign in with pi mcp login ${this.entry.name}`
+          : `MCP ${this.entry.name}: ${(error as Error).message}`;
+      this.changed();
+      throw new Error(this.error);
+    } finally {
+      if (this.connecting === client) this.connecting = undefined;
+      this.lifetime.signal.removeEventListener("abort", abort);
+    }
   }
   private async updateCatalog(client: McpClient) {
     const revision = ++this.discovery;
@@ -191,10 +224,19 @@ export class McpServerSession {
     this.assertCurrent();
     if (this.client !== client) throw new Error("MCP connection changed while discovering tools");
     if (revision !== this.discovery) return;
-    if (before.scope !== identity.scope) throw new Error("MCP authorization or environment changed during discovery; refresh the directory");
+    if (before.scope !== identity.scope)
+      throw new Error("MCP authorization or environment changed during discovery; refresh the directory");
     this.catalog = { tools, resources, resourceTemplates, hasResources, instructions: client.instructions };
-    this.scope = identity.scope; this.key = identity.key; this.cached = false; this.changed();
-    await this.cache.write(this.key, this.catalog, observedAt, () => !this.closed && this.client === client && this.scope === identity.scope && this.discovery === revision);
+    this.scope = identity.scope;
+    this.key = identity.key;
+    this.cached = false;
+    this.changed();
+    await this.cache.write(
+      this.key,
+      this.catalog,
+      observedAt,
+      () => !this.closed && this.client === client && this.scope === identity.scope && this.discovery === revision,
+    );
   }
   async discover(suspend = false): Promise<void> {
     await this.lease(undefined, async () => {
@@ -230,45 +272,83 @@ export class McpServerSession {
     }
   }
   async callTool(tool: Tool, scope: string, args: Record<string, unknown>, options: McpRequestOptions) {
-    return this.lease(options.signal, owned => this.request(owned, async client => {
-      const live = this.catalog.tools.find(candidate => candidate.name === tool.name);
-      if (!live || scope !== this.scope || canonical(live.inputSchema) !== canonical(tool.inputSchema) ||
-        canonical(live.annotations) !== canonical(tool.annotations)) throw new Error("MCP directory changed; use the updated tool definition and retry");
-      const validated = validateToolArguments({ name: live.name, description: live.description ?? "", parameters: live.inputSchema as TSchema },
-        { type: "toolCall", id: "mcp-validation", name: live.name, arguments: args as JsonObject });
-      return client.callTool(live.name, validated, { ...owned, onProgress: options.onProgress });
-    }));
+    return this.lease(options.signal, (owned) =>
+      this.request(owned, async (client) => {
+        const live = this.catalog.tools.find((candidate) => candidate.name === tool.name);
+        if (
+          !live ||
+          scope !== this.scope ||
+          canonical(live.inputSchema) !== canonical(tool.inputSchema) ||
+          canonical(live.annotations) !== canonical(tool.annotations)
+        )
+          throw new Error("MCP directory changed; use the updated tool definition and retry");
+        const validated = validateToolArguments(
+          { name: live.name, description: live.description ?? "", parameters: live.inputSchema as TSchema },
+          { type: "toolCall", id: "mcp-validation", name: live.name, arguments: args as JsonObject },
+        );
+        return client.callTool(live.name, validated, { ...owned, onProgress: options.onProgress });
+      }),
+    );
   }
-  async resource(method: "resources/list" | "resources/templates/list" | "resources/read", params: Record<string, unknown>, signal?: AbortSignal) {
-    return this.lease(signal, options => this.request<unknown>(options, client => method === "resources/list" ? client.listResourcesPage(params.cursor as string | undefined, options) :
-      method === "resources/templates/list" ? client.listResourceTemplatesPage(params.cursor as string | undefined, options).catch(error => {
-        if (error instanceof McpError && error.code === -32601) return { resourceTemplates: [] }; throw error;
-      }) : client.readResource(params.uri as string, options)));
+  async resource(
+    method: "resources/list" | "resources/templates/list" | "resources/read",
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    return this.lease(signal, (options) =>
+      this.request<unknown>(options, (client) =>
+        method === "resources/list"
+          ? client.listResourcesPage(params.cursor as string | undefined, options)
+          : method === "resources/templates/list"
+            ? client.listResourceTemplatesPage(params.cursor as string | undefined, options).catch((error) => {
+                if (error instanceof McpError && error.code === -32601) return { resourceTemplates: [] };
+                throw error;
+              })
+            : client.readResource(params.uri as string, options),
+      ),
+    );
   }
   async suspend(): Promise<void> {
     if (this.closing) return this.closing;
     clearTimeout(this.timer);
-    const client = this.client; this.client = undefined;
+    const client = this.client;
+    this.client = undefined;
     this.cached = true;
     if (!this.closed) this.state = "disconnected";
     this.changed();
     const close = client ? this.closeClient(client) : Promise.resolve();
     this.closing = close;
-    try { await close; } finally { if (this.closing === close) this.closing = undefined; }
+    try {
+      await close;
+    } finally {
+      if (this.closing === close) this.closing = undefined;
+    }
   }
   private closeClient(client: McpClient): Promise<void> {
     let close = this.closes.get(client);
-    if (!close) { close = Promise.resolve().then(() => client.close()); this.closes.set(client, close); }
+    if (!close) {
+      close = Promise.resolve().then(() => client.close());
+      this.closes.set(client, close);
+    }
     return close;
   }
   shutdown(): Promise<void> {
-    return this.shutdownTask ??= this.closeSession();
+    return (this.shutdownTask ??= this.closeSession());
   }
   private async closeSession(): Promise<void> {
-    this.closed = true; clearTimeout(this.timer); this.lifetime.abort();
+    this.closed = true;
+    clearTimeout(this.timer);
+    this.lifetime.abort();
     const pending = this.opening;
-    await Promise.allSettled([this.suspend(), this.connecting && this.closeClient(this.connecting), ...[...this.retiring].map(client => this.closeClient(client)), this.auth?.settled(), pending]);
-    this.retiring.clear(); this.state = "closed";
+    await Promise.allSettled([
+      this.suspend(),
+      this.connecting && this.closeClient(this.connecting),
+      ...[...this.retiring].map((client) => this.closeClient(client)),
+      this.auth?.settled(),
+      pending,
+    ]);
+    this.retiring.clear();
+    this.state = "closed";
   }
 }
 async function waitFor<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {

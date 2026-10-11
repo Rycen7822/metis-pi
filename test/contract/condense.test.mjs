@@ -5,7 +5,16 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAgentSession, createEventBus, DefaultResourceLoader, initTheme, ModelRuntime, SessionManager, SettingsManager, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  createEventBus,
+  DefaultResourceLoader,
+  initTheme,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+  ToolExecutionComponent,
+} from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { disableNetwork, captureRegistration, modelNamed, FAKE_API_KEY } from "../helpers/native-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
@@ -20,24 +29,60 @@ async function loadHost(t, { extraEntries = [], external = false, codex = false 
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   // Enable projection without invoking a summarizer. Production strategies are unchanged.
-  writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { enabled: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } } }));
+  writeFileSync(
+    join(dir, "settings.json"),
+    JSON.stringify({
+      contextPrune: { enabled: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } },
+    }),
+  );
   const originalSettings = readFileSync(join(dir, "settings.json"), "utf8");
   const settingsManager = SettingsManager.inMemory();
-  const modelRuntime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-cache.json"), refreshOnCreate: false });
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(dir, "auth.json"),
+    modelsPath: null,
+    modelsStorePath: join(dir, "models-cache.json"),
+    refreshOnCreate: false,
+  });
   const sm = SessionManager.inMemory(dir);
   for (const entry of extraEntries) entry(sm);
   const paths = [ENTRY];
   if (external) {
     const externalPath = join(dir, "external.ts");
-    writeFileSync(externalPath, 'export default function(pi) { pi.registerTool({name:"context_tree_query",label:"external",description:"external",parameters:{type:"object",properties:{}},async execute(){return {content:[{type:"text",text:"external"}],details:{}}}}); }');
+    writeFileSync(
+      externalPath,
+      'export default function(pi) { pi.registerTool({name:"context_tree_query",label:"' +
+        'external",description:"external",parameters:{type:"object",properties:{}},async ' +
+        'execute(){return {content:[{type:"text",text:"external"}],details:{}}}}); }',
+    );
     paths.push(externalPath);
   }
   if (codex) paths.push(fileURLToPath(new URL("extensions/execution.ts", root)));
   const eventBus = createEventBus();
-  const resourceLoader = new DefaultResourceLoader({ eventBus, cwd: dir, agentDir: dir, settingsManager, additionalExtensionPaths: paths, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "CONDENSE_TEST" });
+  const resourceLoader = new DefaultResourceLoader({
+    eventBus,
+    cwd: dir,
+    agentDir: dir,
+    settingsManager,
+    additionalExtensionPaths: paths,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: "CONDENSE_TEST",
+  });
   await resourceLoader.reload();
-  const loaded = await createAgentSession({ cwd: dir, agentDir: dir, settingsManager, modelRuntime, resourceLoader, sessionManager: sm, ...(codex ? { model: modelNamed("gpt-6-astra") } : {}) });
-  const errors = [], notices = [], statuses = new Map();
+  const loaded = await createAgentSession({
+    cwd: dir,
+    agentDir: dir,
+    settingsManager,
+    modelRuntime,
+    resourceLoader,
+    sessionManager: sm,
+    ...(codex ? { model: modelNamed("gpt-6-astra") } : {}),
+  });
+  const errors = [],
+    notices = [],
+    statuses = new Map();
   t.after(async () => {
     try {
       await loaded.session.extensionRunner.emit({ type: "session_shutdown" });
@@ -118,14 +163,28 @@ test("recovery output folds compact JSON, expands by native controls and never c
 test("recovery errors remain visible and single-line fallback previews stay bounded", async (t) => {
   initTheme("dark", false);
   const h = await loadHost(t);
-  const tool = h.session.extensionRunner.getAllRegisteredTools().find(x => x.definition.name === "context_tree_query").definition;
+  const tool = h.session.extensionRunner
+    .getAllRegisteredTools()
+    .find((x) => x.definition.name === "context_tree_query").definition;
   const args = { toolCallIds: ["missing"] };
   const result = await tool.execute("query", args, undefined, undefined, { sessionManager: h.sm });
   assert.equal(result.isError, true);
-  const row = new ToolExecutionComponent(tool.name, "query", args, { showImages: false }, tool, { requestRender() {} }, process.cwd());
+  const row = new ToolExecutionComponent(
+    tool.name,
+    "query",
+    args,
+    { showImages: false },
+    tool,
+    { requestRender() {} },
+    process.cwd(),
+  );
   row.updateResult(result, false);
   assert.match(stripVTControlCharacters(row.render(80).join("\n")), /Not found/);
-  const failure = { content: [{ type: "text", text: "READ_FAILURE_MARKER " + "x".repeat(20000) + " ERROR_TAIL_MARKER" }], details: undefined, isError: true };
+  const failure = {
+    content: [{ type: "text", text: "READ_FAILURE_MARKER " + "x".repeat(20000) + " ERROR_TAIL_MARKER" }],
+    details: undefined,
+    isError: true,
+  };
   row.updateResult(failure, false);
   for (const width of [40, 80, 120]) {
     row.setExpanded(false);
@@ -165,8 +224,13 @@ test("Pi native context handlers and final provider payload retain recovery tool
   const capture = await captureRegistration(provider);
   const active = new Set(h.session.getActiveToolNames());
   assert.ok(active.has("context_tree_query"), "recall must actually be callable, not merely registered");
-  const tools = h.session.extensionRunner.getAllRegisteredTools().map(({ definition: { name, description, parameters } }) => ({ name, description, parameters })).filter((tool) => active.has(tool.name));
-  await capture.registration.streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools }, { apiKey: FAKE_API_KEY }).result();
+  const tools = h.session.extensionRunner
+    .getAllRegisteredTools()
+    .map(({ definition: { name, description, parameters } }) => ({ name, description, parameters }))
+    .filter((tool) => active.has(tool.name));
+  await capture.registration
+    .streamSimple(model, { systemPrompt: "CONDENSE_TEST", messages, tools }, { apiKey: FAKE_API_KEY })
+    .result();
   const body = capture.bodies[0];
   const recallSchema = body.tools.find((tool) => tool.name === "context_tree_query");
   assert.ok(recallSchema?.parameters.properties.cursor, "the final request must advertise pagination");

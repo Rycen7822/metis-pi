@@ -96,59 +96,71 @@ export function renderBackgroundBashWidget(ctx: ExtensionContext, state: Backgro
 }
 
 export function registerBackgroundBashWidgetShortcuts(
-	pi: ExtensionAPI,
-	state: BackgroundBashWidgetState,
-	sessions: ExecSessionManager,
-	config: Pick<ExecutionConfig["ui"], "backgroundShellCloseShortcut" | "backgroundShellNextShortcut" | "backgroundShellPrevShortcut" | "backgroundShellToggleShortcut">,
-	isEnabled: () => boolean,
+  pi: ExtensionAPI,
+  state: BackgroundBashWidgetState,
+  sessions: ExecSessionManager,
+  config: Pick<
+    ExecutionConfig["ui"],
+    | "backgroundShellCloseShortcut"
+    | "backgroundShellNextShortcut"
+    | "backgroundShellPrevShortcut"
+    | "backgroundShellToggleShortcut"
+  >,
+  isEnabled: () => boolean,
 ): void {
-	function rerender(ctx: ExtensionContext): void {
-		if (!isEnabled()) return;
-		state.ctx = ctx;
-		renderBackgroundBashWidget(ctx, state, sessions);
-	}
+  function rerender(ctx: ExtensionContext): void {
+    if (!isEnabled()) return;
+    state.ctx = ctx;
+    renderBackgroundBashWidget(ctx, state, sessions);
+  }
 
-	pi.registerShortcut(config.backgroundShellToggleShortcut as "alt+w", {
-		description: "Fold or open Background shell widget",
-		handler: async (ctx) => {
-			if (!isEnabled()) return;
-			toggleBackgroundBashWidget(ctx, state, sessions);
-		},
-	});
-	pi.registerShortcut(config.backgroundShellPrevShortcut as "alt+q", {
-		description: "Previous Background shell",
-		handler: async (ctx) => {
-			if (!isEnabled()) return;
-			const snapshots = sessions.listSessions();
-			const count = snapshots.length;
-			if (count > 0) {
-				const activeIndex = Math.max(0, snapshots.findIndex((session) => session.id === state.activeSessionId));
-				state.activeSessionId = snapshots[(activeIndex + count - 1) % count]!.id;
-			}
-			rerender(ctx);
-		},
-	});
-	pi.registerShortcut(config.backgroundShellNextShortcut as "alt+e", {
-		description: "Next Background shell",
-		handler: async (ctx) => {
-			if (!isEnabled()) return;
-			const snapshots = sessions.listSessions();
-			const count = snapshots.length;
-			if (count > 0) {
-				const activeIndex = Math.max(0, snapshots.findIndex((session) => session.id === state.activeSessionId));
-				state.activeSessionId = snapshots[(activeIndex + 1) % count]!.id;
-			}
-			rerender(ctx);
-		},
-	});
-	pi.registerShortcut(config.backgroundShellCloseShortcut as "alt+r", {
-		description: "Close active Background shell",
-		handler: async (ctx) => {
-			if (!isEnabled()) return;
-			const snapshots = sessions.listSessions();
-			const snapshot = snapshots.find((session) => session.id === state.activeSessionId) ?? snapshots[0];
-			if (snapshot) sessions.terminateSession(snapshot.id);
-			rerender(ctx);
-		},
-	});
+  pi.registerShortcut(config.backgroundShellToggleShortcut as "alt+w", {
+    description: "Fold or open Background shell widget",
+    handler: async (ctx) => {
+      if (!isEnabled()) return;
+      toggleBackgroundBashWidget(ctx, state, sessions);
+    },
+  });
+  pi.registerShortcut(config.backgroundShellPrevShortcut as "alt+q", {
+    description: "Previous Background shell",
+    handler: async (ctx) => {
+      if (!isEnabled()) return;
+      const snapshots = sessions.listSessions();
+      const count = snapshots.length;
+      if (count > 0) {
+        const activeIndex = Math.max(
+          0,
+          snapshots.findIndex((session) => session.id === state.activeSessionId),
+        );
+        state.activeSessionId = snapshots[(activeIndex + count - 1) % count]!.id;
+      }
+      rerender(ctx);
+    },
+  });
+  pi.registerShortcut(config.backgroundShellNextShortcut as "alt+e", {
+    description: "Next Background shell",
+    handler: async (ctx) => {
+      if (!isEnabled()) return;
+      const snapshots = sessions.listSessions();
+      const count = snapshots.length;
+      if (count > 0) {
+        const activeIndex = Math.max(
+          0,
+          snapshots.findIndex((session) => session.id === state.activeSessionId),
+        );
+        state.activeSessionId = snapshots[(activeIndex + 1) % count]!.id;
+      }
+      rerender(ctx);
+    },
+  });
+  pi.registerShortcut(config.backgroundShellCloseShortcut as "alt+r", {
+    description: "Close active Background shell",
+    handler: async (ctx) => {
+      if (!isEnabled()) return;
+      const snapshots = sessions.listSessions();
+      const snapshot = snapshots.find((session) => session.id === state.activeSessionId) ?? snapshots[0];
+      if (snapshot) sessions.terminateSession(snapshot.id);
+      rerender(ctx);
+    },
+  });
 }

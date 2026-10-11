@@ -82,7 +82,15 @@ async function runStep(step) {
     setTimeout(() => { for (const cb of handlers['session_shutdown'] ?? []) cb(); }, step.closeAfterMs);
   }
   try {
-    const ctx = { ui: { confirm: async () => { confirmCount += 1; if (step.confirmDelayMs) await new Promise((r) => setTimeout(r, step.confirmDelayMs)); return step.confirm === true; } } };
+    const ctx = {
+      ui: {
+        confirm: async () => {
+          confirmCount += 1;
+          if (step.confirmDelayMs) await new Promise((r) => setTimeout(r, step.confirmDelayMs));
+          return step.confirm === true;
+        },
+      },
+    };
     const out = await registered.execute('call-1', {
       action: step.action, server: step.server, tool: step.tool, args: step.args ?? {},
     }, signal.signal, null, ctx);

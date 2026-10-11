@@ -28,10 +28,31 @@ function isBoundary(event: AssistantMessageEvent): event is Extract<AssistantMes
   } catch { return false; }
 }
 
-function sampling(model: Parameters<Stream>[0], source: ReturnType<Stream>, cancel: AbortController, signal: AbortSignal, mailbox: Mailbox) {
+function sampling(
+  model: Parameters<Stream>[0],
+  source: ReturnType<Stream>,
+  cancel: AbortController,
+  signal: AbortSignal,
+  mailbox: Mailbox,
+) {
   const output = createAssistantMessageEventStream();
-  let latest: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), content: [], stopReason: "error",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+  let latest: AssistantMessage = {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    timestamp: Date.now(),
+    content: [],
+    stopReason: "error",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
   void (async () => {
     try {
       for await (const event of source) {
@@ -82,10 +103,12 @@ function sampling(model: Parameters<Stream>[0], source: ReturnType<Stream>, canc
 export function installSamplingMailbox(mailbox: Mailbox): () => void {
   const target = ModelRuntime.prototype;
   let hook = Reflect.get(target, SLOT) as Hook | undefined;
-  if (hook && target.streamSimple !== hook.wrapped) throw new Error("Subagent sampling hook was replaced; using turn-end delivery");
+  if (hook && target.streamSimple !== hook.wrapped)
+    throw new Error("Subagent sampling hook was replaced; using turn-end delivery");
   if (!hook) {
     const descriptor = Object.getOwnPropertyDescriptor(target, "streamSimple");
-    if (!descriptor?.configurable || !descriptor.writable || typeof descriptor.value !== "function") throw new Error("Subagent sampling hook unavailable; using turn-end delivery");
+    if (!descriptor?.configurable || !descriptor.writable || typeof descriptor.value !== "function")
+      throw new Error("Subagent sampling hook unavailable; using turn-end delivery");
     const original = descriptor.value as Stream;
     const owners = new Map<string, Mailbox>();
     const wrapped: Stream = function (this: ModelRuntime, model, context, options) {

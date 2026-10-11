@@ -33,7 +33,12 @@ export function validateObjective(input: string): string {
   }
   if (charCount(objective) > MAX_OBJECTIVE_CHARS) {
     throw new Error(
-      `Goal objective is too long: ${charCount(objective).toLocaleString()} characters. Limit: ${MAX_OBJECTIVE_CHARS.toLocaleString()} characters. Put longer instructions in a file and refer to that file in the goal, for example: /goal follow the instructions in docs/goal.md.`,
+      "Goal objective is too long: " +
+        `${charCount(objective).toLocaleString()}` +
+        " characters. Limit: " +
+        `${MAX_OBJECTIVE_CHARS.toLocaleString()}` +
+        " characters. Put longer instructions in a file and refer to that file in the " +
+        "goal, for example: /goal follow the instructions in docs/goal.md.",
     );
   }
   return objective;

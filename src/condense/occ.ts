@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { calculateContextTokens, compact, estimateTokens, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import {
+  calculateContextTokens,
+  compact,
+  estimateTokens,
+  getAgentDir,
+  SettingsManager,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionBeforeCompactEvent,
+} from "@earendil-works/pi-coding-agent";
 import { archiveBatches } from "./spill.ts";
 import { hasUnavailableNestedEvidence, isProtected } from "./protected.ts";
 import { captureBatch, captureUnindexedBatchesFromSession } from "./batch-capture.ts";
@@ -11,10 +20,19 @@ import type { ContextPruneConfig } from "./types.ts";
 const STATE = "metis-occ-state";
 const HOLD_WORK = 4;
 const WAIT_WORK = 3;
-const ENTER = 0.60, EXIT = 0.52, READY = 0.72;
+const ENTER = 0.6,
+  EXIT = 0.52,
+  READY = 0.72;
 // Relative resource weights chosen by the user; not provider billing prices.
 const COST_RATIO = { input: 1, output: 5, cacheRead: 0.1 };
-const nativeTarget = (tokens: number) => tokens === 0 ? undefined : `Aim for at most ${tokens} output text tokens. This is a soft target, not a truncation instruction: preserve required facts, uncertainties and complete statements. It does not change the provider's output/reasoning ceiling.`;
+const nativeTarget = (tokens: number) =>
+  tokens === 0
+    ? undefined
+    : "Aim for at most " +
+      `${tokens}` +
+      " output text tokens. This is a soft target, not a truncation instruction: " +
+      "preserve required facts, uncertainties and complete statements. It does not " +
+      "change the provider's output/reasoning ceiling.";
 
 type Phase = "normal" | "waiting" | "hold";
 interface MaintenanceState {
@@ -201,52 +219,90 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if ((running || event.reason !== "manual") && state.attemptedSource === source) return reject("same-source");
       const p = event.preparation;
       const projected = projection(ctx);
-      const cut = projected.entries.findIndex(e => e.sourceEntry.id === p.firstKeptEntryId);
+      const cut = projected.entries.findIndex((e) => e.sourceEntry.id === p.firstKeptEntryId);
       if (cut < 1) return reject("no-safe-boundary");
       const discarded = projected.entries.slice(0, cut);
-      const discardedMessages = discarded.flatMap(e => e.messages);
+      const discardedMessages = discarded.flatMap((e) => e.messages);
       // Never split a call/result group; a kept assistant or user begins a safe boundary.
-      const kept = projected.entries.slice(cut).flatMap(e => e.messages);
+      const kept = projected.entries.slice(cut).flatMap((e) => e.messages);
       if (kept[0]?.role === "toolResult") return reject("split-tool-group");
       // Program-owned ordered source quotes. They are historical requirements;
       // later user corrections take precedence. Model text cannot edit them.
-      const requirements = discarded.flatMap(e => e.messages.filter(m => m.role === "user")
-        .map(m => ({ source: e.sourceEntry.id, content: m.content })));
+      const requirements = discarded.flatMap((e) =>
+        e.messages.filter((m) => m.role === "user").map((m) => ({ source: e.sourceEntry.id, content: m.content })),
+      );
       const request = { sessionId, messages: discardedMessages, api: ctx.model.api, busy: false, maintenance: true };
       pi.events.emit("metis:condense-project", request);
       if (request.busy) return reject("projection-busy");
-      if (hasUnavailableNestedEvidence(projected.entries.flatMap(entry => entry.messages))) return reject("nested-evidence-unavailable");
+      if (hasUnavailableNestedEvidence(projected.entries.flatMap((entry) => entry.messages)))
+        return reject("nested-evidence-unavailable");
       const goal = { snapshot: undefined as unknown };
       pi.events.emit("metis:goal-snapshot", goal);
-      const obligations = captureUnindexedBatchesFromSession(discarded.flatMap(e => e.messages.map(message => ({ ...e.sourceEntry, type: "message", message }))), { isSummarized: () => false })
-        .flatMap(batch => batch.toolCalls).filter(call => call.nestedProtected || call.isError || call.toolName === "context_tree_query" || isProtected(call.toolName, call.args, config.value))
+      const obligations = captureUnindexedBatchesFromSession(
+        discarded.flatMap((e) => e.messages.map((message) => ({ ...e.sourceEntry, type: "message", message }))),
+        { isSummarized: () => false },
+      )
+        .flatMap((batch) => batch.toolCalls)
+        .filter(
+          (call) =>
+            call.nestedProtected ||
+            call.isError ||
+            call.toolName === "context_tree_query" ||
+            isProtected(call.toolName, call.args, config.value),
+        )
         .map((call): Obligation => {
-          const recalled = call.toolName === "context_tree_query" && !call.isError && !config.value.protectedTools.includes(call.toolName);
-          const key = call.resultTimestamp === undefined ? call.toolCallId : `${call.toolCallId}@${call.resultTimestamp}`;
-          return { id: call.toolCallId, timestamp: call.resultTimestamp, tool: call.toolName, args: call.args, isError: call.isError,
+          const recalled =
+            call.toolName === "context_tree_query" &&
+            !call.isError &&
+            !config.value.protectedTools.includes(call.toolName);
+          const key =
+            call.resultTimestamp === undefined ? call.toolCallId : `${call.toolCallId}@${call.resultTimestamp}`;
+          return {
+            id: call.toolCallId,
+            timestamp: call.resultTimestamp,
+            tool: call.toolName,
+            args: call.args,
+            isError: call.isError,
             ...(recalled ? { transient: true } : {}),
-            text: recalled ? `Historical recovery page archived. Read context_tree_query with toolCallIds=[${JSON.stringify(key)}].`
-              : call.resultText + (call.nestedProtected ? `\nNested evidence: context_tree_query with parentToolCallId=${JSON.stringify(call.nestedRootToolCallId ?? call.toolCallId)}.` : "") };
+            text: recalled
+              ? `Historical recovery page archived. Read context_tree_query with toolCallIds=[${JSON.stringify(key)}].`
+              : call.resultText +
+                (call.nestedProtected
+                  ? `\nNested evidence: context_tree_query with parentToolCallId=${JSON.stringify(call.nestedRootToolCallId ?? call.toolCallId)}.`
+                  : ""),
+          };
         });
       const protectedSources = retainSources(discarded, request.messages, requirements, obligations, goal.snapshot);
       // Legacy manual chain projections are derived, including their preserved
       // outputs. Keep them verbatim once rather than feeding them to a model.
-      for (const message of (request.messages as any[]).filter(m => m.metisDerived?.kind === "condense-chain")) {
+      for (const message of (request.messages as any[]).filter((m) => m.metisDerived?.kind === "condense-chain")) {
         protectedSources.legacy.push({ source: `chain:${message.metisDerived.blockId}`, content: message.content });
       }
-      protectedSources.legacy = [...new Map(protectedSources.legacy.map(item => [item.source, item])).values()];
+      protectedSources.legacy = [...new Map(protectedSources.legacy.map((item) => [item.source, item])).values()];
       for (const message of request.messages as any[]) {
         if (message.role !== "custom" || message.customType !== ARGUMENT_HISTORY) continue;
-        protectedSources.obligations.push({ id: message.details.sourceEntryIds[0], tool: "completed-interaction",
-          args: { sourceEntryIds: message.details.sourceEntryIds }, isError: false, text: message.content, transient: true });
+        protectedSources.obligations.push({
+          id: message.details.sourceEntryIds[0],
+          tool: "completed-interaction",
+          args: { sourceEntryIds: message.details.sourceEntryIds },
+          isError: false,
+          text: message.content,
+          transient: true,
+        });
       }
       const protection = JSON.stringify(protectedSources);
       const before = JSON.stringify(request.messages).length;
       // Protect old summaries verbatim; never ask the model to summarize a summary again.
-      const modelMessages = request.messages.filter(m => !isDerived(m));
+      const modelMessages = request.messages.filter((m) => !isDerived(m));
       const summaryOutput = summaryLimit(p.settings.reserveTokens, ctx.model.maxTokens);
       const upperAfter = protection.length + 4 * summaryOutput;
-      metrics = { ...metrics, beforeChars: before, protectedChars: protection.length, estimatedAfterChars: upperAfter, summaryOutputUpperBound: summaryOutput };
+      metrics = {
+        ...metrics,
+        beforeChars: before,
+        protectedChars: protection.length,
+        estimatedAfterChars: upperAfter,
+        summaryOutputUpperBound: summaryOutput,
+      };
       if (upperAfter >= before * 0.75) return reject("protected-content-too-large");
       const budget = running ? capacity(ctx, p.settings) : undefined;
       const wholeTokens = estimatedTokens(visible(ctx).messages);
@@ -314,11 +370,27 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (!result.summary.trim() || summary.length >= before * 0.8) return reject("insufficient-actual-savings");
       if (!fits(Math.ceil(summary.length / 4))) return reject("insufficient-actual-headroom");
       decision("accepted", metrics);
-      return { compaction: { ...result, summary, firstKeptEntryId: p.firstKeptEntryId,
-        details: { ...result.details as object, metisOcc: { source, requirements, protectedChars: protection.length, protection: protectedSources } } } };
+      return {
+        compaction: {
+          ...result,
+          summary,
+          firstKeptEntryId: p.firstKeptEntryId,
+          details: {
+            ...(result.details as object),
+            metisOcc: { source, requirements, protectedChars: protection.length, protection: protectedSources },
+          },
+        },
+      };
     } catch (error) {
       if (version !== lifecycle) return { cancel: true as const };
-      try { ctx.ui.notify(`OCC kept original context: ${error instanceof Error ? error.message : String(error)}`, "warning"); } catch { /* UI is optional. */ }
+      try {
+        ctx.ui.notify(
+          `OCC kept original context: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      } catch {
+        /* UI is optional. */
+      }
       return reject("preparation-failed");
     }
   }
@@ -343,13 +415,23 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     localTokensSaved = 0;
   }
   pi.on("turn_end", (event) => {
-    if (!enabled() || event.message.role !== "assistant" || event.message.stopReason === "error" || event.message.stopReason === "aborted" || !event.toolResults.length) return;
-    const calls = captureBatch(event.message, event.toolResults, 0, 0).toolCalls.filter(call =>
-      !call.isError && !["context_tree_query", "write_stdin", "get_goal"].includes(call.toolName)
-      && (call.toolName !== "exec_command" || call.exitCode === 0)
-      && event.toolResults.some(result => result.toolCallId === call.toolCallId && result.isError === false));
+    if (
+      !enabled() ||
+      event.message.role !== "assistant" ||
+      event.message.stopReason === "error" ||
+      event.message.stopReason === "aborted" ||
+      !event.toolResults.length
+    )
+      return;
+    const calls = captureBatch(event.message, event.toolResults, 0, 0).toolCalls.filter(
+      (call) =>
+        !call.isError &&
+        !["context_tree_query", "write_stdin", "get_goal"].includes(call.toolName) &&
+        (call.toolName !== "exec_command" || call.exitCode === 0) &&
+        event.toolResults.some((result) => result.toolCallId === call.toolCallId && result.isError === false),
+    );
     if (!calls.length) return;
-    const key = hash(calls.map(call => [call.toolName, call.args, call.resultText, call.exitCode]));
+    const key = hash(calls.map((call) => [call.toolName, call.args, call.resultText, call.exitCode]));
     if (state.recentWork?.includes(key)) return;
     state.lastWork = key;
     state.recentWork = [...(state.recentWork ?? []), key].slice(-16);

@@ -125,7 +125,12 @@ export class CancelledError extends Error {
 }
 
 
-export interface JsonRpcResponse { jsonrpc?: string; id?: number | string | null; result?: unknown; error?: { code: number; message: string; data?: unknown } }
+export interface JsonRpcResponse {
+  jsonrpc?: string;
+  id?: number | string | null;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
 
 
 function toToolMeta(raw: unknown, mirrorHeaders: boolean): ToolMeta | null {

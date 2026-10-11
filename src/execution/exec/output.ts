@@ -79,33 +79,51 @@ export function generateChunkId(): string {
 	return randomBytes(3).toString("hex");
 }
 
-export function truncateOutput(text: string, maxOutputTokens?: number, originalCharCount = text.length): { output: string; original_token_count?: number | undefined } {
-	if (text.length === 0 && originalCharCount === 0) return { output: "" };
-	const maxChars = maxCharsForTokens(maxOutputTokens);
-	const originalTokenCount = Math.ceil(Math.max(text.length, originalCharCount) / 4);
-	if (text.length <= maxChars) return { output: text, original_token_count: originalTokenCount };
-	return { output: truncateToTail(text, maxChars).output, original_token_count: originalTokenCount };
+export function truncateOutput(
+  text: string,
+  maxOutputTokens?: number,
+  originalCharCount = text.length,
+): { output: string; original_token_count?: number | undefined } {
+  if (text.length === 0 && originalCharCount === 0) return { output: "" };
+  const maxChars = maxCharsForTokens(maxOutputTokens);
+  const originalTokenCount = Math.ceil(Math.max(text.length, originalCharCount) / 4);
+  if (text.length <= maxChars) return { output: text, original_token_count: originalTokenCount };
+  return { output: truncateToTail(text, maxChars).output, original_token_count: originalTokenCount };
 }
 
-function outputSince(session: ExecOutputSessionState, offset: number, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	const endOffset = session.buffer.endOffset;
-	const retainedStart = Math.max(offset, session.buffer.startOffset);
-	// Include one extra code unit so truncateOutput preserves its surrogate boundary rule.
-	const startOffset = Math.max(retainedStart, endOffset - maxCharsForTokens(maxOutputTokens) - 1);
-	const text = session.buffer.slice(startOffset - session.buffer.startOffset);
-	return truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
+function outputSince(
+  session: ExecOutputSessionState,
+  offset: number,
+  maxOutputTokens?: number,
+): { output: string; original_token_count?: number | undefined } {
+  const endOffset = session.buffer.endOffset;
+  const retainedStart = Math.max(offset, session.buffer.startOffset);
+  // Include one extra code unit so truncateOutput preserves its surrogate boundary rule.
+  const startOffset = Math.max(retainedStart, endOffset - maxCharsForTokens(maxOutputTokens) - 1);
+  const text = session.buffer.slice(startOffset - session.buffer.startOffset);
+  return truncateOutput(text, maxOutputTokens, Math.max(0, endOffset - offset));
 }
 
-export function consumeOutput(session: ExecOutputSessionState, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	const output = outputSince(session, session.emittedOffset, maxOutputTokens);
-	session.emittedOffset = session.buffer.endOffset;
-	return output;
+export function consumeOutput(
+  session: ExecOutputSessionState,
+  maxOutputTokens?: number,
+): { output: string; original_token_count?: number | undefined } {
+  const output = outputSince(session, session.emittedOffset, maxOutputTokens);
+  session.emittedOffset = session.buffer.endOffset;
+  return output;
 }
 
-export function peekUnconsumedOutput(session: ExecOutputSessionState, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	return outputSince(session, session.emittedOffset, maxOutputTokens);
+export function peekUnconsumedOutput(
+  session: ExecOutputSessionState,
+  maxOutputTokens?: number,
+): { output: string; original_token_count?: number | undefined } {
+  return outputSince(session, session.emittedOffset, maxOutputTokens);
 }
 
-export function peekOutputSince(session: ExecOutputSessionState, baselineOffset: number, maxOutputTokens?: number): { output: string; original_token_count?: number | undefined } {
-	return outputSince(session, baselineOffset, maxOutputTokens);
+export function peekOutputSince(
+  session: ExecOutputSessionState,
+  baselineOffset: number,
+  maxOutputTokens?: number,
+): { output: string; original_token_count?: number | undefined } {
+  return outputSince(session, baselineOffset, maxOutputTokens);
 }

@@ -207,22 +207,28 @@ export function pruneMessages(
 }
 
 export function toolResultStub(msg: any, record: ToolCallRecord | undefined, ref: string): any {
-    const text = record?.spillPath
-      ? [
-          `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
-          `Tool: ${record.toolName}`,
-          record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
-          record.resultPreview ?? "",
-          `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
-          `Or use context_tree_query with ref \`${ref}\`.`,
-        ].join("\n")
-      : `[Captured ${msg.toolName} output retained, status ${msg.isError ? "ERROR" : "OK"}, ref \`${ref}\`. Use context_tree_query to retrieve full output.]`;
-    return {
-      role: "toolResult",
-      toolCallId: msg.toolCallId,
-      toolName: msg.toolName,
-      content: [{ type: "text", text }],
-      isError: msg.isError,
-      timestamp: msg.timestamp,
-    };
+  const text = record?.spillPath
+    ? [
+        `[Captured output archived — ${record.spillBytes ?? "?"} bytes${record.archiveComplete === false ? "; INCOMPLETE captured prefix" : ""}.]`,
+        `Tool: ${record.toolName}`,
+        record.archiveSource === "fused-command-output" ? `Mutation and command evidence:` : `Preview (head):`,
+        record.resultPreview ?? "",
+        `Captured output — read this file (offset/limit supported): ${record.spillPath}`,
+        `Or use context_tree_query with ref \`${ref}\`.`,
+      ].join("\n")
+    : "[Captured " +
+      `${msg.toolName}` +
+      " output retained, status " +
+      `${msg.isError ? "ERROR" : "OK"}` +
+      ", ref `" +
+      `${ref}` +
+      "`. Use context_tree_query to retrieve full output.]";
+  return {
+    role: "toolResult",
+    toolCallId: msg.toolCallId,
+    toolName: msg.toolName,
+    content: [{ type: "text", text }],
+    isError: msg.isError,
+    timestamp: msg.timestamp,
+  };
 }

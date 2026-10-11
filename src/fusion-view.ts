@@ -24,10 +24,22 @@ export function fusionRenderers(mutation: Renderers, shell: Renderers, currentRe
       const mutationCtx = mutationViewContext(result, ctx);
       if (!receipt || !Array.isArray(value.content)) return mutation.renderResult(result, options, theme, mutationCtx);
       const { metisActionFusion: _receipt, ...mutationDetails } = asRecord(value.details);
-      const mutationResult = { ...value, details: mutationDetails, isError: receipt.mutationStatus !== "success", content: value.content.slice(0, receipt.command.outputBlock - 1) };
+      const mutationResult = {
+        ...value,
+        details: mutationDetails,
+        isError: receipt.mutationStatus !== "success",
+        content: value.content.slice(0, receipt.command.outputBlock - 1),
+      };
       const running = receipt.command.status === "running";
       const failed = !["running", "succeeded"].includes(receipt.command.status);
-      const shellCtx = { ...ctx, args: { command: receipt.command.command }, isError: failed, isPartial: running, hasResult: !running, lastComponent: undefined };
+      const shellCtx = {
+        ...ctx,
+        args: { command: receipt.command.command },
+        isError: failed,
+        isPartial: running,
+        hasResult: !running,
+        lastComponent: undefined,
+      };
       const commandResult = { content: value.content.slice(receipt.command.outputBlock - 1), isError: failed };
       return stackComponents([
         mutation.renderResult(mutationResult, { ...options, isPartial: false }, theme, mutationCtx),

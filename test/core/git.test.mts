@@ -25,7 +25,17 @@ test("resolveHead: injected failures require positive evidence before reporting 
     args[0] === "symbolic-ref" ? symref ?? { ok: false, stdout: "", code: 128 } : { ok: false, stdout: "", code };
   assert.deepEqual(await resolveHead("/unused-repo", { exec: failing(128) }), { kind: "error" }, "a general git failure");
   assert.deepEqual(await resolveHead("/unused-repo", { exec: failing(1) }), { kind: "error" }, "exit 1 but HEAD is not a live symref");
-  assert.deepEqual(await resolveHead("/unused-repo", { exec: failing(1, { ok: true, stdout: "" }) }), { kind: "error" }, "symref without a branch name");
-  assert.deepEqual(await resolveHead("/unused-repo", { exec: failing(1, { ok: true, stdout: "refs/heads/main\n" }) }), { kind: "unborn" });
-  assert.deepEqual(await resolveHead("/unused-repo", { exec: async () => ({ ok: true, stdout: "", code: 0 }) }), { kind: "error" }, "success without an id");
+  assert.deepEqual(
+    await resolveHead("/unused-repo", { exec: failing(1, { ok: true, stdout: "" }) }),
+    { kind: "error" },
+    "symref without a branch name",
+  );
+  assert.deepEqual(await resolveHead("/unused-repo", { exec: failing(1, { ok: true, stdout: "refs/heads/main\n" }) }), {
+    kind: "unborn",
+  });
+  assert.deepEqual(
+    await resolveHead("/unused-repo", { exec: async () => ({ ok: true, stdout: "", code: 0 }) }),
+    { kind: "error" },
+    "success without an id",
+  );
 });

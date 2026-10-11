@@ -46,14 +46,27 @@ export interface ScalarRow {
 }
 
 const PRUNE_MODE_GUIDANCE: Record<ContextPruneConfig["pruneOn"], string> = {
-  "agent-message": "Recommended default. Evaluate mechanical pruning after the final text reply; paid summaries also require pressure and a complete-message net-benefit budget. Deferred work retries on a later request.",
-  "on-demand": "Ordinary summaries are manual unless a budget trigger is enabled. Zero-call old-chain maintenance remains independent.",
+  "agent-message":
+    "Recommended default. Evaluate mechanical pruning after the final text reply; " +
+    "paid summaries also require pressure and a complete-message net-benefit budget. " +
+    "Deferred work retries on a later request.",
+  "on-demand":
+    "Ordinary summaries are manual unless a budget trigger is enabled. Zero-call old-chain maintenance remains independent.",
 };
 
 function pruneTriggerDescription(config: ContextPruneConfig): string {
   const mode = config.pruneOn;
-  const guidance = PRUNE_MODE_GUIDANCE[mode] ?? "Controls when summarized tool outputs replace raw tool results in future context.";
-  return `When to summarize tool outputs. Current mode: ${optionLabel("pruneOn", mode)} (${mode}) — ${guidance} Press Enter/Space to cycle through modes.`;
+  const guidance =
+    PRUNE_MODE_GUIDANCE[mode] ?? "Controls when summarized tool outputs replace raw tool results in future context.";
+  return (
+    "When to summarize tool outputs. Current mode: " +
+    `${optionLabel("pruneOn", mode)}` +
+    " (" +
+    `${mode}` +
+    ") — " +
+    `${guidance}` +
+    " Press Enter/Space to cycle through modes."
+  );
 }
 
 function summarizerThinkingDescription(config: ContextPruneConfig): string {
@@ -85,57 +98,129 @@ function pruneStatusLineDescription(config: ContextPruneConfig): string {
 function quietOversizedSkipsDescription(config: ContextPruneConfig): string {
   const base = config.quietOversizedSkips ? "ON" : "OFF";
   if (config.quietOversizedSkips) {
-    return `Suppress non-error skip/deferral notifications. Trivial batches may advance the frontier; budget-deferred work stays pending and blocks advancement across its gap. Currently ${base}.`;
+    return (
+      "Suppress non-error skip/deferral notifications. Trivial batches may advance the " +
+      "frontier; budget-deferred work stays pending and blocks advancement across its " +
+      "gap. Currently " +
+      `${base}` +
+      "."
+    );
   }
-  return `Show non-error character-guard and token-budget deferral notifications. Budget rejection retains raw evidence and pending work. Currently ${base}.`;
+  return (
+    "Show non-error character-guard and token-budget deferral notifications. Budget " +
+    "rejection retains raw evidence and pending work. Currently " +
+    `${base}` +
+    "."
+  );
 }
 
 function minBatchCharsDescription(config: ContextPruneConfig): string {
   if (config.minBatchChars === 0) {
-    return `Currently 0 — character guard disabled. This never forces a model request: paid summaries still need pressure and at least both ${config.summaryBudget.minGainTokens} tokens and ${Math.round(config.summaryBudget.minGainFraction * 100)}% local proxy gain; deterministic pruning is checked separately.`;
+    return (
+      "Currently 0 — character guard disabled. This never forces a model request: paid " +
+      "summaries still need pressure and at least both " +
+      `${config.summaryBudget.minGainTokens}` +
+      " tokens and " +
+      `${Math.round(config.summaryBudget.minGainFraction * 100)}` +
+      "% local proxy gain; deterministic pruning is checked separately."
+    );
   }
-  return `Currently ${config.minBatchChars} chars. Skip remaining semantic batches below that size without a model call. Default 5000; 0 disables only this guard. Paid pressure/token budgets still apply; profitable deterministic candidates bypass it. Pending gaps prevent frontier advancement.`;
+  return (
+    "Currently " +
+    `${config.minBatchChars}` +
+    " chars. Skip remaining semantic batches below that size without a model call. " +
+    "Default 5000; 0 disables only this guard. Paid pressure/token budgets still " +
+    "apply; profitable deterministic candidates bypass it. Pending gaps prevent " +
+    "frontier advancement."
+  );
 }
 
 function recoveryGraceDescription(config: ContextPruneConfig): string {
   if (config.recoveryGraceTurns === 0) {
-    return "context_tree_query output is stubbed immediately (grace disabled). Set to a positive integer to keep recovered output verbatim for that many user-turn-groups.";
+    return (
+      "context_tree_query output is stubbed immediately (grace disabled). Set to a " +
+      "positive integer to keep recovered output verbatim for that many " +
+      "user-turn-groups."
+    );
   }
-  return `context_tree_query (recovery) output stays verbatim for ${config.recoveryGraceTurns} user-turn-group(s) after recovery, then reverts to the stub. Bounds the recover->re-stub->re-query loop. Currently ${config.recoveryGraceTurns}. Set to 0 to disable.`;
+  return (
+    "context_tree_query (recovery) output stays verbatim for " +
+    `${config.recoveryGraceTurns}` +
+    " user-turn-group(s) after recovery, then reverts to the stub. Bounds the " +
+    "recover->re-stub->re-query loop. Currently " +
+    `${config.recoveryGraceTurns}` +
+    ". Set to 0 to disable."
+  );
 }
 
 function idleTimeoutDescription(config: ContextPruneConfig): string {
   if (config.summarizerIdleTimeoutMs === 0) {
     return "Summarizer idle timeout DISABLED - a stalled stream is only bounded by the ceiling (or not at all if that is 0 too).";
   }
-  return `Abort a summarizer call after ${Math.round(config.summarizerIdleTimeoutMs / 1000)}s of silence (no stream event). Resets on every event, so it never aborts a flowing generation; a timeout feeds the same outage-fallback retry as a provider error. Set 0 to disable.`;
+  return (
+    "Abort a summarizer call after " +
+    `${Math.round(config.summarizerIdleTimeoutMs / 1000)}` +
+    "s of silence (no stream event). Resets on every event, so it never aborts a " +
+    "flowing generation; a timeout feeds the same outage-fallback retry as a " +
+    "provider error. Set 0 to disable."
+  );
 }
 
 function maxTimeoutDescription(config: ContextPruneConfig): string {
   if (config.summarizerMaxTimeoutMs === 0) {
     return "Summarizer total-duration ceiling DISABLED - only the idle timeout bounds a call.";
   }
-  return `Hard ceiling on total duration of a single summarizer call: ${Math.round(config.summarizerMaxTimeoutMs / 1000)}s. Backstop for a stream that dribbles forever without going idle. Set 0 to disable.`;
+  return (
+    "Hard ceiling on total duration of a single summarizer call: " +
+    `${Math.round(config.summarizerMaxTimeoutMs / 1000)}` +
+    "s. Backstop for a stream that dribbles forever without going idle. Set 0 to " +
+    "disable."
+  );
 }
 
 function autoBudgetThresholdDescription(config: ContextPruneConfig): string {
   const cap = `${config.summaryBudget.maxBudgetWindowTokens / 1000}k`;
   if (config.autoBudgetThreshold == null) {
-    return `Automatic paid summaries disabled in both modes. Mechanical work, manual requests and Pi's native capacity rescue remain available. Pick a percentage to enable pressure admission.`;
+    return (
+      "Automatic paid summaries disabled in both modes. Mechanical work, manual " +
+      "requests and Pi's native capacity rescue remain available. Pick a percentage to " +
+      "enable pressure admission."
+    );
   }
   const pct = Math.round(config.autoBudgetThreshold * 100);
-  return `Admit automatic paid summaries at ${pct}% of the window, ${cap} tokens, or native capacity minus ${config.summaryBudget.growthHeadroomTokens} growth headroom, whichever comes first. Subject to OCC coordination and net-benefit budgets. Agent-message waits for the final reply; Off disables paid automatic work.`;
+  return (
+    "Admit automatic paid summaries at " +
+    `${pct}` +
+    "% of the window, " +
+    `${cap}` +
+    " tokens, or native capacity minus " +
+    `${config.summaryBudget.growthHeadroomTokens}` +
+    " growth headroom, whichever comes first. Subject to OCC coordination and " +
+    "net-benefit budgets. Agent-message waits for the final reply; Off disables paid " +
+    "automatic work."
+  );
 }
 
 function dedupByContentHashDescription(config: ContextPruneConfig): string {
   if (config.dedupByContentHash) {
-    return `Pre-flush content-hash dedup. When a captured tool call's (toolName, exact resultText) matches a record already in the indexer, the duplicate is registered as an alias of the original — no summarizer LLM call. Currently ON.`;
+    return (
+      "Pre-flush content-hash dedup. When a captured tool call's (toolName, exact " +
+      "resultText) matches a record already in the indexer, the duplicate is " +
+      "registered as an alias of the original — no summarizer LLM call. Currently ON."
+    );
   }
   return `Pre-flush content-hash dedup. Currently OFF. Identical re-reads will be sent to the summarizer like any other tool call.`;
 }
 
 function chainCompressionEnabledDescription(config: ContextPruneConfig): string {
-  return `Range-compress closed chains beyond the rolling window (K=${config.chainCompression.rollingWindow}). Drops middle assistant turns + tool results, injects a synthetic summary. Currently ${config.chainCompression.enabled ? "ON" : "OFF"}.`;
+  return (
+    "Range-compress closed chains beyond the rolling window (K=" +
+    `${config.chainCompression.rollingWindow}` +
+    "). Drops middle assistant turns + tool results, injects a synthetic summary. " +
+    "Currently " +
+    `${config.chainCompression.enabled ? "ON" : "OFF"}` +
+    "."
+  );
 }
 
 function chainWindowDescription(config: ContextPruneConfig): string {
@@ -143,15 +228,35 @@ function chainWindowDescription(config: ContextPruneConfig): string {
 }
 
 function stripThinkingDescription(config: ContextPruneConfig): string {
-  return `Strip thinking blocks from the kept final text-only assistant message when compressing a chain. Currently ${config.chainCompression.stripFinalAssistantThinking ? "ON" : "OFF"}.`;
+  return (
+    "Strip thinking blocks from the kept final text-only assistant message when " +
+    "compressing a chain. Currently " +
+    `${config.chainCompression.stripFinalAssistantThinking ? "ON" : "OFF"}` +
+    "."
+  );
 }
 
 function fuseRangeDescription(config: ContextPruneConfig): string {
-  return `Allow one paid fusion during manual /pruner compact only when the full chain message earns the ${config.summaryBudget.minGainTokens}-token / ${Math.round(config.summaryBudget.minGainFraction * 100)}% proxy gain over mechanical concatenation. Automatic maintenance makes no fusion calls; rejection keeps concatenation. Currently ${config.chainCompression.fuseRangeSummary ? "ON" : "OFF"}.`;
+  return (
+    "Allow one paid fusion during manual /pruner compact only when the full chain " +
+    "message earns the " +
+    `${config.summaryBudget.minGainTokens}` +
+    "-token / " +
+    `${Math.round(config.summaryBudget.minGainFraction * 100)}` +
+    "% proxy gain over mechanical concatenation. Automatic maintenance makes no " +
+    "fusion calls; rejection keeps concatenation. Currently " +
+    `${config.chainCompression.fuseRangeSummary ? "ON" : "OFF"}` +
+    "."
+  );
 }
 
 function purgeErrorsEnabledDescription(config: ContextPruneConfig): string {
-  return `Replace failed toolCall argument bodies with compact stubs after a cooldown. Reclaims context from large write/edit args that will never succeed. Currently ${config.purgeErrors.enabled ? "ON" : "OFF"}.`;
+  return (
+    "Replace failed toolCall argument bodies with compact stubs after a cooldown. " +
+    "Reclaims context from large write/edit args that will never succeed. Currently " +
+    `${config.purgeErrors.enabled ? "ON" : "OFF"}` +
+    "."
+  );
 }
 
 function purgeCooldownDescription(config: ContextPruneConfig): string {
@@ -168,49 +273,186 @@ const BOOLEAN_OPTIONS: readonly FieldOption[] = [
 ];
 
 export const SCALAR_ROWS: readonly ScalarRow[] = [
-  { id: "enabled", path: "enabled", label: "Enabled", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: "Enable or disable context pruning" },
-  { id: "showPruneStatusLine", path: "showPruneStatusLine", label: "Prune status line", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: pruneStatusLineDescription },
-  { id: "showOccStatusLine", path: "showOccStatusLine", label: "OCC status line", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: "Show OCC progress and retain its latest result in the footer. Does not affect compaction." },
-  { id: "compactionSummaryMaxTokens", path: "compactionSummaryMaxTokens", label: "Native summary token limit", kind: "integer",
-    options: ["0", "4096", "8192", "16384", "32768", "65536"].map(value => ({ value, label: value === "0" ? "Pi default" : value })),
-    description: config => `Current limit: ${config.compactionSummaryMaxTokens || "Pi default"}. Limits each native/OCC summary request, even with pruning off; Pi/model limits still apply. Does not change the compaction trigger. Set any non-negative integer with /pruner compaction-summary-limit <n>; 0 restores Pi's limit.` },
-  { id: "pruneOn", path: "pruneOn", label: "Prune trigger", kind: "enum", loose: true,
-    options: PRUNE_ON_MODES, description: pruneTriggerDescription },
-  { id: "summarizerThinking", path: "summarizerThinking", label: "Summarizer thinking", kind: "enum",
-    options: SUMMARIZER_THINKING_LEVELS, description: summarizerThinkingDescription },
-  { id: "batchingMode", path: "batchingMode", label: "Batching mode", kind: "enum",
-    options: BATCHING_MODES, description: batchingModeDescription },
-  { id: "quietOversizedSkips", path: "quietOversizedSkips", label: "Quiet skip notifications", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: quietOversizedSkipsDescription },
-  { id: "minBatchChars", path: "minBatchChars", label: "Min batch chars", kind: "integer",
-    options: MIN_BATCH_CHARS_PRESETS, description: minBatchCharsDescription },
-  { id: "recoveryGraceTurns", path: "recoveryGraceTurns", label: "Recovery grace (user-turn-groups)", kind: "integer",
-    options: RECOVERY_GRACE_PRESETS, description: recoveryGraceDescription },
-  { id: "summarizerIdleTimeoutMs", path: "summarizerIdleTimeoutMs", label: "Summarizer idle timeout", kind: "integer",
-    options: SUMMARIZER_IDLE_TIMEOUT_PRESETS, description: idleTimeoutDescription },
-  { id: "summarizerMaxTimeoutMs", path: "summarizerMaxTimeoutMs", label: "Summarizer max timeout", kind: "integer",
-    options: SUMMARIZER_MAX_TIMEOUT_PRESETS, description: maxTimeoutDescription },
-  { id: "autoBudgetThreshold", path: "autoBudgetThreshold", label: "Auto-flush at context %", kind: "fraction",
-    options: AUTO_BUDGET_PRESETS, description: autoBudgetThresholdDescription },
-  { id: "dedupByContentHash", path: "dedupByContentHash", label: "Dedup by content hash", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: dedupByContentHashDescription },
-  { id: "chainCompressionEnabled", path: "chainCompression.enabled", label: "Chain compression", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: chainCompressionEnabledDescription },
-  { id: "chainCompressionRollingWindow", path: "chainCompression.rollingWindow", label: "Chain window (K)", kind: "integer", min: 0,
-    options: ROLLING_WINDOW_PRESETS, description: chainWindowDescription },
-  { id: "chainCompressionStripThinking", path: "chainCompression.stripFinalAssistantThinking", label: "Strip final thinking", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: stripThinkingDescription },
-  { id: "chainCompressionFuseRange", path: "chainCompression.fuseRangeSummary", label: "Fuse range summary", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: fuseRangeDescription },
-  { id: "purgeErrorsEnabled", path: "purgeErrors.enabled", label: "Error purge", kind: "boolean",
-    options: BOOLEAN_OPTIONS, description: purgeErrorsEnabledDescription },
-  { id: "purgeErrorsCooldown", path: "purgeErrors.cooldownTurns", label: "Error purge cooldown (turns)", kind: "integer", min: 1,
-    options: PURGE_COOLDOWN_PRESETS, description: purgeCooldownDescription },
-  { id: "purgeErrorsMinArgChars", path: "purgeErrors.minArgChars", label: "Error purge min arg chars", kind: "integer",
-    options: PURGE_MIN_ARG_PRESETS, description: purgeMinArgCharsDescription },
+  {
+    id: "enabled",
+    path: "enabled",
+    label: "Enabled",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: "Enable or disable context pruning",
+  },
+  {
+    id: "showPruneStatusLine",
+    path: "showPruneStatusLine",
+    label: "Prune status line",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: pruneStatusLineDescription,
+  },
+  {
+    id: "showOccStatusLine",
+    path: "showOccStatusLine",
+    label: "OCC status line",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: "Show OCC progress and retain its latest result in the footer. Does not affect compaction.",
+  },
+  {
+    id: "compactionSummaryMaxTokens",
+    path: "compactionSummaryMaxTokens",
+    label: "Native summary token limit",
+    kind: "integer",
+    options: ["0", "4096", "8192", "16384", "32768", "65536"].map((value) => ({
+      value,
+      label: value === "0" ? "Pi default" : value,
+    })),
+    description: (config) =>
+      "Current limit: " +
+      `${config.compactionSummaryMaxTokens || "Pi default"}` +
+      ". Limits each native/OCC summary request, even with pruning off; Pi/model " +
+      "limits still apply. Does not change the compaction trigger. Set any " +
+      "non-negative integer with /pruner compaction-summary-limit <n>; 0 restores Pi's " +
+      "limit.",
+  },
+  {
+    id: "pruneOn",
+    path: "pruneOn",
+    label: "Prune trigger",
+    kind: "enum",
+    loose: true,
+    options: PRUNE_ON_MODES,
+    description: pruneTriggerDescription,
+  },
+  {
+    id: "summarizerThinking",
+    path: "summarizerThinking",
+    label: "Summarizer thinking",
+    kind: "enum",
+    options: SUMMARIZER_THINKING_LEVELS,
+    description: summarizerThinkingDescription,
+  },
+  {
+    id: "batchingMode",
+    path: "batchingMode",
+    label: "Batching mode",
+    kind: "enum",
+    options: BATCHING_MODES,
+    description: batchingModeDescription,
+  },
+  {
+    id: "quietOversizedSkips",
+    path: "quietOversizedSkips",
+    label: "Quiet skip notifications",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: quietOversizedSkipsDescription,
+  },
+  {
+    id: "minBatchChars",
+    path: "minBatchChars",
+    label: "Min batch chars",
+    kind: "integer",
+    options: MIN_BATCH_CHARS_PRESETS,
+    description: minBatchCharsDescription,
+  },
+  {
+    id: "recoveryGraceTurns",
+    path: "recoveryGraceTurns",
+    label: "Recovery grace (user-turn-groups)",
+    kind: "integer",
+    options: RECOVERY_GRACE_PRESETS,
+    description: recoveryGraceDescription,
+  },
+  {
+    id: "summarizerIdleTimeoutMs",
+    path: "summarizerIdleTimeoutMs",
+    label: "Summarizer idle timeout",
+    kind: "integer",
+    options: SUMMARIZER_IDLE_TIMEOUT_PRESETS,
+    description: idleTimeoutDescription,
+  },
+  {
+    id: "summarizerMaxTimeoutMs",
+    path: "summarizerMaxTimeoutMs",
+    label: "Summarizer max timeout",
+    kind: "integer",
+    options: SUMMARIZER_MAX_TIMEOUT_PRESETS,
+    description: maxTimeoutDescription,
+  },
+  {
+    id: "autoBudgetThreshold",
+    path: "autoBudgetThreshold",
+    label: "Auto-flush at context %",
+    kind: "fraction",
+    options: AUTO_BUDGET_PRESETS,
+    description: autoBudgetThresholdDescription,
+  },
+  {
+    id: "dedupByContentHash",
+    path: "dedupByContentHash",
+    label: "Dedup by content hash",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: dedupByContentHashDescription,
+  },
+  {
+    id: "chainCompressionEnabled",
+    path: "chainCompression.enabled",
+    label: "Chain compression",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: chainCompressionEnabledDescription,
+  },
+  {
+    id: "chainCompressionRollingWindow",
+    path: "chainCompression.rollingWindow",
+    label: "Chain window (K)",
+    kind: "integer",
+    min: 0,
+    options: ROLLING_WINDOW_PRESETS,
+    description: chainWindowDescription,
+  },
+  {
+    id: "chainCompressionStripThinking",
+    path: "chainCompression.stripFinalAssistantThinking",
+    label: "Strip final thinking",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: stripThinkingDescription,
+  },
+  {
+    id: "chainCompressionFuseRange",
+    path: "chainCompression.fuseRangeSummary",
+    label: "Fuse range summary",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: fuseRangeDescription,
+  },
+  {
+    id: "purgeErrorsEnabled",
+    path: "purgeErrors.enabled",
+    label: "Error purge",
+    kind: "boolean",
+    options: BOOLEAN_OPTIONS,
+    description: purgeErrorsEnabledDescription,
+  },
+  {
+    id: "purgeErrorsCooldown",
+    path: "purgeErrors.cooldownTurns",
+    label: "Error purge cooldown (turns)",
+    kind: "integer",
+    min: 1,
+    options: PURGE_COOLDOWN_PRESETS,
+    description: purgeCooldownDescription,
+  },
+  {
+    id: "purgeErrorsMinArgChars",
+    path: "purgeErrors.minArgChars",
+    label: "Error purge min arg chars",
+    kind: "integer",
+    options: PURGE_MIN_ARG_PRESETS,
+    description: purgeMinArgCharsDescription,
+  },
 ];
 
 export function scalarRow(id: string): ScalarRow {

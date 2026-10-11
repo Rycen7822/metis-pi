@@ -10,11 +10,16 @@ export interface RenderTheme {
 	renderCommandCall?(command: string, state: ExecCommandStatus, expanded: boolean): { render(width: number): string[] };
 }
 
-export function renderExecCommandCall(command: string, state: ExecCommandStatus, theme: RenderTheme, expanded = false): string | { render(width: number): string[] } {
-	const summary = summarizeShellCommand(command);
-	return summary.maskAsExplored
-		? renderExplorationText([summary.actions], state, theme, expanded ? [command] : undefined)
-		: theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded);
+export function renderExecCommandCall(
+  command: string,
+  state: ExecCommandStatus,
+  theme: RenderTheme,
+  expanded = false,
+): string | { render(width: number): string[] } {
+  const summary = summarizeShellCommand(command);
+  return summary.maskAsExplored
+    ? renderExplorationText([summary.actions], state, theme, expanded ? [command] : undefined)
+    : (theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded));
 }
 
 export function renderWriteStdinCall(

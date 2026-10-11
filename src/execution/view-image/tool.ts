@@ -66,31 +66,45 @@ function prepareViewImageArguments(args: unknown): Record<string, unknown> {
 	return prepared;
 }
 
-async function executeRustViewImageContent(params: ViewImageParams, cwd: string, signal: AbortSignal | undefined, customRustBinariesDir?: string | undefined): Promise<ViewImageContent> {
-	const binary = getBundledToolBinaryPath("view_image", {}, customRustBinariesDir);
-	if (!binary) {
-		throw new Error(`view_image binary is not bundled for ${process.platform}-${process.arch}`);
-	}
-	const child = await runBundledTool({
-		binary,
-		args: [JSON.stringify(params)],
-		cwd,
-		signal,
-		label: "view_image",
-	});
-	if (child.status !== 0) {
-		throw new Error((child.stderr || child.stdout || "view_image failed").trim());
-	}
-	const imageContent = imageContentFromViewImageOutput(child.stdout);
-	if (!imageContent) {
-		throw new Error("view_image expected an image file. Use exec_command for text files");
-	}
-	return imageContent;
+async function executeRustViewImageContent(
+  params: ViewImageParams,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  customRustBinariesDir?: string | undefined,
+): Promise<ViewImageContent> {
+  const binary = getBundledToolBinaryPath("view_image", {}, customRustBinariesDir);
+  if (!binary) {
+    throw new Error(`view_image binary is not bundled for ${process.platform}-${process.arch}`);
+  }
+  const child = await runBundledTool({
+    binary,
+    args: [JSON.stringify(params)],
+    cwd,
+    signal,
+    label: "view_image",
+  });
+  if (child.status !== 0) {
+    throw new Error((child.stderr || child.stdout || "view_image failed").trim());
+  }
+  const imageContent = imageContentFromViewImageOutput(child.stdout);
+  if (!imageContent) {
+    throw new Error("view_image expected an image file. Use exec_command for text files");
+  }
+  return imageContent;
 }
 
-async function executeRustViewImage(params: ViewImageParams, cwd: string, signal: AbortSignal | undefined, customRustBinariesDir?: string | undefined): Promise<AgentToolResult<unknown>> {
-	const imageContent = await executeRustViewImageContent(params, cwd, signal, customRustBinariesDir);
-	return { content: [imageContent], details: { viewImage: true }, structuredContent: { type: "image", data: imageContent.data, mimeType: imageContent.mimeType } };
+async function executeRustViewImage(
+  params: ViewImageParams,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  customRustBinariesDir?: string | undefined,
+): Promise<AgentToolResult<unknown>> {
+  const imageContent = await executeRustViewImageContent(params, cwd, signal, customRustBinariesDir);
+  return {
+    content: [imageContent],
+    details: { viewImage: true },
+    structuredContent: { type: "image", data: imageContent.data, mimeType: imageContent.mimeType },
+  };
 }
 
 function isUsableDescriptionModel(model: ExtensionContext["model"]): boolean {
@@ -140,41 +154,57 @@ export async function describeImageContentForTextModel(image: ViewImageContent, 
 }
 
 export function createViewImageTool(options: CreateViewImageToolOptions = {}): ToolDefinition<ViewImageParameters> {
-	const parameters = createViewImageParameters();
+  const parameters = createViewImageParameters();
 
-	return {
-		name: "view_image",
-		label: "view_image",
-		description: "View image",
-		...(options.promptSnippet === false ? {} : { promptSnippet: "View image" }),
-		parameters,
-		outputSchema: Type.Union([Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() }), Type.Object({ description: Type.String() })]),
-		prepareArguments: prepareViewImageArguments,
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			if (!supportsViewImageInputs(ctx.model) && !options.describeForTextModels) {
-				throw new Error(VIEW_IMAGE_UNSUPPORTED_MESSAGE);
-			}
-			const typedParams = parseViewImageParams(params);
-			if (!supportsViewImageInputs(ctx.model)) {
-				const image = await executeRustViewImageContent(typedParams, ctx.cwd, signal, options.customRustBinariesDir);
-				const { text: description, usage } = await describeImageContentForTextModel(image, ctx, signal);
-				return { content: [{ type: "text", text: description }], structuredContent: { description }, usage, details: { viewImageDescription: { image, path: typedParams.path, description } } };
-			}
-			return executeRustViewImage(typedParams, ctx.cwd, signal, options.customRustBinariesDir);
-		},
-		...(options.customRendering === false ? {} : {
-		renderCall(args, theme) {
-			return renderCodexToolCell("Viewed Image", typeof args["path"]! === "string" ? args["path"]! : undefined, theme);
-		},
-		renderResult(result, { isPartial }, theme) {
-			if (isPartial) {
-				return new Text(theme.fg("warning", "Loading image..."), 0, 0);
-			}
-			const textBlock = result.content.find((item) => item.type === "text");
-			const text = theme.fg("dim", textBlock?.type === "text" ? textBlock.text : "");
-			const content = result.content.some((item) => item.type === "image") ? result.content : [...result.content, ...imageContentsFromViewImageDetails(result.details)];
-			return renderTextWithImages(text, content, theme);
-		},
-		}),
-	};
+  return {
+    name: "view_image",
+    label: "view_image",
+    description: "View image",
+    ...(options.promptSnippet === false ? {} : { promptSnippet: "View image" }),
+    parameters,
+    outputSchema: Type.Union([
+      Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() }),
+      Type.Object({ description: Type.String() }),
+    ]),
+    prepareArguments: prepareViewImageArguments,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (!supportsViewImageInputs(ctx.model) && !options.describeForTextModels) {
+        throw new Error(VIEW_IMAGE_UNSUPPORTED_MESSAGE);
+      }
+      const typedParams = parseViewImageParams(params);
+      if (!supportsViewImageInputs(ctx.model)) {
+        const image = await executeRustViewImageContent(typedParams, ctx.cwd, signal, options.customRustBinariesDir);
+        const { text: description, usage } = await describeImageContentForTextModel(image, ctx, signal);
+        return {
+          content: [{ type: "text", text: description }],
+          structuredContent: { description },
+          usage,
+          details: { viewImageDescription: { image, path: typedParams.path, description } },
+        };
+      }
+      return executeRustViewImage(typedParams, ctx.cwd, signal, options.customRustBinariesDir);
+    },
+    ...(options.customRendering === false
+      ? {}
+      : {
+          renderCall(args, theme) {
+            return renderCodexToolCell(
+              "Viewed Image",
+              typeof args["path"]! === "string" ? args["path"]! : undefined,
+              theme,
+            );
+          },
+          renderResult(result, { isPartial }, theme) {
+            if (isPartial) {
+              return new Text(theme.fg("warning", "Loading image..."), 0, 0);
+            }
+            const textBlock = result.content.find((item) => item.type === "text");
+            const text = theme.fg("dim", textBlock?.type === "text" ? textBlock.text : "");
+            const content = result.content.some((item) => item.type === "image")
+              ? result.content
+              : [...result.content, ...imageContentsFromViewImageDetails(result.details)];
+            return renderTextWithImages(text, content, theme);
+          },
+        }),
+  };
 }

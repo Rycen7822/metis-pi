@@ -98,7 +98,13 @@ export interface TranscriptAdapterInput {
    * component. Only ever used to replace the host's OWN collapsed label Text
    * inside its MouseRegion; never applied to an expanded Markdown body.
    */
-  makeThoughtSummary?: (input: { durationMs?: number; runIndex: number; ended: boolean; paddingX: number; paint?: (text: string) => string }) => unknown;
+  makeThoughtSummary?: (input: {
+    durationMs?: number;
+    runIndex: number;
+    ended: boolean;
+    paddingX: number;
+    paint?: (text: string) => string;
+  }) => unknown;
   /**
    * Structural guard: is this node the host's collapsed-label Text? Must be a
    * real class/shape check from the host (e.g. `instanceof Tui.Text`) — never
@@ -150,7 +156,13 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   const key = "updateContent";
   const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
   if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
-    return { installed: false, reason: "Pi updateContent missing or read-only", railInstalled: false, railReason: "no updateContent access", dispose: () => {} };
+    return {
+      installed: false,
+      reason: "Pi updateContent missing or read-only",
+      railInstalled: false,
+      railReason: "no updateContent access",
+      dispose: () => {},
+    };
   }
   // Structural contract: the method exists, is writable/configurable, and the
   // rebuilt subtree exposes the host's contentContainer. String fingerprints
@@ -221,7 +233,13 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     Object.defineProperty(prototype, ASSISTANT_SLOT, { value: owner, configurable: true });
     Object.defineProperty(prototype, key, { ...descriptor, value: wrapper });
   } catch {
-    return { installed: false, reason: "Pi assistant prototype cannot be decorated", railInstalled: false, railReason: "cannot decorate", dispose() {} };
+    return {
+      installed: false,
+      reason: "Pi assistant prototype cannot be decorated",
+      railInstalled: false,
+      railReason: "cannot decorate",
+      dispose() {},
+    };
   }
   return {
     installed: true,
@@ -324,7 +342,12 @@ function applyThinkingPolicy(
  * and swap the host's collapsed labels for duration summaries.
  * Runs on every rebuild; each pass leaves exactly one matching decoration.
  */
-function coordinateSubtree(input: TranscriptAdapterInput, { component: record, planKey, runs }: AssistantView, spacerProto: object | undefined, rebuild: (target: object) => void): void {
+function coordinateSubtree(
+  input: TranscriptAdapterInput,
+  { component: record, planKey, runs }: AssistantView,
+  spacerProto: object | undefined,
+  rebuild: (target: object) => void,
+): void {
   const component = record;
   const container = asRecord(record.contentContainer);
   const children = container.children;
@@ -349,8 +372,13 @@ function coordinateSubtree(input: TranscriptAdapterInput, { component: record, p
     // remember the original so the unwrap pass can restore it — a later pass
     // (or a successor install) must re-decide from the NATIVE node, never
     // inherit a stale summary.
-    const innerWrapper = (child as Record<string, unknown>).child as (Record<symbol | string, unknown> & { original?: unknown }) | undefined;
-    if (innerWrapper && typeof innerWrapper === "object" && (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL])) {
+    const innerWrapper = (child as Record<string, unknown>).child as
+      (Record<symbol | string, unknown> & { original?: unknown }) | undefined;
+    if (
+      innerWrapper &&
+      typeof innerWrapper === "object" &&
+      (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL])
+    ) {
       const original = innerWrapper["original"];
       if (original !== undefined) {
         (child as { child: unknown }).child = original;

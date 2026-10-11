@@ -106,8 +106,12 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
     dispose,
     status() {
       return {
-        installed: !!lease, reason,
-        margin: { installed: !!lease && marginReady, reason: options.margin <= 0 ? "disabled(config)" : marginReady ? reason : "host bindings unavailable" },
+        installed: !!lease,
+        reason,
+        margin: {
+          installed: !!lease && marginReady,
+          reason: options.margin <= 0 ? "disabled(config)" : marginReady ? reason : "host bindings unavailable",
+        },
         history: history.status(),
       };
     },

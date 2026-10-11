@@ -42,11 +42,26 @@ export function protectedToolsDisplay(list: string[]): string {
 }
 
 function protectedToolsDescription(config: ContextPruneConfig): string {
-  return `Tool names whose outputs are NEVER pruned (kept verbatim in context). Currently: ${protectedToolsDisplay(config.protectedTools)}. Edit via \`/pruner protected-tools\` for an interactive prompt, or \`/pruner protected-tools <comma-separated names>\` to set directly. Common candidates: todowrite, todoread.`;
+  return (
+    "Tool names whose outputs are NEVER pruned (kept verbatim in context). " +
+    "Currently: " +
+    `${protectedToolsDisplay(config.protectedTools)}` +
+    ". Edit via `/pruner protected-tools` for an interactive prompt, or `/pruner " +
+    "protected-tools <comma-separated names>` to set directly. Common candidates: " +
+    "todowrite, todoread."
+  );
 }
 
 function protectedPathsDescription(config: ContextPruneConfig): string {
-  return `Glob patterns matched against a tool call's \`args.path\`; matching outputs are NEVER pruned. Currently: ${protectedToolsDisplay(config.protectedPaths)}. Edit via \`/pruner protected-paths\` (interactive) or \`/pruner protected-paths <comma-separated globs>\`. Set to 'none' to disable (kill switch). Default protects skill files and per-repo gauntlet overrides: **/skills/**/*.md, **/gauntlet-overrides.md`;
+  return (
+    "Glob patterns matched against a tool call's `args.path`; matching outputs are " +
+    "NEVER pruned. Currently: " +
+    `${protectedToolsDisplay(config.protectedPaths)}` +
+    ". Edit via `/pruner protected-paths` (interactive) or `/pruner protected-paths " +
+    "<comma-separated globs>`. Set to 'none' to disable (kill switch). Default " +
+    "protects skill files and per-repo gauntlet overrides: **/skills/**/*.md, " +
+    "**/gauntlet-overrides.md"
+  );
 }
 
 export async function openPrunerSettings(

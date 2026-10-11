@@ -117,11 +117,25 @@ export interface CompressEligibleDeps {
    * Returning null (or throwing) is non-fatal: the chain still compresses and
    * the renderer falls back to the per-batch concatenation.
    */
-  fuseRange?: (perBatchSummaryText: string, entry: SingleChainCompressionEntry, extraBody?: string) => Promise<string | null>;
-  /** MUST be the same withClosingMessage(...) array chain detection ran on - raw branch messages spuriously fail span resolution on the message_end path (see doc/specs/2026-08-14-uncovered-chain-deterministic-backfill.md). */
+  fuseRange?: (
+    perBatchSummaryText: string,
+    entry: SingleChainCompressionEntry,
+    extraBody?: string,
+  ) => Promise<string | null>;
+  /**
+   * MUST be the same withClosingMessage(...) array chain detection ran on.
+   * Raw branch messages spuriously fail span resolution on the message_end path.
+   * See doc/specs/2026-08-14-uncovered-chain-deterministic-backfill.md.
+   */
   messages: any[];
   diagnostics: Pick<DiagnosticSink, "report">;
-  backfill: { spillThreshold: number; spillPreviewBytes: number; sessionDir: string; sessionId: string; assertValid?: () => void };
+  backfill: {
+    spillThreshold: number;
+    spillPreviewBytes: number;
+    sessionDir: string;
+    sessionId: string;
+    assertValid?: () => void;
+  };
   validate?: (entry: SingleChainCompressionEntry) => Promise<boolean>;
 }
 
@@ -298,7 +312,10 @@ export async function compressEligible(
         ...(chain.protectedToolCallIds?.length ? { protectedToolCallIds: chain.protectedToolCallIds } : {}),
         ...(chain.middleOccurrenceKeys?.length ? { droppedOccurrenceKeys: chain.middleOccurrenceKeys } : {}),
       };
-      if (deps.validate && !await deps.validate(entry)) { skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" }); continue; }
+      if (deps.validate && !(await deps.validate(entry))) {
+        skipped.push({ startUserTimestamp: chain.startUserTimestamp, reason: "no-gain" });
+        continue;
+      }
       deps.appendEntry(CUSTOM_TYPE_CHAIN, entry);
       deps.indexer.registerChain(entry);
       compressedEntries.push(entry);
@@ -307,9 +324,17 @@ export async function compressEligible(
 
     const blockId = deps.blockRefs.issue();
     const toolRefs = deps.indexer.getToolRefsForToolCallIds(lookupKeys);
-    const uncovered = lookupKeys.map(key => deps.indexer.getIndex().get(key)).filter((record): record is ToolCallRecord => record?.archiveOnly === true);
-    const extraBody = uncovered.length ? buildDeterministicBody(uncovered, deps.indexer.getToolRefsForToolCallIds(
-      uncovered.map(record => occKey(record.toolCallId, record.resultTimestamp)))) : undefined;
+    const uncovered = lookupKeys
+      .map((key) => deps.indexer.getIndex().get(key))
+      .filter((record): record is ToolCallRecord => record?.archiveOnly === true);
+    const extraBody = uncovered.length
+      ? buildDeterministicBody(
+          uncovered,
+          deps.indexer.getToolRefsForToolCallIds(
+            uncovered.map((record) => occKey(record.toolCallId, record.resultTimestamp)),
+          ),
+        )
+      : undefined;
     const summaries = deps.indexer.getPerBatchSummariesForToolCallIds(lookupKeys);
     const summaryFingerprint = projectionFingerprint([summaries]);
 

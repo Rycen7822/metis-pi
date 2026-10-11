@@ -1,9 +1,34 @@
-// Display-only renderer registration for Pi's native two slots (call region = title/command, result region = output/diff body; never modifies tool data).
+// Display-only renderer registration for Pi's native two slots:
+// call region = title/command; result region = output/diff body.
+// Never modifies tool data.
 
 import { renderCodexDiffComponent } from "./diff-component.ts";
-import { renderExplorationHeader, renderExplorationMember, renderExplorationImages, renderExplorationLines, explorationVerb, type ExplorationRow } from "./explore.ts";
+import {
+  renderExplorationHeader,
+  renderExplorationMember,
+  renderExplorationImages,
+  renderExplorationLines,
+  explorationVerb,
+  type ExplorationRow,
+} from "./explore.ts";
 import type { ExplorationPlan, TranscriptState } from "./transcript-state.ts";
-import { asRecord, safeText, languageForPath, TOOL_NAMES, type ToolName, type Palette, type ViewContext, type ViewOptions, type TextFactory, type Highlight, type Renderers, type DiffFactory, type Component, type TextComponent, type DiffLayoutOps } from "./tool-names.ts";
+import {
+  asRecord,
+  safeText,
+  languageForPath,
+  TOOL_NAMES,
+  type ToolName,
+  type Palette,
+  type ViewContext,
+  type ViewOptions,
+  type TextFactory,
+  type Highlight,
+  type Renderers,
+  type DiffFactory,
+  type Component,
+  type TextComponent,
+  type DiffLayoutOps,
+} from "./tool-names.ts";
 import { parseDisplayDiff, diffStatsFromRows, renderDiffLines, type DiffStats } from "./diff.ts";
 import type { WriteDiff } from "./write-tracker.ts";
 import { resolveWriteStage, type WriteStage } from "./write-preview.ts";
@@ -60,13 +85,21 @@ function gutter(lines: readonly string[], theme: Palette, color = "toolOutput"):
   return lines.map((line, i) => `${theme.fg("dim", i === 0 ? "  └ " : "    ")}${theme.fg(color, line)}`).join("\n");
 }
 function highlight(text: string, language: string, theme: Palette, paint?: Highlight): string {
-  try { if (paint) return paint(text, language); } catch { /* Syntax colouring is optional. */ }
+  try {
+    if (paint) return paint(text, language);
+  } catch {
+    /* Syntax colouring is optional. */
+  }
   return theme.fg("toolTitle", text);
 }
 
-
 /** Exploration title (call region): the FIRST grouped member owns the group header; later members render only their own row. */
-export function explorationTitle(name: ToolName, ctx: ViewContext, theme: Palette, colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" }): string {
+export function explorationTitle(
+  name: ToolName,
+  ctx: ViewContext,
+  theme: Palette,
+  colorLevel: import("./palette.ts").ColorLevel = { kind: "ansi16" },
+): string {
   const args = asRecord(ctx.args);
   const done = ctx.isPartial === false;
   const verb = explorationVerb(name);
@@ -126,10 +159,30 @@ export function writeTitle(ctx: ViewContext, theme: Palette, change: WriteDiff |
     return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target}${reason}`;
   }
   if (change.kind === "add") {
-    return `${bullet} ${theme.fg("toolTitle", theme.bold("Added"))} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", "-0")}`;
+    return (
+      `${bullet}` +
+      " " +
+      `${theme.fg("toolTitle", theme.bold("Added"))}` +
+      " " +
+      `${target}` +
+      " " +
+      `${theme.fg("toolDiffAdded", `+${change.added}`)}` +
+      " " +
+      `${theme.fg("toolDiffRemoved", "-0")}`
+    );
   }
   if (change.kind === "update") {
-    return `${bullet} ${theme.fg("toolTitle", theme.bold("Edited"))} ${target} ${theme.fg("toolDiffAdded", `+${change.added}`)} ${theme.fg("toolDiffRemoved", `-${change.removed}`)}`;
+    return (
+      `${bullet}` +
+      " " +
+      `${theme.fg("toolTitle", theme.bold("Edited"))}` +
+      " " +
+      `${target}` +
+      " " +
+      `${theme.fg("toolDiffAdded", `+${change.added}`)}` +
+      " " +
+      `${theme.fg("toolDiffRemoved", `-${change.removed}`)}`
+    );
   }
   if (change.kind === "unchanged") {
     return `${bullet} ${theme.fg("toolTitle", theme.bold("Wrote"))} ${target} ${theme.fg("muted", "(unchanged)")}`;
@@ -144,37 +197,74 @@ export function diffStats(value: unknown): DiffStats | undefined {
 }
 
 /** Shell call text for non-component hosts (title + command, never output). */
-export function shellCallText(bullet: string, title: string, args: Record<string, unknown>, ctx: ViewContext, theme: Palette, paint?: Highlight): string {
+export function shellCallText(
+  bullet: string,
+  title: string,
+  args: Record<string, unknown>,
+  ctx: ViewContext,
+  theme: Palette,
+  paint?: Highlight,
+): string {
   const value = string(args.command) || "…";
   const all = cleanLines(value);
   const expanded = ctx.expanded === true;
   const visible = expanded ? all : all.slice(0, COMMAND_LINES).map(shortened);
   if (!expanded && all.length > COMMAND_LINES) visible.push(`… +${all.length - COMMAND_LINES} command lines`);
   const [head = "…", ...rest] = visible;
-  return `${bullet} ${theme.fg("toolTitle", theme.bold(title))} ${highlight(head, "bash", theme, paint)}`
-    + rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("");
+  return (
+    `${bullet} ${theme.fg("toolTitle", theme.bold(title))} ${highlight(head, "bash", theme, paint)}` +
+    rest.map((line) => `\n${theme.fg("dim", "  │ ")}${highlight(line, "bash", theme, paint)}`).join("")
+  );
 }
 
-export function formatResult(name: ToolName, value: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext, hint = "expand tool output"): string {
+export function formatResult(
+  name: ToolName,
+  value: unknown,
+  options: ViewOptions,
+  theme: Palette,
+  ctx: ViewContext,
+  hint = "expand tool output",
+): string {
   const result = asRecord(value);
   const blocks = Array.isArray(result.content) ? result.content.map(asRecord) : [];
-  const text = blocks.filter((block) => block.type === "text").map((block) => string(block.text)).join("\n");
+  const text = blocks
+    .filter((block) => block.type === "text")
+    .map((block) => string(block.text))
+    .join("\n");
   const lines = cleanLines(text);
   const expanded = options.expanded === true;
   const error = ctx.isError === true || result.isError === true;
   const sections: string[] = [];
   const foldedExploration = EXPLORATION.has(name) && !expanded && !error && !options.isPartial;
   if (lines.length && !foldedExploration) {
-    sections.push(gutter(preview(lines, PREVIEW_LINES, expanded, hint,
-      SHELL.has(name) ? (options.isPartial ? "tail" : "both") : "head"), theme, error ? "error" : "toolOutput"));
+    sections.push(
+      gutter(
+        preview(lines, PREVIEW_LINES, expanded, hint, SHELL.has(name) ? (options.isPartial ? "tail" : "both") : "head"),
+        theme,
+        error ? "error" : "toolOutput",
+      ),
+    );
   }
   if (!lines.length && error) sections.push(gutter(["Tool failed (no text output)"], theme, "error"));
   if (!lines.length && !error && options.isPartial) sections.push(gutter(["Running…"], theme, "dim"));
-  if (SHELL.has(name) && !lines.length && !error && !options.isPartial) sections.push(gutter(["(no output)"], theme, "dim"));
+  if (SHELL.has(name) && !lines.length && !error && !options.isPartial)
+    sections.push(gutter(["(no output)"], theme, "dim"));
   const images = blocks.filter((block) => block.type === "image").length;
   // Grouped members don't repeat the image notice; the group aggregates it once (call region).
   const groupedMember = EXPLORATION.has(name) && ctx.explorationPlan !== undefined;
-  if (images && !groupedMember) sections.push(gutter([`${images} image${images === 1 ? "" : "s"}${ctx.showImages === false ? " (TUI preview disabled)" : ""}`], theme, "dim"));
+  if (images && !groupedMember)
+    sections.push(
+      gutter(
+        [
+          `${images}` +
+            " image" +
+            `${images === 1 ? "" : "s"}` +
+            `${ctx.showImages === false ? " (TUI preview disabled)" : ""}`,
+        ],
+        theme,
+        "dim",
+      ),
+    );
   const other = blocks.filter((block) => block.type !== "text" && block.type !== "image");
   if (other.length) sections.push(gutter([`${other.length} additional non-text content block(s)`], theme, "dim"));
   return sections.filter(Boolean).join("\n");
@@ -186,13 +276,25 @@ function editCall(input: unknown, theme: Palette, ctx: ViewContext, stats?: Diff
   const marker = theme.fg(ctx.isError ? "error" : done ? "success" : "dim", "•");
   const label = ctx.isError ? "Failed" : done ? "Edited" : "Editing";
   let suffix = "";
-  if (stats && ctx.isError !== true) suffix = ` (${theme.fg("toolDiffAdded", `+${stats.added}`)} ${theme.fg("toolDiffRemoved", `-${stats.removed}`)})`;
+  if (stats && ctx.isError !== true)
+    suffix =
+      " (" +
+      `${theme.fg("toolDiffAdded", `+${stats.added}`)}` +
+      " " +
+      `${theme.fg("toolDiffRemoved", `-${stats.removed}`)}` +
+      ")";
   return `${marker} ${theme.fg("toolTitle", theme.bold(label))} ${theme.fg("toolTitle", shortened(safeText(path(args, ctx))))}${suffix}`;
 }
 
 export interface WritePreviewInput {
-  name: ToolName; args: Record<string, unknown>; stage: WriteStage; contentPrefix: string;
-  expanded: boolean; theme: Palette; context: ViewContext; expandHint: string;
+  name: ToolName;
+  args: Record<string, unknown>;
+  stage: WriteStage;
+  contentPrefix: string;
+  expanded: boolean;
+  theme: Palette;
+  context: ViewContext;
+  expandHint: string;
   colorLevel: import("./palette.ts").ColorLevel;
   /** Call slot's structured header (always present above the body). */
   headerText?: string;
@@ -307,99 +409,142 @@ export function makeRenderers(
     return component([head, body].filter(Boolean).join("\n"), ctx);
   }
 
-  return Object.fromEntries<Renderers>(TOOL_NAMES.map((name) => [name, {
-    renderCall(args: unknown, theme: Palette, ctx: ViewContext) {
-      // Pi passes the same args in both slots; merge so title builders can read args from either source.
-      const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
-      if (SHELL.has(name)) {
-        const { bullet, title } = shellTitle(merged, theme);
-        if (makeShell?.makeShellCall) {
-          return makeShell.makeShellCall({
-            name, bullet, title, args: asRecord(args),
-            options: { isPartial: merged.isPartial, expanded: merged.expanded },
-            theme, context: merged, expandHint: expandHint(), colorLevel: colorFor(merged),
-          });
-        }
-        return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
-      }
-      if (name === "write") {
-        // Call slot ALWAYS owns a structured header: it stays visible through
-        // arg streaming and completion; the live preview is a body UNDER it,
-        // never a replacement.
-        const hasResult = merged.isPartial === false;
-        const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
-        const stage = resolveWriteStage({
-          argsComplete: merged.argsComplete === true,
-          executionStarted: merged.executionStarted === true,
-          isPartial: merged.isPartial === true,
-          isError: merged.isError === true,
-          hasResult: merged.isPartial === false,
-        });
-        if (makeWriteCall && !hasResult) {
-          const input: WritePreviewInput & { headerText: string } = {
-            name, args: asRecord(args), stage, contentPrefix,
-            headerText: writeTitle(merged, theme, writeChangeFor(merged)),
-            expanded: merged.expanded === true, theme, context: merged,
-            expandHint: expandHint(), colorLevel: colorFor(merged),
-          };
-          // Reuse our previous call component when the host hands it back (updateArgs → lastComponent); update in place, never mutate a foreign instance.
-          const previous = ctx.lastComponent;
-          if (previous && typeof previous === "object" && ownComponents.has(previous)
-              && typeof (previous as { update?: unknown }).update === "function") {
-            (previous as { update: (next: typeof input) => void }).update(input);
-            return previous as Component;
+  return Object.fromEntries<Renderers>(
+    TOOL_NAMES.map((name) => [
+      name,
+      {
+        renderCall(args: unknown, theme: Palette, ctx: ViewContext) {
+          // Pi passes the same args in both slots; merge so title builders can read args from either source.
+          const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
+          if (SHELL.has(name)) {
+            const { bullet, title } = shellTitle(merged, theme);
+            if (makeShell?.makeShellCall) {
+              return makeShell.makeShellCall({
+                name,
+                bullet,
+                title,
+                args: asRecord(args),
+                options: { isPartial: merged.isPartial, expanded: merged.expanded },
+                theme,
+                context: merged,
+                expandHint: expandHint(),
+                colorLevel: colorFor(merged),
+              });
+            }
+            return component(shellCallText(bullet, title, asRecord(args), merged, theme, paint), ctx);
           }
-          const callComponent = makeWriteCall(input);
-          if (callComponent && typeof callComponent === "object") {
-            ownComponents.add(callComponent);
-            return callComponent;
+          if (name === "write") {
+            // Call slot ALWAYS owns a structured header: it stays visible through
+            // arg streaming and completion; the live preview is a body UNDER it,
+            // never a replacement.
+            const hasResult = merged.isPartial === false;
+            const contentPrefix = typeof asRecord(args).content === "string" ? (asRecord(args).content as string) : "";
+            const stage = resolveWriteStage({
+              argsComplete: merged.argsComplete === true,
+              executionStarted: merged.executionStarted === true,
+              isPartial: merged.isPartial === true,
+              isError: merged.isError === true,
+              hasResult: merged.isPartial === false,
+            });
+            if (makeWriteCall && !hasResult) {
+              const input: WritePreviewInput & { headerText: string } = {
+                name,
+                args: asRecord(args),
+                stage,
+                contentPrefix,
+                headerText: writeTitle(merged, theme, writeChangeFor(merged)),
+                expanded: merged.expanded === true,
+                theme,
+                context: merged,
+                expandHint: expandHint(),
+                colorLevel: colorFor(merged),
+              };
+              // Reuse our previous call component when the host hands it back
+              // (updateArgs → lastComponent). Update in place; never mutate a foreign instance.
+              const previous = ctx.lastComponent;
+              if (
+                previous &&
+                typeof previous === "object" &&
+                ownComponents.has(previous) &&
+                typeof (previous as { update?: unknown }).update === "function"
+              ) {
+                (previous as { update: (next: typeof input) => void }).update(input);
+                return previous as Component;
+              }
+              const callComponent = makeWriteCall(input);
+              if (callComponent && typeof callComponent === "object") {
+                ownComponents.add(callComponent);
+                return callComponent;
+              }
+            }
+            return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
           }
-        }
-        return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
-      }
-      if (EXPLORATION.has(name)) {
-        const plan = merged.explorationPlan
-          ?? session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
-        return component(explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)), ctx);
-      }
-      const state = view(ctx);
-      const call = component(editCall(args, theme, merged, state?.stats), ctx);
-      if (state) state.call = call;
-      return call;
-    },
-    renderResult(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext) {
-      if (name === "edit") {
-        const state = view(ctx);
-        if (state) {
-          state.stats = diffStats(result);
-          state.call?.setText(editCall(ctx.args, theme, ctx, state.stats));
-        }
-      }
-      if (name === "edit" && ctx.isError !== true) {
-        const details = asRecord(asRecord(result).details);
-        if (typeof details.diff === "string") {
-          const rows = parseDisplayDiff(details.diff);
-          const filePath = path(asRecord(ctx.args), ctx);
-          if (makeDiff) {
-            return makeDiff({ rows, filePath, theme, context: ctx, options, expandHint: expandHint() });
+          if (EXPLORATION.has(name)) {
+            const plan =
+              merged.explorationPlan ??
+              session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");
+            return component(
+              explorationTitle(name, { ...merged, explorationPlan: plan }, theme, colorFor(merged)),
+              ctx,
+            );
           }
-          return component(renderCodexDiffComponent({
-            rows, filePath, paint, colorLevel: colorFor(ctx),
-            expanded: options.expanded === true, expandHint: expandHint(),
-          }, 100, layout).join("\n"), ctx);
-        }
-      }
-      if (name === "write") {
-        if (options.isPartial) return component("", ctx);
-        return writeBody(result, options, theme, ctx);
-      }
-      if (SHELL.has(name) && makeShell?.makeShellResult) {
-        return makeShell.makeShellResult({
-          name, args: asRecord(ctx.args), result, options, theme, context: ctx,
-          expandHint: expandHint(), colorLevel: colorFor(ctx),
-        });
-      }
-      return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
-    },
-  }])) as Record<ToolName, Renderers>;
+          const state = view(ctx);
+          const call = component(editCall(args, theme, merged, state?.stats), ctx);
+          if (state) state.call = call;
+          return call;
+        },
+        renderResult(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext) {
+          if (name === "edit") {
+            const state = view(ctx);
+            if (state) {
+              state.stats = diffStats(result);
+              state.call?.setText(editCall(ctx.args, theme, ctx, state.stats));
+            }
+          }
+          if (name === "edit" && ctx.isError !== true) {
+            const details = asRecord(asRecord(result).details);
+            if (typeof details.diff === "string") {
+              const rows = parseDisplayDiff(details.diff);
+              const filePath = path(asRecord(ctx.args), ctx);
+              if (makeDiff) {
+                return makeDiff({ rows, filePath, theme, context: ctx, options, expandHint: expandHint() });
+              }
+              return component(
+                renderCodexDiffComponent(
+                  {
+                    rows,
+                    filePath,
+                    paint,
+                    colorLevel: colorFor(ctx),
+                    expanded: options.expanded === true,
+                    expandHint: expandHint(),
+                  },
+                  100,
+                  layout,
+                ).join("\n"),
+                ctx,
+              );
+            }
+          }
+          if (name === "write") {
+            if (options.isPartial) return component("", ctx);
+            return writeBody(result, options, theme, ctx);
+          }
+          if (SHELL.has(name) && makeShell?.makeShellResult) {
+            return makeShell.makeShellResult({
+              name,
+              args: asRecord(ctx.args),
+              result,
+              options,
+              theme,
+              context: ctx,
+              expandHint: expandHint(),
+              colorLevel: colorFor(ctx),
+            });
+          }
+          return component(formatResult(name, result, options, theme, ctx, expandHint()), ctx);
+        },
+      },
+    ]),
+  ) as Record<ToolName, Renderers>;
 }

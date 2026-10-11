@@ -140,7 +140,11 @@ def launch_spec(config, profile_name, model, cwd, access, thinking=None, host=No
     unknown = set(p) - PROFILE_KEYS
     if unknown: raise AgentError('invalid_config',f'Unknown profile keys: {sorted(unknown)}')
     executable = host['node_path'] if host else shutil.which(config['pi_command'][0])
-    if not executable: raise AgentError('pi_not_found','Pi executable not found; set subagents.piCommand in metis-pi.toml or PI_AGENTS_PI (legacy bridge only)')
+    if not executable:
+        raise AgentError(
+            "pi_not_found",
+            "Pi executable not found; set subagents.piCommand in metis-pi.toml or PI_AGENTS_PI (legacy bridge only)",
+        )
     tools = p.get('tools',[])
     if not isinstance(tools,list) or any(t not in PI_BUILTIN_TOOLS for t in tools):
         raise AgentError('invalid_config','tools must be a list of Pi builtin names')

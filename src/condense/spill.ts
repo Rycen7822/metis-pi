@@ -20,7 +20,14 @@ export async function importOutputArchive(call: CapturedToolCall, sessionDir: st
   if (!info.isFile()) return false;
   const bytes = source.bytes ?? info.size;
   const offset = source.offsetBytes ?? 0;
-  if (!Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(offset) || offset < 0 || offset + bytes > info.size) throw new Error("Incomplete output archive snapshot");
+  if (
+    !Number.isSafeInteger(bytes) ||
+    bytes < 0 ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset + bytes > info.size
+  )
+    throw new Error("Incomplete output archive snapshot");
   const directory = blobDirFor(sessionDir, sessionId);
   // Owned exec logs are append-only, already durable, and can be shared by
   // successive polls. Each record pins its visible byte length independently.
@@ -49,39 +56,72 @@ export async function importOutputArchive(call: CapturedToolCall, sessionDir: st
   call.archiveComplete = source.complete;
   call.archiveAppendOnly = appendOnly;
   // Do not seed normalized tool-result dedup with a truncated preview/empty body.
-  call.contentHash = createHash("sha256").update(`${target}:${bytes}${call.resultPrefix ? `:${call.resultPrefix}` : ""}`).digest("hex");
+  call.contentHash = createHash("sha256")
+    .update(`${target}:${bytes}${call.resultPrefix ? `:${call.resultPrefix}` : ""}`)
+    .digest("hex");
   return true;
 }
 
 /** Index every persisted nested result, including entries evicted from UI traces. */
-async function importFusionJournal(call: CapturedToolCall, batch: CapturedBatch, args: {
-  indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
-  appendEntry: (customType: string, data?: unknown) => void;
-  archiveOnly?: boolean;
-}): Promise<void> {
+async function importFusionJournal(
+  call: CapturedToolCall,
+  batch: CapturedBatch,
+  args: {
+    indexer: ToolCallIndexer;
+    sessionDir: string;
+    sessionId: string;
+    appendEntry: (customType: string, data?: unknown) => void;
+    archiveOnly?: boolean;
+  },
+): Promise<void> {
   const source = call.outputArchive;
   if (source?.source !== "fusion-journal" || !isAbsolute(source.path)) return;
-  const offset = source.offsetBytes ?? 0, bytes = source.bytes ?? 0;
+  const offset = source.offsetBytes ?? 0,
+    bytes = source.bytes ?? 0;
   const info = await stat(source.path);
-  if (!info.isFile() || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(bytes) || bytes < 1 || offset + bytes > info.size) throw new Error("Incomplete fusion journal snapshot");
+  if (
+    !info.isFile() ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    !Number.isSafeInteger(bytes) ||
+    bytes < 1 ||
+    offset + bytes > info.size
+  )
+    throw new Error("Incomplete fusion journal snapshot");
   const stream = createReadStream(source.path, { start: offset, end: offset + bytes - 1 });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const line of lines) {
       const entry = JSON.parse(line);
-      if (entry.version !== 1 || typeof entry.id !== "string" || typeof entry.toolName !== "string" || !Number.isSafeInteger(entry.timestamp)) throw new Error("Invalid fusion journal record");
-      if (args.indexer.getRecordsForId(entry.id).some(record => record.resultTimestamp === entry.timestamp)) continue;
+      if (
+        entry.version !== 1 ||
+        typeof entry.id !== "string" ||
+        typeof entry.toolName !== "string" ||
+        !Number.isSafeInteger(entry.timestamp)
+      )
+        throw new Error("Invalid fusion journal record");
+      if (args.indexer.getRecordsForId(entry.id).some((record) => record.resultTimestamp === entry.timestamp)) continue;
       const fusion = captureFusionResult(entry.result);
       if (!fusion.fusionCommand) throw new Error("Invalid fusion receipt");
-      const child: CapturedToolCall = { toolCallId: entry.id, toolName: entry.toolName,
+      const child: CapturedToolCall = {
+        toolCallId: entry.id,
+        toolName: entry.toolName,
         args: entry.input && typeof entry.input === "object" ? entry.input : { input: entry.input },
-        resultText: entry.result.content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n"),
-        resultTimestamp: entry.timestamp, isError: false, ...fusion,
+        resultText: entry.result.content
+          .filter((block: any) => block.type === "text")
+          .map((block: any) => block.text)
+          .join("\n"),
+        resultTimestamp: entry.timestamp,
+        isError: false,
+        ...fusion,
       };
       if (child.outputArchive) await importOutputArchive(child, args.sessionDir, args.sessionId);
       args.indexer.addBatch({ ...batch, toolCalls: [child] }, args.appendEntry, args.archiveOnly);
     }
-  } finally { lines.close(); stream.destroy(); }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
 }
 
 /** OCC archive preparation retains nested fusion receipts without publishing pruning. */

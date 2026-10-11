@@ -1,10 +1,24 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth, type Component, type KeybindingsManager, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  type Component,
+  type KeybindingsManager,
+  type TUI,
+  type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import { DEFAULT_CONFIG, type AppearanceConfig } from "../config.ts";
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
 
 export interface AgentInspection {
-  agent: { name?: string; state: string; cwd?: string; resolved_model?: { provider: string; id: string }; active_tools?: string[] };
+  agent: {
+    name?: string;
+    state: string;
+    cwd?: string;
+    resolved_model?: { provider: string; id: string };
+    active_tools?: string[];
+  };
   messages: Array<{ id: string; message: ViewerMessage }>;
   session_file: string;
   reset?: boolean;
@@ -95,15 +109,29 @@ export class SubagentViewer implements Component {
   }
 
   handleInput(data: string) {
-    if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q") this.done(undefined);
+    if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q")
+      this.done(undefined);
     else if (this.keys.matches(data, "tui.select.up")) this.scroll(-1);
     else if (this.keys.matches(data, "tui.select.down")) this.scroll(1);
     else if (matchesKey(data, "pageUp")) this.scroll(-this.pageSize);
     else if (matchesKey(data, "pageDown")) this.scroll(this.pageSize);
-    else if (matchesKey(data, "home")) { this.offset = 0; this.tui.requestRender(); }
-    else if (matchesKey(data, "end")) { this.offset = Infinity; this.tui.requestRender(); }
-    else if (this.keys.matches(data, "app.tools.expand")) { this.offset = this.renderedOffset; this.content.toggleTools(); this.invalidate(); this.tui.requestRender(); }
-    else if (this.keys.matches(data, "app.thinking.toggle")) { this.offset = this.renderedOffset; this.content.toggleThinking(); this.invalidate(); this.tui.requestRender(); }
+    else if (matchesKey(data, "home")) {
+      this.offset = 0;
+      this.tui.requestRender();
+    } else if (matchesKey(data, "end")) {
+      this.offset = Infinity;
+      this.tui.requestRender();
+    } else if (this.keys.matches(data, "app.tools.expand")) {
+      this.offset = this.renderedOffset;
+      this.content.toggleTools();
+      this.invalidate();
+      this.tui.requestRender();
+    } else if (this.keys.matches(data, "app.thinking.toggle")) {
+      this.offset = this.renderedOffset;
+      this.content.toggleThinking();
+      this.invalidate();
+      this.tui.requestRender();
+    }
   }
 
   handleMouse(event: TuiMouseEvent) {
@@ -149,25 +177,45 @@ export class SubagentViewer implements Component {
     while (body.length < this.pageSize) body.push("");
     const content = [
       this.theme.fg("accent", `Subagent: ${clean(agent?.name ?? this.agentId)}`),
-      clean(`${agent?.state ?? "loading"} · run ${this.snapshot?.run?.state ?? "—"}${agent?.active_tools?.length ? ` · tools: ${agent.active_tools.join(", ")}` : ""}`),
+      clean(
+        `${agent?.state ?? "loading"}` +
+          " · run " +
+          `${this.snapshot?.run?.state ?? "—"}` +
+          `${agent?.active_tools?.length ? ` · tools: ${agent.active_tools.join(", ")}` : ""}`,
+      ),
       this.theme.fg("muted", clean(`${model ? `${model.provider}/${model.id} · ` : ""}${agent?.cwd ?? ""}`)),
-      this.theme.fg(this.error || this.snapshot?.run?.error ? "error" : "dim", this.error || clean(this.snapshot?.run?.error ?? "") || (this.truncated ? "Some history omitted" : "Click tools or thoughts to expand/collapse")),
+      this.theme.fg(
+        this.error || this.snapshot?.run?.error ? "error" : "dim",
+        this.error ||
+          clean(this.snapshot?.run?.error ?? "") ||
+          (this.truncated ? "Some history omitted" : "Click tools or thoughts to expand/collapse"),
+      ),
       ...body,
       this.theme.fg("muted", `Click to fold · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · Esc close`),
     ];
-    if (width < 5) return content.slice(0, height).map(line => truncateToWidth(line.replace(/\n/g, " "), width, "…"));
+    if (width < 5) return content.slice(0, height).map((line) => truncateToWidth(line.replace(/\n/g, " "), width, "…"));
     const border = (text: string) => this.theme.fg("border", text);
-    return [border(`╭${"─".repeat(width - 2)}╮`), ...content.map(line => {
-      const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
-      return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${border("│")}`;
-    }), border(`╰${"─".repeat(width - 2)}╯`)].slice(0, height);
+    return [
+      border(`╭${"─".repeat(width - 2)}╮`),
+      ...content.map((line) => {
+        const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
+        return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${border("│")}`;
+      }),
+      border(`╰${"─".repeat(width - 2)}╯`),
+    ].slice(0, height);
   }
 
-  invalidate() { this.cachedWidth = -1; }
+  invalidate() {
+    this.cachedWidth = -1;
+  }
   dispose() {
     if (this.disposed) return;
-    this.disposed = true; clearTimeout(this.timer);
-    this.content.dispose(); this.layout = []; this.lines = [];
-    this.abort.signal.removeEventListener("abort", this.onAbort); this.abort.abort();
+    this.disposed = true;
+    clearTimeout(this.timer);
+    this.content.dispose();
+    this.layout = [];
+    this.lines = [];
+    this.abort.signal.removeEventListener("abort", this.onAbort);
+    this.abort.abort();
   }
 }

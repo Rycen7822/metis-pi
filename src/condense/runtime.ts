@@ -40,7 +40,15 @@ import { computeContextMetrics } from "./context-metrics.ts";
 import { StatsAccumulator } from "./stats.ts";
 import { PruneFrontierTracker } from "./frontier.ts";
 import { BlockRefIssuer } from "./block-refs.ts";
-import { compressEligible, prepareSharedChain, selectEligible, findCompressibleRange, chainMatchesGrace, extractChainRecords, type CompressEligibleDeps } from "./chain-compressor.ts";
+import {
+  compressEligible,
+  prepareSharedChain,
+  selectEligible,
+  findCompressibleRange,
+  chainMatchesGrace,
+  extractChainRecords,
+  type CompressEligibleDeps,
+} from "./chain-compressor.ts";
 import { createSupersedeState, earliestChainStart, earliestResultTimestamp, lowerFloor } from "./supersede.ts";
 import { detectChains, withClosingMessage } from "./chain-detector.ts";
 import { inGraceRecoveryToolCallIds } from "./recovery-grace.ts";
@@ -70,9 +78,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const resetNested = registerNestedCapture(pi, indexer, protectionPredicate);
   let argumentHistory: ArgumentHistory[] = [];
   const restoreArguments = (ctx: ExtensionContext) => {
-    argumentHistory = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === ARGUMENT_HISTORY)
-      .map(entry => (entry as any).data as ArgumentHistory)
-      .filter(group => group?.version === 1 && Array.isArray(group.sourceIds) && Array.isArray(group.fingerprints) && Array.isArray(group.keys) && typeof group.text === "string");
+    argumentHistory = ctx.sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "custom" && entry.customType === ARGUMENT_HISTORY)
+      .map((entry) => (entry as any).data as ArgumentHistory)
+      .filter(
+        (group) =>
+          group?.version === 1 &&
+          Array.isArray(group.sourceIds) &&
+          Array.isArray(group.fingerprints) &&
+          Array.isArray(group.keys) &&
+          typeof group.text === "string",
+      );
   };
 
   // Shared stats accumulator — tracks cumulative token usage for summarizer calls
@@ -227,10 +244,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const rawBranch = ctx.sessionManager.getBranch();
       const sourceTurns = new Map<string, number>();
       let turnIndex = 0;
-      for (const entry of rawBranch) if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
-      const branch = occ.enabled() ? ctx.sessionManager.buildSessionProjection().entries.flatMap((entry: any) =>
-        entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message }))) : rawBranch;
-      batches = captureUnindexedBatchesFromSession(branch, { isSummarized: key => queuedSummaryKeys.has(key) || indexer.isSummarized(key) }, protectionPredicate, sourceTurns);
+      for (const entry of rawBranch)
+        if (entry.type === "message" && entry.message.role === "assistant") sourceTurns.set(entry.id, turnIndex++);
+      const branch = occ.enabled()
+        ? ctx.sessionManager
+            .buildSessionProjection()
+            .entries.flatMap((entry: any) =>
+              entry.messages.map((message: any) => ({ ...entry.sourceEntry, type: "message", message })),
+            )
+        : rawBranch;
+      batches = captureUnindexedBatchesFromSession(
+        branch,
+        { isSummarized: (key) => queuedSummaryKeys.has(key) || indexer.isSummarized(key) },
+        protectionPredicate,
+        sourceTurns,
+      );
     } catch (err) {
       if (opts?.rethrow) throw err;
       batches = pendingBatches.slice();
@@ -238,16 +266,37 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     // Archive-only records in a dropped chain are recoverable, not pending
     // model work. Also leave non-text results intact rather than summarizing
     // only their text and accidentally discarding attachments.
-    const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
+    const visible = projectContext(
+      ctx.sessionManager.buildSessionProjection().messages,
+      ctx.model?.api,
+      ctx,
+      undefined,
+      true,
+    ).messages;
     const edited = readSourceEdits(ctx).changedToolIds;
-    const visibleKeys = new Set(visible.filter((message: any) => message.role === "toolResult" && !edited.has(message.toolCallId)
-      && Array.isArray(message.content) && message.content.every((block: any) => block.type === "text"))
-      .map((message: any) => occKey(message.toolCallId, message.timestamp)));
-    batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => visibleKeys.has(occKey(call.toolCallId, call.resultTimestamp))) }));
+    const visibleKeys = new Set(
+      visible
+        .filter(
+          (message: any) =>
+            message.role === "toolResult" &&
+            !edited.has(message.toolCallId) &&
+            Array.isArray(message.content) &&
+            message.content.every((block: any) => block.type === "text"),
+        )
+        .map((message: any) => occKey(message.toolCallId, message.timestamp)),
+    );
+    batches = batches.map((batch) => ({
+      ...batch,
+      toolCalls: batch.toolCalls.filter((call) => visibleKeys.has(occKey(call.toolCallId, call.resultTimestamp))),
+    }));
     batches = batches
       .map((batch) => trimBatchToPendingRange(batch))
       .filter((batch): batch is CapturedBatch => batch !== null);
-    return groupBatchesByMode(batches, currentConfig.value.batchingMode, summarizerInputBudget(currentConfig.value, ctx));
+    return groupBatchesByMode(
+      batches,
+      currentConfig.value.batchingMode,
+      summarizerInputBudget(currentConfig.value, ctx),
+    );
   };
 
   // Summarizes + indexes all pending batches.
@@ -376,44 +425,94 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const boundary = closingMessage?.usage;
     if (boundary && Number.isFinite(boundary.input)) {
       const tokens = boundary.input + (boundary.output ?? 0) + (boundary.cacheRead ?? 0) + (boundary.cacheWrite ?? 0);
-      if (Number.isFinite(tokens) && tokens > 0) usage = { tokens, contextWindow: usage?.contextWindow ?? ctx.model?.contextWindow };
+      if (Number.isFinite(tokens) && tokens > 0)
+        usage = { tokens, contextWindow: usage?.contextWindow ?? ctx.model?.contextWindow };
     }
-    return shouldBudgetFlush(usage, currentConfig.value.autoBudgetThreshold, occ.nativeCapacity(ctx), currentConfig.value.summaryBudget);
+    return shouldBudgetFlush(
+      usage,
+      currentConfig.value.autoBudgetThreshold,
+      occ.nativeCapacity(ctx),
+      currentConfig.value.summaryBudget,
+    );
   };
 
   // Read at each preparation site; delivery and live assertions remain with the writer.
   const archiveOptions = (manager: ExtensionContext["sessionManager"]) => ({
-    spillThreshold: currentConfig.value.spillThreshold, spillPreviewBytes: currentConfig.value.spillPreviewBytes,
-    sessionDir: manager.getSessionDir(), sessionId: manager.getSessionId(),
+    spillThreshold: currentConfig.value.spillThreshold,
+    spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+    sessionDir: manager.getSessionDir(),
+    sessionId: manager.getSessionId(),
   });
 
   // Archive first so aliases, spill previews and recovery paths are real and
   // fixed before paying for a summary. This same renderer is used to publish.
-  const prepareReplacement = async (batch: CapturedBatch, ctx: any,
-    appendEntry: (type: string, data?: unknown) => void, signal: AbortSignal,
-    onDeferred: (reason: DeferredReason) => void) => {
-    const unavailable = (reason: DeferredReason) => { onDeferred(reason); return null; };
+  const prepareReplacement = async (
+    batch: CapturedBatch,
+    ctx: any,
+    appendEntry: (type: string, data?: unknown) => void,
+    signal: AbortSignal,
+    onDeferred: (reason: DeferredReason) => void,
+  ) => {
+    const unavailable = (reason: DeferredReason) => {
+      onDeferred(reason);
+      return null;
+    };
     const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
-    const existing = batch.toolCalls.map(call => {
-      const key = occKey(call.toolCallId, call.resultTimestamp), record = indexer.getRecord(key);
+    const existing = batch.toolCalls.map((call) => {
+      const key = occKey(call.toolCallId, call.resultTimestamp),
+        record = indexer.getRecord(key);
       const shortId = indexer.getShortRefForToolCallId(key);
-      return record && shortId && !record.metadataUnavailable && record.archiveComplete !== false
-        && record.toolName === call.toolName && record.isError === call.isError
-        && JSON.stringify(record.args) === JSON.stringify(call.args)
-        && (record.contentHash ?? hashToolResult(record.toolName, record.resultText)) === hashToolResult(call.toolName, call.resultText)
-        ? { shortId, toolCallId: call.toolCallId, resultTimestamp: call.resultTimestamp } : undefined;
+      return record &&
+        shortId &&
+        !record.metadataUnavailable &&
+        record.archiveComplete !== false &&
+        record.toolName === call.toolName &&
+        record.isError === call.isError &&
+        JSON.stringify(record.args) === JSON.stringify(call.args) &&
+        (record.contentHash ?? hashToolResult(record.toolName, record.resultText)) ===
+          hashToolResult(call.toolName, call.resultText)
+        ? { shortId, toolCallId: call.toolCallId, resultTimestamp: call.resultTimestamp }
+        : undefined;
     });
-    const refs = existing.every(ref => ref !== undefined) ? existing : await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager) });
+    const refs = existing.every((ref) => ref !== undefined)
+      ? existing
+      : await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager) });
     signal.throwIfAborted();
-    if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)) throw new Error("This extension ctx is stale: summary source changed during archive");
-    const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
-    const replacements = new Map(batch.toolCalls.map((call, i) => [occKey(call.toolCallId, call.resultTimestamp),
-      { call, ref: refs[i]!.shortId, record: indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))! }]));
-    const before = visible.filter((message: any) => message.role === "toolResult" && replacements.has(occKey(message.toolCallId, message.timestamp)));
-    if ([...replacements.values()].some(({ record }) => !record || record.metadataUnavailable || record.archiveComplete === false)) return unavailable("replacement");
-    if (before.length !== batch.toolCalls.length || before.some((message: any) => !Array.isArray(message.content)
-      || message.content.some((block: any) => block.type !== "text"))) return unavailable("replacement");
-    if (batch.toolCalls.some(call => call.nestedProtected || protectionPredicate(call.toolName, call.args))) return unavailable("replacement");
+    if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages))
+      throw new Error("This extension ctx is stale: summary source changed during archive");
+    const visible = projectContext(
+      ctx.sessionManager.buildSessionProjection().messages,
+      ctx.model?.api,
+      ctx,
+      undefined,
+      true,
+    ).messages;
+    const replacements = new Map(
+      batch.toolCalls.map((call, i) => [
+        occKey(call.toolCallId, call.resultTimestamp),
+        { call, ref: refs[i]!.shortId, record: indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))! },
+      ]),
+    );
+    const before = visible.filter(
+      (message: any) =>
+        message.role === "toolResult" && replacements.has(occKey(message.toolCallId, message.timestamp)),
+    );
+    if (
+      [...replacements.values()].some(
+        ({ record }) => !record || record.metadataUnavailable || record.archiveComplete === false,
+      )
+    )
+      return unavailable("replacement");
+    if (
+      before.length !== batch.toolCalls.length ||
+      before.some(
+        (message: any) =>
+          !Array.isArray(message.content) || message.content.some((block: any) => block.type !== "text"),
+      )
+    )
+      return unavailable("replacement");
+    if (batch.toolCalls.some((call) => call.nestedProtected || protectionPredicate(call.toolName, call.args)))
+      return unavailable("replacement");
     const stubs = before.map((message: any) => {
       const replacement = replacements.get(occKey(message.toolCallId, message.timestamp))!;
       return toolResultStub(message, replacement.record, replacement.ref);
@@ -540,21 +639,47 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const base = ctx.sessionManager.buildSessionProjection();
         const before = projectContext(base.messages, ctx.model?.api, ctx).messages;
         const argumentProtection = effectiveProtection();
-        const candidates = argumentCandidates(base.entries, argumentProtection, argumentHistory)
-          .filter(({ group }) => !group.keys.some(key => indexer.getRecord(key)?.metadataUnavailable)
-            && projectArguments(before, [group], effectiveProtection()) !== before);
-        const after = projectArguments(before, candidates.map(candidate => candidate.group), effectiveProtection());
+        const candidates = argumentCandidates(base.entries, argumentProtection, argumentHistory).filter(
+          ({ group }) =>
+            !group.keys.some((key) => indexer.getRecord(key)?.metadataUnavailable) &&
+            projectArguments(before, [group], effectiveProtection()) !== before,
+        );
+        const after = projectArguments(
+          before,
+          candidates.map((candidate) => candidate.group),
+          effectiveProtection(),
+        );
         if (after !== before && JSON.stringify(after).length < JSON.stringify(before).length) {
-          await archiveBatches(candidates.map(({ batch }) => batch), { indexer, ...archiveOptions(ctx.sessionManager), appendEntry: appendEntry! });
-          const current = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx).messages;
-          if (currentConfig.value.enabled && JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection)
-            && JSON.stringify(current) === JSON.stringify(before)) {
-            for (const { group } of candidates) { appendEntry!(ARGUMENT_HISTORY, group); argumentHistory.push(group); }
-            const keys = new Set(candidates.flatMap(candidate => candidate.group.keys));
-            batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !keys.has(occKey(call.toolCallId, call.resultTimestamp))) })).filter(batch => batch.toolCalls.length);
+          await archiveBatches(
+            candidates.map(({ batch }) => batch),
+            { indexer, ...archiveOptions(ctx.sessionManager), appendEntry: appendEntry! },
+          );
+          const current = projectContext(
+            ctx.sessionManager.buildSessionProjection().messages,
+            ctx.model?.api,
+            ctx,
+          ).messages;
+          if (
+            currentConfig.value.enabled &&
+            JSON.stringify(effectiveProtection()) === JSON.stringify(argumentProtection) &&
+            JSON.stringify(current) === JSON.stringify(before)
+          ) {
+            for (const { group } of candidates) {
+              appendEntry!(ARGUMENT_HISTORY, group);
+              argumentHistory.push(group);
+            }
+            const keys = new Set(candidates.flatMap((candidate) => candidate.group.keys));
+            batches = batches
+              .map((batch) => ({
+                ...batch,
+                toolCalls: batch.toolCalls.filter((call) => !keys.has(occKey(call.toolCallId, call.resultTimestamp))),
+              }))
+              .filter((batch) => batch.toolCalls.length);
             publishedAliasesOrArchives = true;
             argumentCharsSaved += JSON.stringify(before).length - JSON.stringify(after).length;
-            firstChangedMessage = before.findIndex((message: any, index: number) => JSON.stringify(message) !== JSON.stringify(after[index]));
+            firstChangedMessage = before.findIndex(
+              (message: any, index: number) => JSON.stringify(message) !== JSON.stringify(after[index]),
+            );
           }
         }
       }
@@ -588,15 +713,30 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Reload/rescan can reach the final boundary without a turn_end callback.
       // Recover fused evidence before any summary can replace its visible tail.
       for (const batch of batches) {
-        const toolCalls = batch.toolCalls.filter(call => call.outputArchive?.source);
+        const toolCalls = batch.toolCalls.filter((call) => call.outputArchive?.source);
         if (toolCalls.length === 0) continue;
-        const handled = await spillOversizedBatch({ batch: { ...batch, toolCalls }, indexer,
-          config: { spillThreshold: Infinity, spillPreviewBytes: currentConfig.value.spillPreviewBytes, dedupByContentHash: false },
-          sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(), appendEntry: appendEntry! });
+        const handled = await spillOversizedBatch({
+          batch: { ...batch, toolCalls },
+          indexer,
+          config: {
+            spillThreshold: Infinity,
+            spillPreviewBytes: currentConfig.value.spillPreviewBytes,
+            dedupByContentHash: false,
+          },
+          sessionDir: ctx.sessionManager.getSessionDir(),
+          sessionId: ctx.sessionManager.getSessionId(),
+          appendEntry: appendEntry!,
+        });
         publishedAliasesOrArchives ||= handled.size > 0;
       }
-      batches = batches.map(batch => ({ ...batch, toolCalls: batch.toolCalls.filter(call => !indexer.isSummarized(occKey(call.toolCallId, call.resultTimestamp))) }))
-        .filter(batch => batch.toolCalls.length > 0);
+      batches = batches
+        .map((batch) => ({
+          ...batch,
+          toolCalls: batch.toolCalls.filter(
+            (call) => !indexer.isSummarized(occKey(call.toolCallId, call.resultTimestamp)),
+          ),
+        }))
+        .filter((batch) => batch.toolCalls.length > 0);
       if (batches.length === 0) {
         outcome = "empty";
         return { ok: false, reason: "empty" };
@@ -632,14 +772,37 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               const source = projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages);
               // Allocate a durable recovery ref without authorizing hiding.
               // registerDuplicate reuses it only after this exact stub wins.
-              const refs = await archiveBatches([{ ...batch, toolCalls: [tc] }], { indexer, appendEntry: appendEntry!, ...archiveOptions(ctx.sessionManager) });
-              const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
-              const message = visible.find((message: any) => message.role === "toolResult" && occKey(message.toolCallId, message.timestamp) === key);
+              const refs = await archiveBatches([{ ...batch, toolCalls: [tc] }], {
+                indexer,
+                appendEntry: appendEntry!,
+                ...archiveOptions(ctx.sessionManager),
+              });
+              const visible = projectContext(
+                ctx.sessionManager.buildSessionProjection().messages,
+                ctx.model?.api,
+                ctx,
+                undefined,
+                true,
+              ).messages;
+              const message = visible.find(
+                (message: any) =>
+                  message.role === "toolResult" && occKey(message.toolCallId, message.timestamp) === key,
+              );
               const archived = indexer.getRecord(key);
-              const counts = message && archived && !archived.metadataUnavailable && archived.archiveComplete !== false
-                && await tokenEstimator.measure([message], [toolResultStub(message, archived, refs[0]!.shortId)], signal);
-              assertCurrent(version); signal.throwIfAborted();
-              if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)) throw new Error("This extension ctx is stale: dedup source changed");
+              const counts =
+                message &&
+                archived &&
+                !archived.metadataUnavailable &&
+                archived.archiveComplete !== false &&
+                (await tokenEstimator.measure(
+                  [message],
+                  [toolResultStub(message, archived, refs[0]!.shortId)],
+                  signal,
+                ));
+              assertCurrent(version);
+              signal.throwIfAborted();
+              if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages))
+                throw new Error("This extension ctx is stale: dedup source changed");
               beneficial = !!counts && counts.before > counts.after;
             }
             if (beneficial) {
@@ -849,11 +1012,22 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
         const archivedBatch = batch;
         const plan = record.plan!;
-        const visible = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages;
-        const current = visible.filter((message: any) => message.role === "toolResult" && plan.replacements.has(occKey(message.toolCallId, message.timestamp)));
-        if (projectionFingerprint(current) !== projectionFingerprint(plan.before)) throw new Error("This extension ctx is stale: replacement source changed");
+        const visible = projectContext(
+          ctx.sessionManager.buildSessionProjection().messages,
+          ctx.model?.api,
+          ctx,
+          undefined,
+          true,
+        ).messages;
+        const current = visible.filter(
+          (message: any) =>
+            message.role === "toolResult" && plan.replacements.has(occKey(message.toolCallId, message.timestamp)),
+        );
+        if (projectionFingerprint(current) !== projectionFingerprint(plan.before))
+          throw new Error("This extension ctx is stale: replacement source changed");
         const summary = plan.render(result.summaryText, result.deterministic);
-        const summaryText = summary.content, batchDetails = summary.details;
+        const summaryText = summary.content,
+          batchDetails = summary.details;
         let replaced = 0;
         const proposed = visible.map((message: any) => {
           if (message.role !== "toolResult") return message;
@@ -929,33 +1103,68 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       // Includes deferred gaps, even when later deterministic work committed.
       restoreUnprocessed();
-      const deferredOutcome = Object.keys(deferredReasons).every(reason => reason === "budget") ? "deferred-budget" : "deferred";
+      const deferredOutcome = Object.keys(deferredReasons).every((reason) => reason === "budget")
+        ? "deferred-budget"
+        : "deferred";
 
       if (processedBatches.length === 0) {
         // Nothing was persisted (all calls failed or first call failed)
         if (modelAttempted) {
-          try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
-          catch (error) { if (delivery === "runtime") throw error; }
+          try {
+            appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats());
+          } catch (error) {
+            if (delivery === "runtime") throw error;
+          }
         }
         updatePruneStatus(ctx);
         outcome = deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : "error";
-        failureReason = deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : failureReason ?? "summarizer-failed";
-        return { ok: false, reason: deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : failureReason === "input-budget" ? "input-budget" : "summarizer-failed",
-          ...(deferredBatches.length ? { deferredReasons } : {}), error: failureMessage };
+        failureReason = deliveryPending
+          ? "delivery-pending"
+          : deferredBatches.length
+            ? deferredOutcome
+            : (failureReason ?? "summarizer-failed");
+        return {
+          ok: false,
+          reason: deliveryPending
+            ? "delivery-pending"
+            : deferredBatches.length
+              ? deferredOutcome
+              : failureReason === "input-budget"
+                ? "input-budget"
+                : "summarizer-failed",
+          ...(deferredBatches.length ? { deferredReasons } : {}),
+          error: failureMessage,
+        };
       }
 
       const flushOutcome = processedOutcome();
-      if (currentConfig.value.enabled && currentConfig.value.chainCompression.enabled
-        && firstFailureIndex < 0 && deferredBatches.length === 0 && !signal.aborted) {
+      if (
+        currentConfig.value.enabled &&
+        currentConfig.value.chainCompression.enabled &&
+        firstFailureIndex < 0 &&
+        deferredBatches.length === 0 &&
+        !signal.aborted
+      ) {
         try {
-          const result = await compressChains(ctx, currentConfig.value.chainCompression.rollingWindow, appendEntry!, options.closingMessage, signal, trigger !== "manual");
+          const result = await compressChains(
+            ctx,
+            currentConfig.value.chainCompression.rollingWindow,
+            appendEntry!,
+            options.closingMessage,
+            signal,
+            trigger !== "manual",
+          );
           publishedAliasesOrArchives ||= result.compressedEntries.length > 0;
         } catch (err) {
-          if (!signal.aborted && !isStaleContextError(err)) safeNotify(ctx, `pruner: chain compression failed: ${errorMessage(err)}`, "warning");
+          if (!signal.aborted && !isStaleContextError(err))
+            safeNotify(ctx, `pruner: chain compression failed: ${errorMessage(err)}`, "warning");
         }
       }
-      try { appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats()); }
-      catch (err) { if (delivery === "runtime") throw err; }
+      try {
+        appendEntry!(CUSTOM_TYPE_STATS, statsAccum.getStats());
+      } catch (err) {
+        if (delivery === "runtime") throw err;
+      }
 
       updatePruneStatus(ctx);
 
@@ -963,19 +1172,43 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (!currentConfig.value.quietOversizedSkips) {
         const notify = (message: string) => safeNotify(ctx, message, "info");
         for (const [reason, count] of Object.entries(deferredReasons)) {
-          notify(`pruner: ${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}; frontier did not advance over them`);
+          notify(
+            `pruner: ${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}; frontier did not advance over them`,
+          );
         }
         for (const record of trivialBatches) {
           const batch = record.batch;
           notify(
-            `pruner: skipped pruning turn ${batch.turnIndex} (${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — summary candidate ${record.prepared.candidateChars} chars (< minBatchChars=${minChars}); ${record.rawChars} raw chars retained; no LLM call made; ${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`
+            "pruner: skipped pruning turn " +
+              `${batch.turnIndex}` +
+              " (" +
+              `${batch.toolCalls.length}` +
+              " tool call" +
+              `${batch.toolCalls.length === 1 ? "" : "s"}` +
+              ") — summary candidate " +
+              `${record.prepared.candidateChars}` +
+              " chars (< minBatchChars=" +
+              `${minChars}` +
+              "); " +
+              `${record.rawChars}` +
+              " raw chars retained; no LLM call made; " +
+              `${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`,
           );
         }
         for (const record of dedupedBatches) {
           const batch = record.batch;
           const n = record.deduped.length;
           notify(
-            `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (turn ${batch.turnIndex}, ${record.dedupedRawChars} raw chars) against earlier prunes; no LLM call made; ${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`
+            "pruner: deduplicated " +
+              `${n}` +
+              " tool call" +
+              `${n === 1 ? "" : "s"}` +
+              " (turn " +
+              `${batch.turnIndex}` +
+              ", " +
+              `${record.dedupedRawChars}` +
+              " raw chars) against earlier prunes; no LLM call made; " +
+              `${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`,
           );
         }
         if (totalDedupedCount > 0 && dedupedBatches.length === 0) {
@@ -984,7 +1217,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             ? "LLM summarization was attempted for remaining tool calls."
             : "No LLM summarization was attempted for remaining tool calls.";
           notify(
-            `pruner: deduplicated ${totalDedupedCount} tool call${totalDedupedCount === 1 ? "" : "s"} against earlier prunes (no LLM call for those); ${remainder}`
+            "pruner: deduplicated " +
+              `${totalDedupedCount}` +
+              " tool call" +
+              `${totalDedupedCount === 1 ? "" : "s"}` +
+              " against earlier prunes (no LLM call for those); " +
+              `${remainder}`,
           );
         }
       }
@@ -1089,7 +1327,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const start = async (ctx: ExtensionContext) => {
     const version = ++lifecycle;
-    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear(); deferredFinal = undefined; lastMaintenanceSource = undefined; maintenanceNext = undefined;
+    maintenanceAbort?.abort();
+    tokenEstimator.clear();
+    sharedApprovals.clear();
+    stagedChains.clear();
+    deferredFinal = undefined;
+    lastMaintenanceSource = undefined;
+    maintenanceNext = undefined;
     activeFlushAbort?.abort();
     clearBoot();
     restore(ctx);
@@ -1112,7 +1356,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
   const tree = async (ctx: ExtensionContext) => {
     lifecycle++;
-    maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear(); stagedChains.clear(); deferredFinal = undefined; lastMaintenanceSource = undefined; maintenanceNext = undefined;
+    maintenanceAbort?.abort();
+    tokenEstimator.clear();
+    sharedApprovals.clear();
+    stagedChains.clear();
+    deferredFinal = undefined;
+    lastMaintenanceSource = undefined;
+    maintenanceNext = undefined;
     activeFlushAbort?.abort();
     restore(ctx);
     rebuildBranchIndex(ctx);
@@ -1359,11 +1609,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         previousSize = editedToolIds.size;
         for (const message of projection.messages) {
           const ids = summaryToolIds(message);
-          if (ids.some(id => editedToolIds.has(id))) ids.forEach(id => editedToolIds.add(id));
+          if (ids.some((id) => editedToolIds.has(id))) ids.forEach((id) => editedToolIds.add(id));
         }
       }
-      const filtered = messages.filter(message => editedSummaries.has(summaryIdentity(message)) || !summaryToolIds(message).some(id => editedToolIds.has(id)));
-      if (filtered.length !== messages.length) { messages = filtered; changed = true; }
+      const filtered = messages.filter(
+        (message) =>
+          editedSummaries.has(summaryIdentity(message)) || !summaryToolIds(message).some((id) => editedToolIds.has(id)),
+      );
+      if (filtered.length !== messages.length) {
+        messages = filtered;
+        changed = true;
+      }
     }
 
     // pruneMessages is the single source of truth for "is there work to do".
@@ -1486,41 +1742,80 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const raw = ctx?.sessionManager.buildSessionProjection().messages ?? messages;
     const chains = detectChains(raw, protectionPredicate);
     const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
-    const singles: SingleChainCompressionEntry[] = entries.filter(entry => !isSharedChain(entry)).flatMap(chainMembers).flatMap(entry => {
-      const chain = chains.find(chain => chain.startUserTimestamp === entry.startUserTimestamp
-        && chain.finalAssistantTimestamp === entry.finalAssistantTimestamp);
-      if (!chain || chainMatchesGrace(chain, grace) || !singleSummaryCurrent(entry, ctx)) return [];
-      return [{ ...entry, protectedToolCallIds: chain.protectedToolCallIds }];
-    });
+    const singles: SingleChainCompressionEntry[] = entries
+      .filter((entry) => !isSharedChain(entry))
+      .flatMap(chainMembers)
+      .flatMap((entry) => {
+        const chain = chains.find(
+          (chain) =>
+            chain.startUserTimestamp === entry.startUserTimestamp &&
+            chain.finalAssistantTimestamp === entry.finalAssistantTimestamp,
+        );
+        if (!chain || chainMatchesGrace(chain, grace) || !singleSummaryCurrent(entry, ctx)) return [];
+        return [{ ...entry, protectedToolCallIds: chain.protectedToolCallIds }];
+      });
     const shared = entries.filter(isSharedChain);
     if (!ctx || shared.length === 0) return singles;
     const before = projectContext(messages, ctx.model?.api, ctx, singles, true).messages;
-    return singles.concat(shared.flatMap(entry => {
-      const views = sharedCandidates(entry, raw, ctx);
-      return views.length && sharedApprovals.get(entry.blockId) === sharedShape(before, views) ? views : [];
-    }));
+    return singles.concat(
+      shared.flatMap((entry) => {
+        const views = sharedCandidates(entry, raw, ctx);
+        return views.length && sharedApprovals.get(entry.blockId) === sharedShape(before, views) ? views : [];
+      }),
+    );
   }
 
   const maintainChains = (ctx: ExtensionContext): Promise<void> => {
     if (!currentConfig.value.enabled) {
-      maintenanceAbort?.abort(); tokenEstimator.clear(); sharedApprovals.clear();
-      stagedChains.clear(); lastMaintenanceSource = undefined; maintenanceNext = undefined;
+      maintenanceAbort?.abort();
+      tokenEstimator.clear();
+      sharedApprovals.clear();
+      stagedChains.clear();
+      lastMaintenanceSource = undefined;
+      maintenanceNext = undefined;
       return Promise.resolve();
     }
-    if (maintenanceTask) { maintenanceNext = { ctx, version: lifecycle }; return maintenanceTask; }
-    if (maintenanceHandoffs || isFlushing || isArchiving || isCompactingChains || occ.isRunning() || occ.isCapacityWaiting()) return Promise.resolve();
+    if (maintenanceTask) {
+      maintenanceNext = { ctx, version: lifecycle };
+      return maintenanceTask;
+    }
+    if (
+      maintenanceHandoffs ||
+      isFlushing ||
+      isArchiving ||
+      isCompactingChains ||
+      occ.isRunning() ||
+      occ.isCapacityWaiting()
+    )
+      return Promise.resolve();
     const version = lifecycle;
-    const controller = new AbortController(); maintenanceAbort = controller;
+    const controller = new AbortController();
+    maintenanceAbort = controller;
     const signal = controller.signal;
     const manager = ctx.sessionManager;
     const config = JSON.stringify(currentConfig.value);
-    const assertValid = () => { assertCurrent(version); signal.throwIfAborted();
-      if (maintenanceHandoffs || isFlushing || isArchiving || isCompactingChains || occ.isRunning() || occ.isCapacityWaiting() || config !== JSON.stringify(currentConfig.value)) throw new Error("Chain maintenance invalidated"); };
+    const assertValid = () => {
+      assertCurrent(version);
+      signal.throwIfAborted();
+      if (
+        maintenanceHandoffs ||
+        isFlushing ||
+        isArchiving ||
+        isCompactingChains ||
+        occ.isRunning() ||
+        occ.isCapacityWaiting() ||
+        config !== JSON.stringify(currentConfig.value)
+      )
+        throw new Error("Chain maintenance invalidated");
+    };
     maintenanceTask = (async () => {
       indexer.syncSummaryEntries(ctx);
       let raw = manager.buildSessionProjection().messages;
       // Revalidate published shapes after edits, recovery or reload, without rewriting their records.
-      const singles = indexer.getChainEntries().filter(entry => !isSharedChain(entry)).flatMap(chainMembers);
+      const singles = indexer
+        .getChainEntries()
+        .filter((entry) => !isSharedChain(entry))
+        .flatMap(chainMembers);
       for (const entry of indexer.getChainEntries().filter(isSharedChain)) {
         assertValid();
         const views = sharedCandidates(entry, raw, ctx);
@@ -1546,32 +1841,70 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const chains = detectChains(raw, protectionPredicate);
       const window = currentConfig.value.chainCompression.rollingWindow;
       const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
-      const known = new Set(indexer.getChainEntries().flatMap(chainMembers).map(member => member.startUserTimestamp));
+      const known = new Set(
+        indexer
+          .getChainEntries()
+          .flatMap(chainMembers)
+          .map((member) => member.startUserTimestamp),
+      );
       const edited = readSourceEdits(ctx).changedToolIds;
-      const eligible = selectEligible(chains, window, known, grace).filter(chain => chain.finalAssistantTimestamp !== deferredFinal
-        && !chain.middleToolCallIds.some(id => edited.has(id)));
+      const eligible = selectEligible(chains, window, known, grace).filter(
+        (chain) =>
+          chain.finalAssistantTimestamp !== deferredFinal && !chain.middleToolCallIds.some((id) => edited.has(id)),
+      );
       const attempt = source + config + [...known].join(",");
       if (attempt === lastMaintenanceSource || eligible.length === 0) return;
       lastMaintenanceSource = attempt;
       const appendEntry = (type: string, data: unknown) => {
-        assertValid(); pi.appendEntry(type, data);
-        if (!manager.getBranch().some(item => item.type === "custom" && item.customType === type
-          && JSON.stringify(item.data) === JSON.stringify(data))) throw new Error("Chain archive was not persisted on the current branch");
+        assertValid();
+        pi.appendEntry(type, data);
+        if (
+          !manager
+            .getBranch()
+            .some(
+              (item) =>
+                item.type === "custom" &&
+                item.customType === type &&
+                JSON.stringify(item.data) === JSON.stringify(data),
+            )
+        )
+          throw new Error("Chain archive was not persisted on the current branch");
       };
       if (eligible.length === 1) {
         const stage = stagedChains.get(eligible[0]!.startUserTimestamp);
         const range = stage && resolveRange(stage.entry, raw);
-        if (stage && range && stage.config === config && singleSummaryCurrent(stage.entry, ctx)
-          && stage.source === projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))) {
+        if (
+          stage &&
+          range &&
+          stage.config === config &&
+          singleSummaryCurrent(stage.entry, ctx) &&
+          stage.source === projectionFingerprint(raw.slice(range.startIndex, range.endIndex + 1))
+        ) {
           const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
-          const after = projectContext(raw, ctx.model?.api, ctx, currentChainViews(raw, ctx).concat(stage.entry), true, stage.entry.startUserTimestamp).messages;
+          const after = projectContext(
+            raw,
+            ctx.model?.api,
+            ctx,
+            currentChainViews(raw, ctx).concat(stage.entry),
+            true,
+            stage.entry.startUserTimestamp,
+          ).messages;
           const counts = await tokenEstimator.compare(before, after, signal);
           assertValid();
-          if (!counts) { lastMaintenanceSource = undefined; return; }
-          if (counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
-            && source === projectionFingerprint(manager.buildSessionProjection().messages)) {
-            appendEntry(CUSTOM_TYPE_CHAIN, stage.entry); indexer.registerChain(stage.entry);
-            lowerFloor(supersede, stage.entry.startUserTimestamp); statsAccum.addChainsCompressed(1);
+          if (!counts) {
+            lastMaintenanceSource = undefined;
+            return;
+          }
+          if (
+            counts &&
+            counts.piBefore > counts.piAfter &&
+            counts.proxyDelta > 0 &&
+            source === projectionFingerprint(manager.buildSessionProjection().messages)
+          ) {
+            appendEntry(CUSTOM_TYPE_CHAIN, stage.entry);
+            indexer.registerChain(stage.entry);
+            lowerFloor(supersede, stage.entry.startUserTimestamp);
+            statsAccum.addChainsCompressed(1);
             occ.rewrite(ctx, counts.piBefore);
           }
           stagedChains.delete(stage.entry.startUserTimestamp);
@@ -1599,13 +1932,36 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const after = projectContext(raw, ctx.model?.api, ctx, current.concat(views), true, floor).messages;
       const counts = await tokenEstimator.compare(before, after, signal);
       assertValid();
-      if (!counts) { lastMaintenanceSource = undefined; return; }
-      if (!counts || counts.piBefore <= counts.piAfter || counts.proxyDelta <= 0
-        || source !== projectionFingerprint(manager.buildSessionProjection().messages)) return;
-      if (indexer.getChainEntries().flatMap(chainMembers).some(member => views.some(view => view.startUserTimestamp === member.startUserTimestamp))) return;
+      if (!counts) {
+        lastMaintenanceSource = undefined;
+        return;
+      }
+      if (
+        !counts ||
+        counts.piBefore <= counts.piAfter ||
+        counts.proxyDelta <= 0 ||
+        source !== projectionFingerprint(manager.buildSessionProjection().messages)
+      )
+        return;
+      if (
+        indexer
+          .getChainEntries()
+          .flatMap(chainMembers)
+          .some((member) => views.some((view) => view.startUserTimestamp === member.startUserTimestamp))
+      )
+        return;
       appendEntry(CUSTOM_TYPE_CHAIN, entry);
-      if (!manager.getBranch().some(item => item.type === "custom" && item.customType === CUSTOM_TYPE_CHAIN
-        && JSON.stringify(item.data) === JSON.stringify(entry))) return;
+      if (
+        !manager
+          .getBranch()
+          .some(
+            (item) =>
+              item.type === "custom" &&
+              item.customType === CUSTOM_TYPE_CHAIN &&
+              JSON.stringify(item.data) === JSON.stringify(entry),
+          )
+      )
+        return;
       indexer.registerChain(entry);
       const plain = projectContext(raw, ctx.model?.api, ctx, singles, true, floor).messages;
       sharedApprovals.set(entry.blockId, sharedShape(plain, views));
@@ -1666,7 +2022,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   // ── Register /pruner command + summary message renderer ────────────
   const compactChains = async (ctx: any) => {
-    if (isFlushing || isArchiving || isCompactingChains || occ.isRunning()) throw new Error("Another context rewrite is running; retry after it settles");
+    if (isFlushing || isArchiving || isCompactingChains || occ.isRunning())
+      throw new Error("Another context rewrite is running; retry after it settles");
     const version = lifecycle;
     const abort = new AbortController();
     activeFlushAbort = abort;
@@ -1681,7 +2038,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         statsAccum.persist(pi);
       }
       updatePruneStatus(ctx);
-      return { compressedEntries: result.compressedEntries, skipped: result.skipped.filter((s) => s.reason === "no-summary").length, reclaimedTokens: result.reclaimedTokens };
+      return {
+        compressedEntries: result.compressedEntries,
+        skipped: result.skipped.filter((s) => s.reason === "no-summary").length,
+        reclaimedTokens: result.reclaimedTokens,
+      };
     } finally {
       isCompactingChains = false;
       if (activeFlushAbort === abort) activeFlushAbort = undefined;

@@ -83,7 +83,19 @@ const workingLine = (config: AppearanceConfig, snap: ReturnType<UiMetrics["snaps
 
 const modelLine = (deps: DiagnosticsDeps): string => {
   const model = deps.hostData.getModel();
-  return `  model: id=${fmt(model?.id)} effort=${fmt(deps.hostData.getThinkingLevel())} provider=${fmt(model?.provider)} window=${fmt(model?.contextWindow)} (live ctx, rev ${deps.hostData.revision})`;
+  return (
+    "  model: id=" +
+    `${fmt(model?.id)}` +
+    " effort=" +
+    `${fmt(deps.hostData.getThinkingLevel())}` +
+    " provider=" +
+    `${fmt(model?.provider)}` +
+    " window=" +
+    `${fmt(model?.contextWindow)}` +
+    " (live ctx, rev " +
+    `${deps.hostData.revision}` +
+    ")"
+  );
 };
 
 const contextLine = (deps: DiagnosticsDeps): string => {
@@ -147,7 +159,17 @@ const decorationsLine = (deps: DiagnosticsDeps): string => {
 
 const thinkingLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
   const auto = deps.getDecorations()?.thinkingAutoApplied?.() ?? "n/a";
-  return `  thinking: policy=${config.thinking.streaming}/${config.thinking.completed} peekLines=${config.thinking.peekLines} autoVisibility=${auto} (host override-map transitions applied once)`;
+  return (
+    "  thinking: policy=" +
+    `${config.thinking.streaming}` +
+    "/" +
+    `${config.thinking.completed}` +
+    " peekLines=" +
+    `${config.thinking.peekLines}` +
+    " autoVisibility=" +
+    `${auto}` +
+    " (host override-map transitions applied once)"
+  );
 };
 
 const fullscreenMarginLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
@@ -155,7 +177,10 @@ const fullscreenMarginLine = (deps: DiagnosticsDeps, config: AppearanceConfig): 
     return `  fullscreen-margin: ${config.fullscreen.marginX > 0 ? "unavailable (no host bindings)" : "disabled(config)"}`;
   }
   const status = deps.fullscreenLayout.status().margin;
-  return `  fullscreen-margin: ${status.installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : status.reason}`;
+  return (
+    "  fullscreen-margin: " +
+    `${status.installed ? `applied (margin=${config.fullscreen.marginX}, minWidth=${config.fullscreen.minWidth})` : status.reason}`
+  );
 };
 
 const glyphsLine = (deps: DiagnosticsDeps): string => {
@@ -166,7 +191,19 @@ const glyphsLine = (deps: DiagnosticsDeps): string => {
   const applied = status.installed ? `applied (${status.reason})` : status.reason;
   const include = deps.getConfig().glyphs.include;
   const includeSuffix = include.length > 0 ? ` include=${include.join(" ")}` : "";
-  return `  glyphs: ${applied} marks=${status.glyphs.length} [${status.glyphs.join(" ")}] frames=${status.frames} changed=${status.changed}${includeSuffix}`;
+  return (
+    "  glyphs: " +
+    `${applied}` +
+    " marks=" +
+    `${status.glyphs.length}` +
+    " [" +
+    `${status.glyphs.join(" ")}` +
+    "] frames=" +
+    `${status.frames}` +
+    " changed=" +
+    `${status.changed}` +
+    `${includeSuffix}`
+  );
 };
 
 const configLine = (config: AppearanceConfig): string => {
@@ -209,23 +246,81 @@ const gitChangesLine = (deps: DiagnosticsDeps): string => {
   if (!stat) return "  git-changes: unavailable (no git metadata in cwd, or no successful read yet)";
   const session = deps.gitChanges.session();
   const base = session.rev ? `HEAD ${session.rev.slice(0, 12)}` : "the empty tree (unborn HEAD)";
-  return `  git-changes: work tree vs ${base} now +${stat.additions} -${stat.deletions} (${stat.files} files, ${session.observations} reads; staged + unstaged counted once, untracked text files included — reconcile with \`git diff --numstat HEAD\`; ${GIT_CHANGES_INTERVAL_MS / 1000}s poll + ${GIT_CHANGES_DEBOUNCE_MS}ms activity refresh)`;
+  return (
+    "  git-changes: work tree vs " +
+    `${base}` +
+    " now +" +
+    `${stat.additions}` +
+    " -" +
+    `${stat.deletions}` +
+    " (" +
+    `${stat.files}` +
+    " files, " +
+    `${session.observations}` +
+    " reads; staged + unstaged counted once, untracked text files included — " +
+    "reconcile with `git diff --numstat HEAD`; " +
+    `${GIT_CHANGES_INTERVAL_MS / 1000}` +
+    "s poll + " +
+    `${GIT_CHANGES_DEBOUNCE_MS}` +
+    "ms activity refresh)"
+  );
 };
 
 const selectionCopyLines = (deps: DiagnosticsDeps): string[] => {
   if (!deps.selectionCopy) {
-    return [`  selection-copy: ${deps.getConfig().selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`];
+    return [
+      `  selection-copy: ${deps.getConfig().selectionCopy.enabled ? "disabled (no host bindings)" : "disabled(config)"}`,
+    ];
   }
   const d = deps.selectionCopy.diagnostics();
   const t = d.telemetry;
   const m = d.mirrors;
-  const serializer = d.serializerInstalled ? (d.live ? "installed+live" : "installed-but-inert") : `not-installed (${d.installBlocker})`;
+  const serializer = d.serializerInstalled
+    ? d.live
+      ? "installed+live"
+      : "installed-but-inert"
+    : `not-installed (${d.installBlocker})`;
   const degraded = m.markdownDegraded + m.textDegraded;
   const throttled = m.markdownThrottled + m.textThrottled;
   const lastReason = m.lastDegradedReason ? ` (${m.lastDegradedReason})` : "";
   return [
-    `  selection-copy: serializer=${serializer} mirrors(md/txt)=${m.markdownBuilt}/${m.textBuilt} built, ${degraded} degraded, ${throttled} throttled${lastReason} other-wrapper=${d.externalPatch ?? "none"}`,
-    `  copy-stats: calls=${t.calls ?? 0} exact=${t.exact} mixed=${t.mixed} native=${t.nativeFallback} empty=${t.emptyDecoration} failed=${t.failed} last=${t.lastMode} chars=${t.lastCharCount} ms=${t.lastDurationMs} cache=${d.cache.hits}/${d.cache.misses}${t.lastReason ? ` lastError=${t.lastReason}` : ""}`,
+    "  selection-copy: serializer=" +
+      `${serializer}` +
+      " mirrors(md/txt)=" +
+      `${m.markdownBuilt}` +
+      "/" +
+      `${m.textBuilt}` +
+      " built, " +
+      `${degraded}` +
+      " degraded, " +
+      `${throttled}` +
+      " throttled" +
+      `${lastReason}` +
+      " other-wrapper=" +
+      `${d.externalPatch ?? "none"}`,
+    "  copy-stats: calls=" +
+      `${t.calls ?? 0}` +
+      " exact=" +
+      `${t.exact}` +
+      " mixed=" +
+      `${t.mixed}` +
+      " native=" +
+      `${t.nativeFallback}` +
+      " empty=" +
+      `${t.emptyDecoration}` +
+      " failed=" +
+      `${t.failed}` +
+      " last=" +
+      `${t.lastMode}` +
+      " chars=" +
+      `${t.lastCharCount}` +
+      " ms=" +
+      `${t.lastDurationMs}` +
+      " cache=" +
+      `${d.cache.hits}` +
+      "/" +
+      `${d.cache.misses}` +
+      `${t.lastReason ? ` lastError=${t.lastReason}` : ""}`,
   ];
 };
 
@@ -233,7 +328,9 @@ const historyLine = (deps: DiagnosticsDeps): string =>
   `  history-window: ${JSON.stringify(deps.fullscreenLayout?.status().history ?? { installed: false })}`;
 
 const FOOTER_SOURCES_LINE =
-  "  footer: model source=live ctx (composer surface) context source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd source=ctx.cwd";
+  "  footer: model source=live ctx (composer surface) context " +
+  "source=ctx.getContextUsage() session source=UsageLedger(session entries) cwd " +
+  "source=ctx.cwd";
 
 // ---------------------------------------------------------------------------
 

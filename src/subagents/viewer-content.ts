@@ -12,8 +12,22 @@ import { subagentToolRenderers } from "./rendering.ts";
 
 export const cleanViewerText = (text: string) => stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 export interface ViewerMessage {
-  role: string; content: string | Array<{ type: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: Record<string, unknown> }>;
-  toolCallId?: string; toolName?: string; isError?: boolean; details?: unknown; errorMessage?: string;
+  role: string;
+  content:
+    | string
+    | Array<{
+        type: string;
+        text?: string;
+        thinking?: string;
+        id?: string;
+        name?: string;
+        arguments?: Record<string, unknown>;
+      }>;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+  details?: unknown;
+  errorMessage?: string;
 }
 const colorLevel = () => resolveColorContext({ terminalTrueColor: getCapabilities().trueColor === true });
 
@@ -100,16 +114,31 @@ export class ViewerContent {
           this.add({ component: box, bytes: block.text.length });
         }
       }
-      if (message.errorMessage) this.add({ component: new Text(this.theme.fg("error", cleanViewerText(message.errorMessage)), 1, 0), bytes: message.errorMessage.length });
+      if (message.errorMessage)
+        this.add({
+          component: new Text(this.theme.fg("error", cleanViewerText(message.errorMessage)), 1, 0),
+          bytes: message.errorMessage.length,
+        });
     }
     let bytes = this.entries.reduce((sum, entry) => sum + entry.bytes, 0);
     while (this.entries.length > 256 || bytes > 524288) {
-      const entry = this.entries.shift()!; bytes -= entry.bytes;
+      const entry = this.entries.shift()!;
+      bytes -= entry.bytes;
       for (const [id, item] of this.tools) if (item === entry) this.tools.delete(id);
       this.truncated = true;
     }
   }
-  toggleTools() { this.toolsExpanded = !this.toolsExpanded; for (const entry of this.entries) entry.tool?.setExpanded(this.toolsExpanded); }
-  toggleThinking() { this.thinkingExpanded = !(this.thinkingExpanded ?? this.config.completed === "full"); for (const entry of this.entries) entry.thought?.setExpanded(this.thinkingExpanded); }
-  dispose() { this.entries.length = 0; this.tools.clear(); this.truncated = false; }
+  toggleTools() {
+    this.toolsExpanded = !this.toolsExpanded;
+    for (const entry of this.entries) entry.tool?.setExpanded(this.toolsExpanded);
+  }
+  toggleThinking() {
+    this.thinkingExpanded = !(this.thinkingExpanded ?? this.config.completed === "full");
+    for (const entry of this.entries) entry.thought?.setExpanded(this.thinkingExpanded);
+  }
+  dispose() {
+    this.entries.length = 0;
+    this.tools.clear();
+    this.truncated = false;
+  }
 }

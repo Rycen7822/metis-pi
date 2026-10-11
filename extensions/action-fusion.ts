@@ -1,6 +1,12 @@
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type TProperties, type TObject, type Static } from "typebox";
-import { createEditToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  createEditToolDefinition,
+  createWriteToolDefinition,
+  defineTool,
+  type ExtensionAPI,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { executeFusion, fusionFailed, THEN_RUN_SCHEMA } from "../src/execution/action-fusion.ts";
 import { runNativeFusionCommand } from "../src/execution/action-fusion-command.ts";
 import { ACTION_FUSION_AVAILABILITY } from "../src/execution/action-fusion-availability.ts";
@@ -22,12 +28,27 @@ function wrapNative<P extends TProperties, D, S>(base: ToolDefinition<TObject<P>
       const raw = params as Record<string, unknown>;
       if (typeof raw.path !== "string") throw new Error("Mutation requires a path");
       const path = resolveNativeMutationPath(ctx.cwd, raw.path);
-      return executeFusion({ paths: [path], thenRun: raw.then_run, signal,
+      return executeFusion({
+        paths: [path],
+        thenRun: raw.then_run,
+        signal,
         async mutate() {
           const before = base.name === "write" ? snapshotFile(path) : undefined;
-          const result = await base.execute(id, params as Static<TObject<P>>, signal, raw.then_run === undefined ? onUpdate : undefined, ctx);
+          const result = await base.execute(
+            id,
+            params as Static<TObject<P>>,
+            signal,
+            raw.then_run === undefined ? onUpdate : undefined,
+            ctx,
+          );
           if (!before || typeof raw.content !== "string") return result;
-          return { ...result, details: { ...(result.details && typeof result.details === "object" ? result.details : {}), metisWriteDiff: computeWriteDiff(before, snapshotFile(path), raw.content) } };
+          return {
+            ...result,
+            details: {
+              ...(result.details && typeof result.details === "object" ? result.details : {}),
+              metisWriteDiff: computeWriteDiff(before, snapshotFile(path), raw.content),
+            },
+          };
         },
         run: (input, abort, update) => runNativeFusionCommand(input, ctx, abort, update),
         onUpdate,

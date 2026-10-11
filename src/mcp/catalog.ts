@@ -56,9 +56,19 @@ export class CatalogCache {
   }
 }
 function validCatalog(value: unknown): value is Catalog {
-  return isRecord(value) && typeof value.hasResources === "boolean" &&
-    Array.isArray(value.tools) && value.tools.every(tool => isRecord(tool) && typeof tool.name === "string" && isRecord(tool.inputSchema)) &&
-    Array.isArray(value.resources) && value.resources.every(resource => isRecord(resource) && typeof resource.uri === "string" && typeof resource.name === "string") &&
-    Array.isArray(value.resourceTemplates) && value.resourceTemplates.every(resource => isRecord(resource) && typeof resource.uriTemplate === "string" && typeof resource.name === "string") &&
-    (value.instructions === undefined || typeof value.instructions === "string");
+  return (
+    isRecord(value) &&
+    typeof value.hasResources === "boolean" &&
+    Array.isArray(value.tools) &&
+    value.tools.every((tool) => isRecord(tool) && typeof tool.name === "string" && isRecord(tool.inputSchema)) &&
+    Array.isArray(value.resources) &&
+    value.resources.every(
+      (resource) => isRecord(resource) && typeof resource.uri === "string" && typeof resource.name === "string",
+    ) &&
+    Array.isArray(value.resourceTemplates) &&
+    value.resourceTemplates.every(
+      (resource) => isRecord(resource) && typeof resource.uriTemplate === "string" && typeof resource.name === "string",
+    ) &&
+    (value.instructions === undefined || typeof value.instructions === "string")
+  );
 }

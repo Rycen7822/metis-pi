@@ -164,71 +164,98 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_DELETE(self):
-        event('session-delete', session=self.headers.get('mcp-session-id'))
-        self.send_response(200); self.send_header('content-length', '0'); self.end_headers()
+        event("session-delete", session=self.headers.get("mcp-session-id"))
+        self.send_response(200)
+        self.send_header("content-length", "0")
+        self.end_headers()
 
     def do_POST(self):
-        length = int(self.headers.get('content-length', 0))
+        length = int(self.headers.get("content-length", 0))
         body = self.rfile.read(length)
         try:
             req = json.loads(body)
         except ValueError:
-            self.send_response(400); self.send_header('content-length', '0'); self.end_headers(); return
-        rid, method = req.get('id'), req.get('method')
-        params = req.get('params') or {}
-        proto_header = self.headers.get('mcp-protocol-version')
-        event('request', method=method, protocol_header=proto_header,
-              mcp_method_header=self.headers.get('mcp-method'),
-              mcp_name_header=self.headers.get('mcp-name'),
-              session=self.headers.get('mcp-session-id'),
-              has_modern_meta=(MODERN_META_KEY in (params.get('_meta') or {})))
-        if MODE == 'redirect_hanging_body' and method == 'tools/call' and self.path != '/mcp2':
-            self.send_response(307)
-            self.send_header('location','/mcp2')
+            self.send_response(400)
+            self.send_header("content-length", "0")
             self.end_headers()
-            self.wfile.write(b'partial redirect body'); self.wfile.flush()
-            event('redirect-open-body')
+            return
+        rid, method = req.get("id"), req.get("method")
+        params = req.get("params") or {}
+        proto_header = self.headers.get("mcp-protocol-version")
+        event(
+            "request",
+            method=method,
+            protocol_header=proto_header,
+            mcp_method_header=self.headers.get("mcp-method"),
+            mcp_name_header=self.headers.get("mcp-name"),
+            session=self.headers.get("mcp-session-id"),
+            has_modern_meta=(MODERN_META_KEY in (params.get("_meta") or {})),
+        )
+        if MODE == "redirect_hanging_body" and method == "tools/call" and self.path != "/mcp2":
+            self.send_response(307)
+            self.send_header("location", "/mcp2")
+            self.end_headers()
+            self.wfile.write(b"partial redirect body")
+            self.wfile.flush()
+            event("redirect-open-body")
             time.sleep(30)
             return
-        if STATE['redirect_idx'] < len(REDIRECT_PLAN):
-            entry = REDIRECT_PLAN[STATE['redirect_idx']]
-            STATE['redirect_idx'] += 1
-            code, _, target = entry.partition(':')
+        if STATE["redirect_idx"] < len(REDIRECT_PLAN):
+            entry = REDIRECT_PLAN[STATE["redirect_idx"]]
+            STATE["redirect_idx"] += 1
+            code, _, target = entry.partition(":")
             self.send_response(int(code))
-            self.send_header('location', target)
-            self.send_header('content-length', '0')
+            self.send_header("location", target)
+            self.send_header("content-length", "0")
             self.end_headers()
-            event('redirect-sent', status=int(code), target=target)
+            event("redirect-sent", status=int(code), target=target)
             return
-        if method == 'server/discover' and DISCOVER_REJECT:
+        if method == "server/discover" and DISCOVER_REJECT:
             status, errbody = DISCOVER_REJECT
-            data = json.dumps({**errbody, 'id': rid}).encode() if errbody else b''
+            data = json.dumps({**errbody, "id": rid}).encode() if errbody else b""
             self.send_response(status)
-            self.send_header('content-type', 'application/json')
-            self.send_header('content-length', str(len(data)))
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
             self.end_headers()
             if data:
                 self.wfile.write(data)
-            event('discover-rejected', status=status)
+            event("discover-rejected", status=status)
             return
-        if MODE == 'bad_status':
-            self.send_response(503); self.send_header('content-length', '0'); self.end_headers(); return
+        if MODE == "bad_status":
+            self.send_response(503)
+            self.send_header("content-length", "0")
+            self.end_headers()
+            return
 
-        modern = MODE.startswith('modern')
-        if MODE == 'legacy_only' and method == 'server/discover':
-            self.send_response(404); self.send_header('content-length', '0'); self.end_headers()
-            event('discover-404-legacy-only')
+        modern = MODE.startswith("modern")
+        if MODE == "legacy_only" and method == "server/discover":
+            self.send_response(404)
+            self.send_header("content-length", "0")
+            self.end_headers()
+            event("discover-404-legacy-only")
             return
         if modern:
             what = None
-            if proto_header != MODERN_VERSION: what = 'MCP-Protocol-Version'
-            elif self.headers.get('mcp-method') != method: what = 'Mcp-Method'
-            elif method == 'tools/call' and decode_header_value(self.headers.get('mcp-name') or '') != params.get('name'): what = 'Mcp-Name'
-            elif params.get('_meta', {}).get(MODERN_META_KEY) != MODERN_VERSION: what = 'modern _meta protocolVersion'
+            if proto_header != MODERN_VERSION:
+                what = "MCP-Protocol-Version"
+            elif self.headers.get("mcp-method") != method:
+                what = "Mcp-Method"
+            elif method == "tools/call" and decode_header_value(self.headers.get("mcp-name") or "") != params.get(
+                "name"
+            ):
+                what = "Mcp-Name"
+            elif params.get("_meta", {}).get(MODERN_META_KEY) != MODERN_VERSION:
+                what = "modern _meta protocolVersion"
             if what:
-                event('strict-rejected', what=what)
-                err = json.dumps({"jsonrpc": "2.0", "id": rid, "error": {"code": -32600, "message": f"strict modern violation: missing {what}"}}).encode()
-                self._flush_headers('application/json', len(err), session=False, status=400)
+                event("strict-rejected", what=what)
+                err = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "error": {"code": -32600, "message": f"strict modern violation: missing {what}"},
+                    }
+                ).encode()
+                self._flush_headers("application/json", len(err), session=False, status=400)
                 self.wfile.write(err)
                 return
 

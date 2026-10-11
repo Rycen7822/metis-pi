@@ -104,10 +104,17 @@ function readJson(path: string, read: ReadConfigFile): ObjectValue | undefined {
     const value = JSON.parse(text.replace(/^\uFEFF/, ""));
     if (!object(value)) throw new Error("not a JSON object");
     return value;
-  } catch (error) { throw new MetisConfigError(path, `invalid legacy JSON: ${(error as Error).message}`); }
+  } catch (error) {
+    throw new MetisConfigError(path, `invalid legacy JSON: ${(error as Error).message}`);
+  }
 }
 function camelizeTable(raw: ObjectValue): ObjectValue {
-  return Object.fromEntries(Object.entries(raw).map(([key, value]) => [key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()), value]));
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, value]) => [
+      key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()),
+      value,
+    ]),
+  );
 }
 function legacySubagentBackend(raw: ObjectValue): ObjectValue {
   const result = camelizeTable(raw);
@@ -116,37 +123,93 @@ function legacySubagentBackend(raw: ObjectValue): ObjectValue {
     delete result["defaultRunTimeoutSeconds"];
   }
   if (object(raw["inheritance"])) result["inheritance"] = camelizeTable(raw["inheritance"]);
-  if (object(raw["profiles"])) result["profiles"] = Object.fromEntries(Object.entries(raw["profiles"]).map(([name, profile]) => [name, object(profile) ? camelizeTable(profile) : profile]));
+  if (object(raw["profiles"]))
+    result["profiles"] = Object.fromEntries(
+      Object.entries(raw["profiles"]).map(([name, profile]) => [
+        name,
+        object(profile) ? camelizeTable(profile) : profile,
+      ]),
+    );
   return result;
 }
 function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
-  const base = defaultMetisConfig(), notes: string[] = [];
-  const [old, pi, dynamic, conversion, formerAgents] = legacyJsonFiles.map(name => readJson(join(agentDir, name), read));
-  const backendPath = join(agentDir, legacyBackendFile), backendText = readText(backendPath, read);
+  const base = defaultMetisConfig(),
+    notes: string[] = [];
+  const [old, pi, dynamic, conversion, formerAgents] = legacyJsonFiles.map((name) =>
+    readJson(join(agentDir, name), read),
+  );
+  const backendPath = join(agentDir, legacyBackendFile),
+    backendText = readText(backendPath, read);
   let subagents: ObjectValue = {};
   if (formerAgents) {
     if (formerAgents["maxConcurrent"] !== undefined) subagents["maxResidentAgents"] = formerAgents["maxConcurrent"];
-    for (const key of Object.keys(formerAgents).filter(key => key !== "maxConcurrent"))
-      notes.push(`subagents.json.${key}: old provider option is not a native backend setting; original file kept (migrate also backs it up), not installed as an inert knob`);
+    for (const key of Object.keys(formerAgents).filter((key) => key !== "maxConcurrent"))
+      notes.push(
+        "subagents.json." +
+          `${key}` +
+          ": old provider option is not a native backend setting; original file kept " +
+          "(migrate also backs it up), not installed as an inert knob",
+      );
   }
-  if (backendText !== undefined) subagents = mergeMetisConfig(subagents, legacySubagentBackend(parseMetisConfig(backendText, backendPath)));
-  const appearance = Object.fromEntries(Object.keys(base["appearance"]).filter(key => old?.[key] !== undefined).map(key => [key, old![key]]));
-  const execution = mergeMetisConfig({ tools: conversion?.["tools"] ?? {}, ui: conversion?.["ui"] ?? {} }, old?.["execution"] ?? {});
-  const imported = { appearance, execution, mcp: old?.["mcp"] ?? {}, subagents,
+  if (backendText !== undefined)
+    subagents = mergeMetisConfig(subagents, legacySubagentBackend(parseMetisConfig(backendText, backendPath)));
+  const appearance = Object.fromEntries(
+    Object.keys(base["appearance"])
+      .filter((key) => old?.[key] !== undefined)
+      .map((key) => [key, old![key]]),
+  );
+  const execution = mergeMetisConfig(
+    { tools: conversion?.["tools"] ?? {}, ui: conversion?.["ui"] ?? {} },
+    old?.["execution"] ?? {},
+  );
+  const imported = {
+    appearance,
+    execution,
+    mcp: old?.["mcp"] ?? {},
+    subagents,
     contextPrune: object(pi?.["contextPrune"]) ? encodePruneConfig(pi["contextPrune"]) : {},
-    dynamicAgents: dynamic ? { ...dynamic, enabled: dynamic["enabled"] !== false } : {} };
-  return { imported, notes, present: !!(old || pi?.["contextPrune"] || dynamic || conversion || formerAgents || backendText !== undefined) };
+    dynamicAgents: dynamic ? { ...dynamic, enabled: dynamic["enabled"] !== false } : {},
+  };
+  return {
+    imported,
+    notes,
+    present: !!(old || pi?.["contextPrune"] || dynamic || conversion || formerAgents || backendText !== undefined),
+  };
 }
 /** Read-only bridge until the single global TOML exists. Never read project metis settings. */
-export function readMetisConfig(agentDir: string, read: ReadConfigFile = optionalRead): { config: ObjectValue; present: boolean; legacy: boolean; notes: string[] } {
-  const path = metisConfigPath(agentDir), text = readText(path, read);
-  if (text !== undefined) return { config: mergeMetisConfig(defaultMetisConfig(), parseMetisConfig(text, path)), present: true, legacy: false, notes: [] };
+export function readMetisConfig(
+  agentDir: string,
+  read: ReadConfigFile = optionalRead,
+): { config: ObjectValue; present: boolean; legacy: boolean; notes: string[] } {
+  const path = metisConfigPath(agentDir),
+    text = readText(path, read);
+  if (text !== undefined)
+    return {
+      config: mergeMetisConfig(defaultMetisConfig(), parseMetisConfig(text, path)),
+      present: true,
+      legacy: false,
+      notes: [],
+    };
   const legacy = readLegacyMetisConfig(agentDir, read);
-  return { config: mergeMetisConfig(defaultMetisConfig(), legacy.imported), present: legacy.present, legacy: legacy.present, notes: legacy.notes };
+  return {
+    config: mergeMetisConfig(defaultMetisConfig(), legacy.imported),
+    present: legacy.present,
+    legacy: legacy.present,
+    notes: legacy.notes,
+  };
 }
 function installGuide(agentDir: string, replace = false): void {
-  try { atomicWrite(join(agentDir, METIS_CONFIG_GUIDE), readFileSync(new URL("../metis-pi-config.md", import.meta.url), "utf8"), !replace); }
-  catch (error) { throw new Error(`Configuration ready at ${metisConfigPath(agentDir)}, but parameter guide could not be installed: ${(error as Error).message}`); }
+  try {
+    atomicWrite(
+      join(agentDir, METIS_CONFIG_GUIDE),
+      readFileSync(new URL("../metis-pi-config.md", import.meta.url), "utf8"),
+      !replace,
+    );
+  } catch (error) {
+    throw new Error(
+      `Configuration ready at ${metisConfigPath(agentDir)}, but parameter guide could not be installed: ${(error as Error).message}`,
+    );
+  }
 }
 function atomicWrite(path: string, text: string, exclusive = false): boolean {
   mkdirSync(dirname(path), { recursive: true });

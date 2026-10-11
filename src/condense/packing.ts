@@ -21,7 +21,15 @@ function isBuildOutput(call: CapturedToolCall): boolean {
   if (call.toolName === "exec_command" && call.exitCode !== 0) return false;
   const command = call.args.command ?? call.args.cmd;
   if (typeof command !== "string" || /[;|&\n]/.test(command)) return false;
-  return /^(?:rtk\s+)?(?:npm\s+(?:test|run\s+(?:test|build|check|lint|typecheck))|(?:pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|check|lint|typecheck)|cargo\s+(?:test|build|check|clippy)|(?:python3?\s+-m\s+)?pytest|(?:go\s+(?:test|build)))(?:\s|$)/.test(command.trim());
+  return new RegExp(
+    "^(?:rtk\\s+)?(?:" +
+      "npm\\s+(?:test|run\\s+(?:test|build|check|lint|typecheck))|" +
+      "(?:pnpm|yarn|bun)\\s+(?:run\\s+)?(?:test|build|check|lint|typecheck)|" +
+      "cargo\\s+(?:test|build|check|clippy)|" +
+      "(?:python3?\\s+-m\\s+)?pytest|" +
+      "(?:go\\s+(?:test|build))" +
+      ")(?:\\s|$)",
+  ).test(command.trim());
 }
 
 export function packToolResult(call: CapturedToolCall): string | undefined {

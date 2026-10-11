@@ -117,7 +117,14 @@ export class TurnSummary {
   /** Called from the metrics onSettled callback with the frozen verdict. */
   record(
     snapshot: InteractionSnapshot,
-    verdict: { outcome: InteractionOutcome; evidence: TerminalEvidence; reason: string; attempt: number; toolErrorsObserved: number; replyEndedAt?: number },
+    verdict: {
+      outcome: InteractionOutcome;
+      evidence: TerminalEvidence;
+      reason: string;
+      attempt: number;
+      toolErrorsObserved: number;
+      replyEndedAt?: number;
+    },
     branchAnchor?: string,
   ): void {
     const interactionId = `i${snapshot.startedAt ?? 0}`;

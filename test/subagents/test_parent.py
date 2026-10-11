@@ -128,7 +128,12 @@ else:
         self.assertTrue(all('not a user instruction or approval' in m['message'] for m in messages))
         conflict=await self.parent_tool('pi_context',{'cwd':str(self.workspace),'scope':first},other,error=True)
         self.assertEqual(conflict['error']['code'],'parent_conflict')
-        conflict=await self.parent_tool('pi_spawn_agent',{'scope':first,'request_id':'wrong-parent','task':'must not start','access':'read'},other,error=True)
+        conflict = await self.parent_tool(
+            "pi_spawn_agent",
+            {"scope": first, "request_id": "wrong-parent", "task": "must not start", "access": "read"},
+            other,
+            error=True,
+        )
         self.assertEqual(conflict['error']['code'],'parent_conflict')
 
     async def test_question_and_stop_notify_without_a_parent_wait(self):
@@ -292,7 +297,15 @@ else:
                 while not self.queued(): await asyncio.sleep(.02)
             async def output(value):
                 self.assertEqual(len(self.recalls()),1,'withdraw the earlier wakeup before delivering a wait result')
-            waiting=asyncio.create_task(request(self.home,'wait',{'scope':sid,'run_ids':[run['run_id']]},source=self.trusted_source(),on_result=output))
+            waiting = asyncio.create_task(
+                request(
+                    self.home,
+                    "wait",
+                    {"scope": sid, "run_ids": [run["run_id"]]},
+                    source=self.trusted_source(),
+                    on_result=output,
+                )
+            )
             await asyncio.sleep(.05)
             self.assertFalse(waiting.done())
             hold.unlink()
@@ -345,7 +358,15 @@ else:
             async with asyncio.timeout(8):
                 while not self.queued(): await asyncio.sleep(.02)
             async def output(value): self.assertEqual(value['text'],'Completed: done')
-            reading=asyncio.create_task(request(self.home,'result',{'scope':sid,'run_id':run['run_id']},source=self.trusted_source(),on_result=output))
+            reading = asyncio.create_task(
+                request(
+                    self.home,
+                    "result",
+                    {"scope": sid, "run_id": run["run_id"]},
+                    source=self.trusted_source(),
+                    on_result=output,
+                )
+            )
             await asyncio.sleep(.05)
             self.assertFalse(reading.done(),'result delivery must settle its in-flight notification')
             hold.unlink()
@@ -389,7 +410,10 @@ else:
         await self.restart_daemon()
         again=await self.parent_tool('pi_wait_agent',{'scope':sid,'run_ids':[run['run_id']],'timeout_seconds':0})
         self.assertEqual(again['runs'][0]['result']['result_sha256'],result['runs'][0]['result']['result_sha256'])
-        self.assertEqual((await self.parent_tool('pi_agent_result',{'scope':sid,'run_id':run['run_id']}))['result_sha256'],result['runs'][0]['result']['result_sha256'])
+        self.assertEqual(
+            (await self.parent_tool("pi_agent_result", {"scope": sid, "run_id": run["run_id"]}))["result_sha256"],
+            result["runs"][0]["result"]["result_sha256"],
+        )
         self.assertEqual(self.queued(),[])
 
     async def test_question_receipt_does_not_hide_later_completion(self):

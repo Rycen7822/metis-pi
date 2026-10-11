@@ -165,11 +165,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   // emoji-presentation marks like ✔/✖ are drawn by the monospace font instead
   // of an emoji font that paints over the next character (see
   // glyph-presentation.ts). Installed from captureTui with the same retry logic.
-  const glyphPresentation = config.enabled ? createGlyphPresentation({ enabled: config.glyphs.textPresentation, include: config.glyphs.include }) : undefined;
+  const glyphPresentation = config.enabled
+    ? createGlyphPresentation({ enabled: config.glyphs.textPresentation, include: config.glyphs.include })
+    : undefined;
   function requestRender(): void {
     try {
       chrome.state.tui?.requestRender?.();
-    } catch { /* render happens on the next host cycle */ }
+    } catch {
+      /* render happens on the next host cycle */
+    }
   }
 
   // Working-tree change counts for the footer: display-only git reads on a 2s
@@ -289,28 +293,59 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       installation = chrome.install(available, generation).then(() => {
         // Wait for a successful footer install; neither a hidden changes
         // segment nor a late install from a disposed session needs a poller.
-        if (generation === chrome.state.generation && chromeEnabled
-          && config.footer.showChanges && chrome.state.footerInstalled && hostData.getCwd()) gitChanges.start();
+        if (
+          generation === chrome.state.generation &&
+          chromeEnabled &&
+          config.footer.showChanges &&
+          chrome.state.footerInstalled &&
+          hostData.getCwd()
+        )
+          gitChanges.start();
       });
     }
     if (!enabled || handle?.installed) return;
-    const renderers = makeRenderers(bindings.makeText, bindings.expandHint, bindings.highlight, bindings.makeDiff, bindings.makeShell, bindings.makeWriteCall, session, bindings.layoutOps);
+    const renderers = makeRenderers(
+      bindings.makeText,
+      bindings.expandHint,
+      bindings.highlight,
+      bindings.makeDiff,
+      bindings.makeShell,
+      bindings.makeWriteCall,
+      session,
+      bindings.layoutOps,
+    );
     handle = installAdapter(bindings.prototype, {
-      getTools: () => pi.getAllTools(), enabled: () => enabled,
+      getTools: () => pi.getAllTools(),
+      enabled: () => enabled,
       definitionPrototype: bindings.interactivePrototype,
       renderers,
-      makeCodemode: (resolve) => makeCodemodeRenderers({ makeText: bindings.makeText, highlight: bindings.highlight,
-        store: codemodeViews, shell: renderers.bash, expandHint: bindings.expandHint, resolve }),
+      makeCodemode: (resolve) =>
+        makeCodemodeRenderers({
+          makeText: bindings.makeText,
+          highlight: bindings.highlight,
+          store: codemodeViews,
+          shell: renderers.bash,
+          expandHint: bindings.expandHint,
+          resolve,
+        }),
       highlightOwnedCommand: (lines) => highlightBashScript(lines, session.colorLevel),
       renderOwnedCommand: bindings.makeShell?.makeShellCall
-        ? (command, state, expanded, theme, context) => bindings.makeShell!.makeShellCall!({
-          name: "bash", args: { command }, options: { expanded }, theme, context,
-          bullet: theme.fg("dim", "•"), title: state === "running" ? "Running" : "Ran",
-          expandHint: bindings.expandHint(), colorLevel: session.colorLevel,
-        })
+        ? (command, state, expanded, theme, context) =>
+            bindings.makeShell!.makeShellCall!({
+              name: "bash",
+              args: { command },
+              options: { expanded },
+              theme,
+              context,
+              bullet: theme.fg("dim", "•"),
+              title: state === "running" ? "Running" : "Ran",
+              expandHint: bindings.expandHint(),
+              colorLevel: session.colorLevel,
+            })
         : undefined,
     });
-    if (!handle.installed) ctx.ui.notify(`metis-pi: ${handle.reason}. Compact transcript was not installed.`, "warning");
+    if (!handle.installed)
+      ctx.ui.notify(`metis-pi: ${handle.reason}. Compact transcript was not installed.`, "warning");
     // Scoped transcript decorations (member spacing + assistant separator +
     // thinking rail). Failures are reported PER FEATURE; per-member rows,
     // native text and the output dimming keep working regardless.
@@ -466,7 +501,14 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     }
     // Image count from the real result content blocks (count only, no copy).
     const images = countImageBlocks(event.result);
-    if (!event.parentToolCallId) transcript.apply({ type: "tool_execution_end", toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError === true, imageCount: images });
+    if (!event.parentToolCallId)
+      transcript.apply({
+        type: "tool_execution_end",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        isError: event.isError === true,
+        imageCount: images,
+      });
     if (chromeEnabled) metrics.toolEnd(event.toolCallId);
   });
 
@@ -493,7 +535,15 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // Phase feed for the Working line: the CURRENT streaming event decides
     // the phase — never the accumulated content. An old thinking block must
     // NOT keep "Thinking" lit while the model streams a write tool call.
-    const streamEvent = (event as { assistantMessageEvent?: { type?: string; contentIndex?: number; partial?: { content?: Array<Record<string, unknown>> } } }).assistantMessageEvent;
+    const streamEvent = (
+      event as {
+        assistantMessageEvent?: {
+          type?: string;
+          contentIndex?: number;
+          partial?: { content?: Array<Record<string, unknown>> };
+        };
+      }
+    ).assistantMessageEvent;
     const eventType = typeof streamEvent?.type === "string" ? streamEvent.type : undefined;
     if (stateMessage && stateMessage.role === "assistant" && eventType) {
       // Output speed measures real token arrival: only *_delta events open and

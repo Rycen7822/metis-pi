@@ -107,8 +107,17 @@ export class HttpConnection extends McpConnection {
     throw new Error("event-stream closed before the JSON-RPC response arrived");
   }
 
-  async request(method: string, params: unknown, timeoutSec: number,
-                opts: { notification?: boolean; signal?: AbortSignal; toolName?: string; paramHeaders?: Record<string, string> } = {}): Promise<unknown> {
+  async request(
+    method: string,
+    params: unknown,
+    timeoutSec: number,
+    opts: {
+      notification?: boolean;
+      signal?: AbortSignal;
+      toolName?: string;
+      paramHeaders?: Record<string, string>;
+    } = {},
+  ): Promise<unknown> {
     // One exchange, one AbortController: the deadline, caller cancellation and
     // connection close all cover send/headers/body/parse until settlement, so a
     // hung body still hits the deadline. No exchange is ever retried here.
@@ -140,7 +149,9 @@ export class HttpConnection extends McpConnection {
         if (response.status === 404 && this.mode === "legacy" && this.sessionId && method !== "initialize") {
           this.stale = true;
           await this.discard(response);
-          throw new StaleSessionError(`MCP session expired (HTTP 404)${sent ? "; the sent request's outcome is unknown" : ""}; the next explicit operation re-initializes`);
+          throw new StaleSessionError(
+            `MCP session expired (HTTP 404)${sent ? "; the sent request's outcome is unknown" : ""}; the next explicit operation re-initializes`,
+          );
         }
         throw await this.classifyHttpError(response);
       }
@@ -158,8 +169,14 @@ export class HttpConnection extends McpConnection {
         if (err instanceof CancelledError) throw err;
         throw new CancelledError(sent);
       }
-      if (err === ABORT_DEADLINE) throw new Error(`${method} exchange timed out after ${timeoutSec}s${sent ? "; server outcome is unknown" : ""}`);
-      if (err === ABORT_CLOSED) throw new Error(`${method} exchange ended because the connection was closed${sent ? "; server outcome is unknown" : ""}`);
+      if (err === ABORT_DEADLINE)
+        throw new Error(
+          `${method} exchange timed out after ${timeoutSec}s${sent ? "; server outcome is unknown" : ""}`,
+        );
+      if (err === ABORT_CLOSED)
+        throw new Error(
+          `${method} exchange ended because the connection was closed${sent ? "; server outcome is unknown" : ""}`,
+        );
       if (err === ABORT_USER) throw new CancelledError(sent);
       throw err;
     } finally {
@@ -179,9 +196,13 @@ export class HttpConnection extends McpConnection {
   }
 
   private async legacyInitialize(): Promise<void> {
-    const result = await this.request("initialize", LEGACY_INIT, this.cfg.startup_timeout_sec) as { protocolVersion?: unknown } | undefined;
+    const result = (await this.request("initialize", LEGACY_INIT, this.cfg.startup_timeout_sec)) as
+      { protocolVersion?: unknown } | undefined;
     // Negotiate: honor the server's returned version for all later requests.
-    this.negotiatedVersion = typeof result?.protocolVersion === "string" && result.protocolVersion ? result.protocolVersion : LEGACY_INIT.protocolVersion;
+    this.negotiatedVersion =
+      typeof result?.protocolVersion === "string" && result.protocolVersion
+        ? result.protocolVersion
+        : LEGACY_INIT.protocolVersion;
     await this.request("notifications/initialized", {}, this.cfg.startup_timeout_sec, { notification: true });
   }
 

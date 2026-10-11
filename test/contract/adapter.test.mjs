@@ -73,12 +73,40 @@ test("one native row survives install, duplicate install, disable and disposal w
 for (const [owner, names, builtin] of [
   ["FFF overrides", ["grep", "find"], false],
   ["other extensions", ["read", "write", "edit", "bash", "ls"], false],
-  ["outside takeover list", ["web_search", "get_search_content", "fetch_content", "mcp", "mcp_search", "session_search", "fffind", "ffgrep", "exec_command", "subagent", "lsp", "ask_user_question"], true],
+  [
+    "outside takeover list",
+    [
+      "web_search",
+      "get_search_content",
+      "fetch_content",
+      "mcp",
+      "mcp_search",
+      "session_search",
+      "fffind",
+      "ffgrep",
+      "exec_command",
+      "subagent",
+      "lsp",
+      "ask_user_question",
+    ],
+    true,
+  ],
 ]) {
   test(`${owner}: both native renderers remain unchanged`, (t) => {
-    const { Host, handle } = setup(t, names.map((name) => toolInfo(name, builtin)));
+    const { Host, handle } = setup(
+      t,
+      names.map((name) => toolInfo(name, builtin)),
+    );
     for (const name of names) {
-      assertNative(new Host(name, deepFreeze({ renderCall: () => bindings.makeText("custom"), renderResult: () => bindings.makeText("custom result") })));
+      assertNative(
+        new Host(
+          name,
+          deepFreeze({
+            renderCall: () => bindings.makeText("custom"),
+            renderResult: () => bindings.makeText("custom result"),
+          }),
+        ),
+      );
     }
   });
 }

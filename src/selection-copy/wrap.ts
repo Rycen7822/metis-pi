@@ -34,7 +34,16 @@ export interface ProvenanceRow {
   hard: boolean;
 }
 
-const CJK_BREAK = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]/u;
+const CJK_BREAK = new RegExp(
+  "[" +
+    "\\p{Script_Extensions=Han}" +
+    "\\p{Script_Extensions=Hiragana}" +
+    "\\p{Script_Extensions=Katakana}" +
+    "\\p{Script_Extensions=Hangul}" +
+    "\\p{Script_Extensions=Bopomofo}" +
+    "]",
+  "u",
+);
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /** Printable ASCII runs: every char is a single-cell grapheme and never a CJK
  * breakpoint, so the Segmenter + per-grapheme width calls can be skipped

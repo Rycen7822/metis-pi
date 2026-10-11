@@ -40,8 +40,17 @@ export function registerImageHints(pi: ExtensionAPI): void {
       hints.push(hint ?? { detail: "auto", mimeType: image.mimeType });
     }
     nested.delete(event.toolCallId);
-    if (hints.some(hint => hint.detail === "ambiguous")) return { content: [{ type: "text", text: "Identical nested image bytes carry different detail hints; emit them in separate codemode calls." }], isError: true };
-    if (!hints.some(hint => hint.detail !== "auto")) return;
+    if (hints.some((hint) => hint.detail === "ambiguous"))
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Identical nested image bytes carry different detail hints; emit them in separate codemode calls.",
+          },
+        ],
+        isError: true,
+      };
+    if (!hints.some((hint) => hint.detail !== "auto")) return;
     const details = event.details && typeof event.details === "object" ? event.details : {};
     return { details: { ...details, imageHints: hints } };
   });
@@ -76,32 +85,45 @@ export function registerImageHints(pi: ExtensionAPI): void {
     const payload = event.payload as { input?: any[] };
     if (!Array.isArray(payload.input)) return;
     let changed = false;
-    const input = await Promise.all(payload.input.map(async item => {
-      if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !Array.isArray(item.output)) return item;
-      const hints = requestHints.get(item.call_id);
-      if (!hints) return item;
-      let ordinal = 0;
-      const output = await Promise.all(item.output.map(async (block: any) => {
-        if (block.type !== "input_image") return block;
-        const hint = hints[ordinal++];
-        if (!hint || hint.detail === "auto") return block;
-        changed = true;
-        const image = { ...block, detail: hint.detail };
-        try {
-        if (hint.original) {
-          if (!hint.archiveSession || !/^[a-zA-Z0-9_-]+$/.test(hint.archiveSession)) throw new Error("Invalid original image session");
-          const directory = blobs(ctx, hint.archiveSession), path = resolve(directory, hint.original);
-          if (relative(directory, path).startsWith("..") || !/^image-[a-f0-9]{64}$/.test(hint.original)) throw new Error("Invalid original image archive");
-          const data = (await readFile(path)).toString("base64");
-          if (hash(data) !== hint.digest) throw new Error("Original image archive changed");
-          image.image_url = `data:${hint.mimeType};base64,${data}`;
-        }
-        if (hint.originalData) image.image_url = `data:${hint.mimeType};base64,${hint.originalData}`;
-        return image;
-        } catch (error) { return { type: "input_text", text: `Original image unavailable: ${String(error)}. Restore its session blobs before requesting the image.` }; }
-      }));
-      return { ...item, output };
-    }));
+    const input = await Promise.all(
+      payload.input.map(async (item) => {
+        if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !Array.isArray(item.output))
+          return item;
+        const hints = requestHints.get(item.call_id);
+        if (!hints) return item;
+        let ordinal = 0;
+        const output = await Promise.all(
+          item.output.map(async (block: any) => {
+            if (block.type !== "input_image") return block;
+            const hint = hints[ordinal++];
+            if (!hint || hint.detail === "auto") return block;
+            changed = true;
+            const image = { ...block, detail: hint.detail };
+            try {
+              if (hint.original) {
+                if (!hint.archiveSession || !/^[a-zA-Z0-9_-]+$/.test(hint.archiveSession))
+                  throw new Error("Invalid original image session");
+                const directory = blobs(ctx, hint.archiveSession),
+                  path = resolve(directory, hint.original);
+                if (relative(directory, path).startsWith("..") || !/^image-[a-f0-9]{64}$/.test(hint.original))
+                  throw new Error("Invalid original image archive");
+                const data = (await readFile(path)).toString("base64");
+                if (hash(data) !== hint.digest) throw new Error("Original image archive changed");
+                image.image_url = `data:${hint.mimeType};base64,${data}`;
+              }
+              if (hint.originalData) image.image_url = `data:${hint.mimeType};base64,${hint.originalData}`;
+              return image;
+            } catch (error) {
+              return {
+                type: "input_text",
+                text: `Original image unavailable: ${String(error)}. Restore its session blobs before requesting the image.`,
+              };
+            }
+          }),
+        );
+        return { ...item, output };
+      }),
+    );
     return changed ? { ...payload, input } : undefined;
   });
 }

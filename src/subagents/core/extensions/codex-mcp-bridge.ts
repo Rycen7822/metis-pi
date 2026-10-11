@@ -157,8 +157,13 @@ export default async function (pi: ExtensionAPI) {
     args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Tool arguments object (call)" })),
   });
 
-  async function execute(_id: string, params: { action: "list" | "describe" | "call"; server?: string; tool?: string; args?: Record<string, unknown> },
-                         signal: AbortSignal | undefined, _onUpdate: unknown, ctx: { ui: { confirm: (title: string, message: string) => Promise<boolean> } }) {
+  async function execute(
+    _id: string,
+    params: { action: "list" | "describe" | "call"; server?: string; tool?: string; args?: Record<string, unknown> },
+    signal: AbortSignal | undefined,
+    _onUpdate: unknown,
+    ctx: { ui: { confirm: (title: string, message: string) => Promise<boolean> } },
+  ) {
     if (boot.error) {
       throw new Error(`Inherited MCP is unavailable in this child: ${boot.error}`);
     }
@@ -215,14 +220,23 @@ export default async function (pi: ExtensionAPI) {
         throw new Error(`Tool ${serverName}.${toolName} is not exposed to this child by the inherited policy`);
       }
       if (!toolMeta.inputSchema) {
-        throw new Error(`Tool ${serverName}.${toolName} has no usable inputSchema (missing or larger than ${MAX_SCHEMA_BYTES} bytes)`);
+        throw new Error(
+          `Tool ${serverName}.${toolName} has no usable inputSchema (missing or larger than ${MAX_SCHEMA_BYTES} bytes)`,
+        );
       }
       callableHeaderPlan(serverName, toolName, toolMeta);
-      return report({ server: serverName, tool: toolMeta.name, description: toolMeta.description, inputSchema: toolMeta.inputSchema });
+      return report({
+        server: serverName,
+        tool: toolMeta.name,
+        description: toolMeta.description,
+        inputSchema: toolMeta.inputSchema,
+      });
     }
     // action === "call": same effective policy, checked against current metadata right before execution
     if (!toolVisible(cfg, toolMeta)) {
-      throw new Error(`Tool ${serverName}.${toolName} is not available to this managed child (access=${access}; only explicitly read-only tools are exposed)`);
+      throw new Error(
+        `Tool ${serverName}.${toolName} is not available to this managed child (access=${access}; only explicitly read-only tools are exposed)`,
+      );
     }
     const headerPlan = callableHeaderPlan(serverName, toolName, toolMeta);
     if (needsConfirmation(cfg, toolMeta)) {
@@ -232,17 +246,22 @@ export default async function (pi: ExtensionAPI) {
         `Allow inherited MCP call ${serverName}.${toolName}? args: ${argsPreview}`,
       );
       if (!ok) {
-        return { content: [{ type: "text" as const, text: "Approval denied; the MCP tool was not called" }], details: { confirmed: false } };  // denial is not an error
+        return {
+          content: [{ type: "text" as const, text: "Approval denied; the MCP tool was not called" }],
+          details: { confirmed: false },
+        }; // denial is not an error
       }
     }
     if (signal?.aborted) throw new CancelledError(false);
     try {
-      const result = await conn.callTool(toolName, params.args ?? {}, cfg.tool_timeout_sec, signal, headerPlan) as { isError?: boolean } | undefined;
+      const result = (await conn.callTool(toolName, params.args ?? {}, cfg.tool_timeout_sec, signal, headerPlan)) as
+        { isError?: boolean } | undefined;
       const text = describeResult(result, cfg.tool_output_limits?.[toolName]);
-      if (result?.isError) throw new Error(`MCP tool reported failure: ${text.slice(0, 1000)}`);  // Pi sets isError on throw
+      if (result?.isError) throw new Error(`MCP tool reported failure: ${text.slice(0, 1000)}`); // Pi sets isError on throw
       return { content: [{ type: "text" as const, text }], details: { server: serverName, tool: toolName } };
     } catch (err) {
-      if ((err as Error).name === "AbortError" || (err as Error).name === "CancelledError") throw new CancelledError(true);
+      if ((err as Error).name === "AbortError" || (err as Error).name === "CancelledError")
+        throw new CancelledError(true);
       // no automatic retry: a tools/call may have had side effects
       throw new Error(`MCP call ${serverName}.${toolName} failed: ${(err as Error).message.slice(0, 500)}`);
     }

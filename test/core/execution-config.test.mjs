@@ -9,7 +9,11 @@ import { parseMetisConfig } from "../../src/metis-config.ts";
 test("execution is global only and section writes preserve other values", t => {
   const dir = mkdtempSync(join(tmpdir(), "metis-execution-config-")), cwd = join(dir, "project");
   const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
-  t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
   const global = executionConfigPath();
   mkdirSync(join(cwd, ".pi"), { recursive: true });
   writeFileSync(global, '[appearance]\nenabled=false\n[future]\nvalue=7\n[execution.tools]\ncustomRustBinariesDir="/global/bin"\nfuture="keep"\n');

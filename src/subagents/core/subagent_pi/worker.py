@@ -250,16 +250,28 @@ async def surface_report(w, timeout=SURFACE_TIMEOUT_SECONDS):
     or not-ok report fails the launch: a read-only worker is never handed a
     write-capable built-in that this plugin could not confirm it removed."""
     with contextlib.suppress(asyncio.TimeoutError):
-        await asyncio.wait_for(w.surface_ready.wait(),timeout)
+        await asyncio.wait_for(w.surface_ready.wait(), timeout)
     return w.surface
+
 
 def check_surface(report):
     if report is None:
-        raise AgentError('tool_surface_unavailable',
-            'Managed Pi never reported its built-in tool surface; check that the shipped extension loads (see the agent stderr log)')
-    if not report['ok']:
-        raise AgentError('tool_surface_unapplied',
-            f"Managed Pi did not apply the profile's built-in tool surface (applied={report.get('builtins','')} expected={report.get('expected','')})")
+        raise AgentError(
+            "tool_surface_unavailable",
+            "Managed Pi never reported its built-in tool surface; check that the shipped extension loads (see the agent stderr log)",
+        )
+    if not report["ok"]:
+        raise AgentError(
+            "tool_surface_unapplied",
+            (
+                "Managed Pi did not apply the profile's built-in tool surface (applied="
+                f"{report.get('builtins', '')}"
+                " expected="
+                f"{report.get('expected', '')}"
+                ")"
+            ),
+        )
+
 
 def managed_command(argv, sdk_path=None):
     """Locate the SDK beside the chosen Pi executable; never edit that install.
@@ -412,90 +424,136 @@ def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
     about the old writer, so only a positively dead leader with no surviving
     process group is gone, and only positively matched identities are live."""
     try:
-        record = json.loads((directory/'owner.json').read_text())
+        record = json.loads((directory / "owner.json").read_text())
     except FileNotFoundError:
         record = None
     except (ValueError, OSError):
-        record = {'spawning': True}
+        record = {"spawning": True}
     if record is None:
-        if not a.get('pid'):
-            if a.get('cleanup') != 'pending':
-                return {'status': 'gone', 'reason': 'No child was ever launched for this agent', 'record': None}
-            return {'status': 'unknown', 'reason': 'Owner record missing and the launch may have forked; manual process inspection required', 'record': None}
-        if live_identity(a['pid'],a.get('identity')) is False and not group_members(a['pid']):
-            return {'status': 'gone', 'reason': 'Verified leader is dead and no process group remains', 'record': None}
-        return {'status': 'unknown', 'reason': 'Owner record missing; manual process inspection required', 'record': None}
-    matches = {k: live_identity(record.get(k+'_pid'),record.get(k+'_identity')) for k in ('guard','pi')}
-    if record.get('spawning') or any(v is None for v in matches.values()):
-        return {'status': 'unknown', 'reason': 'Cannot safely prove orphan process identity', 'record': record}
+        if not a.get("pid"):
+            if a.get("cleanup") != "pending":
+                return {"status": "gone", "reason": "No child was ever launched for this agent", "record": None}
+            return {
+                "status": "unknown",
+                "reason": "Owner record missing and the launch may have forked; manual process inspection required",
+                "record": None,
+            }
+        if live_identity(a["pid"], a.get("identity")) is False and not group_members(a["pid"]):
+            return {"status": "gone", "reason": "Verified leader is dead and no process group remains", "record": None}
+        return {
+            "status": "unknown",
+            "reason": "Owner record missing; manual process inspection required",
+            "record": None,
+        }
+    matches = {k: live_identity(record.get(k + "_pid"), record.get(k + "_identity")) for k in ("guard", "pi")}
+    if record.get("spawning") or any(v is None for v in matches.values()):
+        return {"status": "unknown", "reason": "Cannot safely prove orphan process identity", "record": record}
     if any(matches.values()):
-        return {'status': 'live', 'reason': 'A verified session owner is still running', 'record': record}
-    if record.get('guard_pid') and group_members(record['guard_pid']):
-        return {'status': 'unknown', 'reason': 'A process group remains but its leaders cannot be verified; manual inspection required', 'record': record}
-    if not descendants_confirmed and record.get('descendants_cleanup','verified')!='verified':
-        return {'status': 'unknown', 'reason': 'Guard exited without confirming descendant cleanup; manual inspection required', 'record': record}
-    return {'status': 'gone', 'reason': 'Verified leaders are dead and no process group remains', 'record': record}
+        return {"status": "live", "reason": "A verified session owner is still running", "record": record}
+    if record.get("guard_pid") and group_members(record["guard_pid"]):
+        return {
+            "status": "unknown",
+            "reason": "A process group remains but its leaders cannot be verified; manual inspection required",
+            "record": record,
+        }
+    if not descendants_confirmed and record.get("descendants_cleanup", "verified") != "verified":
+        return {
+            "status": "unknown",
+            "reason": "Guard exited without confirming descendant cleanup; manual inspection required",
+            "record": record,
+        }
+    return {"status": "gone", "reason": "Verified leaders are dead and no process group remains", "record": record}
 
-async def stop_group(pgid,graceful_guard=False):
+
+async def stop_group(pgid, graceful_guard=False):
     """Signal and verify a group whose ownership the caller has already proved."""
-    for sig,wait in ((signal.SIGTERM,1.5),(signal.SIGKILL,1.0)):
-        if not group_members(pgid): break
+    for sig, wait in ((signal.SIGTERM, 1.5), (signal.SIGKILL, 1.0)):
+        if not group_members(pgid):
+            break
         # A current guard forwards TERM and reaps tools; avoid sending Pi a
         # duplicate signal while its once-only shutdown handler is disposing.
         with contextlib.suppress(ProcessLookupError):
-            if graceful_guard and sig==signal.SIGTERM: os.kill(pgid,signal.SIGCONT)
-            (os.kill if graceful_guard and sig==signal.SIGTERM else os.killpg)(pgid,sig)
-        until=time.monotonic()+wait
-        while group_members(pgid) and time.monotonic()<until: await asyncio.sleep(.025)
-    return 'unknown' if group_members(pgid) else 'verified'
+            if graceful_guard and sig == signal.SIGTERM:
+                os.kill(pgid, signal.SIGCONT)
+            (os.kill if graceful_guard and sig == signal.SIGTERM else os.killpg)(pgid, sig)
+        until = time.monotonic() + wait
+        while group_members(pgid) and time.monotonic() < until:
+            await asyncio.sleep(0.025)
+    return "unknown" if group_members(pgid) else "verified"
+
 
 async def stop_owned_process(directory, agent, proc):
     """A just-spawned guard still needs identity proof before group signalling."""
-    pgid=proc.pid
-    owned=live_identity(pgid,agent.get('identity')) is True
+    pgid = proc.pid
+    owned = live_identity(pgid, agent.get("identity")) is True
     if not owned:
-        owned=ownership(directory,agent)['status']=='live'
+        owned = ownership(directory, agent)["status"] == "live"
     if not owned and group_members(pgid):
-        return 'unknown',False
-    record=ownership(directory,agent)['record'] or {}
-    guarded=(record.get('guard_pid')==pgid and 'descendants_cleanup' in record
-        and live_identity(pgid,record.get('guard_identity')) is True)
-    cleanup=await stop_group(pgid,graceful_guard=guarded)
-    with contextlib.suppress(asyncio.TimeoutError): await asyncio.wait_for(proc.wait(),2)
-    if cleanup=='verified' and ownership(directory,agent)['status']!='gone': cleanup='unknown'
-    return cleanup,True
+        return "unknown", False
+    record = ownership(directory, agent)["record"] or {}
+    guarded = (
+        record.get("guard_pid") == pgid
+        and "descendants_cleanup" in record
+        and live_identity(pgid, record.get("guard_identity")) is True
+    )
+    cleanup = await stop_group(pgid, graceful_guard=guarded)
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(proc.wait(), 2)
+    if cleanup == "verified" and ownership(directory, agent)["status"] != "gone":
+        cleanup = "unknown"
+    return cleanup, True
+
 
 async def terminate(directory, w):
-    w.stopping=True
-    cleanup,attempted=await stop_owned_process(directory,w.agent,w.proc)
-    if attempted: w.closed=True
+    w.stopping = True
+    cleanup, attempted = await stop_owned_process(directory, w.agent, w.proc)
+    if attempted:
+        w.closed = True
     return cleanup
+
 
 def confirm_cleanup(directory, a, generation):
     """Record an operator's descendant inspection for exactly one dead owner."""
-    if generation != a['generation']:
-        raise AgentError('ownership_unknown','Cleanup confirmation belongs to a different generation; inspect the current owner')
-    fd=os.open(directory/'session.lock',os.O_RDWR|os.O_CREAT,0o600)
+    if generation != a["generation"]:
+        raise AgentError(
+            "ownership_unknown", "Cleanup confirmation belongs to a different generation; inspect the current owner"
+        )
+    fd = os.open(directory / "session.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError: raise AgentError('ownership_unknown','Session lease is still owned; cleanup cannot be confirmed')
-        verdict=ownership(directory,a,descendants_confirmed=True)
-        record=verdict['record']
-        if verdict['status']!='gone' or not record or record.get('generation')!=generation:
-            raise AgentError('ownership_unknown','Current owner must be identified and dead, with no original process group, before confirming inspected descendants')
-        atomic_json(directory/'owner.json',{**record,'descendants_cleanup':'verified',
-            'cleanup_confirmation':{'generation':generation,'by':'operator','at':time.time()}})
-    finally: os.close(fd)
-    return 'verified'
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise AgentError("ownership_unknown", "Session lease is still owned; cleanup cannot be confirmed")
+        verdict = ownership(directory, a, descendants_confirmed=True)
+        record = verdict["record"]
+        if verdict["status"] != "gone" or not record or record.get("generation") != generation:
+            raise AgentError(
+                "ownership_unknown",
+                "Current owner must be identified and dead, with no original process group, before confirming inspected descendants",
+            )
+        atomic_json(
+            directory / "owner.json",
+            {
+                **record,
+                "descendants_cleanup": "verified",
+                "cleanup_confirmation": {"generation": generation, "by": "operator", "at": time.time()},
+            },
+        )
+    finally:
+        os.close(fd)
+    return "verified"
+
 
 async def reap_orphan(directory, a):
-    verdict=ownership(directory,a)
-    if verdict['status']=='gone': return 'verified'
-    if verdict['status']=='unknown':
-        raise AgentError('ownership_unknown',verdict['reason'])
-    pgid=verdict['record'].get('guard_pid')
-    if not pgid: raise AgentError('ownership_unknown','No verified process group')
-    record=verdict['record']
-    guarded=('descendants_cleanup' in record and live_identity(pgid,record.get('guard_identity')) is True)
-    cleanup=await stop_group(pgid,graceful_guard=guarded)
-    return cleanup if ownership(directory,a)['status']=='gone' else 'unknown'
+    verdict = ownership(directory, a)
+    if verdict["status"] == "gone":
+        return "verified"
+    if verdict["status"] == "unknown":
+        raise AgentError("ownership_unknown", verdict["reason"])
+    pgid = verdict["record"].get("guard_pid")
+    if not pgid:
+        raise AgentError("ownership_unknown", "No verified process group")
+    record = verdict["record"]
+    guarded = "descendants_cleanup" in record and live_identity(pgid, record.get("guard_identity")) is True
+    cleanup = await stop_group(pgid, graceful_guard=guarded)
+    return cleanup if ownership(directory, a)["status"] == "gone" else "unknown"

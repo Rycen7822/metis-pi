@@ -56,7 +56,13 @@ export function createWindowsClipboard() {
       try { child.kill("SIGKILL"); } catch { /* Still wait for confirmed closure below. */ }
     }
   }
-  const failures: [EventEmitter, string][] = [[child, "error"], [child, "exit"], [child.stdin, "error"], [child.stdout, "error"], [child.stdout, "end"]];
+  const failures: [EventEmitter, string][] = [
+    [child, "error"],
+    [child, "exit"],
+    [child.stdin, "error"],
+    [child.stdout, "error"],
+    [child.stdout, "end"],
+  ];
   for (const [emitter, event] of failures) emitter.on(event, stop);
   const closed = new Promise<void>((resolve) => child.once("close", () => {
     stop();

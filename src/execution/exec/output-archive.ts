@@ -44,7 +44,15 @@ export class ExecOutputArchive {
 	}
 	info() {
 		if (this.failed && !this.path) return { fullOutputComplete: false, fullOutputError: "Output archive unavailable" };
-		return this.path ? { fullOutputPath: this.path, fullOutputBytes: this.bytes, fullOutputComplete: !this.failed, fullOutputAppendOnly: true, ...(this.failed ? { fullOutputError: "Output archive is incomplete" } : {}) } : undefined;
+		return this.path
+      ? {
+          fullOutputPath: this.path,
+          fullOutputBytes: this.bytes,
+          fullOutputComplete: !this.failed,
+          fullOutputAppendOnly: true,
+          ...(this.failed ? { fullOutputError: "Output archive is incomplete" } : {}),
+        }
+      : undefined;
 	}
 	close(): void {
 		if (this.fd !== undefined) { try { closeSync(this.fd); } catch { this.failed = true; } }

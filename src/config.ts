@@ -76,10 +76,13 @@ function validateConfig(raw: unknown, problems: string[]): AppearanceConfig {
   };
 
   const thinking = section("thinking");
-  if (thinking.streaming === "peek" || thinking.streaming === "full" || thinking.streaming === "collapsed") cfg.thinking.streaming = thinking.streaming;
-  else if (thinking.streaming !== undefined) problems.push(`thinking.streaming: unknown value ${JSON.stringify(thinking.streaming)} — using "peek"`);
+  if (thinking.streaming === "peek" || thinking.streaming === "full" || thinking.streaming === "collapsed")
+    cfg.thinking.streaming = thinking.streaming;
+  else if (thinking.streaming !== undefined)
+    problems.push(`thinking.streaming: unknown value ${JSON.stringify(thinking.streaming)} — using "peek"`);
   if (thinking.completed === "collapsed" || thinking.completed === "full") cfg.thinking.completed = thinking.completed;
-  else if (thinking.completed !== undefined) problems.push(`thinking.completed: unknown value — using "${cfg.thinking.completed}"`);
+  else if (thinking.completed !== undefined)
+    problems.push(`thinking.completed: unknown value — using "${cfg.thinking.completed}"`);
   booleans(cfg.thinking, thinking, "thinking");
   cfg.thinking.peekLines = integer(thinking.peekLines, cfg.thinking.peekLines, "thinking.peekLines", 1, 40, true);
 
@@ -115,7 +118,14 @@ function validateConfig(raw: unknown, problems: string[]): AppearanceConfig {
   booleans(cfg.composer, section("composer"), "composer");
   const working = section("working");
   booleans(cfg.working, working, "working");
-  cfg.working.animationIntervalMs = integer(working.animationIntervalMs, cfg.working.animationIntervalMs, "working.animationIntervalMs", 32, 1000, true);
+  cfg.working.animationIntervalMs = integer(
+    working.animationIntervalMs,
+    cfg.working.animationIntervalMs,
+    "working.animationIntervalMs",
+    32,
+    1000,
+    true,
+  );
 
   booleans(cfg.footer, section("footer"), "footer");
   booleans(cfg.summary, section("summary"), "summary");

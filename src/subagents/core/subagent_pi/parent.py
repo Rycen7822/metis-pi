@@ -15,62 +15,90 @@ import uuid
 
 from .common import AgentError, dumps, group_members, read_frame
 
-QUEUE_TIMEOUT_SECONDS=30
-RECALL_TIMEOUT_SECONDS=10
-WAIT_HANDOFF_SECONDS=8  # Fits the existing wait IPC budget (requested wait + 10s).
+QUEUE_TIMEOUT_SECONDS = 30
+RECALL_TIMEOUT_SECONDS = 10
+WAIT_HANDOFF_SECONDS = 8  # Fits the existing wait IPC budget (requested wait + 10s).
 
 
 def capture(environ, thread_id):
     """Only the trusted adapter supplies identity; never a model tool argument."""
-    if not thread_id or environ.get('PI_AGENTS_MANAGED_CHILD'): return None
-    try: thread_id=str(uuid.UUID(thread_id))
-    except (ValueError,TypeError,AttributeError):
-        raise AgentError('invalid_parent','Codex supplied an invalid parent thread ID')
-    home=Path(environ.get('HOME') or Path.home()).expanduser().resolve()
-    codex_home=Path(environ.get('CODEX_HOME') or home/'.codex').expanduser().resolve()
-    executable=shutil.which('codex',path=environ.get('PATH',''))
-    return {'thread_id':thread_id,'codex_home':str(codex_home),'command':executable,
-            'home':str(home),'path':environ.get('PATH','')}
+    if not thread_id or environ.get("PI_AGENTS_MANAGED_CHILD"):
+        return None
+    try:
+        thread_id = str(uuid.UUID(thread_id))
+    except (ValueError, TypeError, AttributeError):
+        raise AgentError("invalid_parent", "Codex supplied an invalid parent thread ID")
+    home = Path(environ.get("HOME") or Path.home()).expanduser().resolve()
+    codex_home = Path(environ.get("CODEX_HOME") or home / ".codex").expanduser().resolve()
+    executable = shutil.which("codex", path=environ.get("PATH", ""))
+    return {
+        "thread_id": thread_id,
+        "codex_home": str(codex_home),
+        "command": executable,
+        "home": str(home),
+        "path": environ.get("PATH", ""),
+    }
 
 
-def bind(store,sid,source,allow_new=True):
+def bind(store, sid, source, allow_new=True):
     from . import pi_parent
-    parent=source.get('parent') if isinstance(source,dict) else None
-    if parent is None: return
+
+    parent = source.get("parent") if isinstance(source, dict) else None
+    if parent is None:
+        return
     if pi_parent.is_pi(parent):
-        return pi_parent.bind(store,sid,source,allow_new)
-    if not isinstance(parent,dict) or set(parent)!={'thread_id','codex_home','command','home','path'}:
-        raise AgentError('invalid_parent','Invalid trusted parent binding')
-    if any(not isinstance(parent[k],str) or len(parent[k])>16384 for k in ('thread_id','codex_home','home','path')):
-        raise AgentError('invalid_parent','Invalid parent binding fields')
-    try: uuid.UUID(parent['thread_id'])
-    except ValueError: raise AgentError('invalid_parent','Invalid parent thread ID')
-    if any(not Path(parent[k]).is_absolute() for k in ('codex_home','home')) or (parent['command'] is not None and (not isinstance(parent['command'],str) or not Path(parent['command']).is_absolute())):
-        raise AgentError('invalid_parent','Parent paths must be absolute')
-    previous=store.scope(sid)['parent']
+        return pi_parent.bind(store, sid, source, allow_new)
+    if not isinstance(parent, dict) or set(parent) != {"thread_id", "codex_home", "command", "home", "path"}:
+        raise AgentError("invalid_parent", "Invalid trusted parent binding")
+    if any(
+        not isinstance(parent[k], str) or len(parent[k]) > 16384 for k in ("thread_id", "codex_home", "home", "path")
+    ):
+        raise AgentError("invalid_parent", "Invalid parent binding fields")
+    try:
+        uuid.UUID(parent["thread_id"])
+    except ValueError:
+        raise AgentError("invalid_parent", "Invalid parent thread ID")
+    if any(not Path(parent[k]).is_absolute() for k in ("codex_home", "home")) or (
+        parent["command"] is not None
+        and (not isinstance(parent["command"], str) or not Path(parent["command"]).is_absolute())
+    ):
+        raise AgentError("invalid_parent", "Parent paths must be absolute")
+    previous = store.scope(sid)["parent"]
     if previous:
-        old=json.loads(previous)
-        if pi_parent.is_pi(old) or (old['thread_id'],old['codex_home']) != (parent['thread_id'],parent['codex_home']):
-            raise AgentError('parent_conflict','Scope belongs to a different parent; open a new scope. Existing results remain readable with explicit scope.')
+        old = json.loads(previous)
+        if pi_parent.is_pi(old) or (old["thread_id"], old["codex_home"]) != (parent["thread_id"], parent["codex_home"]):
+            raise AgentError(
+                "parent_conflict",
+                "Scope belongs to a different parent; open a new scope. Existing results remain readable with explicit scope.",
+            )
         return  # Already-bound pending work must not silently change destination/executable.
     if allow_new:
-        store.execute('UPDATE scopes SET parent=? WHERE id=?',(dumps(parent),sid))
+        store.execute("UPDATE scopes SET parent=? WHERE id=?", (dumps(parent), sid))
 
 
-def status(store,sid,compact=False):
+def status(store, sid, compact=False):
     from . import pi_parent
-    raw=store.scope(sid)['parent']
+
+    raw = store.scope(sid)["parent"]
     if raw and pi_parent.is_pi(json.loads(raw)):
-        return pi_parent.status(store,sid,compact)
+        return pi_parent.status(store, sid, compact)
     if compact:
-        result={'enabled':bool(raw and json.loads(raw)['command'])}
-        failed=store.one("SELECT COUNT(*) n FROM parent_notifications WHERE scope=? AND state IN ('unknown','recall_failed')",(sid,))['n']
-        if failed: result['failed']=failed
+        result = {"enabled": bool(raw and json.loads(raw)["command"])}
+        failed = store.one(
+            "SELECT COUNT(*) n FROM parent_notifications WHERE scope=? AND state IN ('unknown','recall_failed')", (sid,)
+        )["n"]
+        if failed:
+            result["failed"] = failed
         return result
-    if not raw: return {'enabled':False,'reason':'no_parent_identity'}
-    parent=json.loads(raw)
-    return {'enabled':bool(parent['command']),'thread_id':parent['thread_id'],'transport':'codex_queue',
-            'recent':store.recent_notifications(sid)}
+    if not raw:
+        return {"enabled": False, "reason": "no_parent_identity"}
+    parent = json.loads(raw)
+    return {
+        "enabled": bool(parent["command"]),
+        "thread_id": parent["thread_id"],
+        "transport": "codex_queue",
+        "recent": store.recent_notifications(sid),
+    }
 
 
 class ParentNotifications:
@@ -103,37 +131,58 @@ class ParentNotifications:
 
     def cover_wait(self, token):
         """Only first-event waits, or an already prepared response, take attention."""
-        sid,ids,covering=self.waits[token]
-        if covering: return
-        self.waits[token]=(sid,ids,True)
+        sid, ids, covering = self.waits[token]
+        if covering:
+            return
+        self.waits[token] = (sid, ids, True)
         for rid in ids or ():
-            self.store.execute("UPDATE parent_notifications SET state='recalling',error=NULL WHERE scope=? AND run_id=? AND state='recall_failed' AND queued_id IS NOT NULL",
-                               (sid,rid))
+            self.store.execute(
+                (
+                    "UPDATE parent_notifications SET state='recalling',error=NULL WHERE scope=? AND "
+                    "run_id=? AND state='recall_failed' AND queued_id IS NOT NULL"
+                ),
+                (sid, rid),
+            )
 
     async def settle_delivery(self, token, op, response):
         """A read cannot deliver an event while its earlier wakeup can arrive."""
         if token in self.pi.waits:
-            return self.pi.prepare_delivery(token,op,response)
-        reservation=self.waits.get(token)
-        if not reservation: return
-        sid,ids,_=reservation
+            return self.pi.prepare_delivery(token, op, response)
+        reservation = self.waits.get(token)
+        if not reservation:
+            return
+        sid, ids, _ = reservation
         from .views import delivered_events
-        events=[e for e in delivered_events(op,response) if ids is None or e[0] in ids]
-        if ids is None: self.waits[token]=(sid,frozenset(e[0] for e in events),False)
+
+        events = [e for e in delivered_events(op, response) if ids is None or e[0] in ids]
+        if ids is None:
+            self.waits[token] = (sid, frozenset(e[0] for e in events), False)
         self.cover_wait(token)
-        until=asyncio.get_running_loop().time()+WAIT_HANDOFF_SECONDS
+        until = asyncio.get_running_loop().time() + WAIT_HANDOFF_SECONDS
         while True:
             self.schedule()
-            rows=[row for rid,kind,ui_id in events for row in self.store.all(
-                'SELECT state FROM parent_notifications WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?',
-                (sid,rid,kind,ui_id))]
-            if any(r['state'] in ('unknown','recall_failed') for r in rows):
-                raise AgentError('notification_handoff_failed','Result was not delivered: its earlier parent notification could not be settled. Inspect parent_notifications before retrying.')
-            if not any(r['state'] in ('sending','queued','recalling') for r in rows): return
-            remaining=until-asyncio.get_running_loop().time()
-            if remaining<=0 or not self.deliveries:
-                raise AgentError('notification_handoff_pending','Result was not delivered: an earlier parent notification is still being settled. Retry the read; the run was not cancelled.')
-            await asyncio.wait(tuple(self.deliveries.values()),timeout=remaining,return_when=asyncio.FIRST_COMPLETED)
+            rows = [
+                row
+                for rid, kind, ui_id in events
+                for row in self.store.all(
+                    "SELECT state FROM parent_notifications WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?",
+                    (sid, rid, kind, ui_id),
+                )
+            ]
+            if any(r["state"] in ("unknown", "recall_failed") for r in rows):
+                raise AgentError(
+                    "notification_handoff_failed",
+                    "Result was not delivered: its earlier parent notification could not be settled. Inspect parent_notifications before retrying.",
+                )
+            if not any(r["state"] in ("sending", "queued", "recalling") for r in rows):
+                return
+            remaining = until - asyncio.get_running_loop().time()
+            if remaining <= 0 or not self.deliveries:
+                raise AgentError(
+                    "notification_handoff_pending",
+                    "Result was not delivered: an earlier parent notification is still being settled. Retry the read; the run was not cancelled.",
+                )
+            await asyncio.wait(tuple(self.deliveries.values()), timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
 
     def release_delivery(self, token, op, response=None):
         if token in self.pi.waits:
@@ -150,57 +199,96 @@ class ParentNotifications:
     def observe(self, sid, rid, kind, ui_id=None):
         # Preserve observation even while enqueue is awaiting its receipt. The
         # sender must not overwrite this intent when it publishes queued_id.
-        self.store.execute("UPDATE parent_notifications SET handled=1,state=CASE WHEN state='pending' THEN 'observed' ELSE state END WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?",
-                           (sid,rid,kind,ui_id))
+        self.store.execute(
+            (
+                "UPDATE parent_notifications SET handled=1,state=CASE WHEN state='pending' THEN "
+                "'observed' ELSE state END WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?"
+            ),
+            (sid, rid, kind, ui_id),
+        )
 
     def schedule(self):
         """At most four independent parent queues; no sender blocks another parent."""
-        if self.closing or len(self.deliveries)>=4: return
-        priority="CASE WHEN n.state IN ('queued','recalling') THEN 0 WHEN n.kind='question' THEN 1 ELSE 2 END"
-        cursor=None
-        while len(self.deliveries)<4:
-            busy=tuple(self.deliveries)
-            blocked=''.join(" AND NOT (json_extract(s.parent,'$.codex_home')=? AND json_extract(s.parent,'$.thread_id')=?)" for _ in busy)
-            busy_args=[value for home,thread in busy for value in (home,thread)]
-            after=f' AND ({priority},n.created,n.id)>(?,?,?)' if cursor else ''
-            args=busy_args+list(cursor or ())
-            notices=self.store.all(
-                f'SELECT n.*,s.parent,r.agent_id,r.state AS run_state,{priority} AS priority '
-                'FROM parent_notifications n JOIN scopes s ON s.id=n.scope '
-                f"JOIN runs r ON r.id=n.run_id AND r.scope=n.scope WHERE s.parent IS NOT NULL AND COALESCE(json_extract(s.parent,'$.kind'),'codex')!='pi' AND n.state IN ('pending','queued','recalling'){blocked}{after} "
-                f'ORDER BY {priority},n.created,n.id LIMIT 64',args)
-            if not notices: break
+        if self.closing or len(self.deliveries) >= 4:
+            return
+        priority = "CASE WHEN n.state IN ('queued','recalling') THEN 0 WHEN n.kind='question' THEN 1 ELSE 2 END"
+        cursor = None
+        while len(self.deliveries) < 4:
+            busy = tuple(self.deliveries)
+            blocked = "".join(
+                " AND NOT (json_extract(s.parent,'$.codex_home')=? AND json_extract(s.parent,'$.thread_id')=?)"
+                for _ in busy
+            )
+            busy_args = [value for home, thread in busy for value in (home, thread)]
+            after = f" AND ({priority},n.created,n.id)>(?,?,?)" if cursor else ""
+            args = busy_args + list(cursor or ())
+            notices = self.store.all(
+                (
+                    "SELECT n.*,s.parent,r.agent_id,r.state AS run_state,"
+                    f"{priority}"
+                    " AS priority FROM parent_notifications n JOIN scopes s ON s.id=n.scope JOIN "
+                    "runs r ON r.id=n.run_id AND r.scope=n.scope WHERE s.parent IS NOT NULL AND "
+                    "COALESCE(json_extract(s.parent,'$.kind'),'codex')!='pi' AND n.state IN "
+                    "('pending','queued','recalling')"
+                    f"{blocked}"
+                    f"{after}"
+                    " ORDER BY "
+                    f"{priority}"
+                    ",n.created,n.id LIMIT 64"
+                ),
+                args,
+            )
+            if not notices:
+                break
             for notice in notices:
-                cursor=(notice['priority'],notice['created'],notice['id'])
-                run={'id':notice['run_id'],'agent_id':notice['agent_id'],
-                     'state':notice['run_state']}
-                worker=self.worker_for(run['agent_id'])
-                relevant=not notice['handled'] and (notice['kind']=='terminal' or bool(worker and worker.run_id==run['id'] and notice['ui_id'] in worker.ui))
-                waiting=any(covering and sid==notice['scope'] and (ids is None or notice['run_id'] in ids) for sid,ids,covering in self.waits.values())
-                recalling=notice['state'] in ('queued','recalling')
-                if notice['state']=='queued' and relevant and not waiting: continue
+                cursor = (notice["priority"], notice["created"], notice["id"])
+                run = {"id": notice["run_id"], "agent_id": notice["agent_id"], "state": notice["run_state"]}
+                worker = self.worker_for(run["agent_id"])
+                relevant = not notice["handled"] and (
+                    notice["kind"] == "terminal"
+                    or bool(worker and worker.run_id == run["id"] and notice["ui_id"] in worker.ui)
+                )
+                waiting = any(
+                    covering and sid == notice["scope"] and (ids is None or notice["run_id"] in ids)
+                    for sid, ids, covering in self.waits.values()
+                )
+                recalling = notice["state"] in ("queued", "recalling")
+                if notice["state"] == "queued" and relevant and not waiting:
+                    continue
                 if not recalling:
                     if not relevant:
-                        self.store.execute("UPDATE parent_notifications SET state='superseded' WHERE id=?",(notice['id'],)); continue
-                    if waiting: continue
-                parent=json.loads(notice['parent'])
-                key=(parent['codex_home'],parent['thread_id'])
-                if key in self.deliveries: continue
+                        self.store.execute(
+                            "UPDATE parent_notifications SET state='superseded' WHERE id=?", (notice["id"],)
+                        )
+                        continue
+                    if waiting:
+                        continue
+                parent = json.loads(notice["parent"])
+                key = (parent["codex_home"], parent["thread_id"])
+                if key in self.deliveries:
+                    continue
                 # Claim before scheduling; subsequent notify() calls cannot send twice.
                 if recalling:
                     # A wait reservation is not consumption. Failed output must
                     # leave its event eligible for a fresh automatic wakeup.
-                    self.store.execute("UPDATE parent_notifications SET state='recalling',handled=? WHERE id=?",(int(not relevant),notice['id']))
-                    task=self.spawn_task(self.recall(notice,parent))
+                    self.store.execute(
+                        "UPDATE parent_notifications SET state='recalling',handled=? WHERE id=?",
+                        (int(not relevant), notice["id"]),
+                    )
+                    task = self.spawn_task(self.recall(notice, parent))
                 else:
-                    self.store.execute("UPDATE parent_notifications SET state='sending' WHERE id=?",(notice['id'],))
-                    task=self.spawn_task(self.deliver(notice,run,parent))
-                self.deliveries[key]=task
-                def finished(_,key=key):
-                    self.deliveries.pop(key,None)
-                    if not self.closing: self.schedule()
+                    self.store.execute("UPDATE parent_notifications SET state='sending' WHERE id=?", (notice["id"],))
+                    task = self.spawn_task(self.deliver(notice, run, parent))
+                self.deliveries[key] = task
+
+                def finished(_, key=key):
+                    self.deliveries.pop(key, None)
+                    if not self.closing:
+                        self.schedule()
+
                 task.add_done_callback(finished)
-                if len(self.deliveries)>=4: break
+                if len(self.deliveries) >= 4:
+                    break
 
     async def recall(self, notice, parent):
         # Delete only the exact submission acknowledged by Codex, never search by

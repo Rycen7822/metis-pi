@@ -36,7 +36,10 @@ export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: 
         const state = waiting ? "waiting for input" : agent.state;
         const stats: string[] = [];
         if (agent.tool_uses) stats.push(`${agent.tool_uses} tool use${agent.tool_uses === 1 ? "" : "s"}`);
-        if (agent.total_tokens) stats.push(`${agent.total_tokens >= 1000 ? `${(agent.total_tokens / 1000).toFixed(1)}k` : agent.total_tokens} tokens`);
+        if (agent.total_tokens)
+          stats.push(
+            `${agent.total_tokens >= 1000 ? `${(agent.total_tokens / 1000).toFixed(1)}k` : agent.total_tokens} tokens`,
+          );
         if (agent.started) {
           const seconds = Math.max(0, Math.floor(now / 1000 - agent.started));
           stats.push(seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`);

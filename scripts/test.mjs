@@ -37,6 +37,10 @@ if (selected.length === 0) {
   console.error(`No tests selected for ${suite}`);
   process.exit(2);
 }
-const child = spawnSync(process.execPath, ["--experimental-strip-types", "--test", ...selected.map((file) => join(fileURLToPath(root), file))], { stdio: "inherit" });
+const child = spawnSync(
+  process.execPath,
+  ["--experimental-strip-types", "--test", ...selected.map((file) => join(fileURLToPath(root), file))],
+  { stdio: "inherit" },
+);
 if (child.error) console.error(child.error);
 process.exitCode = child.status ?? 1;

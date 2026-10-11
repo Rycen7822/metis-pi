@@ -168,7 +168,12 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
 
   function syncTimer(active: boolean): void {
     const anim = input.getAnimation();
-    const wants = active && anim.enabled && (input.colorKind === "truecolor" || input.colorKind === "ansi256") && anim.intervalMs >= 32 && anim.intervalMs <= 1000;
+    const wants =
+      active &&
+      anim.enabled &&
+      (input.colorKind === "truecolor" || input.colorKind === "ansi256") &&
+      anim.intervalMs >= 32 &&
+      anim.intervalMs <= 1000;
     if (wants && !timerActive) {
       timerActive = true;
       stopTimer = schedule(() => {

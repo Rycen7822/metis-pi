@@ -142,7 +142,16 @@ def atomic_json(path: Path, value):
     atomic_write(path, dumps(value).encode())
 
 def state_home() -> Path:
-    return Path(os.environ.get("PI_AGENTS_HOME", str(Path(os.environ.get("XDG_STATE_HOME", Path.home()/".local/state"))/"subagent-pi"))).expanduser().resolve()
+    return (
+        Path(
+            os.environ.get(
+                "PI_AGENTS_HOME",
+                str(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "subagent-pi"),
+            )
+        )
+        .expanduser()
+        .resolve()
+    )
 
 def socket_path(home: Path) -> Path:
     """Use a short private runtime path; AF_UNIX addresses have a small limit."""

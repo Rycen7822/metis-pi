@@ -118,7 +118,8 @@ export function renderWritePreview(
     return [stageRow];
   }
 
-  // Walk BACKWARDS wrapping until the budget is filled: one physical row per logical line is only a lower bound — a single long line can consume the whole budget.
+  // Walk BACKWARDS wrapping until the budget is filled. One physical row per
+  // logical line is only a lower bound; a single long line can consume the whole budget.
   const wrapOne = (text: string): string[] => {
     const wrapped = layout.wrap(text, bodyWidth);
     return wrapped.length ? wrapped : [""];
@@ -155,7 +156,9 @@ export function renderWritePreview(
   }
   const visibleRows = expanded ? rows : rows.slice(-bodyBudget);
   // Only the window's first row lost its predecessor; soft joins among kept rows stay valid.
-  const visibleCopy = expanded ? copyRows : copyRows.slice(-bodyBudget).map((row, index) => (index === 0 ? { ...row, breakBefore: "hard" as const } : row));
+  const visibleCopy = expanded
+    ? copyRows
+    : copyRows.slice(-bodyBudget).map((row, index) => (index === 0 ? { ...row, breakBefore: "hard" as const } : row));
 
   const out: string[] = [stageRow, ...visibleRows];
   copy?.push({ spans: [{ colStart: 0, colEnd: width, kind: "decoration" }], breakBefore: "hard" });

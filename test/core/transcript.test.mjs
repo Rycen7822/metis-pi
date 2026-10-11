@@ -32,7 +32,11 @@ test("message identity and thinking controls survive finalization, duplicate end
   state.apply({ type: "message_start", message: source }, source);
   const nextKey = state.identityOf(source);
   assert.notEqual(nextKey, key, "an object reused after a session reset gets a fresh identity");
-  assert.notEqual(state.thinkingViewControl(nextKey, 0, createThinkingViewControl), control, "a new session does not reuse a discarded thinking control");
+  assert.notEqual(
+    state.thinkingViewControl(nextKey, 0, createThinkingViewControl),
+    control,
+    "a new session does not reuse a discarded thinking control",
+  );
 });
 
 test("renderedThinkingRuns: semantic typing, empty runs, barriers and boundaries", () => {

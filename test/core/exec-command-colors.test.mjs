@@ -28,6 +28,9 @@ test("the component hook receives the original multiline command; exploration by
   assert.equal(rendered, component);
   const delegated = { ...colored, renderCommandCall() { assert.fail("exploration must keep its native grouping"); } };
   for (const expanded of [false, true]) {
-    assert.equal(renderExecCommandCall("cat example.ts", "done", delegated, expanded), renderExecCommandCall("cat example.ts", "done", colored, expanded));
+    assert.equal(
+      renderExecCommandCall("cat example.ts", "done", delegated, expanded),
+      renderExecCommandCall("cat example.ts", "done", colored, expanded),
+    );
   }
 });

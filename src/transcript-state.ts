@@ -95,7 +95,11 @@ export function normalizeMessageBlocks(blocks: unknown): MessageBlock[] {
   if (!Array.isArray(blocks)) return [];
   return blocks.map((block) => {
     const b = (block ?? {}) as Record<string, unknown>;
-    return { type: String(b.type ?? ""), text: typeof b.text === "string" ? b.text : undefined, thinking: typeof b.thinking === "string" ? b.thinking : undefined };
+    return {
+      type: String(b.type ?? ""),
+      text: typeof b.text === "string" ? b.text : undefined,
+      thinking: typeof b.thinking === "string" ? b.thinking : undefined,
+    };
   });
 }
 
@@ -396,7 +400,13 @@ export class TranscriptState {
     if (sourceObject) this.identityByObject.set(sourceObject, key);
     let plan = this.messagePlans.get(key);
     if (!plan) {
-      plan = { key, finalized: false, separatorBefore: this.lastNode === "exploration" || this.lastNode === "other-tool", blockCount: 0, thinkingRuns: [] };
+      plan = {
+        key,
+        finalized: false,
+        separatorBefore: this.lastNode === "exploration" || this.lastNode === "other-tool",
+        blockCount: 0,
+        thinkingRuns: [],
+      };
       this.messagePlans.set(key, plan);
       this.openMessageKey = key;
     }

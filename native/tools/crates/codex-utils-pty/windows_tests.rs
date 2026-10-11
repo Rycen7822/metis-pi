@@ -2,9 +2,9 @@ use super::collect_output_until_exit;
 use super::combine_spawned_output;
 use super::find_python;
 use super::wait_for_output_contains;
-use crate::TerminalSize;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
+use crate::TerminalSize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -20,16 +20,14 @@ struct WindowsShell {
 }
 
 fn find_powershell() -> Option<String> {
-    ["pwsh.exe", "powershell.exe"]
-        .into_iter()
-        .find_map(|candidate| {
-            std::process::Command::new(candidate)
-                .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
-                .status()
-                .ok()
-                .filter(std::process::ExitStatus::success)
-                .map(|_| candidate.to_string())
-        })
+    ["pwsh.exe", "powershell.exe"].into_iter().find_map(|candidate| {
+        std::process::Command::new(candidate)
+            .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
+            .status()
+            .ok()
+            .filter(std::process::ExitStatus::success)
+            .map(|_| candidate.to_string())
+    })
 }
 
 fn utf8_hex(value: &str) -> String {
@@ -74,7 +72,10 @@ async fn assert_terminate_kills_descendant(
     // Exercise descendants created after the best-effort pipe assignment,
     // without making the test depend on winning the intentionally accepted race.
     let code = format!(
-        "import subprocess,sys,time; time.sleep(0.5); code=bytes.fromhex('{}').decode(); subprocess.Popen([sys.executable,'-u','-c',code]); time.sleep(60)",
+        concat!(
+            "import subprocess,sys,time; time.sleep(0.5); code=bytes.fromhex('{}').decode(); ",
+            "subprocess.Popen([sys.executable,'-u','-c',code]); time.sleep(60)",
+        ),
         utf8_hex(&child_code)
     );
     let args = vec!["-u".to_string(), "-c".to_string(), code];
@@ -96,10 +97,7 @@ async fn assert_terminate_kills_descendant(
     wait_for_output_contains(&mut output_rx, READY_MARKER, /*timeout_ms*/ 10_000).await?;
     session.request_terminate();
     let (_, exit_code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
-    assert_ne!(
-        exit_code, -1,
-        "{backend} root did not exit after termination"
-    );
+    assert_ne!(exit_code, -1, "{backend} root did not exit after termination");
     tokio::time::sleep(Duration::from_secs(2)).await;
     let survived = marker.exists();
     if survived {
@@ -124,12 +122,24 @@ async fn assert_normal_exit_preserves_descendant(
     let ready_marker = marker_base.with_extension("ready");
     let survival_marker = marker_base.with_extension("survived");
     let child_code = format!(
-        "import pathlib,time; pathlib.Path(bytes.fromhex('{}').decode()).write_text('ready'); time.sleep(1); pathlib.Path(bytes.fromhex('{}').decode()).write_text('survived')",
+        concat!(
+            "import pathlib,time; pathlib.Path(bytes.fromhex('{}').decode()).write_text('ready'); ",
+            "time.sleep(1); pathlib.Path(bytes.fromhex('{}').decode()).write_text('survived')",
+        ),
         utf8_hex(&ready_marker.to_string_lossy()),
         utf8_hex(&survival_marker.to_string_lossy())
     );
     let code = format!(
-        "import pathlib,subprocess,sys,time; code=bytes.fromhex('{}').decode(); ready=pathlib.Path(bytes.fromhex('{}').decode()); subprocess.Popen([sys.executable,'-u','-c',code],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP); deadline=time.time()+10\nwhile not ready.exists() and time.time()<deadline: time.sleep(.05)\nsys.exit(0 if ready.exists() else 2)",
+        concat!(
+            "import pathlib,subprocess,sys,time; code=bytes.fromhex('{}').decode(); ",
+            "ready=pathlib.Path(bytes.fromhex('{}').decode()); ",
+            "subprocess.Popen([sys.executable,'-u','-c',code],",
+            "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,",
+            "creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP); ",
+            "deadline=time.time()+10\n",
+            "while not ready.exists() and time.time()<deadline: time.sleep(.05)\n",
+            "sys.exit(0 if ready.exists() else 2)",
+        ),
         utf8_hex(&child_code),
         utf8_hex(&ready_marker.to_string_lossy())
     );
@@ -161,8 +171,7 @@ async fn assert_normal_exit_preserves_descendant(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminate_kills_descendants_for_best_effort_pipe_and_atomic_conpty() -> anyhow::Result<()>
-{
+async fn terminate_kills_descendants_for_best_effort_pipe_and_atomic_conpty() -> anyhow::Result<()> {
     let Some(python) = find_python() else {
         eprintln!("python not found; skipping Windows process-tree termination test");
         return Ok(());
@@ -223,26 +232,18 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         .await?;
         let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
         let writer = session.writer_sender();
-        writer
-            .send(format!("{}\n", shell.child_command).into_bytes())
-            .await?;
+        writer.send(format!("{}\n", shell.child_command).into_bytes()).await?;
         wait_for_output_contains(&mut output_rx, READY_MARKER, /*timeout_ms*/ 10_000)
             .await
             .map_err(|err| anyhow::anyhow!("{} child did not become ready: {err}", shell.name))?;
 
-        writer
-            .send(format!("{expected}X\u{8}\n").into_bytes())
-            .await?;
-        let mut output =
-            wait_for_output_contains(&mut output_rx, &expected_marker, /*timeout_ms*/ 10_000)
-                .await
-                .map_err(|err| {
-                    anyhow::anyhow!("{} child received incorrect input: {err}", shell.name)
-                })?;
+        writer.send(format!("{expected}X\u{8}\n").into_bytes()).await?;
+        let mut output = wait_for_output_contains(&mut output_rx, &expected_marker, /*timeout_ms*/ 10_000)
+            .await
+            .map_err(|err| anyhow::anyhow!("{} child received incorrect input: {err}", shell.name))?;
 
         writer.send(b"exit 0\n".to_vec()).await?;
-        let (remaining, exit_code) =
-            collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
+        let (remaining, exit_code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
         output.extend_from_slice(&remaining);
 
         assert_eq!(
@@ -282,16 +283,10 @@ async fn conpty_ctrl_c_interrupts_powershell_foreground_child() -> anyhow::Resul
     writer.send(vec![0x03]).await?;
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     writer.send(b"cmd.exe /D /C ver\n".to_vec()).await?;
-    let mut output = wait_for_output_contains(
-        &mut output_rx,
-        "Microsoft Windows",
-        /*timeout_ms*/ 10_000,
-    )
-    .await?;
+    let mut output = wait_for_output_contains(&mut output_rx, "Microsoft Windows", /*timeout_ms*/ 10_000).await?;
 
     writer.send(b"exit 0\n".to_vec()).await?;
-    let (remaining, exit_code) =
-        collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
+    let (remaining, exit_code) = collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
     output.extend_from_slice(&remaining);
     assert_eq!(
         exit_code,

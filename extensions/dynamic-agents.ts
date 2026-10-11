@@ -55,36 +55,70 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type !== "custom" || entry.customType !== DYNAMIC_AGENTS_STATE) continue;
       const data = entry.data as { sources?: unknown };
-      if (Array.isArray(data?.sources)) for (const path of data.sources) if (typeof path === "string") sources.add(path);
+      if (Array.isArray(data?.sources))
+        for (const path of data.sources) if (typeof path === "string") sources.add(path);
     }
-    snapshot = undefined; lastOptions = undefined; dirty = true; preparing = false;
+    snapshot = undefined;
+    lastOptions = undefined;
+    dirty = true;
+    preparing = false;
     managed = configured() || sources.size > globalPaths(getAgentDir()).length;
   };
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
-  pi.on("before_agent_start", (event, ctx) => { prepare(event.systemPromptOptions, ctx); });
+  pi.on("before_agent_start", (event, ctx) => {
+    prepare(event.systemPromptOptions, ctx);
+  });
   pi.on("agent_start", (_event, ctx) => {
     preparing = false;
     if (!snapshot || !managed) return;
     const { policy } = snapshot;
-    const notice = policy.error ? `Dynamic agents: ${policy.error}; using native global instructions.`
+    const notice = policy.error
+      ? `Dynamic agents: ${policy.error}; using native global instructions.`
       : `Dynamic agents: ${policy.group ?? "native global"}${policy.file ? ` (${policy.file.path})` : ""}`;
     const noticeKey = JSON.stringify([policy.group, policy.error, snapshot.replacement]);
     const paths = [...sources];
-    const previous = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === DYNAMIC_AGENTS_STATE).at(-1);
-    if (JSON.stringify(previous?.type === "custom" ? previous.data : undefined) !== JSON.stringify({ sources: paths })) pi.appendEntry(DYNAMIC_AGENTS_STATE, { sources: paths });
-    if (noticeKey !== lastNoticeKey && (policy.error || policy.notify)) ctx.ui.notify(notice, policy.error ? "warning" : "info");
+    const previous = ctx.sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "custom" && entry.customType === DYNAMIC_AGENTS_STATE)
+      .at(-1);
+    if (JSON.stringify(previous?.type === "custom" ? previous.data : undefined) !== JSON.stringify({ sources: paths }))
+      pi.appendEntry(DYNAMIC_AGENTS_STATE, { sources: paths });
+    if (noticeKey !== lastNoticeKey && (policy.error || policy.notify))
+      ctx.ui.notify(notice, policy.error ? "warning" : "info");
     lastNoticeKey = noticeKey;
   });
-  pi.on("context_with_system", event => snapshot
-    ? { messages: projectMessages(event.messages, sources, snapshot.replacement) } : undefined);
+  pi.on("context_with_system", (event) =>
+    snapshot ? { messages: projectMessages(event.messages, sources, snapshot.replacement) } : undefined,
+  );
 
   pi.registerCommand("dynamic-agents", {
     description: "Show active global policy; reload schedules a refresh for the next agent run",
     handler: async (args, ctx) => {
-      if (args.trim() === "reload") { dirty = true; ctx.ui.notify("Dynamic agents: reload scheduled for the next agent run.", "info"); return; }
+      if (args.trim() === "reload") {
+        dirty = true;
+        ctx.ui.notify("Dynamic agents: reload scheduled for the next agent run.", "info");
+        return;
+      }
       const policy = snapshot?.policy;
-      ctx.ui.notify(`Dynamic agents: ${policy?.group ?? "native global"}\nSelected model: ${ctx.model?.provider ?? "none"}/${ctx.model?.id ?? "none"}\nActive model: ${snapshot?.model ?? "none"}\nConfig: ${configPath}\nFile: ${policy?.file?.path ?? nativeGlobal?.path ?? "none"}${policy?.error ? `\nFallback: ${policy.error}` : ""}\n${preparing || dirty || snapshot?.model !== identity(ctx.model) ? "Pending next agent run" : "Active"}`, "info");
+      ctx.ui.notify(
+        "Dynamic agents: " +
+          `${policy?.group ?? "native global"}` +
+          "\nSelected model: " +
+          `${ctx.model?.provider ?? "none"}` +
+          "/" +
+          `${ctx.model?.id ?? "none"}` +
+          "\nActive model: " +
+          `${snapshot?.model ?? "none"}` +
+          "\nConfig: " +
+          `${configPath}` +
+          "\nFile: " +
+          `${policy?.file?.path ?? nativeGlobal?.path ?? "none"}` +
+          `${policy?.error ? `\nFallback: ${policy.error}` : ""}` +
+          "\n" +
+          `${preparing || dirty || snapshot?.model !== identity(ctx.model) ? "Pending next agent run" : "Active"}`,
+        "info",
+      );
     },
   });
 }

@@ -35,7 +35,11 @@ test("Pi-loaded skill resources drive expansion and stay current after resource 
   ready = true;
   const out = mux.expand("/skill:alpha /skill:beta do the thing");
   for (const [name, body] of [["alpha", "Alpha body line one.\nAlpha body line two."], ["beta", "Beta body."]]) {
-    assert.ok(out!.includes(`<skill name="${name}" location="${files[name]}">\nReferences are relative to ${resolve(files[name], "..")}.\n\n${body}\n`));
+    assert.ok(
+      out!.includes(
+        `<skill name="${name}" location="${files[name]}">\nReferences are relative to ${resolve(files[name], "..")}.\n\n${body}\n`,
+      ),
+    );
   }
   assert.doesNotMatch(out!, /description:|---/);
   const parsed = parseSkillBlock(out!);

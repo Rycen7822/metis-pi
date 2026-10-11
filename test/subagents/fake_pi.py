@@ -19,18 +19,30 @@ import shutil
 import subprocess
 import sys
 
-p=argparse.ArgumentParser(add_help=False)
-p.add_argument('--hold-eof',action='store_true'); p.add_argument('--session'); p.add_argument('--session-dir'); p.add_argument('--mode')
-p.add_argument('--skill',action='append'); p.add_argument('--extension',action='append'); p.add_argument('--exclude-tools'); p.add_argument('--no-extensions',action='store_true'); p.add_argument('--no-skills',action='store_true'); p.add_argument('--no-context-files',action='store_true')
-p.add_argument('--handle-prompt',action='store_true')
-p.add_argument('--hold-prompt-ms',type=int,default=0)
-p.add_argument('--no-managed-protocol',action='store_true')
-p.add_argument('--reject-abort',action='store_true')
-a,_=p.parse_known_args()
-if a.no_context_files and any(Path(path).name=='managed-context.ts' for path in a.extension or []):
-    print('subagent-pi-context ready',file=sys.stderr,flush=True)
-MARK_OUTCOME='PI_MOCK_OUTCOME'
-path=Path(a.session) if a.session else Path(a.session_dir)/'test-session.jsonl'; current=None; queue=[]; ui={}
+p = argparse.ArgumentParser(add_help=False)
+p.add_argument("--hold-eof", action="store_true")
+p.add_argument("--session")
+p.add_argument("--session-dir")
+p.add_argument("--mode")
+p.add_argument("--skill", action="append")
+p.add_argument("--extension", action="append")
+p.add_argument("--exclude-tools")
+p.add_argument("--no-extensions", action="store_true")
+p.add_argument("--no-skills", action="store_true")
+p.add_argument("--no-context-files", action="store_true")
+p.add_argument("--handle-prompt", action="store_true")
+p.add_argument("--hold-prompt-ms", type=int, default=0)
+p.add_argument("--no-managed-protocol", action="store_true")
+p.add_argument("--reject-abort", action="store_true")
+a, _ = p.parse_known_args()
+if a.no_context_files and any(Path(path).name == "managed-context.ts" for path in a.extension or []):
+    print("subagent-pi-context ready", file=sys.stderr, flush=True)
+MARK_OUTCOME = "PI_MOCK_OUTCOME"
+path = Path(a.session) if a.session else Path(a.session_dir) / "test-session.jsonl"
+current = None
+queue = []
+ui = {}
+
 
 def surface_report():
     """Stand-in for extensions/managed-surface.ts: report the built-in surface the
@@ -107,206 +119,387 @@ def skill_registry():
     skill is therefore dropped by Pi itself.
     PI_TEST_AMBIENT_SKILL_DIRS (os.pathsep separated) stands in for Pi's own
     discovery: it is empty by default, so tests never read a real ~/.pi tree."""
-    registry={}
+    registry = {}
+
     def add(skill_md: Path):
-        if not skill_md.is_file(): return
-        name=skill_entry(skill_md)
-        if name: registry.setdefault(name,str(skill_md.resolve()))
-    for root in (os.environ.get('PI_TEST_AMBIENT_SKILL_DIRS','') or '').split(os.pathsep):
-        if not root: continue
-        try: entries=sorted(Path(root).iterdir())
-        except OSError: continue
-        for entry in entries: add(entry/'SKILL.md' if entry.is_dir() else entry)
+        if not skill_md.is_file():
+            return
+        name = skill_entry(skill_md)
+        if name:
+            registry.setdefault(name, str(skill_md.resolve()))
+
+    for root in (os.environ.get("PI_TEST_AMBIENT_SKILL_DIRS", "") or "").split(os.pathsep):
+        if not root:
+            continue
+        try:
+            entries = sorted(Path(root).iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            add(entry / "SKILL.md" if entry.is_dir() else entry)
     for raw in a.skill or []:
-        entry=Path(raw); add(entry/'SKILL.md' if entry.is_dir() else entry)
+        entry = Path(raw)
+        add(entry / "SKILL.md" if entry.is_dir() else entry)
     return registry
 
-SKILLS=skill_registry()
+
+SKILLS = skill_registry()
+
 
 def emit(e):
-    print(json.dumps(e,ensure_ascii=False),flush=True)
+    print(json.dumps(e, ensure_ascii=False), flush=True)
 
-def msg(role,body,**extra):
-    m={'role':role,'content':[{'type':'text','text':body}],**extra}
-    path.parent.mkdir(parents=True,exist_ok=True)
-    if not path.exists(): path.write_text(json.dumps({'type':'session','id':'fake-session','version':3})+'\n')
-    with path.open('a') as f: f.write(json.dumps({'type':'message','message':m},ensure_ascii=False)+'\n')
-    emit({'type':'message_end','message':m})
 
-def response(r,success=True,data=None,error=None):
-    emit({'type':'response','id':r.get('id'),'command':r['type'],'success':success,**({'data':data} if data is not None else {}),**({'error':error} if error else {})})
+def msg(role, body, **extra):
+    m = {"role": role, "content": [{"type": "text", "text": body}], **extra}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(json.dumps({"type": "session", "id": "fake-session", "version": 3}) + "\n")
+    with path.open("a") as f:
+        f.write(json.dumps({"type": "message", "message": m}, ensure_ascii=False) + "\n")
+    emit({"type": "message_end", "message": m})
 
-TASK_OPTS={'delay','settle','resume','retry','compact','dupsettled','model','parallel','after_tool','gate','limit'}
+
+def response(r, success=True, data=None, error=None):
+    emit(
+        {
+            "type": "response",
+            "id": r.get("id"),
+            "command": r["type"],
+            "success": success,
+            **({"data": data} if data is not None else {}),
+            **({"error": error} if error else {}),
+        }
+    )
+
+
+TASK_OPTS = {
+    "delay",
+    "settle",
+    "resume",
+    "retry",
+    "compact",
+    "dupsettled",
+    "model",
+    "parallel",
+    "after_tool",
+    "gate",
+    "limit",
+}
+
 
 def parse_task(task):
     """Parse test-only key=value| prefixes: turn/post-run delay, continuation and
     retry counts, compaction, or duplicate managed completion."""
-    opts={}
-    while '|' in task:
-        head,tail=task.split('|',1)
-        key,sep,value=head.partition('=')
-        if not sep or key not in TASK_OPTS: break
-        opts[key]=value; task=tail
-    return task,opts
+    opts = {}
+    while "|" in task:
+        head, tail = task.split("|", 1)
+        key, sep, value = head.partition("=")
+        if not sep or key not in TASK_OPTS:
+            break
+        opts[key] = value
+        task = tail
+    return task, opts
+
 
 async def held_prompt(r):
     """Delay the acceptance reply to exercise uncertain mutation timeouts."""
     global current
-    await asyncio.sleep(a.hold_prompt_ms/1000)
-    response(r); current=asyncio.create_task(run(r['message'],r['runId']))
+    await asyncio.sleep(a.hold_prompt_ms / 1000)
+    response(r)
+    current = asyncio.create_task(run(r["message"], r["runId"]))
+
 
 async def run(raw_task, rid):
-    task,opts=parse_task(raw_task)
-    delay=float(opts.get('delay',.1)); settle=float(opts.get('settle',0))
-    resume=int(opts.get('resume',0)); retry=int(opts.get('retry',0)); compact=bool(opts.get('compact'))
-    emit({'type':'agent_start'})
-    msg('user',task)
-    if opts.get('gate'):
-        while not Path(opts['gate']).exists(): await asyncio.sleep(.01)
-    if task=='CRASH': os._exit(9)
-    if task in {'SPAWN_CHILD','SPAWN_DETACHED_CHILD'}:
-        proc=subprocess.Popen(['sleep','120'],start_new_session=task=='SPAWN_DETACHED_CHILD')
-        emit({'type':'tool_execution_start','toolName':'bash','toolCallId':'sleep','args':{'command':'sleep 120','pid':proc.pid}})
+    task, opts = parse_task(raw_task)
+    delay = float(opts.get("delay", 0.1))
+    settle = float(opts.get("settle", 0))
+    resume = int(opts.get("resume", 0))
+    retry = int(opts.get("retry", 0))
+    compact = bool(opts.get("compact"))
+    emit({"type": "agent_start"})
+    msg("user", task)
+    if opts.get("gate"):
+        while not Path(opts["gate"]).exists():
+            await asyncio.sleep(0.01)
+    if task == "CRASH":
+        os._exit(9)
+    if task in {"SPAWN_CHILD", "SPAWN_DETACHED_CHILD"}:
+        proc = subprocess.Popen(["sleep", "120"], start_new_session=task == "SPAWN_DETACHED_CHILD")
+        emit(
+            {
+                "type": "tool_execution_start",
+                "toolName": "bash",
+                "toolCallId": "sleep",
+                "args": {"command": "sleep 120", "pid": proc.pid},
+            }
+        )
         await asyncio.sleep(120)
-    if opts.get('model'):
-        kind=opts['model']
-        end=asyncio.get_running_loop().time()+delay
-        while asyncio.get_running_loop().time()<end:
-            if kind=='noise': emit({'type':'extension_ui_request','method':'notify','message':'still alive'})
-            elif kind!='silent':
-                emit({'type':'message_update','assistantMessageEvent':{'type':kind+'_delta','delta':'x' if kind!='empty' else ''}})
-            await asyncio.sleep(.1)
-        output='Completed: '+task
-    elif task=='UI_CONFIRM':
-        await asyncio.sleep(float(opts.get('delay',0)))
-        f=asyncio.get_running_loop().create_future(); ui['ui-1']=f
-        emit({'type':'extension_ui_request','id':'ui-1','method':'confirm','title':'Allow this test operation?','message':'Test-only confirmation'})
-        accepted=await f; ui.pop('ui-1',None)
-        output='confirmed='+str(accepted)
+    if opts.get("model"):
+        kind = opts["model"]
+        end = asyncio.get_running_loop().time() + delay
+        while asyncio.get_running_loop().time() < end:
+            if kind == "noise":
+                emit({"type": "extension_ui_request", "method": "notify", "message": "still alive"})
+            elif kind != "silent":
+                emit(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {"type": kind + "_delta", "delta": "x" if kind != "empty" else ""},
+                    }
+                )
+            await asyncio.sleep(0.1)
+        output = "Completed: " + task
+    elif task == "UI_CONFIRM":
+        await asyncio.sleep(float(opts.get("delay", 0)))
+        f = asyncio.get_running_loop().create_future()
+        ui["ui-1"] = f
+        emit(
+            {
+                "type": "extension_ui_request",
+                "id": "ui-1",
+                "method": "confirm",
+                "title": "Allow this test operation?",
+                "message": "Test-only confirmation",
+            }
+        )
+        accepted = await f
+        ui.pop("ui-1", None)
+        output = "confirmed=" + str(accepted)
     else:
-        emit({'type':'tool_execution_start','toolName':'read','toolCallId':'read-1','args':{'path':'src/example.py','sample':'界'*5000 if task=='BIG' else ''}})
-        if opts.get('parallel'):
-            emit({'type':'tool_execution_start','toolName':'bash','toolCallId':'long-2','args':{'command':'sleep'}})
-        await asyncio.sleep(delay/2)
-        if task!='NO_CONSUME':
-            while queue: msg('user',queue.pop(0))
-        emit({'type':'tool_execution_end','toolName':'read','toolCallId':'read-1','isError':False,'result':{'content':[{'type':'text','text':'sample'}]}})
-        await asyncio.sleep(delay/2)
-        if opts.get('parallel'):
-            emit({'type':'tool_execution_end','toolName':'bash','toolCallId':'long-2','isError':False,'result':{}})
-        if task!='NO_CONSUME':
-            while queue: msg('user',queue.pop(0))
-        else: queue.clear()
-        if opts.get('after_tool'): await asyncio.sleep(float(opts['after_tool']))
-        output=('汉字🙂\u2028\u2029'*3000) if task=='BIG' else 'Completed: '+task
-    if opts.get('limit'):
-        msg('assistant','I will implement the task.',stopReason='toolUse')
-        content=[{'type':'thinking','thinking':'test-only output budget exhausted'}]
-        if opts['limit']=='text': content.append({'type':'text','text':'Incomplete answer'})
-        msg('assistant','',content=content,stopReason='length',usage={'output':8,'reasoning':8,'totalTokens':8})
+        emit(
+            {
+                "type": "tool_execution_start",
+                "toolName": "read",
+                "toolCallId": "read-1",
+                "args": {"path": "src/example.py", "sample": "界" * 5000 if task == "BIG" else ""},
+            }
+        )
+        if opts.get("parallel"):
+            emit(
+                {
+                    "type": "tool_execution_start",
+                    "toolName": "bash",
+                    "toolCallId": "long-2",
+                    "args": {"command": "sleep"},
+                }
+            )
+        await asyncio.sleep(delay / 2)
+        if task != "NO_CONSUME":
+            while queue:
+                msg("user", queue.pop(0))
+        emit(
+            {
+                "type": "tool_execution_end",
+                "toolName": "read",
+                "toolCallId": "read-1",
+                "isError": False,
+                "result": {"content": [{"type": "text", "text": "sample"}]},
+            }
+        )
+        await asyncio.sleep(delay / 2)
+        if opts.get("parallel"):
+            emit(
+                {
+                    "type": "tool_execution_end",
+                    "toolName": "bash",
+                    "toolCallId": "long-2",
+                    "isError": False,
+                    "result": {},
+                }
+            )
+        if task != "NO_CONSUME":
+            while queue:
+                msg("user", queue.pop(0))
+        else:
+            queue.clear()
+        if opts.get("after_tool"):
+            await asyncio.sleep(float(opts["after_tool"]))
+        output = ("汉字🙂\u2028\u2029" * 3000) if task == "BIG" else "Completed: " + task
+    if opts.get("limit"):
+        msg("assistant", "I will implement the task.", stopReason="toolUse")
+        content = [{"type": "thinking", "thinking": "test-only output budget exhausted"}]
+        if opts["limit"] == "text":
+            content.append({"type": "text", "text": "Incomplete answer"})
+        msg(
+            "assistant", "", content=content, stopReason="length", usage={"output": 8, "reasoning": 8, "totalTokens": 8}
+        )
     elif compact:
         # Pi compacts by itself: overflow ends the run with willRetry, the
         # transcript is replaced, then the retried run continues.
-        msg('assistant','Context overflow; compacting before retry',stopReason='error',errorMessage='context_length_exceeded')
-        emit({'type':'agent_end','messages':[],'willRetry':True})
-        emit({'type':'auto_compaction_start','reason':'overflow'})
-        emit({'type':'auto_compaction_end','aborted':False})
-        emit({'type':'agent_start'})
-        msg('assistant',output,stopReason='stop',usage={'input':100,'output':10,'totalTokens':110})
+        msg(
+            "assistant",
+            "Context overflow; compacting before retry",
+            stopReason="error",
+            errorMessage="context_length_exceeded",
+        )
+        emit({"type": "agent_end", "messages": [], "willRetry": True})
+        emit({"type": "auto_compaction_start", "reason": "overflow"})
+        emit({"type": "auto_compaction_end", "aborted": False})
+        emit({"type": "agent_start"})
+        msg("assistant", output, stopReason="stop", usage={"input": 100, "output": 10, "totalTokens": 110})
     elif retry:
         # Pi retries by itself: the low-level run ends with a transient error
         # and agent_end(willRetry), then the retry attempts run.
-        msg('assistant','Transient failure: overloaded',stopReason='error',errorMessage='overloaded')
-        emit({'type':'agent_end','messages':[],'willRetry':True})
-        emit({'type':'auto_retry_start','attempt':1,'delayMs':0,'errorMessage':'overloaded'})
-        for attempt in range(1,retry+1):
-            emit({'type':'agent_start'})
-            if attempt==retry: msg('assistant',output,stopReason='stop',usage={'input':100,'output':10,'totalTokens':110})
-            else: msg('assistant','Transient failure: overloaded',stopReason='error',errorMessage='overloaded')
-            emit({'type':'agent_end','messages':[],'willRetry':attempt<retry})
-        emit({'type':'auto_retry_end','success':True,'attempt':retry})
+        msg("assistant", "Transient failure: overloaded", stopReason="error", errorMessage="overloaded")
+        emit({"type": "agent_end", "messages": [], "willRetry": True})
+        emit({"type": "auto_retry_start", "attempt": 1, "delayMs": 0, "errorMessage": "overloaded"})
+        for attempt in range(1, retry + 1):
+            emit({"type": "agent_start"})
+            if attempt == retry:
+                msg("assistant", output, stopReason="stop", usage={"input": 100, "output": 10, "totalTokens": 110})
+            else:
+                msg("assistant", "Transient failure: overloaded", stopReason="error", errorMessage="overloaded")
+            emit({"type": "agent_end", "messages": [], "willRetry": attempt < retry})
+        emit({"type": "auto_retry_end", "success": True, "attempt": retry})
     else:
-        msg('assistant',output,stopReason='stop',usage={'input':100,'output':10,'totalTokens':110})
-    emit({'type':'agent_end','messages':[]})
+        msg("assistant", output, stopReason="stop", usage={"input": 100, "output": 10, "totalTokens": 110})
+    emit({"type": "agent_end", "messages": []})
     # SDK work may continue after a low-level run ends; only the final managed
     # completion belongs to the daemon task.
-    if settle: await asyncio.sleep(settle)
-    for turn in range(1,resume+1):
-        emit({'type':'agent_start'})
-        msg('assistant',f'Continued {turn}: '+task,stopReason='stop',usage={'input':100,'output':10,'totalTokens':110})
-        emit({'type':'agent_end','messages':[]})
-    emit({'type':'managed_task_end','runId':rid})
-    if opts.get('dupsettled'): emit({'type':'managed_task_end','runId':rid})
+    if settle:
+        await asyncio.sleep(settle)
+    for turn in range(1, resume + 1):
+        emit({"type": "agent_start"})
+        msg(
+            "assistant",
+            f"Continued {turn}: " + task,
+            stopReason="stop",
+            usage={"input": 100, "output": 10, "totalTokens": 110},
+        )
+        emit({"type": "agent_end", "messages": []})
+    emit({"type": "managed_task_end", "runId": rid})
+    if opts.get("dupsettled"):
+        emit({"type": "managed_task_end", "runId": rid})
+
 
 async def main():
     global current
     surface_report()
-    reader=asyncio.StreamReader(); transport,_=await asyncio.get_running_loop().connect_read_pipe(lambda:asyncio.StreamReaderProtocol(reader),sys.stdin.buffer)
-    while line:=await reader.readline():
-        r=json.loads(line); kind=r['type']
-        if kind=='get_state':
+    reader = asyncio.StreamReader()
+    transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+        lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer
+    )
+    while line := await reader.readline():
+        r = json.loads(line)
+        kind = r["type"]
+        if kind == "get_state":
             # PI_TEST_PROBE_FILE: evidence channel for the env-binding chain test.
             # The probe runs a harmless interpreter found via PATH so the test can
             # prove the child's environment actually works (rc 127 proves it does
             # not). Only non-secret facts are recorded: rc, PATH value (test
             # fixture path), booleans for canary PRESENCE, never secret values.
-            probe_file=os.environ.get('PI_TEST_PROBE_FILE')
+            probe_file = os.environ.get("PI_TEST_PROBE_FILE")
             if probe_file and not Path(probe_file).exists():
-                pc=os.environ.get('PI_TEST_PROBE_CMD')
-                rc=127; out=''
+                pc = os.environ.get("PI_TEST_PROBE_CMD")
+                rc = 127
+                out = ""
                 if pc:
-                    exe=shutil.which(pc)
+                    exe = shutil.which(pc)
                     if exe:
-                        proc=subprocess.run([exe],capture_output=True,text=True,timeout=10)
-                        rc=proc.returncode; out=proc.stdout.strip()[:80]
-                with open(probe_file,'w') as f:
-                    json.dump({'rc':rc,'out':out,
-                               'path':os.environ.get('PATH','')[:500],
-                               'has_auth':'PI_TEST_AUTH' in os.environ,
-                               'has_daemon_only':'PI_TEST_DAEMON_ONLY' in os.environ,
-                               'home_tag':os.environ.get('PI_TEST_HOME_TAG',''),
-                               'coding_agent_dir':os.environ.get('PI_CODING_AGENT_DIR',''),
-                               'cwd':os.getcwd()},f)
-            state={'sessionFile':str(path),'sessionId':'fake-session','isStreaming':bool(current and not current.done()),'pendingMessageCount':len(queue),'model':{'id':'fake','provider':'test'},'env_probe':{**{k:v for k,v in sorted(os.environ.items()) if k.startswith('PI_TEST_') and len(v)<=256},
-                           # Non-secret location, asserted by the agent-dir binding tests:
-                           **({'PI_CODING_AGENT_DIR':os.environ['PI_CODING_AGENT_DIR']} if os.environ.get('PI_CODING_AGENT_DIR') else {})},'path_probe':None if 'PI_TEST_PROBE_CMD' not in os.environ else {'rc':0}}
-            if not a.no_managed_protocol: state['subagentProtocol']=1
-            response(r,data=state)
-        elif kind=='prompt':
-            if r.get('message')=='REJECT_START': response(r,False,error='Explicit test prompt rejection')
-            elif current and not current.done(): response(r,False,error='Already streaming')
-            elif a.handle_prompt and MARK_OUTCOME in r.get('message',''):
+                        proc = subprocess.run([exe], capture_output=True, text=True, timeout=10)
+                        rc = proc.returncode
+                        out = proc.stdout.strip()[:80]
+                with open(probe_file, "w") as f:
+                    json.dump(
+                        {
+                            "rc": rc,
+                            "out": out,
+                            "path": os.environ.get("PATH", "")[:500],
+                            "has_auth": "PI_TEST_AUTH" in os.environ,
+                            "has_daemon_only": "PI_TEST_DAEMON_ONLY" in os.environ,
+                            "home_tag": os.environ.get("PI_TEST_HOME_TAG", ""),
+                            "coding_agent_dir": os.environ.get("PI_CODING_AGENT_DIR", ""),
+                            "cwd": os.getcwd(),
+                        },
+                        f,
+                    )
+            state = {
+                "sessionFile": str(path),
+                "sessionId": "fake-session",
+                "isStreaming": bool(current and not current.done()),
+                "pendingMessageCount": len(queue),
+                "model": {"id": "fake", "provider": "test"},
+                "env_probe": {
+                    **{k: v for k, v in sorted(os.environ.items()) if k.startswith("PI_TEST_") and len(v) <= 256},
+                    # Non-secret location, asserted by the agent-dir binding tests:
+                    **(
+                        {"PI_CODING_AGENT_DIR": os.environ["PI_CODING_AGENT_DIR"]}
+                        if os.environ.get("PI_CODING_AGENT_DIR")
+                        else {}
+                    ),
+                },
+                "path_probe": None if "PI_TEST_PROBE_CMD" not in os.environ else {"rc": 0},
+            }
+            if not a.no_managed_protocol:
+                state["subagentProtocol"] = 1
+            response(r, data=state)
+        elif kind == "prompt":
+            if r.get("message") == "REJECT_START":
+                response(r, False, error="Explicit test prompt rejection")
+            elif current and not current.done():
+                response(r, False, error="Already streaming")
+            elif a.handle_prompt and MARK_OUTCOME in r.get("message", ""):
                 response(r)
-                emit({'type':'managed_task_end','runId':r['runId'],'error':'Pi handled the input without producing an assistant result'})
+                emit(
+                    {
+                        "type": "managed_task_end",
+                        "runId": r["runId"],
+                        "error": "Pi handled the input without producing an assistant result",
+                    }
+                )
             elif a.hold_prompt_ms:
-                current=asyncio.create_task(held_prompt(r))
-            else: response(r); current=asyncio.create_task(run(r['message'],r['runId']))
-        elif kind=='steer': queue.append(r['message']); response(r)
-        elif kind=='native_input': queue.append(r['message']); response(r)
-        elif kind=='store_message':
-            msg('custom',r['message'],customType='subagent-pi-message'); response(r,data={'stored':True})
-        elif kind=='abort':
-            if a.reject_abort: response(r,False,error='Uncooperative abort'); continue
+                current = asyncio.create_task(held_prompt(r))
+            else:
+                response(r)
+                current = asyncio.create_task(run(r["message"], r["runId"]))
+        elif kind == "steer":
+            queue.append(r["message"])
+            response(r)
+        elif kind == "native_input":
+            queue.append(r["message"])
+            response(r)
+        elif kind == "store_message":
+            msg("custom", r["message"], customType="subagent-pi-message")
+            response(r, data={"stored": True})
+        elif kind == "abort":
+            if a.reject_abort:
+                response(r, False, error="Uncooperative abort")
+                continue
             if current and not current.done():
                 current.cancel()
-                with contextlib.suppress(asyncio.CancelledError): await current
+                with contextlib.suppress(asyncio.CancelledError):
+                    await current
             queue.clear()
             for f in ui.values():
-                if not f.done(): f.cancel()
+                if not f.done():
+                    f.cancel()
             ui.clear()
-            emit({'type':'managed_task_end','runId':r.get('runId'),'cancelled':True})
-            response(r,data={'runId':r.get('runId'),'taskExited':True})
-        elif kind=='get_commands':
-            response(r,data={'commands':[{'name':'skill:'+n,'source':'skill','sourceInfo':{'path':p}}
-                                         for n,p in sorted(SKILLS.items())]})
-        elif kind=='extension_ui_response':
-            f=ui.get(r['id'])
-            if f and not f.done(): f.set_result(r.get('confirmed',False))
-        else: response(r,False,error='Unknown command')
-    if a.hold_eof: await asyncio.sleep(120)
+            emit({"type": "managed_task_end", "runId": r.get("runId"), "cancelled": True})
+            response(r, data={"runId": r.get("runId"), "taskExited": True})
+        elif kind == "get_commands":
+            response(
+                r,
+                data={
+                    "commands": [
+                        {"name": "skill:" + n, "source": "skill", "sourceInfo": {"path": p}}
+                        for n, p in sorted(SKILLS.items())
+                    ]
+                },
+            )
+        elif kind == "extension_ui_response":
+            f = ui.get(r["id"])
+            if f and not f.done():
+                f.set_result(r.get("confirmed", False))
+        else:
+            response(r, False, error="Unknown command")
+    if a.hold_eof:
+        await asyncio.sleep(120)
     if current and not current.done():
         current.cancel()
-        with contextlib.suppress(asyncio.CancelledError): await current
+        with contextlib.suppress(asyncio.CancelledError):
+            await current
     transport.close()
+
 
 asyncio.run(main())

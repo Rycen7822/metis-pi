@@ -250,7 +250,15 @@ test("one interaction wires live/final usage, Working and the persisted summary"
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
   const speed = (text) => Number(text.match(/([\d.]+) tok\/s/)?.[1]);
-  const message = (id, usage) => ({ role: "assistant", content: [], stopReason: "stop", responseId: id, provider: "test-provider", timestamp: 1, usage });
+  const message = (id, usage) => ({
+    role: "assistant",
+    content: [],
+    stopReason: "stop",
+    responseId: id,
+    provider: "test-provider",
+    timestamp: 1,
+    usage,
+  });
   const update = (id, usage, delta) => handlers.get("message_update")({
     message: message(id, usage),
     assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { content: [] } },

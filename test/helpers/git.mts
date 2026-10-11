@@ -31,7 +31,12 @@ export function trackedRepo(t: TestContext, cwd: string, deps: Partial<Parameter
   return tracker;
 }
 
-export async function refreshAndExpectSample(tracker: ReturnType<typeof createGitChangesTracker>, additions: number, deletions: number, files: number) {
+export async function refreshAndExpectSample(
+  tracker: ReturnType<typeof createGitChangesTracker>,
+  additions: number,
+  deletions: number,
+  files: number,
+) {
   await tracker.refresh();
   assert.deepEqual(tracker.snapshot(), { additions, deletions, files });
 }

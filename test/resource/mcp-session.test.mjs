@@ -15,28 +15,61 @@ test("real stdio catalog stays lazy, shares connection, survives idle, and rejec
   const entry = { name: "fixture", scope: "global", source: "fixture", config: { command: process.execPath,
     args: [fileURLToPath(new URL("../helpers/mcp-server.mjs", import.meta.url)), "stdio", log, schema] } };
   const ctx = { cwd: dir, isIdle: () => true, isProjectTrusted: () => true }, cache = new CatalogCache(dir);
-  const make = () => new McpServerSession(entry, dir, dir, { enabled: true, idleTimeoutSeconds: 0.05, keepAliveServers: [] }, cache, () => ctx, () => {});
-  const first = make(), second = make(); let slow;
-  t.after(async () => { await Promise.all([first.shutdown(), second.shutdown(), slow?.shutdown()]); rmSync(dir, { recursive: true, force: true }); });
-  assert.equal(await first.restore(), false); await first.discover(true); await first.shutdown();
+  const make = () =>
+    new McpServerSession(
+      entry,
+      dir,
+      dir,
+      { enabled: true, idleTimeoutSeconds: 0.05, keepAliveServers: [] },
+      cache,
+      () => ctx,
+      () => {},
+    );
+  const first = make(),
+    second = make();
+  let slow;
+  t.after(async () => {
+    await Promise.all([first.shutdown(), second.shutdown(), slow?.shutdown()]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(await first.restore(), false);
+  await first.discover(true);
+  await first.shutdown();
   assert.equal(await second.restore(), true);
   const events = () => readFileSync(log, "utf8").trim().split("\n");
-  const starts = () => events().filter(line => line.startsWith("start:")).length;
+  const starts = () => events().filter((line) => line.startsWith("start:")).length;
   assert.equal(starts(), 1, "cache recovery starts no child process");
-  const tool = second.catalog.tools[0], scope = second.scope;
-  const values = await Promise.all([1, 2, 3].map(value => second.callTool(tool, scope, { value }, {})));
-  assert.deepEqual(values.map(result => result.structuredContent.value), [1, 2, 3]); assert.equal(starts(), 2);
+  const tool = second.catalog.tools[0],
+    scope = second.scope;
+  const values = await Promise.all([1, 2, 3].map((value) => second.callTool(tool, scope, { value }, {})));
+  assert.deepEqual(
+    values.map((result) => result.structuredContent.value),
+    [1, 2, 3],
+  );
+  assert.equal(starts(), 2);
   const busy = second.callTool(second.catalog.tools[0], second.scope, { value: 4, delayMs: 150 }, {});
-  await delay(90); assert.equal(second.state, "connected"); await busy;
-  await delay(140); assert.equal(second.state, "disconnected");
-  const old = second.catalog.tools[0], oldScope = second.scope;
+  await delay(90);
+  assert.equal(second.state, "connected");
+  await busy;
+  await delay(140);
+  assert.equal(second.state, "disconnected");
+  const old = second.catalog.tools[0],
+    oldScope = second.scope;
   writeFileSync(schema, '{"type":"string"}');
-  const before = events().filter(line => line.startsWith("call:")).length;
+  const before = events().filter((line) => line.startsWith("call:")).length;
   await assert.rejects(second.callTool(old, oldScope, { value: 7 }, {}), /directory changed/);
-  assert.equal(events().filter(line => line.startsWith("call:")).length, before, "obsolete arguments produce no server side effect");
-  assert.equal((await second.callTool(second.catalog.tools[0], second.scope, { value: "007" }, {})).structuredContent.value, "007");
+  assert.equal(
+    events().filter((line) => line.startsWith("call:")).length,
+    before,
+    "obsolete arguments produce no server side effect",
+  );
+  assert.equal(
+    (await second.callTool(second.catalog.tools[0], second.scope, { value: "007" }, {})).structuredContent.value,
+    "007",
+  );
   await second.shutdown();
-  for (const line of events().filter(line => line.startsWith("start:"))) assert.throws(() => process.kill(Number(line.slice(6)), 0), { code: "ESRCH" });
+  for (const line of events().filter((line) => line.startsWith("start:")))
+    assert.throws(() => process.kill(Number(line.slice(6)), 0), { code: "ESRCH" });
   await assert.rejects(second.callTool(old, oldScope, { value: 1 }, {}), /no longer active/);
   slow = new McpServerSession({ ...entry, config: { ...entry.config, args: [...entry.config.args, "3000"] } }, dir, dir,
     { enabled: true, idleTimeoutSeconds: 600, keepAliveServers: [] }, cache, () => ctx, () => {});

@@ -24,12 +24,19 @@ export function parseConfig(value: unknown): { enabled: boolean; notify: boolean
   const groups = raw.groups.map((item: unknown) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid policy group");
     const group = item as Record<string, unknown>;
-    if (typeof group.id !== "string" || !group.id.trim() || ids.has(group.id)
-      || typeof group.file !== "string" || !group.file.trim()
-      || !strings(group.include) || !group.include.length
-      || (group.exclude !== undefined && !strings(group.exclude))) throw new Error("Group needs unique id, file, nonempty include and optional exclude arrays");
+    if (
+      typeof group.id !== "string" ||
+      !group.id.trim() ||
+      ids.has(group.id) ||
+      typeof group.file !== "string" ||
+      !group.file.trim() ||
+      !strings(group.include) ||
+      !group.include.length ||
+      (group.exclude !== undefined && !strings(group.exclude))
+    )
+      throw new Error("Group needs unique id, file, nonempty include and optional exclude arrays");
     ids.add(group.id);
-    return { id: group.id, file: group.file, include: group.include, exclude: group.exclude as string[] ?? [] };
+    return { id: group.id, file: group.file, include: group.include, exclude: (group.exclude as string[]) ?? [] };
   });
   return { enabled: raw.enabled !== false, notify: raw.notify !== false, groups };
 }
@@ -94,7 +101,13 @@ export function replaceGlobal(files: AgentFile[], sources: Set<string>, replacem
  * Match whole blocks up to the next source, so policy text may contain closing tags.
  */
 export function projectInstructions(text: string, sources: Set<string>, replacement: AgentFile | undefined): string {
-  const block = /^<project_instructions path="([^"\n]+)">\n[\s\S]*?\n<\/project_instructions>(?=\n\n<project_instructions path="|\n<\/project_context>|\s*$)/gm;
+  const block = new RegExp(
+    '^<project_instructions path="([^"\\n]+)">\\n[\\s\\S]*?\\n<\\/project_instructions>(?=\\n\\n<project_instruct' +
+      'ions path="|' +
+      "\\n<\\/project_context>|" +
+      "\\s*$)",
+    "gm",
+  );
   let inserted = false;
   return text.replace(block, (original, path: string) => {
     if (!sources.has(path)) return original;

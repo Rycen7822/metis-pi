@@ -43,7 +43,13 @@ test("native widget gestures and shortcuts preserve selection, folding and clean
     assert.equal(host.extensionWidgetsBelow.size, 0, "background sessions occupy only the above-editor slot");
   } } };
   const render = () => renderBackgroundBashWidget(ctx, state, sessions);
-  registerBackgroundBashWidgetShortcuts({ registerShortcut: (key, handler) => shortcuts.set(key, handler) }, state, sessions, EXECUTION_DEFAULTS.ui, () => enabled);
+  registerBackgroundBashWidgetShortcuts(
+    { registerShortcut: (key, handler) => shortcuts.set(key, handler) },
+    state,
+    sessions,
+    EXECUTION_DEFAULTS.ui,
+    () => enabled,
+  );
   const frame = (width = 80) => host.widgetContainerAbove.render(width).join("\n");
   const click = () => host.widgetContainerAbove.handleMouse(mouseEvent("click", "left", 1));
   const key = key => shortcuts.get(key).handler(ctx);

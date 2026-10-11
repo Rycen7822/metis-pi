@@ -68,7 +68,12 @@ test("edit diffs use line-number-first Codex ordering and are not arbitrarily tr
     ...Array.from({ length: 30 }, (_, i) => `  ${2031 + i} context-${i}`),
   ].join("\n");
   const input = { content: [], details: { diff } };
-  const text = stripVTControlCharacters(renderers.edit.renderResult(input, { expanded: true }, theme, { args: { path: "file" } }).render(100).join("\n"));
+  const text = stripVTControlCharacters(
+    renderers.edit
+      .renderResult(input, { expanded: true }, theme, { args: { path: "file" } })
+      .render(100)
+      .join("\n"),
+  );
   assert.match(text, /2030 -old value/);
   assert.match(text, /2030 \+new value/);
   assert.match(text, /2060  context-29/);

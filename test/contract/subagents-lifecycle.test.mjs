@@ -11,61 +11,99 @@ async function until(probe) {
   assert.ok(probe(), "bounded lifecycle condition reached");
 }
 function fixture(t, call) {
-  const warnings = [], operations = [];
-  t.mock.method(SubagentClient.prototype, "call", async function(op, params, signal, extra) {
-    operations.push({ op, extra }); return call(op, params, signal, extra);
+  const warnings = [],
+    operations = [];
+  t.mock.method(SubagentClient.prototype, "call", async function (op, params, signal, extra) {
+    operations.push({ op, extra });
+    return call(op, params, signal, extra);
   });
-  const branch = [{ type: "custom", customType: "metis-subagent-scope", data: { sessionId: "lifecycle-test", scope: "scope_test" } }];
-  const ctx = { cwd: process.cwd(), mode: "rpc", isIdle: () => false, hasPendingMessages: () => false,
+  const branch = [
+    { type: "custom", customType: "metis-subagent-scope", data: { sessionId: "lifecycle-test", scope: "scope_test" } },
+  ];
+  const ctx = {
+    cwd: process.cwd(),
+    mode: "rpc",
+    isIdle: () => false,
+    hasPendingMessages: () => false,
     sessionManager: { getSessionId: () => "lifecycle-test", getBranch: () => branch },
-    ui: { notify: (text, level) => warnings.push({ text, level }), setWidget() {}, setStatus() {} } };
+    ui: { notify: (text, level) => warnings.push({ text, level }), setWidget() {}, setStatus() {} },
+  };
   const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, runtime, ctx, "/unused-test-agent-dir");
   t.after(() => owner.close());
-  const boundary = type => owner.boundary({ type, outcome: "completed", entries: [] }, ctx);
+  const boundary = (type) => owner.boundary({ type, outcome: "completed", entries: [] }, ctx);
   return { owner, ctx, warnings, operations, boundary, branch };
 }
 function heldWatch(signal) {
-  return new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("closed test watch")), { once: true }));
+  return new Promise((_, reject) =>
+    signal.addEventListener("abort", () => reject(new Error("closed test watch")), { once: true }),
+  );
 }
 
-for (const error of [new RuntimeError({ code: "version_mismatch", message: "controlled stale daemon" }), new Error("unknown connection failure")]) {
-  test(`watch failure pauses automatic callbacks once without hiding explicit ${error instanceof RuntimeError ? "runtime" : "unknown"} errors`, async t => {
-    const f = fixture(t, async () => { throw error; });
-    await until(() => f.warnings.length === 1);
-    for (let i = 0; i < 3; i++) {
-      assert.equal(await f.boundary("turn_end"), undefined);
-      assert.equal(await f.boundary("agent_before_settle"), undefined);
-      await f.owner.settled(f.ctx, true);
-    }
-    assert.equal(f.warnings.length, 1); assert.equal(f.warnings[0].level, "warning");
-    assert.deepEqual(f.operations.map(row => row.op), ["pi_watch"]);
-    if (error instanceof RuntimeError) {
-      const result = await f.owner.execute("pi_list_agents", {}, "test-call", f.ctx);
-      assert.equal(result.isError, true); assert.equal(JSON.parse(result.content[0].text).error.code, "version_mismatch");
-    } else await assert.rejects(f.owner.execute("pi_list_agents", {}, "test-call", f.ctx), value => value === error);
-    assert.equal(f.warnings.length, 1);
-  });
+for (const error of [
+  new RuntimeError({ code: "version_mismatch", message: "controlled stale daemon" }),
+  new Error("unknown connection failure"),
+]) {
+  test(
+    "watch failure pauses automatic callbacks once without hiding explicit " +
+      `${error instanceof RuntimeError ? "runtime" : "unknown"}` +
+      " errors",
+    async (t) => {
+      const f = fixture(t, async () => {
+        throw error;
+      });
+      await until(() => f.warnings.length === 1);
+      for (let i = 0; i < 3; i++) {
+        assert.equal(await f.boundary("turn_end"), undefined);
+        assert.equal(await f.boundary("agent_before_settle"), undefined);
+        await f.owner.settled(f.ctx, true);
+      }
+      assert.equal(f.warnings.length, 1);
+      assert.equal(f.warnings[0].level, "warning");
+      assert.deepEqual(
+        f.operations.map((row) => row.op),
+        ["pi_watch"],
+      );
+      if (error instanceof RuntimeError) {
+        const result = await f.owner.execute("pi_list_agents", {}, "test-call", f.ctx);
+        assert.equal(result.isError, true);
+        assert.equal(JSON.parse(result.content[0].text).error.code, "version_mismatch");
+      } else
+        await assert.rejects(f.owner.execute("pi_list_agents", {}, "test-call", f.ctx), (value) => value === error);
+      assert.equal(f.warnings.length, 1);
+    },
+  );
 }
 
-test("a boundary failure shares the same degraded state as a concurrent watch failure", async t => {
+test("a boundary failure shares the same degraded state as a concurrent watch failure", async (t) => {
   const error = new RuntimeError({ code: "version_mismatch", message: "same cached initialization failure" });
   let rejectWatch;
-  const f = fixture(t, async op => {
-    if (op === "pi_watch") return new Promise((_, reject) => { rejectWatch = reject; });
+  const f = fixture(t, async (op) => {
+    if (op === "pi_watch")
+      return new Promise((_, reject) => {
+        rejectWatch = reject;
+      });
     throw error;
   });
   await until(() => rejectWatch);
   assert.equal(await f.boundary("turn_end"), undefined);
-  rejectWatch(error); await tick();
-  await f.owner.settled(f.ctx, true); await f.boundary("agent_before_settle");
+  rejectWatch(error);
+  await tick();
+  await f.owner.settled(f.ctx, true);
+  await f.boundary("agent_before_settle");
   assert.equal(f.warnings.length, 1);
-  assert.deepEqual(f.operations.map(row => row.op), ["pi_watch", "pi_claim"]);
+  assert.deepEqual(
+    f.operations.map((row) => row.op),
+    ["pi_watch", "pi_claim"],
+  );
 });
 
-test("a successful in-flight watch reply cannot resume synchronization after a boundary failure", async t => {
+test("a successful in-flight watch reply cannot resume synchronization after a boundary failure", async (t) => {
   let resolveWatch;
-  const f = fixture(t, async op => {
-    if (op === "pi_watch") return new Promise(resolve => { resolveWatch = resolve; });
+  const f = fixture(t, async (op) => {
+    if (op === "pi_watch")
+      return new Promise((resolve) => {
+        resolveWatch = resolve;
+      });
     throw new Error("controlled boundary failure");
   });
   await until(() => resolveWatch);

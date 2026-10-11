@@ -30,7 +30,11 @@ export function explorationVerb(name: string): ExplorationVerb {
 
 /** "• Explored|Exploring" group title line. Bullet tone = run state (dim while
  * running, vivid success green once done — Codex's #13a10e state dot). */
-export function renderExplorationHeader(render: { running: boolean; isError: boolean }, _colorLevel: ColorLevel, theme: { bold(text: string): string; fg(key: string, text: string): string }): string {
+export function renderExplorationHeader(
+  render: { running: boolean; isError: boolean },
+  _colorLevel: ColorLevel,
+  theme: { bold(text: string): string; fg(key: string, text: string): string },
+): string {
   const title = render.isError ? "Exploration failed" : render.running ? "Exploring" : "Explored";
   const bullet = render.isError ? "error" : render.running ? "dim" : "success";
   return `${theme.fg(bullet, "•")} ${theme.fg("toolTitle", theme.bold(title))}`;
@@ -57,7 +61,11 @@ export function renderExplorationImages(count: number, colorLevel: ColorLevel, s
 }
 
 /** All-in-one render for ungrouped calls: header + own rows. */
-export function renderExplorationLines(render: ExplorationRender, colorLevel: ColorLevel, theme: { bold(text: string): string; fg(key: string, text: string): string }): string[] {
+export function renderExplorationLines(
+  render: ExplorationRender,
+  colorLevel: ColorLevel,
+  theme: { bold(text: string): string; fg(key: string, text: string): string },
+): string[] {
   const lines = [renderExplorationHeader(render, colorLevel, theme)];
   for (const row of render.rows) {
     lines.push(renderExplorationMember(row, { first: true }, colorLevel));

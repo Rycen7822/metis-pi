@@ -281,7 +281,19 @@ const bootPi = () => {
   tmux(["set-option", "-g", "set-clipboard", "off"]);
   tmux(["set-option", "-g", "allow-passthrough", "off"]);
   // Keep asynchronous update banners from moving mouse targets.
-  sendKeys(["-l", `env -u DISPLAY -u WAYLAND_DISPLAY -u WSL_INTEROP -u WSL_DISTRO_NAME -u NO_COLOR FORCE_COLOR=3 COLORTERM=truecolor HOME=${HOME_DIR} PI_SKIP_VERSION_CHECK=1 PCX_PTY_CLIPBOARD_SINK=${CLIPBOARD_SINK} PCX_PTY_CLIPBOARD_READY=${CLIPBOARD_READY} ${PI_BIN} --approve`]);
+  sendKeys([
+    "-l",
+    "env -u DISPLAY -u WAYLAND_DISPLAY -u WSL_INTEROP -u WSL_DISTRO_NAME -u NO_COLOR " +
+      "FORCE_COLOR=3 COLORTERM=truecolor HOME=" +
+      `${HOME_DIR}` +
+      " PI_SKIP_VERSION_CHECK=1 PCX_PTY_CLIPBOARD_SINK=" +
+      `${CLIPBOARD_SINK}` +
+      " PCX_PTY_CLIPBOARD_READY=" +
+      `${CLIPBOARD_READY}` +
+      " " +
+      `${PI_BIN}` +
+      " --approve",
+  ]);
   sendKeys(["Enter"]);
 };
 const startJourney = async (name) => {
@@ -421,13 +433,19 @@ try {
     await waitForVisible(/PCX_THINK_HEAD/, 10_000, "right opens full thinking from collapsed");
     clickRow(rowOf(/PCX_THINK_HEAD/), 3, 2);
     await waitGone(/PCX_THINK_HEAD|PCX_THINK_TAIL/, 10_000, "right closes directly expanded thinking");
-
   }
   if (selected.has("E4")) {
     await startJourney("E4");
-    const selectReply = "SELECT_BEGIN_MARK\n这一段很长的中文回答会在终端宽度下软折行显示成多个屏幕行，复制时应当保持为一行逻辑文本，不添加多余的换行或空格。\nselect alpha beta gamma delta epsilon zeta eta theta iota kappa lambda\nSELECT_END_MARK";
+    const selectReply =
+      "SELECT_BEGIN_MARK\n这一段很长的中文回答会在终端宽度下软折行显示成多个屏幕行，复制时应当保持为一行逻辑文本，不添加多余的换行或空格。\nselec" +
+      "t alpha beta gamma delta epsilon zeta eta theta iota kappa " +
+      "lambda\nSELECT_END_MARK";
     const history = Array.from({ length: 40 }, (_, i) => `SCROLL_FILLER_${i}`).join("\n\n");
-    responses.push({ text: `${history}\n\n${selectReply}` }, { text: "PCX_DRAFT_ACK" }, { text: "PCX_AFTER_CLEAR_ACK" });
+    responses.push(
+      { text: `${history}\n\n${selectReply}` },
+      { text: "PCX_DRAFT_ACK" },
+      { text: "PCX_AFTER_CLEAR_ACK" },
+    );
     // E4: real SGR drag and Ctrl+C through the isolated clipboard sink.
     submit("please PCX_SELECT now");
     await waitForAfter(/Worked for/, "SELECT_END_MARK", 60_000, "selectable reply is settled");

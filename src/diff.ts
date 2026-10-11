@@ -147,7 +147,12 @@ function surface(kind: "add" | "remove" | "context", level: ColorLevel): Surface
  * the diff background survives: drop any background SGR the highlighter emits
  * and translate bare full resets into foreground-only resets.
  */
-function highlightBody(text: string, language: string | undefined, paint: ((text: string, language: string) => string) | undefined, fallback: (text: string) => string): string {
+function highlightBody(
+  text: string,
+  language: string | undefined,
+  paint: ((text: string, language: string) => string) | undefined,
+  fallback: (text: string) => string,
+): string {
   if (!text) return "";
   if (language && paint) {
     try {

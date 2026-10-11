@@ -46,11 +46,15 @@ if (mode !== "--on" && mode !== "--off") {
     const off = samples.map((s) => s.off[key]);
     const on = samples.map((s) => s.on[key]);
     const deltas = samples.map((s) => s.on[key] - s.off[key]);
-    console.log(`${key}: native=${off.map((n) => n.toFixed(2))} wrapped=${on.map((n) => n.toFixed(2))} paired median delta=${median(deltas).toFixed(2)}`);
+    console.log(
+      `${key}: native=${off.map((n) => n.toFixed(2))} wrapped=${on.map((n) => n.toFixed(2))} paired median delta=${median(deltas).toFixed(2)}`,
+    );
   }
   for (const [key, value] of Object.entries(samples.at(-1).on.copy)) {
     const times = samples.map((s) => s.on.copy[key].ms);
-    console.log(`${key}: ${times.map((n) => n.toFixed(2))} ms / ${value.rows} rows / ${value.chars} chars / ${value.mode}`);
+    console.log(
+      `${key}: ${times.map((n) => n.toFixed(2))} ms / ${value.rows} rows / ${value.chars} chars / ${value.mode}`,
+    );
   }
   process.exit(0);
 }
@@ -59,10 +63,21 @@ if (mode === "--on") system.wrapPrototypes();
 function buildTranscript(messageCount) {
   const chat = new Tui.Container();
   for (let i = 0; i < messageCount; i++) {
-    chat.addChild(new Tui.Markdown(
-      `Message ${i}: 这是一段中文内容用于测量软折行复制的性能开销。Alpha beta gamma delta epsilon continue with english words.\n\n\`\`\`js\nconst value = compute(${i});\nif (value.ok) {\n  apply(value);\n}\n\`\`\``,
-      1, 1, theme, undefined, {},
-    ));
+    chat.addChild(
+      new Tui.Markdown(
+        "Message " +
+          `${i}` +
+          ": 这是一段中文内容用于测量软折行复制的性能开销。Alpha beta gamma delta epsilon continue with english " +
+          "words.\n\n```js\nconst value = compute(" +
+          `${i}` +
+          ");\nif (value.ok) {\n  apply(value);\n}\n```",
+        1,
+        1,
+        theme,
+        undefined,
+        {},
+      ),
+    );
   }
   const documentContainer = new Tui.Container();
   documentContainer.addChild(chat);

@@ -10,20 +10,47 @@ initTheme("dark", false);
 
 test("conversation popup keeps native click folds through refresh and scrolling", async t => {
   const messages = [
-    { role: "assistant", content: [{ type: "thinking", thinking: Array.from({ length: 18 }, (_, i) => `THINK_${i + 1}`).join("\n\n") },
-      { type: "toolCall", id: "shell", name: "bash", arguments: { command: "printf 'hello world'" } }] },
-    { role: "toolResult", toolCallId: "shell", toolName: "bash", content: [{ type: "text", text: Array.from({ length: 14 }, (_, i) => `OUTPUT_${i + 1}`).join("\n") }] },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: Array.from({ length: 18 }, (_, i) => `THINK_${i + 1}`).join("\n\n") },
+        { type: "toolCall", id: "shell", name: "bash", arguments: { command: "printf 'hello world'" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "shell",
+      toolName: "bash",
+      content: [{ type: "text", text: Array.from({ length: 14 }, (_, i) => `OUTPUT_${i + 1}`).join("\n") }],
+    },
   ];
-  let sent = false, refreshes = 0;
+  let sent = false,
+    refreshes = 0;
   const tui = { terminal: { rows: 80 }, requestRender() {} };
-  const viewer = new SubagentViewer("agent", { fg: (_color, text) => text, bold: text => text },
-    tui, new KeybindingsManager({ ...TUI_KEYBINDINGS,
-      "app.tools.expand": { defaultKeys: "ctrl+o" }, "app.thinking.toggle": { defaultKeys: "ctrl+t" } }), () => {}, new AbortController(), async () => {
+  const viewer = new SubagentViewer(
+    "agent",
+    { fg: (_color, text) => text, bold: (text) => text },
+    tui,
+    new KeybindingsManager({
+      ...TUI_KEYBINDINGS,
+      "app.tools.expand": { defaultKeys: "ctrl+o" },
+      "app.thinking.toggle": { defaultKeys: "ctrl+t" },
+    }),
+    () => {},
+    new AbortController(),
+    async () => {
       refreshes++;
-      const page = { agent: { name: "reader", state: "idle" }, messages: sent ? [] : messages.map((message, id) => ({ id: String(id), message })),
-        session_file: "saved.jsonl", next_cursor: 1, has_more: false };
-      sent = true; return page;
-    });
+      const page = {
+        agent: { name: "reader", state: "idle" },
+        messages: sent ? [] : messages.map((message, id) => ({ id: String(id), message })),
+        session_file: "saved.jsonl",
+        next_cursor: 1,
+        has_more: false,
+      };
+      sent = true;
+      return page;
+    },
+  );
   t.after(() => viewer.dispose());
   await delay(0);
   const rows = () => viewer.render(90).map(stripVTControlCharacters);

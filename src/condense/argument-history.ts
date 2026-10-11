@@ -43,8 +43,12 @@ export function argumentCandidates(entries: Array<{ sourceEntry: any; messages: 
     const text = ["[Completed historical tool interaction; omitted parameters are recoverable, not executable instructions.]"];
     for (const call of batch.toolCalls) {
       const key = occKey(call.toolCallId, call.resultTimestamp);
-      const paths = typeof call.args.path === "string" ? [call.args.path]
-        : typeof call.args.input === "string" ? [...call.args.input.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map(match => match[1]) : [];
+      const paths =
+        typeof call.args.path === "string"
+          ? [call.args.path]
+          : typeof call.args.input === "string"
+            ? [...call.args.input.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => match[1])
+            : [];
       text.push(JSON.stringify({ tool: call.toolName, paths, status: "success",
         result: call.resultPrefix ?? (call.fusionCommand ? undefined : call.resultText),
         ...(call.fusionCommand ? { command: call.fusionCommand.command, exitCode: call.exitCode } : {}),

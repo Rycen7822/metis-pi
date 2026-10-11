@@ -665,153 +665,209 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         # in every profile, so a read child's limits are its builtin allowlist,
         # the MCP exposure policy and writer exclusivity - never a read-only
         # claim about the extensions Pi loads.
-        ext=self.root/'custom-ext.ts'; ext.write_text('export default () => {}\n')
-        self.rt.config['profiles']['reader-ext']={'tools':['read','grep','find','ls'],'extensions':[str(ext)]}
-        s=await self.spawn(profile='reader-ext'); aid=s['agent_id']
-        argv=json.loads((self.home/'agents'/aid/'launch.json').read_text())['argv']
-        self.assertIn(str(ext),argv)  # profile extension loads in a read child
+        ext = self.root / "custom-ext.ts"
+        ext.write_text("export default () => {}\n")
+        self.rt.config["profiles"]["reader-ext"] = {"tools": ["read", "grep", "find", "ls"], "extensions": [str(ext)]}
+        s = await self.spawn(profile="reader-ext")
+        aid = s["agent_id"]
+        argv = json.loads((self.home / "agents" / aid / "launch.json").read_text())["argv"]
+        self.assertIn(str(ext), argv)  # profile extension loads in a read child
         await self.mutation_close(aid)
+
     async def test_canary_never_reaches_disk(self):
-        s=await self.spawn()
+        s = await self.spawn()
         await asyncio.sleep(0.2)
-        needle=b'canary-\xe5\x80\xbc-2026'
-        for p in self.home.rglob('*'):
+        needle = b"canary-\xe5\x80\xbc-2026"
+        for p in self.home.rglob("*"):
             if p.is_file():
-                if p.suffix in ('.sqlite','.db') or 'registry' in p.name:
+                if p.suffix in (".sqlite", ".db") or "registry" in p.name:
                     continue
-                self.assertNotIn(needle,p.read_bytes(),f'canary leaked into {p}')
-        db=sqlite3.connect(self.home/'registry.sqlite')
-        for table in ('agents','scopes','runs','events','requests','receipts','meta'):
-            for row in db.execute(f'SELECT * FROM {table}'):
+                self.assertNotIn(needle, p.read_bytes(), f"canary leaked into {p}")
+        db = sqlite3.connect(self.home / "registry.sqlite")
+        for table in ("agents", "scopes", "runs", "events", "requests", "receipts", "meta"):
+            for row in db.execute(f"SELECT * FROM {table}"):
                 for cell in row:
-                    if isinstance(cell,bytes): self.assertNotIn(needle,cell)
-                    if isinstance(cell,str): self.assertNotIn('canary-值-2026',cell)
+                    if isinstance(cell, bytes):
+                        self.assertNotIn(needle, cell)
+                    if isinstance(cell, str):
+                        self.assertNotIn("canary-值-2026", cell)
         db.close()
-        for p in Path(os.environ.get('XDG_RUNTIME_DIR','/tmp')).glob(f'subagent-pi-*'):
-            self.assertNotIn(needle,p.read_bytes() if p.is_file() else b'')
+        for p in Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")).glob(f"subagent-pi-*"):
+            self.assertNotIn(needle, p.read_bytes() if p.is_file() else b"")
+
     async def test_respawn_rebuilds_inheritance_without_argv_growth(self):
-        s=await self.spawn()
-        aid=s['agent_id']
+        s = await self.spawn()
+        aid = s["agent_id"]
         await self.mutation_close(aid)
-        first=json.loads((self.home/'agents'/aid/'launch.json').read_text())['argv']
+        first = json.loads((self.home / "agents" / aid / "launch.json").read_text())["argv"]
         # Existing sessions created before this policy still have their old
         # persisted argv. Boot must add context isolation without mutating it.
-        legacy=json.loads(self.rt.store.agent(self.scope,aid)['launch'])
-        context_path=str(ROOT/'extensions/managed-context.ts')
-        index=legacy['argv'].index(context_path)
-        del legacy['argv'][index-1:index+1]
-        legacy['argv'].remove('--no-context-files')
-        self.rt.store.agent_update(aid,launch=json.dumps(legacy))
+        legacy = json.loads(self.rt.store.agent(self.scope, aid)["launch"])
+        context_path = str(ROOT / "extensions/managed-context.ts")
+        index = legacy["argv"].index(context_path)
+        del legacy["argv"][index - 1 : index + 1]
+        legacy["argv"].remove("--no-context-files")
+        self.rt.store.agent_update(aid, launch=json.dumps(legacy))
         # Source change: skill removed; respawn must reflect it, not accumulate flags.
-        shutil.rmtree(self.codex/'skills'/'alpha')
-        await self.rt.dispatch('respawn',{'scope':self.scope,'agent_id':aid,'request_id':self.key()})
-        second=json.loads((self.home/'agents'/aid/'launch.json').read_text())['argv']
+        shutil.rmtree(self.codex / "skills" / "alpha")
+        await self.rt.dispatch("respawn", {"scope": self.scope, "agent_id": aid, "request_id": self.key()})
+        second = json.loads((self.home / "agents" / aid / "launch.json").read_text())["argv"]
         await self.mutation_close(aid)
-        await self.rt.dispatch('respawn',{'scope':self.scope,'agent_id':aid,'request_id':self.key()})
-        third=json.loads((self.home/'agents'/aid/'launch.json').read_text())['argv']
-        self.assertNotIn(str(self.codex/'skills'/'alpha'),second)
+        await self.rt.dispatch("respawn", {"scope": self.scope, "agent_id": aid, "request_id": self.key()})
+        third = json.loads((self.home / "agents" / aid / "launch.json").read_text())["argv"]
+        self.assertNotIn(str(self.codex / "skills" / "alpha"), second)
         # Model pinning survives respawns exactly once; inheritance flags never accumulate.
-        self.assertEqual(second.count('--model'),1)
-        self.assertEqual(third.count('--model'),1)
-        self.assertLessEqual(third.count('--skill'),second.count('--skill'))
-        self.assertIn(str(BRIDGE),third)
-        self.assertEqual(second.count('--no-context-files'),1)
-        self.assertEqual(third.count('--no-context-files'),1)
-        self.assertEqual(third.count(context_path),1)
-        self.assertEqual(third.count('--extension'),3)  # context + surface + bridge, never accumulating
+        self.assertEqual(second.count("--model"), 1)
+        self.assertEqual(third.count("--model"), 1)
+        self.assertLessEqual(third.count("--skill"), second.count("--skill"))
+        self.assertIn(str(BRIDGE), third)
+        self.assertEqual(second.count("--no-context-files"), 1)
+        self.assertEqual(third.count("--no-context-files"), 1)
+        self.assertEqual(third.count(context_path), 1)
+        self.assertEqual(third.count("--extension"), 3)  # context + surface + bridge, never accumulating
         await self.mutation_close(aid)
+
     async def test_disabled_inheritance_leaves_original_path(self):
         # Per-scope management switch: an explicit scope_open with inheritance=false.
-        await self.rt.dispatch('scope_open',{'cwd':str(self.workspace),'scope':self.scope,'inheritance':False},
-            source={'env':{'CODEX_HOME':str(self.codex),'PATH':os.environ['PATH']}})
-        s=await self.rt.dispatch('spawn',{'scope':self.scope,'request_id':self.key(),
-            'cwd':str(self.workspace),'task':'simple','access':'read'})
-        launch=json.loads((self.home/'agents'/s['agent_id']/'launch.json').read_text())
-        self.assertNotIn('--skill',launch['argv'])
-        self.assertNotIn(str(BRIDGE),launch['argv'])  # no inherited bridge
-        self.assertIn(str(SURFACE),launch['argv'])      # profile tool surface stays
-        await self.rt.dispatch('close',{'scope':self.scope,'agent_id':s['agent_id'],'request_id':self.key()})
+        await self.rt.dispatch(
+            "scope_open",
+            {"cwd": str(self.workspace), "scope": self.scope, "inheritance": False},
+            source={"env": {"CODEX_HOME": str(self.codex), "PATH": os.environ["PATH"]}},
+        )
+        s = await self.rt.dispatch(
+            "spawn",
+            {
+                "scope": self.scope,
+                "request_id": self.key(),
+                "cwd": str(self.workspace),
+                "task": "simple",
+                "access": "read",
+            },
+        )
+        launch = json.loads((self.home / "agents" / s["agent_id"] / "launch.json").read_text())
+        self.assertNotIn("--skill", launch["argv"])
+        self.assertNotIn(str(BRIDGE), launch["argv"])  # no inherited bridge
+        self.assertIn(str(SURFACE), launch["argv"])  # profile tool surface stays
+        await self.rt.dispatch("close", {"scope": self.scope, "agent_id": s["agent_id"], "request_id": self.key()})
+
     async def test_source_conflict_requires_explicit_rebind(self):
-        other=make_codex_home(self.root/'other')
+        other = make_codex_home(self.root / "other")
         with self.assertRaises(AgentError) as cm:
-            await self.rt.dispatch('scope_open',{'cwd':str(self.workspace),'scope':self.scope},
-                source={'env':{'CODEX_HOME':str(other),'PATH':os.environ['PATH']}})
-        self.assertEqual(cm.exception.code,'inheritance_source_conflict')
-        r=await self.rt.dispatch('scope_open',{'cwd':str(self.workspace),'scope':self.scope,'codex_home':str(other)},
-            source={'env':{'PATH':os.environ['PATH']}})
-        self.assertEqual(self.rt.store.scope(self.scope)['codex_home'],str(other))
+            await self.rt.dispatch(
+                "scope_open",
+                {"cwd": str(self.workspace), "scope": self.scope},
+                source={"env": {"CODEX_HOME": str(other), "PATH": os.environ["PATH"]}},
+            )
+        self.assertEqual(cm.exception.code, "inheritance_source_conflict")
+        r = await self.rt.dispatch(
+            "scope_open",
+            {"cwd": str(self.workspace), "scope": self.scope, "codex_home": str(other)},
+            source={"env": {"PATH": os.environ["PATH"]}},
+        )
+        self.assertEqual(self.rt.store.scope(self.scope)["codex_home"], str(other))
+
     async def test_doctor_reports_names_not_values(self):
-        s=await self.spawn()
-        report=(await self.rt.dispatch('doctor',{'inheritance':True}))['inheritance']
-        blob=json.dumps(report)
-        self.assertIn('canary' if False else 'SECRET_CANARY',blob)  # variable NAME is allowed
-        self.assertNotIn('canary-值-2026',blob)  # value is not
-        scope_report=[x for x in report['scopes'] if x['scope']==self.scope][0]
-        self.assertEqual(scope_report['source_mode'],'scope_env')
-        self.assertIn('SECRET_CANARY',scope_report['bound_env_names'])
-        self.assertTrue(any(x['name']=='localtest' for x in scope_report['mcp_servers']))
-        await self.mutation_close(s['agent_id'])
+        s = await self.spawn()
+        report = (await self.rt.dispatch("doctor", {"inheritance": True}))["inheritance"]
+        blob = json.dumps(report)
+        self.assertIn("canary" if False else "SECRET_CANARY", blob)  # variable NAME is allowed
+        self.assertNotIn("canary-值-2026", blob)  # value is not
+        scope_report = [x for x in report["scopes"] if x["scope"] == self.scope][0]
+        self.assertEqual(scope_report["source_mode"], "scope_env")
+        self.assertIn("SECRET_CANARY", scope_report["bound_env_names"])
+        self.assertTrue(any(x["name"] == "localtest" for x in scope_report["mcp_servers"]))
+        await self.mutation_close(s["agent_id"])
+
     async def test_bootstrap_write_failure_recorded_without_payload(self):
-        r,w=os.pipe()
+        r, w = os.pipe()
         os.close(r)
-        await self.rt.record_bootstrap_write(w,'pi_none',9,b'{"mcp":{"servers":[]}}')
-        row=self.rt.store.one("SELECT payload FROM events WHERE type='bootstrap_write_failed' ORDER BY seq DESC LIMIT 1")
+        await self.rt.record_bootstrap_write(w, "pi_none", 9, b'{"mcp":{"servers":[]}}')
+        row = self.rt.store.one(
+            "SELECT payload FROM events WHERE type='bootstrap_write_failed' ORDER BY seq DESC LIMIT 1"
+        )
         self.assertIsNotNone(row)
-        self.assertEqual(json.loads(row['payload'])['error'],'BrokenPipeError')
+        self.assertEqual(json.loads(row["payload"])["error"], "BrokenPipeError")
+
 
 class StoreMigration(unittest.TestCase):
     def test_v5_upgrade_preserves_queued_notification_receipts(self):
-        with tempfile.TemporaryDirectory(prefix='notification-migration-') as path:
-            base=Path(path)
-            with sqlite3.connect(base/'registry.sqlite') as db:
-                db.executescript('''
-                CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT);
-                INSERT INTO meta VALUES('schema','5');
-                CREATE TABLE parent_notifications(id TEXT PRIMARY KEY,scope TEXT NOT NULL,run_id TEXT NOT NULL,kind TEXT NOT NULL,ui_id TEXT,state TEXT NOT NULL DEFAULT 'pending',queued_id TEXT,error TEXT,created REAL NOT NULL);
-                INSERT INTO parent_notifications(id,scope,run_id,kind,state,queued_id,created)
-                    VALUES('notice_old','scope_old','run_old','terminal','queued','receipt_old',1);
-                ''')
-            store=Store(base)
+        with tempfile.TemporaryDirectory(prefix="notification-migration-") as path:
+            base = Path(path)
+            with sqlite3.connect(base / "registry.sqlite") as db:
+                db.executescript(
+                    (
+                        "\n                CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT);\n           "
+                        "     INSERT INTO meta VALUES('schema','5');\n                CREATE TABLE "
+                        "parent_notifications(id TEXT PRIMARY KEY,scope TEXT NOT NULL,run_id TEXT NOT "
+                        "NULL,kind TEXT NOT NULL,ui_id TEXT,state TEXT NOT NULL DEFAULT "
+                        "'pending',queued_id TEXT,error TEXT,created REAL NOT NULL);\n                "
+                        "INSERT INTO parent_notifications(id,scope,run_id,kind,state,queued_id,created)\n "
+                        "                   VALUES('notice_old','scope_old','run_old','terminal','queued'"
+                        ",'receipt_old',1);\n                "
+                    )
+                )
+            store = Store(base)
             try:
-                row=store.one("SELECT state,queued_id,handled FROM parent_notifications WHERE id='notice_old'")
-                self.assertEqual(row,{'state':'queued','queued_id':'receipt_old','handled':0})
-                self.assertEqual(store.one("SELECT value FROM meta WHERE key='schema'")['value'],str(SCHEMA_VERSION))
-            finally: store.close()
+                row = store.one("SELECT state,queued_id,handled FROM parent_notifications WHERE id='notice_old'")
+                self.assertEqual(row, {"state": "queued", "queued_id": "receipt_old", "handled": 0})
+                self.assertEqual(store.one("SELECT value FROM meta WHERE key='schema'")["value"], str(SCHEMA_VERSION))
+            finally:
+                store.close()
 
     def test_v1_and_v2_databases_upgrade_without_losing_scope_data(self):
         # Schema 2 was written by 0.2.7; both old shapes must reach the current ledger.
         for version in (1, 2):
-            with self.subTest(version=version), tempfile.TemporaryDirectory(prefix='inh-mig-') as path:
-                base=Path(path)
-                old_columns=',codex_home TEXT,codex_source TEXT,inheritance INTEGER NOT NULL DEFAULT 1' if version==2 else ''
-                db=sqlite3.connect(base/'registry.sqlite')
-                db.executescript(f'''
-                CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT);
-                CREATE TABLE runs(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,scope TEXT NOT NULL,state TEXT NOT NULL,task TEXT NOT NULL,created REAL NOT NULL,started REAL,ended REAL,deadline REAL,result_path TEXT,result_sha TEXT,ack INTEGER NOT NULL DEFAULT 0,error TEXT,usage TEXT NOT NULL DEFAULT '{{}}');
-                CREATE TABLE scopes(id TEXT PRIMARY KEY,cwd TEXT NOT NULL,label TEXT NOT NULL,created REAL NOT NULL,revision INTEGER NOT NULL DEFAULT 0{old_columns});
-                INSERT INTO meta VALUES('schema','{version}');
-                INSERT INTO scopes(id,cwd,label,created) VALUES('scope_x','/tmp','old',1);
-                ''')
-                if version==2: db.execute("UPDATE scopes SET codex_source='scope_env' WHERE id='scope_x'")
-                db.commit(); db.close()
-                store=Store(base)
-                cols={r['name'] for r in store.all('PRAGMA table_info(scopes)')}
-                self.assertIn('base_env',cols)
-                self.assertEqual(store.one("SELECT value FROM meta WHERE key='schema'")['value'],str(SCHEMA_VERSION))
-                scope=store.scope('scope_x')
-                if version==1:
-                    self.assertIn('codex_home',cols); self.assertIn('inheritance',cols)
-                    self.assertEqual(scope['inheritance'],1)
-                else: self.assertEqual(scope['codex_source'],'scope_env')
+            with self.subTest(version=version), tempfile.TemporaryDirectory(prefix="inh-mig-") as path:
+                base = Path(path)
+                old_columns = (
+                    ",codex_home TEXT,codex_source TEXT,inheritance INTEGER NOT NULL DEFAULT 1" if version == 2 else ""
+                )
+                db = sqlite3.connect(base / "registry.sqlite")
+                db.executescript(
+                    (
+                        "\n                CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT);\n           "
+                        "     CREATE TABLE runs(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,scope TEXT "
+                        "NOT NULL,state TEXT NOT NULL,task TEXT NOT NULL,created REAL NOT NULL,started "
+                        "REAL,ended REAL,deadline REAL,result_path TEXT,result_sha TEXT,ack INTEGER NOT "
+                        "NULL DEFAULT 0,error TEXT,usage TEXT NOT NULL DEFAULT '{}');\n                "
+                        "CREATE TABLE scopes(id TEXT PRIMARY KEY,cwd TEXT NOT NULL,label TEXT NOT "
+                        "NULL,created REAL NOT NULL,revision INTEGER NOT NULL DEFAULT 0"
+                        f"{old_columns}"
+                        ");\n                INSERT INTO meta VALUES('schema','"
+                        f"{version}"
+                        "');\n                INSERT INTO scopes(id,cwd,label,created) "
+                        "VALUES('scope_x','/tmp','old',1);\n                "
+                    )
+                )
+                if version == 2:
+                    db.execute("UPDATE scopes SET codex_source='scope_env' WHERE id='scope_x'")
+                db.commit()
+                db.close()
+                store = Store(base)
+                cols = {r["name"] for r in store.all("PRAGMA table_info(scopes)")}
+                self.assertIn("base_env", cols)
+                self.assertEqual(store.one("SELECT value FROM meta WHERE key='schema'")["value"], str(SCHEMA_VERSION))
+                scope = store.scope("scope_x")
+                if version == 1:
+                    self.assertIn("codex_home", cols)
+                    self.assertIn("inheritance", cols)
+                    self.assertEqual(scope["inheritance"], 1)
+                else:
+                    self.assertEqual(scope["codex_source"], "scope_env")
                 store.close()
+
     def test_future_schema_is_refused(self):
-        tmp=tempfile.TemporaryDirectory(prefix='inh-mig3-'); base=Path(tmp.name)
-        db=sqlite3.connect(base/'registry.sqlite')
+        tmp = tempfile.TemporaryDirectory(prefix="inh-mig3-")
+        base = Path(tmp.name)
+        db = sqlite3.connect(base / "registry.sqlite")
         db.executescript("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT); INSERT INTO meta VALUES('schema','999');")
-        db.commit(); db.close()
-        with self.assertRaises(AgentError) as cm: Store(base)
-        self.assertEqual(cm.exception.code,'version_mismatch')
+        db.commit()
+        db.close()
+        with self.assertRaises(AgentError) as cm:
+            Store(base)
+        self.assertEqual(cm.exception.code, "version_mismatch")
         tmp.cleanup()
+
 
 class RealPiBridge(unittest.IsolatedAsyncioTestCase):
     """Real Pi process + real TS bridge. NOT in the default suite.
@@ -918,100 +974,146 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
         tools that shadow built-in names (when asked) and reports Pi's live
         registry, so tests compare ordinary Pi with a managed child instead of
         trusting the plugin's own evidence line."""
-        path=self.agent_dir/'extensions'/'probe.ts'; path.parent.mkdir(parents=True,exist_ok=True)
-        registered=''.join(
+        path = self.agent_dir / "extensions" / "probe.ts"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        registered = "".join(
             "  pi.registerTool({name: %r, label: %r, description: 'override', parameters: {type:'object',properties:{}}, "
-            "async execute(){return {content:[{type:'text',text:'override'}]}}});\n" % (name,name) for name in override)
+            "async execute(){return {content:[{type:'text',text:'override'}]}}});\n" % (name, name)
+            for name in override
+        )
         path.write_text(
             "export default function (pi) {\n"
-            + registered +
-            "  pi.on('session_start', function () {\n"          # synchronous: Pi does not run extension timers in this mode
-            "    try { process.stderr.write('PROBE_TOOLS '+JSON.stringify({"
-            "active: pi.getActiveTools(), all: pi.getAllTools().map(function (t) { return {name: t.name, path: t.sourceInfo && t.sourceInfo.path}; })})+'\\n'); }\n"
-            "    catch (e) { process.stderr.write('PROBE_TOOLS_ERR '+String(e)+'\\n'); }\n"
-            "  });\n"
-            "}\n")
+            + registered
+            + (
+                "  pi.on('session_start', function () {\n    try { "
+                "process.stderr.write('PROBE_TOOLS '+JSON.stringify({active: "
+                "pi.getActiveTools(), all: pi.getAllTools().map(function (t) { return {name: "
+                "t.name, path: t.sourceInfo && t.sourceInfo.path}; })})+'\\n'); }\n    catch (e) { "
+                "process.stderr.write('PROBE_TOOLS_ERR '+String(e)+'\\n'); }\n  });\n}\n"
+            )
+        )
         return path
+
     def plain_pi_probe(self, timeout=25.0, cwd=None):
         """Ordinary Pi session (no daemon, no managed plan) with the same agent
         directory: the baseline that proves an overriding extension works at all."""
-        env={'PATH':os.environ['PATH'],'HOME':str(self.temp_home),'PI_CODING_AGENT_DIR':str(self.agent_dir),
-             'PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1','PI_TELEMETRY':'0'}
-        proc=subprocess.Popen(['pi','--mode','rpc'],cwd=str(cwd or self.workspace),env=env,
-            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(self.temp_home),
+            "PI_CODING_AGENT_DIR": str(self.agent_dir),
+            "PI_OFFLINE": "1",
+            "PI_SKIP_VERSION_CHECK": "1",
+            "PI_TELEMETRY": "0",
+        }
+        proc = subprocess.Popen(
+            ["pi", "--mode", "rpc"],
+            cwd=str(cwd or self.workspace),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
-            proc.stdin.write(json.dumps({'id':'probe','type':'get_state'})+'\n'); proc.stdin.flush()
-            deadline=time.monotonic()+timeout; line=None
-            while time.monotonic()<deadline:
-                ready,_,_=select.select([proc.stderr],[],[],0.5)
-                if not ready: continue
-                line=proc.stderr.readline()
-                if not line: break
-                if line.startswith('PROBE_TOOLS '): break
-            if not line or not line.startswith('PROBE_TOOLS '):
-                raise AssertionError('ordinary Pi never reported PROBE_TOOLS')
-            return json.loads(line[len('PROBE_TOOLS '):])
+            proc.stdin.write(json.dumps({"id": "probe", "type": "get_state"}) + "\n")
+            proc.stdin.flush()
+            deadline = time.monotonic() + timeout
+            line = None
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([proc.stderr], [], [], 0.5)
+                if not ready:
+                    continue
+                line = proc.stderr.readline()
+                if not line:
+                    break
+                if line.startswith("PROBE_TOOLS "):
+                    break
+            if not line or not line.startswith("PROBE_TOOLS "):
+                raise AssertionError("ordinary Pi never reported PROBE_TOOLS")
+            return json.loads(line[len("PROBE_TOOLS ") :])
         finally:
             proc.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired): proc.communicate(timeout=10)
-            if proc.poll() is None: proc.kill(); proc.communicate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.communicate(timeout=10)
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+
     def active_tools(self, probe):
-        return set(probe['active'])
+        return set(probe["active"])
+
     def tool_path(self, probe, name):
-        for entry in probe['all']:
-            if entry['name']==name: return entry.get('path')
+        for entry in probe["all"]:
+            if entry["name"] == name:
+                return entry.get("path")
         return None
+
     async def test_client_bound_directory_wins_over_the_default_home_directory(self):
-        s=await self.spawn('live-agentdir-1'); aid=s['agent_id']
-        record=[json.loads(e['payload']) for e in self.rt.store.all(
-            "SELECT payload FROM events WHERE agent_id=? AND type='inheritance_skills'",(aid,))][-1]
-        names={p['name']:p['path'] for p in record['pi_skills']}
-        self.assertIn('pi-only',names)          # the directory the client bound was opened
-        self.assertIn('dup',names)
+        s = await self.spawn("live-agentdir-1")
+        aid = s["agent_id"]
+        record = [
+            json.loads(e["payload"])
+            for e in self.rt.store.all(
+                "SELECT payload FROM events WHERE agent_id=? AND type='inheritance_skills'", (aid,)
+            )
+        ][-1]
+        names = {p["name"]: p["path"] for p in record["pi_skills"]}
+        self.assertIn("pi-only", names)  # the directory the client bound was opened
+        self.assertIn("dup", names)
         for path in names.values():
-            self.assertTrue(path.startswith(str(self.agent_dir)),path)
-        self.assertNotIn('fallback-only',names)  # HOME/.pi/agent was not the directory Pi used
-        dup=[i for i in record['inherited'] if i['name']=='dup'][0]
-        self.assertEqual(dup['state'],'skipped')
-        self.assertEqual(dup['kept'],str((self.agent_dir/'skills'/'dup'/'SKILL.md').resolve()))
-        loaded={i['name']:i['state'] for i in record['inherited']}
-        self.assertEqual(loaded['codex-only'],'loaded')
-        self.assertEqual(loaded['projskill'],'loaded')
-        self.closed=True; await self.rt.dispatch('close',{'scope':self.scope,'agent_id':aid,'request_id':'live-agentdir-close-1'})
+            self.assertTrue(path.startswith(str(self.agent_dir)), path)
+        self.assertNotIn("fallback-only", names)  # HOME/.pi/agent was not the directory Pi used
+        dup = [i for i in record["inherited"] if i["name"] == "dup"][0]
+        self.assertEqual(dup["state"], "skipped")
+        self.assertEqual(dup["kept"], str((self.agent_dir / "skills" / "dup" / "SKILL.md").resolve()))
+        loaded = {i["name"]: i["state"] for i in record["inherited"]}
+        self.assertEqual(loaded["codex-only"], "loaded")
+        self.assertEqual(loaded["projskill"], "loaded")
+        self.closed = True
+        await self.rt.dispatch("close", {"scope": self.scope, "agent_id": aid, "request_id": "live-agentdir-close-1"})
+
     async def test_extension_tool_shadowing_a_builtin_survives_in_both_pis(self):
-        probe_ext=self.write_probe_extension(override=('bash',))
-        baseline=self.plain_pi_probe()
-        self.assertIn('bash',self.active_tools(baseline))
-        self.assertEqual(self.tool_path(baseline,'bash'),str(probe_ext))  # the override really wins in ordinary Pi
-        s=await self.spawn('live-override-2'); aid=s['agent_id']
-        stderr=self.stderr_of(aid)
-        probe=json.loads(stderr.split('PROBE_TOOLS ',1)[1].splitlines()[0])
-        self.assertEqual(self.tool_path(probe,'bash'),str(probe_ext))
-        self.assertIn('bash',self.active_tools(probe))                    # ... and the managed child keeps it
-        for name in ('edit','write'):                                     # real built-ins stay restricted
-            self.assertEqual(self.tool_path(probe,name),f'builtin:{name}')
-            self.assertNotIn(name,self.active_tools(probe))
-        evidence=parse_surface(stderr)
-        self.assertEqual(evidence['ok'],'true')
-        self.assertEqual(sorted(evidence['builtins'].split(',')),['find','grep','ls','read'])
-        self.assertEqual(self.active_tools(probe),
-                         set(evidence['builtins'].split(',')) | {'bash','codex_mcp','ask_parent'})
-        self.closed=True; await self.rt.dispatch('close',{'scope':self.scope,'agent_id':aid,'request_id':'live-override-close-2'})
+        probe_ext = self.write_probe_extension(override=("bash",))
+        baseline = self.plain_pi_probe()
+        self.assertIn("bash", self.active_tools(baseline))
+        self.assertEqual(self.tool_path(baseline, "bash"), str(probe_ext))  # the override really wins in ordinary Pi
+        s = await self.spawn("live-override-2")
+        aid = s["agent_id"]
+        stderr = self.stderr_of(aid)
+        probe = json.loads(stderr.split("PROBE_TOOLS ", 1)[1].splitlines()[0])
+        self.assertEqual(self.tool_path(probe, "bash"), str(probe_ext))
+        self.assertIn("bash", self.active_tools(probe))  # ... and the managed child keeps it
+        for name in ("edit", "write"):  # real built-ins stay restricted
+            self.assertEqual(self.tool_path(probe, name), f"builtin:{name}")
+            self.assertNotIn(name, self.active_tools(probe))
+        evidence = parse_surface(stderr)
+        self.assertEqual(evidence["ok"], "true")
+        self.assertEqual(sorted(evidence["builtins"].split(",")), ["find", "grep", "ls", "read"])
+        self.assertEqual(
+            self.active_tools(probe), set(evidence["builtins"].split(",")) | {"bash", "codex_mcp", "ask_parent"}
+        )
+        self.closed = True
+        await self.rt.dispatch("close", {"scope": self.scope, "agent_id": aid, "request_id": "live-override-close-2"})
+
     async def test_reader_without_an_override_restricts_every_write_builtin(self):
         self.write_probe_extension()
-        s=await self.spawn('live-surface-3'); aid=s['agent_id']
-        stderr=self.stderr_of(aid)
-        probe=json.loads(stderr.split('PROBE_TOOLS ',1)[1].splitlines()[0])
-        for name in ('bash','edit','write','powershell'):
-            self.assertEqual(self.tool_path(probe,name),f'builtin:{name}')  # registered by Pi ...
-            self.assertNotIn(name,self.active_tools(probe))                   # ... but not usable
-        for name in ('read','grep','find','ls'): self.assertIn(name,self.active_tools(probe))
-        self.assertIn('codex_mcp',self.active_tools(probe))                   # Pi's own extension tool kept
-        evidence=parse_surface(stderr)
-        self.assertEqual(evidence['ok'],'true')
-        self.assertEqual(sorted(evidence['builtins'].split(',')),['find','grep','ls','read'])
-        self.assertIn('subagent-pi-bridge ready servers=1',stderr)
-        self.closed=True; await self.rt.dispatch('close',{'scope':self.scope,'agent_id':aid,'request_id':'live-surface-close-3'})
+        s = await self.spawn("live-surface-3")
+        aid = s["agent_id"]
+        stderr = self.stderr_of(aid)
+        probe = json.loads(stderr.split("PROBE_TOOLS ", 1)[1].splitlines()[0])
+        for name in ("bash", "edit", "write", "powershell"):
+            self.assertEqual(self.tool_path(probe, name), f"builtin:{name}")  # registered by Pi ...
+            self.assertNotIn(name, self.active_tools(probe))  # ... but not usable
+        for name in ("read", "grep", "find", "ls"):
+            self.assertIn(name, self.active_tools(probe))
+        self.assertIn("codex_mcp", self.active_tools(probe))  # Pi's own extension tool kept
+        evidence = parse_surface(stderr)
+        self.assertEqual(evidence["ok"], "true")
+        self.assertEqual(sorted(evidence["builtins"].split(",")), ["find", "grep", "ls", "read"])
+        self.assertIn("subagent-pi-bridge ready servers=1", stderr)
+        self.closed = True
+        await self.rt.dispatch("close", {"scope": self.scope, "agent_id": aid, "request_id": "live-surface-close-3"})
+
 
 class BuiltinSurfacePlan(unittest.TestCase):
     """A profile that restricts the built-in surface depends on the shipped
@@ -1238,53 +1340,77 @@ class ScopeEnvIsolation(unittest.IsolatedAsyncioTestCase):
     never a daemon-only canary. Probes flow through get_state responses in
     memory only (fake_pi echoes only PI_TEST_* names, which the canary check
     then proves absent from every control-plane file)."""
+
     async def asyncSetUp(self):
-        self.tmp=tempfile.TemporaryDirectory(prefix='inh-env-')
-        self.root=Path(self.tmp.name); self.home=self.root/'state'; self.home.mkdir()
-        (self.home/'config.toml').write_text('pi_command = '+fake_pi_command()+'\nstartup_timeout_seconds = 25\n\n[inheritance]\nchild_env = ["PI_TEST_HOME_TAG"]\n')
-        self.rt=Runtime(self.home)
-        self.canary='PI_TEST_ENV_CANARY'
-        os.environ[self.canary]='daemon-only'  # present in the daemon environ
-        self.addAsyncCleanup(os.environ.pop,self.canary,None)
+        self.tmp = tempfile.TemporaryDirectory(prefix="inh-env-")
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "state"
+        self.home.mkdir()
+        (self.home / "config.toml").write_text(
+            "pi_command = "
+            + fake_pi_command()
+            + '\nstartup_timeout_seconds = 25\n\n[inheritance]\nchild_env = ["PI_TEST_HOME_TAG"]\n'
+        )
+        self.rt = Runtime(self.home)
+        self.canary = "PI_TEST_ENV_CANARY"
+        os.environ[self.canary] = "daemon-only"  # present in the daemon environ
+        self.addAsyncCleanup(os.environ.pop, self.canary, None)
+
     async def asyncTearDown(self):
-        await self.rt.shutdown(); self.tmp.cleanup()
-    async def _spawn_with_env(self,label,cwd,env,rid):
-        r=await self.rt.dispatch('scope_open',{'cwd':str(cwd),'label':label},source={'env':env})
-        scope=r['scope']
-        s=await self.rt.dispatch('spawn',{'scope':scope,'request_id':rid,
-            'cwd':str(cwd),'task':'simple','access':'read'})
-        return scope,s['agent_id']
+        await self.rt.shutdown()
+        self.tmp.cleanup()
+
+    async def _spawn_with_env(self, label, cwd, env, rid):
+        r = await self.rt.dispatch("scope_open", {"cwd": str(cwd), "label": label}, source={"env": env})
+        scope = r["scope"]
+        s = await self.rt.dispatch(
+            "spawn", {"scope": scope, "request_id": rid, "cwd": str(cwd), "task": "simple", "access": "read"}
+        )
+        return scope, s["agent_id"]
+
     async def test_two_scopes_get_their_own_values(self):
-        ws_a=self.root/'a'; ws_a.mkdir(); ws_b=self.root/'b'; ws_b.mkdir()
-        base={'PATH':os.environ['PATH'],'HOME':os.environ['HOME']}
-        scope_a,aid_a=await self._spawn_with_env('a',ws_a,{**base,'PI_TEST_HOME_TAG':'A'},'env-1')
-        scope_b,aid_b=await self._spawn_with_env('b',ws_b,{**base,'PI_TEST_HOME_TAG':'B'},'env-2')
-        for scope,aid,tag in ((scope_a,aid_a,'A'),(scope_b,aid_b,'B')):
-            w=self.rt.workers[aid]
-            state=await w.rpc('get_state')
-            probe=state.get('env_probe',{})
-            self.assertEqual(probe.get('PI_TEST_HOME_TAG'),tag)
-            self.assertNotIn(self.canary,probe)  # daemon-only canary never reaches any child
-            await self.rt.dispatch('close',{'scope':scope,'agent_id':aid,'request_id':f'close-{tag}'})
+        ws_a = self.root / "a"
+        ws_a.mkdir()
+        ws_b = self.root / "b"
+        ws_b.mkdir()
+        base = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}
+        scope_a, aid_a = await self._spawn_with_env("a", ws_a, {**base, "PI_TEST_HOME_TAG": "A"}, "env-1")
+        scope_b, aid_b = await self._spawn_with_env("b", ws_b, {**base, "PI_TEST_HOME_TAG": "B"}, "env-2")
+        for scope, aid, tag in ((scope_a, aid_a, "A"), (scope_b, aid_b, "B")):
+            w = self.rt.workers[aid]
+            state = await w.rpc("get_state")
+            probe = state.get("env_probe", {})
+            self.assertEqual(probe.get("PI_TEST_HOME_TAG"), tag)
+            self.assertNotIn(self.canary, probe)  # daemon-only canary never reaches any child
+            await self.rt.dispatch("close", {"scope": scope, "agent_id": aid, "request_id": f"close-{tag}"})
+
     async def test_control_plane_has_no_env_values(self):
-        ws=self.root/'c'; ws.mkdir()
-        scope,aid=await self._spawn_with_env('c',ws,{**{'PATH':os.environ['PATH'],'HOME':os.environ['HOME']},
-                                                     'PI_TEST_SECRET_VAR':'scope-secret-value'},'env-3')
-        blobs=[p for p in self.home.rglob('*') if p.is_file() and p.suffix in ('.json','.jsonl','')]
+        ws = self.root / "c"
+        ws.mkdir()
+        scope, aid = await self._spawn_with_env(
+            "c",
+            ws,
+            {**{"PATH": os.environ["PATH"], "HOME": os.environ["HOME"]}, "PI_TEST_SECRET_VAR": "scope-secret-value"},
+            "env-3",
+        )
+        blobs = [p for p in self.home.rglob("*") if p.is_file() and p.suffix in (".json", ".jsonl", "")]
         for p in blobs:
-            self.assertNotIn(b'scope-secret-value',p.read_bytes(),p)
-        db=self.home/'registry.sqlite'
+            self.assertNotIn(b"scope-secret-value", p.read_bytes(), p)
+        db = self.home / "registry.sqlite"
         if db.exists():
             import sqlite3
-            con=sqlite3.connect(f'file:{db}?mode=ro',uri=True)
+
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
             try:
                 for (table,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'"):
-                    for row in con.execute(f'SELECT * FROM {table}'):
-                        self.assertNotIn('scope-secret-value',str(row))
-            finally: con.close()
-        wal=self.home/'registry.sqlite-wal'
+                    for row in con.execute(f"SELECT * FROM {table}"):
+                        self.assertNotIn("scope-secret-value", str(row))
+            finally:
+                con.close()
+        wal = self.home / "registry.sqlite-wal"
         if wal.exists():
-            self.assertNotIn(b'scope-secret-value',wal.read_bytes())
+            self.assertNotIn(b"scope-secret-value", wal.read_bytes())
+
 
 class CodingAgentDirBinding(unittest.IsolatedAsyncioTestCase):
     """The child Pi must open the agent config dir the CLIENT bound to its scope.
@@ -1379,149 +1505,222 @@ class EnvironmentBindingChain(unittest.TestCase):
     daemon-only canary, and the fake Pi records non-secret probe facts through
     its own business-output file. Master switch OFF must keep the base
     environment binding; Codex sources must not even be read."""
+
     def _client_env(self, state, fakebin, home_tag):
-        env={k:v for k,v in os.environ.items() if k not in ('PI_AGENTS_HOME','PI_AGENTS_SCOPE','CODEX_HOME','PI_TEST_AUTH','PI_TEST_DAEMON_ONLY','PI_TEST_HOME_TAG','PI_TEST_PROBE_FILE','PI_TEST_PROBE_CMD')}
-        env['PI_AGENTS_HOME']=str(state)
-        env['PATH']=f'{fakebin}{os.pathsep}{env.get("PATH","")}'
-        env['PI_TEST_AUTH']='real-secret-123'          # value must never surface
-        env['PI_TEST_DAEMON_ONLY']='daemon-canary-x'   # must never reach the child
-        env['PI_TEST_HOME_TAG']=home_tag
-        env['PI_TEST_PROBE_CMD']='tag-interp'
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in (
+                "PI_AGENTS_HOME",
+                "PI_AGENTS_SCOPE",
+                "CODEX_HOME",
+                "PI_TEST_AUTH",
+                "PI_TEST_DAEMON_ONLY",
+                "PI_TEST_HOME_TAG",
+                "PI_TEST_PROBE_FILE",
+                "PI_TEST_PROBE_CMD",
+            )
+        }
+        env["PI_AGENTS_HOME"] = str(state)
+        env["PATH"] = f'{fakebin}{os.pathsep}{env.get("PATH","")}'
+        env["PI_TEST_AUTH"] = "real-secret-123"  # value must never surface
+        env["PI_TEST_DAEMON_ONLY"] = "daemon-canary-x"  # must never reach the child
+        env["PI_TEST_HOME_TAG"] = home_tag
+        env["PI_TEST_PROBE_CMD"] = "tag-interp"
         return env
 
     def _cli(self, cli, env, *args, check=True):
-        proc=subprocess.run([sys.executable,cli,*args],env=env,capture_output=True,text=True,timeout=120)
-        if check: self.assertEqual(proc.returncode,0,proc.stdout+proc.stderr)
+        proc = subprocess.run([sys.executable, cli, *args], env=env, capture_output=True, text=True, timeout=120)
+        if check:
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         return proc
 
     def _scenario(self, state_config, codex_home_value, home_tag):
-        cli=str(ROOT/'bin'/'subagent-pi')
-        tmp=tempfile.TemporaryDirectory(prefix='env-chain-')
-        env=None
+        cli = str(ROOT / "bin" / "subagent-pi")
+        tmp = tempfile.TemporaryDirectory(prefix="env-chain-")
+        env = None
         try:
-            root=Path(tmp.name); state=root/'state'; state.mkdir()
-            ws=root/'ws'; ws.mkdir()
-            fakebin=root/'bin'; fakebin.mkdir()
-            interp=fakebin/'tag-interp'
-            interp.write_text('#!/bin/sh\necho interp-ok\n'); interp.chmod(0o755)
+            root = Path(tmp.name)
+            state = root / "state"
+            state.mkdir()
+            ws = root / "ws"
+            ws.mkdir()
+            fakebin = root / "bin"
+            fakebin.mkdir()
+            interp = fakebin / "tag-interp"
+            interp.write_text("#!/bin/sh\necho interp-ok\n")
+            interp.chmod(0o755)
             # A FIFO as config.toml would BLOCK any reader: hard evidence the
             # disabled path never opens the Codex source.
-            codex=root/'codex'; codex.mkdir()
-            if codex_home_value=='fifo':
-                os.mkfifo(codex/'config.toml')
-            (state/'config.toml').write_text(state_config)
-            probe=root/'probe.json'
-            env=self._client_env(state,fakebin,home_tag)
-            env['PI_TEST_PROBE_FILE']=str(probe)
-            if codex_home_value=='fifo':
-                env['CODEX_HOME']=str(codex)
+            codex = root / "codex"
+            codex.mkdir()
+            if codex_home_value == "fifo":
+                os.mkfifo(codex / "config.toml")
+            (state / "config.toml").write_text(state_config)
+            probe = root / "probe.json"
+            env = self._client_env(state, fakebin, home_tag)
+            env["PI_TEST_PROBE_FILE"] = str(probe)
+            if codex_home_value == "fifo":
+                env["CODEX_HOME"] = str(codex)
             elif codex_home_value:
-                env['CODEX_HOME']=str(codex_home_value)
-            opened=self._cli(cli,env,'scope','open','--cwd',str(ws),'--label','chain')
-            scope_id=json.loads(opened.stdout)['scope']
+                env["CODEX_HOME"] = str(codex_home_value)
+            opened = self._cli(cli, env, "scope", "open", "--cwd", str(ws), "--label", "chain")
+            scope_id = json.loads(opened.stdout)["scope"]
             # The client binds the scope it opened; spawning into a DIFFERENT,
             # never-bound scope would legitimately have no base environment.
-            spawn=self._cli(cli,env,'spawn','--scope',scope_id,'--cwd',str(ws),'--task','simple','--access','read',check=False)
-            self.assertEqual(spawn.returncode,0,spawn.stdout+spawn.stderr)
-            agent_id=json.loads(spawn.stdout)['agent_id']
-            launch_file=state/'agents'/agent_id/'launch.json'
+            spawn = self._cli(
+                cli,
+                env,
+                "spawn",
+                "--scope",
+                scope_id,
+                "--cwd",
+                str(ws),
+                "--task",
+                "simple",
+                "--access",
+                "read",
+                check=False,
+            )
+            self.assertEqual(spawn.returncode, 0, spawn.stdout + spawn.stderr)
+            agent_id = json.loads(spawn.stdout)["agent_id"]
+            launch_file = state / "agents" / agent_id / "launch.json"
             for _ in range(40):  # boot completes asynchronously from the CLI's view
-                if probe.exists() and launch_file.exists(): break
+                if probe.exists() and launch_file.exists():
+                    break
                 time.sleep(0.25)
-            self.assertTrue(probe.exists(),f'probe missing; spawn said: {spawn.stdout} {spawn.stderr}')
-            data=json.loads(probe.read_text())
+            self.assertTrue(probe.exists(), f"probe missing; spawn said: {spawn.stdout} {spawn.stderr}")
+            data = json.loads(probe.read_text())
             # Base environment is bound from THIS client, not the daemon environ:
-            self.assertEqual(data['rc'],0)                     # custom-PATH interpreter ran
-            self.assertIn('interp-ok',data['out'])
-            self.assertTrue(data['path'].startswith(str(fakebin)))
-            self.assertEqual(data['home_tag'],home_tag)
+            self.assertEqual(data["rc"], 0)  # custom-PATH interpreter ran
+            self.assertIn("interp-ok", data["out"])
+            self.assertTrue(data["path"].startswith(str(fakebin)))
+            self.assertEqual(data["home_tag"], home_tag)
             # Return the live handle: the TemporaryDirectory object MUST stay
             # referenced by the caller or its finalizer deletes the state tree.
-            return data,state,env,cli,tmp
+            return data, state, env, cli, tmp
         except Exception:
             if env is not None:
-                stop_daemon(cli,env)
+                stop_daemon(cli, env)
             tmp.cleanup()
             raise
 
     def test_master_off_keeps_base_env_and_never_reads_source(self):
-        cfg='pi_command = '+fake_pi_command()+'\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = false\nchild_env = ["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n'
-        data,state,env,cli,tmp_s=self._scenario(cfg,'fifo','A')
+        cfg = (
+            "pi_command = "
+            + fake_pi_command()
+            + (
+                "\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = false\nchild_env = "
+                '["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n'
+            )
+        )
+        data, state, env, cli, tmp_s = self._scenario(cfg, "fifo", "A")
         try:
-            self.assertTrue(data['has_auth'])          # authorized auth name still delivered
-            self.assertFalse(data['has_daemon_only'])  # daemon-only canary did NOT reach the child
+            self.assertTrue(data["has_auth"])  # authorized auth name still delivered
+            self.assertFalse(data["has_daemon_only"])  # daemon-only canary did NOT reach the child
             # No inheritance import happened: the FIFO was never opened (no block,
             # no error) and launch argv carries no bridge/skill flags.
-            launches=list((state/'agents').glob('*/launch.json'))
+            launches = list((state / "agents").glob("*/launch.json"))
             self.assertTrue(launches)
-            argv=json.loads(launches[0].read_text())['argv']
-            self.assertNotIn(str(BRIDGE),argv)
-            self.assertNotIn('--skill',argv)
+            argv = json.loads(launches[0].read_text())["argv"]
+            self.assertNotIn(str(BRIDGE), argv)
+            self.assertNotIn("--skill", argv)
             # The authorized secret value never reached any control-plane file.
-            for p in state.rglob('*'):
+            for p in state.rglob("*"):
                 if p.is_file():
-                    self.assertNotIn(b'real-secret-123',p.read_bytes(),p)
+                    self.assertNotIn(b"real-secret-123", p.read_bytes(), p)
         finally:
-            stop_daemon(cli,env)
+            stop_daemon(cli, env)
             tmp_s.cleanup()
 
     def test_two_scopes_get_their_own_chain_env(self):
-        cfg='pi_command = '+fake_pi_command()+'\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = false\nchild_env = ["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n'
-        data_a,state_a,env_a,cli_a,tmp_a=self._scenario(cfg,None,'A')
+        cfg = (
+            "pi_command = "
+            + fake_pi_command()
+            + (
+                "\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = false\nchild_env = "
+                '["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n'
+            )
+        )
+        data_a, state_a, env_a, cli_a, tmp_a = self._scenario(cfg, None, "A")
         try:
-            self.assertEqual(data_a['home_tag'],'A')
+            self.assertEqual(data_a["home_tag"], "A")
         finally:
-            stop_daemon(cli_a,env_a)
+            stop_daemon(cli_a, env_a)
             tmp_a.cleanup()
-        data_b,state_b,env_b,cli_b,tmp_b=self._scenario(cfg,None,'B')
+        data_b, state_b, env_b, cli_b, tmp_b = self._scenario(cfg, None, "B")
         try:
-            self.assertEqual(data_b['home_tag'],'B')   # not scope A's value
+            self.assertEqual(data_b["home_tag"], "B")  # not scope A's value
         finally:
-            stop_daemon(cli_b,env_b)
+            stop_daemon(cli_b, env_b)
             tmp_b.cleanup()
 
     def test_reenabling_inheritance_restores_import(self):
-        tmp=tempfile.TemporaryDirectory(prefix='env-chain-on-')
+        tmp = tempfile.TemporaryDirectory(prefix="env-chain-on-")
         try:
-            root=Path(tmp.name); state=root/'state'; state.mkdir()
-            ws=root/'ws'; ws.mkdir()
-            fakebin=root/'bin'; fakebin.mkdir()
-            interp=fakebin/'tag-interp'; interp.write_text('#!/bin/sh\necho ok\n'); interp.chmod(0o755)
-            codex=make_codex_home(root/'src',config=STDIO_TOML)
-            make_skill(codex/'skills','alpha')
-            (state/'config.toml').write_text('pi_command = '+fake_pi_command()+'\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = false\nchild_env = ["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n')
-            probe=root/'probe.json'
-            env=self._client_env(state,fakebin,'A')
-            env['PI_TEST_PROBE_FILE']=str(probe)
-            env['CODEX_HOME']=str(codex)
-            env['TOKEN_VAR']='tv'  # referenced by the fake codex config; proves env resolution after rebind
-            cli=str(ROOT/'bin'/'subagent-pi')
-            opened=self._cli(cli,env,'scope','open','--cwd',str(ws))
-            scope_id=json.loads(opened.stdout)['scope']
-            self._cli(cli,env,'spawn','--scope',scope_id,'--cwd',str(ws),'--task','simple','--access','read')
-            launches=list((state/'agents').glob('*/launch.json'))
-            argv=json.loads(launches[0].read_text())['argv']
-            self.assertNotIn(str(BRIDGE),argv)  # master off: no import
+            root = Path(tmp.name)
+            state = root / "state"
+            state.mkdir()
+            ws = root / "ws"
+            ws.mkdir()
+            fakebin = root / "bin"
+            fakebin.mkdir()
+            interp = fakebin / "tag-interp"
+            interp.write_text("#!/bin/sh\necho ok\n")
+            interp.chmod(0o755)
+            codex = make_codex_home(root / "src", config=STDIO_TOML)
+            make_skill(codex / "skills", "alpha")
+            (state / "config.toml").write_text(
+                "pi_command = "
+                + fake_pi_command()
+                + (
+                    "\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = false\nchild_env = "
+                    '["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n'
+                )
+            )
+            probe = root / "probe.json"
+            env = self._client_env(state, fakebin, "A")
+            env["PI_TEST_PROBE_FILE"] = str(probe)
+            env["CODEX_HOME"] = str(codex)
+            env["TOKEN_VAR"] = "tv"  # referenced by the fake codex config; proves env resolution after rebind
+            cli = str(ROOT / "bin" / "subagent-pi")
+            opened = self._cli(cli, env, "scope", "open", "--cwd", str(ws))
+            scope_id = json.loads(opened.stdout)["scope"]
+            self._cli(cli, env, "spawn", "--scope", scope_id, "--cwd", str(ws), "--task", "simple", "--access", "read")
+            launches = list((state / "agents").glob("*/launch.json"))
+            argv = json.loads(launches[0].read_text())["argv"]
+            self.assertNotIn(str(BRIDGE), argv)  # master off: no import
             # Flip the master switch on and rebind: import comes back.
-            (state/'config.toml').write_text('pi_command = '+fake_pi_command()+'\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = true\nchild_env = ["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n')
-            stop_daemon(cli,env)  # fully exited before the next autostart races the same socket
+            (state / "config.toml").write_text(
+                "pi_command = "
+                + fake_pi_command()
+                + (
+                    "\nstartup_timeout_seconds = 30\n\n[inheritance]\nenabled = true\nchild_env = "
+                    '["PI_TEST_AUTH", "PI_TEST_PROBE_FILE", "PI_TEST_PROBE_CMD", "PI_TEST_HOME_TAG"]\n'
+                )
+            )
+            stop_daemon(cli, env)  # fully exited before the next autostart races the same socket
             # The restart wiped the daemon's source memory: the owning client
             # must re-open the scope to rebind (no silent ~/.codex fallback).
-            self._cli(cli,env,'scope','open','--cwd',str(ws),'--label','chain','--scope',scope_id)
-            doc=self._cli(cli,env,'doctor','--inheritance')
-            sc=json.loads(doc.stdout)['inheritance']['scopes'][0]
-            self.assertEqual(sc['codex_home'],str(codex))  # rebind bound the client's source
-            spawn=self._cli(cli,env,'spawn','--scope',scope_id,'--cwd',str(ws),'--task','simple','--access','read')
-            agent_id=json.loads(spawn.stdout)['agent_id']
-            argv2=json.loads((state/'agents'/agent_id/'launch.json').read_text())['argv']
-            self.assertIn('--extension',argv2)    # inheritance restored end to end
-            self.assertIn('--skill',argv2)
-            self.assertIn('alpha',' '.join(argv2))  # the codex skill path is referenced in place
+            self._cli(cli, env, "scope", "open", "--cwd", str(ws), "--label", "chain", "--scope", scope_id)
+            doc = self._cli(cli, env, "doctor", "--inheritance")
+            sc = json.loads(doc.stdout)["inheritance"]["scopes"][0]
+            self.assertEqual(sc["codex_home"], str(codex))  # rebind bound the client's source
+            spawn = self._cli(
+                cli, env, "spawn", "--scope", scope_id, "--cwd", str(ws), "--task", "simple", "--access", "read"
+            )
+            agent_id = json.loads(spawn.stdout)["agent_id"]
+            argv2 = json.loads((state / "agents" / agent_id / "launch.json").read_text())["argv"]
+            self.assertIn("--extension", argv2)  # inheritance restored end to end
+            self.assertIn("--skill", argv2)
+            self.assertIn("alpha", " ".join(argv2))  # the codex skill path is referenced in place
         finally:
-            stop_daemon(cli,env)
+            stop_daemon(cli, env)
             tmp.cleanup()
 
-if __name__=='__main__':
+
+if __name__ == "__main__":
     unittest.main()
 
 

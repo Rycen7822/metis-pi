@@ -78,11 +78,22 @@ test("recovery grace preserves the returned page without reintroducing the sourc
   f.ctx.sessionManager.appendCustomEntry("context-prune-index", { toolCalls: [recovery] });
   f.indexer.reconstructFromSession(f.ctx);
   const model = modelNamed("gpt-6-astra");
-  const messages = [{ role: "user", content: "inspect", timestamp: 1 }, assistantToolCall(model, "raw", "read"), toolResult("raw", "read", "BIG_SOURCE".repeat(5000), 3), assistantToolCall(model, "query", "context_tree_query"), toolResult("query", "context_tree_query", page, 9)];
+  const messages = [
+    { role: "user", content: "inspect", timestamp: 1 },
+    assistantToolCall(model, "raw", "read"),
+    toolResult("raw", "read", "BIG_SOURCE".repeat(5000), 3),
+    assistantToolCall(model, "query", "context_tree_query"),
+    toolResult("query", "context_tree_query", page, 9),
+  ];
   const projected = pruneMessages(messages, f.indexer, undefined, undefined, undefined, 3).messages;
   assert.ok(projected.find((m) => m.toolCallId === "raw").content[0].text.length < 1000);
   assert.equal(projected.find((m) => m.toolCallId === "query").content[0].text, page);
-  assert.deepEqual(DEFAULT_CONFIG.chainCompression, { enabled: true, rollingWindow: 3, stripFinalAssistantThinking: true, fuseRangeSummary: true });
+  assert.deepEqual(DEFAULT_CONFIG.chainCompression, {
+    enabled: true,
+    rollingWindow: 3,
+    stripFinalAssistantThinking: true,
+    fuseRangeSummary: true,
+  });
 });
 
 test("duplicate body recall keeps each command, status, timestamp and short ref after reload", async () => {
@@ -102,7 +113,12 @@ test("duplicate body recall keeps each command, status, timestamp and short ref 
 
 test("legacy alias without its source reports unknown metadata and is not pruned", async () => {
   const f = queryFixture([record("first", "shared historic body")]);
-  f.ctx.sessionManager.appendCustomEntry("context-prune-dedup-alias", { newToolCallId: "lost", newResultTimestamp: 8, originalToolCallId: "first", originalResultTimestamp: 3 });
+  f.ctx.sessionManager.appendCustomEntry("context-prune-dedup-alias", {
+    newToolCallId: "lost",
+    newResultTimestamp: 8,
+    originalToolCallId: "first",
+    originalResultTimestamp: 3,
+  });
   f.indexer.reconstructFromSession(f.ctx);
   const own = f.indexer.getRecord("lost@8");
   assert.equal(own?.metadataUnavailable, true);
@@ -116,19 +132,39 @@ test("legacy alias without its source reports unknown metadata and is not pruned
 test("recall pages original arguments and branch-owned summaries with content-bound cursors", async () => {
   const { ctx, indexer, run } = queryFixture([]);
   const args = { path: "historical.ts", content: "🙂原文\n".repeat(6000) };
-  indexer.addBatch({ turnIndex: 1, timestamp: 2, toolCalls: [{ toolCallId: "write", toolName: "write", args, resultText: "done", isError: false, resultTimestamp: 3 }] }, () => {});
-  const query = params => run(params).then(r => r.details);
+  indexer.addBatch(
+    {
+      turnIndex: 1,
+      timestamp: 2,
+      toolCalls: [
+        { toolCallId: "write", toolName: "write", args, resultText: "done", isError: false, resultTimestamp: 3 },
+      ],
+    },
+    () => {},
+  );
+  const query = (params) => run(params).then((r) => r.details);
   const params = { toolCallIds: ["write@3"], component: "arguments", maxBytes: 2048 };
   const first = await query(params);
   assert.equal(first.results[0].source, "tool-arguments");
-  await assert.rejects(query({ ...params, component: "output", cursor: first.nextCursor }), /cursor no longer matches/i);
-  let page = first, text = first.results[0].text;
-  while (page.nextCursor) { page = await query({ ...params, cursor: page.nextCursor }); text += page.results[0].text; }
+  await assert.rejects(
+    query({ ...params, component: "output", cursor: first.nextCursor }),
+    /cursor no longer matches/i,
+  );
+  let page = first,
+    text = first.results[0].text;
+  while (page.nextCursor) {
+    page = await query({ ...params, cursor: page.nextCursor });
+    text += page.results[0].text;
+  }
   assert.equal(text, JSON.stringify(args));
   ctx.sessionManager.appendCustomMessageEntry("context-prune-summary", "DERIVED_HISTORY ".repeat(1000), false, {});
   const entry = ctx.sessionManager.getBranch().at(-1);
-  page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048 }); text = page.results[0].text;
-  while (page.nextCursor) { page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048, cursor: page.nextCursor }); text += page.results[0].text; }
+  page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048 });
+  text = page.results[0].text;
+  while (page.nextCursor) {
+    page = await query({ sourceEntryIds: [entry.id], maxBytes: 2048, cursor: page.nextCursor });
+    text += page.results[0].text;
+  }
   assert.deepEqual(JSON.parse(text), entry);
   assert.match((await query({ sourceEntryIds: ["missing"] })).results[0].error, /Not found/);
   await assert.rejects(query({ sourceEntryIds: [entry.id], ...params }), /Choose sourceEntryIds/);

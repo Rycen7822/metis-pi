@@ -16,7 +16,8 @@ export interface RuntimePackage { root: string; tools: SubagentTool[]; baseEnvKe
 export function runtimePackage(): RuntimePackage {
   const root = fileURLToPath(new URL("./core/", import.meta.url));
   const metadata = JSON.parse(readFileSync(join(root, "tools.json"), "utf8"));
-  if (metadata.hostProtocol !== 1 || !Array.isArray(metadata.scopeEnvKeys)) throw new Error("Metis subagent schema needs host protocol 1 with scopeEnvKeys; run npm run prepare:subagents");
+  if (metadata.hostProtocol !== 1 || !Array.isArray(metadata.scopeEnvKeys))
+    throw new Error("Metis subagent schema needs host protocol 1 with scopeEnvKeys; run npm run prepare:subagents");
   return { root, ...metadata };
 }
 export class RuntimeError extends Error {
@@ -25,9 +26,16 @@ export class RuntimeError extends Error {
   readonly run_id?: string;
   readonly request_id?: string;
   constructor(error: { code: string; message: string; agent_id?: string; run_id?: string; request_id?: string }) {
-    const ids = [error.agent_id && `agent_id=${error.agent_id}`, error.run_id && `run_id=${error.run_id}`, error.request_id && `request_id=${error.request_id}`].filter(Boolean);
-    super(error.message + (ids.length ? ` (${ids.join(', ')})` : ""));
-    this.code = error.code; this.agent_id = error.agent_id; this.run_id = error.run_id; this.request_id = error.request_id;
+    const ids = [
+      error.agent_id && `agent_id=${error.agent_id}`,
+      error.run_id && `run_id=${error.run_id}`,
+      error.request_id && `request_id=${error.request_id}`,
+    ].filter(Boolean);
+    super(error.message + (ids.length ? ` (${ids.join(", ")})` : ""));
+    this.code = error.code;
+    this.agent_id = error.agent_id;
+    this.run_id = error.run_id;
+    this.request_id = error.request_id;
   }
 }
 export function isDaemonIdle(error: unknown): error is RuntimeError {
@@ -74,7 +82,9 @@ export class SubagentClient {
           // A cancelled wait may have won the response race. It did not reach
           // Pi, so its reserved attention can be made eligible again.
           const ticket = message.result?._pi_delivery;
-          if (ticket && this.scope && !this.ended) for (const receipt of ticket.receipts ?? [ticket.id]) void this.rpc("pi_release", { receipt }).catch(() => {});
+          if (ticket && this.scope && !this.ended)
+            for (const receipt of ticket.receipts ?? [ticket.id])
+              void this.rpc("pi_release", { receipt }).catch(() => {});
           continue;
         }
         call.cleanup();
@@ -118,40 +128,78 @@ export class SubagentClient {
     if (this.parking) await this.parking;
     if (this.ended) throw new Error("Subagent frontend closed; reload to reconnect");
     if (!this.bridge) {
-      const child = spawn("python3", [join(this.runtime.root, "bin/subagent-pi"), "--home", join(this.agentDir, "subagent-pi"), "pi-host"], { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } });
-      const bridge = this.bridge = { child, buffer: Buffer.alloc(0), stderr: "" };
+      const child = spawn(
+        "python3",
+        [join(this.runtime.root, "bin/subagent-pi"), "--home", join(this.agentDir, "subagent-pi"), "pi-host"],
+        { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
+      );
+      const bridge = (this.bridge = { child, buffer: Buffer.alloc(0), stderr: "" });
       child.stdout.on("data", (chunk: Buffer) => this.receive(bridge, chunk));
-      child.stderr.on("data", (chunk: Buffer) => { bridge.stderr = (bridge.stderr + chunk.toString("utf8")).slice(-2048); });
-      child.on("error", error => this.fail(bridge, new Error(`Subagents require Linux and Python 3.11+: ${error.message}`)));
-      child.on("exit", () => this.fail(bridge, new Error(`Subagent bridge exited; inspect mutations before retrying. ${bridge.stderr}`)));
+      child.stderr.on("data", (chunk: Buffer) => {
+        bridge.stderr = (bridge.stderr + chunk.toString("utf8")).slice(-2048);
+      });
+      child.on("error", (error) =>
+        this.fail(bridge, new Error(`Subagents require Linux and Python 3.11+: ${error.message}`)),
+      );
+      child.on("exit", () =>
+        this.fail(bridge, new Error(`Subagent bridge exited; inspect mutations before retrying. ${bridge.stderr}`)),
+      );
     }
     const bridge = this.bridge;
     if (bridge.ready) return bridge.ready;
     const reconnect = this.reconnect;
-    return bridge.ready = (async () => {
-      const env = Object.fromEntries(this.runtime.scopeEnvKeys.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
+    return (bridge.ready = (async () => {
+      const env = Object.fromEntries(
+        this.runtime.scopeEnvKeys.flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])),
+      );
       // An unconfirmed bind may already have committed: never regain takeover rights.
       this.reconnect = true;
-      const result = await this.rpc("initialize", { cwd: this.ctx.cwd, label: "Pi subagents", ...(this.scope ? { scope: this.scope } : {}) }, undefined, { passive, reconnect, source: { env,
-        project_trust: { cwd: realpathSync(this.ctx.cwd), trusted: this.ctx.isProjectTrusted() }, parent: {
-        kind: "pi", session_id: this.ctx.sessionManager.getSessionId(), agent_dir: this.agentDir,
-        session_file: this.ctx.sessionManager.getSessionFile() ?? "", sdk_path: join(getPackageDir(), "dist/index.js"),
-        node_path: process.execPath, lease: this.lease, model: this.ctx.model ? { provider: this.ctx.model.provider, id: this.ctx.model.id } : null,
-      } } });
-      this.scope = result.scope as string; this.bootTimeout = result.boot_timeout as number;
+      const result = await this.rpc(
+        "initialize",
+        { cwd: this.ctx.cwd, label: "Pi subagents", ...(this.scope ? { scope: this.scope } : {}) },
+        undefined,
+        {
+          passive,
+          reconnect,
+          source: {
+            env,
+            project_trust: { cwd: realpathSync(this.ctx.cwd), trusted: this.ctx.isProjectTrusted() },
+            parent: {
+              kind: "pi",
+              session_id: this.ctx.sessionManager.getSessionId(),
+              agent_dir: this.agentDir,
+              session_file: this.ctx.sessionManager.getSessionFile() ?? "",
+              sdk_path: join(getPackageDir(), "dist/index.js"),
+              node_path: process.execPath,
+              lease: this.lease,
+              model: this.ctx.model ? { provider: this.ctx.model.provider, id: this.ctx.model.id } : null,
+            },
+          },
+        },
+      );
+      this.scope = result.scope as string;
+      this.bootTimeout = result.boot_timeout as number;
       this.attached(this.scope);
-    })().catch(error => {
+    })().catch((error) => {
       if (isDaemonIdle(error) && this.bridge === bridge) {
-        bridge.ready = undefined; this.reconnect = reconnect; // Proven pre-admission rejection only.
+        bridge.ready = undefined;
+        this.reconnect = reconnect; // Proven pre-admission rejection only.
       }
       throw error;
-    });
+    }));
   }
   async call(operation: string, params: object, signal?: AbortSignal, extra?: object) {
     const passive = (extra as { passive?: boolean } | undefined)?.passive === true;
-    try { await this.connect(passive); }
-    catch (error) { if (!passive && isDaemonIdle(error)) await this.connect(); else throw error; }
-    return this.rpc(operation, params, signal, { model: this.ctx.model ? { provider: this.ctx.model.provider, id: this.ctx.model.id } : null, ...extra });
+    try {
+      await this.connect(passive);
+    } catch (error) {
+      if (!passive && isDaemonIdle(error)) await this.connect();
+      else throw error;
+    }
+    return this.rpc(operation, params, signal, {
+      model: this.ctx.model ? { provider: this.ctx.model.provider, id: this.ctx.model.id } : null,
+      ...extra,
+    });
   }
   async park() {
     if (this.pending.size || !this.bridge || this.ended) return;

@@ -10,21 +10,38 @@ import { createAutoReasoning } from "../src/execution/auto-reasoning.ts";
 import { registerBackgroundShellUi } from "../src/execution/ui/background-shell.ts";
 
 export default function execution(pi: ExtensionAPI): void {
-  const runtime: import("../src/execution/runtime.ts").ExecutionRuntime = { config: readExecutionConfig(),
-    sessions: createExecSessionManager({ bridgeBinaryPath: () => getBundledToolBinaryPath("exec_bridge", {}, runtime.config.tools.customRustBinariesDir) }) };
+  const runtime: import("../src/execution/runtime.ts").ExecutionRuntime = {
+    config: readExecutionConfig(),
+    sessions: createExecSessionManager({
+      bridgeBinaryPath: () => getBundledToolBinaryPath("exec_bridge", {}, runtime.config.tools.customRustBinariesDir),
+    }),
+  };
   const register = (tool: ToolDefinition) => pi.registerTool({ ...tool, exposure: "deferred" });
   const registerCore = () => {
     const config = runtime.config;
-    register(createExecCommandTool(runtime.sessions, { customRendering: config.ui.toolRenaming, showOutputWhenCollapsed: true }));
+    register(
+      createExecCommandTool(runtime.sessions, {
+        customRendering: config.ui.toolRenaming,
+        showOutputWhenCollapsed: true,
+      }),
+    );
     register(createWriteStdinTool(runtime.sessions, { showOutputWhenCollapsed: true }));
-    register(createViewImageTool({ customRustBinariesDir: config.tools.customRustBinariesDir,
-      describeForTextModels: config.tools.viewImageFallback, customRendering: config.ui.toolRenaming }));
+    register(
+      createViewImageTool({
+        customRustBinariesDir: config.tools.customRustBinariesDir,
+        describeForTextModels: config.tools.viewImageFallback,
+        customRendering: config.ui.toolRenaming,
+      }),
+    );
   };
-  registerCore(); registerImageHints(pi);
+  registerCore();
+  registerImageHints(pi);
   const reasoning = createAutoReasoning(pi, () => runtime.config.tools.autoReasoning);
   pi.registerTool(reasoning.tool);
 
-  const offBusy = pi.events.on("metis:execution-status", (request: any) => { request.busy ||= runtime.sessions.listSessions(0).some(session => session.running); });
+  const offBusy = pi.events.on("metis:execution-status", (request: any) => {
+    request.busy ||= runtime.sessions.listSessions(0).some((session) => session.running);
+  });
   const refresh = (_event: unknown, ctx: ExtensionContext) => {
     const config = readExecutionConfig(ctx);
     if (JSON.stringify(config) !== JSON.stringify(runtime.config)) { runtime.config = config; registerCore(); }

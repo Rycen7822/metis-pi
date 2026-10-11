@@ -122,24 +122,46 @@ export class HistoryWindow {
   }
 
   #refreshItems(): void {
-    if (this.#structureChecks.some((unchanged) => !unchanged())) { this.#structureDirty = true; this.#dirty = true; }
+    if (this.#structureChecks.some((unchanged) => !unchanged())) {
+      this.#structureDirty = true;
+      this.#dirty = true;
+    }
     if (!this.#structureDirty) return;
     this.#structureRestores.forEach((restore) => restore());
-    this.#structureRestores = []; this.#structureChecks = [];
+    this.#structureRestores = [];
+    this.#structureChecks = [];
     this.#items = [];
     const walk = (node: Component) => {
-      if (node.constructor !== this.container) { this.#items.push(node); return; }
-      this.#structureRestores.push(observe(node, ["addChild", "removeChild", "clear", "invalidate"], () => {
-        this.#structureDirty = true; this.#dirty = true;
-      }));
-      const children = node.children, length = children?.length, head = children?.[0], tail = children?.at(-1);
+      if (node.constructor !== this.container) {
+        this.#items.push(node);
+        return;
+      }
+      this.#structureRestores.push(
+        observe(node, ["addChild", "removeChild", "clear", "invalidate"], () => {
+          this.#structureDirty = true;
+          this.#dirty = true;
+        }),
+      );
+      const children = node.children,
+        length = children?.length,
+        head = children?.[0],
+        tail = children?.at(-1);
       // Pi replaces its header by array-index assignment. Check container
       // boundaries and array identity without scanning every history entry.
-      this.#structureChecks.push(() => node.children === children && children?.length === length && children?.[0] === head && children?.at(-1) === tail);
-      if (node.children) this.#structureRestores.push(observe(node.children,
-        ["push", "pop", "shift", "unshift", "splice", "sort", "reverse"], () => {
-          this.#structureDirty = true; this.#dirty = true;
-        }));
+      this.#structureChecks.push(
+        () =>
+          node.children === children &&
+          children?.length === length &&
+          children?.[0] === head &&
+          children?.at(-1) === tail,
+      );
+      if (node.children)
+        this.#structureRestores.push(
+          observe(node.children, ["push", "pop", "shift", "unshift", "splice", "sort", "reverse"], () => {
+            this.#structureDirty = true;
+            this.#dirty = true;
+          }),
+        );
       for (const child of node.children ?? []) walk(child);
     };
     walk(this.source);
@@ -299,44 +321,94 @@ export class HistoryWindow {
     const origin = this.#origins[event.y];
     return origin?.component.handleMouse?.({ ...event, y: origin.row, height: origin.height });
   }
-  status() { return { rows: this.#rows.length, cachedBlocks: [...this.#blocks.values()].filter((block) => block.rows).length, renderedBlocks: this.#renderedBlocks,
-    evictedBlocks: this.#evictedBlocks, older: this.#older, newer: this.#newer, budget: HISTORY_ROW_BUDGET }; }
+  status() {
+    return {
+      rows: this.#rows.length,
+      cachedBlocks: [...this.#blocks.values()].filter((block) => block.rows).length,
+      renderedBlocks: this.#renderedBlocks,
+      evictedBlocks: this.#evictedBlocks,
+      older: this.#older,
+      newer: this.#newer,
+      budget: HISTORY_ROW_BUDGET,
+    };
+  }
   dispose(): void {
     this.#scrollTarget = undefined;
-    this.#structureRestores.forEach((restore) => restore()); this.#structureRestores = [];
-    this.invalidate(); this.#rows = []; this.#origins = []; this.#items = []; this.#structureChecks = []; releaseCopyCache(this);
+    this.#structureRestores.forEach((restore) => restore());
+    this.#structureRestores = [];
+    this.invalidate();
+    this.#rows = [];
+    this.#origins = [];
+    this.#items = [];
+    this.#structureChecks = [];
+    releaseCopyCache(this);
   }
 }
 
 export function createHistoryWindowSystem(host: HistoryWindowHost) {
-  let installed: { scroll: Scroll; source: Component; window: HistoryWindow; wheel: Scroll["scrollBy"]; wrapper: Scroll["scrollBy"]; restoreNavigation: () => void; removeInput?: () => void } | undefined;
+  let installed:
+    | {
+        scroll: Scroll;
+        source: Component;
+        window: HistoryWindow;
+        wheel: Scroll["scrollBy"];
+        wrapper: Scroll["scrollBy"];
+        restoreNavigation: () => void;
+        removeInput?: () => void;
+      }
+    | undefined;
   let reason = "not installed";
   function unmount() {
     if (!installed) return;
     const { scroll, source, window, wheel, wrapper, restoreNavigation, removeInput } = installed;
-    removeInput?.(); restoreNavigation();
-    if (scroll.child === window as unknown) { scroll.child = source; scroll.children = [source]; }
+    removeInput?.();
+    restoreNavigation();
+    if (scroll.child === (window as unknown)) {
+      scroll.child = source;
+      scroll.children = [source];
+    }
     if (scroll.scrollBy === wrapper) scroll.scrollBy = wheel;
-    window.dispose(); installed = undefined; reason = "not installed";
+    window.dispose();
+    installed = undefined;
+    reason = "not installed";
   }
   function mount(tui: HistoryWindowTui, root: any) {
-    if (!root || !host.Container || !host.ScrollView) { unmount(); return; }
+    if (!root || !host.Container || !host.ScrollView) {
+      unmount();
+      return;
+    }
     const find = (node: any): Scroll | undefined => {
       if (!node) return;
       if (node instanceof (host.ScrollView as any) && node.primary) return node;
       const layout = node[LAYOUT_NODE]?.();
-      for (const entry of layout?.entries ?? []) { const found = find(entry.component); if (found) return found; }
+      for (const entry of layout?.entries ?? []) {
+        const found = find(entry.component);
+        if (found) return found;
+      }
     };
     const scroll = find(root);
-    if (!scroll) { unmount(); reason = "primary ScrollView unavailable"; return; }
+    if (!scroll) {
+      unmount();
+      reason = "primary ScrollView unavailable";
+      return;
+    }
     if (installed?.scroll === scroll) return;
     unmount();
     const source = scroll.child;
-    if (!(source instanceof (host.Container as any))) { reason = "unsupported transcript root"; return; }
-    const selected = () => tui.getSelectionBounds ? !!tui.getSelectionBounds() : tui.hasActiveSelection?.() === true;
+    if (!(source instanceof (host.Container as any))) {
+      reason = "unsupported transcript root";
+      return;
+    }
+    const selected = () => (tui.getSelectionBounds ? !!tui.getSelectionBounds() : tui.hasActiveSelection?.() === true);
     const window = new HistoryWindow(source, scroll, host.Container, selected);
-    const restoreStart = observe(scroll, ["scrollToStart"], () => { window.jump("older"); tui.requestRender?.(); });
-    const restoreEnd = observe(scroll, ["scrollToEnd"], () => { window.jump("newer"); tui.requestRender?.(); });
+    const restoreStart = observe(scroll, ["scrollToStart"], () => {
+      window.jump("older");
+      tui.requestRender?.();
+    });
+    const restoreEnd = observe(scroll, ["scrollToEnd"], () => {
+      window.jump("newer");
+      tui.requestRender?.();
+    });
     const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
     const updateLayout = scroll.updateLayout;
     const commitLayout: Scroll["updateLayout"] = function (this: Scroll, ...args) {

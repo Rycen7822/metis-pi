@@ -14,37 +14,66 @@ MAX_MCP_SERVERS = 32
 # diagnostic, never fatal); explicitly_unsupported = valid upstream but no honest
 # mapping here (required servers fail, optional are excluded, with a reason);
 # conditional_local = environment_id, absent/'local' ok, anything else unsupported.
-CODEX_MCP_BASELINE = 'legacy 2025-06-18 + modern 2026-07-28 discovery; Codex RawMcpServerConfig surface as of 2026-09'
+CODEX_MCP_BASELINE = "legacy 2025-06-18 + modern 2026-07-28 discovery; Codex RawMcpServerConfig surface as of 2026-09"
 MCP_FIELD_COMPAT = {
-    'command': ('mapped', '', 'stdio'), 'args': ('mapped', '', 'stdio'),
-    'env': ('mapped', '', 'stdio'), 'env_vars': ('mapped', '', 'stdio'), 'cwd': ('mapped', '', 'stdio'),
-    'url': ('mapped', '', 'http'), 'auth': ('mapped', '', 'http'),
-    'bearer_token_env_var': ('mapped', '', 'http'),
-    'http_headers': ('mapped', '', 'http'), 'env_http_headers': ('mapped', '', 'http'),
-    'http_headers_helper': ('explicitly_unsupported', 'dynamic header helper has no in-child equivalent', 'http'),
-    'startup_timeout_sec': ('mapped', '', 'stdio http'), 'startup_timeout_ms': ('mapped', '', 'stdio http'),
-    'tool_timeout_sec': ('mapped', '', 'stdio http'),
-    'enabled': ('mapped', '', 'stdio http'), 'required': ('mapped', '', 'stdio http'),
-    'enabled_tools': ('mapped', '', 'stdio http'), 'disabled_tools': ('mapped', '', 'stdio http'),
-    'default_tools_approval_mode': ('mapped', '', 'stdio http'), 'tools': ('mapped', '', 'stdio http'),
-    'experimental_environment': ('explicitly_unsupported', 'remote executor is not supported in managed children', 'stdio'),
-    'supports_parallel_tool_calls': ('accepted_no_effect', 'concurrency hint; the proxy tool is registered sequential and serializes every call regardless', 'stdio http'),
-    'name': ('accepted_no_effect', 'legacy name label; the config key identifies the server', 'stdio http'),
-    'environment_id': ('conditional_local', 'no remote executor in managed children', 'stdio http'),
-    'omit_tools_from': ('explicitly_unsupported', 'ToolExposureSurface cannot be mapped onto the proxy tool surface without guessing', 'stdio http'),
-    'scopes': ('explicitly_unsupported', 'OAuth scopes need a token store managed children must not create', 'stdio http'),
-    'oauth': ('explicitly_unsupported', 'OAuth needs a credential store managed children must not create or copy', 'stdio http'),
-    'oauth_resource': ('explicitly_unsupported', 'OAuth resource indicator requires oauth support', 'stdio http'),
+    "command": ("mapped", "", "stdio"),
+    "args": ("mapped", "", "stdio"),
+    "env": ("mapped", "", "stdio"),
+    "env_vars": ("mapped", "", "stdio"),
+    "cwd": ("mapped", "", "stdio"),
+    "url": ("mapped", "", "http"),
+    "auth": ("mapped", "", "http"),
+    "bearer_token_env_var": ("mapped", "", "http"),
+    "http_headers": ("mapped", "", "http"),
+    "env_http_headers": ("mapped", "", "http"),
+    "http_headers_helper": ("explicitly_unsupported", "dynamic header helper has no in-child equivalent", "http"),
+    "startup_timeout_sec": ("mapped", "", "stdio http"),
+    "startup_timeout_ms": ("mapped", "", "stdio http"),
+    "tool_timeout_sec": ("mapped", "", "stdio http"),
+    "enabled": ("mapped", "", "stdio http"),
+    "required": ("mapped", "", "stdio http"),
+    "enabled_tools": ("mapped", "", "stdio http"),
+    "disabled_tools": ("mapped", "", "stdio http"),
+    "default_tools_approval_mode": ("mapped", "", "stdio http"),
+    "tools": ("mapped", "", "stdio http"),
+    "experimental_environment": (
+        "explicitly_unsupported",
+        "remote executor is not supported in managed children",
+        "stdio",
+    ),
+    "supports_parallel_tool_calls": (
+        "accepted_no_effect",
+        "concurrency hint; the proxy tool is registered sequential and serializes every call regardless",
+        "stdio http",
+    ),
+    "name": ("accepted_no_effect", "legacy name label; the config key identifies the server", "stdio http"),
+    "environment_id": ("conditional_local", "no remote executor in managed children", "stdio http"),
+    "omit_tools_from": (
+        "explicitly_unsupported",
+        "ToolExposureSurface cannot be mapped onto the proxy tool surface without guessing",
+        "stdio http",
+    ),
+    "scopes": (
+        "explicitly_unsupported",
+        "OAuth scopes need a token store managed children must not create",
+        "stdio http",
+    ),
+    "oauth": (
+        "explicitly_unsupported",
+        "OAuth needs a credential store managed children must not create or copy",
+        "stdio http",
+    ),
+    "oauth_resource": ("explicitly_unsupported", "OAuth resource indicator requires oauth support", "stdio http"),
 }
-TOOL_FIELD_COMPAT = {'approval_mode': 'mapped', 'output_token_limit': 'mapped'}
-MCP_STDIO_KEYS = {f for f, (_, _, t) in MCP_FIELD_COMPAT.items() if 'stdio' in t}
-MCP_HTTP_KEYS = {f for f, (_, _, t) in MCP_FIELD_COMPAT.items() if 'http' in t}
+TOOL_FIELD_COMPAT = {"approval_mode": "mapped", "output_token_limit": "mapped"}
+MCP_STDIO_KEYS = {f for f, (_, _, t) in MCP_FIELD_COMPAT.items() if "stdio" in t}
+MCP_HTTP_KEYS = {f for f, (_, _, t) in MCP_FIELD_COMPAT.items() if "http" in t}
 # Bookkeeping that never belongs to a child-side server config: the credential
 # references resolve_environment turns into values, and parsing's disposition trail.
-SERVER_RESOLVED_KEYS = ('env_var_names', 'env_header_names', 'static_env', 'static_headers')
-SERVER_POLICY_KEYS = ('disposition', 'reasons')
+SERVER_RESOLVED_KEYS = ("env_var_names", "env_header_names", "static_env", "static_headers")
+SERVER_POLICY_KEYS = ("disposition", "reasons")
 MAX_RESULT_TEXT_BYTES = 256 * 1024
-APPROVAL_MODES = {'auto', 'prompt', 'writes', 'approve'}
+APPROVAL_MODES = {"auto", "prompt", "writes", "approve"}
 
 
 class Diagnostic:
@@ -197,62 +226,75 @@ def _http_config(server, protocol_mode):
 
 def _stdio_config(server, codex_home, protocol_mode, name, diagnostics):
     entry = {}
-    entry['transport'] = 'stdio'
-    command = server.get('command')
+    entry["transport"] = "stdio"
+    command = server.get("command")
     if not isinstance(command, str) or not command.strip():
-        raise AgentError('invalid_argument', 'missing command')
-    args = server.get('args', [])
+        raise AgentError("invalid_argument", "missing command")
+    args = server.get("args", [])
     if not isinstance(args, list) or any(not isinstance(a, str) for a in args):
-        raise AgentError('invalid_argument', 'args must be a list of strings')
-    env_static = server.get('env') or {}
-    env_refs = server.get('env_vars', [])
+        raise AgentError("invalid_argument", "args must be a list of strings")
+    env_static = server.get("env") or {}
+    env_refs = server.get("env_vars", [])
     if not isinstance(env_refs, list):
-        raise AgentError('invalid_argument', 'env_vars must be a list of names or local references')
-    if not isinstance(env_static, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in env_static.items()):
-        raise AgentError('invalid_argument', 'env must map strings to strings')
+        raise AgentError("invalid_argument", "env_vars must be a list of names or local references")
+    if not isinstance(env_static, dict) or any(
+        not isinstance(k, str) or not isinstance(v, str) for k, v in env_static.items()
+    ):
+        raise AgentError("invalid_argument", "env must map strings to strings")
     refs: list[str] = []
     for ref in env_refs:
         if isinstance(ref, str):
             refs.append(ref)
-        elif isinstance(ref, dict) and isinstance(ref.get('name'), str) and ref.get('source', 'local') in (None, 'local'):
-            refs.append(ref['name'])
-        elif isinstance(ref, dict) and ref.get('source') == 'remote':
-            raise AgentError('invalid_argument', f"env_vars source=remote ({ref.get('name')}) requires remote executor")
+        elif (
+            isinstance(ref, dict) and isinstance(ref.get("name"), str) and ref.get("source", "local") in (None, "local")
+        ):
+            refs.append(ref["name"])
+        elif isinstance(ref, dict) and ref.get("source") == "remote":
+            raise AgentError("invalid_argument", f"env_vars source=remote ({ref.get('name')}) requires remote executor")
         else:
-            raise AgentError('invalid_argument', 'env_vars entries must be names')
+            raise AgentError("invalid_argument", "env_vars entries must be names")
     # CODEX_MCP_PROTOCOL_VERSION is a Codex CLIENT-side protocol
     # selection marker: consume it here to pick the stdio era and never
     # forward it to the server process (current Codex removes the marker
     # from the env before spawning the MCP server).
-    marker = env_static.get('CODEX_MCP_PROTOCOL_VERSION')
-    env_static = {k: v for k, v in env_static.items() if k != 'CODEX_MCP_PROTOCOL_VERSION'}
-    if marker is not None and marker != '2026-07-28':
-        raise AgentError('invalid_argument',
-                         f'unsupported CODEX_MCP_PROTOCOL_VERSION {marker!r} (only 2026-07-28 is supported)')
-    if marker == '2026-07-28' and protocol_mode == 'legacy_2025_06_18':
-        diagnostics.append(Diagnostic('mcp', name,
-                                      'global protocol_mode legacy_2025_06_18 keeps this stdio server on the 2025-06-18 handshake; the Codex modern opt-in marker is stripped and not forwarded'))
-    entry['protocol_mode'] = ('legacy_2025_06_18'
-                              if marker != '2026-07-28' or protocol_mode == 'legacy_2025_06_18'
-                              else 'modern_2026_07_28')
-    cwd = server.get('cwd')
+    marker = env_static.get("CODEX_MCP_PROTOCOL_VERSION")
+    env_static = {k: v for k, v in env_static.items() if k != "CODEX_MCP_PROTOCOL_VERSION"}
+    if marker is not None and marker != "2026-07-28":
+        raise AgentError(
+            "invalid_argument", f"unsupported CODEX_MCP_PROTOCOL_VERSION {marker!r} (only 2026-07-28 is supported)"
+        )
+    if marker == "2026-07-28" and protocol_mode == "legacy_2025_06_18":
+        diagnostics.append(
+            Diagnostic(
+                "mcp",
+                name,
+                (
+                    "global protocol_mode legacy_2025_06_18 keeps this stdio server on the "
+                    "2025-06-18 handshake; the Codex modern opt-in marker is stripped and not "
+                    "forwarded"
+                ),
+            )
+        )
+    entry["protocol_mode"] = (
+        "legacy_2025_06_18" if marker != "2026-07-28" or protocol_mode == "legacy_2025_06_18" else "modern_2026_07_28"
+    )
+    cwd = server.get("cwd")
     if cwd is not None:
         if not isinstance(cwd, str) or not cwd.strip():
-            raise AgentError('invalid_argument', 'cwd must be a path string')
+            raise AgentError("invalid_argument", "cwd must be a path string")
         cwd_path = Path(cwd).expanduser()
         if not cwd_path.is_absolute():
             # Codex does not document relative-cwd resolution; anchor to the config source.
             cwd_path = (codex_home / cwd_path).resolve()
-            diagnostics.append(Diagnostic('mcp', name, f'relative cwd anchored to codex home: {cwd_path}'))
+            diagnostics.append(Diagnostic("mcp", name, f"relative cwd anchored to codex home: {cwd_path}"))
         cwd = str(cwd_path)
-    entry.update(command=command, args=args, static_env=dict(env_static),
-                 env_var_names=sorted(set(refs)), cwd=cwd)
+    entry.update(command=command, args=args, static_env=dict(env_static), env_var_names=sorted(set(refs)), cwd=cwd)
     if _is_self_server(entry, codex_home):  # recursion guard by execution definition, rename-evasive
-        raise AgentError('invalid_argument', 'subagent-pi management server (recursion guard)')
+        raise AgentError("invalid_argument", "subagent-pi management server (recursion guard)")
     return entry
 
 
-def parse_mcp_servers(codex_home: Path, raw: dict, protocol_mode: str = 'auto') -> tuple[list[dict], list[Diagnostic]]:
+def parse_mcp_servers(codex_home: Path, raw: dict, protocol_mode: str = "auto") -> tuple[list[dict], list[Diagnostic]]:
     """Convert [mcp_servers.*] TOML into normalized in-memory server configs (no
     environment access here). Every declared server keeps a disposition
     ('ok'|'failed'|'disabled') with reasons; unknown keys that affect execution
@@ -366,10 +408,15 @@ def resolve_environment(servers: list[dict], env_snapshot: dict) -> tuple[list[d
 def read_access_diagnostics(servers: list[dict], access: str) -> list[Diagnostic]:
     """Explain read-child restrictions; the bridge enforces them from agent.access."""
     diagnostics: list[Diagnostic] = []
-    if access == 'write':
+    if access == "write":
         return diagnostics
     for server in servers:
-        if server.get('disposition') == 'ok' and server.get('allowed_tools') is None:
-            diagnostics.append(Diagnostic('mcp', server['name'],
-                                          'read child: server has no explicit enabled_tools allowlist; only readOnly tools are visible and every call confirms'))
+        if server.get("disposition") == "ok" and server.get("allowed_tools") is None:
+            diagnostics.append(
+                Diagnostic(
+                    "mcp",
+                    server["name"],
+                    "read child: server has no explicit enabled_tools allowlist; only readOnly tools are visible and every call confirms",
+                )
+            )
     return diagnostics

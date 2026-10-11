@@ -67,54 +67,118 @@ export default function (pi) {
   });
   let calls = 0;
   pi.registerProvider("pi-mock-offline", {
-    baseUrl: "http://127.0.0.1:1", apiKey: "offline-test-only", api: "openai-responses",
-    models: [{ id: "mock", name: "Offline Mock", reasoning: Boolean(env.PI_MOCK_THINKING),
-      ...(env.PI_MOCK_THINKING ? { thinkingLevelMap: { off: null, minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" } } : {}), input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 1024 }],
+    baseUrl: "http://127.0.0.1:1",
+    apiKey: "offline-test-only",
+    api: "openai-responses",
+    models: [
+      {
+        id: "mock",
+        name: "Offline Mock",
+        reasoning: Boolean(env.PI_MOCK_THINKING),
+        ...(env.PI_MOCK_THINKING
+          ? {
+              thinkingLevelMap: {
+                off: null,
+                minimal: null,
+                low: "low",
+                medium: null,
+                high: "high",
+                xhigh: null,
+                max: "max",
+              },
+            }
+          : {}),
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 1024,
+      },
+    ],
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream();
       const call = ++calls;
       mark(`PI_MOCK_REPLY ${call}`);
-      const texts = context.messages.map(entry => textOf(entry.content)).filter(Boolean);
+      const texts = context.messages.map((entry) => textOf(entry.content)).filter(Boolean);
       if (env.PI_MOCK_WIRE === "1") {
-        mark(`PI_MOCK_WIRE ${call} ${JSON.stringify({ texts,
-          forced: context.systemPrompt || getCurrentSystemPrompt(context.messages) })}`);
+        mark(
+          `PI_MOCK_WIRE ${call} ${JSON.stringify({
+            texts,
+            forced: context.systemPrompt || getCurrentSystemPrompt(context.messages),
+          })}`,
+        );
       }
       if (env.PI_MOCK_CONTEXT === "1") mark(`PI_MOCK_CONTEXT ${call} ${texts.join(" | ")}`);
-      const message = { role: "assistant", content: [{ type: "text", text: `MOCK_REPLY_${call}` }],
-        api: model.api, provider: model.provider, model: model.id, stopReason: "stop", timestamp: Date.now(),
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+      const message = {
+        role: "assistant",
+        content: [{ type: "text", text: `MOCK_REPLY_${call}` }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
       if (env.PI_MOCK_ASK_PARENT && call === 1) {
-        message.content = [{ type: "toolCall", id: "ask-parent-1", name: "ask_parent", arguments: { question: "Which branch should I use?" } }] as any;
+        message.content = [
+          {
+            type: "toolCall",
+            id: "ask-parent-1",
+            name: "ask_parent",
+            arguments: { question: "Which branch should I use?" },
+          },
+        ] as any;
         message.stopReason = "toolUse";
       }
       if (env.PI_MOCK_TOOL_MS && call === 1) {
         message.content = [{ type: "toolCall", id: "block-1", name: "mock_block", arguments: {} }] as any;
         message.stopReason = "toolUse";
       }
-      if (env.PI_MOCK_FAIL) { message.stopReason = "error"; (message as any).errorMessage = "Mock provider failed"; }
-      let ended = false, timer;
+      if (env.PI_MOCK_FAIL) {
+        message.stopReason = "error";
+        (message as any).errorMessage = "Mock provider failed";
+      }
+      let ended = false,
+        timer;
       const finish = () => {
         if (ended) return;
-        ended = true; clearTimeout(timer);
-        stream.push({ type: ["error", "aborted"].includes(message.stopReason) ? "error" : "done", reason: message.stopReason, message, error: message } as any);
+        ended = true;
+        clearTimeout(timer);
+        stream.push({
+          type: ["error", "aborted"].includes(message.stopReason) ? "error" : "done",
+          reason: message.stopReason,
+          message,
+          error: message,
+        } as any);
         stream.end();
       };
-      if (env.PI_MOCK_ABORT_SIGNAL) options?.signal?.addEventListener("abort", () => {
-        message.stopReason = "aborted"; finish();
-      }, { once: true });
-      if (env.PI_MOCK_PROGRESS) void (async () => {
-        const kind = env.PI_MOCK_PROGRESS;
-        const partial = { ...message, content: [{ type: kind, [kind]: "" }] };
-        stream.push({ type: "start", partial } as any);
-        for (let elapsed = 0; elapsed < Number(env.PI_MOCK_STREAM_MS); elapsed += 100) {
-          partial.content[0][kind] += "x";
-          stream.push({ type: `${kind}_delta`, contentIndex: 0, delta: "x", partial } as any);
-          await sleep(100);
-        }
-        finish();
-      })();
+      if (env.PI_MOCK_ABORT_SIGNAL)
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            message.stopReason = "aborted";
+            finish();
+          },
+          { once: true },
+        );
+      if (env.PI_MOCK_PROGRESS)
+        void (async () => {
+          const kind = env.PI_MOCK_PROGRESS;
+          const partial = { ...message, content: [{ type: kind, [kind]: "" }] };
+          stream.push({ type: "start", partial } as any);
+          for (let elapsed = 0; elapsed < Number(env.PI_MOCK_STREAM_MS); elapsed += 100) {
+            partial.content[0][kind] += "x";
+            stream.push({ type: `${kind}_delta`, contentIndex: 0, delta: "x", partial } as any);
+            await sleep(100);
+          }
+          finish();
+        })();
       else timer = setTimeout(finish, Number(env.PI_MOCK_SLOW_FIRST && call > 1 ? 30 : env.PI_MOCK_STREAM_MS || 30));
       return stream;
     },

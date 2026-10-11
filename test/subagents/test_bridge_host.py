@@ -715,11 +715,33 @@ class HttpExchangeLifecycleTests(BridgeHostCase):
         good = self.h.start_http()
         cfgs = [self.http_cfg(hanging, name='hang', tool_timeout_sec=10),
                 self.http_cfg(good, name='good', tool_timeout_sec=10)]
-        out = self.h.run_host(cfgs, [
-            {'name': 'hang', 'action': 'call', 'server': 'hang', 'tool': 'publish', 'args': {'body': 'x'}, 'confirm': True, 'launch': True, 'abortAfterMs': 700},
-            {'name': 'good', 'action': 'call', 'server': 'good', 'tool': 'search', 'args': {'query': 'q'}, 'confirm': True, 'launch': True},
-            {'name': 'await', 'awaitPending': True},
-        ], access='write', timeout=30)
+        out = self.h.run_host(
+            cfgs,
+            [
+                {
+                    "name": "hang",
+                    "action": "call",
+                    "server": "hang",
+                    "tool": "publish",
+                    "args": {"body": "x"},
+                    "confirm": True,
+                    "launch": True,
+                    "abortAfterMs": 700,
+                },
+                {
+                    "name": "good",
+                    "action": "call",
+                    "server": "good",
+                    "tool": "search",
+                    "args": {"query": "q"},
+                    "confirm": True,
+                    "launch": True,
+                },
+                {"name": "await", "awaitPending": True},
+            ],
+            access="write",
+            timeout=30,
+        )
         by = {r['step']: r for r in out['results'] if r['step'] in ('hang', 'good')}
         self.assertEqual(by['hang']['kind'], 'error')
         self.assertEqual(by['good']['kind'], 'result')

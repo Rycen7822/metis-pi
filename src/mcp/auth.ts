@@ -29,8 +29,12 @@ export class McpCredentials {
     let temp: string | undefined;
     try {
       let raw: unknown = {};
-      try { raw = JSON.parse(readFileSync(this.path, "utf8")); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot read mcp-auth.json; credentials were not changed"); }
+      try {
+        raw = JSON.parse(readFileSync(this.path, "utf8"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          throw new Error("Cannot read mcp-auth.json; credentials were not changed");
+      }
       if (!isRecord(raw)) throw new Error("Invalid mcp-auth.json; credentials were not changed");
       const { value, write } = fn(raw as Record<string, McpOAuthState>);
       if (compromised) throw new Error("MCP credential lock was lost");

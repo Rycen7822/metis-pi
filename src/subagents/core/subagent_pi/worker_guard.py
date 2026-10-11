@@ -52,7 +52,13 @@ def main():
         for kind in ('guard','pi'):
             if live_identity(old.get(kind+'_pid'),old.get(kind+'_identity')) is not False:
                 raise RuntimeError('Previous session owner is still live or unverifiable')
-    owner = {'guard_pid':os.getpid(),'guard_identity':process_identity(os.getpid()),'generation':spec['generation'],'spawning':True,'descendants_cleanup':'pending'}
+    owner = {
+        "guard_pid": os.getpid(),
+        "guard_identity": process_identity(os.getpid()),
+        "generation": spec["generation"],
+        "spawning": True,
+        "descendants_cleanup": "pending",
+    }
     atomic_json(owner_path,owner)
     env = os.environ.copy()
     env.update(spec.get('env',{}))

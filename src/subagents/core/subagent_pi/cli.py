@@ -23,38 +23,104 @@ def parser():
     for x in ('run','start','status'): ds.add_parser(x)
     ds.add_parser('stop').add_argument('--force',action='store_true')
     s=sub.add_parser('scope'); ss=s.add_subparsers(dest='action',required=True)
-    so=ss.add_parser('open'); so.add_argument('--cwd',default=os.getcwd()); so.add_argument('--scope'); so.add_argument('--label',default='CLI delegation')
+    so = ss.add_parser("open")
+    so.add_argument("--cwd", default=os.getcwd())
+    so.add_argument("--scope")
+    so.add_argument("--label", default="CLI delegation")
     ss.add_parser('list')
-    for name in ('list','spawn','send','steer','follow-up','send-message','followup-task','wait','inspect','result','interrupt','close','respawn','resume','answer'):
-        q=sub.add_parser(name)
+    for name in (
+        "list",
+        "spawn",
+        "send",
+        "steer",
+        "follow-up",
+        "send-message",
+        "followup-task",
+        "wait",
+        "inspect",
+        "result",
+        "interrupt",
+        "close",
+        "respawn",
+        "resume",
+        "answer",
+    ):
+        q = sub.add_parser(name)
         q.add_argument('--scope',default=os.environ.get('PI_AGENTS_SCOPE'))
         if name in {'spawn','send','steer','follow-up','send-message','followup-task','interrupt','close','respawn','resume','answer'}:
             q.add_argument('--request-id',default=None,help='Stable key for safe retries; generated if omitted')
-        if name in {'send','steer','follow-up','send-message','followup-task','inspect','interrupt','close','respawn','resume','answer'}: q.add_argument('agent_id')
-        if name=='close': q.add_argument('--confirm-cleanup',type=int,metavar='GENERATION',help='After manually inspecting and removing all descendants, confirm cleanup for this dead owner generation')
+        if name in {
+            "send",
+            "steer",
+            "follow-up",
+            "send-message",
+            "followup-task",
+            "inspect",
+            "interrupt",
+            "close",
+            "respawn",
+            "resume",
+            "answer",
+        }:
+            q.add_argument("agent_id")
+        if name == "close":
+            q.add_argument(
+                "--confirm-cleanup",
+                type=int,
+                metavar="GENERATION",
+                help="After manually inspecting and removing all descendants, confirm cleanup for this dead owner generation",
+            )
         if name=='spawn':
-            q.add_argument('--cwd',default=os.getcwd()); q.add_argument('--name'); q.add_argument('--profile'); q.add_argument('--model'); q.add_argument('--thinking',help='A level supported by the selected Pi model; defaults to Pi settings')
-            q.add_argument('--access',choices=['read','write'],default='write'); q.add_argument('--idle-timeout-seconds',type=int,help='Model inactivity limit; active tools and parent questions pause it. No total task deadline')
+            q.add_argument("--cwd", default=os.getcwd())
+            q.add_argument("--name")
+            q.add_argument("--profile")
+            q.add_argument("--model")
+            q.add_argument("--thinking", help="A level supported by the selected Pi model; defaults to Pi settings")
+            q.add_argument("--access", choices=["read", "write"], default="write")
+            q.add_argument(
+                "--idle-timeout-seconds",
+                type=int,
+                help="Model inactivity limit; active tools and parent questions pause it. No total task deadline",
+            )
             g=q.add_mutually_exclusive_group(required=True); g.add_argument('--task'); g.add_argument('--task-file',help='UTF-8 file, or - for stdin')
         if name in {'send','steer','follow-up','send-message','followup-task','respawn','resume'}:
-            g=q.add_mutually_exclusive_group(required=name in {'send','steer','follow-up','send-message','followup-task'}); g.add_argument('--message'); g.add_argument('--message-file')
+            g = q.add_mutually_exclusive_group(
+                required=name in {"send", "steer", "follow-up", "send-message", "followup-task"}
+            )
+            g.add_argument("--message")
+            g.add_argument("--message-file")
             if name=='send': q.add_argument('--interrupt',action='store_true')
         if name=='list':
             q.add_argument('--limit',type=int,default=20); q.add_argument('--query')
             q.add_argument('--sort',choices=['updated','created'],default='updated'); q.add_argument('--offset',type=int,default=0)
         if name=='wait':
-            q.add_argument('run_ids',nargs='*'); q.add_argument('--mode',choices=['any','all'],default='any'); q.add_argument('--timeout-seconds',type=int,help='Maximum wait in seconds, not a fixed delay; default 10 minutes, max 1 hour, 0 checks immediately')
+            q.add_argument("run_ids", nargs="*")
+            q.add_argument("--mode", choices=["any", "all"], default="any")
+            q.add_argument(
+                "--timeout-seconds",
+                type=int,
+                help="Maximum wait in seconds, not a fixed delay; default 10 minutes, max 1 hour, 0 checks immediately",
+            )
         if name=='inspect':
-            q.add_argument('--after',type=int,default=0); q.add_argument('--limit',type=int,default=20); q.add_argument('--max-bytes',type=int,default=4096); q.add_argument('--detail',choices=['tools','full'],default='tools')
+            q.add_argument("--after", type=int, default=0)
+            q.add_argument("--limit", type=int, default=20)
+            q.add_argument("--max-bytes", type=int, default=4096)
+            q.add_argument("--detail", choices=["tools", "full"], default="tools")
         if name=='result': q.add_argument('run_id')
         if name=='result': q.add_argument('--offset',type=int,default=0); q.add_argument('--max-bytes',type=int,default=4096)
         if name=='answer':
             q.add_argument('ui_request_id'); q.add_argument('--answer',required=True,help='Text, or JSON true/false for confirmation')
     d=sub.add_parser('doctor',help='Diagnostics; add --inheritance for source/skill/server names only')
     d.add_argument('--inheritance',action='store_true',help='Include Codex inheritance diagnostics (names only, no values)')
-    g=sub.add_parser('guide'); g.add_argument('topic',nargs='?',default='getting-started'); g.add_argument('--section'); g.add_argument('--offset',type=int,default=0); g.add_argument('--max-bytes',type=int,default=4096)
+    g = sub.add_parser("guide")
+    g.add_argument("topic", nargs="?", default="getting-started")
+    g.add_argument("--section")
+    g.add_argument("--offset", type=int, default=0)
+    g.add_argument("--max-bytes", type=int, default=4096)
     sub.add_parser('schemas',help='Print the exact MCP tool definitions')
-    c=sub.add_parser('call',help='Generic CLI/IPC API for scripts; accepts a JSON object'); c.add_argument('operation'); c.add_argument('--json',default='-',help='JSON text or - for stdin')
+    c = sub.add_parser("call", help="Generic CLI/IPC API for scripts; accepts a JSON object")
+    c.add_argument("operation")
+    c.add_argument("--json", default="-", help="JSON text or - for stdin")
     cx=sub.add_parser('codex',help='Launch Codex with a durable scope (not a hook)'); cx.add_argument('codex_args',nargs=argparse.REMAINDER)
     return p
 
@@ -119,7 +185,20 @@ async def execute(args):
         if args.action=='stop': return await request(home,'shutdown',{'force':args.force},autostart=False)
         return await request(home,'ping',{},autostart=args.action=='start')
     if cmd=='scope':
-        return await request(home,'scope_open',{'cwd':str(Path(args.cwd).expanduser().resolve()),'label':args.label,**({'scope':args.scope} if args.scope else {})},source=source_snapshot(home)) if args.action=='open' else await request(home,'scope_list',{})
+        return (
+            await request(
+                home,
+                "scope_open",
+                {
+                    "cwd": str(Path(args.cwd).expanduser().resolve()),
+                    "label": args.label,
+                    **({"scope": args.scope} if args.scope else {}),
+                },
+                source=source_snapshot(home),
+            )
+            if args.action == "open"
+            else await request(home, "scope_list", {})
+        )
     if cmd=='doctor': return await request(home,'doctor',{'inheritance':getattr(args,'inheritance',False)})
     if cmd=='guide': return guide(args)
     if cmd=='schemas':
@@ -145,7 +224,16 @@ async def execute(args):
             candidate=Path(found).expanduser()
             cwd=str(candidate.resolve() if candidate.is_absolute() else (Path(cwd)/candidate).resolve())
             if not Path(cwd).is_dir(): raise AgentError('invalid_cwd',f'codex -C/--cd directory does not exist: {cwd}')
-        opened=await request(home,'scope_open',{'cwd':cwd,'label':'Codex CLI',**({'scope':os.environ['PI_AGENTS_SCOPE']} if os.environ.get('PI_AGENTS_SCOPE') else {})},source=source_snapshot(home))
+        opened = await request(
+            home,
+            "scope_open",
+            {
+                "cwd": cwd,
+                "label": "Codex CLI",
+                **({"scope": os.environ["PI_AGENTS_SCOPE"]} if os.environ.get("PI_AGENTS_SCOPE") else {}),
+            },
+            source=source_snapshot(home),
+        )
         env=os.environ.copy(); env.update(PI_AGENTS_SCOPE=opened['scope'],PI_AGENTS_CWD=cwd,PI_AGENTS_HOME=str(home))
         print('Pi scope: '+opened['scope'],file=sys.stderr)
         os.execvpe(exe,[exe,*rest],env)
@@ -164,7 +252,14 @@ async def execute(args):
     if cmd=='answer' and data['answer'] in {'true','false'}: data['answer']=data['answer']=='true'
     if cmd=='wait' and not data['run_ids']: data.pop('run_ids')
     data={k:v for k,v in data.items() if v is not None}
-    op={'steer':'send','follow-up':'send','send-message':'message','followup-task':'followup','interrupt':'soft_interrupt','resume':'respawn'}.get(cmd,cmd)
+    op = {
+        "steer": "send",
+        "follow-up": "send",
+        "send-message": "message",
+        "followup-task": "followup",
+        "interrupt": "soft_interrupt",
+        "resume": "respawn",
+    }.get(cmd, cmd)
     if op in DELIVERY_OPS:
         from .parent import capture
         async def write_result(value):

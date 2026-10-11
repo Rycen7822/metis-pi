@@ -597,7 +597,14 @@ export interface CapturedToolCall {
   archiveSource?: "command-output" | "fused-command-output" | "fusion-journal";
   archiveComplete?: boolean;
   archiveAppendOnly?: boolean;
-  outputArchive?: { path: string; bytes?: number; offsetBytes?: number; complete: boolean; appendOnly?: boolean; source?: "fused-command-output" | "fusion-journal" };
+  outputArchive?: {
+    path: string;
+    bytes?: number;
+    offsetBytes?: number;
+    complete: boolean;
+    appendOnly?: boolean;
+    source?: "fused-command-output" | "fusion-journal";
+  };
   toolCallId: string;
   toolName: string;
   args: Record<string, unknown>;
@@ -767,13 +774,28 @@ export interface FlushMetricsEntry {
   /** Batches after rescan+trim, before processing. */
   capturedBatches: number;
   processedBatches: number;
-  /** Tool calls this flush newly made stub-eligible: dedup aliases on processed batches plus calls of batches actually indexed. 0 when nothing was indexed or aliased (all-trivial/oversized, or failure before any batch was processed). */
+  /**
+   * Tool calls this flush newly made stub-eligible: dedup aliases on processed
+   * batches plus calls of batches actually indexed. Zero when nothing was indexed
+   * or aliased: all-trivial/oversized, or failure before any batch was processed.
+   */
   stubCount: number;
   /** Net serialized projection reductions; not provider token/cost measurements. */
   publishedCharsSaved?: number;
   argumentCharsSaved?: number;
   firstChangedMessage?: number;
-  outcome: "summarized" | "skipped-oversized" | "skipped-deduped" | "skipped-trivial" | "deferred" | "deferred-budget" | "empty" | "delivery-pending" | "partial" | "aborted" | "error";
+  outcome:
+    | "summarized"
+    | "skipped-oversized"
+    | "skipped-deduped"
+    | "skipped-trivial"
+    | "deferred"
+    | "deferred-budget"
+    | "empty"
+    | "delivery-pending"
+    | "partial"
+    | "aborted"
+    | "error";
   deferredReasons?: Partial<Record<DeferredReason, number>>;
   reason?: string;
   error?: string;
@@ -865,8 +887,36 @@ export type BatchTextProgressCallback = (
 
 /** Options accepted by `flushPending`. */
 export type FlushResult =
-  | { ok: true; reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped"; batchCount: number; toolCallCount: number; rawCharCount: number; summaryCharCount: number; dedupedCount?: number; dedupedRawCharCount?: number; deferredReasons?: Partial<Record<DeferredReason, number>>; error?: string }
-  | { ok: false; reason: "empty" | "already-flushing" | "deferred-occ" | "deferred" | "deferred-budget" | "input-budget" | "summarizer-failed" | "delivery-pending" | "stale-context" | "failed" | "aborted"; deferredReasons?: Partial<Record<DeferredReason, number>>; error?: string; batchCount?: number };
+  | {
+      ok: true;
+      reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped";
+      batchCount: number;
+      toolCallCount: number;
+      rawCharCount: number;
+      summaryCharCount: number;
+      dedupedCount?: number;
+      dedupedRawCharCount?: number;
+      deferredReasons?: Partial<Record<DeferredReason, number>>;
+      error?: string;
+    }
+  | {
+      ok: false;
+      reason:
+        | "empty"
+        | "already-flushing"
+        | "deferred-occ"
+        | "deferred"
+        | "deferred-budget"
+        | "input-budget"
+        | "summarizer-failed"
+        | "delivery-pending"
+        | "stale-context"
+        | "failed"
+        | "aborted";
+      deferredReasons?: Partial<Record<DeferredReason, number>>;
+      error?: string;
+      batchCount?: number;
+    };
 
 export interface FlushOptions {
   /** Delivery path: "runtime" uses sendMessage/steer (default); "session" writes directly to session. */

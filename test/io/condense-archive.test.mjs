@@ -39,13 +39,38 @@ test("execution archives survive display eviction, and recall pins append-only s
   t.after(() => archive.close());
   const original = "START\r\n" + "中文\u001b[31m".repeat(1500) + "FIRST_END";
   archive.append(original);
-  const info = archive.info(); assert.ok(info);
-  const assistant = { content: [{ type: "toolCall", id: "exec-original", name: "exec_command", arguments: { cmd: "producer" } }] };
-  const batch = captureBatch(assistant, [{ toolCallId: "exec-original", timestamp: 3, isError: false, content: [{ type: "text", text: "DISPLAY_TAIL" }], details: info }], 1, 2);
-  await spillOversizedBatch({ batch, indexer, config: DEFAULT_CONFIG, sessionDir: dir, sessionId: sm.getSessionId(), appendEntry: (type, data) => sm.appendCustomEntry(type, data) });
+  const info = archive.info();
+  assert.ok(info);
+  const assistant = {
+    content: [{ type: "toolCall", id: "exec-original", name: "exec_command", arguments: { cmd: "producer" } }],
+  };
+  const batch = captureBatch(
+    assistant,
+    [
+      {
+        toolCallId: "exec-original",
+        timestamp: 3,
+        isError: false,
+        content: [{ type: "text", text: "DISPLAY_TAIL" }],
+        details: info,
+      },
+    ],
+    1,
+    2,
+  );
+  await spillOversizedBatch({
+    batch,
+    indexer,
+    config: DEFAULT_CONFIG,
+    sessionDir: dir,
+    sessionId: sm.getSessionId(),
+    appendEntry: (type, data) => sm.appendCustomEntry(type, data),
+  });
   const first = (await run({ toolCallIds: ["exec-original"], maxBytes: 2048 })).details;
-  archive.append("LATER OUTPUT THAT MUST NOT CHANGE THE OLD SNAPSHOT"); archive.close();
-  let body = first, restored = first.results[0].text;
+  archive.append("LATER OUTPUT THAT MUST NOT CHANGE THE OLD SNAPSHOT");
+  archive.close();
+  let body = first,
+    restored = first.results[0].text;
   while (body.nextCursor) {
     body = (await run({ toolCallIds: ["exec-original"], maxBytes: 2048, cursor: body.nextCursor })).details;
     restored += body.results[0].text;
@@ -53,13 +78,40 @@ test("execution archives survive display eviction, and recall pins append-only s
   assert.equal(restored, original);
   assert.equal(first.results[0].source, "command-output");
   assert.equal(first.results[0].archiveComplete, true);
-  assert.equal(indexer.getRecord("exec-original").spillPath, info.fullOutputPath, "polls share the durable producer log");
+  assert.equal(
+    indexer.getRecord("exec-original").spillPath,
+    info.fullOutputPath,
+    "polls share the durable producer log",
+  );
   assert.ok(existsSync(info.fullOutputPath));
-  assert.equal(readFileSync(info.fullOutputPath, "utf8"), original + "LATER OUTPUT THAT MUST NOT CHANGE THE OLD SNAPSHOT");
+  assert.equal(
+    readFileSync(info.fullOutputPath, "utf8"),
+    original + "LATER OUTPUT THAT MUST NOT CHANGE THE OLD SNAPSHOT",
+  );
 
-  const temporary = join(dir, "native-bash.log"); writeFileSync(temporary, "native full output");
-  const native = captureBatch({ content: [{ type: "toolCall", id: "bash-native", name: "bash", arguments: { command: "native" } }] }, [{ toolCallId: "bash-native", timestamp: 7, content: [{ type: "text", text: "native tail" }], details: { fullOutputPath: temporary } }], 2, 6);
-  await spillOversizedBatch({ batch: native, indexer, config: DEFAULT_CONFIG, sessionDir: dir, sessionId: sm.getSessionId(), appendEntry() {} });
+  const temporary = join(dir, "native-bash.log");
+  writeFileSync(temporary, "native full output");
+  const native = captureBatch(
+    { content: [{ type: "toolCall", id: "bash-native", name: "bash", arguments: { command: "native" } }] },
+    [
+      {
+        toolCallId: "bash-native",
+        timestamp: 7,
+        content: [{ type: "text", text: "native tail" }],
+        details: { fullOutputPath: temporary },
+      },
+    ],
+    2,
+    6,
+  );
+  await spillOversizedBatch({
+    batch: native,
+    indexer,
+    config: DEFAULT_CONFIG,
+    sessionDir: dir,
+    sessionId: sm.getSessionId(),
+    appendEntry() {},
+  });
   rmSync(temporary);
   assert.equal((await run({ toolCallIds: ["bash-native"] })).details.results[0].text, "native full output");
 });
@@ -73,14 +125,39 @@ test("archive failure is explicit and incomplete captured prefixes are not repor
   assert.equal(failed.info().fullOutputComplete, false);
   assert.match(failed.info().fullOutputError, /unavailable/i);
   failed.close();
-  const partial = join(dir, "partial.log"); writeFileSync(partial, "captured prefix");
-  const batch = captureBatch({ content: [{ type: "toolCall", id: "partial", name: "bash", arguments: { command: "producer" } }] },
-    [{ toolCallId: "partial", timestamp: 4, content: [{ type: "text", text: "display tail" }], details: { fullOutputPath: partial, fullOutputComplete: false } }], 1, 3);
-  await spillOversizedBatch({ batch, indexer, config: DEFAULT_CONFIG, sessionDir: dir, sessionId: ctx.sessionManager.getSessionId(), appendEntry() {} });
+  const partial = join(dir, "partial.log");
+  writeFileSync(partial, "captured prefix");
+  const batch = captureBatch(
+    { content: [{ type: "toolCall", id: "partial", name: "bash", arguments: { command: "producer" } }] },
+    [
+      {
+        toolCallId: "partial",
+        timestamp: 4,
+        content: [{ type: "text", text: "display tail" }],
+        details: { fullOutputPath: partial, fullOutputComplete: false },
+      },
+    ],
+    1,
+    3,
+  );
+  await spillOversizedBatch({
+    batch,
+    indexer,
+    config: DEFAULT_CONFIG,
+    sessionDir: dir,
+    sessionId: ctx.sessionManager.getSessionId(),
+    appendEntry() {},
+  });
   const result = (await run({ toolCallIds: ["partial"] })).details.results[0];
   assert.equal(result.text, "captured prefix");
   assert.equal(result.archiveComplete, false);
   assert.match(result.error, /incomplete/i);
-  assert.throws(() => indexer.addBatch({ ...batch, toolCalls: [record("rejected", "unpublished")] }, () => { throw new Error("disk write failed"); }), /disk write failed/);
+  assert.throws(
+    () =>
+      indexer.addBatch({ ...batch, toolCalls: [record("rejected", "unpublished")] }, () => {
+        throw new Error("disk write failed");
+      }),
+    /disk write failed/,
+  );
   assert.equal(indexer.getRecord("rejected"), undefined, "failed persistence cannot authorize pruning");
 });

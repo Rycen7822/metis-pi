@@ -40,79 +40,92 @@ function parseFormattedExecTranscript(text: string): FormattedExecTranscript {
 	};
 }
 
-function getResultState(result: { details?: unknown | undefined; content: Array<{ type: string; text?: string | undefined }> }): FormattedExecTranscript {
-	const details = isUnifiedExecResult(result.details) ? result.details : undefined;
-	const content = result.content.find((item) => item.type === "text");
-	if (details) {
-		return {
-			output: details.output,
-			sessionId: details.session_id,
-			exitCode: details.exit_code,
-		};
-	}
-	if (content?.type === "text") {
-		return parseFormattedExecTranscript(content.text ?? "");
-	}
-	return { output: "" };
+function getResultState(result: {
+  details?: unknown | undefined;
+  content: Array<{ type: string; text?: string | undefined }>;
+}): FormattedExecTranscript {
+  const details = isUnifiedExecResult(result.details) ? result.details : undefined;
+  const content = result.content.find((item) => item.type === "text");
+  if (details) {
+    return {
+      output: details.output,
+      sessionId: details.session_id,
+      exitCode: details.exit_code,
+    };
+  }
+  if (content?.type === "text") {
+    return parseFormattedExecTranscript(content.text ?? "");
+  }
+  return { output: "" };
 }
 
 function parseWriteStdinParams(params: unknown): WriteStdinParams {
-	if (!params || typeof params !== "object" || !("session_id" in params) || typeof params.session_id !== "number") {
-		throw new Error("write_stdin requires numeric 'session_id'");
-	}
-	const chars = "chars" in params && typeof params.chars === "string" ? params.chars : undefined;
-	const yield_time_ms = "yield_time_ms" in params && typeof params.yield_time_ms === "number" ? params.yield_time_ms : undefined;
-	const max_output_tokens =
-		"max_output_tokens" in params && typeof params.max_output_tokens === "number" ? params.max_output_tokens : undefined;
-	return { session_id: params.session_id, chars, yield_time_ms, max_output_tokens };
+  if (!params || typeof params !== "object" || !("session_id" in params) || typeof params.session_id !== "number") {
+    throw new Error("write_stdin requires numeric 'session_id'");
+  }
+  const chars = "chars" in params && typeof params.chars === "string" ? params.chars : undefined;
+  const yield_time_ms =
+    "yield_time_ms" in params && typeof params.yield_time_ms === "number" ? params.yield_time_ms : undefined;
+  const max_output_tokens =
+    "max_output_tokens" in params && typeof params.max_output_tokens === "number"
+      ? params.max_output_tokens
+      : undefined;
+  return { session_id: params.session_id, chars, yield_time_ms, max_output_tokens };
 }
 
-export function createWriteStdinTool(sessions: ExecSessionManager, options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {}) {
-	const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
-		name: "write_stdin",
-		label: "write_stdin",
-		description: "Write/poll exec session",
-		...(options.promptSnippet === false ? {} : { promptSnippet: "Write to exec session" }),
-		parameters: WRITE_STDIN_PARAMETERS,
-		outputSchema: EXEC_OUTPUT_SCHEMA,
-		async execute(_toolCallId, params, signal, onUpdate) {
-			const typed = parseWriteStdinParams(params);
-			const command = sessions.getSessionCommand(typed.session_id) ?? "";
-			let result: UnifiedExecResult;
-			try {
-				result = await sessions.write(typed, signal, onUpdate ? (partial) => onUpdate(execToolResult(partial, command)) : undefined);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				throw new Error(`write_stdin failed: ${message}`);
-			}
-			return execToolResult(result, command);
-		},
-		renderCall(args, theme) {
-			const inputArgs = args as Partial<WriteStdinParams>;
-			const sessionId = typeof inputArgs.session_id === "number" ? inputArgs.session_id : "?";
-			const input = typeof inputArgs.chars === "string" ? inputArgs.chars : undefined;
-			const command = typeof sessionId === "number" ? sessions.getSessionCommand(sessionId) : undefined;
-			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
-		},
-		renderResult(result, { expanded, isPartial }, theme) {
-			const state = getResultState(result);
-			if (!expanded) {
-				if (!isPartial || !options.showOutputWhenCollapsed) return new Container();
-				const output = renderTerminalOutput(state.output).trimEnd();
-				const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
-				const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;
-				return new Text(theme.fg("dim", [tail, status].filter(Boolean).join("\n") || "Waiting for output"), 0, 0);
-			}
-			const output = renderTerminalOutput(state.output);
-			let text = theme.fg("dim", output || "(no output)");
-			if (state.sessionId !== undefined) {
-				text += `\n${theme.fg("accent", `Session ${state.sessionId} still running`)}`;
-			}
-			if (state.exitCode !== undefined) {
-				text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
-			}
-			return new Text(text, 0, 0);
-		},
-	};
-	return tool;
+export function createWriteStdinTool(
+  sessions: ExecSessionManager,
+  options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {},
+) {
+  const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
+    name: "write_stdin",
+    label: "write_stdin",
+    description: "Write/poll exec session",
+    ...(options.promptSnippet === false ? {} : { promptSnippet: "Write to exec session" }),
+    parameters: WRITE_STDIN_PARAMETERS,
+    outputSchema: EXEC_OUTPUT_SCHEMA,
+    async execute(_toolCallId, params, signal, onUpdate) {
+      const typed = parseWriteStdinParams(params);
+      const command = sessions.getSessionCommand(typed.session_id) ?? "";
+      let result: UnifiedExecResult;
+      try {
+        result = await sessions.write(
+          typed,
+          signal,
+          onUpdate ? (partial) => onUpdate(execToolResult(partial, command)) : undefined,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`write_stdin failed: ${message}`);
+      }
+      return execToolResult(result, command);
+    },
+    renderCall(args, theme) {
+      const inputArgs = args as Partial<WriteStdinParams>;
+      const sessionId = typeof inputArgs.session_id === "number" ? inputArgs.session_id : "?";
+      const input = typeof inputArgs.chars === "string" ? inputArgs.chars : undefined;
+      const command = typeof sessionId === "number" ? sessions.getSessionCommand(sessionId) : undefined;
+      return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme) {
+      const state = getResultState(result);
+      if (!expanded) {
+        if (!isPartial || !options.showOutputWhenCollapsed) return new Container();
+        const output = renderTerminalOutput(state.output).trimEnd();
+        const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
+        const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;
+        return new Text(theme.fg("dim", [tail, status].filter(Boolean).join("\n") || "Waiting for output"), 0, 0);
+      }
+      const output = renderTerminalOutput(state.output);
+      let text = theme.fg("dim", output || "(no output)");
+      if (state.sessionId !== undefined) {
+        text += `\n${theme.fg("accent", `Session ${state.sessionId} still running`)}`;
+      }
+      if (state.exitCode !== undefined) {
+        text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
+      }
+      return new Text(text, 0, 0);
+    },
+  };
+  return tool;
 }

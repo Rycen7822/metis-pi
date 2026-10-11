@@ -34,12 +34,28 @@ test("copy provenance: dropped spaces bridge selected rows, never shift partial 
 test("fusion composition retains exact diff and command copy across narrow wraps", () => {
   const renderers = makeRenderers(text => new Tui.Text(text, 0, 0), () => "expand");
   const output = "command output with 中文 and several   spaces after wrapping";
-  const result = { content: [{ type: "text", text: "Written" }, { type: "text", text: "[then_run:failed] npm test" }, { type: "text", text: output }],
-    details: { metisWriteDiff: { kind: "add", added: 1, removed: 0, rows: [{ kind: "add", lineNumber: 1, content: "saved" }] },
-      metisActionFusion: { version: 1, mutationStatus: "success", command: { command: "npm test", status: "failed", exitCode: 1, outputBlock: 2 } } } };
+  const result = {
+    content: [
+      { type: "text", text: "Written" },
+      { type: "text", text: "[then_run:failed] npm test" },
+      { type: "text", text: output },
+    ],
+    details: {
+      metisWriteDiff: { kind: "add", added: 1, removed: 0, rows: [{ kind: "add", lineNumber: 1, content: "saved" }] },
+      metisActionFusion: {
+        version: 1,
+        mutationStatus: "success",
+        command: { command: "npm test", status: "failed", exitCode: 1, outputBlock: 2 },
+      },
+    },
+  };
   const view = fusionRenderers(renderers.write, renderers.bash, () => result);
   for (const width of [18, 80]) {
-    const component = view.renderResult(result, { expanded: true }, toolTheme, { args: { path: "file", content: "saved" }, isError: true, isPartial: false });
+    const component = view.renderResult(result, { expanded: true }, toolTheme, {
+      args: { path: "file", content: "saved" },
+      isError: true,
+      isPartial: false,
+    });
     const copied = select(renderFrame(component, width));
     assert.ok(copied.text.includes(output), "soft wraps must recover the original command spacing");
     assert.match(copied.text, /saved/);

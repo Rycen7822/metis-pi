@@ -42,7 +42,11 @@ function entry(t) {
   t.after(() => {
     handlers.get("session_shutdown")({}, {});
     assert.deepEqual(Object.getOwnPropertyDescriptors(prototype), descriptors, "entry releases the host prototype");
-    assert.deepEqual(Object.getOwnPropertyDescriptors(Core.InteractiveMode.prototype), interactiveDescriptors, "entry releases user timestamp decoration");
+    assert.deepEqual(
+      Object.getOwnPropertyDescriptors(Core.InteractiveMode.prototype),
+      interactiveDescriptors,
+      "entry releases user timestamp decoration",
+    );
   });
   const ctx = { hasUI: true, ui: { notify(text) { throw new Error(text); } } };
   handlers.get("session_start")({}, ctx);

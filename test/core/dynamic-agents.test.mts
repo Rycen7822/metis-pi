@@ -7,8 +7,15 @@ import { loadPolicy, matches, parseConfig, projectMessages, replaceGlobal } from
 
 test("provider globs, literal punctuation and cross-provider terminal IDs", () => {
   const flash = { provider: "commandcode", id: "deepseek/deepseek-v4.1-flash" };
-  for (const pattern of ["commandcode/*", "commandcode/deepseek/*", "*/deepseek/*", "deepseek-v4.1-flash", "*flash"]) assert.ok(matches(pattern, flash), pattern);
-  for (const pattern of ["openai-codex/*", "deepseek-v4X1-flash", "Deepseek-v4.1-flash", "commandcode/deepseek/*-deepseek-v4.1-flash"]) assert.equal(matches(pattern, flash), false, pattern);
+  for (const pattern of ["commandcode/*", "commandcode/deepseek/*", "*/deepseek/*", "deepseek-v4.1-flash", "*flash"])
+    assert.ok(matches(pattern, flash), pattern);
+  for (const pattern of [
+    "openai-codex/*",
+    "deepseek-v4X1-flash",
+    "Deepseek-v4.1-flash",
+    "commandcode/deepseek/*-deepseek-v4.1-flash",
+  ])
+    assert.equal(matches(pattern, flash), false, pattern);
   assert.ok(matches("deepseek-v4.1-flash", { provider: "another", id: "deepseek-v4.1-flash" }));
   assert.ok(matches("a+b(1)", { provider: "p", id: "a+b(1)" }));
   assert.equal(matches("a+b(1)", { provider: "p", id: "aaab1" }), false);
@@ -43,9 +50,19 @@ test("request projection replaces only source-labelled globals without rewriting
   const sources = new Set([global.path, policy.path]);
   const files = [global, project];
   assert.deepEqual(replaceGlobal(files, sources, policy), [policy, project]);
-  const section = `<project_context>\nProject-specific instructions and guidelines:\n\n${files.map(file => `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`).join("\n\n")}\n</project_context>`;
-  const messages = [{ role: "system", content: "", sections: { project_context: section, skills: "SKILL_KEEP" }, toolsAdded: ["TOOL_KEEP"] },
-    { role: "user", content: "OLD_GLOBAL is quoted user data" }];
+  const section =
+    "<project_context>\nProject-specific instructions and guidelines:\n\n" +
+    `${files.map((file) => `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`).join("\n\n")}` +
+    "\n</project_context>";
+  const messages = [
+    {
+      role: "system",
+      content: "",
+      sections: { project_context: section, skills: "SKILL_KEEP" },
+      toolsAdded: ["TOOL_KEEP"],
+    },
+    { role: "user", content: "OLD_GLOBAL is quoted user data" },
+  ];
   const original = JSON.stringify(messages);
   const projected = projectMessages(messages, sources, policy);
   assert.doesNotMatch(projected[0]!.sections!.project_context, /OLD_GLOBAL/);

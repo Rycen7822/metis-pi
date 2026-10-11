@@ -10,7 +10,12 @@ export default function condense(pi: ExtensionAPI): void {
     ctx.ui.setStatus("metis-condense-cost", undefined);
     if (!runtime) {
       if (pi.getAllTools().some((tool) => tool.name === "context_tree_query")) {
-        ctx.ui.notify("metis-pi: external context_tree_query detected; built-in condense is inactive. Remove the separate pi-condense installation and reload to use the built-in version. Existing configuration and archives are preserved.", "warning");
+        ctx.ui.notify(
+          "metis-pi: external context_tree_query detected; built-in condense is inactive. " +
+            "Remove the separate pi-condense installation and reload to use the built-in " +
+            "version. Existing configuration and archives are preserved.",
+          "warning",
+        );
         return;
       }
       runtime = createCondenseRuntime(pi);

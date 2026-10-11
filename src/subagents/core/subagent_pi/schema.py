@@ -269,7 +269,11 @@ TOOLS = [
     tool(
         "pi_spawn_agent",
         "spawn",
-        "Start a Pi task with its own session. Parent conversation and sandbox are not inherited. Supply cwd to bind an unbound connection. Returns agent/run IDs and selected model/thinking. Idle sessions park automatically.",
+        (
+            "Start a Pi task with its own session. Parent conversation and sandbox are not "
+            "inherited. Supply cwd to bind an unbound connection. Returns agent/run IDs and "
+            "selected model/thinking. Idle sessions park automatically."
+        ),
         {
             **SCOPE,
             **REQ,
@@ -309,13 +313,32 @@ TOOLS = [
     tool(
         "pi_wait_agent",
         "wait",
-        "Wait for selected runs. Default any returns on the first completion, failure, stop or question. Optional all waits for every run to reach a terminal state; questions still return early. Returns all ready bounded previews and hashes; delivery consumes returned notifications automatically. Completed means the model stopped, not that its task passed acceptance; verify artifacts before reporting success. Inputs marked not_consumed are not replayed; resend explicitly if needed. Cancelling the wait does not stop agents.",
+        (
+            "Wait for selected runs. Default any returns on the first completion, failure, "
+            "stop or question. Optional all waits for every run to reach a terminal state; "
+            "questions still return early. Returns all ready bounded previews and hashes; "
+            "delivery consumes returned notifications automatically. Completed means the "
+            "model stopped, not that its task passed acceptance; verify artifacts before "
+            "reporting success. Inputs marked not_consumed are not replayed; resend "
+            "explicitly if needed. Cancelling the wait does not stop agents."
+        ),
         {
             **SCOPE,
-            "run_ids": {"type": "array", "items": ID, "maxItems": 100,
-                        "description": "Selected run IDs; omit for up to 100 active or not-yet-delivered runs in the bound scope."},
-            "agent_ids": {"type": "array", "items": LABEL, "maxItems": 100,
-                          "description": "Agent names/IDs instead of run_ids. Locks each current or latest task at call entry; multiple queued tasks require explicit run_ids."},
+            "run_ids": {
+                "type": "array",
+                "items": ID,
+                "maxItems": 100,
+                "description": "Selected run IDs; omit for up to 100 active or not-yet-delivered runs in the bound scope.",
+            },
+            "agent_ids": {
+                "type": "array",
+                "items": LABEL,
+                "maxItems": 100,
+                "description": (
+                    "Agent names/IDs instead of run_ids. Locks each current or latest task at call "
+                    "entry; multiple queued tasks require explicit run_ids."
+                ),
+            },
             "mode": {"type": "string", "enum": ["any", "all"], "default": "any"},
             "timeout_seconds": {
                 "type": "integer",
@@ -331,13 +354,25 @@ TOOLS = [
     tool(
         "pi_list_agents",
         "list",
-        "Search this session's retained agent history by name/ID. Defaults to newest status/task update first; sort=created uses creation time. Timestamps are UTC ISO 8601. total counts all history, matched counts query matches; continue with next_offset while has_more, keeping query/sort unchanged. Outstanding runs remain scope-wide; listing status does not consume result attention. Read results with wait or pi_agent_result. For notification details, call pi_inspect_agent with agent_id and detail=full.",
+        (
+            "Search this session's retained agent history by name/ID. Defaults to newest "
+            "status/task update first; sort=created uses creation time. Timestamps are UTC "
+            "ISO 8601. total counts all history, matched counts query matches; continue with "
+            "next_offset while has_more, keeping query/sort unchanged. Outstanding runs "
+            "remain scope-wide; listing status does not consume result attention. Read "
+            "results with wait or pi_agent_result. For notification details, call "
+            "pi_inspect_agent with agent_id and detail=full."
+        ),
         {
             **SCOPE,
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
-            "query": {**S, "maxLength": LABEL_MAX_CHARS, "description": "Literal name/ID substring; ASCII case-insensitive. Omit to list all history."},
+            "query": {
+                **S,
+                "maxLength": LABEL_MAX_CHARS,
+                "description": "Literal name/ID substring; ASCII case-insensitive. Omit to list all history.",
+            },
             "sort": {**S, "enum": ["updated", "created"], "default": "updated"},
-            "offset": {"type": "integer", "minimum": 0, "maximum": 2**31-1, "default": 0},
+            "offset": {"type": "integer", "minimum": 0, "maximum": 2**31 - 1, "default": 0},
         },
         [],
         True,
@@ -345,7 +380,13 @@ TOOLS = [
     tool(
         "pi_inspect_agent",
         "inspect",
-        "Read bounded events and input receipts; pass next_cursor as after. full adds current/latest run diagnostics and notification details. Usage token counters are run totals across assistant messages; last_message_output and max_message_output distinguish individual response output from cumulative output.",
+        (
+            "Read bounded events and input receipts; pass next_cursor as after. full adds "
+            "current/latest run diagnostics and notification details. Usage token counters "
+            "are run totals across assistant messages; last_message_output and "
+            "max_message_output distinguish individual response output from cumulative "
+            "output."
+        ),
         {
             **AGENT,
             "after": {"type": "integer", "minimum": 0},
@@ -359,7 +400,12 @@ TOOLS = [
     tool(
         "pi_agent_result",
         "result",
-        "Read a terminal result by agent name/ID or explicit run ID; choose exactly one. Paginate long results with next_offset and the returned run.id. Complete wait/notification results need no extra read. Delivery consumes its notification automatically; results remain available for re-reading.",
+        (
+            "Read a terminal result by agent name/ID or explicit run ID; choose exactly one. "
+            "Paginate long results with next_offset and the returned run.id. Complete "
+            "wait/notification results need no extra read. Delivery consumes its "
+            "notification automatically; results remain available for re-reading."
+        ),
         {
             **SCOPE,
             "run_id": ID,
@@ -385,49 +431,88 @@ TOOLS = [
     tool(
         "pi_send_message",
         "message",
-        "Message by agent ID or name. Active tasks receive steering before a later model call; idle messages persist without a model turn. Parked sessions load automatically. Accepted is not consumed.",
+        (
+            "Message by agent ID or name. Active tasks receive steering before a later model "
+            "call; idle messages persist without a model turn. Parked sessions load "
+            "automatically. Accepted is not consumed."
+        ),
         {**AGENT, **REQ, "message": TEXT},
         ["agent_id", "request_id", "message"],
     ),
     tool(
         "pi_followup_task",
         "followup",
-        "Assign work by agent ID or name. Active tasks receive input in the same run; idle agents start a new run. Parked sessions load automatically. Accepted is not consumed.",
+        (
+            "Assign work by agent ID or name. Active tasks receive input in the same run; "
+            "idle agents start a new run. Parked sessions load automatically. Accepted is "
+            "not consumed."
+        ),
         {**AGENT, **REQ, "message": TEXT},
         ["agent_id", "request_id", "message"],
     ),
     tool(
         "pi_interrupt_agent",
         "soft_interrupt",
-        "Interrupt the task and preserve its session. Normally retains the runtime; uncooperative activity requires verified process termination. Idle/unloaded agents are unchanged.",
+        (
+            "Interrupt the task and preserve its session. Normally retains the runtime; "
+            "uncooperative activity requires verified process termination. Idle/unloaded "
+            "agents are unchanged."
+        ),
         {**AGENT, **REQ},
         ["agent_id", "request_id"],
     ),
 ]
 
+
 def native_tools():
     """Pi supplies scope and durable invocation IDs; backend/CLI contracts stay explicit."""
-    result=[]
+    result = []
     for definition in TOOLS:
-        schema=definition['inputSchema']
-        properties={k:v for k,v in schema['properties'].items() if k!='scope'}
-        if 'request_id' in properties:
-            properties['request_id']={**ID,'description':'Normally omit: Pi generates and saves an operation ID. Reuse the returned key only to recover the identical uncertain operation; never retry with a new key.'}
-        description=definition['description']
-        if definition['_op']=='spawn': description=description.replace('Supply cwd to bind an unbound connection.','The workspace defaults to the current Pi session.')
-        if definition['_op']=='answer': description+=' Omit ui_request_id only for the unique question already delivered to this parent; stale or ambiguous questions are rejected.'
-        result.append({**definition,'description':description,'inputSchema':obj(properties,[k for k in schema['required'] if k not in {'scope','request_id','ui_request_id'}])})
+        schema = definition["inputSchema"]
+        properties = {k: v for k, v in schema["properties"].items() if k != "scope"}
+        if "request_id" in properties:
+            properties["request_id"] = {
+                **ID,
+                "description": (
+                    "Normally omit: Pi generates and saves an operation ID. Reuse the returned key "
+                    "only to recover the identical uncertain operation; never retry with a new key."
+                ),
+            }
+        description = definition["description"]
+        if definition["_op"] == "spawn":
+            description = description.replace(
+                "Supply cwd to bind an unbound connection.", "The workspace defaults to the current Pi session."
+            )
+        if definition["_op"] == "answer":
+            description += (
+                " Omit ui_request_id only for the unique question already delivered to this "
+                "parent; stale or ambiguous questions are rejected."
+            )
+        result.append(
+            {
+                **definition,
+                "description": description,
+                "inputSchema": obj(
+                    properties, [k for k in schema["required"] if k not in {"scope", "request_id", "ui_request_id"}]
+                ),
+            }
+        )
     return result
 
-NATIVE_TOOLS=native_tools()
-NATIVE_BY_NAME={t['name']:t for t in NATIVE_TOOLS}
+
+NATIVE_TOOLS = native_tools()
+NATIVE_BY_NAME = {t["name"]: t for t in NATIVE_TOOLS}
 
 # Explicit recovery/legacy calls stay callable without discovery.
 MANAGEMENT = [
     tool(
         "pi_context",
         "scope_open",
-        "Open a Pi delegation scope in an explicit workspace, or resume a known scope. Reuse it for subsequent calls. Optional: pi_spawn_agent with a cwd opens this scope implicitly.",
+        (
+            "Open a Pi delegation scope in an explicit workspace, or resume a known scope. "
+            "Reuse it for subsequent calls. Optional: pi_spawn_agent with a cwd opens this "
+            "scope implicitly."
+        ),
         {
             "cwd": {
                 **S,
@@ -449,19 +534,33 @@ MANAGEMENT = [
     tool(
         "pi_send_input",
         "send",
-        "Submit input to an existing Pi session. Queued is not consumed. send/follow_up wakes a cleanly stopped (dormant or closed, verified) agent from its persisted session and boots it; steer still needs an active run on a live worker. interrupt=true terminates and verifies the owned process before starting a replacement with this message; it does not roll back effects.",
+        (
+            "Submit input to an existing Pi session. Queued is not consumed. send/follow_up "
+            "wakes a cleanly stopped (dormant or closed, verified) agent from its persisted "
+            "session and boots it; steer still needs an active run on a live worker. "
+            "interrupt=true terminates and verifies the owned process before starting a "
+            "replacement with this message; it does not roll back effects."
+        ),
         {
             **AGENT,
             **REQ,
             "message": {
                 **TEXT,
-                "description": "New work or a correction, with any changed facts, permissions and acceptance criteria. The child retains its own Pi history, but cannot see new parent conversation.",
+                "description": (
+                    "New work or a correction, with any changed facts, permissions and acceptance "
+                    "criteria. The child retains its own Pi history, but cannot see new parent "
+                    "conversation."
+                ),
             },
             "mode": {
                 "type": "string",
                 "enum": ["send", "steer", "follow_up"],
                 "default": "steer",
-                "description": "send: new run on an idle agent. steer: same-run continuation after the current SDK call finishes, not a mid-call interruption. follow_up: separate run after the active task and all its continuations.",
+                "description": (
+                    "send: new run on an idle agent. steer: same-run continuation after the current "
+                    "SDK call finishes, not a mid-call interruption. follow_up: separate run after "
+                    "the active task and all its continuations."
+                ),
             },
             "interrupt": {"type": "boolean", "default": False},
         },
@@ -470,15 +569,35 @@ MANAGEMENT = [
     tool(
         "pi_close_agent",
         "close",
-        "Stop work and terminate the owned process group. Preserve durable session and results. Also reaps a verified orphan. Capacity is managed automatically: settled idle agents are parked when the resident limit is reached.",
-        {**AGENT, **REQ, "confirm_cleanup": {"type":"integer", "minimum":1,
-            "description":"Explicit operator confirmation after inspecting and removing all descendants of this dead owner generation. Does not kill or override a live or unidentified owner."}},
+        (
+            "Stop work and terminate the owned process group. Preserve durable session and "
+            "results. Also reaps a verified orphan. Capacity is managed automatically: "
+            "settled idle agents are parked when the resident limit is reached."
+        ),
+        {
+            **AGENT,
+            **REQ,
+            "confirm_cleanup": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Explicit operator confirmation after inspecting and removing all descendants of "
+                    "this dead owner generation. Does not kill or override a live or unidentified "
+                    "owner."
+                ),
+            },
+        },
         ["agent_id", "request_id"],
     ),
     tool(
         "pi_respawn_agent",
         "respawn",
-        "Ensure the same logical agent is running from its persisted Pi session. An alive worker is returned unchanged (already_running) unless a new message would replace it; a cleanly stopped agent can instead be woken with pi_send_input. Never auto-replay interrupted shell commands.",
+        (
+            "Ensure the same logical agent is running from its persisted Pi session. An "
+            "alive worker is returned unchanged (already_running) unless a new message would "
+            "replace it; a cleanly stopped agent can instead be woken with pi_send_input. "
+            "Never auto-replay interrupted shell commands."
+        ),
         {**AGENT, **REQ, "message": TEXT},
         ["agent_id", "request_id"],
     ),

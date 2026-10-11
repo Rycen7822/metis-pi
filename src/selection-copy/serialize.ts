@@ -228,13 +228,23 @@ export class SelectionSerializer {
    * Box rects/clips are screen-space even inside a scrolled subtree, so the
    * content origin's x/y come out when converting the content-space row and
    * clip range. */
-  #ownershipFor(frame: LayoutFrameLike, row: number, anchor: { x: number; y: number }, contentSpace: boolean, maxCol: number): (LeafHit | undefined)[] {
+  #ownershipFor(
+    frame: LayoutFrameLike,
+    row: number,
+    anchor: { x: number; y: number },
+    contentSpace: boolean,
+    maxCol: number,
+  ): (LeafHit | undefined)[] {
     const cells: (LeafHit | undefined)[] = new Array(maxCol).fill(undefined);
     const subtreeRow = contentSpace ? row + anchor.y : row;
     const visit = (box: LayoutBoxLike): void => {
-      if (box.lines !== undefined
-          && subtreeRow >= box.rect.y && subtreeRow < box.rect.y + box.rect.height
-          && subtreeRow >= box.clip.y && subtreeRow < box.clip.y + box.clip.height) {
+      if (
+        box.lines !== undefined &&
+        subtreeRow >= box.rect.y &&
+        subtreeRow < box.rect.y + box.rect.height &&
+        subtreeRow >= box.clip.y &&
+        subtreeRow < box.clip.y + box.clip.height
+      ) {
         const lineIndex = subtreeRow - box.rect.y + (box.lineOffset ?? 0);
         if (lineIndex >= 0 && lineIndex < box.lines.length) {
           const hit: LeafHit = { box, lineIndex };

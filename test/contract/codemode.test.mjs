@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { initTheme, InteractiveMode, createCodemodeExtension, createReadToolDefinition, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  initTheme,
+  InteractiveMode,
+  createCodemodeExtension,
+  createReadToolDefinition,
+  createBashToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { installAdapter } from "../../src/adapter.ts";
 import { activate } from "../../src/extension.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "../../src/codemode-view.ts";
@@ -66,10 +72,25 @@ test("native codemode folding hides every script line and uses ordinary read/she
   const { row, capture } = setup(t);
   const output = Array.from({ length: 18 }, (_, i) => `output-${i}`).join("\n");
   // The final lifecycle flag wins over any stale isError on the result object.
-  capture(1, "read", { path: "note.md" }, deepFreeze({ content: [{ type: "text", text: "FILE_BODY_ONLY" }], details: {}, isError: true }));
-  capture(2, "bash", { command: "printf hello" }, deepFreeze({ content: [{ type: "text", text: output }], details: {} }));
-  const result = deepFreeze({ content: [{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
-    { type: "text", text: "DERIVED SUMMARY KEEP" }], details: { calls: [call(1, "read", { path: "note.md" }), call(2, "bash", { command: "printf hello" })] } });
+  capture(
+    1,
+    "read",
+    { path: "note.md" },
+    deepFreeze({ content: [{ type: "text", text: "FILE_BODY_ONLY" }], details: {}, isError: true }),
+  );
+  capture(
+    2,
+    "bash",
+    { command: "printf hello" },
+    deepFreeze({ content: [{ type: "text", text: output }], details: {} }),
+  );
+  const result = deepFreeze({
+    content: [
+      { type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+      { type: "text", text: "DERIVED SUMMARY KEEP" },
+    ],
+    details: { calls: [call(1, "read", { path: "note.md" }), call(2, "bash", { command: "printf hello" })] },
+  });
   row.updateResult(result, false);
   const folded = plain(row);
   assert.match(folded, /codemode/);
@@ -209,7 +230,12 @@ test("display cache ignores foreign parents, refuses oversized results, and clea
   assert.equal(store.get("foreign", "foreign/1"), undefined);
   store.start({ toolCallId: parent, toolName: "codemode" }, true);
   store.start({ toolCallId: `${parent}/1`, parentToolCallId: parent, toolName: "read", args: { path: "small" } });
-  store.finish({ toolCallId: `${parent}/1`, parentToolCallId: parent, toolName: "read", result: { content: [{ type: "text", text: "x".repeat(1024) }] } });
+  store.finish({
+    toolCallId: `${parent}/1`,
+    parentToolCallId: parent,
+    toolName: "read",
+    result: { content: [{ type: "text", text: "x".repeat(1024) }] },
+  });
   assert.equal(store.get(parent, `${parent}/1`).result, undefined);
   assert.equal(store.get(parent, `${parent}/1`).isPartial, false);
   store.clear();

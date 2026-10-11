@@ -1,4 +1,13 @@
-import { asRecord, safeText, type Component, type Highlight, type Palette, type Renderers, type TextFactory, type ViewContext } from "./tool-names.ts";
+import {
+  asRecord,
+  safeText,
+  type Component,
+  type Highlight,
+  type Palette,
+  type Renderers,
+  type TextFactory,
+  type ViewContext,
+} from "./tool-names.ts";
 import { shellTitle } from "./renderers.ts";
 import { stackComponents } from "./copy-stack.ts";
 
@@ -114,72 +123,122 @@ export function makeCodemodeRenderers(input: {
         if (liveIds.has(String(call.id))) continue;
         // Pi's running preview ids all end in /?. Real lifecycle ids own state.
         const count = pending.get(String(call.name)) ?? 0;
-        if (String(call.id).endsWith("/?") && count > 0) { pending.set(String(call.name), count - 1); continue; }
+        if (String(call.id).endsWith("/?") && count > 0) {
+          pending.set(String(call.name), count - 1);
+          continue;
+        }
         calls.push(call);
       }
       const shown = options.expanded ? calls : calls.slice(-8);
       const parts: Component[] = [];
-      if (shown.length < calls.length) parts.push(input.makeText(theme.fg("dim", `… ${calls.length - shown.length} earlier calls (${input.expandHint()})`)));
+      if (shown.length < calls.length)
+        parts.push(
+          input.makeText(theme.fg("dim", `… ${calls.length - shown.length} earlier calls (${input.expandHint()})`)),
+        );
       let missingResults = false;
       const owner = context.state && typeof context.state === "object" ? context.state : {};
       let slots = states.get(owner);
-      if (!slots) { slots = new Map(); states.set(owner, slots); }
+      if (!slots) {
+        slots = new Map();
+        states.set(owner, slots);
+      }
       for (const call of shown) {
         if (typeof call.id !== "string" || typeof call.name !== "string") continue;
         const captured = input.store.get(context.toolCallId ?? "", call.id);
-        if (call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined) missingResults = true;
+        if (call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined)
+          missingResults = true;
         const saved = historicalArgs.get(call.id);
         let args = captured?.args;
         if (args === undefined && saved?.name === call.name) args = saved.arguments;
         if (args === undefined && typeof call.args === "string") {
-          try { args = JSON.parse(call.args); } catch { /* Display summary, never guess truncated args. */ }
+          try {
+            args = JSON.parse(call.args);
+          } catch {
+            /* Display summary, never guess truncated args. */
+          }
         }
         const rawResult = asRecord(captured?.result);
         // Native callbacks receive content/details only; final event isError is authoritative.
-        const viewResult = captured?.result === undefined ? undefined : { content: rawResult.content, details: rawResult.details };
-        const renderers = call.name !== "codemode" && !call.id.endsWith("/?") ? input.resolve(call.name, viewResult) : undefined;
+        const viewResult =
+          captured?.result === undefined ? undefined : { content: rawResult.content, details: rawResult.details };
+        const renderers =
+          call.name !== "codemode" && !call.id.endsWith("/?") ? input.resolve(call.name, viewResult) : undefined;
         const partial = captured?.isPartial ?? call.status === "running";
         const isError = captured?.isError ?? ["error", "cancelled"].includes(String(call.status));
         if (!renderers || args === undefined) {
           if (renderers === input.shell) {
             // The builtin owner/status is known, but a truncated command isn't.
             const { bullet, title } = shellTitle({ isPartial: partial, isError }, theme);
-            parts.push(input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`));
-            if (options.expanded && call.error) parts.push(input.makeText(theme.fg("error", safeText(String(call.error)))));
+            parts.push(
+              input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`),
+            );
+            if (options.expanded && call.error)
+              parts.push(input.makeText(theme.fg("error", safeText(String(call.error)))));
           } else parts.push(input.makeText(summary(call, theme, options.expanded === true)));
           continue;
         }
         let slot = slots.get(call.id);
-        if (!slot) { slot = { state: {} }; slots.set(call.id, slot); }
+        if (!slot) {
+          slot = { state: {} };
+          slots.set(call.id, slot);
+        }
         const nestedContext: ViewContext = {
-          ...context, args, toolCallId: call.id, state: slot.state,
-          executionStarted: true, argsComplete: true, isPartial: partial,
+          ...context,
+          args,
+          toolCallId: call.id,
+          state: slot.state,
+          executionStarted: true,
+          argsComplete: true,
+          isPartial: partial,
           isError,
-          hasResult: !partial, lastComponent: slot.call,
+          hasResult: !partial,
+          lastComponent: slot.call,
         };
         try {
           slot.call = renderers.renderCall(args, theme, nestedContext);
           if (viewResult !== undefined) {
-            slot.result = renderers.renderResult(viewResult, { ...options, isPartial: partial }, theme,
-              { ...nestedContext, lastComponent: slot.result });
+            slot.result = renderers.renderResult(viewResult, { ...options, isPartial: partial }, theme, {
+              ...nestedContext,
+              lastComponent: slot.result,
+            });
           } else if (call.error) {
-            slot.result = input.shell.renderResult({ content: [{ type: "text", text: String(call.error) }] }, options, theme,
-              { ...nestedContext, lastComponent: undefined });
+            slot.result = input.shell.renderResult(
+              { content: [{ type: "text", text: String(call.error) }] },
+              options,
+              theme,
+              { ...nestedContext, lastComponent: undefined },
+            );
           } else slot.result = undefined;
           parts.push(slot.call, ...(slot.result ? [slot.result] : []));
-        } catch { parts.push(input.makeText(summary(call, theme, options.expanded === true))); }
+        } catch {
+          parts.push(input.makeText(summary(call, theme, options.expanded === true)));
+        }
       }
-      if (missingResults) parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
+      if (missingResults)
+        parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
       // Script output may be a computed summary, not a duplicate of tool output.
       // Keep it and its archive path; reuse the ordinary shell's physical-row budget.
       if (!options.isPartial && Array.isArray(value.content)) {
-        const content = value.content.filter((block, index) => !(index === 0 && asRecord(block).type === "text"
-          && /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/.test(String(asRecord(block).text))));
+        const content = value.content.filter(
+          (block, index) =>
+            !(
+              index === 0 &&
+              asRecord(block).type === "text" &&
+              /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/.test(String(asRecord(block).text))
+            ),
+        );
         if (content.some((block) => asRecord(block).type === "text" && asRecord(block).text)) {
-          parts.push(input.makeText(theme.fg("dim", "Script output")), input.shell.renderResult({ ...value, content }, options, theme,
-            { ...context, args: {}, lastComponent: undefined }));
+          parts.push(
+            input.makeText(theme.fg("dim", "Script output")),
+            input.shell.renderResult({ ...value, content }, options, theme, {
+              ...context,
+              args: {},
+              lastComponent: undefined,
+            }),
+          );
         }
-        if (typeof details.fullOutputPath === "string") parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
+        if (typeof details.fullOutputPath === "string")
+          parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
       return stackComponents(parts, "codemode", "child-placements");
     },
@@ -194,5 +253,13 @@ function summary(call: Readonly<Record<string, unknown>>, theme: Palette, expand
   const cost = typeof call.cost === "number" && call.cost > 0 ? ` $${call.cost.toPrecision(2)}` : "";
   const duration = typeof call.durationMs === "number" ? ` ${(call.durationMs / 1000).toFixed(2)}s` : "";
   const error = expanded && call.error ? `\n  ${theme.fg("error", safeText(String(call.error)))}` : "";
-  return `${theme.fg(failed ? "error" : call.status === "running" ? "dim" : "success", icon)} ${theme.fg("toolTitle", safeText(String(call.name)))}${args ? ` ${args}` : ""}${duration}${cost}${error}`;
+  return (
+    `${theme.fg(failed ? "error" : call.status === "running" ? "dim" : "success", icon)}` +
+    " " +
+    `${theme.fg("toolTitle", safeText(String(call.name)))}` +
+    `${args ? ` ${args}` : ""}` +
+    `${duration}` +
+    `${cost}` +
+    `${error}`
+  );
 }

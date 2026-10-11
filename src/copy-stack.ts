@@ -11,7 +11,13 @@ export function stackComponents(components: Component[], componentId: string, co
         lines.push(...rendered);
         if (composition === "flat-rows") {
           // Fusion takes rows only, never follows a child's placement chain.
-          rows.push(...(product?.rows ?? rendered.map(() => ({ spans: [{ colStart: 0, colEnd: width, kind: "unknown" as const }], breakBefore: "hard" as const }))));
+          rows.push(
+            ...(product?.rows ??
+              rendered.map(() => ({
+                spans: [{ colStart: 0, colEnd: width, kind: "unknown" as const }],
+                breakBefore: "hard" as const,
+              }))),
+          );
         } else {
           for (let i = 0; i < rendered.length; i++) children.push(product?.children
             ? product.children[i]

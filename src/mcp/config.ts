@@ -4,7 +4,14 @@ import { defaultMetisConfig, metisConfigPath, readMetisConfig } from "../metis-c
 import { execSync, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { CONFIG_DIR_NAME, getShellConfig, type McpExposure, type McpServerConfig, type McpServerEntry, type RegisteredMcpServer } from "@earendil-works/pi-coding-agent";
+import {
+  CONFIG_DIR_NAME,
+  getShellConfig,
+  type McpExposure,
+  type McpServerConfig,
+  type McpServerEntry,
+  type RegisteredMcpServer,
+} from "@earendil-works/pi-coding-agent";
 const MCP_EXPOSURES: readonly string[] = ["codemode", "deferred", "direct", "hidden"];
 const MCP_EXPOSURE_ALIASES: Readonly<Record<string, McpExposure>> = { "codemode-deferred": "codemode" };
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
@@ -98,12 +105,22 @@ export function resolveValue(value: string, field: string, commands = true): str
     return resolved;
   });
 }
-export const expandHome = (value: string): string => value === "~" ? homedir() : /^~[/\\]/.test(value) ? join(homedir(), value.slice(2)) : value;
-export const serverCwd = (entry: McpServerEntry, cwd: string): string => "command" in entry.config ? resolve(cwd, expandHome(entry.config.cwd ?? ".")) : cwd;
+export const expandHome = (value: string): string =>
+  value === "~" ? homedir() : /^~[/\\]/.test(value) ? join(homedir(), value.slice(2)) : value;
+export const serverCwd = (entry: McpServerEntry, cwd: string): string =>
+  "command" in entry.config ? resolve(cwd, expandHome(entry.config.cwd ?? ".")) : cwd;
 export const resolveValues = (values: Record<string, string> = {}, commands = true): Record<string, string> =>
   Object.fromEntries(Object.entries(values).map(([name, value]) => [name, resolveValue(value, name, commands)]));
 export function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => isRecord(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+  return JSON.stringify(value, (_key, item: unknown) =>
+    isRecord(item)
+      ? Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((key) => [key, item[key]]),
+        )
+      : item,
+  );
 }
 export function mcpNamespace(server: string): string {
 	return `mcp__${server.replace(/-/g, "_")}`;

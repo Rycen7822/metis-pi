@@ -72,17 +72,29 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     return skipped("Pi UI prototype is sealed or its display updater is unavailable");
   }
   const definitionPrototype = options.definitionPrototype;
-  const lookup = definitionPrototype && Object.getOwnPropertyDescriptor(definitionPrototype, "getRegisteredToolDefinition");
-  if (definitionPrototype && (!lookup || typeof lookup.value !== "function" || !lookup.configurable || !lookup.writable
-      || ![
+  const lookup =
+    definitionPrototype && Object.getOwnPropertyDescriptor(definitionPrototype, "getRegisteredToolDefinition");
+  if (
+    definitionPrototype &&
+    (!lookup ||
+      typeof lookup.value !== "function" ||
+      !lookup.configurable ||
+      !lookup.writable ||
+      ![
         "returnwithBuiltInRenderers(toolName,this.session.getToolDefinition(toolName));",
-        "returnthis.session.extensionRunner.resolveToolRenderers(toolName,()=>withBuiltInRenderers(toolName,this.session.getToolDefinition(toolName)));",
-      ].includes(methodBody(lookup.value)))) {
+        "returnthis.session.extensionRunner.resolveToolRenderers(toolName,()=>withBuiltIn" +
+          "Renderers(toolName,this.session.getToolDefinition(toolName)));",
+      ].includes(methodBody(lookup.value)))
+  ) {
     return skipped("Unrecognized or already modified Pi renderer lookup");
   }
   const sessionGetter = definitionPrototype && Object.getOwnPropertyDescriptor(definitionPrototype, "session");
-  if (sessionGetter && (!sessionGetter.configurable || typeof sessionGetter.get !== "function"
-      || methodBody(sessionGetter.get) !== "returnthis.runtimeHost.session;")) {
+  if (
+    sessionGetter &&
+    (!sessionGetter.configurable ||
+      typeof sessionGetter.get !== "function" ||
+      methodBody(sessionGetter.get) !== "returnthis.runtimeHost.session;")
+  ) {
     return skipped("Unrecognized or already modified Pi session lookup");
   }
   const captureContext = function (this: object): unknown {
@@ -140,30 +152,52 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const source = asRecord(info.sourceInfo);
-    if ((name === "edit" || name === "write") && typeof source.source === "string" && source.path === OWNED_FUSION_ENTRY) {
+    if (
+      (name === "edit" || name === "write") &&
+      typeof source.source === "string" &&
+      source.path === OWNED_FUSION_ENTRY
+    ) {
       return fusionRenderers(options.renderers[name], options.renderers.bash, () => current.result);
     }
-    if (name === "exec_command" && options.highlightOwnedCommand && typeof source.source === "string" && source.path === OWNED_EXECUTION_ENTRY) {
+    if (
+      name === "exec_command" &&
+      options.highlightOwnedCommand &&
+      typeof source.source === "string" &&
+      source.path === OWNED_EXECUTION_ENTRY
+    ) {
       const call = definition.renderCall;
       const result = definition.renderResult;
       if (typeof call !== "function" || typeof result !== "function") return;
       return {
-        renderCall: (args, theme, context) => call(args, {
-          fg: (role: string, text: string) => theme.fg(role, text),
-          bold: (text: string) => theme.bold(text),
-          highlightCommandLines: options.highlightOwnedCommand,
-          renderCommandCall: options.renderOwnedCommand
-            ? (command: string, state: "running" | "done", expanded: boolean) => options.renderOwnedCommand!(command, state, expanded, theme, context)
-            : undefined,
-        }, context),
+        renderCall: (args, theme, context) =>
+          call(
+            args,
+            {
+              fg: (role: string, text: string) => theme.fg(role, text),
+              bold: (text: string) => theme.bold(text),
+              highlightCommandLines: options.highlightOwnedCommand,
+              renderCommandCall: options.renderOwnedCommand
+                ? (command: string, state: "running" | "done", expanded: boolean) =>
+                    options.renderOwnedCommand!(command, state, expanded, theme, context)
+                : undefined,
+            },
+            context,
+          ),
         renderResult: (value, options, theme, context) => result(value, options, theme, context),
       };
     }
-    if (name === "codemode" && source.source === "builtin" && source.path === "builtin:codemode" && codemode) return {
-      renderCall: codemode.renderCall,
-      // Native render callbacks omit the persisted nested-call argument ledger.
-      renderResult: (value, opts, theme, ctx) => codemode.renderResult({ ...asRecord(value), nestedCalls: asRecord(current.result).nestedCalls }, opts, theme, ctx),
-    };
+    if (name === "codemode" && source.source === "builtin" && source.path === "builtin:codemode" && codemode)
+      return {
+        renderCall: codemode.renderCall,
+        // Native render callbacks omit the persisted nested-call argument ledger.
+        renderResult: (value, opts, theme, ctx) =>
+          codemode.renderResult(
+            { ...asRecord(value), nestedCalls: asRecord(current.result).nestedCalls },
+            opts,
+            theme,
+            ctx,
+          ),
+      };
     if (!TOOL_NAMES.includes(name as ToolName)) return;
     if (source.source !== "builtin" || source.path !== `builtin:${name}`) return;
     // An EXACT builtin self-shell (edit renders its own rows) takes the same

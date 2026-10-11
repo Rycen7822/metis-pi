@@ -185,15 +185,28 @@ Batching mode:
 
 Mode guidance:
   - on-demand: maximum manual control. Best when you want to decide exactly when to trade cache stability for shorter context.
-  - agent-message: recommended default. Batches a whole tool-using run, then prunes once after the final text reply so future requests become cacheable again.
+${
+  "  - agent-message: recommended default. Batches a whole tool-using run, then " +
+  "prunes once after the final text reply so future requests become cacheable " +
+  "again."
+}
 
 Why this matters:
-  Frequent edits to earlier context can reduce prompt/prefix cache hits on providers that cache identical prefixes. Batched pruning is usually cheaper and faster than pruning every turn.
+${
+  "  Frequent edits to earlier context can reduce prompt/prefix cache hits on " +
+  "providers that cache identical prefixes. Batched pruning is usually cheaper and " +
+  "faster than pruning every turn."
+}
 
 Related:
   - Anthropic prompt caching docs: https://docs.claude.com/en/docs/build-with-claude/prompt-caching
 
-Settings are saved in [contextPrune] of global <agent-dir>/metis-pi.toml (PI_CODING_AGENT_DIR or ~/.pi/agent). /metis-config init imports legacy settings and installs metis-pi-config.md. Advanced gain/output/pressure constants are configurable in [contextPrune.summaryBudget].`;
+${
+  "Settings are saved in [contextPrune] of global <agent-dir>/metis-pi.toml " +
+  "(PI_CODING_AGENT_DIR or ~/.pi/agent). /metis-config init imports legacy " +
+  "settings and installs metis-pi-config.md. Advanced gain/output/pressure " +
+  "constants are configurable in [contextPrune.summaryBudget]."
+}`;
 
 // ── Pruner progress widget ────────────────────────────────────────────────────
 
@@ -383,16 +396,55 @@ export function registerCommands(
           const cfg = currentConfig.value;
           const mode = optionLabel("pruneOn", cfg.pruneOn);
           const s = getStats();
-          const statsLine = s.callCount > 0
-            ? `\n  --- summarizer ---\n  completed usage records: ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens`
-            : "\n  (no completed summarizer usage yet)";
+          const statsLine =
+            s.callCount > 0
+              ? "\n  --- summarizer ---\n  completed usage records: " +
+                `${s.callCount}` +
+                "\n  input:       " +
+                `${formatTokens(s.totalInputTokens)}` +
+                " tokens\n  output:      " +
+                `${formatTokens(s.totalOutputTokens)}` +
+                " tokens"
+              : "\n  (no completed summarizer usage yet)";
           const fmtTimeout = (ms: number) => (ms === 0 ? "disabled" : ms < 1000 ? `${ms}ms` : `${ms / 1000}s`);
           const m = getContextMetrics?.(ctx);
           const contextLine = m
-            ? `\n  --- context ---\n  thinking:     ${formatTokens(m.openCycleThinkingTokens)} tokens (open segment)\n  chain share:  ${m.largestChainSharePct}%\n  frontier gap: ${formatTokens(m.frontierGapTokens)} tokens${getRearmed?.() ? "\n  rearmed:      yes" : ""}`
+            ? "\n  --- context ---\n  thinking:     " +
+              `${formatTokens(m.openCycleThinkingTokens)}` +
+              " tokens (open segment)\n  chain share:  " +
+              `${m.largestChainSharePct}` +
+              "%\n  frontier gap: " +
+              `${formatTokens(m.frontierGapTokens)}` +
+              " tokens" +
+              `${getRearmed?.() ? "\n  rearmed:      yes" : ""}`
             : "";
           ctx.ui.notify(
-            `pruner status:\n  enabled:  ${cfg.enabled}\n  model:    ${cfg.summarizerModel}\n  thinking: ${optionLabel("summarizerThinking", cfg.summarizerThinking)} (${cfg.summarizerThinking})\n  native summary limit: ${cfg.compactionSummaryMaxTokens || "Pi default"}\n  idle to:  ${fmtTimeout(cfg.summarizerIdleTimeoutMs)}\n  max to:   ${fmtTimeout(cfg.summarizerMaxTimeoutMs)}\n  trigger:  ${mode}\n  batching: ${optionLabel("batchingMode", cfg.batchingMode)} (${cfg.batchingMode})\n  dedup:    ${cfg.dedupByContentHash ? "on" : "off"}\n  status:   ${cfg.showPruneStatusLine ? "on" : "off"}${statsLine}${contextLine}`,
+            "pruner status:\n  enabled:  " +
+              `${cfg.enabled}` +
+              "\n  model:    " +
+              `${cfg.summarizerModel}` +
+              "\n  thinking: " +
+              `${optionLabel("summarizerThinking", cfg.summarizerThinking)}` +
+              " (" +
+              `${cfg.summarizerThinking}` +
+              ")\n  native summary limit: " +
+              `${cfg.compactionSummaryMaxTokens || "Pi default"}` +
+              "\n  idle to:  " +
+              `${fmtTimeout(cfg.summarizerIdleTimeoutMs)}` +
+              "\n  max to:   " +
+              `${fmtTimeout(cfg.summarizerMaxTimeoutMs)}` +
+              "\n  trigger:  " +
+              `${mode}` +
+              "\n  batching: " +
+              `${optionLabel("batchingMode", cfg.batchingMode)}` +
+              " (" +
+              `${cfg.batchingMode}` +
+              ")\n  dedup:    " +
+              `${cfg.dedupByContentHash ? "on" : "off"}` +
+              "\n  status:   " +
+              `${cfg.showPruneStatusLine ? "on" : "off"}` +
+              `${statsLine}` +
+              `${contextLine}`,
           );
           break;
         }
@@ -405,7 +457,14 @@ export function registerCommands(
           } else {
             const chainsLine = s.chainsCompressed > 0 ? `\n  chains:      ${s.chainsCompressed} compressed` : "";
             ctx.ui.notify(
-              `pruner stats:\n  completed usage records: ${s.callCount}\n  input:       ${formatTokens(s.totalInputTokens)} tokens\n  output:      ${formatTokens(s.totalOutputTokens)} tokens${chainsLine}`,
+              "pruner stats:\n  completed usage records: " +
+                `${s.callCount}` +
+                "\n  input:       " +
+                `${formatTokens(s.totalInputTokens)}` +
+                " tokens\n  output:      " +
+                `${formatTokens(s.totalOutputTokens)}` +
+                " tokens" +
+                `${chainsLine}`,
             );
           }
           break;
@@ -416,7 +475,13 @@ export function registerCommands(
           const modelArg = subArgs[0];
           if (!modelArg) {
             ctx.ui.notify(
-              `Current summarizer model: ${currentConfig.value.summarizerModel}\nCurrent summarizer thinking: ${optionLabel("summarizerThinking", currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`,
+              "Current summarizer model: " +
+                `${currentConfig.value.summarizerModel}` +
+                "\nCurrent summarizer thinking: " +
+                `${optionLabel("summarizerThinking", currentConfig.value.summarizerThinking)}` +
+                " (" +
+                `${currentConfig.value.summarizerThinking}` +
+                ")",
             );
           } else {
             const parsed = parseModelAndThinkingArg(modelArg);
@@ -446,7 +511,13 @@ export function registerCommands(
           let raw = subArgs[0];
           if (!raw) {
             if (thinking) {
-              ctx.ui.notify(`Current summarizer thinking: ${optionLabel(row.id, currentConfig.value.summarizerThinking)} (${currentConfig.value.summarizerThinking})`);
+              ctx.ui.notify(
+                "Current summarizer thinking: " +
+                  `${optionLabel(row.id, currentConfig.value.summarizerThinking)}` +
+                  " (" +
+                  `${currentConfig.value.summarizerThinking}` +
+                  ")",
+              );
               return;
             }
             const choice = await ctx.ui.select(
@@ -507,9 +578,13 @@ export function registerCommands(
 
           // Capture the pending queue first so we can pre-build the widget rows.
           let batches: CapturedBatch[];
-          try { batches = capturePendingBatches(ctx); }
-          catch (error) {
-            ctx.ui.notify(`pruner: could not inspect pending batches: ${error instanceof Error ? error.message : String(error)}; raw results retained`, "warning");
+          try {
+            batches = capturePendingBatches(ctx);
+          } catch (error) {
+            ctx.ui.notify(
+              `pruner: could not inspect pending batches: ${error instanceof Error ? error.message : String(error)}; raw results retained`,
+              "warning",
+            );
             break;
           }
           if (batches.length === 0) {
@@ -553,33 +628,61 @@ export function registerCommands(
             }
             if (result.reason === "deferred-budget" || result.reason === "deferred") {
               const reasons = Object.entries(result.deferredReasons ?? { budget: 1 })
-                .map(([reason, count]) => `${count} batch(es): ${DEFERRED_REASON_LABELS[reason as DeferredReason]}`).join("; ");
-              ctx.ui.notify(`pruner: raw evidence retained pending — ${reasons}; frontier unchanged across the gap`, "info");
+                .map(([reason, count]) => `${count} batch(es): ${DEFERRED_REASON_LABELS[reason as DeferredReason]}`)
+                .join("; ");
+              ctx.ui.notify(
+                `pruner: raw evidence retained pending — ${reasons}; frontier unchanged across the gap`,
+                "info",
+              );
               break;
             }
             const suffix = "error" in result && result.error ? ` (${result.error})` : "";
-            const progress = result.batchCount ? `${result.batchCount} batches completed; remaining retained` : "nothing flushed";
-            ctx.ui.notify(`pruner: ${progress} — ${result.reason}${suffix}`, result.reason === "empty" ? "info" : "warning");
+            const progress = result.batchCount
+              ? `${result.batchCount} batches completed; remaining retained`
+              : "nothing flushed";
+            ctx.ui.notify(
+              `pruner: ${progress} — ${result.reason}${suffix}`,
+              result.reason === "empty" ? "info" : "warning",
+            );
             break;
           }
 
           if (result.reason === "partial") {
-            ctx.ui.notify(`pruner: ${result.batchCount}/${batches.length} batches completed; remaining retained${result.error ? ` (${result.error})` : ""}`, "warning");
+            ctx.ui.notify(
+              `pruner: ${result.batchCount}/${batches.length} batches completed; remaining retained${result.error ? ` (${result.error})` : ""}`,
+              "warning",
+            );
             break;
           }
 
           if (result.reason === "skipped-oversized") {
             ctx.ui.notify(
-              `pruner: skipped pruning ${result.toolCallCount} tool call${result.toolCallCount === 1 ? "" : "s"} — summary was ${result.summaryCharCount} chars vs ${result.rawCharCount} raw chars; frontier advanced past this range`,
-              "warning"
+              "pruner: skipped pruning " +
+                `${result.toolCallCount}` +
+                " tool call" +
+                `${result.toolCallCount === 1 ? "" : "s"}` +
+                " — summary was " +
+                `${result.summaryCharCount}` +
+                " chars vs " +
+                `${result.rawCharCount}` +
+                " raw chars; frontier advanced past this range",
+              "warning",
             );
             break;
           }
 
           if (result.reason === "skipped-trivial") {
             ctx.ui.notify(
-              `pruner: skipped ${result.toolCallCount} trivial tool call${result.toolCallCount === 1 ? "" : "s"} — ${result.rawCharCount} total raw chars retained; summary candidates below minBatchChars=${currentConfig.value.minBatchChars}; no LLM call made; frontier advanced past this range`,
-              "info"
+              "pruner: skipped " +
+                `${result.toolCallCount}` +
+                " trivial tool call" +
+                `${result.toolCallCount === 1 ? "" : "s"}` +
+                " — " +
+                `${result.rawCharCount}` +
+                " total raw chars retained; summary candidates below minBatchChars=" +
+                `${currentConfig.value.minBatchChars}` +
+                "; no LLM call made; frontier advanced past this range",
+              "info",
             );
             break;
           }
@@ -587,15 +690,34 @@ export function registerCommands(
           if (result.reason === "skipped-deduped") {
             const n = result.dedupedCount ?? result.toolCallCount;
             ctx.ui.notify(
-              `pruner: deduplicated ${n} tool call${n === 1 ? "" : "s"} (${result.dedupedRawCharCount ?? result.rawCharCount} raw chars) against earlier prunes; no LLM call made; frontier advanced past this range`,
-              "info"
+              "pruner: deduplicated " +
+                `${n}` +
+                " tool call" +
+                `${n === 1 ? "" : "s"}` +
+                " (" +
+                `${result.dedupedRawCharCount ?? result.rawCharCount}` +
+                " raw chars) against earlier prunes; no LLM call made; frontier advanced past " +
+                "this range",
+              "info",
             );
             break;
           }
 
           ctx.ui.notify(
-            `pruner: pruned ${result.toolCallCount} tool call${result.toolCallCount === 1 ? "" : "s"} from ${result.batchCount} batch${result.batchCount === 1 ? "" : "es"} — summary ${result.summaryCharCount} chars vs ${result.rawCharCount} raw chars`,
-            "info"
+            "pruner: pruned " +
+              `${result.toolCallCount}` +
+              " tool call" +
+              `${result.toolCallCount === 1 ? "" : "s"}` +
+              " from " +
+              `${result.batchCount}` +
+              " batch" +
+              `${result.batchCount === 1 ? "" : "es"}` +
+              " — summary " +
+              `${result.summaryCharCount}` +
+              " chars vs " +
+              `${result.rawCharCount}` +
+              " raw chars",
+            "info",
           );
           break;
         }
@@ -659,13 +781,22 @@ export function registerCommands(
           }
           const value = parseScalar(scalarRow(id), arg);
           if (value === undefined) {
-            ctx.ui.notify(`Invalid ${batch ? "minBatchChars" : "recovery-grace"}: "${arg}". Expected a non-negative integer (0 disables).`, "warning");
+            ctx.ui.notify(
+              `Invalid ${batch ? "minBatchChars" : "recovery-grace"}: "${arg}". Expected a non-negative integer (0 disables).`,
+              "warning",
+            );
             break;
           }
           setScalar(id, value);
-          ctx.ui.notify(batch
-            ? (value === 0 ? "minBatchChars set to 0 — pre-flush trivial-batch skipping disabled." : `minBatchChars set to ${value}.`)
-            : (value === 0 ? "recovery-grace set to 0 - context_tree_query output stubs immediately." : `recovery-grace set to ${value} user-turn-group(s).`));
+          ctx.ui.notify(
+            batch
+              ? value === 0
+                ? "minBatchChars set to 0 — pre-flush trivial-batch skipping disabled."
+                : `minBatchChars set to ${value}.`
+              : value === 0
+                ? "recovery-grace set to 0 - context_tree_query output stubs immediately."
+                : `recovery-grace set to ${value} user-turn-group(s).`,
+          );
           break;
         }
 

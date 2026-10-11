@@ -2,7 +2,15 @@ import { readFile } from "node:fs/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ContextPruneConfig, PruneOn, SummarizerThinking } from "./types.ts";
 import { DEFAULT_CONFIG, PRUNE_ON_MODES, SUMMARIZER_THINKING_LEVELS } from "./types.ts";
-import { decodePruneConfig, encodePruneConfig, MetisConfigError, metisConfigPath, parseMetisConfig, readMetisConfig, updateMetisConfig } from "../metis-config.ts";
+import {
+  decodePruneConfig,
+  encodePruneConfig,
+  MetisConfigError,
+  metisConfigPath,
+  parseMetisConfig,
+  readMetisConfig,
+  updateMetisConfig,
+} from "../metis-config.ts";
 
 export const settingsPath = () => metisConfigPath(getAgentDir());
 export const SETTINGS_KEY = "contextPrune" as const;
@@ -31,19 +39,32 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
     const value = existing.summaryBudget?.[key];
     if (key === "minGainFraction") {
       if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1) summaryBudget[key] = value;
-    } else if (Number.isSafeInteger(value) && value! >= (["maxBudgetWindowTokens", "minGainTokens", "maxProxyTokens"].includes(key) ? 1 : 0)) summaryBudget[key] = value!;
+    } else if (
+      Number.isSafeInteger(value) &&
+      value! >= (["maxBudgetWindowTokens", "minGainTokens", "maxProxyTokens"].includes(key) ? 1 : 0)
+    )
+      summaryBudget[key] = value!;
   }
   return {
-    ...merged, summaryBudget,
+    ...merged,
+    summaryBudget,
     opportunisticCompaction: merged.opportunisticCompaction === true,
     enabled: booleanOrDefault(merged.enabled, defaults.enabled),
     showPruneStatusLine: booleanOrDefault(merged.showPruneStatusLine, defaults.showPruneStatusLine),
     showOccStatusLine: booleanOrDefault(merged.showOccStatusLine, defaults.showOccStatusLine),
-    compactionSummaryMaxTokens: Number.isSafeInteger(merged.compactionSummaryMaxTokens) && merged.compactionSummaryMaxTokens >= 0 ? merged.compactionSummaryMaxTokens : defaults.compactionSummaryMaxTokens,
-    summarizerModel: typeof merged.summarizerModel === "string" && merged.summarizerModel.trim() ? merged.summarizerModel : defaults.summarizerModel,
+    compactionSummaryMaxTokens:
+      Number.isSafeInteger(merged.compactionSummaryMaxTokens) && merged.compactionSummaryMaxTokens >= 0
+        ? merged.compactionSummaryMaxTokens
+        : defaults.compactionSummaryMaxTokens,
+    summarizerModel:
+      typeof merged.summarizerModel === "string" && merged.summarizerModel.trim()
+        ? merged.summarizerModel
+        : defaults.summarizerModel,
     pruneOn: isPruneOn(merged.pruneOn) ? merged.pruneOn : defaults.pruneOn,
     summarizerFallbackModels: normalizeFallbackModels(merged.summarizerFallbackModels),
-    summarizerThinking: isSummarizerThinking(merged.summarizerThinking) ? merged.summarizerThinking : defaults.summarizerThinking,
+    summarizerThinking: isSummarizerThinking(merged.summarizerThinking)
+      ? merged.summarizerThinking
+      : defaults.summarizerThinking,
     quietOversizedSkips: booleanOrDefault(merged.quietOversizedSkips, defaults.quietOversizedSkips),
     minBatchChars: integerOrDefault(merged.minBatchChars, defaults.minBatchChars),
     summarizerIdleTimeoutMs: integerOrDefault(merged.summarizerIdleTimeoutMs, defaults.summarizerIdleTimeoutMs),
@@ -72,24 +93,38 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
   };
 }
 export async function loadConfig(): Promise<ContextPruneConfig> {
-  try { return normalize(decodePruneConfig(readMetisConfig(getAgentDir()).config[SETTINGS_KEY] ?? {})); }
-  catch (error) { if (error instanceof MetisConfigError) return structuredClone(DEFAULT_CONFIG); throw error; }
+  try {
+    return normalize(decodePruneConfig(readMetisConfig(getAgentDir()).config[SETTINGS_KEY] ?? {}));
+  } catch (error) {
+    if (error instanceof MetisConfigError) return structuredClone(DEFAULT_CONFIG);
+    throw error;
+  }
 }
 export async function saveConfig(config: ContextPruneConfig, read?: typeof readFile): Promise<void> {
   // Retain the injectable read boundary for failure fixtures; normal writers are synchronous and shared.
   if (read) {
-    try { parseMetisConfig(await read(settingsPath(), "utf8"), settingsPath()); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error instanceof MetisConfigError ? error : new MetisConfigError(settingsPath(), (error as NodeJS.ErrnoException).code ?? String(error));
+    try {
+      parseMetisConfig(await read(settingsPath(), "utf8"), settingsPath());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        throw error instanceof MetisConfigError
+          ? error
+          : new MetisConfigError(settingsPath(), (error as NodeJS.ErrnoException).code ?? String(error));
     }
   }
   updateMetisConfig(getAgentDir(), { [SETTINGS_KEY]: encodePruneConfig(config) });
 }
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;
-export async function persistConfig(notify: Notify, config: ContextPruneConfig, save: (config: ContextPruneConfig) => Promise<void> = saveConfig): Promise<void> {
-  try { await save(config); }
-  catch (error) {
-    const reason = error instanceof MetisConfigError ? error.reason : ((error as NodeJS.ErrnoException)?.code ?? String(error));
+export async function persistConfig(
+  notify: Notify,
+  config: ContextPruneConfig,
+  save: (config: ContextPruneConfig) => Promise<void> = saveConfig,
+): Promise<void> {
+  try {
+    await save(config);
+  } catch (error) {
+    const reason =
+      error instanceof MetisConfigError ? error.reason : ((error as NodeJS.ErrnoException)?.code ?? String(error));
     notify(`Could not save settings to ${settingsPath()}: ${reason}. Change applies to this session only.`, "error");
   }
 }

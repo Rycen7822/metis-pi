@@ -26,40 +26,49 @@ export function createAutoReasoning(pi: ExtensionAPI, enabled: () => boolean): A
 		}
 	};
 	return {
-		begin,
-		settle(ctx: ExtensionContext) {
-			const restore = matches(ctx) && applied !== undefined && pi.getThinkingLevel() === applied ? baseline?.level : undefined;
-			baseline = undefined;
-			applied = undefined;
-			if (restore !== undefined) pi.setThinkingLevel(restore);
-		},
-		tool: {
-			name: "change_reasoning",
-			exposure: "hidden",
-			label: "Change Reasoning",
-			description: "Adjust effort by work phase, not per tool call; user starting level is the floor, restored when the run settles",
-			parameters: PARAMETERS,
-			...auxiliaryToolRenderers("Reasoning adjustment failed", (_args, result) => {
-				const details = displayRecord(result?.details);
-				return {
-					active: "Adjusting reasoning",
-					complete: "Adjusted reasoning",
-					...(result ? { summary: `${details["level"]} effort · user floor ${details["floor"]}`, body: "" } : {}),
-				};
-			}),
-			async execute(_id: string, params: { level: "low" | "medium" | "high" }, _signal: AbortSignal | undefined, _update: unknown, ctx: ExtensionContext) {
-				if (!(enabled() && ctx.model?.reasoning)) throw new Error("change_reasoning requires Auto reasoning enabled on a reasoning model");
-				begin(ctx);
-				if (!baseline) throw new Error("No reasoning baseline");
-				const previous = pi.getThinkingLevel();
-				// A user selector change supersedes the tool's last selection.
-				if (previous !== (applied ?? baseline.level)) baseline.level = previous;
-				const effective = levels.indexOf(params.level) < levels.indexOf(baseline.level) ? baseline.level : params.level;
-				pi.setThinkingLevel(effective);
-				applied = pi.getThinkingLevel();
-				const details = { level: applied, floor: baseline.level };
-				return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details };
-			},
-		},
-	};
+    begin,
+    settle(ctx: ExtensionContext) {
+      const restore =
+        matches(ctx) && applied !== undefined && pi.getThinkingLevel() === applied ? baseline?.level : undefined;
+      baseline = undefined;
+      applied = undefined;
+      if (restore !== undefined) pi.setThinkingLevel(restore);
+    },
+    tool: {
+      name: "change_reasoning",
+      exposure: "hidden",
+      label: "Change Reasoning",
+      description:
+        "Adjust effort by work phase, not per tool call; user starting level is the floor, restored when the run settles",
+      parameters: PARAMETERS,
+      ...auxiliaryToolRenderers("Reasoning adjustment failed", (_args, result) => {
+        const details = displayRecord(result?.details);
+        return {
+          active: "Adjusting reasoning",
+          complete: "Adjusted reasoning",
+          ...(result ? { summary: `${details["level"]} effort · user floor ${details["floor"]}`, body: "" } : {}),
+        };
+      }),
+      async execute(
+        _id: string,
+        params: { level: "low" | "medium" | "high" },
+        _signal: AbortSignal | undefined,
+        _update: unknown,
+        ctx: ExtensionContext,
+      ) {
+        if (!(enabled() && ctx.model?.reasoning))
+          throw new Error("change_reasoning requires Auto reasoning enabled on a reasoning model");
+        begin(ctx);
+        if (!baseline) throw new Error("No reasoning baseline");
+        const previous = pi.getThinkingLevel();
+        // A user selector change supersedes the tool's last selection.
+        if (previous !== (applied ?? baseline.level)) baseline.level = previous;
+        const effective = levels.indexOf(params.level) < levels.indexOf(baseline.level) ? baseline.level : params.level;
+        pi.setThinkingLevel(effective);
+        applied = pi.getThinkingLevel();
+        const details = { level: applied, floor: baseline.level };
+        return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details };
+      },
+    },
+  };
 }

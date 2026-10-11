@@ -193,7 +193,15 @@ export function createSelectionCopySystem(host: SelectionCopyHost, externalPatch
     },
 
     diagnostics() {
-      return { telemetry, mirrors, externalPatch, serializerInstalled, installBlocker, live: installedTui ? serializerIsLive(installedTui) : false, cache: cacheStats() };
+      return {
+        telemetry,
+        mirrors,
+        externalPatch,
+        serializerInstalled,
+        installBlocker,
+        live: installedTui ? serializerIsLive(installedTui) : false,
+        cache: cacheStats(),
+      };
     },
   };
 }
@@ -213,8 +221,19 @@ export interface CopyTelemetry {
 }
 
 export interface AltScreenLike {
-  getSelectionBounds?: () => { start: { row: number; col: number; scrollView?: unknown; boundary?: boolean }; end: { row: number; col: number; scrollView?: unknown; boundary?: boolean } } | undefined;
-  getSelectionColumns?: (line: string, row: number, selection: unknown, minColumn?: number, maxColumn?: number) => { start: number; end: number };
+  getSelectionBounds?: () =>
+    | {
+        start: { row: number; col: number; scrollView?: unknown; boundary?: boolean };
+        end: { row: number; col: number; scrollView?: unknown; boundary?: boolean };
+      }
+    | undefined;
+  getSelectionColumns?: (
+    line: string,
+    row: number,
+    selection: unknown,
+    minColumn?: number,
+    maxColumn?: number,
+  ) => { start: number; end: number };
   getActiveSelectionText?: () => string | undefined;
   copyTextToClipboard?: (text: string) => Promise<boolean>;
   currentLayout?: LayoutFrameLike | undefined;
@@ -313,7 +332,13 @@ function installSerializer(tui: AltScreenLike, deps: CopyControllerDeps): (() =>
         for (let row = selection.start.row; row <= selection.end.row; row++) {
           const columns = columnsFor(row);
           const line = sourceLines[row] ?? "";
-          lines.push(deps.fns.stripTerminalSequences(deps.fns.sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true)).trimEnd());
+          lines.push(
+            deps.fns
+              .stripTerminalSequences(
+                deps.fns.sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true),
+              )
+              .trimEnd(),
+          );
         }
         const fallback = lines.join("\n");
         return fallback.length === 0 ? undefined : fallback;
@@ -415,7 +440,11 @@ export function tryConsumeCopyKey(
  * pi-copy-soft-wrap). Returns a short owner label for diagnostics. */
 export function detectExternalSerializerPatch(altScreenPrototype: object | undefined): string | undefined {
   if (!altScreenPrototype) return undefined;
-  if ((altScreenPrototype as Record<symbol, SerializerOwner>)[OWNER]?.method === Reflect.get(altScreenPrototype, "getActiveSelectionText")) return undefined;
+  if (
+    (altScreenPrototype as Record<symbol, SerializerOwner>)[OWNER]?.method ===
+    Reflect.get(altScreenPrototype, "getActiveSelectionText")
+  )
+    return undefined;
   const descriptor = Object.getOwnPropertyDescriptor(altScreenPrototype, "getActiveSelectionText");
   if (!descriptor || typeof descriptor.value !== "function") return undefined;
   let source = "";

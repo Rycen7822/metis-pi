@@ -4,11 +4,25 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  createEventBus,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { captureBody, disableNetwork, FAKE_API_KEY } from "../helpers/native-provider.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+const usage = {
+  input: 1,
+  output: 1,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 2,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 test.beforeEach(disableNetwork);
 
 async function host(t, converted, reverse = false, wholePackage = false) {
@@ -25,83 +39,176 @@ async function host(t, converted, reverse = false, wholePackage = false) {
   writeFileSync(join(agentDir, "A.md"), "POLICY_A_SENTINEL");
   writeFileSync(join(agentDir, "B.md"), "POLICY_B_SENTINEL");
   writeFileSync(join(cwd, "AGENTS.md"), "PROJECT_SENTINEL");
-  const settingsManager = SettingsManager.inMemory({ packages: wholePackage ? [root] : [], compaction: { enabled: false }, retry: { enabled: false } });
+  const settingsManager = SettingsManager.inMemory({
+    packages: wholePackage ? [root] : [],
+    compaction: { enabled: false },
+    retry: { enabled: false },
+  });
   const bus = createEventBus();
-  const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, modelsStorePath: join(agentDir, "models.json"), refreshOnCreate: false });
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(agentDir, "auth.json"),
+    modelsPath: null,
+    modelsStorePath: join(agentDir, "models.json"),
+    refreshOnCreate: false,
+  });
   const provider = converted ? "openai-codex" : "dynamic-test";
-  const model = id => ({ id, name: id, provider, api: converted ? "openai-codex-responses" : "openai-completions",
-    baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+  const model = (id) => ({
+    id,
+    name: id,
+    provider,
+    api: converted ? "openai-codex-responses" : "openai-completions",
+    baseUrl: "http://invalid",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 100000,
+    maxTokens: 1000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
   await modelRuntime.setRuntimeApiKey(provider, converted ? FAKE_API_KEY : "offline");
-  const paths = [join(root, "extensions/dynamic-agents.ts"), ...(converted ? [join(root, "extensions/execution.ts")] : [])];
-  const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, eventBus: bus,
+  const paths = [
+    join(root, "extensions/dynamic-agents.ts"),
+    ...(converted ? [join(root, "extensions/execution.ts")] : []),
+  ];
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    eventBus: bus,
     additionalExtensionPaths: wholePackage ? [] : reverse ? paths.reverse() : paths,
-    noSkills: true, noThemes: true, noPromptTemplates: true, systemPrompt: "DYNAMIC_TEST" });
+    noSkills: true,
+    noThemes: true,
+    noPromptTemplates: true,
+    systemPrompt: "DYNAMIC_TEST",
+  });
   await loader.reload();
   const sm = SessionManager.create(cwd, agentDir);
-  const { session, extensionsResult } = await createAgentSession({ cwd, agentDir, settingsManager, modelRuntime, resourceLoader: loader, sessionManager: sm, model: model("a") });
-  const errors = [], calls = [];
+  const { session, extensionsResult } = await createAgentSession({
+    cwd,
+    agentDir,
+    settingsManager,
+    modelRuntime,
+    resourceLoader: loader,
+    sessionManager: sm,
+    model: model("a"),
+  });
+  const errors = [],
+    calls = [];
   t.after(async () => {
-    try { await session.extensionRunner.emit({ type: "session_shutdown" }); }
-    finally { session.dispose(); if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); }
+    try {
+      await session.extensionRunner.emit({ type: "session_shutdown" });
+    } finally {
+      session.dispose();
+      if (old === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = old;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
   assert.deepEqual(extensionsResult.errors, []);
   if (wholePackage) assert.equal(extensionsResult.extensions.length, 11);
-  await session.bindExtensions({ onError: e => errors.push(e) });
+  await session.bindExtensions({ onError: (e) => errors.push(e) });
   let reply;
   const streamSimple = (m, context) => {
     calls.push({ model: m, context: structuredClone(context) });
     const stream = createAssistantMessageEventStream();
-    const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
-      content: [{ type: "text", text: "Done." }], stopReason: "stop", timestamp: Date.now(), usage, ...reply?.(calls.length) };
-    stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message); return stream;
+    const message = {
+      role: "assistant",
+      api: m.api,
+      provider: m.provider,
+      model: m.id,
+      content: [{ type: "text", text: "Done." }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage,
+      ...reply?.(calls.length),
+    };
+    stream.push({ type: "done", reason: message.stopReason, message });
+    stream.end(message);
+    return stream;
   };
-  modelRuntime.registerProvider(provider, { api: model("a").api, apiKey: converted ? FAKE_API_KEY : "offline",
-    baseUrl: "http://invalid", models: ["a", "b", "other"].map(model), streamSimple });
-  return { session, sm, model, calls, errors, bus, config, agentDir, cwd, setReply(fn) { reply = fn; }, async run() { await session.prompt("Continue."); await session.waitForIdle(); assert.deepEqual(errors, []); return calls.at(-1); } };
+  modelRuntime.registerProvider(provider, {
+    api: model("a").api,
+    apiKey: converted ? FAKE_API_KEY : "offline",
+    baseUrl: "http://invalid",
+    models: ["a", "b", "other"].map(model),
+    streamSimple,
+  });
+  return {
+    session,
+    sm,
+    model,
+    calls,
+    errors,
+    bus,
+    config,
+    agentDir,
+    cwd,
+    setReply(fn) {
+      reply = fn;
+    },
+    async run() {
+      await session.prompt("Continue.");
+      await session.waitForIdle();
+      assert.deepEqual(errors, []);
+      return calls.at(-1);
+    },
+  };
 }
 
-for (const [converted, reverse] of [[false, false], [true, false], [true, true]]) test(`run-boundary replacement preserves sources and project rules, converted=${converted}, reverse=${reverse}`, async t => {
-  const h = await host(t, converted, reverse);
-  const stateEntries = () => h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metis-dynamic-agents");
-  await h.session.setModel(h.model("b")); await h.session.setModel(h.model("a"));
-  assert.equal(stateEntries().length, 0); assert.equal(h.calls.length, 0);
-  const first = await h.run();
-  assert.match(JSON.stringify(first.context), /POLICY_A_SENTINEL/);
-  assert.doesNotMatch(JSON.stringify(first.context), /NATIVE_GLOBAL_SENTINEL|POLICY_B_SENTINEL/);
-  const oldEntries = h.sm.getEntries().map(e => ({ id: e.id, text: JSON.stringify(e) }));
-  const diskPrefix = readFileSync(h.sm.getSessionFile(), "utf8");
-  await h.session.setModel(h.model("b"));
-  const second = await h.run();
-  assert.match(JSON.stringify(second.context), /POLICY_B_SENTINEL/);
-  assert.doesNotMatch(JSON.stringify(second.context), /POLICY_A_SENTINEL|NATIVE_GLOBAL_SENTINEL/);
-  assert.match(JSON.stringify(second.context), /PROJECT_SENTINEL/);
-  for (const entry of oldEntries) assert.equal(JSON.stringify(h.sm.getEntries().find(e => e.id === entry.id)), entry.text);
-  assert.ok(readFileSync(h.sm.getSessionFile(), "utf8").startsWith(diskPrefix));
-  if (converted) {
-    const body = await captureBody(second.model, second.context, { onPayload: body => h.session.extensionRunner.emitBeforeProviderRequest(body) });
-    assert.match(JSON.stringify(body), /POLICY_B_SENTINEL/);
-    assert.doesNotMatch(JSON.stringify(body), /POLICY_A_SENTINEL|NATIVE_GLOBAL_SENTINEL/);
-    assert.match(JSON.stringify(body), /PROJECT_SENTINEL/);
-  }
-  await h.session.setModel(h.model("a"));
-  const third = await h.run();
-  assert.match(JSON.stringify(third.context), /POLICY_A_SENTINEL/);
-  assert.doesNotMatch(JSON.stringify(third.context), /POLICY_B_SENTINEL/);
-  await h.session.setModel(h.model("other"));
-  const fallback = await h.run();
-  assert.match(JSON.stringify(fallback.context), /NATIVE_GLOBAL_SENTINEL/);
-  assert.doesNotMatch(JSON.stringify(fallback.context), /POLICY_[AB]_SENTINEL/);
-  assert.equal(readFileSync(join(h.agentDir, "AGENTS.md"), "utf8"), "NATIVE_GLOBAL_SENTINEL");
-  assert.equal(readFileSync(join(h.agentDir, "A.md"), "utf8"), "POLICY_A_SENTINEL");
-});
+for (const [converted, reverse] of [
+  [false, false],
+  [true, false],
+  [true, true],
+])
+  test(`run-boundary replacement preserves sources and project rules, converted=${converted}, reverse=${reverse}`, async (t) => {
+    const h = await host(t, converted, reverse);
+    const stateEntries = () =>
+      h.sm.getBranch().filter((e) => e.type === "custom" && e.customType === "metis-dynamic-agents");
+    await h.session.setModel(h.model("b"));
+    await h.session.setModel(h.model("a"));
+    assert.equal(stateEntries().length, 0);
+    assert.equal(h.calls.length, 0);
+    const first = await h.run();
+    assert.match(JSON.stringify(first.context), /POLICY_A_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(first.context), /NATIVE_GLOBAL_SENTINEL|POLICY_B_SENTINEL/);
+    const oldEntries = h.sm.getEntries().map((e) => ({ id: e.id, text: JSON.stringify(e) }));
+    const diskPrefix = readFileSync(h.sm.getSessionFile(), "utf8");
+    await h.session.setModel(h.model("b"));
+    const second = await h.run();
+    assert.match(JSON.stringify(second.context), /POLICY_B_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(second.context), /POLICY_A_SENTINEL|NATIVE_GLOBAL_SENTINEL/);
+    assert.match(JSON.stringify(second.context), /PROJECT_SENTINEL/);
+    for (const entry of oldEntries)
+      assert.equal(JSON.stringify(h.sm.getEntries().find((e) => e.id === entry.id)), entry.text);
+    assert.ok(readFileSync(h.sm.getSessionFile(), "utf8").startsWith(diskPrefix));
+    if (converted) {
+      const body = await captureBody(second.model, second.context, {
+        onPayload: (body) => h.session.extensionRunner.emitBeforeProviderRequest(body),
+      });
+      assert.match(JSON.stringify(body), /POLICY_B_SENTINEL/);
+      assert.doesNotMatch(JSON.stringify(body), /POLICY_A_SENTINEL|NATIVE_GLOBAL_SENTINEL/);
+      assert.match(JSON.stringify(body), /PROJECT_SENTINEL/);
+    }
+    await h.session.setModel(h.model("a"));
+    const third = await h.run();
+    assert.match(JSON.stringify(third.context), /POLICY_A_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(third.context), /POLICY_B_SENTINEL/);
+    await h.session.setModel(h.model("other"));
+    const fallback = await h.run();
+    assert.match(JSON.stringify(fallback.context), /NATIVE_GLOBAL_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(fallback.context), /POLICY_[AB]_SENTINEL/);
+    assert.equal(readFileSync(join(h.agentDir, "AGENTS.md"), "utf8"), "NATIVE_GLOBAL_SENTINEL");
+    assert.equal(readFileSync(join(h.agentDir, "A.md"), "utf8"), "POLICY_A_SENTINEL");
+  });
 
-test("policy is frozen across tool steps and refreshes only at the next run", async t => {
+test("policy is frozen across tool steps and refreshes only at the next run", async (t) => {
   const h = await host(t, false);
-  h.setReply(count => {
+  h.setReply((count) => {
     if (count !== 1) return;
     writeFileSync(join(h.agentDir, "A.md"), "POLICY_UPDATED_SENTINEL");
-    return { content: [{ type: "toolCall", id: "read-project", name: "read", arguments: { path: join(h.cwd, "AGENTS.md") } }], stopReason: "toolUse" };
+    return {
+      content: [{ type: "toolCall", id: "read-project", name: "read", arguments: { path: join(h.cwd, "AGENTS.md") } }],
+      stopReason: "toolUse",
+    };
   });
   await h.run();
   assert.equal(h.calls.length, 2);
@@ -110,40 +217,50 @@ test("policy is frozen across tool steps and refreshes only at the next run", as
     assert.doesNotMatch(JSON.stringify(call.context), /POLICY_UPDATED_SENTINEL/);
   }
   const next = JSON.stringify((await h.run()).context);
-  assert.match(next, /POLICY_UPDATED_SENTINEL/); assert.doesNotMatch(next, /POLICY_A_SENTINEL/);
+  assert.match(next, /POLICY_UPDATED_SENTINEL/);
+  assert.doesNotMatch(next, /POLICY_A_SENTINEL/);
 });
 
-for (const converted of [false, true]) test(`global file edits refresh next run without reload, converted=${converted}`, async t => {
-  const h = await host(t, converted);
-  await h.session.setModel(h.model("other"));
-  h.setReply(count => {
-    if (count !== 1) return;
-    writeFileSync(join(h.agentDir, "AGENTS.md"), "UPDATED_GLOBAL_SENTINEL");
-    return { content: [{ type: "toolCall", id: "read-project", name: "read", arguments: { path: join(h.cwd, "AGENTS.md") } }], stopReason: "toolUse" };
+for (const converted of [false, true])
+  test(`global file edits refresh next run without reload, converted=${converted}`, async (t) => {
+    const h = await host(t, converted);
+    await h.session.setModel(h.model("other"));
+    h.setReply((count) => {
+      if (count !== 1) return;
+      writeFileSync(join(h.agentDir, "AGENTS.md"), "UPDATED_GLOBAL_SENTINEL");
+      return {
+        content: [
+          { type: "toolCall", id: "read-project", name: "read", arguments: { path: join(h.cwd, "AGENTS.md") } },
+        ],
+        stopReason: "toolUse",
+      };
+    });
+    await h.run();
+    assert.equal(h.calls.length, 2);
+    for (const call of h.calls) {
+      assert.match(JSON.stringify(call.context), /NATIVE_GLOBAL_SENTINEL/);
+      assert.doesNotMatch(JSON.stringify(call.context), /UPDATED_GLOBAL_SENTINEL/);
+    }
+    const updated = await h.run();
+    const body = converted
+      ? await captureBody(updated.model, updated.context, {
+          onPayload: (body) => h.session.extensionRunner.emitBeforeProviderRequest(body),
+        })
+      : updated.context;
+    assert.match(JSON.stringify(body), /UPDATED_GLOBAL_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(body), /NATIVE_GLOBAL_SENTINEL/);
+    assert.match(JSON.stringify(body), /PROJECT_SENTINEL/);
+    writeFileSync(join(h.agentDir, "AGENTS.override.md"), "OVERRIDE_GLOBAL_SENTINEL");
+    assert.match(JSON.stringify((await h.run()).context), /OVERRIDE_GLOBAL_SENTINEL/);
+    rmSync(join(h.agentDir, "AGENTS.override.md"));
+    assert.match(JSON.stringify((await h.run()).context), /UPDATED_GLOBAL_SENTINEL/);
+    rmSync(join(h.agentDir, "AGENTS.md"));
+    const removed = JSON.stringify((await h.run()).context);
+    assert.doesNotMatch(removed, /(?:UPDATED|OVERRIDE|NATIVE)_GLOBAL_SENTINEL/);
+    assert.match(removed, /PROJECT_SENTINEL/);
+    writeFileSync(join(h.agentDir, "AGENTS.md"), "RECREATED_GLOBAL_SENTINEL");
+    assert.match(JSON.stringify((await h.run()).context), /RECREATED_GLOBAL_SENTINEL/);
   });
-  await h.run();
-  assert.equal(h.calls.length, 2);
-  for (const call of h.calls) {
-    assert.match(JSON.stringify(call.context), /NATIVE_GLOBAL_SENTINEL/);
-    assert.doesNotMatch(JSON.stringify(call.context), /UPDATED_GLOBAL_SENTINEL/);
-  }
-  const updated = await h.run();
-  const body = converted ? await captureBody(updated.model, updated.context,
-    { onPayload: body => h.session.extensionRunner.emitBeforeProviderRequest(body) }) : updated.context;
-  assert.match(JSON.stringify(body), /UPDATED_GLOBAL_SENTINEL/);
-  assert.doesNotMatch(JSON.stringify(body), /NATIVE_GLOBAL_SENTINEL/);
-  assert.match(JSON.stringify(body), /PROJECT_SENTINEL/);
-  writeFileSync(join(h.agentDir, "AGENTS.override.md"), "OVERRIDE_GLOBAL_SENTINEL");
-  assert.match(JSON.stringify((await h.run()).context), /OVERRIDE_GLOBAL_SENTINEL/);
-  rmSync(join(h.agentDir, "AGENTS.override.md"));
-  assert.match(JSON.stringify((await h.run()).context), /UPDATED_GLOBAL_SENTINEL/);
-  rmSync(join(h.agentDir, "AGENTS.md"));
-  const removed = JSON.stringify((await h.run()).context);
-  assert.doesNotMatch(removed, /(?:UPDATED|OVERRIDE|NATIVE)_GLOBAL_SENTINEL/);
-  assert.match(removed, /PROJECT_SENTINEL/);
-  writeFileSync(join(h.agentDir, "AGENTS.md"), "RECREATED_GLOBAL_SENTINEL");
-  assert.match(JSON.stringify((await h.run()).context), /RECREATED_GLOBAL_SENTINEL/);
-});
 
 test("editing an inactive policy affects only the next run that selects it", async t => {
   const h = await host(t, false);
