@@ -23,9 +23,7 @@ import {
   optionLabel, optionValues, parseScalar, rowDescription, scalarRow,
   type ScalarValue, writeScalar,
 } from "./setting-fields.ts";
-import { buildPruneTree, TreeBrowser } from "./tree-browser.ts";
 import { normalizeSummaryToolCallRefs } from "./summary-refs.ts";
-import type { ToolCallIndexer } from "./indexer.ts";
 
 // ── Status widget text ──────────────────────────────────────────────────────
 
@@ -82,7 +80,6 @@ const SUBCOMMANDS = [
   { value: "prune-on", label: "prune-on  — show or set the trigger mode" },
   { value: "batching", label: "batching  — show or set the batching mode (turn / agent-message)" },
   { value: "stats",   label: "stats     — show cumulative summarizer token stats" },
-  { value: "tree",    label: "tree      — browse pruned tool calls in a foldable tree" },
   { value: "now",     label: "now       — flush pending tool calls immediately (widget progress)" },
   { value: "compact", label: "compact   — retroactively compress all eligible closed chains" },
   { value: "protected-tools", label: "protected-tools — show or edit the never-pruned tool allowlist" },
@@ -136,7 +133,6 @@ Usage:
   /pruner batching turn                    One summary per assistant turn (default)
   /pruner batching agent-message           One summary per user→final-agent-message span (merges all turns in a span)
   /pruner stats                            Show cumulative summarizer token stats
-  /pruner tree                             Browse pruned tool calls in a foldable tree (Ctrl-O opens selected summary)
   /pruner now                              Flush pending tool calls immediately (shows live footer progress)
   /pruner protected-tools                  Interactively edit the never-pruned tool allowlist
   /pruner protected-tools <names>          Set the allowlist (comma- or space-separated; 'none' clears)
@@ -327,7 +323,6 @@ export function registerCommands(
   capturePendingBatches: (ctx: ExtensionCommandContext) => CapturedBatch[],
   getStats: () => SummarizerStats,
   getLiveReclaim: () => LiveReclaim | undefined,
-  indexer: ToolCallIndexer,
   compactChains: (ctx: ExtensionCommandContext) => Promise<{ compressedEntries: ChainCompressionEntry[]; skipped: number; reclaimedTokens?: number }>,
   getDiagnosticCounts?: () => Record<DiagnosticKind, number>,
   getContextMetrics?: (ctx: ExtensionCommandContext) => ContextMetricsSnapshot,
@@ -398,27 +393,6 @@ export function registerCommands(
             : "";
           ctx.ui.notify(
             `pruner status:\n  enabled:  ${cfg.enabled}\n  model:    ${cfg.summarizerModel}\n  thinking: ${optionLabel("summarizerThinking", cfg.summarizerThinking)} (${cfg.summarizerThinking})\n  native summary limit: ${cfg.compactionSummaryMaxTokens || "Pi default"}\n  idle to:  ${fmtTimeout(cfg.summarizerIdleTimeoutMs)}\n  max to:   ${fmtTimeout(cfg.summarizerMaxTimeoutMs)}\n  trigger:  ${mode}\n  batching: ${optionLabel("batchingMode", cfg.batchingMode)} (${cfg.batchingMode})\n  dedup:    ${cfg.dedupByContentHash ? "on" : "off"}\n  status:   ${cfg.showPruneStatusLine ? "on" : "off"}${statsLine}${contextLine}`,
-          );
-          break;
-        }
-
-        // ── /pruner tree ── foldable tree browser ──
-        case "tree": {
-          const roots = buildPruneTree(ctx, indexer);
-          if (roots.length === 0) {
-            ctx.ui.notify("No pruned tool calls found in this session.", "info");
-            break;
-          }
-
-          await ctx.ui.custom(
-            (_tui, theme, _keybindings, done) => {
-              const browser = new TreeBrowser(roots, theme, () => done(undefined));
-              return browser;
-            },
-            {
-              overlay: true,
-              overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" },
-            },
           );
           break;
         }

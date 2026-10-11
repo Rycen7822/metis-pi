@@ -4,7 +4,6 @@ import { SettingsList } from "@earendil-works/pi-tui";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { openPrunerSettings } from "../../src/condense/settings.ts";
 import { registerCommands } from "../../src/condense/commands.ts";
-import { ToolCallIndexer } from "../../src/condense/indexer.ts";
 import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
 import { loadConfig, saveConfig } from "../../src/condense/config.ts";
 import { parseMetisConfig } from "../../src/metis-config.ts";
@@ -151,7 +150,6 @@ function prunerCommand({ select = async () => undefined, save = async () => {} }
     () => [],
     () => ({ callCount: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, chainsCompressed: 0 }),
     () => undefined,
-    new ToolCallIndexer(),
     async () => ({ compressedEntries: [], skipped: 0 }),
     undefined,
     undefined,

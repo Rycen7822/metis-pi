@@ -62,7 +62,13 @@ test("real host loads one built-in tool, preserves settings, and uses one token-
   const runner = h.session.extensionRunner;
   const tools = runner.getAllRegisteredTools().map((x) => x.definition);
   assert.equal(tools.filter((x) => x.name === "context_tree_query").length, 1);
-  assert.ok(runner.getRegisteredCommands().some((x) => x.name === "pruner"));
+  const pruner = runner.getRegisteredCommands().find((x) => x.name === "pruner");
+  assert.ok(pruner);
+  assert.ok(!(await pruner.getArgumentCompletions("")).some((item) => item.value === "tree"));
+  await h.session.prompt("/pruner help");
+  assert.ok(!h.notices.at(-1).includes("/pruner tree"));
+  await h.session.prompt("/pruner tree");
+  assert.match(h.notices.at(-1), /Unknown subcommand: "tree"/);
   await h.session.prompt("/pruner recovery-grace");
   assert.ok(h.notices.some((text) => text.includes("Current recovery grace: 3 user-turn-group")), "the command must dispatch through AgentSession");
   assert.equal(h.statuses.get("context-prune"), "│ prune: ON · usage: 0 tokens");

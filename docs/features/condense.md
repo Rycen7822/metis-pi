@@ -101,6 +101,7 @@ provider 的输出 cap 与此 proxy 分开：沿用模型窗口/输出的既有 
 - 原生 nested 使用 execution start/end 与 prepared 参数归档，父结果传播保护、错误、未完成和归档失败。缺失或失败捕获必须标不完整。
 
 context_tree_query 返回历史证据；省略目标先列目录，再分页读取。
+交互式 `/pruner tree` 已移除；原文目录、正文、参数与分页恢复仍通过 `context_tree_query` 使用。
 
 | 参数/字段 | 语义 |
 | --- | --- |

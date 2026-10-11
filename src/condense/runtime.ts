@@ -1695,7 +1695,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     ctx => splitPackingRuns(capturePendingBatches(ctx, { rethrow: true })),
     () => statsAccum.getStats(),
     () => statsAccum.getLiveReclaim(),
-    indexer,
     compactChains,
     () => diagnostics.counts(),
     (ctx: any) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT,
