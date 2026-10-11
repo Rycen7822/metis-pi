@@ -157,6 +157,9 @@ export class SubagentSession {
       this.widgetRefresh?.();
       return;
     }
+    const animate = loadConfig(this.agentDir, path => {
+      try { return readFileSync(path, "utf8"); } catch { return undefined; }
+    }).config.working.animation && process.env.NO_COLOR === undefined;
     this.ctx.ui.setWidget(
       "metis-subagents",
       (tui, theme) => {
@@ -167,11 +170,13 @@ export class SubagentSession {
           (id) => {
             void this.openViewer(id);
           },
+          animate,
         );
       },
       { placement: "aboveEditor" },
     );
-    this.widgetTimer = setInterval(() => this.widgetRefresh?.(), WIDGET_FRAME_MS);
+    // Keep elapsed time current when motion is disabled.
+    this.widgetTimer = setInterval(() => this.widgetRefresh?.(), animate ? WIDGET_FRAME_MS : 1000);
     this.widgetTimer.unref();
   }
   private async openViewer(agentId: string) {

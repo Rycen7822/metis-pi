@@ -86,8 +86,12 @@ the inspected current generation, a dead owner and a released session lease.
 
 In the TUI, active subagents appear above the input box as a tree with animated
 running indicators, names, states, elapsed time, tool counts, tokens and current
-tool activity. Agents waiting for input appear first. The list clears when work
-settles or the parent session closes. It uses at most twelve lines, including
+tool activity. Running indicators use Bubbles Dot's eight constant-density frames
+at 100ms intervals, with a 600ms static startup. Their color and width stay fixed.
+With `[appearance.working] animation = false` or `NO_COLOR`, the indicator stays
+static while metadata refreshes once per second. Agents waiting for input appear
+first. The list clears when work settles or the parent session closes. It uses at
+most twelve lines, including
 any remaining-agent count. Click either line of an entry to open its
 read-only conversation overlay, with current state, tool activity and completed
 messages. Use arrows, Page Up/Down or the mouse wheel to scroll; Esc closes the

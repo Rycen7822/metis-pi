@@ -75,3 +75,10 @@ The native subagent core (src/subagents/core) derives from Rycen7822/subagent-pi
 commit 4765456f62bbec2724743e17855c4e21f5f6d6d8 (0.5.0).
 Copyright (c) 2026 Rycen7822. MIT License
 (see docs/provenance/subagents/LICENSE and THIRD_PARTY_NOTICES.md).
+
+The subagent running indicator uses the Dot frame sequence from Bubbles:
+Upstream: https://github.com/charmbracelet/bubbles (spinner/spinner.go).
+Copyright (c) 2020-2026 Charmbracelet, Inc. MIT License
+(permission notice and disclaimer in LICENSE).
+The 600ms startup delay references OpenAI Codex's summary_shimmer.rs behavior;
+no Codex animation implementation is copied.

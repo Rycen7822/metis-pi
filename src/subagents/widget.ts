@@ -9,21 +9,12 @@ export interface WidgetAgent {
 
 export const cleanLabel = (text: string) => stripVTControlCharacters(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
 const ACTIVE = new Set(["starting", "running", "needs_input", "stopping"]);
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-export const WIDGET_FRAME_MS = 50;
-const SPINNER_CYCLE_MS = 2500;
-
-function spinnerFrames(): string[] {
-  return SPINNER.flatMap((glyph, index) => {
-    const current = glyph.codePointAt(0)! & 0xff;
-    const next = SPINNER[(index + 1) % SPINNER.length].codePointAt(0)! & 0xff;
-    // Sweep the two bottom braille dots through the transition, then thin the
-    // next pose. Unlike tint-only frames, every step (including the wrap) is
-    // a different one-cell glyph even when terminal colors are quantized.
-    return [current, current | 0x40, current | next | 0xc0, next | 0x80, next & (next - 1)]
-      .map(mask => String.fromCodePoint(0x2800 | mask));
-  });
-}
+// Bubbles spinner.Dot (MIT, attribution in NOTICE). Keep its original frames
+// and cadence: a moving gap among seven lit dots, not changing dot density.
+const SPINNER = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+export const WIDGET_FRAME_MS = 100;
+// Inspired by Codex summary shimmer: short work stays still before animating.
+const ANIMATION_DELAY_MS = 600;
 const ACTIONS: Record<string, string> = {
   read: "reading", bash: "running command", exec_command: "running command", write_stdin: "waiting for command",
   edit: "editing", write: "writing", apply_patch: "applying patch", grep: "searching", find: "finding files", ls: "listing",
@@ -32,17 +23,20 @@ const ACTIONS: Record<string, string> = {
 export const activeAgents = (agents: WidgetAgent[]) => agents.filter(agent => ACTIVE.has(agent.state));
 
 /** Live rows and their mouse targets come from the same rendered snapshot. */
-export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: (id: string) => void) {
-  const frames = spinnerFrames();
+export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: (id: string) => void, animation = true) {
+  const animated = animation && process.env.NO_COLOR === undefined;
+  const runningSince = new Map<string, number>();
   let targets: Array<string | undefined> = [];
   return new MouseRegion({
     render(width) {
       targets = [];
       if (width <= 0) return [];
       const active = activeAgents(agents()).sort((a, b) => Number(b.state === "needs_input") - Number(a.state === "needs_input"));
+      const running = new Set(active.filter(agent => agent.state === "running").map(agent => agent.id));
+      for (const id of runningSince.keys()) if (!running.has(id)) runningSince.delete(id);
       if (!active.length) return [];
       const shown = active.slice(0, 5), overflow = active.length - shown.length;
-      const now = Date.now(), frame = frames[Math.floor((now % SPINNER_CYCLE_MS) / WIDGET_FRAME_MS)];
+      const now = Date.now(), animationNow = performance.now();
       const lines = [theme.fg("accent", `● Subagents · ${active.length} active`)];
       targets.push(undefined);
       for (const [index, agent] of shown.entries()) {
@@ -62,7 +56,13 @@ export function subagentWidget(theme: Theme, agents: () => WidgetAgent[], open: 
         const tools = [...new Set((agent.active_tools ?? []).filter(tool => typeof tool === "string"))];
         const activity = waiting ? "waiting for input" : tools.length ? tools.map(tool => ACTIONS[tool] ?? cleanLabel(tool)).join(", ") + "…"
           : agent.state === "running" ? cleanLabel(agent.response_preview ?? "") || "thinking…" : state;
-        const icon = waiting ? "?" : agent.state === "running" ? frame : "◦";
+        let icon = waiting ? "?" : "◦";
+        if (agent.state === "running") {
+          const since = runningSince.get(agent.id) ?? animationNow;
+          runningSince.set(agent.id, since);
+          const elapsed = Math.max(0, animationNow - since - ANIMATION_DELAY_MS);
+          icon = SPINNER[animated ? Math.floor(elapsed / WIDGET_FRAME_MS) % SPINNER.length : 0];
+        }
         lines.push(theme.fg("dim", last ? "└─ " : "├─ ") + theme.fg(tone, `${icon} ${theme.bold(cleanLabel(agent.name))}`)
           + theme.fg("muted", ` · ${state}${stats.length ? ` · ${stats.join(" · ")}` : ""}`));
         lines.push(theme.fg("dim", `${last ? "   " : "│  "}  ⎿  `) + theme.fg(waiting ? "warning" : "muted", activity));

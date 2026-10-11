@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { subagentTheme } from "../helpers/subagent-theme.mjs";
 import { SubagentSession } from "../../src/subagents/session.ts";
 import { RuntimeError, SubagentClient } from "../../src/subagents/client.ts";
@@ -11,7 +14,7 @@ async function until(probe) {
   while (!probe() && Date.now() < end) await tick();
   assert.ok(probe(), "bounded lifecycle condition reached");
 }
-function fixture(t, call) {
+function fixture(t, call, agentDir = "/unused-test-agent-dir") {
   const warnings = [],
     operations = [];
   t.mock.method(SubagentClient.prototype, "call", async function (op, params, signal, extra) {
@@ -29,7 +32,7 @@ function fixture(t, call) {
     sessionManager: { getSessionId: () => "lifecycle-test", getBranch: () => branch },
     ui: { notify: (text, level) => warnings.push({ text, level }), setWidget() {}, setStatus() {} },
   };
-  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, runtime, ctx, "/unused-test-agent-dir");
+  const owner = new SubagentSession({ appendEntry() {}, sendMessage() {} }, runtime, ctx, agentDir);
   t.after(() => owner.close());
   const boundary = (type) => owner.boundary({ type, outcome: "completed", entries: [] }, ctx);
   return { owner, ctx, warnings, operations, boundary, branch };
@@ -40,33 +43,83 @@ function heldWatch(signal) {
   );
 }
 
-test("the widget refreshes at 20 FPS without backend polling and stops when closed", async t => {
+test("the widget uses Bubbles cadence without backend polling or remounting and stops when closed", async t => {
+  const previous = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
+  t.after(() => { if (previous === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = previous; });
   t.mock.timers.enable({ apis: ["setInterval"] });
-  let watches = 0;
+  let watches = 0, publishUpdate;
   const f = fixture(t, async (op, _params, signal) => {
     if (op !== "pi_watch") return {};
-    if (watches++) return heldWatch(signal);
+    if (watches++) {
+      if (watches === 2) return new Promise(resolve => { publishUpdate = resolve; });
+      return heldWatch(signal);
+    }
     return { cursor: 1, agents: [{ id: "spinner", name: "worker", state: "running" }], notifications: [] };
   });
-  let renders = 0, widget;
+  let renders = 0, mounts = 0, widget;
   f.ctx.mode = "tui";
   f.ctx.ui.setWidget = (_key, factory) => {
+    if (factory) mounts++;
     widget = factory?.({ requestRender: () => { renders++; } }, subagentTheme);
   };
   await until(() => widget && watches === 2);
+  const mounted = widget;
+  publishUpdate({ cursor: 2, agents: [{ id: "spinner", name: "worker", state: "running", tool_uses: 1 }], notifications: [] });
+  await until(() => watches === 3);
+  assert.equal(widget, mounted, "watch snapshots preserve the mounted widget and its startup clock");
+  assert.equal(mounts, 1);
+  renders = 0;
   const calls = f.operations.length;
-  t.mock.timers.tick(49);
+  t.mock.timers.tick(99);
   assert.equal(renders, 0);
   t.mock.timers.tick(1);
   assert.equal(renders, 1);
-  t.mock.timers.tick(950);
-  assert.equal(renders, 20);
+  t.mock.timers.tick(900);
+  assert.equal(renders, 10);
+  assert.equal(mounts, 1, "animation ticks keep the widget and its startup clock mounted");
   assert.equal(f.operations.length, calls, "animation ticks do not query the backend");
   await f.owner.close();
   assert.equal(widget, undefined);
   t.mock.timers.tick(1000);
-  assert.equal(renders, 20, "closed sessions no longer request animation frames");
+  assert.equal(renders, 10, "closed sessions no longer request animation frames");
 });
+
+for (const policy of ["configuration", "NO_COLOR"]) {
+  test(`${policy} disables motion and refreshes widget metadata only once per second`, async t => {
+    const previous = process.env.NO_COLOR;
+    if (policy === "NO_COLOR") process.env.NO_COLOR = "1"; else delete process.env.NO_COLOR;
+    t.after(() => { if (previous === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = previous; });
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const agentDir = mkdtempSync(join(tmpdir(), "metis-static-motion-"));
+    t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+    if (policy === "configuration") {
+      writeFileSync(join(agentDir, "metis-pi.toml"), "[appearance.working]\nanimation = false\n");
+    }
+    let watches = 0;
+    const f = fixture(t, async (op, _params, signal) => {
+      if (op !== "pi_watch") return {};
+      if (watches++) return heldWatch(signal);
+      return { cursor: 1, agents: [{ id: "spinner", name: "worker", state: "running" }], notifications: [] };
+    }, agentDir);
+    let renders = 0, widget;
+    f.ctx.mode = "tui";
+    f.ctx.ui.setWidget = (_key, factory) => {
+      widget = factory?.({ requestRender: () => { renders++; } }, subagentTheme);
+    };
+    await until(() => widget && watches === 2);
+    const first = widget.render(80), calls = f.operations.length;
+    t.mock.timers.tick(999);
+    assert.equal(renders, 0);
+    t.mock.timers.tick(1);
+    assert.equal(renders, 1);
+    assert.deepEqual(widget.render(80), first, "disabled animation keeps a visible static indicator");
+    assert.equal(f.operations.length, calls, "metadata refresh does not query the backend");
+    await f.owner.close();
+    t.mock.timers.tick(1000);
+    assert.equal(renders, 1, "static refresh also stops on close");
+  });
+}
 
 for (const error of [
   new RuntimeError({ code: "version_mismatch", message: "controlled stale daemon" }),

@@ -19,25 +19,74 @@ import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagent
 import { subagentWidget } from "../../src/subagents/widget.ts";
 import { makeSubagentTheme, subagentTheme } from "../helpers/subagent-theme.mjs";
 
-test("subagent spinner changes glyph every 50ms in truecolor and 256color", (t) => {
-  let now = 0;
-  t.mock.method(Date, "now", () => now);
-  const themes = [subagentTheme, makeSubagentTheme("256color")];
-  for (const theme of themes) {
+function enableAnimation(t) {
+  const previous = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
+  t.after(() => { if (previous === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = previous; });
+}
+
+test("Bubbles Dot holds a steady startup and uses upstream frames in both color modes", t => {
+  enableAnimation(t);
+  let now = 0, wall = 0;
+  t.mock.method(performance, "now", () => now);
+  t.mock.method(Date, "now", () => wall);
+  // Bubbles spinner.Dot: eight constant-density frames at time.Second / 10.
+  const expected = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+  for (const theme of [subagentTheme, makeSubagentTheme("256color")]) {
+    now = 0;
     const widget = subagentWidget(theme, () => [{ id: "spinner", name: "worker", state: "running" }], () => {});
-    const frames = [];
-    for (now = 0; now < 2500; now += 50) {
-      const rows = widget.render(80);
+    const first = widget.render(80);
+    for (now of [99, 300, 599, 600, 699]) assert.deepEqual(widget.render(80), first, "short tasks never start flashing");
+    for (let frame = 0; frame <= expected.length; frame++) {
+      now = 600 + frame * 100;
+      wall = frame % 2 ? -1e9 : 1e9;
+      const rows = widget.render(80), icon = stripVTControlCharacters(rows[1])[3];
+      assert.equal(icon, expected[frame % expected.length], "phase uses a monotonic clock, not wall time");
+      assert.equal((icon.codePointAt(0) & 0xff).toString(2).replace(/0/g, "").length, 7, "constant lit-dot count");
       assert.ok(rows.every(row => visibleWidth(row) <= 80));
-      frames.push(stripVTControlCharacters(rows[1])[3]);
+      assert.deepEqual([rows[0], rows[2]], [first[0], first[2]], "animation leaves header/activity rows untouched");
+      assert.equal(rows[1].replace(icon, expected[0]), first[1], "only the one-cell glyph changes, never its color or layout");
     }
-    for (let i = 0; i < frames.length; i++) {
-      assert.notEqual(frames[i], frames[(i + 1) % frames.length], `${theme.getColorMode()}: adjacent glyphs must change, not just ANSI color`);
-      assert.equal(visibleWidth(frames[i]), 1, "animation keeps one terminal cell");
-    }
-    const original = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    assert.deepEqual(frames.filter((_frame, i) => i % 5 === 0), original);
-    assert.equal(stripVTControlCharacters(widget.render(80)[1])[3], frames[0], "the cycle still repeats after 2.5 seconds");
+  }
+});
+
+test("Bubbles Dot starts per agent and resets after leaving the running state", t => {
+  enableAnimation(t);
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  let agents = [{ id: "old", name: "old", state: "running" }];
+  const widget = subagentWidget(subagentTheme, () => agents, () => {});
+  const icons = () => widget.render(80).filter((_row, i) => i % 2 === 1).map(row => stripVTControlCharacters(row)[3]);
+  assert.deepEqual(icons(), ["⣾"]);
+  now = 700;
+  agents = [...agents.map(agent => ({ ...agent })), { id: "new", name: "new", state: "running" }];
+  assert.deepEqual(icons(), ["⣽", "⣾"], "watch snapshots must not restart old animation; new agents get their own delay");
+  agents = [{ id: "old", name: "old", state: "needs_input" }];
+  assert.deepEqual(icons(), ["?"]);
+  now = 1000;
+  agents = [{ id: "old", name: "old", state: "running" }];
+  assert.deepEqual(icons(), ["⣾"]);
+  now = 1700;
+  assert.deepEqual(icons(), ["⣽"]);
+  agents = [];
+  assert.deepEqual(widget.render(80), []);
+  agents = [{ id: "old", name: "old", state: "running" }];
+  assert.deepEqual(icons(), ["⣾"], "removed agents cannot retain an old clock");
+});
+
+test("Bubbles Dot respects static motion policy and NO_COLOR", t => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const previous = process.env.NO_COLOR;
+  t.after(() => { if (previous === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = previous; });
+  const agents = () => [{ id: "spinner", name: "worker", state: "running" }];
+  for (const noColor of [false, true]) {
+    if (noColor) process.env.NO_COLOR = "1"; else delete process.env.NO_COLOR;
+    const widget = subagentWidget(subagentTheme, agents, () => {}, noColor);
+    now = 0;
+    const first = widget.render(80);
+    now = 7700;
+    assert.deepEqual(widget.render(80), first, "explicit disabled motion or NO_COLOR keeps a nonblank static glyph");
   }
 });
 
