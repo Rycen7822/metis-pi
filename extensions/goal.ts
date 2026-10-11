@@ -320,6 +320,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   const state = new GoalState();
   let revision = 0;
   let inputGeneration = 0;
+  let pendingError: { errorMessage?: string } | undefined;
   let owed: { token: string; goalId: string; revision: number; input: number; session: string } | undefined;
   const clearOwed = () => {
     if (owed) state.continuationQueued = false;
@@ -376,6 +377,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     if (action !== "account") {
       revision++;
       clearOwed();
+      pendingError = undefined;
     }
     pi.appendEntry(STATE_TYPE, {
       version: 2,
@@ -446,6 +448,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   function reconstructState(ctx: ExtensionContext): void {
     stopStatusTimer();
     clearOwed();
+    pendingError = undefined;
     state.restore(ctx.sessionManager.getBranch());
     updateStatus(ctx);
   }
@@ -455,6 +458,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     stopStatusTimer();
     clearOwed();
+    pendingError = undefined;
     stopGoalSnapshot();
     stopOccFinished();
   });
@@ -483,6 +487,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async (_event, _ctx) => {
+    pendingError = undefined;
     state.startTurn();
   });
 
@@ -498,17 +503,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 
     const lastAssistant = lastAssistantMessage(event.messages);
     if (lastAssistant?.stopReason === "error") {
-      const status = goalStopStatusForAssistantError(lastAssistant);
-      state.transition(status);
-      persist("status");
-      showGoalMessage(
-        "Goal " +
-          `${statusLabel(status)}` +
-          "\n\nThe last goal turn ended with an error, so automatic continuation was " +
-          "stopped.\n\n" +
-          `${goalSummary(state.current)}`,
-      );
-      updateStatus(ctx);
+      // agent_end precedes Pi's retry decision; settlement waits for recovery to finish.
+      pendingError = lastAssistant;
       return;
     }
 
@@ -544,6 +540,22 @@ export default function goalExtension(pi: ExtensionAPI) {
       };
       state.continuationQueued = true;
     } else queueContinuation(ctx);
+  });
+
+  pi.on("agent_settled", async (event, ctx) => {
+    const error = pendingError;
+    pendingError = undefined;
+    if (!error || state.current?.status !== "active") return;
+    if ("aborted" in event && event.aborted) return;
+    const status = goalStopStatusForAssistantError(error);
+    state.transition(status);
+    persist("status");
+    showGoalMessage(
+      `Goal ${statusLabel(status)}` +
+        "\n\nPi finished error recovery without a successful response, so automatic " +
+        `continuation was stopped.\n\n${goalSummary(state.current)}`,
+    );
+    updateStatus(ctx);
   });
 
   pi.on("context", async (event) => {

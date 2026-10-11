@@ -150,7 +150,7 @@ test("turn accounting stays with the goal that started the turn and stops at its
   assert.equal(h.sent.length, sent, "a budget-limited goal does not continue");
 });
 
-test("errors stop continuation and context keeps only the current goal's last continuation", async (t) => {
+test("settled errors stop continuation and context keeps only the current goal's last continuation", async (t) => {
   const h = makeHost(t);
   await h.command("keep the right continuation");
   const first = structuredClone(h.sent.at(-1));
@@ -162,6 +162,71 @@ test("errors stop continuation and context keeps only the current goal's last co
   assert.deepEqual(filtered.messages, [user, last]);
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "rate limit" }] }, h.ctx);
+  assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+  await h.fire("agent_settled", {}, h.ctx);
   assert.equal((await h.tool("get_goal", {})).details.goal.status, "usageLimited");
   assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [user]);
 });
+
+test("a goal stays active through all five attempts and blocks only after final settlement", async (t) => {
+  const h = makeHost(t);
+  await h.command("survive transient Codex errors");
+  const sent = h.sent.length;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await h.fire("agent_start", {}, h.ctx);
+    tick(t, 1);
+    await h.fire("agent_end", {
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "Codex error: You can retry your request." }],
+    }, h.ctx);
+    assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+    assert.equal(h.sent.length, sent, "goal continuation must not compete with native retry");
+  }
+  await h.fire("agent_settled", {}, h.ctx);
+  const goal = (await h.tool("get_goal", {})).details.goal;
+  assert.equal(goal.status, "blocked");
+  assert.equal(goal.timeUsedSeconds, 5);
+  const statuses = h.entries.filter(entry => entry.data.action === "status");
+  assert.equal(statuses.length, 1);
+  await h.fire("agent_settled", {}, h.ctx);
+  assert.equal(h.entries.filter(entry => entry.data.action === "status").length, 1);
+});
+
+test("a successful retry clears the failed attempt and resumes goal continuation", async (t) => {
+  const h = makeHost(t);
+  await h.command("continue after recovery");
+  const sent = h.sent.length;
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", {
+    messages: [{ role: "assistant", stopReason: "error", errorMessage: "fetch failed" }],
+  }, h.ctx);
+  assert.equal(h.sent.length, sent);
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
+  assert.equal(h.sent.length, sent + 1);
+  await h.fire("agent_settled", {}, h.ctx);
+  assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+  assert.equal(h.entries.filter(entry => entry.data.action === "status").length, 0);
+});
+
+for (const action of ["pause", "replace", "restore", "abort"] as const) {
+  test(`a pending retry error does not override goal ${action}`, async (t) => {
+    const h = makeHost(t);
+    await h.command("keep stale errors away");
+    await h.fire("agent_start", {}, h.ctx);
+    await h.fire("agent_end", {
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "terminated" }],
+    }, h.ctx);
+    if (action === "pause") await h.command("pause");
+    if (action === "replace") {
+      await h.command("clear");
+      await h.command("new goal");
+    }
+    if (action === "restore") {
+      const saved = structuredClone(h.entries.at(-1)!.data);
+      h.ctx.sessionManager.getBranch = () => [{ type: "custom", customType: "goal", data: saved }];
+      await h.fire("session_tree", {}, h.ctx);
+    }
+    await h.fire("agent_settled", { aborted: action === "abort" }, h.ctx);
+    assert.equal((await h.tool("get_goal", {})).details.goal.status, action === "pause" ? "paused" : "active");
+  });
+}
