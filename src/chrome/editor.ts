@@ -15,6 +15,14 @@
 import { CODEX_CYAN_RGB } from "../palette.ts";
 import { isSkillPrefixOnly } from "../skill-tokens.ts";
 import { CURSOR_MARKER } from "../surface.ts";
+import { cellWidth, clipLine } from "../segments.ts";
+import { formatDuration } from "../ui-metrics.ts";
+
+/** Structural subset of the status passed through CustomEditor's public API. */
+export interface CodexStatusIndicator {
+  readonly kind: "working" | "retry" | "compaction" | "branchSummary";
+  renderInBorder(width: number): string;
+}
 
 export interface CodexEditorRowHost {
   borderColor: (str: string) => string;
@@ -27,6 +35,7 @@ export interface CodexEditorRowHost {
   getPaddingX(): number;
   setPaddingX(padding: number): void;
   handleInput(data: string): void;
+  setWorkingStatusIndicator?(indicator: CodexStatusIndicator | undefined): void;
   /** Base editor surface used by the multi-skill trigger hook (optional so
    * test fakes without them stay valid — absent means "no hook"). */
   getLines?: () => string[];
@@ -127,10 +136,30 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
 
   class CodexSurfaceEditor extends input.host.CustomEditor {
     private readonly hardwareCursorActive: () => boolean;
+    private nativeStatus: CodexStatusIndicator | undefined;
+    private compactionStartedAt: number | undefined;
 
     constructor(tui: unknown, theme: unknown, keybindings: unknown, options: { embedWorkingStatus?: boolean; paddingX?: number }) {
       super(tui, theme, keybindings, options);
       this.hardwareCursorActive = input.hardwareCursor?.(tui) ?? (() => false);
+    }
+
+    // Public custom-editor integration, not a native prototype patch. Pi owns
+    // the indicator, spinner repaint and cancellation; we only render it.
+    override setWorkingStatusIndicator(indicator: CodexStatusIndicator | undefined): void {
+      super.setWorkingStatusIndicator?.(indicator);
+      this.nativeStatus = indicator;
+      if (indicator?.kind === "compaction") {
+        this.compactionStartedAt ??= performance.now();
+      } else if (indicator && indicator.kind !== "retry") {
+        this.compactionStartedAt = undefined;
+      } else if (!indicator && this.compactionStartedAt !== undefined) {
+        // showStatusIndicator clears then replaces synchronously. Keep elapsed
+        // time through retry/backoff swaps, but clear it after a real end.
+        queueMicrotask(() => {
+          if (!this.nativeStatus) this.compactionStartedAt = undefined;
+        });
+      }
     }
 
     // The host re-applies ITS default paddingX to custom editors after
@@ -152,6 +181,20 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
     }
 
     override renderTopBorder(width: number, hiddenLineCount: number): string {
+      if (input.embedWorkingStatus && this.nativeStatus && width > 0) {
+        const elapsed = this.nativeStatus.kind === "compaction" && this.compactionStartedAt !== undefined
+          ? ` · ${formatDuration(performance.now() - this.compactionStartedAt)}` : "";
+        const scroll = hiddenLineCount > 0 ? ` · ↑ ${hiddenLineCount} more` : "";
+        const status = this.nativeStatus.renderInBorder(Math.max(1, width - 2));
+        // Keep the native cancel hint ahead of display-only details. Drop
+        // scroll detail, then elapsed, rather than truncating a fitting hint.
+        const room = width - 1 - cellWidth(status);
+        const tail = cellWidth(elapsed + scroll) <= room ? elapsed + scroll
+          : cellWidth(elapsed) <= room ? elapsed : "";
+        const paintedTail = surface ? surface.paintGlyph(tail, "dim") : tail;
+        const line = clipLine(` ${status}${paintedTail}`, width);
+        return surface ? surface.paintRow(line, width) : line;
+      }
       if (!surface) return accent("─".repeat(Math.max(0, width)));
       if (hiddenLineCount > 0) {
         // Scroll indicator must survive the redesign (dim, on-surface).

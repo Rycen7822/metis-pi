@@ -4,7 +4,9 @@ import { activate } from "../../src/extension.ts";
 import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
 import { theme, toolInfo } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { altScreen } from "../helpers/ui-fixtures.mjs";
+import { CustomEditor, initTheme } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { stringify } from "smol-toml";
 const appearanceFile = config => path => path.endsWith("metis-pi.toml") ? stringify({ appearance: config }) : undefined;
 
@@ -91,6 +93,21 @@ async function session(t, bindings = {}, overrides = {}) {
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
+
+test("appearance installs the public native-status editor path for compaction timing", async t => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
+  const { slots } = await session(t, { editorHost: { CustomEditor } });
+  const { tui } = altScreen();
+  const editor = slots.editorFactories.at(-1)(tui, { ...theme, borderColor: text => text }, new KeybindingsManager(TUI_KEYBINDINGS));
+  assert.equal(editor.embedWorkingStatus, true, "production install opts into native status delivery");
+  editor.setWorkingStatusIndicator({ kind: "compaction", renderInBorder: () => "Compacting context... (escape to cancel)" });
+  now += 12_000;
+  assert.match(plain(editor.render(100)[0]), /Compacting context.*cancel.* · 12s/);
+  editor.setWorkingStatusIndicator(undefined);
+  await Promise.resolve();
+  assert.doesNotMatch(plain(editor.render(100)[0]), /Compacting context| · 12s/);
+});
 
 test("nested tool activity does not leak image notices into top-level exploration", async (t) => {
   const { handlers, Host, ctx } = await session(t);

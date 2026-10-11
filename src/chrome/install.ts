@@ -157,15 +157,15 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
 
     // Editor factory: Codex surface composer. The gray surface (when the
     // terminal can carry it and surface ops were injected) replaces the
-    // accent borders; embedWorkingStatus is OFF — the Working line lives in
-    // the above-editor widget.
+    // accent borders. Native compaction/retry status uses the public editor
+    // slot; the regular Working line still lives in the above-editor widget.
     if (available.setEditorComponent && !ui.getEditorComponent?.() && deps.editorHost?.CustomEditor) {
       try {
         const surface = config.composer.surface ? deps.surface : undefined;
         const factory = mods.makeCodexEditorFactory({
           host: deps.editorHost as never,
           paddingX: 2,
-          embedWorkingStatus: false,
+          embedWorkingStatus: true,
           surface,
           promptPrefix: config.composer.promptPrefix,
           placeholder: "Ask anything...",
