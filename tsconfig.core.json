@@ -23,6 +23,8 @@
   ],
   "exclude": [
     "src/execution/**",
-    "src/condense/**"
+    "src/condense/**",
+    "src/pi-web-access/**",
+    "src/pi-session-recall/**"
   ]
 }

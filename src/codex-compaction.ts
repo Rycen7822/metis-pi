@@ -15,6 +15,11 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 const record = (value: unknown): Item => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const ours = (entry: SessionEntry): entry is CompactionEntry => entry.type === "compaction" && entry.summary.startsWith(MARKER);
 
+function isCodexModel(model: ExtensionContext["model"]): model is Model<Api> {
+  return model?.api === "openai-codex-responses"
+    && (model.provider === "openai" || model.provider === "openai-codex");
+}
+
 function checkpoint(entry: CompactionEntry): Checkpoint | undefined {
   const data = record(record(entry.details)[KEY]);
   if (data.version !== 1 || data.marker !== entry.summary || typeof data.binding !== "string" || !Array.isArray(data.history)) return;
@@ -125,7 +130,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     unsubscribeOwner?.();
     unsubscribeOwner = pi.events.on("metis:codex-compaction-owner", value => {
       const request = value as { ctx: ExtensionContext; owns: boolean };
-      request.owns = request.ctx.model?.provider === "openai-codex" || Boolean(active(request.ctx));
+      request.owns = isCodexModel(request.ctx.model) || Boolean(active(request.ctx));
     });
   };
   subscribeOwner();
@@ -146,7 +151,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     preparedGeneration = generation;
     const current = active(ctx);
     if (!current) return;
-    if (current.data && ctx.model?.provider === "openai-codex") {
+    if (current.data && isCodexModel(ctx.model)) {
       try { if (current.data.binding === await binding(ctx, ctx.model)) return; } catch { /* Restore instead of sending an opaque marker. */ }
     }
     return { messages: buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages.filter(m => m.role !== "system") };
@@ -156,7 +161,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     // or model changes may have invalidated it during asynchronous preparation.
     if (!JSON.stringify(event.payload).includes(MARKER)) return;
     const requestModel = preparedModel ?? ctx.model;
-    if (!requestModel || requestModel.api !== "openai-codex-responses" || requestModel.provider !== "openai-codex"
+    if (!isCodexModel(requestModel)
       || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation)
       return { ...record(event.payload), input: [{ type: "metis_checkpoint_route_changed" }] };
     const source = hash(ctx.sessionManager.getBranch());
@@ -183,7 +188,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
-    const codex = ctx.model?.provider === "openai-codex";
+    const codex = isCodexModel(ctx.model);
     try {
       const previous = active(ctx);
       if (!codex && !previous) return;
@@ -216,7 +221,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         event.preparation.tokensBefore = projected.messages.reduce((n, m) => n + estimateTokens(m), 0);
         return;
       }
-      if (!model || model.api !== "openai-codex-responses" || !request || !identity) throw new Error("Unsupported Codex API");
+      if (!isCodexModel(model) || !request || !identity) throw new Error("Unsupported Codex API");
       if (!prefix.some(m => m.role !== "system")) throw new Error("No discarded history to compact");
       pending?.abort(); const controller = new AbortController(); pending = controller;
       const signal = AbortSignal.any([event.signal, controller.signal, AbortSignal.timeout(TIMEOUT)]);

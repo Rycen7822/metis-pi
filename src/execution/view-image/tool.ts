@@ -108,7 +108,8 @@ async function executeRustViewImage(
 }
 
 function isUsableDescriptionModel(model: ExtensionContext["model"]): boolean {
-  return model?.provider === "openai-codex" && !!model.input?.includes("image");
+  return (model?.provider === "openai" || model?.provider === "openai-codex")
+    && !!model.input?.includes("image");
 }
 
 function modelVersionScore(id: string): number[] {
@@ -131,7 +132,7 @@ export function resolveImageDescriptionModel(ctx: ExtensionContext): NonNullable
   const model = models.filter(model => model.id.toLowerCase().includes("mini"))
     .sort((a, b) => compareModelIdsDescending(a.id, b.id))[0]
     ?? models.find(model => model.id === IMAGE_DESCRIPTION_MODEL);
-  if (!model) throw new Error("view_image fallback requires an authenticated OpenAI Codex image model");
+  if (!model) throw new Error("view_image fallback requires an authenticated OpenAI image model");
   return model;
 }
 export async function describeImageContentForTextModel(image: ViewImageContent, ctx: ExtensionContext, signal: AbortSignal | undefined) {

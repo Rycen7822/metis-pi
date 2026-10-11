@@ -104,7 +104,7 @@ async function host(t, converted, reverse = false, wholePackage = false) {
     }
   });
   assert.deepEqual(extensionsResult.errors, []);
-  if (wholePackage) assert.equal(extensionsResult.extensions.length, 11);
+  if (wholePackage) assert.equal(extensionsResult.extensions.length, 14);
   await session.bindExtensions({ onError: (e) => errors.push(e) });
   let reply;
   const streamSimple = (m, context) => {

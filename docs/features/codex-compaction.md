@@ -1,6 +1,6 @@
 # Codex 远端压缩
 
-`extensions/codex-compaction.ts` 默认接管 **provider 恰为 `openai-codex`** 的 Pi `/compact`、自动阈值压缩及 context-overflow 恢复。其他 provider 没有远端 checkpoint 时继续使用原来的 Pi/Condense/OCC 路径。无需新增配置，不修改模型、thinking 或凭据。
+`extensions/codex-compaction.ts` 默认接管 **provider 为 `openai` 或 `openai-codex`，且 API 为 `openai-codex-responses`** 的 Pi `/compact`、自动阈值压缩及 context-overflow 恢复。使用官方 `openai-responses` API 的 `openai` 模型和其他 provider 没有远端 checkpoint 时继续使用原来的 Pi/Condense/OCC 路径。无需新增配置，不修改模型、thinking 或凭据。
 
 ## 协议与会话
 

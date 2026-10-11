@@ -14,6 +14,8 @@ pi install .
 
 Restart Pi to load the changes, then select `metis-pi` in the theme picker. To install from Git, use `pi install git:git@github.com:Rycen7822/metis-pi.git`. This package provides independent execution tools; remove or disable the standalone `@howaboua/pi-codex-conversion` before installing to avoid duplicate tool registrations.
 
+Metis also maintains bundled `pi-web-access` and `pi-session-recall` sources. Remove or disable their standalone npm entries before loading Metis to avoid duplicate tools; existing settings and sessions are retained. See the [web and recall guide](docs/features/managed-plugins.md).
+
 Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-extensions/goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
 
 ## Features
@@ -33,7 +35,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Execution tools](docs/execution.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
 | [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from an external JSON file, applied at the next agent run. Replaces request context only; preserves project rules and source files. |
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
-| [Codex remote compaction](docs/features/codex-compaction.md) | `/compact` and automatic compaction for `openai-codex` use durable remote encrypted checkpoints; other providers retain their existing path. |
+| [Codex remote compaction](docs/features/codex-compaction.md) | `openai` and `openai-codex` using the Codex API use durable remote encrypted checkpoints; official OpenAI Responses and other routes retain native compaction. |
 | [Condense](docs/features/condense.md) | Opt-in history condensation using contextPrune. Measures mechanical replacements independently; paid summaries need pressure and complete-message proxy budgets. Deferred evidence stays recoverable. Supports paginated retrieval and token-only summary usage. |
 
 All Metis-owned preferences use one global `~/.pi/agent/metis-pi.toml` (honoring `PI_CODING_AGENT_DIR`), with no project Metis overrides. Run `/metis-config init` to import legacy global settings and install the adjacent [parameter guide](metis-pi-config.md); originals are retained. Already initialized? Use `/metis-config migrate` to back up and import omitted execution/subagent preferences, preserving current overrides. Subagent backend preferences also use `[subagents]`; safely drain/restart its daemon to apply them. The bundled [TOML template](metis-pi.toml) contains all defaults. Set `[appearance] enabled = false` to disable only display; Pi-owned model/theme/package/MCP credentials remain in their own files. See the [configuration reference](docs/configuration.md).

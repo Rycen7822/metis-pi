@@ -14,6 +14,8 @@ pi install .
 
 重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包保留独立执行工具，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
 
+Metis 现在内置维护 `pi-web-access` 和 `pi-session-recall`。加载前应移除或禁用原来的两个独立 npm 包入口，避免重复注册；原有配置和历史会话继续使用。详见[网页与会话扩展说明](docs/features/managed-plugins.md)。
+
 可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-extensions/goal.ts"]`。详细用法见[功能手册](docs/README.md)。
 
 ## 功能

@@ -32,11 +32,17 @@ function checkpointEvents(n = 1) {
   const item = { type: "compaction", id: `cmp-${n}`, encrypted_content: `opaque-${n}`, status: "completed" };
   return [{ type: "response.created", response: { id: "r", status: "in_progress" } }, { type: "response.output_item.done", output_index: 0, item }, completed([item])];
 }
-async function host(t, { auto = false, condense = false, existing, response, normalResponse, other = false } = {}) {
+async function host(t, {
+  auto = false, condense = false, existing, response, normalResponse, other = false, routeModel = model,
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
-  writeFileSync(join(dir, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: FAKE_API_KEY, refresh: "offline-refresh", expires: Date.now() + 3_600_000 } }));
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({
+    [routeModel.provider]: {
+      type: "oauth", access: FAKE_API_KEY, refresh: "offline-refresh", expires: Date.now() + 3_600_000,
+    },
+  }));
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { enabled: true, opportunisticCompaction: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } } }));
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models.json"), refreshOnCreate: false });
   const sm = existing ? SessionManager.open(existing, dir) : SessionManager.create(dir);
@@ -59,7 +65,10 @@ async function host(t, { auto = false, condense = false, existing, response, nor
   }
   const loader = new DefaultResourceLoader({ eventBus, cwd: dir, agentDir: dir, settingsManager: settings, additionalExtensionPaths: paths, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: "COMPACTION TEST" });
   await loader.reload();
-  const { session, extensionsResult } = await createAgentSession({ cwd: dir, agentDir: dir, modelRuntime: runtime, sessionManager: sm, settingsManager: settings, resourceLoader: loader, model, thinkingLevel: "off" });
+  const { session, extensionsResult } = await createAgentSession({
+    cwd: dir, agentDir: dir, modelRuntime: runtime, sessionManager: sm, settingsManager: settings,
+    resourceLoader: loader, model: routeModel, thinkingLevel: "off",
+  });
   assert.deepEqual(extensionsResult.errors, []);
   const errors = [], notices = [], bodies = [], headers = [];
   let count = 0;
@@ -105,6 +114,29 @@ test("manual compaction persists a native checkpoint and resumes with it, not a 
   assert.equal(JSON.stringify(next).includes(cp.marker), false);
   assert.equal(JSON.stringify(next.input).split("KEPT TAIL").length - 1, 1);
   assert.equal(JSON.stringify(entry.details).includes(FAKE_API_KEY), false);
+});
+
+test("Codex transport under openai persists and replays its native encrypted checkpoint", async t => {
+  const h = await host(t, { routeModel: { ...model, provider: "openai" } });
+  const result = await h.session.compact();
+  assert.match(result.summary, /^\[Metis Codex remote checkpoint /);
+  assert.equal(h.bodies[0].input.at(-1).type, "compaction_trigger");
+  assert.equal(h.headers[0].get("x-codex-beta-features"), "remote_compaction_v2");
+  await h.session.prompt("CONTINUE");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.equal(JSON.stringify(h.bodies.at(-1)).includes(result.summary), false);
+});
+
+test("official openai Responses retains native compaction without Codex beta requests", async t => {
+  const h = await host(t, {
+    routeModel: { ...model, provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+  });
+  const result = await h.session.compact();
+  assert.equal(result.summary, "OK");
+  assert.equal(compactions(h).at(-1).details?.[key], undefined);
+  assert.ok(h.bodies.length > 0);
+  assert.ok(h.bodies.every(body => !body.input.some(item => item.type === "compaction_trigger")));
+  assert.ok(h.headers.every(headers => !headers.has("x-codex-beta-features")));
 });
 
 test("auto compaction uses the same remote transport before the next inference", async t => {

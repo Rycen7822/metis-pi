@@ -1,0 +1,6 @@
+{
+  "extends": "../pi-web-access/tsconfig.json",
+  "include": [
+    "session-recall.ts"
+  ]
+}

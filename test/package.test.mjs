@@ -23,7 +23,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents"]) {
+  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of [
@@ -32,7 +32,11 @@ test("package exposes extensions, themes and portable skills with their referenc
     "assets/native-tools/exec/linux-x64/exec_bridge",
     "assets/native-tools/view-image/linux-x64/view_image",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
+    "src/pi-web-access/index.ts", "src/pi-web-access/dist/index.js", "src/pi-web-access/dist/mcp-cli.js",
+    "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
+    "src/pi-web-access/licenses/typebox.LICENSE",
   ]) assert.ok(files.has(path), path);
+  assert.ok([...files].every((path) => !path.startsWith("references/")));
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
   assert.ok(files.has("extensions/execution.ts"));
   assert.ok(files.has("src/condense/runtime.ts"));

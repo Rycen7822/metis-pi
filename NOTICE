@@ -82,3 +82,19 @@ Copyright (c) 2020-2026 Charmbracelet, Inc. MIT License
 (permission notice and disclaimer in LICENSE).
 The 600ms startup delay references OpenAI Codex's summary_shimmer.rs behavior;
 no Codex animation implementation is copied.
+
+Metis-maintained web access is derived from pi-web-access 0.38.0:
+Upstream: https://github.com/nicobailon/pi-web-access
+Commit: 7e6e2386dc9a31d5e2a448172060dd1339c604f7.
+Copyright (c) 2025 Nico Bailon. MIT License (src/pi-web-access/LICENSE).
+The source and reproducible Pi/MCP bundles retain dual OpenAI provider support.
+
+Metis-maintained session recall derives from pi-session-recall 1.0.7:
+Upstream: https://github.com/ogulcancelik/pi-extensions (packages/pi-session-recall).
+Commit: 92964e4c7023ae88788181bb2eeea4497a97de9d.
+Copyright (c) 2026 Can Celik. MIT License (src/pi-session-recall/LICENSE).
+The source retains API-aware OpenAI / OpenAI Codex transport selection.
+
+The standalone web MCP bundle also includes typebox 1.3.27 (MIT).
+Its upstream copyright and full license are retained in
+src/pi-web-access/licenses/typebox.LICENSE.

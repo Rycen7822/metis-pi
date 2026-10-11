@@ -16,7 +16,7 @@ notify = true
 [[dynamicAgents.groups]]
 id = "codex"
 file = "./AGENTS-CODEX.md"
-include = ["openai-codex/*"]
+include = ["openai/*", "openai-codex/*"]
 exclude = ["*-mini"]
 ```
 

@@ -35,7 +35,7 @@ Pi 1.1 的普通非空 `tools` 白名单若没有 `mcp__` selector，会保留 M
 
 ## 请求、恢复与旧会话
 
-Pi 持有 provider/OAuth、工具配对与原生 codemode。`openai-codex` 的手动/自动 compaction 使用 [Codex Remote V2](features/codex-compaction.md) 并持久化原生 checkpoint；其他 provider 保留普通 compaction 路径。condense 在有效 `context_edit` 投影上工作，并在 `session_before_compact` 准备保护；嵌套证据未完成或归档失败时保留源历史。
+Pi 持有 provider/OAuth、工具配对与原生 codemode。`openai` 和 `openai-codex` 使用 Codex API 时，手动/自动 compaction 使用 [Codex Remote V2](features/codex-compaction.md) 并持久化原生 checkpoint；官方 OpenAI Responses API 与其他 provider 保留普通 compaction 路径。condense 在有效 `context_edit` 投影上工作，并在 `session_before_compact` 准备保护；嵌套证据未完成或归档失败时保留源历史。
 
 Pi 1.0.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in tools` 探测存在性。`image()` 校验 base64 与图片类型，metis 的有效图片结果遵循原生格式。
 
