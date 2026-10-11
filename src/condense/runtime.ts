@@ -136,6 +136,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceNext = undefined; maintenanceAbort?.abort();
     try { await maintenanceTask; } finally { maintenanceHandoffs--; }
   };
+  const unsubscribeRemoteCompaction = pi.events.on("metis:before-remote-compact", (data) => {
+    const request = data as { waits?: Promise<void>[] } | undefined;
+    if (Array.isArray(request?.waits)) request.waits.push(stopMaintenance());
+  });
   // Native/OCC preparation must wait for the current archive write before it owns I/O.
   pi.on("session_before_compact", async () => {
     tokenEstimator.clear(); sharedApprovals.clear();
@@ -2067,6 +2071,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       queuedSummaryKeys.clear();
       unsubscribeProjection();
       unsubscribeMaintenance();
+      unsubscribeRemoteCompaction();
       try { ctx.ui.setStatus(STATUS_WIDGET_ID, undefined); } catch { /* UI may already be gone. */ }
     },
   };

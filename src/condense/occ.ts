@@ -465,6 +465,11 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     rewrite(ctx);
   });
   pi.on("session_before_compact", (event, ctx) => {
+    // Remote Codex checkpoints (and their raw-history recovery) have their own
+    // publisher. OCC must not spend a summary request or override that result.
+    const remote = { ctx, owns: false };
+    pi.events.emit("metis:codex-compaction-owner", remote);
+    if (remote.owns) return;
     compactionSignal = event.signal;
     if (enabled()) return prepare(event, ctx);
     if (config.value.enabled && staleCapacity(event, ctx)) {
@@ -524,6 +529,11 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     }
   });
   const off = [
+    pi.events.on("metis:before-remote-compact", (value: any) => {
+      // Remote safety rejection is not a user abort. Its earlier handler can
+      // short-circuit dispatch before our normal before_compact observer runs.
+      compactionSignal = value.signal;
+    }),
     pi.events.on("metis:occ-status", (data: any) => {
       // Let native post-run capacity handling finish before issuing the owed
       // continuation. Settled immediately releases it when no compaction runs.

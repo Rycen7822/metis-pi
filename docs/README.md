@@ -13,6 +13,7 @@
 | 精确复制与剪贴板 | [选区复制](features/selection-copy.md) |
 | 多 skill 输入与折叠 | [skills](features/skills.md) |
 | 持久目标与自动续跑 | [goal](features/goal.md) |
+| Codex `/compact` 与自动远端压缩 | [Codex 远端压缩](features/codex-compaction.md) |
 | 历史精简、原文回读与 OCC | [condense](features/condense.md) |
 | 按模型切换全局指令 | [动态指令](features/dynamic-agents.md) |
 | 修改后执行命令 | [Action Fusion](features/action-fusion.md) |
