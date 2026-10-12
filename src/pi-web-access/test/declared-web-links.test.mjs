@@ -162,13 +162,13 @@ test("HTML extraction surfaces declared documentation links without broad URL he
 			});
 		};
 
-		const readable = await extractContent("https://example.com/readable", undefined, { lookup });
+		const readable = await extractContent("https://example.com/readable", undefined, { fetch: globalThis.fetch, lookup });
 		const readableCalls = calls.splice(0);
-		const shell = await extractContent("https://example.com/shell", undefined, { lookup });
+		const shell = await extractContent("https://example.com/shell", undefined, { fetch: globalThis.fetch, lookup });
 		const shellCalls = calls.splice(0);
-		const fallback = await extractContent("https://example.com/fallback", undefined, { lookup });
+		const fallback = await extractContent("https://example.com/fallback", undefined, { fetch: globalThis.fetch, lookup });
 		const fallbackCalls = calls.splice(0);
-		const generic = await extractContent("https://example.com/generic", undefined, { lookup });
+		const generic = await extractContent("https://example.com/generic", undefined, { fetch: globalThis.fetch, lookup });
 		console.log(JSON.stringify({ readable, readableCalls, shell, shellCalls, fallback, fallbackCalls, generic }));
 	`);
 	assert.equal(child.status, 0, child.stderr);

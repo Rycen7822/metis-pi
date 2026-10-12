@@ -44,7 +44,7 @@ test("Crawl4AI extraction posts a fit markdown request with a bearer token and t
 			}), { status: 200 });
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
-		const result = await extractWithCrawl4ai("https://example.com/article", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractWithCrawl4ai("https://example.com/article", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ captured, result }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com/", CRAWL4AI_API_TOKEN: "c4a-test-token" });
 	assert.equal(child.status, 0, child.stderr);
@@ -69,7 +69,7 @@ test("Crawl4AI extraction sends no Authorization header without a token and retu
 			return new Response(JSON.stringify({ success: true, markdown: "  \\n" }), { status: 200 });
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
-		const result = await extractWithCrawl4ai("https://example.com/empty", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractWithCrawl4ai("https://example.com/empty", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ headers, result }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -86,7 +86,7 @@ test("Crawl4AI resolves the token from a config credential source", async () => 
 			return new Response(JSON.stringify({ success: true, markdown: "# Configured" }), { status: 200 });
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
-		const result = await extractWithCrawl4ai("https://example.com/configured", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractWithCrawl4ai("https://example.com/configured", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ authorization, result }));
 	`, { CRAWL4AI_TEST_TOKEN: "from-env-source" }, { crawl4aiBaseUrl: "https://crawl.example.com", crawl4aiApiToken: "$CRAWL4AI_TEST_TOKEN" });
 	assert.equal(child.status, 0, child.stderr);
@@ -104,7 +104,7 @@ test("fetch_content falls back to configured Crawl4AI before hosted providers", 
 			return new Response(JSON.stringify({ success: true, markdown: "# Rendered\\nRendered body" }), { status: 200 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/client-rendered", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, result }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -123,7 +123,7 @@ test("fetch_content tries Firecrawl before Crawl4AI when both are configured", a
 			return new Response(JSON.stringify({ success: true, markdown: "# Second\\nSecond body" }), { status: 200 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/order", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/order", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, result }));
 	`, { FIRECRAWL_BASE_URL: "https://firecrawl.example.com", CRAWL4AI_BASE_URL: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -145,7 +145,7 @@ test("Crawl4AI extraction errors remain visible in fetch_content guidance", asyn
 			return new Response("gateway", { status: 502 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/client-rendered", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, error: result.error }));
 	`, {}, { crawl4aiBaseUrl: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -163,7 +163,7 @@ test("Crawl4AI unsuccessful envelopes mentioning abort remain visible in fetch_c
 			return new Response(JSON.stringify({ success: false, error: "browser navigation aborted unexpectedly" }), { status: 200 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/client-rendered", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, error: result.error }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -187,7 +187,7 @@ test("Crawl4AI malformed and unsuccessful envelopes throw visible errors", async
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		const errors = [];
 		for (let i = 0; i < responses.length; i++) {
-			try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+			try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 			catch (err) { errors.push(err.message); }
 		}
 		console.log(JSON.stringify({ errors }));
@@ -208,7 +208,7 @@ test("Crawl4AI never leaks the configured token through a JSON parse failure", a
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		const { activityMonitor } = await import(${JSON.stringify(activityModuleUrl)});
 		let thrown = null;
-		try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { thrown = err.message; }
 		const logged = JSON.stringify(activityMonitor.getEntries());
 		console.log(JSON.stringify({ thrown, logged }));
@@ -226,7 +226,7 @@ test("Crawl4AI redacts a token that crosses the HTTP error excerpt boundary", as
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		const { activityMonitor } = await import(${JSON.stringify(activityModuleUrl)});
 		let thrown = null;
-		try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { thrown = err.message; }
 		const logged = JSON.stringify(activityMonitor.getEntries());
 		console.log(JSON.stringify({ thrown, logged }));
@@ -247,7 +247,7 @@ test("Crawl4AI rejects private targets without invoking the configured instance"
 		for (const target of ["http://127.0.0.1:8080/admin", "http://localhost:8080/admin", "http://169.254.169.254/latest/meta-data"]) {
 			try { await extractWithCrawl4ai(target); } catch (err) { errors.push(err.message); }
 		}
-		try { await extractWithCrawl4ai("https://internal.example.com/", undefined, { lookup: async () => [{ address: "10.0.0.5", family: 4 }] }); }
+		try { await extractWithCrawl4ai("https://internal.example.com/", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "10.0.0.5", family: 4 }] }); }
 		catch (err) { errors.push(err.message); }
 		console.log(JSON.stringify({ errors, fetchCalls }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com" });
@@ -266,7 +266,7 @@ test("Crawl4AI API base allows configured loopback without global SSRF allow ran
 				return new Response(JSON.stringify({ success: true, markdown: "# Local\\nLocal body" }), { status: 200 });
 			};
 			const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
-			const result = await extractWithCrawl4ai("https://example.com/local", undefined, { lookup: ${PUBLIC_LOOKUP} });
+			const result = await extractWithCrawl4ai("https://example.com/local", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 			console.log(JSON.stringify({ calls, result }));
 		`, {}, { crawl4aiBaseUrl });
 		assert.equal(child.status, 0, child.stderr);
@@ -288,7 +288,7 @@ test("Crawl4AI rejects every cross-origin redirect before fetching the redirecte
 				return new Response(JSON.stringify({ success: true, markdown: "# Redirected" }), { status: 200 });
 			};
 			let error = null;
-			try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+			try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 			catch (err) { error = err.message; }
 			results.push({ status, calls, error });
 		}
@@ -315,7 +315,7 @@ test("Crawl4AI replays same-origin 301 and 302 POSTs but rejects a later cross-o
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		let error = null;
-		try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { error = err.message; }
 		console.log(JSON.stringify({ calls, error }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com", CRAWL4AI_API_TOKEN: "c4a-secret" });
@@ -340,7 +340,7 @@ test("Crawl4AI follows a 303 as a bodyless GET and keeps the POST on 307", async
 			};
 			const { extractWithCrawl4ai, clearCrawl4aiConfigCache } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 			clearCrawl4aiConfigCache();
-			await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} });
+			await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 			return calls[1];
 		};
 		console.log(JSON.stringify({ seeOther: await run(303), temporary: await run(307) }));
@@ -361,7 +361,7 @@ test("Crawl4AI does not resurrect the POST when a 303 is followed by a 301", asy
 			return new Response(JSON.stringify({ success: true, markdown: "# Followed" }), { status: 200 });
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
-		await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -383,7 +383,7 @@ test("Crawl4AI keeps the loopback exemption on the configured origin and blocks 
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		let pivotError = null;
-		try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { pivotError = err.message; }
 		console.log(JSON.stringify({ calls, pivotError }));
 	`, {}, { crawl4aiBaseUrl: "http://127.0.0.1:11235" });
@@ -407,7 +407,7 @@ test("Crawl4AI blocks a loopback base redirecting to localhost", async () => {
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		let redirectError = null;
-		try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { redirectError = err.message; }
 		console.log(JSON.stringify({ calls, redirectError }));
 	`, {}, { crawl4aiBaseUrl: "http://127.0.0.1:11235" });
@@ -426,7 +426,7 @@ test("Crawl4AI blocks configured base redirects to private targets", async () =>
 		};
 		const { extractWithCrawl4ai } = await import(${JSON.stringify(crawl4aiModuleUrl)});
 		let redirectError = null;
-		try { await extractWithCrawl4ai("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithCrawl4ai("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { redirectError = err.message; }
 		console.log(JSON.stringify({ calls, redirectError }));
 	`, { CRAWL4AI_BASE_URL: "https://crawl.example.com" });

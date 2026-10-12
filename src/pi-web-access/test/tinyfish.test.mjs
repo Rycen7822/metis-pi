@@ -110,7 +110,7 @@ test("explicit TinyFish search maps filters, results, and full inline content", 
 			const urlText = String(url);
 			const headers = Object.fromEntries(new Headers(init.headers));
 			calls.push({ url: urlText, headers, body: init.body ? JSON.parse(init.body) : null });
-			if (urlText.startsWith("https://api.search.tinyfish.ai?")) {
+			if (urlText.startsWith("https://api.search.tinyfish.ai/?")) {
 				return new Response(JSON.stringify({
 					query: "tinyfish docs",
 					results: [
@@ -121,7 +121,7 @@ test("explicit TinyFish search maps filters, results, and full inline content", 
 					page: 0,
 				}), { status: 200 });
 			}
-			if (urlText === "https://api.fetch.tinyfish.ai") {
+			if (urlText === "https://api.fetch.tinyfish.ai/") {
 				return new Response(JSON.stringify({
 					results: [{ url: "https://docs.tinyfish.ai/", final_url: "https://docs.tinyfish.ai/", title: "TinyFish Docs", text: "# Full TinyFish documentation", format: "markdown" }],
 					errors: [],
@@ -317,7 +317,7 @@ test("fetch_content uses TinyFish before Parallel after local and Jina extractio
 				return new Response("<html><body><script></script><script></script><script></script><script></script>Loading</body></html>", { status: 200, headers: { "content-type": "text/html" } });
 			}
 			if (urlText.startsWith("https://r.jina.ai/")) return new Response("", { status: 503 });
-			if (urlText === "https://api.fetch.tinyfish.ai") {
+			if (urlText === "https://api.fetch.tinyfish.ai/") {
 				return new Response(JSON.stringify({
 					results: [{ url: "https://example.com/app", final_url: "https://example.com/app", title: "Rendered", text: "# TinyFish rendered content", format: "markdown" }],
 					errors: [],
@@ -328,7 +328,7 @@ test("fetch_content uses TinyFish before Parallel after local and Jina extractio
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-		const result = await extractContent("https://example.com/app", undefined, { lookup });
+		const result = await extractContent("https://example.com/app", undefined, { fetch: globalThis.fetch, lookup });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{
@@ -344,7 +344,7 @@ test("fetch_content uses TinyFish before Parallel after local and Jina extractio
 	assert.deepEqual(output.calls, [
 		"https://example.com/app",
 		"https://r.jina.ai/https://example.com/app",
-		"https://api.fetch.tinyfish.ai",
+		"https://api.fetch.tinyfish.ai/",
 	]);
 	assert.deepEqual(output.result, {
 		url: "https://example.com/app",

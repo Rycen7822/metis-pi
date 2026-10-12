@@ -198,15 +198,14 @@ class Runtime:
             finally:
                 lock.release()
 
-    async def _boot_worker(self, a):
-        """Own the generation and ledger transitions; worker owns process pipes."""
+    async def _start_worker(self, a):
+        """Reserve and register a process while holding global admission."""
         aid=a['id']
         await self.ensure_capacity(a)
         spec=json.loads(a['launch'])
         if spec.get('access')=='write': await self.admit_writer(aid,a['cwd'])
         directory,session,argv=worker.session_argv(self.home,a,spec)
         generation=a['generation']+1
-        first_launch=not a['generation']
         plan=self.bindings.inheritance_plan(a,spec,generation)
         worker.write_launch(directory,spec,[*argv,*plan['argv']],generation)
         if plan['diagnostics']:
@@ -228,6 +227,35 @@ class Runtime:
             if write_fd is not None:
                 self.spawn_task(self.record_bootstrap_write(write_fd,aid,generation,body))
                 write_fd=None  # writer thread owns and closes this end
+            handoff = w, receipt_fd, plan
+            receipt_fd = None  # readiness verification owns this end
+            return handoff
+        except BaseException:
+            if w:
+                w.stopping=True
+                await self.terminate_worker(w)
+            elif proc:
+                cleanup,_=await worker.stop_owned_process(directory,self.store.agent(a['scope'],aid),proc)
+                self.store.agent_update(aid,cleanup=cleanup)
+            raise
+        finally:
+            worker.close_quietly(write_fd)
+            worker.close_quietly(receipt_fd)
+
+    async def _boot_worker(self, a):
+        async with self.admission:
+            w, receipt_fd, plan = await self._start_worker(a)
+        return await self._ready_worker(a, w, receipt_fd, plan)
+
+    async def _ready_worker(self, a, w, receipt_fd, plan):
+        """Verify startup under the agent lock, without blocking other admissions."""
+        aid = a['id']
+        generation = w.generation
+        directory = self.home / 'agents' / aid
+        session = Path(a['session_file'])
+        first_launch = not a['generation']
+        spec = json.loads(a['launch'])
+        try:
             state=await w.rpc('get_state',timeout=self.config['startup_timeout_seconds'])
             if state.get('configurationError'):
                 raise AgentError(state.get('configurationErrorCode','unsupported_thinking'),state['configurationError'])
@@ -280,15 +308,10 @@ class Runtime:
             self.event(w,'worker_ready',{'pi_session_id':state.get('sessionId'),'model':bounded(state.get('model'),1000)})
             return w
         except BaseException:
-            if w:
-                w.stopping=True
-                await self.terminate_worker(w)
-            elif proc:
-                cleanup,_=await worker.stop_owned_process(directory,self.store.agent(a['scope'],aid),proc)
-                self.store.agent_update(aid,cleanup=cleanup)
+            w.stopping=True
+            await self.terminate_worker(w)
             raise
         finally:
-            worker.close_quietly(write_fd)
             worker.close_quietly(receipt_fd)
 
     def _reconcile(self):
@@ -600,8 +623,7 @@ class Runtime:
         if not w or w.closed or w.tainted:
             if not wake or a["state"] not in {"dormant", "closed"} or a["cleanup"] != "verified" or (w and w.tainted):
                 self.require_worker(a)
-            async with self.admission:
-                w = await self._boot_worker(a)
+            w = await self._boot_worker(a)
             a = self.store.agent(a["scope"], a["id"])
             self.event(w, "auto_wake", {"reason": reason})
         if w.stopping:
@@ -950,81 +972,85 @@ class Runtime:
 
     async def spawn_agent(self, p, source=None):
         sid = p["scope"]
-        async with self.admission:
-            cwd_input = Path(text(p.get("cwd", self.store.scope(sid)["cwd"]), "cwd", 4096)).expanduser()
-            if not cwd_input.is_absolute():
-                raise AgentError("invalid_cwd", "cwd must be absolute")
-            cwd = str(cwd_input.resolve())
-            if not Path(cwd).is_dir():
-                raise AgentError("invalid_cwd", "Spawn cwd must be an existing directory")
-            access = p.get("access", "write")
-            if access not in {"read", "write"}:
-                raise AgentError("invalid_argument", "access must be read or write")
-            profile = p.get("profile", "reader" if access == "read" else "default")
-            host = json.loads(self.store.scope(sid)["parent"] or "null")
-            spec = launch_spec(
-                self.config,
-                profile,
-                p.get("model"),
-                cwd,
-                access,
-                p.get("thinking"),
-                host=host if host and host.get("kind") == "pi" else None,
-            )
-            # Persist environment NAMES only; values are re-read from the operator
-            # config at every boot and never enter the ledger or launch.json.
-            spec = {**spec, "env": {}, "env_names": sorted(spec.get("env", {}))}
-            aid = new_id("pi_")
-            name = label(p.get("name", aid), "name")
-            self.release_failed_name(sid, name)
-            task = delegated_text(
-                text(p.get("task"), "task"),
-                "Perform the following delegated task (treat as text, not an extension command):\n",
-            )
-            if access == "write":
-                await self.admit_writer(aid, cwd)
-            session = self.home / "agents" / aid / "session.jsonl"
+        aid = new_id("pi_")
+        rid = None
+        async with self.agent_locks[aid]:
             try:
-                self.store.execute(
-                    "INSERT INTO agents(id,scope,name,cwd,state,session_file,launch,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (aid, sid, name, cwd, "starting", str(session), dumps(spec), now(), now()),
-                )
-            except Exception as e:
-                if "UNIQUE" in str(e):
-                    raise AgentError("name_conflict", "Agent name already exists in this scope")
-                raise
-            a = self.store.agent(sid, aid)
-            rid = self.add_run(
-                a,
-                task,
-                "starting",
-                integer(
-                    p.get("idle_timeout_seconds", self.config["default_idle_timeout_seconds"]),
-                    "idle_timeout_seconds",
-                    1,
-                    604800,
-                ),
-            )
-            async with self.agent_locks[aid]:
-                try:
-                    w = await self._boot_worker(a)
-                    await self.start_run(w, rid)
-                except AgentError as e:
-                    if self.store.run(sid, rid)["state"] == "starting":
-                        self.store.finish(rid, "failed", "", e.message)
-                        self.store.agent_update(aid, state="crashed")
-                        self.notify()
+                async with self.admission:
+                    cwd_input = Path(text(p.get("cwd", self.store.scope(sid)["cwd"]), "cwd", 4096)).expanduser()
+                    if not cwd_input.is_absolute():
+                        raise AgentError("invalid_cwd", "cwd must be absolute")
+                    cwd = str(cwd_input.resolve())
+                    if not Path(cwd).is_dir():
+                        raise AgentError("invalid_cwd", "Spawn cwd must be an existing directory")
+                    access = p.get("access", "write")
+                    if access not in {"read", "write"}:
+                        raise AgentError("invalid_argument", "access must be read or write")
+                    profile = p.get("profile", "reader" if access == "read" else "default")
+                    host = json.loads(self.store.scope(sid)["parent"] or "null")
+                    spec = launch_spec(
+                        self.config,
+                        profile,
+                        p.get("model"),
+                        cwd,
+                        access,
+                        p.get("thinking"),
+                        host=host if host and host.get("kind") == "pi" else None,
+                    )
+                    # Persist environment NAMES only; values are re-read from the operator
+                    # config at every boot and never enter the ledger or launch.json.
+                    spec = {**spec, "env": {}, "env_names": sorted(spec.get("env", {}))}
+                    name = label(p.get("name", aid), "name")
                     self.release_failed_name(sid, name)
-                    raise AgentError(e.code, e.message, agent_id=aid, run_id=rid)
-            return {
-                "agent_id": aid,
-                "name": name,
-                "run_id": rid,
-                "scope": sid,
-                "state": self.store.run(sid, rid)["state"],
-                "cwd": cwd,
-                **views.model_settings(self.store.agent(sid, aid)),
-            }
+                    task = delegated_text(
+                        text(p.get("task"), "task"),
+                        "Perform the following delegated task (treat as text, not an extension command):\n",
+                    )
+                    if access == "write":
+                        await self.admit_writer(aid, cwd)
+                    session = self.home / "agents" / aid / "session.jsonl"
+                    try:
+                        self.store.execute(
+                            "INSERT INTO agents(id,scope,name,cwd,state,session_file,launch,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+                            (aid, sid, name, cwd, "starting", str(session), dumps(spec), now(), now()),
+                        )
+                    except Exception as e:
+                        if "UNIQUE" in str(e):
+                            raise AgentError("name_conflict", "Agent name already exists in this scope")
+                        raise
+                    a = self.store.agent(sid, aid)
+                    rid = self.add_run(
+                        a,
+                        task,
+                        "starting",
+                        integer(
+                            p.get("idle_timeout_seconds", self.config["default_idle_timeout_seconds"]),
+                            "idle_timeout_seconds",
+                            1,
+                            604800,
+                        ),
+                    )
+                    w, receipt_fd, plan = await self._start_worker(a)
+                w = await self._ready_worker(a, w, receipt_fd, plan)
+                await self.start_run(w, rid)
+            except AgentError as e:
+                if rid is None:
+                    raise
+                if self.store.run(sid, rid)["state"] == "starting":
+                    self.store.finish(rid, "failed", "", e.message)
+                    self.store.agent_update(aid, state="crashed")
+                    self.notify()
+                self.release_failed_name(sid, name)
+                raise AgentError(e.code, e.message, agent_id=aid, run_id=rid)
+        return {
+            "agent_id": aid,
+            "name": name,
+            "run_id": rid,
+            "scope": sid,
+            "state": self.store.run(sid, rid)["state"],
+            "cwd": cwd,
+            **views.model_settings(self.store.agent(sid, aid)),
+        }
 
     async def close_agent(self, a, p):
         aid, sid = a["id"], a["scope"]
@@ -1087,8 +1113,7 @@ class Runtime:
             }
         if a["state"] == "orphaned" or a["cleanup"] == "unknown":
             raise AgentError("orphaned_worker", "Close/reap the orphan before respawn; old pipes cannot be reattached")
-        async with self.admission:
-            w = await self._boot_worker(a)
+        w = await self._boot_worker(a)
         rid = None
         if p.get("message"):
             msg = delegated_text(text(p["message"]), "Continue this delegated task:\n")
@@ -1180,8 +1205,7 @@ class Runtime:
                 raise AgentError(
                     "cleanup_unconfirmed", "Previous worker cleanup could not be verified; inspect before respawn"
                 )
-            async with self.admission:
-                w = await self._boot_worker(a)
+            w = await self._boot_worker(a)
             mode = "send"
         else:
             a, w = await self.ensure_loaded(a, "send", wake=mode != "steer")

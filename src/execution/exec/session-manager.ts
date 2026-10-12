@@ -82,6 +82,7 @@ interface ExecSession {
   exposed: boolean;
   readonly exitCode: number | undefined;
   readonly terminating: boolean;
+  readonly outputError: string | undefined;
 }
 
 export type ExecSessionUpdateCallback = (result: UnifiedExecResult) => void;
@@ -214,6 +215,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 
   function finalizeSession(session: ExecSession, reason: ExecSessionChangeReason = "exit"): void {
     if (session.finalized) return;
+    if (session.outputError) session.buffer.archive?.markIncomplete(session.outputError);
     session.finalized = true;
     for (const listener of exitListeners) {
       listener(session.id, session.command);
@@ -228,6 +230,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
   }
 
   function appendOutput(session: ExecSession, text: string): void {
+    if (session.outputError) session.buffer.archive?.markIncomplete(session.outputError);
     if (text.length === 0) return;
     session.buffer.archive?.append(text);
     const output = session.tty ? text : normalizePipeOutput(text);
@@ -293,6 +296,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
         exposed: false,
         get exitCode() { return processHandle.exitCode; },
         get terminating() { return processHandle.terminating; },
+        get outputError() { return processHandle.outputError; },
       };
       sessions.set(session.id, session);
       rememberCommand(session.id, session.command);

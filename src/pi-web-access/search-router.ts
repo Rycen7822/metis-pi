@@ -4,7 +4,8 @@ import { CredentialResolutionError } from "./credential-source.ts";
 import { isGeminiApiAvailable } from "./gemini-api.ts";
 import { searchWithGemini, searchWithGeminiApi, isGeminiWebOptionallyAvailable } from "./gemini-search.ts";
 import { isPerplexityAvailable, searchWithPerplexity } from "./perplexity.ts";
-import { SearchHttpError, type SearchResult, type SearchResponse, type SearchOptions } from "./search-types.ts";
+import { SearchHttpError, SearchUnsupportedFilterError, type SearchResult, type SearchResponse, type SearchOptions } from "./search-types.ts";
+import { filterSearchResponseByDomain } from "./search-response-policy.ts";
 import { ALL_SEARCH_PROVIDERS, SEARCH_PROVIDERS, RESOLVED_SEARCH_PROVIDERS, providerLabel, type ProviderAvailability, type ResolvedSearchProvider, type SearchProvider, type SearchProviderSelection } from "./search-providers.ts";
 import { isExaAvailable, searchWithExa } from "./exa.ts";
 import { isBraveAvailable, searchWithBrave } from "./brave.ts";
@@ -244,6 +245,10 @@ function isAbortError(err: unknown): boolean {
 	return errorMessage(err).toLowerCase().includes("abort");
 }
 
+function stopsAutomaticFallback(err: unknown): boolean {
+	return err instanceof SearchUnsupportedFilterError || isAbortError(err);
+}
+
 async function tryOpenAIInAuto(query: string, options: FullSearchOptions, fallbackErrors: string[]): Promise<AttributedSearchResponse | null> {
 	try {
 		if (await isOpenAISearchAvailable(options.extensionContext)) {
@@ -251,7 +256,7 @@ async function tryOpenAIInAuto(query: string, options: FullSearchOptions, fallba
 			return { ...result, provider: "openai" };
 		}
 	} catch (err) {
-		if (isAbortError(err)) throw err;
+		if (stopsAutomaticFallback(err)) throw err;
 		fallbackErrors.push(`OpenAI: ${errorMessage(err)}`);
 	}
 	return null;
@@ -282,7 +287,9 @@ function classifyProviderError(provider: ResolvedSearchProvider, err: unknown): 
 	const text = openAIStreamError ? lower.replace(/_/g, " ") : lower;
 	let kind: SearchProviderErrorKind = "unknown";
 	const mentionsUnsupportedWebSearch = /(?:web[_ -]?search|web[_ -]?search_preview|(?:the )?tool)\b.*\b(?:unsupported|not supported|does not support|doesn't support|unknown|unrecognized|unavailable|not found)|\b(?:unsupported|not supported|does not support|doesn't support|unknown|unrecognized|unavailable|not found)\b.*\b(?:web[_ -]?search|web[_ -]?search_preview|(?:the )?tool)/i.test(lower);
-	if (err instanceof CredentialResolutionError || /(?:api )?key (?:not found|missing)|credential resolution/.test(lower)) {
+	if (err instanceof SearchUnsupportedFilterError) {
+		kind = "invalid-request";
+	} else if (err instanceof CredentialResolutionError || /(?:api )?key (?:not found|missing)|credential resolution/.test(lower)) {
 		kind = "credential";
 	} else if (isAbortError(err)) {
 		kind = "aborted";
@@ -484,7 +491,10 @@ async function searchWithProviders(
 	for (let index = 0; index < settled.length; index++) {
 		const outcome = settled[index];
 		if (outcome.status === "fulfilled") {
-			successes.push(outcome.value);
+			const response = outcome.value;
+			// Baizhi applies the native MCP domain filter but exposes opaque output without a source schema.
+			successes.push(response.provider === "baizhi" && response.results.length === 0
+				? response : { ...response, ...filterSearchResponseByDomain(response, options.domainFilter) });
 		} else {
 			failures.push({ provider: providers[index], error: errorMessage(outcome.reason) });
 		}
@@ -555,7 +565,7 @@ async function searchWithConfiguredRouting(
 	throw new Error(`Configured search routing exhausted:\n  - ${diagnostics.join("\n  - ")}`);
 }
 
-export async function search(query: string, options: FullSearchOptions = {}): Promise<AttributedSearchResponse> {
+async function searchWithoutDomainProjection(query: string, options: FullSearchOptions): Promise<AttributedSearchResponse> {
 	const config = getSearchConfig();
 	const provider = options.provider === undefined || options.provider === "auto"
 		? config.searchProvider
@@ -578,7 +588,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithSearXNG(query, options);
 			return { ...result, provider: "searxng" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`SearXNG: ${errorMessage(err)}`);
 		}
 	}
@@ -595,7 +605,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithExa(query, options);
 			if (result) return { ...result, provider: "exa" };
 		} catch (err) {
-			if (err instanceof CredentialResolutionError || isAbortError(err)) throw err;
+			if (err instanceof CredentialResolutionError || stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
 		}
 	}
@@ -610,7 +620,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithBrave(query, options);
 			return { ...result, provider: "brave" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Brave: ${errorMessage(err)}`);
 		}
 	}
@@ -620,7 +630,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithParallel(query, options);
 			return { ...result, provider: "parallel" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Parallel: ${errorMessage(err)}`);
 		}
 	}
@@ -630,7 +640,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithTinyFish(query, options);
 			return { ...result, provider: "tinyfish" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`TinyFish: ${errorMessage(err)}`);
 		}
 	}
@@ -640,7 +650,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithSearch1API(query, options);
 			return { ...result, provider: "search1api" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Search1API: ${errorMessage(err)}`);
 		}
 	}
@@ -650,7 +660,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithSearchinfinity(query, options);
 			return { ...result, provider: "searchinfinity" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Searchinfinity: ${errorMessage(err)}`);
 		}
 	}
@@ -660,7 +670,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithQuerit(query, options);
 			return { ...result, provider: "querit" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Querit: ${errorMessage(err)}`);
 		}
 	}
@@ -670,7 +680,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithTavily(query, options);
 			return { ...result, provider: "tavily" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Tavily: ${errorMessage(err)}`);
 		}
 	}
@@ -680,7 +690,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithFirecrawl(query, options);
 			return { ...result, provider: "firecrawl" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Firecrawl: ${errorMessage(err)}`);
 		}
 	}
@@ -690,7 +700,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithJina(query, options);
 			return { ...result, provider: "jina" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Jina: ${errorMessage(err)}`);
 		}
 	}
@@ -700,7 +710,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithSerpdive(query, options);
 			return { ...result, provider: "serpdive" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`SERPdive: ${errorMessage(err)}`);
 		}
 	}
@@ -710,7 +720,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithKagi(query, options);
 			return { ...result, provider: "kagi" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Kagi: ${errorMessage(err)}`);
 		}
 	}
@@ -720,7 +730,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithBocha(query, options);
 			return { ...result, provider: "bocha" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Bocha: ${errorMessage(err)}`);
 		}
 	}
@@ -730,7 +740,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithOllama(query, options);
 			return { ...result, provider: "ollama" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Ollama: ${errorMessage(err)}`);
 		}
 	}
@@ -740,7 +750,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithPerplexity(query, options);
 			return { ...result, provider: "perplexity" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (stopsAutomaticFallback(err)) throw err;
 			fallbackErrors.push(`Perplexity: ${errorMessage(err)}`);
 		}
 	}
@@ -749,7 +759,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		const geminiResult = await searchWithGemini(query, options, false);
 		if (geminiResult) return { ...geminiResult, provider: "gemini" };
 	} catch (err) {
-		if (isAbortError(err)) throw err;
+		if (stopsAutomaticFallback(err)) throw err;
 		fallbackErrors.push(`Gemini: ${errorMessage(err)}`);
 	}
 
@@ -770,3 +780,13 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	);
 }
 
+
+export async function search(query: string, options: FullSearchOptions = {}): Promise<AttributedSearchResponse> {
+	const response = await searchWithoutDomainProjection(query, options);
+	// Selected-provider responses were projected before aggregation. Preserve their sections and errors.
+	if (response.providerResponses || (response.provider === "baizhi" && response.results.length === 0)) return response;
+	return {
+		...response,
+		...filterSearchResponseByDomain(response, options.domainFilter),
+	};
+}

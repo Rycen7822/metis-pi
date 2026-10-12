@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { type BrowserCookieOutcome, type BrowserCookieDiagnosticDetails, type CookieMap, getGoogleCookies } from "./chrome-cookies.ts";
 import { getBrowserCookieSelectionFromConfig, isBrowserCookieAccessAllowed, normalizeChromeProfile } from "./gemini-web-config.ts";
+import { webFetch } from "./proxy-transport.ts";
 
 const GEMINI_APP_URL = "https://gemini.google.com/app";
 const GEMINI_STREAM_GENERATE_URL =
@@ -24,14 +25,9 @@ const MODEL_HEADERS: Record<string, string> = {
 
 const REQUIRED_COOKIES = ["__Secure-1PSID", "__Secure-1PSIDTS"];
 
-// Gemini Web talks to Google's frontend inside the host agent (pi), whose
-// global undici dispatcher runs HTTP/1.1 with undici's default 16 KiB
-// maxHeaderSize. Google's gemini.google.com /app response headers routinely
-// exceed that budget over HTTP/1.1, so cookie-bearing requests fail with
-// UND_ERR_HEADERS_OVERFLOW surfaced as "fetch failed". Route these requests
-// through a dedicated undici Agent with a larger header budget instead; fall
-// back to the ambient global fetch when undici is not resolvable (e.g.
-// standalone test environments).
+// Google frontend headers exceed the default 16 KiB HTTP/1.1 budget.
+// Direct requests use a larger dedicated dispatcher with its matching fetch.
+// Proxy selection remains with the explicit web transport.
 let geminiFetchImpl: typeof fetch | null = null;
 
 // Test-only hook: lets tests inject a simulated transport instead of patching
@@ -61,16 +57,7 @@ export function createGeminiFetch(undiciImpl: typeof import("undici")): typeof f
 		maxHeaderSize: GEMINI_MAX_HEADER_SIZE,
 		pipelining: 1,
 	});
-	// undici 8 types its fetch request/response structurally differently from
-	// the DOM lib types (duplex/textStream on Request, Symbol.dispose on
-	// Headers); the shape this module uses (status, ok, headers.get, text) is
-	// identical, so bridge the two.
-	type UndiciFetch = typeof undiciImpl.fetch;
-	return (input, init) =>
-		undiciImpl.fetch(
-			input as unknown as Parameters<UndiciFetch>[0],
-			{ ...init, dispatcher: agent } as unknown as Parameters<UndiciFetch>[1],
-		) as unknown as Promise<Response>;
+	return (input, init) => webFetch(input, { ...init, dispatcher: agent }, undiciImpl.fetch as unknown as typeof fetch);
 }
 
 export async function resolveGeminiFetch(): Promise<typeof fetch> {
@@ -81,7 +68,7 @@ export async function resolveGeminiFetch(): Promise<typeof fetch> {
 	try {
 		undici = await import("undici");
 	} catch {
-		geminiFetchImpl = fetch;
+		geminiFetchImpl = webFetch;
 		return geminiFetchImpl;
 	}
 

@@ -198,6 +198,8 @@ export async function searchWithDegoog(query: string, options: SearchOptions = {
 			signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal,
 		}, {
 			...loadSsrfConfig(),
+			fetch: options.fetch,
+			...(options.lookup ? { lookup: options.lookup } : {}),
 			// Credentials and reverse-proxy headers must not follow a cross-origin redirect.
 			onRedirect: ({ from, to, init }) => from.origin === to.origin
 				? init

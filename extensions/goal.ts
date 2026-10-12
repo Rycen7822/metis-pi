@@ -14,6 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
+import { METIS_EVENTS, isGoalSnapshotRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -331,10 +332,12 @@ export default function goalExtension(pi: ExtensionAPI) {
     inputGeneration++;
     clearOwed();
   });
-  const stopGoalSnapshot = pi.events.on("metis:goal-snapshot", (request: any) => {
+  const stopGoalSnapshot = pi.events.on(METIS_EVENTS.goalSnapshot, (request) => {
+    if (!isGoalSnapshotRequest(request)) return;
     request.snapshot = state.snapshot();
   });
-  const stopOccFinished = pi.events.on("metis:occ-finished", (event: any) => {
+  const stopOccFinished = pi.events.on(METIS_EVENTS.occFinished, (event) => {
+    if (!isOccFinished(event)) return;
     if (!owed) return;
     if (event.cancelled) {
       clearOwed();
@@ -344,7 +347,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     // can see user input that was invisibly queued during maintenance.
     pi.sendUserMessage(`/goal __continue_${owed.token}`, { expandPromptTemplates: true });
   });
-  const stopCheckpointCancellation = pi.events.on("metis:checkpoint-request-cancelled", () => {
+  const stopCheckpointCancellation = pi.events.on(METIS_EVENTS.checkpointRequestCancelled, () => {
     requestInvalidated = true;
     pendingError = undefined;
     clearOwed();
@@ -554,8 +557,8 @@ export default function goalExtension(pi: ExtensionAPI) {
       }
     }
 
-    const maintenance = { deferGoal: false };
-    pi.events.emit("metis:occ-status", maintenance);
+    const maintenance: OccStatusRequest = { deferGoal: false };
+    pi.events.emit(METIS_EVENTS.occStatus, maintenance);
     if (maintenance.deferGoal && !ctx.hasPendingMessages() && !state.continuationQueued) {
       owed = {
         token: randomUUID(),

@@ -620,8 +620,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     userTimestamps = undefined;
     fullscreenLayout?.dispose();
     selectionCopy?.dispose();
-    // Chrome restore: only OUR factories are removed (identity comparison);
-    // a successor extension's editor/footer/header is left untouched.
+    // Chrome restore checks the selected editor's identity and resets the
+    // public footer/header/widget slots installed during this session.
     chrome.restore();
     gitChanges.dispose();
     session.writeChanges.clear();

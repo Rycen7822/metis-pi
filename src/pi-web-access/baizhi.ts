@@ -1,4 +1,5 @@
 import { SearchHttpError } from "./search-types.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig } from "./utils.ts";
 import { isIP } from "node:net";

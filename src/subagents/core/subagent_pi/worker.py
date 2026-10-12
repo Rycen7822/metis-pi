@@ -487,7 +487,7 @@ def ownership(directory: Path, a, *, descendants_confirmed=False) -> dict:
 async def stop_group(pgid, graceful_guard=False):
     """Signal and verify a group whose ownership the caller has already proved."""
     for sig, wait in ((signal.SIGTERM, 1.5), (signal.SIGKILL, 1.0)):
-        if not group_members(pgid):
+        if not await asyncio.to_thread(group_members, pgid):
             break
         # A current guard forwards TERM and reaps tools; avoid sending Pi a
         # duplicate signal while its once-only shutdown handler is disposing.
@@ -496,9 +496,9 @@ async def stop_group(pgid, graceful_guard=False):
                 os.kill(pgid, signal.SIGCONT)
             (os.kill if graceful_guard and sig == signal.SIGTERM else os.killpg)(pgid, sig)
         until = time.monotonic() + wait
-        while group_members(pgid) and time.monotonic() < until:
+        while time.monotonic() < until and await asyncio.to_thread(group_members, pgid):
             await asyncio.sleep(0.025)
-    return "unknown" if group_members(pgid) else "verified"
+    return "unknown" if await asyncio.to_thread(group_members, pgid) else "verified"
 
 
 async def stop_owned_process(directory, agent, proc):

@@ -1,4 +1,5 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -157,7 +158,7 @@ function buildSearchQuery(query: string, filters: DomainFilters): string {
 	if (filters.include.length === 1) {
 		parts.push(`site:${filters.include[0]}`);
 	} else if (filters.include.length > 1) {
-		parts.push(filters.include.map((domain) => `site:${domain}`).join(" OR "));
+		parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
 	}
 	for (const domain of filters.exclude) {
 		parts.push(`-site:${domain}`);

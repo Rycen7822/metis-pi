@@ -98,7 +98,7 @@ test("Parallel MCP web_fetch is available only through explicit hosted fetch rou
 			return new Response("<html><body></body></html>", { status: 200, headers: { "content-type": "text/html" } });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/article");
+		const result = await extractContent("https://example.com/article", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 		console.log(JSON.stringify({ calls, result }));
 	`, { PI_CODING_AGENT_DIR: enabledHome });
 	assert.equal(enabled.status, 0, enabled.stderr);
@@ -111,7 +111,7 @@ test("Parallel MCP web_fetch is available only through explicit hosted fetch rou
 		const calls = [];
 		globalThis.fetch = async (url) => { calls.push(String(url)); return new Response("<html><body></body></html>", { status: 200, headers: { "content-type": "text/html" } }); };
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/article");
+		const result = await extractContent("https://example.com/article", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 		console.log(JSON.stringify({ calls, error: result.error }));
 	`, { PI_CODING_AGENT_DIR: disabledHome });
 	assert.equal(disabled.status, 0, disabled.stderr);
@@ -128,7 +128,7 @@ test("Parallel MCP stays outside provider all and the default fetch route", asyn
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
 		try { await search("all", { provider: "all" }); } catch {}
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		await extractContent("https://example.com/article");
+		await extractContent("https://example.com/article", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 		console.log(JSON.stringify(calls));
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);

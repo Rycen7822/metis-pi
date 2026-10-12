@@ -194,7 +194,7 @@ test("domain filters are sent to the engine as site: operators and re-applied lo
 
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	assert.equal(output.q, "sdk docs site:github.com OR site:example.com");
+	assert.equal(output.q, "sdk docs (site:github.com OR site:example.com)");
 	// site: narrows the SERP; the same filter still runs on what came back, so an
 	// excluded subdomain Google returned anyway does not reach the caller.
 	assert.deepEqual(output.urls, ["https://github.com/nicobailon/pi-web-access"]);

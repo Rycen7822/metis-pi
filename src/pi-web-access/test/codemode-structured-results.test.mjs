@@ -3,9 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
 // Codemode scripts receive a tool's structuredContent (issue #516). These tests
-// drive the registered Pi tools with only global fetch mocked.
+// drive real Pi tools and extraction code with an explicit fetch fixture.
 const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
 const root = await mkdtemp(join(tmpdir(), "pi-codemode-structured-"));
@@ -18,6 +19,7 @@ await writeFile(join(root, "web-search.json"), JSON.stringify({
 	fetchRouting: { providers: ["http"] },
 }));
 
+const extractionFixture = injectExtractFetch(originalFetch);
 const { default: initializeExtension } = await import("../index.ts");
 const { clearResults } = await import("../storage.ts");
 const tools = [];
@@ -52,10 +54,12 @@ beforeEach(() => {
 		if (url === badUrl) return new Response("Forbidden", { status: 403 });
 		throw new Error("Unexpected fetch: " + url);
 	};
+	extractionFixture.setFetch(globalThis.fetch);
 });
 
 after(async () => {
 	clearResults();
+	extractionFixture.dispose();
 	globalThis.fetch = originalFetch;
 	process.env = originalEnv;
 	await rm(root, { recursive: true, force: true });

@@ -36,6 +36,8 @@
 chrome 通过结构类型和注入能力访问宿主。动画帧不扫描会话、读磁盘或查询额度。显示适配保留原执行、结果和模型正文。
 宿主事件类型及终端字符宽度、grapheme 截断复用 Pi 的公开接口。
 
+`src` 包含领域逻辑和宿主适配模块；纯领域模块保持宿主无关，适配模块可以导入 Pi 公共 API。扩展间的 Metis 事件名称和 payload 合同归 `collaboration.ts`；监听方先检查事实字段，压缩所有权查询和压缩前等待请求保留同步响应合同。
+
 ## 执行与上下文
 
 ```mermaid
@@ -43,7 +45,7 @@ flowchart LR
     Pi[Pi provider / OAuth / 工具与 compaction] --> UI[显示与独立功能]
     Pi --> Native[原生 codemode]
     Native --> Tools[PTY / 图片 / edit-write Fusion]
-    Tools --> Archive[完整输出与 nested 归档]
+    Tools --> Archive[输出与 nested 归档 / 完整性]
     Archive --> Condense[condense 投影 / OCC / 回读]
     Condense --> Pi
 ```
@@ -52,11 +54,13 @@ Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 仅�
 
 显式启用 MCP 后，每个服务器由一个 session owner 共享连接；每个工具独立注册，调用经过 Pi 原执行链。目录缓存不授权执行，实时 schema/身份变化会拒绝旧调用；空闲回收、取消和关闭属于该 owner。MCP 协议与 OAuth 复用 Pi 公共包；服务器配置、凭据及 CLI 保持原生格式。切换步骤见 [配置](configuration.md#mcp)。
 
-condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。错误清理按 occurrence 配对，程序派生身份不由用户正文推断。配置模块拥有默认值和领域合法值，设置预设拥有 UI 标签；保存负责持久化，运行时应用配置并按相关政策决定失效范围。显示设置不会取消领域工作。OCC 由 condense 在 `session_before_compact` 准备，执行模块只提供忙状态，goal 暂存续跑并在完成后复核；没有第二个 compaction owner。
+condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。错误清理按 occurrence 配对，程序派生身份不由用户正文推断。配置模块拥有默认值和领域合法值，设置预设拥有 UI 标签；保存负责持久化，运行时应用配置并按相关政策决定失效范围。显示设置不会取消领域工作。Pi 发起压缩并提供边界；普通模型由 condense 的 OCC 准备候选，Codex 远端检查点及其原文恢复由 `codex-compaction.ts` 发布，OCC 查询该所有权后让出同一次请求。执行模块只提供忙状态，goal 暂存续跑并在完成后复核。
 
-执行 bridge 持有每个进程的字节解码、序号、退出和串行轮询；manager 组合 process handle，独立持有等待、交付、保留与展示状态。查询分页共享字节来源，不把历史条目或证据目录伪装成工具执行。
+执行 bridge 持有每个进程的字节解码、序号、退出和串行轮询；manager 组合 process handle，独立持有等待、交付、保留与展示状态。输出流尚未关闭或缓冲已淘汰未读数据时，归档记录不完整及其原因，并保留真实进程退出码。查询分页共享字节来源，不把历史条目或证据目录伪装成工具执行。
 
-Web 搜索的公共结果归 `search-types.ts`，provider 身份与标签归 `search-providers.ts`，选择与回退归 `search-router.ts`；具体 adapter 保留各服务的协议、鉴权、能力与计费差异。HTTP 失败事实与展示文案分开，非空正文不代替完整传输或模型完成。网络代理和 SSRF 校验使用同一端口匹配规则；Curator 的资源与 Cookie 诊断归具体实例或操作。
+Web 搜索的公共结果归 `search-types.ts`，provider 身份与标签归 `search-providers.ts`，选择与回退归 `search-router.ts`；具体 adapter 保留各服务的协议、鉴权、能力与计费差异。`search-response-policy.ts` 保证筛选后答案、来源和内联正文一致，底层域名匹配与答案格式化各自保持纯粹。`search-error-redaction.ts` 统一诊断脱敏，保留 HTTP 状态、错误名称和无需脱敏时的原始异常；活动结算仍归具体 adapter。HTTP 失败事实与展示文案分开，非空正文不代替完整传输或模型完成。
+
+网页请求使用显式 transport，不改写进程全局 fetch；代理和 SSRF 校验使用同一实际路由，默认将已验证的 DNS 地址固定到连接。Curator 的资源与 Cookie 诊断归具体实例或操作；页面使用固定版本和完整性校验的 Markdown parser/sanitizer，结果正文不能提供 UI 身份属性，选择操作只读取页面自身创建的卡片与控件。
 
 子代理核心由 metis 完全维护并随包交付，不依赖独立 subagent-pi 仓库或运行包。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；接收证明校验 session、scope、receipt 和正文 digest。不确定交付保留账本，wait、结果读取和状态检查按已交付票据消费终态通知；列表保留 attention，结果文件支持重复读取。Worker 的进程状态与每次 run 的投影分开，Runtime 仍是任务推进者。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[管理入口](subagents/cli.md)。
 

@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "target": "x86_64-unknown-linux-musl",
+  "source": {
+    "root": "native/tools",
+    "baseRevision": "70e463a2bc9f5896f6735ec1851236c16dc6d001",
+    "baseRef": "code-mode-host-rust-v0.145.0-metis.3-77-g70e463a",
+    "modified": true,
+    "verification": "Requires a Git checkout containing native/tools; installed packages contain helper bytes only.",
+    "sha256": "8adb142792e19173ef62d9b1ae9d7c58b1b95799d505108bf55b22fa76338a5f",
+    "inputs": [
+      {
+        "path": "native/tools/Cargo.lock",
+        "sha256": "c12ecbb8ec62c87bab24239bb8c7de94354fdc5ce3710c1ff38a6de24621a71d"
+      },
+      {
+        "path": "native/tools/Cargo.toml",
+        "sha256": "d9f8fe865d965cc79a5fd68d8a68e9d76c7b94ab4e9757ea89a3847b81284cd9"
+      },
+      {
+        "path": "native/tools/build-linux-x64.mjs",
+        "sha256": "3f8c0a3a414aa0aabb13aaf1604c5c6e6a3ca91472f115b0e7ea7edc511309c5"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-image/Cargo.toml",
+        "sha256": "302e4752d313b29e280414f01f900fb83c5336ccf3512f742c86df3b9d347a49"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-image/error.rs",
+        "sha256": "c5dac9746d1ee1efd2a0d6433f384bd2554db29795b17cdf0f75883924d00a39"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-image/image_tests.rs",
+        "sha256": "0002c454d2498a6ef631fc98d4858ddb68eda1e9d400fb1c9f39e7432e8a93fb"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-image/lib.rs",
+        "sha256": "443a541a3949dab36fce25237f8a3ae1ace38bce47ef4a2adba173158a35f78c"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/Cargo.toml",
+        "sha256": "5b2c2e4a625941e25e8e5bedf7d209096f159657a952ef6a0429b45459a6d4c6"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/lib.rs",
+        "sha256": "99f3d8abca8e62113c16d79a634752a7f0f612c93faa05b12f5841af2f29b4eb"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/pipe.rs",
+        "sha256": "a1c9a32ee75ba7f959307cf962c6a36bebb5c2e43a2fb1fb4bc0ac4fcf8b6811"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/pipe_tests.rs",
+        "sha256": "f9a8fc8902a869b49687d3b295abf956d7f326569b1058e3fca4d6d125cc47d4"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/process.rs",
+        "sha256": "a62cbe9482a66c4cfb6a0082acc1a194b32d73a66a116e4630fe15f709ea5626"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/process_group.rs",
+        "sha256": "ae577b4c772623fdb257e4bc0b5b0b3a805db17ba521178e8b5962a92e77d391"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/pty.rs",
+        "sha256": "7af080346d83e1e1addab3bada4d6b4232a701852537d33f6a7e7c26b549d8e0"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/tests.rs",
+        "sha256": "90267506248769b50931b5f5b58441a217453dc50ce3b4839b8afe5c21f83d26"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/conpty.rs",
+        "sha256": "0dc2739c7df7f84dafe65658db3802d917dd719afa1dfa40663e5ae9609aa8d0"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/job.rs",
+        "sha256": "8b00360743d62541e5a75859c07455984a0e2fd96f2f82e07d40643fb548fbe8"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/mod.rs",
+        "sha256": "4f355ebc286683984158ff5b3cc3994c55e8b4eaea39775da905d91fd1fbbb14"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/procthreadattr.rs",
+        "sha256": "f143dff9ff9ce080e617e6bae2e1864e7f59b6f83569eae18fd7f02e997a1956"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/win/psuedocon.rs",
+        "sha256": "e4686f0fed3326ba716c2677fc0e39833888bf11deddaf7410549fadbe458401"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/windows_input.rs",
+        "sha256": "bac4b55825fe7becafb532c00d98188cd253a0ce07525f6474f8c76ad3681bad"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/windows_input_tests.rs",
+        "sha256": "dca6cc92c081ca7a3bfdaaec13cc7bbf32185e3c0b343e6def76d2039a2a6921"
+      },
+      {
+        "path": "native/tools/crates/codex-utils-pty/windows_tests.rs",
+        "sha256": "6611b880c61d1c9cb8ffc45bcffc1462738509ef8a1886e6ceed17b8c250044a"
+      },
+      {
+        "path": "native/tools/exec/Cargo.toml",
+        "sha256": "3941b995ba34d2bb0d19bf1e927b20f87ef79186c69e659afd6d9d3d04cbbb24"
+      },
+      {
+        "path": "native/tools/exec/lib.rs",
+        "sha256": "d1e16b97c5c3cd36fb949964a5d721ac90c251f62d32014c396e1f518bd618fc"
+      },
+      {
+        "path": "native/tools/exec/local_process.rs",
+        "sha256": "1b9d6f02fbf1f2b30c56a9b3fe24168a957d4953f12c4c801ecbd397648bcef7"
+      },
+      {
+        "path": "native/tools/exec/main.rs",
+        "sha256": "957a5398b1ae0e68a1309033b883be41df9b9a635fb2506ccbfe412f4c47bf98"
+      },
+      {
+        "path": "native/tools/exec/protocol.rs",
+        "sha256": "7dc0ebfea4496a6968ac6a69be843e3df1a6284e83176cc04e0e5711b2705a6a"
+      },
+      {
+        "path": "native/tools/view-image/Cargo.toml",
+        "sha256": "52f477e4119427dc9a5cf4948b25ef20f6ef359db0a6617d467408c6361cab5b"
+      },
+      {
+        "path": "native/tools/view-image/main.rs",
+        "sha256": "8f68d98255389d540c6794318d4871e5f580cb573898b4f2fe15d16670735b0e"
+      }
+    ]
+  },
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "--manifest-path",
+      "native/tools/Cargo.toml",
+      "--release",
+      "--locked",
+      "--offline",
+      "--target",
+      "x86_64-unknown-linux-musl",
+      "--bin",
+      "exec_bridge",
+      "--bin",
+      "view_image"
+    ],
+    "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "linker": "musl-gcc",
+    "linkerVersion": "x86_64-linux-gnu-gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "rustFlags": [
+      "-C",
+      "target-feature=+crt-static",
+      "-C",
+      "target-cpu=x86-64"
+    ]
+  },
+  "assets": [
+    {
+      "path": "assets/native-tools/exec/linux-x64/exec_bridge",
+      "sha256": "e2f7fa55ae9ba063ce3f0a5928bb341b39a9f835cfb70c44462b6ba8d97a9384",
+      "bytes": 1262416,
+      "abi": {
+        "machine": "x86-64",
+        "interpreter": null,
+        "needed": [],
+        "glibcVersions": []
+      }
+    },
+    {
+      "path": "assets/native-tools/view-image/linux-x64/view_image",
+      "sha256": "5f3f3af012b7f23da49c7e892ca49d2e21c8464ac9242b6b2b8d4b0abcef4b91",
+      "bytes": 1507936,
+      "abi": {
+        "machine": "x86-64",
+        "interpreter": null,
+        "needed": [],
+        "glibcVersions": []
+      }
+    }
+  ]
+}

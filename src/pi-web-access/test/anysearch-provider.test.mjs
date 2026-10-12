@@ -44,7 +44,7 @@ test("AnySearch supports anonymous success with a minimal request and gated cont
 			return new Response(${JSON.stringify(successBody())}, { status: 200 });
 		};
 		const { searchWithAnySearch } = await import(${JSON.stringify(anysearchModuleUrl)});
-		const withoutContent = await searchWithAnySearch("anonymous", { numResults: 3, recencyFilter: "week", domainFilter: ["example.com"] });
+		const withoutContent = await searchWithAnySearch("anonymous", { numResults: 3, domainFilter: ["example.com"] });
 		const withContent = await searchWithAnySearch("anonymous", { includeContent: true });
 		console.log(JSON.stringify({ captured, withoutContent, withContent }));
 	`, { PI_CODING_AGENT_DIR: home });

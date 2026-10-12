@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { after, beforeEach, test } from "node:test";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
 // web_search calls a codemode script makes (tool_call with parentToolCallId) must not
-// curate or fetch in the background (issue #516). Only global fetch is mocked.
+// curate or fetch in the background (issue #516). Extraction receives the same
+// fetch fixture explicitly while all entry and extraction business code stays real.
 const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
 const root = await mkdtemp(join(tmpdir(), "pi-codemode-nested-"));
@@ -18,6 +20,7 @@ await writeFile(join(root, "web-search.json"), JSON.stringify({
 	fetchRouting: { providers: ["http"] },
 }));
 
+const extractionFixture = injectExtractFetch(originalFetch);
 const { default: initializeExtension } = await import("../index.ts");
 const { clearResults } = await import("../storage.ts");
 const tools = [];
@@ -47,10 +50,12 @@ beforeEach(() => {
 		if (url === pageUrl) return new Response("Full page body.", { headers: { "content-type": "text/plain" } });
 		throw new Error("Unexpected fetch: " + url);
 	};
+	extractionFixture.setFetch(globalThis.fetch);
 });
 
 after(async () => {
 	clearResults();
+	extractionFixture.dispose();
 	globalThis.fetch = originalFetch;
 	process.env = originalEnv;
 	await rm(root, { recursive: true, force: true });

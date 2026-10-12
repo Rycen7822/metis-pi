@@ -8,6 +8,7 @@
 // packages (src/ rule) while rendering exactly what it rendered before.
 
 import { registerProduct, productFor, publishRows } from "../selection-copy/model.ts";
+import { stripAnsi } from "../selection-copy/wrap.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
 import { peekHintText } from "../thinking-view.ts";
 import type { PeekWindow, ThinkingView, ThinkingViewControl } from "../thinking-view.ts";
@@ -175,7 +176,7 @@ export class CodexThinkingRailComponent implements Component {
     // Per-row shift: rows already carrying a rail pass through WITHOUT the
     // prefix, so their provenance shift is 0, not railCells.
     const shifts = childLines.map((line) => {
-      const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
+      const stripped = stripAnsi(line);
       return stripped.startsWith("▏") || stripped.startsWith("| ") ? 0 : railCells;
     });
     this.#cache = childLines.map((line, i) => (shifts[i] === 0 ? line : `${rail}${line}`));

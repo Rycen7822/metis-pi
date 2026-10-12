@@ -1,4 +1,7 @@
-import { SearchHttpError } from "./search-types.ts";
+import { redactSearchFailure } from "./search-error-redaction.ts";
+import { SearchHttpError, SearchUnsupportedFilterError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { loadWebAccessConfig } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -48,10 +51,6 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 	});
 }
 
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function invalidResponse(message: string): Error {
 	return new Error(`AnySearch API returned invalid response: ${message}`);
 }
@@ -96,9 +95,12 @@ export function isAnySearchAvailable(): boolean {
 }
 
 export async function searchWithAnySearch(query: string, options: AnySearchSearchOptions = {}): Promise<SearchResponse> {
+	if (options.recencyFilter) throw new SearchUnsupportedFilterError("AnySearch search adapter does not support recencyFilter");
 	const apiKey = await getApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
-	const body = { query, max_results: numResults };
+	const filters = normalizeDomainFilters(options.domainFilter);
+	const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
+	const body = { query, max_results: hasDomains ? 20 : numResults };
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let response: Response;
 
@@ -115,16 +117,10 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 				: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
 		});
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, failure.message);
+		throw failure.error;
 	}
 
 	if (!response.ok) {
@@ -151,14 +147,15 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 	}
 
 	activityMonitor.logComplete(activityId, response.status);
-	const results = data.data.results.slice(0, numResults).map((result) => ({
+	const retained = data.data.results.filter(result => matchesDomainFilter(result.url, filters)).slice(0, numResults);
+	const results = retained.map((result) => ({
 		title: result.title,
 		url: result.url,
 		snippet: result.snippet,
 	}));
 	const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
 	if (options.includeContent) {
-		const inlineContent: ExtractedContent[] = data.data.results.slice(0, numResults)
+		const inlineContent: ExtractedContent[] = retained
 			.filter(result => result.content.length > 0)
 			.map(result => ({ url: result.url, title: result.title, content: result.content, error: null }));
 		if (inlineContent.length > 0) mapped.inlineContent = inlineContent;

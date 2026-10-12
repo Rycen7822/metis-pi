@@ -51,7 +51,7 @@ for (const operation of ["search", "fetch"]) {
 			try {
 				${operation === "search"
 					? 'await searchWithOllama("malformed search");'
-					: 'await extractWithOllama("https://example.com/source", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });'}
+					: 'await extractWithOllama("https://example.com/source", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });'}
 			} catch (err) { error = err.message; }
 			console.log(JSON.stringify({ error, requests, entries: activityMonitor.getEntries() }));
 		`);

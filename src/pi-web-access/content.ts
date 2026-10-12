@@ -47,6 +47,8 @@ export interface ExtractOptions {
 	rejectDirectImages?: string;
 	/** Custom DNS resolver used for SSRF validation. Primarily a test seam. */
 	lookup?: Lookup;
+	/** Request injection; URL checks and redirect policy remain owned by extraction. */
+	fetch?: typeof globalThis.fetch;
 }
 
 export function extractHeadingTitle(text: string): string | null {

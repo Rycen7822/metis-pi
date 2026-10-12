@@ -3,14 +3,15 @@ import { fileURLToPath } from "node:url";
 import { runtimePackage } from "../src/subagents/client.ts";
 import { SubagentSession } from "../src/subagents/session.ts";
 import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/rendering.ts";
-import { readMetisConfig } from "../src/metis-config.ts";
+import { isMetisConfigTable, readMetisConfig } from "../src/metis-config.ts";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
   const agentDir = getAgentDir();
   let runtime: ReturnType<typeof runtimePackage>;
   try {
-    const enabled = readMetisConfig(agentDir).config["subagents"]["enabled"];
+    const section = readMetisConfig(agentDir).config["subagents"];
+    const enabled = isMetisConfigTable(section) ? section["enabled"] : undefined;
     if (typeof enabled !== "boolean") throw new Error("subagents.enabled must be a boolean");
     if (!enabled) return;
     pi.registerMessageRenderer("metis-subagent-attention", subagentAttentionRenderer);

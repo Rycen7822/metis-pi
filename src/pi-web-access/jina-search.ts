@@ -1,4 +1,5 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent } from "./content.ts";

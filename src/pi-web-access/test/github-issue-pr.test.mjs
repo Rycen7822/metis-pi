@@ -315,7 +315,7 @@ test("extractGitHubIssuePr aborts active gh work with the caller signal", async 
 			const controller = new AbortController();
 			setTimeout(() => controller.abort(), 50);
 			const started = Date.now();
-			const result = await extractGitHubIssuePr("https://github.com/owner/repo/pull/7", controller.signal, { lookup: async () => [{ address: "140.82.112.6", family: 4 }] });
+			const result = await extractGitHubIssuePr("https://github.com/owner/repo/pull/7", controller.signal, { fetch: globalThis.fetch, lookup: async () => [{ address: "140.82.112.6", family: 4 }] });
 			console.log(JSON.stringify({ elapsed: Date.now() - started, result }));
 		`,
 		encoding: "utf8",
@@ -375,7 +375,7 @@ test("REST fallback preserves caller cancellation", async () => {
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
 			const lookup = ${publicLookup.toString()};
-			const result = await extractContent("https://github.com/owner/repo/issues/12", controller.signal, { lookup });
+			const result = await extractContent("https://github.com/owner/repo/issues/12", controller.signal, { fetch: globalThis.fetch, lookup });
 			console.log(JSON.stringify({ fetched, result }));
 		`,
 		encoding: "utf8",
@@ -405,7 +405,7 @@ test("extractContent returns an actionable GitHub rate-limit result instead of H
 			globalThis.fetch = async () => new Response("rate limited", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000000" } });
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
 			const lookup = ${publicLookup.toString()};
-			const result = await extractContent("https://github.com/owner/repo/issues/12", undefined, { lookup });
+			const result = await extractContent("https://github.com/owner/repo/issues/12", undefined, { fetch: globalThis.fetch, lookup });
 			console.log(JSON.stringify(result));
 		`,
 		encoding: "utf8",
@@ -438,7 +438,7 @@ test("REST fallback fetches an anchored issue comment outside the first page", a
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
 			const lookup = ${publicLookup.toString()};
-			const result = await extractContent("https://github.com/owner/repo/issues/12#issuecomment-99", undefined, { lookup });
+			const result = await extractContent("https://github.com/owner/repo/issues/12#issuecomment-99", undefined, { fetch: globalThis.fetch, lookup });
 			console.log(JSON.stringify(result));
 		`,
 		encoding: "utf8",
@@ -472,7 +472,7 @@ test("REST fallback rejects anchored issue comments from another work item", asy
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
 			const lookup = ${publicLookup.toString()};
-			const result = await extractContent("https://github.com/owner/repo/issues/12#issuecomment-99", undefined, { lookup });
+			const result = await extractContent("https://github.com/owner/repo/issues/12#issuecomment-99", undefined, { fetch: globalThis.fetch, lookup });
 			console.log(JSON.stringify(result));
 		`,
 		encoding: "utf8",
@@ -506,7 +506,7 @@ test("REST fallback fetches an anchored PR review comment outside the first page
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
 			const lookup = ${publicLookup.toString()};
-			const result = await extractContent("https://github.com/owner/repo/pull/7#discussion_r42", undefined, { lookup });
+			const result = await extractContent("https://github.com/owner/repo/pull/7#discussion_r42", undefined, { fetch: globalThis.fetch, lookup });
 			console.log(JSON.stringify(result));
 		`,
 		encoding: "utf8",
@@ -546,7 +546,7 @@ test("REST fallback does not render positive changedFiles as none when files are
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
 			const lookup = ${publicLookup.toString()};
-			const result = await extractContent("https://github.com/owner/repo/pull/7", undefined, { lookup });
+			const result = await extractContent("https://github.com/owner/repo/pull/7", undefined, { fetch: globalThis.fetch, lookup });
 			console.log(JSON.stringify(result));
 		`,
 		encoding: "utf8",

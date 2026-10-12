@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
 const originalFetch = globalThis.fetch;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -12,6 +13,7 @@ process.env.PI_CODING_AGENT_DIR = root;
 delete process.env.PI_WEB_ACCESS_CACHE_ROOT;
 await writeFile(join(root, "web-search.json"), JSON.stringify({ fetchRouting: { providers: ["http"] } }));
 
+const extractionFixture = injectExtractFetch(originalFetch);
 const { default: initializeExtension } = await import("../index.ts");
 const { clearResults } = await import("../storage.ts");
 const tools = [];
@@ -40,10 +42,12 @@ beforeEach(() => {
 		if (url === badUrl || url === `${badUrl}-also`) return new Response("Forbidden", { status: 403 });
 		throw new Error("Unexpected fetch: " + url);
 	};
+	extractionFixture.setFetch(globalThis.fetch);
 });
 
 after(async () => {
 	clearResults();
+	extractionFixture.dispose();
 	globalThis.fetch = originalFetch;
 	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;

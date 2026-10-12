@@ -68,7 +68,7 @@ test("Firecrawl masks before clipping and omits credential-bearing JSON parser e
 		const { activityMonitor } = await import(${JSON.stringify(new URL("../activity.ts", import.meta.url).href)});
 		const messages = [];
 		for (let i = 0; i < bodies.length; i++) {
-			try { await extractWithFirecrawl("https://example.com/doc", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+			try { await extractWithFirecrawl("https://example.com/doc", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 			catch (error) { messages.push(error.message); }
 		}
 		console.log(JSON.stringify({ messages, logged: activityMonitor.getEntries().map(entry => entry.error) }));
@@ -90,7 +90,7 @@ test("Firecrawl response-body cancellation retains the caller's abort", async ()
 		} });
 		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
 		let outcome;
-		try { await extractWithFirecrawl("https://example.com/doc", controller.signal, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithFirecrawl("https://example.com/doc", controller.signal, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (error) { outcome = { name: error.name, message: error.message }; }
 		console.log(JSON.stringify(outcome));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, FIRECRAWL_BASE_URL: "https://crawl.example.com" });
@@ -107,7 +107,7 @@ test("Firecrawl extraction maps markdown, uses credentials, and defaults to lock
 		};
 		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
 		const result = await extractWithFirecrawl("https://example.com/article", undefined, {
-			lookup: ${PUBLIC_LOOKUP},
+			fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP},
 		});
 		console.log(JSON.stringify({ captured, result }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com/", FIRECRAWL_API_KEY: "fc-test-key" });
@@ -139,7 +139,7 @@ test("Firecrawl search maps shared options and inline Markdown", async () => {
 			recencyFilter: "week",
 			numResults: 4,
 			includeContent: true,
-			lookup: ${PUBLIC_LOOKUP},
+			fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP},
 		});
 		console.log(JSON.stringify({ captured, result }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com/", FIRECRAWL_API_KEY: "fc-test-key" });
@@ -171,7 +171,7 @@ test("Firecrawl search accepts v1 flat result arrays", async () => {
 			}), { status: 200 });
 		};
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
-		const result = await search("v1 firecrawl", { provider: "firecrawl", includeContent: true, lookup: ${PUBLIC_LOOKUP} });
+		const result = await search("v1 firecrawl", { provider: "firecrawl", fetch: globalThis.fetch, includeContent: true, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ capturedUrl, result }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com/", FIRECRAWL_API_VERSION: "v1" });
 	assert.equal(child.status, 0, child.stderr);
@@ -191,7 +191,7 @@ test("Firecrawl API base allows configured loopback without global SSRF allow ra
 				return new Response(JSON.stringify({ success: true, data: { web: [{ title: "Local", url: "https://example.com/local", description: "local" }] } }), { status: 200 });
 			};
 			const { search } = await import(${JSON.stringify(searchModuleUrl)});
-			const result = await search("local firecrawl", { provider: "firecrawl" });
+			const result = await search("local firecrawl", { provider: "firecrawl", fetch: globalThis.fetch });
 			console.log(JSON.stringify({ calls, result }));
 		`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 		assert.equal(child.status, 0, child.stderr);
@@ -213,7 +213,7 @@ test("Firecrawl search honors configured SSRF allow ranges", async () => {
 			return new Response(JSON.stringify({ success: true, data: { web: [{ title: "Local", url: "https://example.com/local", description: "local" }] } }), { status: 200 });
 		};
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
-		const result = await search("local firecrawl", { provider: "firecrawl" });
+		const result = await search("local firecrawl", { provider: "firecrawl", fetch: globalThis.fetch });
 		console.log(JSON.stringify({ calls, result }));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
@@ -232,7 +232,7 @@ test("Firecrawl fresh scraping is explicit opt-in", async () => {
 				return new Response(JSON.stringify({ success: true, data: { markdown: "Fresh body" } }), { status: 200 });
 			};
 			const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
-			await extractWithFirecrawl("https://example.com/fresh", undefined, { lookup: ${PUBLIC_LOOKUP} });
+			await extractWithFirecrawl("https://example.com/fresh", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 			console.log(JSON.stringify({ body }));
 		`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, ...env });
 		assert.equal(child.status, 0, child.stderr);
@@ -249,7 +249,7 @@ test("Firecrawl PDF page cap is sent on scrape and reports truncation", async ()
 			return new Response(JSON.stringify({ success: true, data: { markdown: "# Report", metadata: { title: "Report", numPages: 3, totalPages: 15 } } }), { status: 200 });
 		};
 		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
-		const result = await extractWithFirecrawl("https://example.com/report.pdf", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractWithFirecrawl("https://example.com/report.pdf", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ body, result }));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
@@ -273,7 +273,7 @@ test("Firecrawl PDF page cap is sent in search scrape options", async () => {
 			return new Response(JSON.stringify({ success: true, data: { web: [{ title: "Doc", url: "https://example.com/doc.pdf", markdown: "# Doc" }] } }), { status: 200 });
 		};
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
-		await search("pdf", { provider: "firecrawl", includeContent: true, lookup: ${PUBLIC_LOOKUP} });
+		await search("pdf", { provider: "firecrawl", fetch: globalThis.fetch, includeContent: true, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ body }));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
@@ -298,7 +298,7 @@ test("Firecrawl rejects invalid PDF page caps and v1 caps before calling the API
 			globalThis.fetch = async () => { fetchCalls++; return new Response("{}", { status: 200 }); };
 			const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
 			let error = null;
-			try { await extractWithFirecrawl("https://example.com/report.pdf", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+			try { await extractWithFirecrawl("https://example.com/report.pdf", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 			catch (err) { error = err.message; }
 			console.log(JSON.stringify({ error, fetchCalls }));
 		`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
@@ -322,7 +322,7 @@ test("private Firecrawl base URLs require an explicit narrow SSRF range", async 
 			return new Response(JSON.stringify({ success: true, data: { markdown: "Local body", metadata: { title: "Local" } } }), { status: 200 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/article", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/article", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, result }));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
@@ -340,7 +340,7 @@ test("Firecrawl rejects private targets without invoking the configured instance
 		for (const target of ["http://127.0.0.1:8080/admin", "http://localhost:8080/admin", "http://169.254.169.254/latest/meta-data"]) {
 			try { await extractWithFirecrawl(target); } catch (err) { errors.push(err.message); }
 		}
-		try { await extractWithFirecrawl("https://internal.example.com/", undefined, { lookup: async () => [{ address: "10.0.0.5", family: 4 }] }); }
+		try { await extractWithFirecrawl("https://internal.example.com/", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "10.0.0.5", family: 4 }] }); }
 		catch (err) { errors.push(err.message); }
 		console.log(JSON.stringify({ errors, fetchCalls }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com" });
@@ -359,7 +359,7 @@ test("Firecrawl validates configured base redirects and strips auth on public cr
 			return new Response(JSON.stringify({ success: true, data: { markdown: "Redirect body" } }), { status: 200 });
 		};
 		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
-		await extractWithFirecrawl("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		await extractWithFirecrawl("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com", FIRECRAWL_API_KEY: "fc-secret" });
 	assert.equal(child.status, 0, child.stderr);
@@ -378,7 +378,7 @@ test("Firecrawl blocks configured base redirects to private targets", async () =
 		};
 		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
 		let redirectError = null;
-		try { await extractWithFirecrawl("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithFirecrawl("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { redirectError = err.message; }
 		console.log(JSON.stringify({ calls, redirectError }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com" });
@@ -400,7 +400,7 @@ test("Firecrawl malformed success envelopes throw visible shape errors", async (
 		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
 		const errors = [];
 		for (let i = 0; i < responses.length; i++) {
-			try { await extractWithFirecrawl("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+			try { await extractWithFirecrawl("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 			catch (err) { errors.push(err.message); }
 		}
 		console.log(JSON.stringify({ errors }));
@@ -423,7 +423,7 @@ test("fetch_content prefers configured Firecrawl before hosted fallbacks", async
 			return new Response(JSON.stringify({ success: true, data: { markdown: "Rendered body", metadata: { title: "Rendered" } } }), { status: 200 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/client-rendered", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, result }));
 	`, { FIRECRAWL_BASE_URL: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
@@ -442,7 +442,7 @@ test("Firecrawl extraction errors remain visible in fetch_content guidance", asy
 			return new Response("gateway", { status: 502 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/client-rendered", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, error: result.error }));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);

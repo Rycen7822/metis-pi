@@ -1,6 +1,6 @@
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
+import { normalizeDomain, normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -148,7 +148,7 @@ async function tinyFishJsonRequest<T>(
 ): Promise<T> {
 	let response: Response;
 	try {
-		response = await fetch(url, {
+		response = await fetchWithCredentialRedirects(url, {
 			...init,
 			headers: {
 				"X-API-Key": apiKey,
@@ -156,7 +156,7 @@ async function tinyFishJsonRequest<T>(
 				...init.headers,
 			},
 			signal: requestSignal(signal, timeoutMs),
-		});
+		}, ["X-API-Key", "Authorization", "Cookie"]);
 	} catch (err) {
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);
@@ -301,7 +301,8 @@ export async function searchWithTinyFish(query: string, options: TinyFishSearchO
 			if (data.results.length < 10) break;
 		}
 
-		const results = deduplicateResults(combined, numResults);
+		const domains = normalizeDomainFilters(options.domainFilter);
+		const results = deduplicateResults(combined.filter(result => matchesDomainFilter(result.url, domains)), numResults);
 		const response: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
 		if (options.includeContent && results.length > 0) {
 			const inlineContent = await fetchInlineContent(results.map(result => result.url), apiKey, options.signal);

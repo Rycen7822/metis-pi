@@ -1,6 +1,8 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { filterSearchResponseByDomain } from "./search-response-policy.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
@@ -126,7 +128,7 @@ function parseConversationResponse(value: unknown, options: SearchOptions, numRe
 
 	const answer = answerParts.join("\n").trim();
 	if (!answer && results.length === 0) throw invalidResponse("no answer or sources");
-	return { answer, results };
+	return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
 }
 
 async function getApiKey(signal?: AbortSignal): Promise<string> {

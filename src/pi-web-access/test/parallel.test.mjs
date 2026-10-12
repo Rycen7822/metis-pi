@@ -191,7 +191,7 @@ test("fetch_content continues to Gemini when Parallel extract fails", async () =
 		// Inject DNS so SSRF validation never depends on real resolution (which a
 		// local fake-IP/TUN proxy would map into a blocked reserved range).
 		const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-		const result = await extractContent("https://example.com/app", undefined, { lookup });
+		const result = await extractContent("https://example.com/app", undefined, { fetch: globalThis.fetch, lookup });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{

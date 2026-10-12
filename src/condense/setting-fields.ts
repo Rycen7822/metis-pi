@@ -453,7 +453,8 @@ export function parseScalar(row: ScalarRow, raw: string): ScalarValue | undefine
     return isScalarConfigValue(row.path, parsed) && (row.min === undefined || parsed >= row.min) ? parsed : undefined;
   }
   if (kind === "fraction") {
-    const parsed = Number.parseFloat(raw);
+    // The UI uses "0" for the nullable fraction's Off preset.
+    const parsed = raw === "0" ? null : Number.parseFloat(raw);
     return isScalarConfigValue(row.path, parsed) ? parsed : undefined;
   }
   return row.loose && row.path === "pruneOn" || isScalarConfigValue(row.path, raw) ? raw : undefined;

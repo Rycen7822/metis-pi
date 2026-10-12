@@ -35,7 +35,7 @@ async function runExtract(config, { jinaFails = false } = {}) {
 				return new Response("blocked", { status: 403 });
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://example.com/routed", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://example.com/routed", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`,
 		encoding: "utf8",
@@ -65,7 +65,7 @@ async function runTypedExtract(config, contentType) {
 				throw new Error("Unexpected fetch " + text);
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://example.com/typed", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://example.com/typed", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`,
 		encoding: "utf8",
@@ -205,7 +205,7 @@ test("Ollama Web Fetch is disabled for remote URLs without hosted-provider opt-i
 				throw new Error("Unexpected fetch " + text);
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://example.com/routed", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://example.com/routed", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`,
 		encoding: "utf8",
@@ -237,7 +237,7 @@ test("hosted providers cannot bypass redirect policy validation", async () => {
 				throw new Error("Unexpected fetch " + text);
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://example.com/redirect", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://example.com/redirect", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`,
 		encoding: "utf8",
@@ -272,7 +272,7 @@ async function runChallengeExtract(config, { body, headers = {}, mode } = {}) {
 				throw new Error("Unexpected fetch " + text);
 			};
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://example.com/challenge", undefined, { ${mode ? `mode: ${JSON.stringify(mode)}, ` : ""}lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://example.com/challenge", undefined, { fetch: globalThis.fetch, ${mode ? `mode: ${JSON.stringify(mode)}, ` : ""}lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`,
 		encoding: "utf8",

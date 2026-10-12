@@ -74,7 +74,7 @@ test("Bright Data Web Unlocker maps markdown and sends the credential and Unlock
 		};
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		const result = await extractWithBrightDataUnlocker("https://example.com/article", undefined, {
-			lookup: ${PUBLIC_LOOKUP},
+			fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP},
 		});
 		console.log(JSON.stringify({ captured, result }));
 	`,
@@ -125,11 +125,11 @@ test("Bright Data Web Unlocker rejects private targets without invoking the paid
 		for (const target of ["http://127.0.0.1:8080/admin", "http://localhost:8080/admin", "http://169.254.169.254/latest/meta-data"]) {
 			try { await extractWithBrightDataUnlocker(target); } catch (err) { errors.push(err.message); }
 		}
-		try { await extractWithBrightDataUnlocker("https://internal.example.com/", undefined, { lookup: async () => [{ address: "10.0.0.5", family: 4 }] }); }
+		try { await extractWithBrightDataUnlocker("https://internal.example.com/", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "10.0.0.5", family: 4 }] }); }
 		catch (err) { errors.push(err.message); }
 		// A second resolved address in a private range must also block: the guard
 		// checks every answer, not the first.
-		try { await extractWithBrightDataUnlocker("https://rebind.example.com/", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }, { address: "192.168.1.10", family: 4 }] }); }
+		try { await extractWithBrightDataUnlocker("https://rebind.example.com/", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }, { address: "192.168.1.10", family: 4 }] }); }
 		catch (err) { errors.push(err.message); }
 		console.log(JSON.stringify({ errors, fetchCalls }));
 	`,
@@ -194,7 +194,7 @@ test("Bright Data Web Unlocker validates its own fixed API endpoint, not just th
 		let message = null;
 		try {
 			await extractWithBrightDataUnlocker("https://example.com/a", undefined, {
-				lookup: async (hostname) => hostname === "api.brightdata.com"
+				fetch: globalThis.fetch, lookup: async (hostname) => hostname === "api.brightdata.com"
 					? [{ address: "10.0.0.5", family: 4 }]
 					: [{ address: "93.184.216.34", family: 4 }],
 			});
@@ -222,7 +222,7 @@ test("Bright Data Web Unlocker credentials are stripped on public cross-origin A
 			return new Response("# Redirect body", { status: 200 });
 		};
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
-		const result = await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{
@@ -254,7 +254,7 @@ test("Bright Data Web Unlocker blocks API redirects to private targets", async (
 		};
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let redirectError = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { redirectError = err.message; }
 		console.log(JSON.stringify({ calls, redirectError }));
 	`,
@@ -280,7 +280,7 @@ test("Bright Data Web Unlocker stops after five API redirects with an explicit m
 		};
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let message = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { message = err.message; }
 		console.log(JSON.stringify({ calls, message }));
 	`,
@@ -338,7 +338,7 @@ test("BRIGHTDATA_UNLOCKER_ZONE takes precedence over brightdataUnlockerZone in t
 				return new Response("# Zone body", { status: 200 });
 			};
 			const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
-			await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} });
+			await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 			console.log(JSON.stringify({ zone }));
 		`,
 			{ HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, ...env },
@@ -364,7 +364,7 @@ test("Bright Data Web Unlocker requires its own zone and never borrows the SERP 
 		const { extractWithBrightDataUnlocker, isBrightDataUnlockerAvailable } = await import(${JSON.stringify(brightdataModuleUrl)});
 		const available = isBrightDataUnlockerAvailable();
 		let zoneError = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { zoneError = err.message; }
 		console.log(JSON.stringify({ available, zoneError, fetchCalls }));
 	`,
@@ -446,7 +446,7 @@ test("Bright Data Web Unlocker resolves the credential at request time, after th
 		let blockedError = null;
 		try { await extractWithBrightDataUnlocker("http://127.0.0.1:8080/admin"); } catch (err) { blockedError = err.message; }
 		const ranAfterBlocked = existsSync(${JSON.stringify(marker)});
-		await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		const ranAfter = existsSync(${JSON.stringify(marker)});
 		console.log(JSON.stringify({ availableBefore, ranBefore, blockedError, ranAfterBlocked, ranAfter, auth }));
 	`,
@@ -469,7 +469,7 @@ test("Bright Data Web Unlocker HTTP failures surface the status and redact the c
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let message = null;
 		let result = "not-reached";
-		try { result = await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { result = await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { message = err.message; }
 		console.log(JSON.stringify({ message, result }));
 	`,
@@ -500,7 +500,7 @@ test("Bright Data Web Unlocker redacts the credential before truncating a long e
 		globalThis.fetch = async () => new Response("e".repeat(280) + key + " trailing detail", { status: 500 });
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let message = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { message = err.message; }
 		console.log(JSON.stringify({ message }));
 	`,
@@ -532,7 +532,7 @@ test("Bright Data Web Unlocker redacts transport errors and preserves the error 
 		let name = null;
 		let message = null;
 		let result = "not-reached";
-		try { result = await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { result = await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { name = err.name; message = err.message; }
 		console.log(JSON.stringify({ name, message, result }));
 	`,
@@ -559,7 +559,7 @@ test("Bright Data Web Unlocker returns null only for genuinely empty content", a
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		const results = [];
 		for (let i = 0; i < bodies.length; i++) {
-			results.push(await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }));
+			results.push(await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }));
 		}
 		console.log(JSON.stringify({ results }));
 	`,
@@ -593,7 +593,7 @@ test("Bright Data Web Unlocker propagates cancellation instead of returning null
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let name = null;
 		let message = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", AbortSignal.abort(), { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", AbortSignal.abort(), { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { name = err.name; message = err.message; }
 		console.log(JSON.stringify({ sawAbortedSignal, name, message }));
 	`,
@@ -627,9 +627,9 @@ test("Bright Data Web Unlocker uses fetch_content's timeoutMs and its own 60s de
 		};
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 
-		await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP}, timeoutMs: 12345 });
+		await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP}, timeoutMs: 12345 });
 		const explicit = requested.splice(0);
-		await extractWithBrightDataUnlocker("https://example.com/b", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		await extractWithBrightDataUnlocker("https://example.com/b", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		const fallback = requested.splice(0);
 
 		// A tiny budget must actually abort the in-flight request, not merely be recorded.
@@ -644,7 +644,7 @@ test("Bright Data Web Unlocker uses fetch_content's timeoutMs and its own 60s de
 		});
 		let timedOutName = null;
 		let timedOutResult = "not-reached";
-		try { timedOutResult = await extractWithBrightDataUnlocker("https://example.com/c", undefined, { lookup: ${PUBLIC_LOOKUP}, timeoutMs: 25 }); }
+		try { timedOutResult = await extractWithBrightDataUnlocker("https://example.com/c", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP}, timeoutMs: 25 }); }
 		catch (err) { timedOutName = err.name; }
 		console.log(JSON.stringify({ explicit, fallback, tiny: requested, sawSignal, timedOutName, timedOutResult }));
 	`,
@@ -690,7 +690,7 @@ test("fetch_content tries Bright Data after the direct fetch and Jina Reader, an
 			return new Response("# Unblocked\\n\\nUnblocked body.", { status: 200 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/protected", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/protected", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{ HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home },
@@ -726,7 +726,7 @@ test("Bright Data Web Unlocker failures stay visible in fetch_content guidance",
 			return new Response("payment required for token bd-secret", { status: 402 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-		const result = await extractContent("https://example.com/paywalled", undefined, { lookup: ${PUBLIC_LOOKUP} });
+		const result = await extractContent("https://example.com/paywalled", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 		console.log(JSON.stringify({ calls, error: result.error }));
 	`,
 		{ HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home },
@@ -758,7 +758,7 @@ test("Bright Data Web Unlocker rejects a malformed zone and a malformed config r
 		const { extractWithBrightDataUnlocker, isBrightDataUnlockerAvailable } = await import(${JSON.stringify(brightdataModuleUrl)});
 		const available = isBrightDataUnlockerAvailable();
 		let message = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { message = err.message; }
 		console.log(JSON.stringify({ available, message, fetchCalls }));
 	`,
@@ -779,7 +779,7 @@ test("Bright Data Web Unlocker rejects a malformed zone and a malformed config r
 		`
 		const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(brightdataModuleUrl)});
 		let message = null;
-		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+		try { await extractWithBrightDataUnlocker("https://example.com/a", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} }); }
 		catch (err) { message = err.message; }
 		console.log(JSON.stringify({ message }));
 	`,
@@ -816,7 +816,7 @@ test("a private Bright Data endpoint mirror requires an explicit narrow SSRF ran
 				return new Response("# Local mirror", { status: 200 });
 			};
 			const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
-			const result = await extractContent("https://example.com/protected", undefined, { lookup: ${PUBLIC_LOOKUP} });
+			const result = await extractContent("https://example.com/protected", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
 			console.log(JSON.stringify({ calls, result }));
 		`,
 			{ HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home },

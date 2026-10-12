@@ -342,7 +342,7 @@ test("fetch_content uses Search1API after local and Jina extraction fail", async
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-		const result = await extractContent("https://example.com/app", undefined, { lookup });
+		const result = await extractContent("https://example.com/app", undefined, { fetch: globalThis.fetch, lookup });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{

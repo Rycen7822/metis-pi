@@ -168,6 +168,21 @@ test("Baizhi is explicit-only, available to provider arrays, labels and the Cura
 	assert.ok(clientData.providers.includes("baizhi"));
 });
 
+test("router preserves Baizhi opaque native-filter answers for explicit and selected-provider searches", async () => {
+	const { search } = await import("../search-router.ts");
+	for (const provider of ["baizhi", ["baizhi"]]) {
+		reset();
+		const result = await search("native filtered query", { provider, domainFilter: ["example.com", "-private.example.com"] });
+		assert.match(result.answer, /opaque search result/);
+		assert.deepEqual(result.results, []);
+		assert.deepEqual(calls.find(c => c.rpc?.method === "tools/call").rpc.params.arguments.filter, {
+			domains: ["example.com"], exclude_domains: ["private.example.com"],
+		});
+		assert.equal(calls.filter(c => c.rpc?.method === "tools/call").length, 1);
+		assert.equal(calls.at(-1).method, "DELETE");
+	}
+});
+
 test("real Pi resource loader, extension binding and agent prompt dispatch Baizhi; includeContent does not guess sources", async () => {
 	reset();
 	const { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");

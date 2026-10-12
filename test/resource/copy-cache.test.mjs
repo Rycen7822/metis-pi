@@ -3,7 +3,42 @@ import assert from "node:assert/strict";
 import * as Tui from "@earendil-works/pi-tui";
 import { productFor, publishedRowsOf } from "../../src/selection-copy/model.ts";
 import { createSelectionCopySystem } from "../../src/selection-copy/index.ts";
-import { container, installCopyPrototypes, markdownTheme as theme } from "../helpers/ui-fixtures.mjs";
+import { container, installCopyPrototypes, markdownTheme as theme, select } from "../helpers/ui-fixtures.mjs";
+
+test("stable degraded Markdown reuses its native-copy decision and rebuilds when actual rows change", t => {
+  let drift = true, paints = 0;
+  class FreshText extends Tui.Text { render(width) { return super.render(width); } }
+  class DriftedMarkdown extends Tui.Markdown {
+    render(width) {
+      const rows = [...super.render(width)];
+      if (drift) rows[rows.length - 1] = "VISIBLE_HOST_DRIFT".padEnd(width);
+      return rows;
+    }
+  }
+  const system = createSelectionCopySystem({
+    prototypes: { Text: FreshText.prototype, Markdown: DriftedMarkdown.prototype, Box: Tui.Box.prototype, Container: Tui.Container.prototype },
+    fns: { ...Tui, renderLatex: () => null },
+  });
+  t.after(() => system.dispose());
+  assert.equal(system.wrapPrototypes().installed, true);
+  const countingTheme = { ...theme, highlightCode(text) { paints++; return text.split("\n").map(line => `\x1b[31m${line}\x1b[39m`); } };
+  const component = new DriftedMarkdown("```ts\nconst source = '原文🙂';\n```", 0, 0, countingTheme);
+  let rows;
+  for (let i = 0; i < 40; i++) rows = component.render(60);
+  assert.equal(paints, 2, "native highlight plus one failed mirror, rather than work on every stable frame");
+  assert.equal(productFor(rows), undefined);
+  const rect = { x: 0, y: 0, width: 60, height: rows.length };
+  const failedFrame = { root: { component, rect, clip: rect, children: [], lines: rows } };
+  const native = select(failedFrame);
+  assert.equal(native.text, "```ts\n  const source = '原文🙂';\nVISIBLE_HOST_DRIFT");
+  assert.equal(native.nativeRows, 3);
+  drift = false;
+  const recovered = component.render(60);
+  assert.equal(paints, 3, "same source/width, changed actual host rows retry the mirror");
+  assert.ok(productFor(recovered));
+  assert.equal(select({ root: { ...failedFrame.root, lines: recovered } }).text, "```ts\nconst source = '原文🙂';\n```");
+  assert.equal(select(failedFrame).text, native.text, "an older committed native frame keeps its own rows");
+});
 
 test("throttle: changing text at one width rebuilds at most once per interval; stable text rebuilds immediately", (t) => {
   let fakeNow = 10_000;

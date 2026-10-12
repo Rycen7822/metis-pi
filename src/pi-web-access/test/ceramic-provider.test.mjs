@@ -48,14 +48,14 @@ test("Ceramic posts the query with a Bearer key and maps nested results", () => 
 			]))}, { status: 200 });
 		};
 		const { searchWithCeramic, isCeramicAvailable } = await import(${JSON.stringify(ceramicModuleUrl)});
-		const result = await searchWithCeramic("node release", { numResults: 50, recencyFilter: "week" });
+		const result = await searchWithCeramic("node release", { numResults: 50 });
 		console.log(JSON.stringify({ captured, available: isCeramicAvailable(), result }));
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(output.available, true);
 	assert.equal(output.captured.url, "https://api.ceramic.ai/search");
 	assert.equal(output.captured.method, "POST");
 	assert.equal(output.captured.headers.Authorization, "Bearer ceramic-key");
-	// Ceramic has no date filter, so recency is not sent.
+	// Ordinary searches retain the native count and description budget.
 	assert.deepEqual(output.captured.body, { query: "node release", maxResults: 20, maxDescriptionLength: 1000 });
 	const [paper, untitled, ...rest] = output.result.results;
 	assert.equal(paper.title, "Paper");

@@ -388,7 +388,6 @@ export async function prepareSharedChain(
     const finalEntryId = anchorId("final", chain.finalAssistantTimestamp);
     if (!startEntryId || !finalEntryId) continue;
     const source = deps.messages.slice(range.startIndex, range.endIndex + 1);
-    const final = source.at(-1);
     const keys = chain.middleOccurrenceKeys ?? [];
     if (!keys.length || keys.length !== source.filter(m => m.role === "toolResult").length) continue;
     const calls = source.flatMap(m => m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall") : []);

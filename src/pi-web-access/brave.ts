@@ -1,3 +1,4 @@
+import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -49,7 +50,7 @@ function buildBraveQuery(query: string, filters: DomainFilters): string {
 	if (filters.include.length === 1) {
 		parts.push(`site:${filters.include[0]}`);
 	} else if (filters.include.length > 1) {
-		parts.push(filters.include.map(domain => `site:${domain}`).join(" OR "));
+		parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
 	}
 
 	for (const domain of filters.exclude) {
@@ -163,18 +164,12 @@ export async function searchWithBrave(
 
 		return { answer, results };
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) {
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) {
 			activityMonitor.logComplete(activityId, 0);
 		} else {
-			activityMonitor.logError(activityId, redactedMessage);
+			activityMonitor.logError(activityId, failure.message);
 		}
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		throw failure.error;
 	}
 }

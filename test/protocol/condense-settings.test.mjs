@@ -124,6 +124,25 @@ async function openSettings(overrides = {}) {
 /** persistConfig saves asynchronously; let the pending microtask run. */
 const flushSaves = () => new Promise((resolve) => setImmediate(resolve));
 
+test("settings Off applies and saves a disabled auto-budget threshold through the actual list", async () => {
+  const { current, saved, refreshed, list, row } = await openSettings();
+  list.selectItem("autoBudgetThreshold");
+  const threshold = row("autoBudgetThreshold");
+  for (let i = 0; threshold.currentValue !== "0" && i < threshold.values.length; i++) list.handleInput(" ");
+  assert.equal(threshold.currentValue, "0", "the UI selected the Off preset");
+  assert.equal(current.value.autoBudgetThreshold, null);
+  await flushSaves();
+  assert.equal(saved.at(-1).autoBudgetThreshold, null);
+  assert.equal(refreshed.at(-1).autoBudgetThreshold, null);
+  assert.match(threshold.description, /Automatic paid summaries disabled/);
+
+  const reopened = await openSettings(current.value);
+  assert.equal(reopened.row("autoBudgetThreshold").currentValue, "0");
+  reopened.list.selectItem("autoBudgetThreshold");
+  reopened.list.handleInput(" ");
+  assert.equal(reopened.current.value.autoBudgetThreshold, 0.6, "the next percentage restores the selected threshold");
+});
+
 test("pruner settings saves changes and ignores display-only rows", async () => {
   const { current, saved, refreshed, list, row } = await openSettings();
 

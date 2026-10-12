@@ -12,10 +12,10 @@ const legacyJsonFiles = [
   "pi-codex-conversion.json", "subagents.json", "session-recall.json",
 ];
 const legacyBackendFile = "subagent-pi/config.toml";
-type ObjectValue = Record<string, any>;
+export type MetisConfig = Record<string, unknown>;
 export type ReadConfigFile = (path: string) => string | undefined;
 export const metisConfigPath = (agentDir: string) => join(agentDir, METIS_CONFIG_FILE);
-const object = (value: unknown): value is ObjectValue => !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
+export const isMetisConfigTable = (value: unknown): value is MetisConfig => !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
 const optionalRead: ReadConfigFile = path => {
   try { return readFileSync(path, "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
@@ -28,14 +28,14 @@ export class MetisConfigError extends Error {
     this.path = path; this.reason = reason; this.name = "MetisConfigError";
   }
 }
-export function parseMetisConfig(text: string, path = METIS_CONFIG_FILE): ObjectValue {
+export function parseMetisConfig(text: string, path = METIS_CONFIG_FILE): MetisConfig {
   try { return parse(text.replace(/^\uFEFF/, "")); }
   catch (error) { throw new MetisConfigError(path, `invalid TOML: ${(error as Error).message}`); }
 }
 let template: string | undefined;
 const bundledTemplate = () => template ??= readFileSync(new URL("../metis-pi.toml", import.meta.url), "utf8");
-let defaults: ObjectValue | undefined;
-export function defaultMetisConfig(): ObjectValue {
+let defaults: MetisConfig | undefined;
+export function defaultMetisConfig(): MetisConfig {
   defaults ??= parseMetisConfig(bundledTemplate());
   return structuredClone(defaults);
 }
@@ -63,7 +63,7 @@ function templateAnnotations(): Map<string, string[]> {
   return result;
 }
 /** Decorate serializer output, never user TOML: smol-toml escapes string newlines on one line. */
-export function renderMetisConfig(config: ObjectValue): string {
+export function renderMetisConfig(config: MetisConfig): string {
   const notes = templateAnnotations(), output: string[] = [];
   let table = "";
   for (const line of stringify(config).split("\n")) {
@@ -77,23 +77,23 @@ export function renderMetisConfig(config: ObjectValue): string {
   }
   return `# metis-pi · 全局配置\n# 以下为当前有效设置；包内 metis-pi.toml 提供默认值。\n# 参数说明：同目录 ${METIS_CONFIG_GUIDE}。密钥与 Pi 自有设置仍由 Pi 管理。\n\n${output.join("\n")}`;
 }
-export function mergeMetisConfig(base: ObjectValue, overrides: ObjectValue): ObjectValue {
+export function mergeMetisConfig(base: MetisConfig, overrides: MetisConfig): MetisConfig {
   const result = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined || value === null) continue;
     // Retain TOML date/time classes and unknown fields, without mutating the inputs.
-    Object.defineProperty(result, key, { value: object(value) && object(result[key]) ? mergeMetisConfig(result[key], value) : value,
+    Object.defineProperty(result, key, { value: isMetisConfigTable(value) && isMetisConfigTable(result[key]) ? mergeMetisConfig(result[key], value) : value,
       enumerable: true, writable: true, configurable: true });
   }
   return result;
 }
 const nullable = ["autoBudgetThreshold", "budgetTurnDelta", "frontierGapThresholdTokens", "maxImagesPerRequest"];
-export function encodePruneConfig(config: ObjectValue): ObjectValue {
-  const copy = { ...config };
+export function encodePruneConfig(config: object): MetisConfig {
+  const copy: MetisConfig = { ...config };
   for (const key of nullable) if (copy[key] === null) copy[key] = false;
   return copy;
 }
-export function decodePruneConfig(config: ObjectValue): ObjectValue {
+export function decodePruneConfig(config: MetisConfig): MetisConfig {
   const copy = { ...config };
   for (const key of nullable) if (copy[key] === false) copy[key] = null;
   return copy;
@@ -102,18 +102,18 @@ function readText(path: string, read: ReadConfigFile): string | undefined {
   try { return read(path); }
   catch (error) { throw new MetisConfigError(path, (error as NodeJS.ErrnoException).code ?? String(error)); }
 }
-function readJson(path: string, read: ReadConfigFile): ObjectValue | undefined {
+function readJson(path: string, read: ReadConfigFile): MetisConfig | undefined {
   const text = readText(path, read);
   if (text === undefined) return undefined;
   try {
     const value = JSON.parse(text.replace(/^\uFEFF/, ""));
-    if (!object(value)) throw new Error("not a JSON object");
+    if (!isMetisConfigTable(value)) throw new Error("not a JSON object");
     return value;
   } catch (error) {
     throw new MetisConfigError(path, `invalid legacy JSON: ${(error as Error).message}`);
   }
 }
-function camelizeTable(raw: ObjectValue): ObjectValue {
+function camelizeTable(raw: MetisConfig): MetisConfig {
   return Object.fromEntries(
     Object.entries(raw).map(([key, value]) => [
       key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()),
@@ -121,18 +121,18 @@ function camelizeTable(raw: ObjectValue): ObjectValue {
     ]),
   );
 }
-function legacySubagentBackend(raw: ObjectValue): ObjectValue {
+function legacySubagentBackend(raw: MetisConfig): MetisConfig {
   const result = camelizeTable(raw);
   if (raw["default_run_timeout_seconds"] !== undefined) {
     result["defaultIdleTimeoutSeconds"] ??= raw["default_run_timeout_seconds"];
     delete result["defaultRunTimeoutSeconds"];
   }
-  if (object(raw["inheritance"])) result["inheritance"] = camelizeTable(raw["inheritance"]);
-  if (object(raw["profiles"]))
+  if (isMetisConfigTable(raw["inheritance"])) result["inheritance"] = camelizeTable(raw["inheritance"]);
+  if (isMetisConfigTable(raw["profiles"]))
     result["profiles"] = Object.fromEntries(
       Object.entries(raw["profiles"]).map(([name, profile]) => [
         name,
-        object(profile) ? camelizeTable(profile) : profile,
+        isMetisConfigTable(profile) ? camelizeTable(profile) : profile,
       ]),
     );
   return result;
@@ -145,7 +145,7 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
   );
   const backendPath = join(agentDir, legacyBackendFile),
     backendText = readText(backendPath, read);
-  let subagents: ObjectValue = {};
+  let subagents: MetisConfig = {};
   if (formerAgents) {
     if (formerAgents["maxConcurrent"] !== undefined) subagents["maxResidentAgents"] = formerAgents["maxConcurrent"];
     for (const key of Object.keys(formerAgents).filter((key) => key !== "maxConcurrent"))
@@ -158,15 +158,16 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
   if (backendText !== undefined)
     subagents = mergeMetisConfig(subagents, legacySubagentBackend(parseMetisConfig(backendText, backendPath)));
   const appearance = Object.fromEntries(
-    Object.keys(base["appearance"])
+    Object.keys(isMetisConfigTable(base["appearance"]) ? base["appearance"] : {})
       .filter((key) => old?.[key] !== undefined)
       .map((key) => [key, old![key]]),
   );
+  const legacyExecution = old?.["execution"];
   const execution = mergeMetisConfig(
     { tools: conversion?.["tools"] ?? {}, ui: conversion?.["ui"] ?? {} },
-    old?.["execution"] ?? {},
+    isMetisConfigTable(legacyExecution) ? legacyExecution : {},
   );
-  const recallModel = recall?.["queryModel"];
+  const recallModel = isMetisConfigTable(recall?.["queryModel"]) ? recall["queryModel"] : undefined;
   const sessionRecall = typeof recallModel?.["provider"] === "string" && recallModel["provider"]
     && typeof recallModel["id"] === "string" && recallModel["id"]
     ? { queryModel: `${recallModel["provider"]}/${recallModel["id"]}` } : {};
@@ -176,7 +177,7 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
     execution,
     mcp: old?.["mcp"] ?? {},
     subagents,
-    contextPrune: object(pi?.["contextPrune"]) ? encodePruneConfig(pi["contextPrune"]) : {},
+    contextPrune: isMetisConfigTable(pi?.["contextPrune"]) ? encodePruneConfig(pi["contextPrune"]) : {},
     dynamicAgents: dynamic ? { ...dynamic, enabled: dynamic["enabled"] !== false } : {},
     sessionRecall,
     webAccess: web?.preferences ?? {},
@@ -191,7 +192,7 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
 export function readMetisConfig(
   agentDir: string,
   read: ReadConfigFile = optionalRead,
-): { config: ObjectValue; present: boolean; legacy: boolean; notes: string[] } {
+): { config: MetisConfig; present: boolean; legacy: boolean; notes: string[] } {
   const path = metisConfigPath(agentDir),
     text = readText(path, read);
   if (text !== undefined)
@@ -210,8 +211,8 @@ export function readMetisConfig(
   };
 }
 
-let cachedWebToml: { path: string; text: string; config: ObjectValue } | undefined;
-export function readWebAccessConfig(agentDir: string): ObjectValue {
+let cachedWebToml: { path: string; text: string; config: MetisConfig } | undefined;
+export function readWebAccessConfig(agentDir: string): MetisConfig {
   try {
     const path = metisConfigPath(agentDir), text = readText(path, optionalRead);
     const legacy = readLegacyWebAccess(agentDir, optionalRead);
@@ -219,13 +220,14 @@ export function readWebAccessConfig(agentDir: string): ObjectValue {
       cachedWebToml = { path, text, config: parseMetisConfig(text, path) };
     }
     const config = text === undefined ? legacy?.preferences ?? {} : cachedWebToml!.config["webAccess"] ?? {};
-    if (!object(config)) throw new MetisConfigError(metisConfigPath(agentDir), "webAccess must be a table");
+    if (!isMetisConfigTable(config)) throw new MetisConfigError(metisConfigPath(agentDir), "webAccess must be a table");
     const { preferences, credentials } = splitWebAccessConfig(config);
     if (text !== undefined && Object.keys(credentials).length) {
       throw new MetisConfigError(metisConfigPath(agentDir), `webAccess credentials belong in ${WEB_CREDENTIALS_FILE}`);
     }
+    const webDefaults = defaultMetisConfig()["webAccess"];
     return structuredClone({
-      ...defaultMetisConfig()["webAccess"], ...preferences,
+      ...(isMetisConfigTable(webDefaults) ? webDefaults : {}), ...preferences,
       ...(legacy ? splitWebAccessConfig(legacy.config).credentials : {}),
     });
   } catch (error) {
@@ -234,7 +236,7 @@ export function readWebAccessConfig(agentDir: string): ObjectValue {
   }
 }
 
-export function updateWebAccessConfig(agentDir: string, patch: ObjectValue): void {
+export function updateWebAccessConfig(agentDir: string, patch: MetisConfig): void {
   const { preferences, credentials } = splitWebAccessConfig(patch);
   if (Object.keys(credentials).length) throw new Error(`Store Web Access credentials in ${WEB_CREDENTIALS_FILE}`);
   updateMetisConfig(agentDir, { webAccess: preferences });
@@ -299,7 +301,7 @@ function withConfigLock<T>(agentDir: string, write: () => T): T {
 }
 
 /** Serialize the fresh read, merge and publication across Pi processes. */
-export function updateMetisConfig(agentDir: string, patch: ObjectValue): void {
+export function updateMetisConfig(agentDir: string, patch: MetisConfig): void {
   withConfigLock(agentDir, () => {
     const current = readMetisConfig(agentDir);
     atomicWrite(metisConfigPath(agentDir), renderMetisConfig(mergeMetisConfig(current.config, patch)));

@@ -58,7 +58,7 @@ function buildChildScript(moduleUrl) {
 		// Inject DNS so SSRF validation never depends on real resolution (which a
 		// local fake-IP/TUN proxy would map into a blocked reserved range).
 		const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-		const result = await extractContent("https://www.youtube.com/watch?v=dQw4w9WgXcQ", undefined, { lookup });
+		const result = await extractContent("https://www.youtube.com/watch?v=dQw4w9WgXcQ", undefined, { fetch: globalThis.fetch, lookup });
 		console.log(JSON.stringify(result));
 	`;
 }

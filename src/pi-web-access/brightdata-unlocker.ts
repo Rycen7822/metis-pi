@@ -2,13 +2,11 @@ import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } f
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
-import { validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
+import { validateRemoteUrl, fetchRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
 const BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request";
 const EXTRACT_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_REDIRECTS = 5;
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const ZONE_PATTERN = /^[a-z0-9_-]+$/i;
 
 export interface BrightDataSsrfOptions {
@@ -16,7 +14,7 @@ export interface BrightDataSsrfOptions {
 	trustEnvProxy: boolean;
 }
 
-export interface BrightDataExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup"> {
+export interface BrightDataExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup" | "fetch"> {
 	ssrf?: BrightDataSsrfOptions;
 }
 
@@ -123,45 +121,23 @@ function ssrfOptions(options?: BrightDataExtractOptions): { lookup?: Lookup; all
 	};
 }
 
-function withoutSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
-	const next = { ...headers };
-	delete next.Authorization;
-	delete next.authorization;
-	delete next.Cookie;
-	delete next.cookie;
-	delete next["X-API-Key"];
-	delete next["x-api-key"];
-	return next;
-}
-
 async function fetchBrightDataApi(
 	url: string,
 	init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
 	options: BrightDataExtractOptions | undefined,
 ): Promise<Response> {
-	let current = await validateRemoteUrl(url, ssrfOptions(options));
-	let headers = init.headers;
-	// `redirect: "manual"` is what makes this loop exist: with the default "follow"
-	// the runtime resolves the chain itself, the final response is a 200, and the
-	// per-hop validateRemoteUrl / credential strip / hop cap below all become dead
-	// code. Tests assert the option is present on every hop for that reason.
-	//
-	// The loop is intentionally unbounded (`for (;;)`) with the cap enforced inside:
-	// a `redirects <= DEFAULT_MAX_REDIRECTS` header would make the post-loop
-	// statement provably unreachable, which is exactly the dead line firecrawl.ts
-	// carries at :186. Every exit is a `return` or a `throw` written here.
-	for (let redirects = 0; ; redirects++) {
-		const response = await fetch(current, { ...init, headers, redirect: "manual" });
-		if (!REDIRECT_STATUSES.has(response.status)) return response;
-
-		const location = response.headers.get("location");
-		if (!location) return response;
-		if (redirects === DEFAULT_MAX_REDIRECTS) throw new Error(`Too many redirects fetching ${current.toString()}`);
-
-		const next = await validateRemoteUrl(new URL(location, current), ssrfOptions(options));
-		if (next.origin !== current.origin) headers = withoutSensitiveHeaders(headers);
-		current = next;
-	}
+	return fetchRemoteUrl(url, init, {
+		...ssrfOptions(options),
+		fetch: options?.fetch,
+		onRedirect: ({ from, to, init: next }) => {
+			const headers = new Headers(next.headers);
+			if (from.origin !== to.origin) {
+				for (const name of ["Authorization", "Cookie", "X-API-Key"]) headers.delete(name);
+			}
+			// This API's existing redirect contract replays the original POST body, including 303.
+			return { ...next, method: init.method, body: init.body, headers };
+		},
+	});
 }
 
 function unlockerBody(url: string, zone: string): Record<string, unknown> {

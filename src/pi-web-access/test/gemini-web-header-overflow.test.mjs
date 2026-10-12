@@ -101,27 +101,34 @@ test("dedicated agent fetches oversized-header responses the pi-style global dis
 	}
 });
 
-test("resolveGeminiFetch falls back to the ambient global fetch when undici is not resolvable", () => {
+test("resolveGeminiFetch keeps explicit web transport when undici is not resolvable", () => {
 	const dir = mkdtempSync(join(tmpdir(), "gw-fallback-"));
 	try {
 		// Copy just the module graph (no node_modules) so the dynamic undici
 		// import fails and the fallback path is exercised.
-		for (const f of ["gemini-web.ts", "chrome-cookies.ts", "gemini-web-config.ts", "utils.ts"]) {
+		for (const f of ["gemini-web.ts", "chrome-cookies.ts", "gemini-web-config.ts", "utils.ts", "proxy-transport.ts"]) {
 			copyFileSync(join(import.meta.dirname, "..", f), join(dir, f));
 		}
-		const utils = join(dir, "utils.ts");
-		writeFileSync(utils, readFileSync(utils, "utf8").replace(
-			/from "\.\.\/(metis-config|web-access-config)\.ts"/g,
-			(_, name) => `from "${new URL(`../../${name}.ts`, import.meta.url).href}"`,
-		));
+		for (const file of ["utils.ts", "proxy-transport.ts"]) {
+			const target = join(dir, file);
+			writeFileSync(target, readFileSync(target, "utf8").replace(
+				/from "\.\.\/(metis-config|web-access-config)\.ts"/g,
+				(_, name) => `from "${new URL(`../../${name}.ts`, import.meta.url).href}"`,
+			));
+		}
 		const script = [
 			"import { resolveGeminiFetch } from './gemini-web.ts';",
+			"const calls = []; globalThis.fetch = async (input, init) => { calls.push({ url: String(input), headers: Object.fromEntries(new Headers(init?.headers)) }); return new Response('fallback-body'); };",
 			"const f = await resolveGeminiFetch();",
-			"console.log('FETCH_KIND:' + (f === globalThis.fetch ? 'FALLBACK' : 'UNDICI'));",
+			"const response = await f('https://gemini.google.com/app', { headers: { cookie: 'synthetic-cookie=present' } });",
+			"console.log(JSON.stringify({ calls, body: await response.text() }));",
 		].join("\n");
 		const r = spawnSync(process.execPath, ["-e", script], { cwd: dir, encoding: "utf8" });
 		assert.equal(r.status, 0, r.stderr);
-		assert.match(r.stdout, /FETCH_KIND:FALLBACK/);
+		assert.deepEqual(JSON.parse(r.stdout), {
+			calls: [{ url: "https://gemini.google.com/app", headers: { cookie: "synthetic-cookie=present" } }],
+			body: "fallback-body",
+		});
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

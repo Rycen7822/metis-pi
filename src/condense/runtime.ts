@@ -59,8 +59,18 @@ import { DiagnosticSink } from "./diagnostics.ts";
 import { TokenEstimator, projectionFingerprint } from "./token-estimator.ts";
 import { resolveRange, perBatchSummaryOverlapsDropped } from "./chain-range-prune.ts";
 import { hashToolResult } from "./content-hash.ts";
+import {
+  METIS_EVENTS, isBeforeRemoteCompactRequest, isCondenseMaintenanceRequest, isCondenseProjectRequest,
+} from "../collaboration.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
+
+class CondenseContextChangedError extends Error {
+  constructor(reason: string) {
+    super(`This extension ctx is stale: ${reason}`);
+    this.name = "CondenseContextChangedError";
+  }
+}
 
 function policyFingerprint(config: ContextPruneConfig): string {
   const { showOccStatusLine, showPruneStatusLine, quietOversizedSkips, ...policy } = config;
@@ -133,7 +143,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const stagedChains = new Map<number, { entry: SingleChainCompressionEntry; source: string; config: string }>();
   let deferredFinal: number | undefined;
   const assertCurrent = (version: number) => {
-    if (version !== lifecycle) throw new Error("This extension ctx is stale: condense lifecycle changed");
+    if (version !== lifecycle) throw new CondenseContextChangedError("condense lifecycle changed");
   };
   let isFlushing = false;
   let isArchiving = false;
@@ -144,9 +154,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceNext = undefined; maintenanceAbort?.abort();
     try { await maintenanceTask; } finally { maintenanceHandoffs--; }
   };
-  const unsubscribeRemoteCompaction = pi.events.on("metis:before-remote-compact", (data) => {
-    const request = data as { waits?: Promise<void>[] } | undefined;
-    if (Array.isArray(request?.waits)) request.waits.push(stopMaintenance());
+  const unsubscribeRemoteCompaction = pi.events.on(METIS_EVENTS.beforeRemoteCompact, (data) => {
+    if (isBeforeRemoteCompactRequest(data)) data.waits.push(stopMaintenance());
   });
   // Native/OCC preparation must wait for the current archive write before it owns I/O.
   pi.on("session_before_compact", async () => {
@@ -201,7 +210,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   const isStaleContextError = (err: unknown) =>
-    err instanceof Error && err.message.includes("This extension ctx is stale");
+    err instanceof CondenseContextChangedError ||
+    // Pi exposes stale-context failures as plain Error with this prefix.
+    (err instanceof Error && err.message.startsWith("This extension ctx is stale"));
 
   const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -352,7 +363,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertCurrent(version);
         signal?.throwIfAborted();
         if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
-          || config !== policyFingerprint(currentConfig.value)) throw new Error("This extension ctx is stale: fusion source changed");
+          || config !== policyFingerprint(currentConfig.value)) throw new CondenseContextChangedError("fusion source changed");
       };
       valid();
       const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal,
@@ -499,7 +510,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       : await archiveBatches([batch], { indexer, appendEntry, ...archiveOptions(ctx.sessionManager) });
     signal.throwIfAborted();
     if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages))
-      throw new Error("This extension ctx is stale: summary source changed during archive");
+      throw new CondenseContextChangedError("summary source changed during archive");
     const visible = projectContext(
       ctx.sessionManager.buildSessionProjection().messages,
       ctx.model?.api,
@@ -821,7 +832,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               assertCurrent(version);
               signal.throwIfAborted();
               if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages))
-                throw new Error("This extension ctx is stale: dedup source changed");
+                throw new CondenseContextChangedError("dedup source changed");
               beneficial = !!counts && counts.before > counts.after;
             }
             if (beneficial) {
@@ -927,7 +938,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertCurrent(version);
         if (signal.aborted) throw new Error("summarize: aborted");
         if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== expectedSource) {
-          throw new Error("This extension ctx is stale: summary source changed");
+          throw new CondenseContextChangedError("summary source changed");
         }
       };
       const allowPaid = trigger === "manual" || paidPressure(ctx, options.closingMessage);
@@ -1043,19 +1054,21 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             message.role === "toolResult" && plan.replacements.has(occKey(message.toolCallId, message.timestamp)),
         );
         if (projectionFingerprint(current) !== projectionFingerprint(plan.before))
-          throw new Error("This extension ctx is stale: replacement source changed");
+          throw new CondenseContextChangedError("replacement source changed");
         const summary = plan.render(result.summaryText, result.deterministic);
         const summaryText = summary.content,
           batchDetails = summary.details;
-        let replaced = 0;
-        const proposed = visible.map((message: any) => {
-          if (message.role !== "toolResult") return message;
+        let replaced = 0, firstChanged = -1;
+        // Replacements keep array separators; adding the summary adds one comma.
+        let charsSaved = -JSON.stringify(summary).length - 1;
+        for (const [index, message] of visible.entries()) {
+          if (message.role !== "toolResult") continue;
           const candidate = plan.replacements.get(occKey(message.toolCallId, message.timestamp));
-          if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args)) return message;
-          return plan.stubs[replaced++];
-        });
-        proposed.push(summary);
-        const charsSaved = JSON.stringify(visible).length - JSON.stringify(proposed).length;
+          if (!candidate || protectionPredicate(candidate.call.toolName, candidate.call.args)) continue;
+          const original = JSON.stringify(message), replacement = JSON.stringify(plan.stubs[replaced++]);
+          charsSaved += original.length - replacement.length;
+          if (firstChanged < 0 && original !== replacement) firstChanged = index;
+        }
         const shouldSkipOversized = replaced !== archivedBatch.toolCalls.length || !await plan.accepts(result.summaryText, result.deterministic);
         checkSource();
         if (shouldSkipOversized) {
@@ -1098,8 +1111,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               break;
             }
             publishedCharsSaved += charsSaved;
-            const first = visible.findIndex((message: any, index: number) => JSON.stringify(message) !== JSON.stringify(proposed[index]));
-            firstChangedMessage = firstChangedMessage === undefined ? first : Math.min(firstChangedMessage, first);
+            firstChangedMessage = firstChangedMessage === undefined ? firstChanged : Math.min(firstChangedMessage, firstChanged);
             stubCount += archivedBatch.toolCalls.length + dedupCount;
             floorSources.push(...archivedBatch.toolCalls);
           }
@@ -1990,13 +2002,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   pi.on("turn_end", (_event, ctx) => { void maintainChains(ctx); });
   pi.on("agent_settled", (_event, ctx) => { void maintainChains(ctx); });
-  const unsubscribeMaintenance = pi.events.on("metis:condense-maintenance", (data: any) => { data.pending = maintenanceTask; });
+  const unsubscribeMaintenance = pi.events.on(METIS_EVENTS.condenseMaintenance, (data) => {
+    if (isCondenseMaintenanceRequest(data)) data.pending = maintenanceTask;
+  });
 
   let activeSessionId: string | undefined;
   let projectionContext: ExtensionContext | undefined;
-  const unsubscribeProjection = pi.events.on("metis:condense-project", (data: unknown) => {
-    if (!data || typeof data !== "object" || !("messages" in data) || !Array.isArray(data.messages)) return;
-    const request = data as { sessionId: string; messages: any[]; api?: string; busy?: boolean; maintenance?: boolean };
+  const unsubscribeProjection = pi.events.on(METIS_EVENTS.condenseProject, (data) => {
+    if (!isCondenseProjectRequest(data)) return;
+    const request = data;
     if (request.sessionId !== activeSessionId) return;
     if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
     if (projectionContext) indexer.syncSummaryEntries(projectionContext);

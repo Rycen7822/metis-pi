@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { metisConfigPath, readWebAccessConfig, updateWebAccessConfig } from "../metis-config.ts";
 import { webAccessAgentDir, WEB_CREDENTIALS_FILE } from "../web-access-config.ts";
+import { webFetch } from "./proxy-transport.ts";
 
 export function getWebSearchConfigDir(): string {
 	return webAccessAgentDir();
@@ -80,12 +81,13 @@ export async function fetchWithCredentialRedirects(
 	url: string,
 	init: RequestInit,
 	credentialHeaders: readonly string[],
+	credentialQueryParameters: readonly string[] = [],
 ): Promise<Response> {
 	let current = new URL(url);
 	let requestInit = init;
 
 	for (let redirects = 0; ; redirects++) {
-		const response = await fetch(current, { ...requestInit, redirect: "manual" });
+		const response = await webFetch(current, { ...requestInit, redirect: "manual" });
 		if (!API_REDIRECT_STATUSES.has(response.status)) return response;
 
 		const location = response.headers.get("location");
@@ -109,6 +111,7 @@ export async function fetchWithCredentialRedirects(
 			requestInit = { ...withoutBody, method: "GET", headers };
 		}
 		if (next.origin !== current.origin) {
+			for (const name of credentialQueryParameters) next.searchParams.delete(name);
 			const headers = new Headers(requestInit.headers);
 			for (const name of credentialHeaders) headers.delete(name);
 			requestInit = { ...requestInit, headers };

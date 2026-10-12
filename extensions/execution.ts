@@ -8,6 +8,7 @@ import { createViewImageTool } from "../src/execution/view-image/tool.ts";
 import { registerImageHints } from "../src/execution/view-image/hints.ts";
 import { createAutoReasoning } from "../src/execution/auto-reasoning.ts";
 import { registerBackgroundShellUi } from "../src/execution/ui/background-shell.ts";
+import { METIS_EVENTS, isExecutionStatusRequest } from "../src/collaboration.ts";
 
 export default function execution(pi: ExtensionAPI): void {
   const runtime: import("../src/execution/runtime.ts").ExecutionRuntime = {
@@ -39,7 +40,8 @@ export default function execution(pi: ExtensionAPI): void {
   const reasoning = createAutoReasoning(pi, () => runtime.config.tools.autoReasoning);
   pi.registerTool(reasoning.tool);
 
-  const offBusy = pi.events.on("metis:execution-status", (request: any) => {
+  const offBusy = pi.events.on(METIS_EVENTS.executionStatus, (request) => {
+    if (!isExecutionStatusRequest(request)) return;
     request.busy ||= runtime.sessions.listSessions(0).some((session) => session.running);
   });
   const refresh = (_event: unknown, ctx: ExtensionContext) => {

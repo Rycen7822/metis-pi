@@ -55,7 +55,7 @@ test("degoog posts the query with engines, recency, credentials, and domain filt
 				return new Response(${JSON.stringify(DEGOOG_RESPONSE)}, { status: 200, headers: { "content-type": "application/json" } });
 			};
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
-			const result = await searchWithDegoog("self hosted", {
+			const result = await searchWithDegoog("self hosted", { fetch: globalThis.fetch,
 				numResults: 2,
 				recencyFilter: "week",
 				domainFilter: ["example.com", "-private.example.net"],
@@ -103,7 +103,7 @@ test("degoog uses instance defaults when no engines are configured", async () =>
 				return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } });
 			};
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
-			await searchWithDegoog("plain");
+			await searchWithDegoog("plain", { fetch: globalThis.fetch });
 			console.log(JSON.stringify({ capturedBody }));
 		`, { PI_CODING_AGENT_DIR: home });
 
@@ -132,7 +132,7 @@ test("degoog strips credentials and custom headers on cross-origin redirects", a
 				return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } });
 			};
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
-			await searchWithDegoog("redirect");
+			await searchWithDegoog("redirect", { fetch: globalThis.fetch });
 			console.log(JSON.stringify({ calls }));
 		`, { PI_CODING_AGENT_DIR: home });
 
@@ -166,7 +166,7 @@ test("degoog rejects invalid JSON and explains protected instances without leaki
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
 			const errors = [];
 			for (let i = 0; i < 2; i++) {
-				try { await searchWithDegoog("broken"); } catch (error) { errors.push(String(error)); }
+				try { await searchWithDegoog("broken", { fetch: globalThis.fetch }); } catch (error) { errors.push(String(error)); }
 			}
 			console.log(JSON.stringify(errors));
 		`, { PI_CODING_AGENT_DIR: home });
@@ -232,9 +232,9 @@ test("degoog transient failures fall through configured routing", async () => {
 			};
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
 			let directError = "";
-			try { await searchWithDegoog("unavailable"); } catch (error) { directError = String(error); }
+			try { await searchWithDegoog("unavailable", { fetch: globalThis.fetch }); } catch (error) { directError = String(error); }
 			const { search } = await import(${JSON.stringify(searchModuleUrl)});
-			const routed = await search("unavailable", { provider: "auto" });
+			const routed = await search("unavailable", { fetch: globalThis.fetch, provider: "auto" });
 			console.log(JSON.stringify({ directError, provider: routed.provider, calls }));
 		`, { PI_CODING_AGENT_DIR: home });
 
@@ -316,8 +316,8 @@ test("degoog groups multi-domain clauses, drops unusable links, and deduplicates
 				] }), { status: 200, headers: { "content-type": "application/json" } });
 			};
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
-			const filtered = await searchWithDegoog("several", { domainFilter: ["example.com", "example.org", "-private.example.com"], numResults: 5 });
-			const unfiltered = await searchWithDegoog("no filter", { numResults: 5 });
+			const filtered = await searchWithDegoog("several", { fetch: globalThis.fetch, domainFilter: ["example.com", "example.org", "-private.example.com"], numResults: 5 });
+			const unfiltered = await searchWithDegoog("no filter", { fetch: globalThis.fetch, numResults: 5 });
 			console.log(JSON.stringify({ bodies, filtered: filtered.results.map(r => r.url), unfiltered: unfiltered.results.map(r => r.url) }));
 		`, { PI_CODING_AGENT_DIR: home });
 
@@ -356,9 +356,9 @@ test("a malformed degoog envelope reports invalid-response so routing can fall b
 			};
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
 			let directError = "";
-			try { await searchWithDegoog("malformed"); } catch (error) { directError = String(error); }
+			try { await searchWithDegoog("malformed", { fetch: globalThis.fetch }); } catch (error) { directError = String(error); }
 			const { search } = await import(${JSON.stringify(searchModuleUrl)});
-			const routed = await search("malformed", { provider: "auto" });
+			const routed = await search("malformed", { fetch: globalThis.fetch, provider: "auto" });
 			console.log(JSON.stringify({ directError, provider: routed.provider, calls }));
 		`, { PI_CODING_AGENT_DIR: home });
 
@@ -393,7 +393,7 @@ test("degoog redacts configured header secrets from upstream errors", async () =
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
 			const { activityMonitor } = await import(${JSON.stringify(activityModuleUrl)});
 			let error = "";
-			try { await searchWithDegoog("denied"); } catch (caught) { error = String(caught); }
+			try { await searchWithDegoog("denied", { fetch: globalThis.fetch }); } catch (caught) { error = String(caught); }
 			console.log(JSON.stringify({ sentHeaders, error, activityError: activityMonitor.getEntries().at(-1).error }));
 		`, { PI_CODING_AGENT_DIR: home });
 
@@ -421,10 +421,10 @@ test("degoog records a request timeout as a failure but caller cancellation as c
 			const { searchWithDegoog } = await import(${JSON.stringify(degoogModuleUrl)});
 			const { activityMonitor } = await import(${JSON.stringify(activityModuleUrl)});
 			let timeoutError = "";
-			try { await searchWithDegoog("timeout"); } catch (error) { timeoutError = String(error); }
+			try { await searchWithDegoog("timeout", { fetch: globalThis.fetch }); } catch (error) { timeoutError = String(error); }
 			const timeoutEntry = activityMonitor.getEntries().at(-1);
 			let abortError = "";
-			try { await searchWithDegoog("cancelled", { signal: AbortSignal.abort() }); } catch (error) { abortError = String(error); }
+			try { await searchWithDegoog("cancelled", { fetch: globalThis.fetch, signal: AbortSignal.abort() }); } catch (error) { abortError = String(error); }
 			const abortEntry = activityMonitor.getEntries().at(-1);
 			console.log(JSON.stringify({
 				timeoutError,
@@ -462,7 +462,7 @@ test("an explicitly selected degoog provider searches the configured instance", 
 				}), { status: 200, headers: { "content-type": "application/json" } });
 			};
 			const { search } = await import(${JSON.stringify(searchModuleUrl)});
-			const response = await search("explicit", { provider: "degoog" });
+			const response = await search("explicit", { fetch: globalThis.fetch, provider: "degoog" });
 			console.log(JSON.stringify({ provider: response.provider, calls, results: response.results }));
 		`, { PI_CODING_AGENT_DIR: home });
 

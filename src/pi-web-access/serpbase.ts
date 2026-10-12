@@ -1,7 +1,7 @@
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -111,10 +111,10 @@ export async function searchWithSerpBase(query: string, options: SearchOptions =
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	try {
-		const response = await fetch(url, {
+		const response = await fetchWithCredentialRedirects(url.toString(), {
 			headers: { Accept: "application/json" },
 			signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal,
-		});
+		}, [], ["api_key"]);
 		if (!response.ok) {
 			const errorText = redactCredential(await response.text(), apiKey);
 			throw new SearchHttpError(response.status, `SerpBase API error ${response.status}: ${errorText.slice(0, 300)}`);

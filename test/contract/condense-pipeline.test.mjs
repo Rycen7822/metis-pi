@@ -31,17 +31,33 @@ async function waitForSummarizer(f) {
   assert.ok(f.calls.length, "offline provider must start before checking in-flight state");
 }
 
-async function changeSetting(f, id) {
+async function changeSetting(f, id, selectedValue) {
   initTheme("dark", false);
   f.ctx.ui.custom = async (factory) => {
     const overlay = factory(null, null, null, () => {});
     const list = overlay.children.find(child => child instanceof SettingsList);
     assert.ok(list, "the settings command must open the actual SettingsList");
     list.selectItem(id);
-    list.handleInput(" ");
+    if (selectedValue === undefined) list.handleInput(" ");
+    else {
+      const row = list.items.find(item => item.id === id);
+      for (let i = 0; row.currentValue !== selectedValue && i < row.values.length; i++) list.handleInput(" ");
+      assert.equal(row.currentValue, selectedValue, "the settings list reaches the requested preset");
+    }
   };
   await f.commands.get("pruner").handler("settings", f.ctx);
 }
+
+test("settings Off suppresses automatic paid summaries while explicit manual summaries remain available", async t => {
+  const f = await fixture(t);
+  await changeSetting(f, "autoBudgetThreshold", "0");
+  f.add("semantic source ".repeat(2000), "unknown-command", "auto-budget-off");
+  await f.finish();
+  assert.equal(f.calls.length, 0, "Off blocks automatic model work even at high pressure");
+  assert.equal((await loadConfig()).autoBudgetThreshold, null, "the disabled threshold survives the settings save");
+  await f.commands.get("pruner").handler("now", f.ctx);
+  assert.equal(f.calls.length, 1, "explicit manual summaries retain their model admission");
+});
 
 function addClosedChains(f) {
   for (let i = 0; i < 2; i++) {
@@ -218,6 +234,44 @@ async function fixture(
     waitMaintenance, nextTimestamp: () => clock++,
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
+
+test("persistence failures with embedded stale wording stay write failures and can retry", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand" });
+  const source = f.add("semantic evidence ".repeat(2000), "unknown-command", "write-failure");
+  const mock = t.mock.method(f.pi, "sendMessage", () => {
+    throw new Error('Storage write failed while logging "This extension ctx is stale"');
+  });
+  await f.commands.get("pruner").handler("now", f.ctx);
+  const failed = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data;
+  assert.equal(failed.reason, "failed", "quoted error text does not prove a stale host context");
+  assert.equal(failed.outcome, "error");
+  assert.equal(f.sm.buildSessionProjection().messages.find(message => message.toolCallId === source.id).content[0].text,
+    source.result.content[0].text);
+  assert.ok(!f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"));
+  mock.mock.restore();
+  await f.commands.get("pruner").handler("now", f.ctx);
+  assert.equal(f.calls.length, 2);
+  assert.ok(f.sm.getBranch().some(entry => entry.customType === "context-prune-summary"));
+});
+
+test("published character savings match the actual context projection across multiple summaries", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", batchingMode: "turn" });
+  f.sm.appendMessage({ role: "user", content: "unrelated history ".repeat(10000), timestamp: f.nextTimestamp() });
+  f.add("first semantic evidence ".repeat(2000), "unknown-first", "first-summary");
+  f.add("second semantic evidence ".repeat(2000), "unknown-second", "second-summary");
+  await f.finish();
+  const projection = async () => {
+    const messages = f.sm.buildSessionProjection().messages;
+    return (await f.emit("context", { messages }))?.messages ?? messages;
+  };
+  const before = await projection();
+  await f.commands.get("pruner").handler("now", f.ctx);
+  const after = await projection();
+  const metrics = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data;
+  assert.equal(f.calls.length, 2, "separate turns publish two ordered summaries");
+  assert.equal(metrics.publishedCharsSaved, JSON.stringify(before).length - JSON.stringify(after).length);
+  assert.equal(metrics.firstChangedMessage, before.findIndex((message, index) => JSON.stringify(message) !== JSON.stringify(after[index])));
+});
 
 test("packing precedes the 5000-char gate and keeps settled history stable with chain compression disabled", async (t) => {
   const f = await fixture(t);

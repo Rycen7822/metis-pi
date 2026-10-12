@@ -1,6 +1,7 @@
+import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
-import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
@@ -71,10 +72,6 @@ function text(value: unknown, limit: number): string {
 	return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
 }
 
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function invalidResponse(message: string): Error {
 	return new Error(`Valyu API returned invalid response: ${message}`);
 }
@@ -94,27 +91,22 @@ export function isValyuAvailable(): boolean {
 export async function searchWithValyu(query: string, options: SearchOptions & { includeContent?: boolean } = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
+	const domains = normalizeDomainFilters(options.domainFilter);
 	const startDate = recencyToStartDate(options.recencyFilter);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let response: Response;
 	try {
-		response = await fetch(VALYU_SEARCH_URL, {
+		response = await fetchWithCredentialRedirects(VALYU_SEARCH_URL, {
 			method: "POST",
 			headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
 			body: JSON.stringify({ query, max_num_results: numResults, ...mapDomainFilter(options.domainFilter), ...(startDate ? { start_date: startDate } : {}) }),
 			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-		});
+		}, ["x-api-key"]);
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, failure.message);
+		throw failure.error;
 	}
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
@@ -142,7 +134,7 @@ export async function searchWithValyu(query: string, options: SearchOptions & { 
 	for (const entry of entries) {
 		if (!entry || typeof entry !== "object") continue;
 		const url = text(entry.url, Number.MAX_SAFE_INTEGER);
-		if (!url) continue;
+		if (!url || !matchesDomainFilter(url, domains)) continue;
 		const title = text(entry.title, Number.MAX_SAFE_INTEGER) || `Source ${results.length + 1}`;
 		const content = text(entry.content, MAX_CONTENT_CHARS);
 		const description = text(entry.description, MAX_SNIPPET_CHARS);

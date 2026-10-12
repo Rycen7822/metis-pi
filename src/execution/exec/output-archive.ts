@@ -9,6 +9,7 @@ export class ExecOutputArchive {
 	private path: string | undefined;
 	private bytes = 0;
 	private failed = false;
+	private incompleteReason: string | undefined;
 	private closed = false;
 	private readonly directory: string;
 	private readonly threshold: number;
@@ -42,17 +43,17 @@ export class ExecOutputArchive {
 			this.close();
 		}
 	}
+	markIncomplete(reason: string): void { this.incompleteReason ??= reason; }
 	info() {
-		if (this.failed && !this.path) return { fullOutputComplete: false, fullOutputError: "Output archive unavailable" };
-		return this.path
-      ? {
+		const error = this.failed ? (this.path ? "Output archive is incomplete" : "Output archive unavailable") : this.incompleteReason;
+		if (!this.path) return error ? { fullOutputComplete: false, fullOutputError: error } : undefined;
+		return {
           fullOutputPath: this.path,
           fullOutputBytes: this.bytes,
-          fullOutputComplete: !this.failed,
+          fullOutputComplete: !error,
           fullOutputAppendOnly: true,
-          ...(this.failed ? { fullOutputError: "Output archive is incomplete" } : {}),
-        }
-      : undefined;
+          ...(error ? { fullOutputError: error } : {}),
+        };
 	}
 	close(): void {
 		if (this.fd !== undefined) { try { closeSync(this.fd); } catch { this.failed = true; } }

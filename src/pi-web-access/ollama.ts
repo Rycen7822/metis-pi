@@ -1,7 +1,9 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
-import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
+import { SearchHttpError, SearchUnsupportedFilterError, type SearchOptions, type SearchResponse } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -36,7 +38,7 @@ interface OllamaSearchOptions extends SearchOptions {
 	includeContent?: boolean;
 }
 
-export interface OllamaExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup"> {
+export interface OllamaExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup" | "fetch"> {
 	ssrf?: SsrfConfig;
 }
 
@@ -105,15 +107,18 @@ export function isOllamaAvailable(): boolean {
 }
 
 export async function searchWithOllama(query: string, options: OllamaSearchOptions = {}): Promise<SearchResponse> {
+	if (options.recencyFilter) throw new SearchUnsupportedFilterError("Ollama web search does not support recencyFilter");
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults, { max: 10 });
+	const filters = normalizeDomainFilters(options.domainFilter);
+	const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let response: Response;
 	try {
 		response = await fetch(OLLAMA_SEARCH_URL, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-			body: JSON.stringify({ query, max_results: numResults }),
+			body: JSON.stringify({ query, max_results: hasDomains ? 10 : numResults }),
 			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
 		});
 	} catch (err) {
@@ -149,10 +154,11 @@ export async function searchWithOllama(query: string, options: OllamaSearchOptio
 		throw err;
 	}
 	activityMonitor.logComplete(activityId, response.status);
-	const results = data.results.slice(0, numResults).map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
+	const retained = data.results.filter(result => matchesDomainFilter(result.url, filters)).slice(0, numResults);
+	const results = retained.map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
 	const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
 	if (options.includeContent) {
-		const inlineContent: ExtractedContent[] = data.results.slice(0, numResults)
+		const inlineContent: ExtractedContent[] = retained
 			.filter(result => result.content.trim().length > 0)
 			.map(result => ({ url: result.url, title: result.title, content: result.content, error: null }));
 		if (inlineContent.length > 0) mapped.inlineContent = inlineContent;
@@ -183,6 +189,7 @@ export async function extractWithOllama(url: string, signal?: AbortSignal, optio
 			body: JSON.stringify({ url }),
 			signal: signal ? AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS),
 		}, {
+			fetch: options.fetch,
 			allowRanges: ssrf.allowRanges,
 			trustEnvProxy: ssrf.trustEnvProxy,
 			onRedirect: ({ from, to, init }) => to.origin === from.origin ? init : { ...init, headers: { "Content-Type": "application/json" } },

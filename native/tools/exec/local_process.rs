@@ -30,6 +30,7 @@ struct RunningProcess {
     pipe_stdin: bool,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
+    evicted_through_seq: u64,
     next_seq: u64,
     exit_code: Option<i32>,
     output_notify: Arc<Notify>,
@@ -147,6 +148,7 @@ impl LocalProcess {
                     pipe_stdin: params.pipe_stdin,
                     output: VecDeque::new(),
                     retained_bytes: 0,
+                    evicted_through_seq: 0,
                     next_seq: 1,
                     exit_code: None,
                     output_notify: Arc::clone(&output_notify),
@@ -230,7 +232,9 @@ impl LocalProcess {
                         exited: process.exit_code.is_some(),
                         exit_code: process.exit_code,
                         closed: process.closed,
-                        failure: None,
+                        failure: (after_seq < process.evicted_through_seq).then(|| {
+                            "Earlier output was omitted because the output retention limit was exceeded.".to_string()
+                        }),
                     },
                     Arc::clone(&process.output_notify),
                 )
@@ -328,6 +332,7 @@ async fn stream_output(
                     break;
                 };
                 process.retained_bytes = process.retained_bytes.saturating_sub(evicted.chunk.len());
+                process.evicted_through_seq = evicted.seq;
             }
         }
         output_notify.notify_waiters();
@@ -513,6 +518,52 @@ mod tests {
         .expect("output streams close after the descendant writes its tail");
         assert_eq!(output, b"tail");
         backend.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn reports_unread_output_eviction_without_changing_exit() {
+        for bytes in [65_536usize, 12 * 1024 * 1024] {
+            let backend = LocalProcess::default();
+            let process_id = ProcessId::from(format!("retention-{bytes}"));
+            backend.exec(ExecParams {
+                process_id: process_id.clone(),
+                argv: vec!["sh".into(), "-c".into(), format!("head -c {bytes} /dev/zero")],
+                cwd: std::env::current_dir().unwrap(), env: HashMap::new(),
+                tty: false, pipe_stdin: false, arg0: None,
+            }).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let response = backend.exec_read(ReadParams {
+                        process_id: process_id.clone(), after_seq: Some(0),
+                        max_bytes: Some(1), wait_ms: Some(20),
+                    }).await.unwrap();
+                    if response.closed { break; }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            }).await.expect("the finite producer closes its output streams");
+            let response = backend.exec_read(ReadParams {
+                process_id: process_id.clone(), after_seq: Some(0),
+                max_bytes: None, wait_ms: None,
+            }).await.unwrap();
+            assert_eq!(response.exit_code, Some(0));
+            assert!(response.closed);
+            let captured: usize = response.chunks.iter().map(|chunk| chunk.chunk.0.len()).sum();
+            if bytes == 65_536 {
+                assert_eq!(captured, bytes);
+                assert!(response.failure.is_none(), "fully retained output is not a capture failure");
+            } else {
+                assert!(captured < bytes, "the lagging cursor actually misses producer output");
+                assert!(response.failure.is_some(), "omitted unread bytes must be explicitly reported");
+            }
+            let caught_up = backend.exec_read(ReadParams {
+                process_id, after_seq: Some(response.next_seq.saturating_sub(1)),
+                max_bytes: None, wait_ms: None,
+            }).await.unwrap();
+            assert!(caught_up.failure.is_none(), "an up-to-date cursor does not lose unread data");
+            assert!(caught_up.chunks.is_empty());
+            backend.shutdown().await;
+        }
     }
 
     #[tokio::test]

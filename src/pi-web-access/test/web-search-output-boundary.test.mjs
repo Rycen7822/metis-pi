@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+const extractFetchFixtureUrl = new URL("./extract-fetch-fixture.mjs", import.meta.url).href;
 const DEFAULT_CAP = 30_000;
 const LARGE_ANSWER_LENGTH = 116_000;
 
@@ -227,6 +228,8 @@ test("background includeContent keeps provider page content and fetches only unc
 				on(event, handler) { handlers.set(event, handler); }, appendEntry() {},
 				sendMessage(message) { if (message.customType === "web-search-content-ready") notify(message.content); },
 			};
+			const { injectExtractFetch } = await import(${JSON.stringify(extractFetchFixtureUrl)});
+			const extractionFixture = injectExtractFetch(globalThis.fetch);
 			const initializeExtension = (await import(${JSON.stringify(indexUrl)})).default;
 			initializeExtension(pi);
 			await handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] } });
@@ -235,6 +238,7 @@ test("background includeContent keeps provider page content and fetches only unc
 			const retrieve = tools.find(tool => tool.name === "get_search_content");
 			const pages = [];
 			for (const urlIndex of [0, 1]) pages.push((await retrieve.execute("page", { responseId: result.details.fetchId, urlIndex })).content[0].text);
+			extractionFixture.dispose();
 			console.log(JSON.stringify({ fetchId: result.details.fetchId, message, pages, requests }));
 			`,
 			encoding: "utf8",

@@ -4,6 +4,7 @@ import {
   buildSessionProjection, convertToLlm, estimateTokens,
   type ExtensionAPI, type ExtensionContext, type SessionEntry, type CompactionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { METIS_EVENTS, isCodexCompactionOwnerRequest, type CodexCompactionOwnerRequest, type BeforeRemoteCompactRequest } from "./collaboration.ts";
 
 const KEY = "metisCodexRemoteCompaction";
 const MARKER = "[Metis Codex remote checkpoint ";
@@ -19,7 +20,9 @@ const ours = (entry: SessionEntry): entry is CompactionEntry => entry.type === "
   && (entry.fromHook === true || Object.hasOwn(record(entry.details), KEY))
   && entry.summary.startsWith(MARKER) && /^[\da-f-]{36}\]$/.test(entry.summary.slice(MARKER.length));
 
-function isRemoteModel(model: ExtensionContext["model"]): model is Model<Api> {
+function isRemoteModel(model: ExtensionContext["model"]): model is Model<Api>;
+function isRemoteModel(model: CodexCompactionOwnerRequest["model"]): boolean;
+function isRemoteModel(model: CodexCompactionOwnerRequest["model"]): boolean {
   return (model?.api === "openai-codex-responses" || model?.api === "openai-responses")
     && (model.provider === "openai" || model.provider === "openai-codex");
 }
@@ -50,7 +53,7 @@ function rawBranch(branch: SessionEntry[]): SessionEntry[] {
     ? { ...entry, type: "custom" as const, customType: KEY, data: undefined }
     : entry);
 }
-function active(ctx: ExtensionContext) {
+function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManager"] }) {
   const projection = ctx.sessionManager.buildSessionProjection();
   const entry = projection.entries.find(e => e.sourceEntry.type === "compaction" && e.messages.length)?.sourceEntry;
   if (!entry || !ours(entry)) return;
@@ -171,9 +174,9 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   let unsubscribeOwner: (() => void) | undefined;
   const subscribeOwner = () => {
     unsubscribeOwner?.();
-    unsubscribeOwner = pi.events.on("metis:codex-compaction-owner", value => {
-      const request = value as { ctx: ExtensionContext; owns: boolean };
-      request.owns = isRemoteModel(request.ctx.model) || Boolean(active(request.ctx));
+    unsubscribeOwner = pi.events.on(METIS_EVENTS.codexCompactionOwner, request => {
+      if (!isCodexCompactionOwnerRequest(request)) return;
+      request.owns = isRemoteModel(request.model) || Boolean(active(request));
     });
   };
   subscribeOwner();
@@ -196,7 +199,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     ctx.abort();
     if (preparedModel?.api === "openai-codex-responses" && preparedSession)
       cleanupSessionResources(preparedSession);
-    pi.events.emit("metis:checkpoint-request-cancelled", {});
+    pi.events.emit(METIS_EVENTS.checkpointRequestCancelled, {});
     try {
       ctx.ui.notify("Request cancelled because its context or model changed. Retry to use the current context.", "warning");
     } catch { /* UI teardown cannot undo request cancellation. */ }
@@ -255,7 +258,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const previous = active(ctx);
       if (!remote && !previous) return;
       const waits: Promise<void>[] = [];
-      pi.events.emit("metis:before-remote-compact", { waits, signal: event.signal });
+      pi.events.emit(METIS_EVENTS.beforeRemoteCompact, { waits, signal: event.signal } satisfies BeforeRemoteCompactRequest);
       await Promise.all(waits);
       const version = generation, model = ctx.model;
       const modelHash = hash(model);

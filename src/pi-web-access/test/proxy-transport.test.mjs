@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import initializeExtension from "../index.ts";
-import { getActiveProxy, installGlobalProxyFetch, runWithProxy } from "../proxy-transport.ts";
+import { getActiveProxy, webFetch as fetch, runWithProxy } from "../proxy-transport.ts";
 
 const originalFetch = globalThis.fetch;
 const originalPath = process.env.PATH;
@@ -38,12 +38,16 @@ async function withFakeCurl(t, routes, fn) {
 const fs = require("node:fs");
 const routes = JSON.parse(process.env.PI_PROXY_TEST_ROUTES);
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.PI_PROXY_TEST_LOG, JSON.stringify(args) + "\\n");
+const options = fs.readFileSync(0, "utf8").trim().split("\\n").map(line => {
+  const separator = line.indexOf(" = ");
+  return [line.slice(0, separator), JSON.parse(line.slice(separator + 3))];
+});
+fs.appendFileSync(process.env.PI_PROXY_TEST_LOG, JSON.stringify({ args, options }) + "\\n");
 function valueAfter(flag) {
   const index = args.indexOf(flag);
   return index === -1 ? null : args[index + 1];
 }
-const url = args[args.length - 1];
+const url = options.find(([name]) => name === "url")[1];
 const route = routes[url];
 if (!route) throw new Error("unexpected url " + url);
 fs.writeFileSync(valueAfter("-D"), "HTTP/1.1 " + route.status + " " + route.statusText + "\\r\\n" + (route.location ? "Location: " + route.location + "\\r\\n" : "") + "\\r\\n");
@@ -57,7 +61,6 @@ process.stdout.write(JSON.stringify({ url_effective: url, num_redirects: 0 }));
 	process.env.NO_PROXY = "";
 	process.env.no_proxy = "";
 	globalThis.fetch = originalFetch;
-	installGlobalProxyFetch();
 	t.after(async () => {
 		globalThis.fetch = originalFetch;
 		if (originalPath === undefined) delete process.env.PATH;
@@ -83,11 +86,7 @@ async function readCurlCalls(logPath) {
 }
 
 function headerValues(args) {
-	const values = [];
-	for (let index = 0; index < args.length; index++) {
-		if (args[index] === "-H") values.push(args[index + 1]);
-	}
-	return values;
+	return args.options.filter(([name]) => name === "header").map(([, value]) => value);
 }
 
 function registerSourceCheck() {
@@ -115,13 +114,14 @@ function registerFetchContent() {
 }
 
 function proxyArg(args) {
-	const index = args.indexOf("-x");
-	return index === -1 ? undefined : args[index + 1];
+	return args.options.find(([name]) => name === "proxy")?.[1];
 }
 
-test("extension initialization preserves fetch identity and installs proxy transport on first proxied tool call", async (t) => {
+function urlArg(args) { return args.options.find(([name]) => name === "url")?.[1]; }
+
+test("extension initialization and proxied tool execution preserve host fetch identity", async (t) => {
 	await withFakeCurl(t, {
-		"https://example.com/page": {
+		"https://93.184.216.34/page": {
 			status: 200,
 			statusText: "OK",
 			body: "<html><title>Proxy page</title><body>Fetched lazily through the requested proxy.</body></html>",
@@ -143,12 +143,12 @@ test("extension initialization preserves fetch identity and installs proxy trans
 				const unchangedAfterInit = globalThis.fetch === hostFetch;
 				const tool = tools.find((candidate) => candidate.name === "fetch_content");
 				const result = await tool.execute("call", {
-					url: "https://example.com/page",
+					url: "https://93.184.216.34/page",
 					proxy: "http://call-proxy.example:8080",
 				});
 				console.log(JSON.stringify({
 					unchangedAfterInit,
-					installedAfterProxyCall: globalThis.fetch !== hostFetch,
+					unchangedAfterProxyCall: globalThis.fetch === hostFetch,
 					successful: result.details.successful,
 				}));
 			`,
@@ -160,12 +160,12 @@ test("extension initialization preserves fetch identity and installs proxy trans
 		assert.equal(child.status, 0, child.stderr);
 		assert.deepEqual(JSON.parse(child.stdout.trim()), {
 			unchangedAfterInit: true,
-			installedAfterProxyCall: true,
+			unchangedAfterProxyCall: true,
 			successful: 1,
 		});
 		const calls = await readCurlCalls(logPath);
 		assert.equal(calls.length, 1);
-		assert.equal(calls[0].at(-1), "https://example.com/page");
+		assert.equal(urlArg(calls[0]), "https://93.184.216.34/page");
 		assert.ok(["http://call-proxy.example:8080", "http://call-proxy.example:8080/"].includes(proxyArg(calls[0])));
 	});
 });
@@ -191,7 +191,7 @@ test("proxy curl redirects strip caller headers across origins", async (t) => {
 		assert.equal(calls.length, 2);
 		assert.ok(headerValues(calls[0]).some((header) => /^authorization:/i.test(header)));
 		assert.deepEqual(headerValues(calls[1]), []);
-		assert.ok(calls.every((args) => !args.includes("--location")));
+		assert.ok(calls.every((args) => !args.args.includes("--location")));
 	});
 });
 
@@ -270,7 +270,7 @@ test("fetch_content lets a trusted configured proxy resolve hostnames that local
 		});
 		assert.equal(child.status, 0, child.stderr);
 		assert.deepEqual(JSON.parse(child.stdout.trim().split("\n").at(-1)), [1, 1]);
-		const pageCalls = (await readCurlCalls(logPath)).filter((args) => args.at(-1) === url);
+		const pageCalls = (await readCurlCalls(logPath)).filter((args) => urlArg(args) === url);
 		assert.equal(pageCalls.length, 2);
 		assert.ok(pageCalls.every((args) => ["http://configured-proxy.example:3128", "http://configured-proxy.example:3128/"].includes(proxyArg(args))));
 	});
@@ -450,10 +450,10 @@ test("source_check fetchContent uses the explicit proxy for result pages", async
 			status: 200,
 			statusText: "OK",
 			body: JSON.stringify({
-				output: [{ type: "web_search_call", action: { sources: [{ title: "API docs", url: "https://example.com/api" }] } }],
+				output: [{ type: "web_search_call", action: { sources: [{ title: "API docs", url: "https://93.184.216.34/api" }] } }],
 			}),
 		},
-		"https://example.com/api": { status: 200, statusText: "OK", body: "<html><title>API docs</title><body>The API docs are available.</body></html>" },
+		"https://93.184.216.34/api": { status: 200, statusText: "OK", body: "<html><title>API docs</title><body>The API docs are available.</body></html>" },
 	}, async (logPath) => {
 		const tool = registerSourceCheck();
 		assert.ok(tool);
@@ -466,8 +466,8 @@ test("source_check fetchContent uses the explicit proxy for result pages", async
 
 		assert.equal(response.details.sourceCount, 1);
 		const calls = await readCurlCalls(logPath);
-		const apiCall = calls.find((args) => args.at(-1) === "https://api.openai.com/v1/responses");
-		const pageCall = calls.find((args) => args.at(-1) === "https://example.com/api");
+		const apiCall = calls.find((args) => urlArg(args) === "https://api.openai.com/v1/responses");
+		const pageCall = calls.find((args) => urlArg(args) === "https://93.184.216.34/api");
 		assert.ok(apiCall);
 		assert.ok(pageCall);
 		assert.ok(["http://call-proxy.example:8080", "http://call-proxy.example:8080/"].includes(proxyArg(apiCall)));
@@ -477,7 +477,7 @@ test("source_check fetchContent uses the explicit proxy for result pages", async
 
 test("fetch_content passes the explicit proxy through queued extraction", async (t) => {
 	await withFakeCurl(t, {
-		"https://example.com/page": {
+		"https://93.184.216.34/page": {
 			status: 200,
 			statusText: "OK",
 			body: "<html><title>Proxy page</title><body>Fetched through the requested proxy.</body></html>",
@@ -486,12 +486,12 @@ test("fetch_content passes the explicit proxy through queued extraction", async 
 		const tool = registerFetchContent();
 		assert.ok(tool);
 		const response = await tool.execute("call", {
-			url: "https://example.com/page",
+			url: "https://93.184.216.34/page",
 			proxy: "http://call-proxy.example:8080",
 		});
 
 		assert.equal(response.details.successful, 1);
-		const pageCall = (await readCurlCalls(logPath)).find((args) => args.at(-1) === "https://example.com/page");
+		const pageCall = (await readCurlCalls(logPath)).find((args) => urlArg(args) === "https://93.184.216.34/page");
 		assert.ok(pageCall);
 		assert.ok(["http://call-proxy.example:8080", "http://call-proxy.example:8080/"].includes(proxyArg(pageCall)));
 	});
@@ -614,7 +614,7 @@ test("websearch command scopes searches but not model callbacks to configured pr
 		});
 		const calls = await readCurlCalls(logPath);
 		assert.equal(calls.length, 2);
-		assert.equal(calls.filter((args) => args.at(-1) === "https://run.xcrawl.com/v1/serp").length, 2);
+		assert.equal(calls.filter((args) => urlArg(args) === "https://run.xcrawl.com/v1/serp").length, 2);
 		assert.ok(calls.every((args) => ["http://configured-proxy.example:8080", "http://configured-proxy.example:8080/"].includes(proxyArg(args))));
 	});
 });
@@ -627,13 +627,12 @@ test("configured socks5h proxy is accepted and routed to curl", async (t) => {
 	});
 
 	await withFakeCurl(t, {
-		"https://example.com/page": { status: 200, statusText: "OK", body: "through socks proxy" },
+		"https://93.184.216.34/page": { status: 200, statusText: "OK", body: "through socks proxy" },
 	}, async (logPath) => {
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
-				const { getActiveProxy, installGlobalProxyFetch, runWithProxy } = await import(${JSON.stringify(utilsUrl)});
-				installGlobalProxyFetch();
-				const response = await runWithProxy(undefined, () => fetch("https://example.com/page"));
+				const { getActiveProxy, webFetch: fetch, runWithProxy } = await import(${JSON.stringify(utilsUrl)});
+				const response = await runWithProxy(undefined, () => fetch("https://93.184.216.34/page"));
 				console.log(JSON.stringify({ active: runWithProxy(undefined, () => getActiveProxy()), body: await response.text() }));
 			`,
 			encoding: "utf8",
@@ -647,7 +646,7 @@ test("configured socks5h proxy is accepted and routed to curl", async (t) => {
 		assert.equal(output.body, "through socks proxy");
 
 		const calls = await readCurlCalls(logPath);
-		const pageCall = calls.find((args) => args.at(-1) === "https://example.com/page");
+		const pageCall = calls.find((args) => urlArg(args) === "https://93.184.216.34/page");
 		assert.ok(pageCall);
 		assert.equal(proxyArg(pageCall), "socks5h://proxy.example:9050");
 	});
@@ -656,10 +655,10 @@ test("configured socks5h proxy is accepted and routed to curl", async (t) => {
 for (const scheme of ["socks4", "socks4a", "socks5", "socks5h"]) {
 	test(`per-call ${scheme} proxy is routed unchanged to curl`, async (t) => {
 		await withFakeCurl(t, {
-			"https://example.com/page": { status: 200, statusText: "OK", body: "through socks proxy" },
+			"https://93.184.216.34/page": { status: 200, statusText: "OK", body: "through socks proxy" },
 		}, async (logPath) => {
 			const proxy = `${scheme}://proxy.example:9050`;
-			const response = await runWithProxy(proxy, () => fetch("https://example.com/page"));
+			const response = await runWithProxy(proxy, () => fetch("https://93.184.216.34/page"));
 			assert.equal(await response.text(), "through socks proxy");
 			const calls = await readCurlCalls(logPath);
 			assert.equal(calls.length, 1);
@@ -673,7 +672,7 @@ test("generic socks proxy is rejected before transport runs", async (t) => {
 		let called = false;
 		assert.throws(() => runWithProxy("socks://proxy.example:9050", () => {
 			called = true;
-			return fetch("https://example.com/page");
+			return fetch("https://93.184.216.34/page");
 		}), /proxy.*must use the http:\/\/, https:\/\/, or socks scheme/);
 		assert.equal(called, false);
 		await assert.rejects(readFile(logPath, "utf8"), /ENOENT/);

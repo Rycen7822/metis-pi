@@ -59,11 +59,13 @@ import fs from "node:fs";
 const mode = ${JSON.stringify(mode)};
 const readStarted = ${JSON.stringify(readStarted)}, outputReady = ${JSON.stringify(outputReady)}, responsePath = ${JSON.stringify(responsePath)};
 const chunks = [
-  { seq: 1, stream: "stdout", chunk: Buffer.from([0xf0, 0x9f]).toString("base64") },
-  { seq: 2, stream: "stdout", chunk: Buffer.from([0x99, 0x82]).toString("base64") },
+  { seq: mode === "evicted" ? 3 : 1, stream: "stdout", chunk: Buffer.concat([
+    Buffer.from(mode === "evicted" ? "retained-prefix-".repeat(64) : ""), Buffer.from([0xf0, 0x9f]),
+  ]).toString("base64") },
+  { seq: mode === "evicted" ? 4 : 2, stream: "stdout", chunk: Buffer.from([0x99, 0x82]).toString("base64") },
 ];
 let available = mode === "arriving" ? chunks.slice(0, 1) : chunks;
-let closed = false;
+let closed = mode === "evicted";
 let queue = Promise.resolve();
 createInterface({ input: process.stdin }).on("line", line => {
   const request = JSON.parse(line);
@@ -79,7 +81,8 @@ createInterface({ input: process.stdin }).on("line", line => {
       const emitted = mode === "held" && !fs.existsSync(outputReady) ? [] : available;
       const selected = emitted.filter(chunk => chunk.seq > request.after_seq);
       await new Promise(resolve => setTimeout(resolve, selected.length ? 20 : request.wait_ms ?? 0));
-      result = { chunks: selected, nextSeq: (emitted.at(-1)?.seq ?? 0) + 1, exited: closed, exitCode: closed ? 0 : undefined, closed };
+      result = { chunks: selected, nextSeq: (emitted.at(-1)?.seq ?? 0) + 1, exited: closed, exitCode: closed ? 0 : undefined, closed,
+        failure: mode === "evicted" ? "Earlier output was omitted because the output retention limit was exceeded." : null };
       fs.writeFileSync(responsePath, JSON.stringify({ sequences: selected.map(chunk => chunk.seq) }));
       if (mode === "arriving") { available = chunks; closed = true; }
     }
@@ -90,7 +93,7 @@ createInterface({ input: process.stdin }).on("line", line => {
 `, { mode: 0o700 });
     const runtime = createBridgeSessionRuntime(() => path);
     t.after(async () => { try { await runtime.shutdown(); } finally { fs.rmSync(directory, { recursive: true, force: true }); } });
-    return { runtime, readStarted, outputReady, responsePath };
+    return { runtime, binaryPath: path, readStarted, outputReady, responsePath };
   }
 
   function retainedProcess(runtime, hooks) {
@@ -98,6 +101,21 @@ createInterface({ input: process.stdin }).on("line", line => {
       input: { executionCommand: "fixture", executionEnv: {} },
       workdir: process.cwd(), shell: "/bin/sh", hooks });
   }
+
+  test("reported native retention loss preserves received data and process status but marks the archive incomplete", async t => {
+    const { binaryPath, responsePath } = retainedBridge(t, "evicted");
+    const manager = createExecSessionManager({ bridgeBinaryPath: () => binaryPath });
+    t.after(() => manager.shutdown());
+    const result = await manager.exec({ cmd: "fixture", shell: "/bin/sh", login: false,
+      yield_time_ms: 1000, max_output_tokens: 16, archiveDirectory: join(responsePath, "..") }, process.cwd());
+    assert.equal(result.exit_code, 0, "capture incompleteness does not turn execution into failure");
+    assert.equal(fs.readFileSync(result.fullOutputPath, "utf8"), "retained-prefix-".repeat(64) + "🙂");
+    assert.equal(result.fullOutputComplete, false);
+    assert.match(result.fullOutputError, /retention limit/);
+    const replay = await manager.write({ session_id: 1 });
+    assert.equal(replay.fullOutputComplete, false);
+    assert.equal(replay.fullOutputError, result.fullOutputError);
+  });
 
   test("background and foreground polls commit each retained byte sequence once", async t => {
     const { runtime } = retainedBridge(t);
@@ -417,13 +435,15 @@ createInterface({ input: process.stdin }).on("line", line => {
   test("post-exit idle cutoff retires dangling streams without flushing incomplete UTF-8", { timeout: 15000 }, async t => {
     const directory = fs.mkdtempSync(join(tmpdir(), "metis-exec-late-tail-"));
     const release = join(directory, "release"), emitted = join(directory, "emitted");
-    const { manager, exec } = nativeExec(t);
+    const prefix = "captured-prefix-".repeat(4000);
+    const { manager, exec } = nativeExec(t, { maxSessionBufferChars: 1024 });
     let exits = 0;
     manager.onSessionExit(() => { exits++; });
     const child = `
       const fs = require("node:fs");
       process.stdout.on("error", () => {});
-      process.stdout.write(Buffer.from([0xf0, 0x9f]), () => process.send("ready"));
+      process.stdout.write(${JSON.stringify(prefix)}, () =>
+        process.stdout.write(Buffer.from([0xf0, 0x9f]), () => process.send("ready")));
       const deadline = Date.now() + 5000;
       const timer = setInterval(() => {
         if (fs.existsSync(${JSON.stringify(release)})) {
@@ -439,19 +459,25 @@ createInterface({ input: process.stdin }).on("line", line => {
     const script = `const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(child)}],
       { stdio: ["ignore", 1, 2, "ipc"] }); child.once("message", () => process.exit(0));`;
     try {
-      const result = await exec(script, { yield_time_ms: 1000 });
+      const result = await exec(script, { yield_time_ms: 1000, max_output_tokens: 16, archiveDirectory: directory });
       fs.writeFileSync(release, "emit");
       const deadline = Date.now() + 5000;
       while (!fs.existsSync(emitted) && Date.now() < deadline)
         await new Promise(resolve => setTimeout(resolve, 10));
       assert.equal(fs.readFileSync(emitted, "utf8"), "tail", "the descendant actually emits the late bytes through its inherited pipe");
       assert.equal(result.exit_code, 0, "the host retires the exited parent before the descendant is released");
-      assert.equal(result.output, "", "host inactivity is not stream EOF and cannot flush a half character");
+      assert.doesNotMatch(result.output, /\uFFFD/, "host inactivity is not stream EOF and cannot flush a half character");
+      assert.equal(fs.readFileSync(result.fullOutputPath, "utf8"), prefix, "the durable captured prefix excludes the actually emitted late bytes");
+      assert.equal(result.fullOutputComplete, false, "an archive stopped before pipe closure cannot claim complete output");
+      assert.match(result.fullOutputError, /output streams.*closed|later output/i);
       assert.equal(exits, 1);
       assert.equal(manager.hasSession(1), false);
       const replay = await manager.write({ session_id: 1 });
       assert.equal(replay.exit_code, 0);
-      assert.equal(replay.output, "", "late descendant output stays outside the host's bounded completed replay");
+      assert.doesNotMatch(replay.output, /\uFFFD/, "completed replay does not flush the unfinished character");
+      assert.equal(replay.fullOutputComplete, false, "completed replay retains capture incompleteness");
+      assert.equal(replay.fullOutputPath, result.fullOutputPath);
+      assert.equal(fs.readFileSync(replay.fullOutputPath, "utf8"), prefix);
     } finally {
       fs.writeFileSync(release, "emit");
       const deadline = Date.now() + 5000;

@@ -24,7 +24,7 @@ async function runExtract(config, urls, optionsByUrl = []) {
 			const optionsByUrl = ${JSON.stringify(optionsByUrl)};
 			const results = [];
 			for (let index = 0; index < urls.length; index += 1) {
-				results.push(await extractContent(urls[index], undefined, { ...optionsByUrl[index], lookup: async () => [{ address: "93.184.216.34", family: 4 }] }));
+				results.push(await extractContent(urls[index], undefined, { ...optionsByUrl[index], fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] }));
 			}
 			console.log(JSON.stringify({ fetchCalls, results }));
 		`,
@@ -82,7 +82,7 @@ test("fetch_content rejects chunked oversized text responses while reading", asy
 				},
 			}), { status: 200, headers: { "content-type": "text/html" } });
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://allowed.example/article", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://allowed.example/article", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify(result));
 		`,
 		encoding: "utf8",

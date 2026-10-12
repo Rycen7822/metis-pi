@@ -1,4 +1,4 @@
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
@@ -313,7 +313,7 @@ async function parallelFetch(
 	const activityId = activityMonitor.logStart(activityContext(url, body));
 	let response: Response;
 	try {
-		response = await fetch(url, {
+		response = await fetchWithCredentialRedirects(url, {
 			method: "POST",
 			headers: {
 				"x-api-key": apiKey,
@@ -321,7 +321,7 @@ async function parallelFetch(
 			},
 			body: JSON.stringify(body),
 			signal: requestSignal(signal),
-		});
+		}, ["x-api-key"]);
 	} catch (err) {
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);

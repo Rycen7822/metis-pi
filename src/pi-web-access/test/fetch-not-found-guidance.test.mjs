@@ -15,7 +15,7 @@ function stubStatus(t, status, statusText) {
 test("404 drops the provider checklist and points at the registered tools", async (t) => {
 	stubStatus(t, 404, "Not Found");
 
-	const result = await extractContent("https://example.com/missing-page", undefined, { lookup, toolNames });
+	const result = await extractContent("https://example.com/missing-page", undefined, { fetch: globalThis.fetch, lookup, toolNames });
 
 	assert.equal(result.status, 404);
 	assert.match(result.error, /HTTP 404: Not Found/);
@@ -27,7 +27,7 @@ test("404 drops the provider checklist and points at the registered tools", asyn
 test("410 gets the same not-found guidance", async (t) => {
 	stubStatus(t, 410, "Gone");
 
-	const result = await extractContent("https://example.com/retired", undefined, { lookup, toolNames });
+	const result = await extractContent("https://example.com/retired", undefined, { fetch: globalThis.fetch, lookup, toolNames });
 
 	assert.equal(result.status, 410);
 	assert.doesNotMatch(result.error, /Fallback options:/);
@@ -38,6 +38,7 @@ test("guidance uses the registered public tool names", async (t) => {
 	stubStatus(t, 404, "Not Found");
 
 	const result = await extractContent("https://example.com/missing-page", undefined, {
+		fetch: globalThis.fetch,
 		lookup,
 		toolNames: { webSearch: "webfinder", fetchContent: "pageget" },
 	});
@@ -50,7 +51,7 @@ test("guidance uses the registered public tool names", async (t) => {
 test("guidance stays generic when the caller does not know the tool names", async (t) => {
 	stubStatus(t, 404, "Not Found");
 
-	const result = await extractContent("https://example.com/missing-page", undefined, { lookup });
+	const result = await extractContent("https://example.com/missing-page", undefined, { fetch: globalThis.fetch, lookup });
 
 	assert.doesNotMatch(result.error, /Fallback options:/);
 	assert.doesNotMatch(result.error, /web_search/);
@@ -61,6 +62,7 @@ test("guidance omits the fetch tool when only search is registered", async (t) =
 	stubStatus(t, 404, "Not Found");
 
 	const result = await extractContent("https://example.com/missing-page", undefined, {
+		fetch: globalThis.fetch,
 		lookup,
 		toolNames: { webSearch: "web_search" },
 	});
@@ -72,7 +74,7 @@ test("guidance omits the fetch tool when only search is registered", async (t) =
 test("transient errors keep the fallback checklist", async (t) => {
 	stubStatus(t, 500, "Internal Server Error");
 
-	const result = await extractContent("https://example.com/oops", undefined, { lookup, toolNames });
+	const result = await extractContent("https://example.com/oops", undefined, { fetch: globalThis.fetch, lookup, toolNames });
 
 	assert.equal(result.status, 500);
 	assert.match(result.error, /Fallback options:/);
@@ -83,6 +85,7 @@ test("the checklist search bullet follows the registered search tool name", asyn
 	stubStatus(t, 500, "Internal Server Error");
 
 	const result = await extractContent("https://example.com/oops", undefined, {
+		fetch: globalThis.fetch,
 		lookup,
 		toolNames: { webSearch: "webfinder" },
 	});

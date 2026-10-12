@@ -48,7 +48,10 @@ export function generateCuratorPage(
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.umd.js"
+  integrity="sha384-N2BlPYJH0HRuJRIZOGNTL/ymqHb++FCViUqW4rdB5/7fH+KvFTqyCvPPQ8X4nElj" crossorigin="anonymous"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js"
+  integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous"><\/script>
 <style>
 ${CSS}
 </style>
@@ -1491,6 +1494,8 @@ const SCRIPT = `(function() {
   var heroTitle = document.querySelector(".hero-title");
   var heroDesc = document.querySelector(".hero-desc");
   var resultCardsEl = document.getElementById("result-cards");
+  var ownedResultCards = new WeakSet();
+  var cardCheckboxes = new WeakMap();
   var btnSend = document.getElementById("btn-send");
   var btnSendRaw = document.getElementById("btn-send-raw");
   var sendRawRow = document.getElementById("send-raw-row");
@@ -1549,22 +1554,19 @@ const SCRIPT = `(function() {
 
   function sanitizeHref(url) {
     var value = typeof url === "string" ? url.trim() : "";
-    return /^https?:\/\//i.test(value) ? value : "#";
+    return /^https?:\\/\\//i.test(value) ? value : "#";
   }
 
   function sanitizeMarkdownHtml(html) {
+    if (!window.DOMPurify || !window.DOMPurify.isSupported) return escHtml(html);
     var container = document.createElement("div");
-    container.innerHTML = html;
-
-    container.querySelectorAll("script, iframe, object, embed, form, style, link, meta, base")
-      .forEach(function(el) { el.remove(); });
-
-    var nodes = container.querySelectorAll("*");
-    nodes.forEach(function(node) {
-      for (var i = node.attributes.length - 1; i >= 0; i--) {
-        var attr = node.attributes[i];
-        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
-      }
+    container.innerHTML = window.DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: ["p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote",
+        "ul", "ol", "li", "strong", "em", "b", "i", "del", "s", "pre", "code", "a", "img",
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "sup", "sub"],
+      ALLOWED_ATTR: ["href", "src", "alt", "title", "colspan", "rowspan", "start"],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
     });
 
     var anchors = container.querySelectorAll("a[href]");
@@ -1586,6 +1588,12 @@ const SCRIPT = `(function() {
     });
 
     return container.innerHTML;
+  }
+
+  function getResultCards() {
+    return resultCardsEl ? Array.from(resultCardsEl.children).filter(function(card) {
+      return ownedResultCards.has(card);
+    }) : [];
   }
 
   function post(path, body) {
@@ -1862,9 +1870,9 @@ const SCRIPT = `(function() {
       addSearchEl.style.pointerEvents = disableAddSearch ? "none" : "";
     }
 
-    var cards = resultCardsEl ? resultCardsEl.querySelectorAll(".result-card") : [];
+    var cards = getResultCards();
     cards.forEach(function(card) {
-      var cb = card.querySelector("input[type=checkbox]");
+      var cb = cardCheckboxes.get(card);
       if (!cb) return;
       var searching = card.classList.contains("searching");
       var error = card.classList.contains("error");
@@ -1901,7 +1909,7 @@ const SCRIPT = `(function() {
 
   function updateSummaryText() {
     if (completedCount <= 0) return;
-    var totalCards = resultCardsEl.querySelectorAll(".result-card").length;
+    var totalCards = getResultCards().length;
     var searchingCount = totalCards - completedCount;
     if (searchingCount > 0) {
       heroTitle.textContent = completedCount + " of " + totalCards + " Searches Complete";
@@ -2193,6 +2201,7 @@ const SCRIPT = `(function() {
 
   function createSearchingCard(queryText, provider) {
     var card = document.createElement("div");
+    ownedResultCards.add(card);
     card.className = "result-card searching";
     card.innerHTML =
       '<div class="result-card-header">' +
@@ -2206,6 +2215,7 @@ const SCRIPT = `(function() {
         "</div>" +
       "</div>" +
       buildAltChipsHtml(provider, queryText);
+    cardCheckboxes.set(card, card.querySelector("input[type=checkbox]"));
     return card;
   }
 
@@ -2215,7 +2225,7 @@ const SCRIPT = `(function() {
       resultCardsEl.insertBefore(card, afterCard.nextSibling);
       return;
     }
-    var slotCards = resultCardsEl.querySelectorAll('.result-card[data-slot="' + slotId + '"]');
+    var slotCards = getResultCards().filter(function(existing) { return existing.dataset.slot === String(slotId); });
     var lastCard = slotCards.length > 0 ? slotCards[slotCards.length - 1] : null;
     if (lastCard) resultCardsEl.insertBefore(card, lastCard.nextSibling);
     else resultCardsEl.appendChild(card);
@@ -2749,7 +2759,7 @@ const SCRIPT = `(function() {
     var queryText = data.query || queries[data.queryIndex] || "";
     var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
     if (typeof slotId !== "number") slotId = data.queryIndex;
-    var card = resultCardsEl.querySelector('.result-card[data-qi="' + data.queryIndex + '"]');
+    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
     if (!card) {
       card = createSearchingCard(queryText, data.provider);
       card.dataset.qi = data.queryIndex;
@@ -2768,7 +2778,7 @@ const SCRIPT = `(function() {
     var queryText = data.query || queries[data.queryIndex] || "";
     var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
     if (typeof slotId !== "number") slotId = data.queryIndex;
-    var card = resultCardsEl.querySelector('.result-card[data-qi="' + data.queryIndex + '"]');
+    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
     if (!card) {
       card = createSearchingCard(queryText, data.provider);
       card.dataset.qi = data.queryIndex;
@@ -2877,6 +2887,7 @@ const SCRIPT = `(function() {
     var expandEl = card.querySelector(".result-card-expand");
 
     if (!header || !cb) return;
+    cardCheckboxes.set(card, cb);
 
     header.addEventListener("click", function(e) {
       if (e.target.tagName === "A") return;
@@ -2907,11 +2918,11 @@ const SCRIPT = `(function() {
 
   function getSelectedIndices() {
     var indices = [];
-    var cards = resultCardsEl.querySelectorAll(".result-card");
+    var cards = getResultCards();
     cards.forEach(function(card) {
       if (card.dataset.completed !== "true") return;
       if (card.classList.contains("error")) return;
-      var cb = card.querySelector("input[type=checkbox]");
+      var cb = cardCheckboxes.get(card);
       if (!cb || !cb.checked) return;
       var qi = parseInt(card.dataset.qi, 10);
       if (!Number.isNaN(qi)) indices.push(qi);
@@ -2921,7 +2932,7 @@ const SCRIPT = `(function() {
 
   function getCompletedSelectableIndices() {
     var indices = [];
-    var cards = resultCardsEl.querySelectorAll(".result-card");
+    var cards = getResultCards();
     cards.forEach(function(card) {
       if (card.dataset.completed !== "true") return;
       if (card.classList.contains("error")) return;
@@ -2932,7 +2943,7 @@ const SCRIPT = `(function() {
   }
 
   function hasPendingSearchCards() {
-    var cards = resultCardsEl.querySelectorAll(".result-card");
+    var cards = getResultCards();
     for (var i = 0; i < cards.length; i++) {
       var card = cards[i];
       if (card.dataset.completed !== "true") return true;
@@ -3498,10 +3509,10 @@ const SCRIPT = `(function() {
     if (e.key.toLowerCase() === "a" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       if (stage !== "results") return;
-      var boxes = resultCardsEl.querySelectorAll(".result-card input[type=checkbox]");
+      var boxes = getResultCards().map(function(card) { return cardCheckboxes.get(card); });
       var selectable = [];
       boxes.forEach(function(cb) {
-        if (cb.disabled) return;
+        if (!cb || cb.disabled) return;
         selectable.push(cb);
       });
       if (selectable.length === 0) return;

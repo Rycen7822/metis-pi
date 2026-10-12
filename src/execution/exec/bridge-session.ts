@@ -16,6 +16,7 @@ export interface BridgeExecProcess {
 	readonly started: boolean;
 	readonly exitCode: number | undefined;
 	readonly terminating: boolean;
+	readonly outputError: string | undefined;
 	poll(waitMs?: number): Promise<void>;
 	waitForStartup(signal?: AbortSignal): Promise<void>;
 	write(chars: string): Promise<void>;
@@ -54,6 +55,7 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
 		let postExitIdleSince: number | undefined;
 		let observedExitCode: number | null | undefined;
 		let outputDecodersFlushed = false;
+		let outputFailure: string | undefined;
 		const outputDecoders = {
 			stdout: new StringDecoder("utf8"),
 			stderr: new StringDecoder("utf8"),
@@ -79,6 +81,10 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
 				wait_ms: waitMs,
 			});
 			if (!hooks.isOwned()) return;
+			if (response.failure) {
+				outputFailure ??= response.failure;
+				hooks.onOutput("");
+			}
 			let receivedOutput = false;
 			for (const chunk of response.chunks ?? []) {
 				if (chunk.seq <= lastSeq) continue;
@@ -180,6 +186,11 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
 			get started() { return started; },
 			get exitCode() { return exitCode; },
 			get terminating() { return terminating; },
+			get outputError() {
+				return outputFailure ?? (started && exitCode !== undefined && !outputDecodersFlushed
+					? "Output capture ended before all output streams closed; later output may be omitted."
+					: undefined);
+			},
 			poll,
 			waitForStartup,
 			write: async (chars) => {

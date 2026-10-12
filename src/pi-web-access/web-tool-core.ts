@@ -505,7 +505,7 @@ export interface WebToolCoreHost {
 	/** Answers fetch_content mode "answer"; requires the host's model access. */
 	answerFromPage?(request: PageAnswerRequest, extensionContext: ExtensionContext | undefined, signal?: AbortSignal): Promise<{ text: string }>;
 	/** Extraction options every fetch in this host adds (for example direct-image policy). */
-	extractOptions?: Pick<ExtractOptions, "rejectDirectImages">;
+	extractOptions?: Pick<ExtractOptions, "rejectDirectImages" | "fetch">;
 }
 
 export type WebToolUpdate = (update: { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }) => void;

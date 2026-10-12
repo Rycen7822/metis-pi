@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { after, afterEach, test } from "node:test";
 
-import initializeExtension from "../index.ts";
-import { clearResults, getResult } from "../storage.ts";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
-const originalFetch = globalThis.fetch;
-after(() => { globalThis.fetch = originalFetch; });
+const fetchFixture = injectExtractFetch(async () => { throw new Error("Unexpected fetch in concurrent session test"); });
+const { default: initializeExtension } = await import("../index.ts");
+const { clearResults, getResult } = await import("../storage.ts");
+after(() => { fetchFixture.dispose(); });
 
 // A host that serves several conversations at once (an app or chat server built on the SDK)
 // runs one extension instance per session, in one process. Each instance's session events
@@ -52,10 +53,10 @@ function startInstance(entries = []) {
 }
 
 function servePage(text) {
-	globalThis.fetch = async () => new Response(
+	fetchFixture.setFetch(async () => new Response(
 		`<!doctype html><html><head><title>Page</title></head><body><article><h1>Page</h1><p>${text}</p></article></body></html>`,
 		{ status: 200, headers: { "content-type": "text/html" } },
-	);
+	));
 }
 
 const retrieve = async (instance, responseId) =>

@@ -347,3 +347,5 @@ queryModel = "default"
 # enabled = true
 # provider = "auto"
 # API key/token、认证请求头保留在同目录 web-search.json，可继续用 $ENV / !command；不要写在 TOML。
+# [webAccess.ssrf]
+# trustEnvProxy = false               # true 将远端 DNS 安全交给可信代理；否则代理须支持 CONNECT

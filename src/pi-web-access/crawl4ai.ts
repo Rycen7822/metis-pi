@@ -8,7 +8,7 @@ const CONFIG_PATH = getWebSearchConfigPath();
 const EXTRACT_TIMEOUT_MS = 60_000;
 const MARKDOWN_FILTER = "fit";
 
-export interface Crawl4aiExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup"> {
+export interface Crawl4aiExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup" | "fetch"> {
 	ssrf?: SsrfConfig;
 }
 
@@ -124,6 +124,7 @@ export async function extractWithCrawl4ai(
 	const activityId = activityMonitor.logStart({ type: "fetch", url: requestUrl.toString() });
 	try {
 		const response = await fetchRemoteUrl(requestUrl, init, {
+			fetch: options?.fetch,
 			...ssrf,
 			allowLoopback: isLoopbackHostname(requestUrl.hostname),
 			onRedirect: ({ to, init: redirectInit, response }) => {

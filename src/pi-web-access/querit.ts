@@ -1,6 +1,7 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
+import { normalizeDomain, normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
@@ -321,7 +322,9 @@ export async function searchWithQuerit(
 			options.signal,
 		);
 		assertApiSuccess("Search", data);
-		const results = mapSearchResults(data);
+		const domains = normalizeDomainFilters(options.domainFilter);
+		const results = mapSearchResults(data).filter(result => matchesDomainFilter(result.url, domains))
+			.slice(0, normalizeSearchResultCount(options.numResults));
 		const response: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
 		if (options.includeContent && results.length > 0) {
 			const inlineContent = await fetchInlineContent(results.map((result) => result.url), apiKey, options.signal);

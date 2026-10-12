@@ -1,4 +1,4 @@
-import { SearchHttpError } from "./search-types.ts";
+import { SearchHttpError, SearchUnsupportedFilterError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
@@ -93,8 +93,9 @@ export function isCeramicAvailable(): boolean {
 	return hasCredentialSource({ provider: "Ceramic", configuredValue: loadConfig().ceramicApiKey, environmentValue: process.env.CERAMIC_API_KEY });
 }
 
-// Ceramic has no date filter and returns no dates, so `recencyFilter` is not applied.
+// Ceramic has no date filter and returns no dates for a local date check.
 export async function searchWithCeramic(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
+	if (options.recencyFilter) throw new SearchUnsupportedFilterError("Ceramic search adapter does not support recencyFilter");
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const filters = normalizeDomainFilters(options.domainFilter);

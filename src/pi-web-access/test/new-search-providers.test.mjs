@@ -54,7 +54,7 @@ test("Ollama search and Web Fetch use the Cloud REST endpoints", async () => {
 		};
 		const { searchWithOllama, extractWithOllama } = await import(${JSON.stringify(ollamaModuleUrl)});
 		const search = await searchWithOllama("cloud search", { numResults: 7, includeContent: true });
-		const fetched = await extractWithOllama("https://example.com/ollama", undefined, { lookup: ${publicLookup} });
+		const fetched = await extractWithOllama("https://example.com/ollama", undefined, { fetch: globalThis.fetch, lookup: ${publicLookup} });
 		console.log(JSON.stringify({ calls, search, fetched }));
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
@@ -84,7 +84,7 @@ test("Kagi search maps v1 results and Extract maps markdown", async () => {
 		};
 		const { searchWithKagi, extractWithKagi } = await import(${JSON.stringify(kagiModuleUrl)});
 		const search = await searchWithKagi("premium search", { numResults: 3, includeContent: true });
-		const fetched = await extractWithKagi("https://example.com/kagi", undefined, { lookup: ${publicLookup} });
+		const fetched = await extractWithKagi("https://example.com/kagi", undefined, { fetch: globalThis.fetch, lookup: ${publicLookup} });
 		console.log(JSON.stringify({ calls, search, fetched }));
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);

@@ -11,6 +11,7 @@ import stat as statmod
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import weakref
 from unittest import mock as m
@@ -36,6 +37,64 @@ cwd = "servers/dir with space"
 
 
 class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
+    async def test_readiness_wait_releases_admission_without_losing_reservations(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        rpc = worker.Worker.rpc
+
+        async def hold_readiness(w, kind, *args, **kwargs):
+            result = await rpc(w, kind, *args, **kwargs)
+            if kind == "get_state" and w.agent["name"] == "slow-startup":
+                entered.set()
+                await release.wait()
+            return result
+
+        slow = fast = None
+        with m.patch.object(worker.Worker, "rpc", hold_readiness):
+            try:
+                slow = asyncio.create_task(self.spawn(name="slow-startup", access="write"))
+                await asyncio.wait_for(entered.wait(), 5)
+                fast = asyncio.create_task(self.spawn(name="independent-reader"))
+                other = await asyncio.wait_for(asyncio.shield(fast), 3)
+                self.assertFalse(slow.done(), "independent admission completed before the slow readiness receipt")
+                self.assertEqual((await self.wait(other["run_id"]))["reason"], "completed")
+                with self.assertRaises(AgentError) as writer:
+                    await self.spawn(name="overlapping-writer", access="write")
+                self.assertEqual(writer.exception.code, "writer_conflict")
+                await self.mutation("close", other["agent_id"])
+                self.rt.config["max_resident_agents"] = 1
+                with self.assertRaises(AgentError) as capacity:
+                    await self.spawn(name="over-capacity")
+                self.assertEqual(capacity.exception.code, "capacity_exceeded")
+                self.rt.config["max_resident_agents"] = 2
+                self.rt.config["max_agents_per_scope"] = 1
+                with self.assertRaises(AgentError) as scope:
+                    await self.spawn(name="over-scope-limit")
+                self.assertEqual(scope.exception.code, "scope_limit")
+            finally:
+                release.set()
+                await asyncio.gather(*(task for task in (slow, fast) if task), return_exceptions=True)
+
+    async def test_stop_group_scan_allows_event_loop_progress(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked_scan(pgid):
+            entered.set()
+            release.wait(2)  # Bound the faulty synchronous implementation as well.
+            return []
+
+        stopping = None
+        with m.patch("subagent_pi.worker.group_members", blocked_scan):
+            try:
+                stopping = asyncio.create_task(worker.stop_group(999999))
+                await self.until(entered.is_set)
+                self.assertFalse(stopping.done(), "the event loop progressed while the scan remained blocked")
+                release.set()
+                self.assertEqual(await stopping, "verified")
+            finally:
+                release.set()
+                if stopping:
+                    await stopping
+
     async def test_idle_shutdown_requires_no_queued_work_and_verified_residents(self):
         self.assertTrue(self.rt.can_idle_shutdown())
         gate = self.root / "release-idle-test"

@@ -23,7 +23,7 @@ test("weak Readability output falls back to useful RSC content", async (t) => {
 		},
 	);
 
-	const result = await extractContent("https://example.com/rsc", undefined, { lookup });
+	const result = await extractContent("https://example.com/rsc", undefined, { fetch: globalThis.fetch, lookup });
 	assert.equal(result.error, null);
 	assert.equal(result.title, "RSC article");
 	assert.match(result.content, /RSC article content survives the loading shell/);
@@ -49,7 +49,7 @@ test("null Readability output falls back to local Defuddle extraction", async (t
 		);
 	};
 
-	const result = await extractContent("https://example.com/defuddle-null", undefined, { lookup });
+	const result = await extractContent("https://example.com/defuddle-null", undefined, { fetch: globalThis.fetch, lookup });
 	assert.equal(fetchCalls, 1);
 	assert.equal(result.error, null);
 	assert.equal(result.title, "Defuddle article");
@@ -71,7 +71,7 @@ test("Defuddle fallback resolves relative canonical URLs against the fetched URL
 	const warnings = [];
 	console.warn = (...args) => { warnings.push(args); };
 
-	const result = await extractContent("https://example.com/relative-canonical", undefined, { lookup });
+	const result = await extractContent("https://example.com/relative-canonical", undefined, { fetch: globalThis.fetch, lookup });
 	assert.equal(result.error, null);
 	assert.deepEqual(warnings, []);
 });
@@ -84,7 +84,7 @@ test("short Readability output falls back to useful Defuddle content", async (t)
 		{ status: 200, headers: { "content-type": "text/html" } },
 	);
 
-	const result = await extractContent("https://example.com/defuddle-short", undefined, { lookup });
+	const result = await extractContent("https://example.com/defuddle-short", undefined, { fetch: globalThis.fetch, lookup });
 	assert.equal(result.error, null);
 	assert.equal(result.title, "Short article fallback");
 	assert.match(result.content, /Useful Defuddle content after the short Readability article/);
@@ -105,7 +105,7 @@ test("Defuddle processing failures stay contained and do not return the fallback
 
 	const consoleErrors = [];
 	console.error = (...args) => { consoleErrors.push(args); };
-	const result = await extractContent("https://example.com/defuddle-selector-failure", undefined, { lookup });
+	const result = await extractContent("https://example.com/defuddle-selector-failure", undefined, { fetch: globalThis.fetch, lookup });
 
 	assert.equal(consoleErrors.length, 0);
 	assert.match(result.error, /Defuddle failed to process document: Unknown pseudo-class :a/);
@@ -119,7 +119,7 @@ test("short non-RSC pages remain incomplete", async (t) => {
 		{ status: 200, headers: { "content-type": "text/html" } },
 	);
 
-	const result = await extractContent("https://example.com/short", undefined, { lookup });
+	const result = await extractContent("https://example.com/short", undefined, { fetch: globalThis.fetch, lookup });
 	assert.notEqual(result.error, null);
 });
 
@@ -131,7 +131,7 @@ test("short RSC payloads remain incomplete", async (t) => {
 		{ status: 200, headers: { "content-type": "text/html" } },
 	);
 
-	const result = await extractContent("https://example.com/short-rsc", undefined, { lookup });
+	const result = await extractContent("https://example.com/short-rsc", undefined, { fetch: globalThis.fetch, lookup });
 	assert.notEqual(result.error, null);
 });
 

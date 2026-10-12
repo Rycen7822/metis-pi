@@ -158,7 +158,64 @@ test("packaged command rows preserve ownership boundaries, native results and th
   assertNative(command);
 });
 
-test("an earlier patch on ANY intercepted method prevents installation, atomically", (t) => {
+test("compatible native wrappers retain compact rows, image rows and renderer ownership", (t) => {
+  const Host = isolatedToolHost();
+  for (const key of ["getCallRenderer", "getResultRenderer", "getRenderShell", "render"]) {
+    const native = Host.prototype[key];
+    Host.prototype[key] = function (...args) { return Reflect.apply(native, this, args); };
+  }
+  const definitionPrototype = {};
+  const nativeSession = Object.getOwnPropertyDescriptor(InteractiveMode.prototype, "session");
+  const nativeLookup = Object.getOwnPropertyDescriptor(InteractiveMode.prototype, "getRegisteredToolDefinition");
+  Object.defineProperty(definitionPrototype, "session", {
+    ...nativeSession, get() { return nativeSession.get.call(this); },
+  });
+  Object.defineProperty(definitionPrototype, "getRegisteredToolDefinition", {
+    ...nativeLookup, value(...args) { return Reflect.apply(nativeLookup.value, this, args); },
+  });
+  let overlay = false;
+  const foreignCall = () => bindings.makeText("foreign read");
+  const runtimeHost = { session: {
+    getToolDefinition() { return createReadToolDefinition(process.cwd()); },
+    extensionRunner: { resolveToolRenderers(_name, next) {
+      const base = next();
+      return overlay ? { ...base, renderCall: foreignCall } : base;
+    } },
+  } };
+  const owner = Object.create(definitionPrototype, { runtimeHost: { value: runtimeHost } });
+  const { handle, renderers } = setup(t, [toolInfo("read")], { definitionPrototype }, Host);
+  assert.equal(handle.installed, true, handle.reason);
+  const row = new Host("read", owner.getRegisteredToolDefinition("read"), { path: "README.md" });
+  assert.equal(row.getCallRenderer(), renderers.read.renderCall);
+  plain(row);
+  row.imageSpacers = [{ render: () => ["image spacer"] }];
+  row.imageComponents = [{ render: () => ["image payload"] }];
+  const lines = row.render(80);
+  assert.deepEqual(lines.slice(-2), ["image spacer", "image payload"]);
+  assert.equal(row.selfRenderHeight, lines.length - 3);
+  overlay = true;
+  const foreign = new Host("read", owner.getRegisteredToolDefinition("read"), { path: "README.md" });
+  assert.equal(foreign.getCallRenderer(), foreignCall);
+  assert.match(plain(foreign), /foreign read/);
+  handle.dispose();
+  assert.equal(row.getCallRenderer(), row.toolDefinition.renderCall);
+});
+
+test("a selector wrapper that overrides one actual tool keeps that renderer", (t) => {
+  const Host = isolatedToolHost();
+  const native = Host.prototype.getCallRenderer;
+  const foreign = () => bindings.makeText("foreign bash");
+  Host.prototype.getCallRenderer = function () {
+    return this.toolName === "bash" ? foreign : native.call(this);
+  };
+  const { handle } = setup(t, undefined, {}, Host);
+  assert.equal(handle.installed, true, handle.reason);
+  const row = new Host("bash", { renderCall: () => bindings.makeText("stock") });
+  assert.equal(row.getCallRenderer(), foreign);
+  assert.match(plain(row), /foreign bash/);
+});
+
+test("an incompatible earlier patch prevents installation, atomically", (t) => {
   for (const key of ["getResultRenderer", "getRenderShell", "render"]) {
     const Host = isolatedToolHost();
     Host.prototype[key] = function () { return "another extension"; };
@@ -166,6 +223,22 @@ test("an earlier patch on ANY intercepted method prevents installation, atomical
     const { handle } = setup(t, [], { renderers: {} }, Host);
     assert.equal(handle.installed, false, key);
     assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), before, key);
+  }
+});
+
+test("a host render that drops image rows or mouse height is declined atomically", (t) => {
+  for (const altered of ["images", "mouse height"]) {
+    const Host = isolatedToolHost();
+    const native = Host.prototype.render;
+    Host.prototype.render = function (width) {
+      const lines = native.call(this, width);
+      if (altered === "mouse height") this.selfRenderHeight = 0;
+      return altered === "images" && this.imageComponents.length ? lines.slice(0, -2) : lines;
+    };
+    const before = Object.getOwnPropertyDescriptors(Host.prototype);
+    const { handle } = setup(t, [], {}, Host);
+    assert.equal(handle.installed, false, altered);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(Host.prototype), before, altered);
   }
 });
 
@@ -232,7 +305,7 @@ test("a frozen lookup retains only an inert owned wrapper after disposal", (t) =
   assert.equal(reads, 1, "inactive wrapper only invokes the original lookup");
 });
 
-test("sealed prototypes and unrecognized host versions fail closed", (t) => {
+test("sealed prototypes and unsupported host capabilities fail closed", (t) => {
   for (const Host of [isolatedToolHost(), class Unknown {}]) {
     Object.preventExtensions(Host.prototype);
     const { handle } = setup(t, [], { renderers: {} }, Host);

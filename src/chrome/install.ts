@@ -65,7 +65,7 @@ export interface ChromeLifecycle {
   install(available: UiAvailable, generation: number): Promise<void>;
   /** Drop late installs from a previous session (preload in flight). */
   invalidate(): void;
-  /** Remove OUR factories only (identity checked) — a successor's stay. */
+  /** Release our selected editor and reset the chrome slots installed this session. */
   restore(): void;
   setWidgetVisible(visible: boolean): void;
 }

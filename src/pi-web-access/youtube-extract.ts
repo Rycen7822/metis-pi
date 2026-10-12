@@ -2,6 +2,7 @@ import {
 	loadWebAccessConfig,
 	getWebAccessConfigPath,
 } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { formatSeconds, readExecError, isTimeoutError, trimErrorText, mapFfmpegError } from "./media-errors.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

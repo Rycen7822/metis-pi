@@ -6,14 +6,12 @@ import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { loadSsrfConfig, validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
+import { loadSsrfConfig, validateRemoteUrl, fetchRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
 const DEFAULT_API_VERSION = "v2";
 const EXTRACT_TIMEOUT_MS = 60_000;
 const SEARCH_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_REDIRECTS = 5;
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const SUPPORTED_API_VERSIONS = ["v1", "v2"] as const;
 type FirecrawlApiVersion = (typeof SUPPORTED_API_VERSIONS)[number];
 
@@ -22,11 +20,11 @@ export interface FirecrawlSsrfOptions {
 	trustEnvProxy: boolean;
 }
 
-export interface FirecrawlExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup"> {
+export interface FirecrawlExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup" | "fetch"> {
 	ssrf?: FirecrawlSsrfOptions;
 }
 
-interface FirecrawlSearchOptions extends SearchOptions, Pick<ExtractOptions, "timeoutMs" | "lookup"> {
+interface FirecrawlSearchOptions extends SearchOptions, Pick<ExtractOptions, "timeoutMs" | "lookup" | "fetch"> {
 	includeContent?: boolean;
 	ssrf?: FirecrawlSsrfOptions;
 }
@@ -199,38 +197,24 @@ function firecrawlApiSsrfOptions(
 	return { ...ssrfOptions(options), allowLoopback };
 }
 
-function withoutSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
-	const next = { ...headers };
-	delete next.Authorization;
-	delete next.authorization;
-	delete next.Cookie;
-	delete next.cookie;
-	delete next["X-API-Key"];
-	delete next["x-api-key"];
-	return next;
-}
-
 async function fetchFirecrawlApi(
 	url: string,
 	init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
 	options: FirecrawlExtractOptions | FirecrawlSearchOptions | undefined,
 ): Promise<Response> {
 	const allowLoopback = isLoopbackHostname(new URL(url).hostname);
-	let current = await validateRemoteUrl(url, firecrawlApiSsrfOptions(options, allowLoopback));
-	let headers = init.headers;
-	for (let redirects = 0; redirects <= DEFAULT_MAX_REDIRECTS; redirects++) {
-		const response = await fetch(current, { ...init, headers, redirect: "manual" });
-		if (!REDIRECT_STATUSES.has(response.status)) return response;
-
-		const location = response.headers.get("location");
-		if (!location) return response;
-		if (redirects === DEFAULT_MAX_REDIRECTS) throw new Error(`Too many redirects fetching ${current.toString()}`);
-
-		const next = await validateRemoteUrl(new URL(location, current), firecrawlApiSsrfOptions(options, allowLoopback));
-		if (next.origin !== current.origin) headers = withoutSensitiveHeaders(headers);
-		current = next;
-	}
-	throw new Error(`Too many redirects fetching ${current.toString()}`);
+	return fetchRemoteUrl(url, init, {
+		...firecrawlApiSsrfOptions(options, allowLoopback),
+		fetch: options?.fetch,
+		onRedirect: ({ from, to, init: next }) => {
+			const headers = new Headers(next.headers);
+			if (from.origin !== to.origin) {
+				for (const name of ["Authorization", "Cookie", "X-API-Key"]) headers.delete(name);
+			}
+			// This API's existing redirect contract replays the original POST body, including 303.
+			return { ...next, method: init.method, body: init.body, headers };
+		},
+	});
 }
 
 function scrapeBody(url: string): Record<string, unknown> {

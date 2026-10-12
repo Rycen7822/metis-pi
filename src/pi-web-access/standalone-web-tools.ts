@@ -60,7 +60,7 @@ function standaloneFetchRejection(params: FetchContentCallParams, fetchModes: Fe
 
 /** Core for hosts without Pi: no extension context, curator, or summaries; results
  * live in a bounded in-memory store; includeContent waits for the page fetch. */
-export function createStandaloneWebToolCore(): StandaloneWebToolCore {
+export function createStandaloneWebToolCore(fetch?: typeof globalThis.fetch): StandaloneWebToolCore {
 	const config = loadConfig();
 	const settings: WebToolCoreSettings = {
 		toolNames: { ...DEFAULT_TOOL_NAMES },
@@ -87,7 +87,7 @@ export function createStandaloneWebToolCore(): StandaloneWebToolCore {
 		publishResult(data) {
 			remember(data.id);
 		},
-		extractOptions: { rejectDirectImages: STANDALONE_DIRECT_IMAGE_ERROR },
+		extractOptions: { fetch, rejectDirectImages: STANDALONE_DIRECT_IMAGE_ERROR },
 	});
 
 	return {

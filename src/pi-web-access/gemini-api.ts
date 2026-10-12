@@ -1,4 +1,4 @@
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import {
 	isGeminiAdcAvailable,
@@ -166,7 +166,7 @@ export async function fetchGeminiApi(
 		}
 	}
 	try {
-		const response = await fetch(parsedUrl, { ...init, headers });
+		const response = await fetchWithCredentialRedirects(parsedUrl.toString(), { ...init, headers }, ["x-goog-api-key", "cf-aig-authorization", "Authorization"]);
 		responseCredentials.set(response, { apiKey: resolvedApiKey, cloudflareApiKey, adcToken });
 		return response;
 	} catch (error) {

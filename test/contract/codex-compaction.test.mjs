@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync, gunzipSync } from "node:zlib";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { METIS_EVENTS } from "../../src/collaboration.ts";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { closeOpenAICodexWebSocketSessions, streamSimple as streamSimpleOpenAICodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { FAKE_API_KEY, modelNamed } from "../helpers/native-provider.mjs";
@@ -37,7 +38,7 @@ function checkpointEvents(n = 1) {
   return [{ type: "response.created", response: { id: "r", status: "in_progress" } }, { type: "response.output_item.done", output_index: 0, item }, completed([item])];
 }
 async function host(t, {
-  auto = false, condense = false, goal = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
+  auto = false, condense = false, goal = false, execution = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -84,6 +85,7 @@ async function host(t, {
   }
   if (condense) paths.push(fileURLToPath(new URL("extensions/condense.ts", root)));
   if (goal) paths.push(fileURLToPath(new URL("extensions/goal.ts", root)));
+  if (execution) paths.push(fileURLToPath(new URL("extensions/execution.ts", root)));
   if (other) {
     const entry = join(dir, "other-provider.ts");
     writeFileSync(entry, `export default function(pi) { pi.registerProvider("other-codex", { baseUrl:"https://offline.invalid/backend-api/codex", api:"openai-codex-responses", apiKey:${JSON.stringify(FAKE_API_KEY)}, models:[{ id:"other", name:"Other", reasoning:false, input:["text"], contextWindow:128000, maxTokens:16000, cost:{input:0,output:0,cacheRead:0,cacheWrite:0} }] }); }`);
@@ -130,6 +132,54 @@ async function host(t, {
   return { session, sm, dir, bodies, headers, urls, notices, errors, runtime, eventBus };
 }
 const compactions = h => h.sm.getBranch().filter(e => e.type === "compaction");
+
+test("native collaboration ignores malformed facts and preserves synchronous queries and remote ownership", async t => {
+  const h = await host(t, { condense: true, goal: true, execution: true });
+  const errors = [];
+  t.mock.method(console, "error", (...args) => errors.push(args));
+  const requests = [
+    [METIS_EVENTS.executionStatus, { busy: "yes" }],
+    [METIS_EVENTS.goalSnapshot, { other: true }],
+    [METIS_EVENTS.occStatus, { deferGoal: "yes" }],
+    [METIS_EVENTS.occFinished, { cancelled: "yes" }],
+    [METIS_EVENTS.beforeRemoteCompact, { waits: [], signal: "not a signal" }],
+    [METIS_EVENTS.condenseProject, { sessionId: h.sm.getSessionId(), messages: [], api: 7 }],
+    [METIS_EVENTS.condenseMaintenance, { pending: 7 }],
+    [METIS_EVENTS.codexCompactionOwner, { get ctx() { throw new Error("opaque ctx accessed"); }, owns: false }],
+    [METIS_EVENTS.codexCompactionOwner, { model: { api: 7, provider: "openai" }, owns: false,
+      sessionManager: { buildSessionProjection() { throw new Error("invalid model reached history"); }, getBranch() { return []; } } }],
+    [METIS_EVENTS.codexCompactionOwner, { owns: false, sessionManager: { buildSessionProjection: 7, getBranch() { return []; } } }],
+  ];
+  for (const [channel, malformed] of requests) {
+    for (const value of [undefined, null, [], malformed]) h.eventBus.emit(channel, value);
+  }
+  await Promise.resolve();
+  assert.deepEqual(errors, [], "malformed events never reach domain consumers");
+  assert.equal(h.bodies.length, 0);
+
+  let busy = false, writes = 0;
+  const executionStatus = { get busy() { return busy; }, set busy(value) { busy = value; writes++; } };
+  h.eventBus.emit(METIS_EVENTS.executionStatus, executionStatus);
+  assert.equal(busy, false, "the registered execution runtime has no running sessions");
+  assert.equal(writes, 1, "the response is filled before emit returns");
+  const goal = { snapshot: undefined };
+  h.eventBus.emit(METIS_EVENTS.goalSnapshot, goal);
+  assert.equal(goal.snapshot.objective, "preserve the active goal during context recovery");
+  const occ = { deferGoal: false };
+  h.eventBus.emit(METIS_EVENTS.occStatus, occ);
+  assert.equal(occ.running, false);
+
+  const ownership = [];
+  t.after(h.eventBus.on(METIS_EVENTS.codexCompactionOwner, request => ownership.push(request.owns)));
+  await h.session.compact().catch(error => {
+    assert.deepEqual(ownership, [true], "the native caller receives its remote-owner response across extension entries");
+    throw error;
+  });
+  assert.deepEqual(ownership, [true]);
+  assert.equal(compactions(h).length, 1);
+  assert.equal(h.bodies.length, 1, "the real remote owner excludes an OCC plaintext summary");
+  assert.deepEqual(errors, []);
+});
 
 test("manual compaction persists a native checkpoint and resumes with it, not a textual marker", async t => {
   const h = await host(t, { condense: true });

@@ -1,4 +1,5 @@
 import { loadWebAccessConfig } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { createSign } from "node:crypto";
 import { homedir } from "node:os";
@@ -184,6 +185,7 @@ async function exchangeRefreshToken(cfg: AdcFile, signal?: AbortSignal): Promise
 	});
 	const res = await fetch(TOKEN_ENDPOINT, {
 		method: "POST",
+		redirect: "error",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body,
 		signal,
@@ -223,6 +225,7 @@ async function exchangeServiceAccountJwt(cfg: AdcFile, signal?: AbortSignal): Pr
 	});
 	const res = await fetch(cfg.token_uri || TOKEN_ENDPOINT, {
 		method: "POST",
+		redirect: "error",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body,
 		signal,

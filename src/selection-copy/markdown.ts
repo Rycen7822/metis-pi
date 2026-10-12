@@ -459,8 +459,8 @@ export const MIRROR_REBUILD_INTERVAL_MS = 200;
 
 /** Shared render-prototype wrapper: the host render runs untouched, then the
  * mirror builds (and verifies) a provenance product for the returned array.
- * Cache hits still register the product for the fresh array — products are
- * resolved by array identity and the host may return a new array per render. */
+ * Cache hits rebind successful products to fresh arrays; failed decisions keep
+ * native extraction. Products resolve by the actual render-array identity. */
 function wrapRenderPrototype<INST extends { text: string }>(
   prototype: object,
   key: symbol,
@@ -479,7 +479,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
     return false;
   }
   const original = descriptor.value as (this: INST, width: number) => string[];
-  const cache = new WeakMap<object, { text: string; width: number; rows: readonly string[]; product: CopyProduct }>();
+  const cache = new WeakMap<object, { text: string; width: number; rows: readonly string[]; product?: CopyProduct }>();
   /** Per-component stream state: the text/width seen on the last miss render
    * and the time of the last build ATTEMPT (success or failure — an
    * always-degrading component must not retry the full mirror per frame). */
@@ -492,7 +492,7 @@ function wrapRenderPrototype<INST extends { text: string }>(
       const cached = cache.get(this);
       if (cached && cached.text === this.text && cached.width === width
           && (cached.rows === rows || (cached.rows.length === rows.length && rows.every((row, i) => row === cached.rows[i])))) {
-        registerProduct(rows, cached.product);
+        if (cached.product) registerProduct(rows, cached.product);
         return rows;
       }
       const previous = seen.get(this);
@@ -505,9 +505,11 @@ function wrapRenderPrototype<INST extends { text: string }>(
         return rows;
       }
       const product = build(this, width, rows, deps);
+      // A stable host mismatch also has a reusable decision: preserve native
+      // extraction without re-running the mirror/highlighter every frame.
+      cache.set(this, { text: this.text, width, rows, product });
       if (product) {
         registerProduct(rows, product);
-        cache.set(this, { text: this.text, width, rows, product });
         deps.diagnostics[counters.built] += 1;
       } else {
         deps.diagnostics[counters.degraded] += 1;

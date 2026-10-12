@@ -467,8 +467,8 @@ test("SearXNG search is SSRF-guarded and preferred first when configured", async
 		};
 		const { searchWithSearXNG } = await import(${JSON.stringify(searxngModuleUrl)});
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
-		const direct = await searchWithSearXNG("self hosted", { domainFilter: ["example.com", "-private.example.net"], numResults: 2 });
-		const auto = await search("local first", { provider: "auto" });
+		const direct = await searchWithSearXNG("self hosted", { fetch: globalThis.fetch, domainFilter: ["example.com", "-private.example.net"], numResults: 2 });
+		const auto = await search("local first", { fetch: globalThis.fetch, provider: "auto" });
 		console.log(JSON.stringify({ calls, direct, auto }));
 	`, {
 		HOME: home,
@@ -509,7 +509,7 @@ test("SearXNG search merges configured custom headers", async (t) => {
 			}), { status: 200, headers: { "content-type": "application/json" } });
 		};
 		const { searchWithSearXNG } = await import(${JSON.stringify(searxngModuleUrl)});
-		await searchWithSearXNG("headers");
+		await searchWithSearXNG("headers", { fetch: globalThis.fetch });
 		console.log(JSON.stringify({ capturedHeaders }));
 	`, {
 		HOME: home,
@@ -540,7 +540,7 @@ test("SearXNG search merges configured custom headers", async (t) => {
 			return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } });
 		};
 		const { searchWithSearXNG } = await import(${JSON.stringify(searxngModuleUrl)});
-		await searchWithSearXNG("headers");
+		await searchWithSearXNG("headers", { fetch: globalThis.fetch });
 		console.log(JSON.stringify({ capturedHeaders }));
 	`, {
 		HOME: overrideHome,
@@ -576,7 +576,7 @@ test("SearXNG search strips configured headers on cross-origin redirects", async
 			}), { status: 200, headers: { "content-type": "application/json" } });
 		};
 		const { searchWithSearXNG } = await import(${JSON.stringify(searxngModuleUrl)});
-		await searchWithSearXNG("headers redirect");
+		await searchWithSearXNG("headers redirect", { fetch: globalThis.fetch });
 		console.log(JSON.stringify({ calls }));
 	`, {
 		HOME: home,
@@ -609,7 +609,7 @@ test("SearXNG redirect validation rejects an unapproved private target", async (
 		});
 		const { searchWithSearXNG } = await import(${JSON.stringify(searxngModuleUrl)});
 		try {
-			await searchWithSearXNG("redirect");
+			await searchWithSearXNG("redirect", { fetch: globalThis.fetch });
 			console.log(JSON.stringify({ ok: true }));
 		} catch (error) {
 			console.log(JSON.stringify({ ok: false, error: String(error) }));
@@ -1048,7 +1048,8 @@ test("OpenAI search requires web_search and maps domain filters", async (t) => {
 		allowed_domains: ["openai.com"],
 		blocked_domains: ["reddit.com"],
 	});
-	assert.equal(output.answer, "Answer from the web");
+	// Only the first word is cited; unbound prose is not part of a filtered answer.
+	assert.equal(output.answer, "Source: OpenAI Docs (https://openai.com/docs)\n\nSource: OpenAI Blog (https://openai.com/blog)");
 	assert.deepEqual(output.results.map((result) => result.url), [
 		"https://openai.com/docs",
 		"https://openai.com/blog",

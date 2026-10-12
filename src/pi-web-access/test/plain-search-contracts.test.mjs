@@ -69,7 +69,7 @@ test("configured SearXNG header secrets are redacted before clipping HTTP diagno
 		return new Response(`rejected ${longProxySecret}; proxy=${proxySecret}`, { status: 503 });
 	};
 	let failure;
-	try { await searchWithSearXNG("secret boundary"); } catch (error) { failure = error; }
+	try { await searchWithSearXNG("secret boundary", { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] }); } catch (error) { failure = error; }
 	assert.deepEqual(calls, [{
 		url: "http://127.0.0.1:8443/search?q=secret+boundary&format=json",
 		headers: { accept: "application/json", "x-proxy-key": proxySecret, "cf-access-client-secret": longProxySecret },
@@ -92,7 +92,7 @@ test("configured SearXNG header secrets are redacted from network errors", async
 		throw new TypeError(`network rejected ${proxySecret}`);
 	};
 	let failure;
-	try { await searchWithSearXNG("network boundary"); } catch (error) { failure = error; }
+	try { await searchWithSearXNG("network boundary", { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] }); } catch (error) { failure = error; }
 	assert.deepEqual(calls, [{ url: "http://127.0.0.1:8443/search?q=network+boundary&format=json", secret: proxySecret }]);
 	assert.ok(failure);
 	assert.match(failure.message, /network rejected \[redacted\]/);
@@ -131,7 +131,7 @@ test("Kagi extraction semantic errors finish their activity entry", async () => 
 	};
 	let failure;
 	try {
-		await extractWithKagi("https://example.com/page", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+		await extractWithKagi("https://example.com/page", undefined, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 	} catch (error) { failure = error; }
 	assert.deepEqual(calls, [{ url: "https://kagi.com/api/v1/extract", method: "POST", body: { pages: [{ url: "https://example.com/page" }] }, authorization: `Bearer ${syntheticKey}` }]);
 	assert.match(failure?.message ?? "", /extract semantic failure/);
@@ -164,7 +164,7 @@ for (const cause of ["deadline", "caller"]) {
 		try {
 			await extractWithKagi("https://example.com/page", caller.signal, {
 				timeoutMs: cause === "deadline" ? 5 : 1000,
-				lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+				fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }],
 			});
 		} catch (error) { failure = error; }
 		finally { clearTimeout(cancellation); }

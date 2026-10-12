@@ -3,13 +3,17 @@ import assert from "node:assert/strict";
 import { loadConfig, DEFAULT_CONFIG } from "../../src/config.ts";
 import {
   readMetisConfig, updateMetisConfig, parseMetisConfig, defaultMetisConfig, renderMetisConfig,
-  initializeMetisConfig,
+  initializeMetisConfig, isMetisConfigTable,
   readWebAccessConfig, updateWebAccessConfig,
 } from "../../src/metis-config.ts";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
 const legacyReader = (text: string) => (path: string) => path.endsWith("metis-pi.json") ? text : undefined;
+function table(value: unknown): Record<string, unknown> {
+  assert.ok(isMetisConfigTable(value), "expected a configuration table");
+  return value;
+}
 
 test("web init imports preferences and backs up mixed JSON before separating credentials", (t) => {
   const dir = mkdtempSync(join(process.cwd(), ".work", "web-config-"));
@@ -29,14 +33,14 @@ test("web init imports preferences and backs up mixed JSON before separating cre
   const web = readWebAccessConfig(dir);
   assert.equal(web["provider"], "brave");
   assert.equal(web["workflow"], "auto-summary");
-  assert.equal(web["pdf"]["enabled"], false);
+  assert.equal(table(web["pdf"])["enabled"], false);
   assert.deepEqual(JSON.parse(readFileSync(jsonPath, "utf8")), credentials);
   assert.equal(statSync(jsonPath).mode & 0o777, 0o600);
   assert.doesNotMatch(readFileSync(tomlPath, "utf8"), /METIS_TEST_OPENAI_KEY|synthetic-(key|token|password)|openaiApiKey|degoogHeaders/);
   updateMetisConfig(dir, { sessionRecall: { queryModel: "openai/recall" } });
   updateWebAccessConfig(dir, { provider: "exa", workflow: "none" });
   assert.equal(readWebAccessConfig(dir)["provider"], "exa");
-  assert.equal(readMetisConfig(dir).config["sessionRecall"]["queryModel"], "openai/recall");
+  assert.equal(table(readMetisConfig(dir).config["sessionRecall"])["queryModel"], "openai/recall");
   assert.deepEqual(JSON.parse(readFileSync(jsonPath, "utf8")), credentials);
   assert.throws(() => updateWebAccessConfig(dir, { openaiApiKey: "synthetic-key" }), /web-search.json/);
   const mixed = JSON.stringify({ ...credentials, provider: "brave", workflow: "auto-summary" });
@@ -130,8 +134,8 @@ test("TOML is authoritative and malformed TOML never falls back to legacy", () =
 
 test("readable rendering retains default annotations without changing serialized values", () => {
   const config = defaultMetisConfig();
-  config.appearance.thinking.peekLines = 17;
-  config.dynamicAgents.groups = [{ id: "example", file: "AGENTS.md", include: ["p/*"], exclude: [] }];
+  table(table(config.appearance).thinking).peekLines = 17;
+  table(config.dynamicAgents).groups = [{ id: "example", file: "AGENTS.md", include: ["p/*"], exclude: [] }];
   config.future = { text: '[appearance]\nenabled = false\n# not a config comment', "quoted.key": '"quoted" # value',
     mixed: [1, { nested: true }], date: parseMetisConfig("value = 2026-10-08").value };
   config["quoted table"] = { enabled: true };
@@ -148,15 +152,15 @@ test("global saves retain defaults, annotations, unknown fields and other owners
   const dir = mkdtempSync(join(process.cwd(), ".work/metis-config-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "metis-pi.toml"), initialConfig = defaultMetisConfig();
-  initialConfig.execution.tools.viewImageFallback = true;
+  table(table(initialConfig.execution).tools).viewImageFallback = true;
   writeFileSync(path, renderMetisConfig(initialConfig) + '\n[futureDate]\nday=2026-10-08\nclock=12:30:00\n');
   updateMetisConfig(dir, { future: { opaque: [1, 2] }, execution: { ui: { toolRenaming: false } } });
   updateMetisConfig(dir, { contextPrune: { minBatchChars: 1234 } });
   const config = readMetisConfig(dir).config;
-  assert.deepEqual(config.future.opaque, [1, 2]);
-  assert.equal(config.execution.ui.toolRenaming, false);
-  assert.equal(config.execution.tools.viewImageFallback, true);
-  assert.equal(config.contextPrune.minBatchChars, 1234);
+  assert.deepEqual(table(config.future).opaque, [1, 2]);
+  assert.equal(table(table(config.execution).ui).toolRenaming, false);
+  assert.equal(table(table(config.execution).tools).viewImageFallback, true);
+  assert.equal(table(config.contextPrune).minBatchChars, 1234);
   assert.match(readFileSync(path, "utf8"), /# 5a\. 高级摘要预算/);
   assert.match(readFileSync(path, "utf8"), /day = 2026-10-08\n/);
   assert.match(readFileSync(path, "utf8"), /clock = 12:30:00(?:\.0+)?\n/);
@@ -175,13 +179,13 @@ test("recall init preserves originals and leaves existing TOML preferences uncha
   assert.equal(readMetisConfig(dir).legacy, true);
   assert.equal(initializeMetisConfig(dir).legacy, true);
   assert.equal(readMetisConfig(dir).legacy, false);
-  assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, "openai-codex/recall/variant");
+  assert.equal(table(readMetisConfig(dir).config.sessionRecall).queryModel, "openai-codex/recall/variant");
   for (const selection of [undefined, "openai/current-choice", "default"]) {
     const original = selection === undefined ? "" : stringify({ sessionRecall: { queryModel: selection } });
     writeFileSync(configPath, original);
-    assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "default");
+    assert.equal(table(readMetisConfig(dir).config.sessionRecall).queryModel, selection ?? "default");
     assert.equal(initializeMetisConfig(dir).created, false);
-    assert.equal(readMetisConfig(dir).config.sessionRecall.queryModel, selection ?? "default");
+    assert.equal(table(readMetisConfig(dir).config.sessionRecall).queryModel, selection ?? "default");
     assert.equal(readFileSync(configPath, "utf8"), original);
   }
   assert.equal(readFileSync(legacyPath, "utf8"), legacy);

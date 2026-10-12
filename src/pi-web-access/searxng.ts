@@ -111,7 +111,7 @@ function buildSearXNGQuery(query: string, filters: DomainFilters): string {
 	if (filters.include.length === 1) {
 		parts.push(`site:${filters.include[0]}`);
 	} else if (filters.include.length > 1) {
-		parts.push(filters.include.map(domain => `site:${domain}`).join(" OR "));
+		parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
 	}
 	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
 	return parts.join(" ");
@@ -155,6 +155,8 @@ export async function searchWithSearXNG(query: string, options: SearchOptions = 
 				: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
 		}, {
 			...loadSsrfConfig(),
+			fetch: options.fetch,
+			...(options.lookup ? { lookup: options.lookup } : {}),
 			onRedirect: ({ from, to, init }) => from.origin === to.origin ? init : { ...init, headers: { Accept: "application/json" } },
 		});
 

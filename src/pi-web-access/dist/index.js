@@ -55,103 +55,14 @@ var init_media_errors = __esm({
   }
 });
 
-// utils.ts
-import { isIP } from "node:net";
-import { join } from "node:path";
-import { metisConfigPath, readWebAccessConfig, updateWebAccessConfig } from "../../metis-config.ts";
-import { webAccessAgentDir, WEB_CREDENTIALS_FILE } from "../../web-access-config.ts";
-function getWebSearchConfigDir() {
-  return webAccessAgentDir();
-}
-function getWebSearchConfigPath() {
-  return join(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
-}
-function getWebAccessConfigPath() {
-  return metisConfigPath(getWebSearchConfigDir());
-}
-function loadWebAccessConfig() {
-  return readWebAccessConfig(getWebSearchConfigDir());
-}
-function saveWebAccessConfig(patch) {
-  updateWebAccessConfig(getWebSearchConfigDir(), patch);
-}
-function isLoopbackHostname(hostnameValue) {
-  const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
-}
-function resolveApiBaseUrl(options) {
-  const fromEnvironment = options.environmentValue !== void 0;
-  const value = fromEnvironment ? options.environmentValue : options.configuredValue;
-  if (value === void 0) return options.defaultValue;
-  const source = fromEnvironment ? options.environmentKey : `webAccess.${options.configKey} in ${getWebAccessConfigPath()}`;
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${source} must be an absolute HTTP(S) URL`);
-  }
-  let url;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new Error(`${source} must be an absolute HTTP(S) URL`);
-  }
-  if (url.protocol !== "https:" && (url.protocol !== "http:" || !isLoopbackHostname(url.hostname))) {
-    throw new Error(`${source} must be an absolute HTTPS URL`);
-  }
-  if (url.username || url.password) {
-    throw new Error(`${source} must not include credentials`);
-  }
-  if (url.search || url.hash) {
-    throw new Error(`${source} must not include query parameters or fragments`);
-  }
-  url.search = "";
-  url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  return url.toString().replace(/\/+$/, "");
-}
-async function fetchWithCredentialRedirects(url, init, credentialHeaders) {
-  let current = new URL(url);
-  let requestInit = init;
-  for (let redirects = 0; ; redirects++) {
-    const response = await fetch(current, { ...requestInit, redirect: "manual" });
-    if (!API_REDIRECT_STATUSES.has(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!location) return response;
-    if (redirects === MAX_API_REDIRECTS) {
-      throw new Error(`Too many API redirects from ${url}`);
-    }
-    const next = new URL(location, current);
-    if (next.protocol !== "http:" && next.protocol !== "https:") {
-      throw new Error(`API redirect from ${current.origin} must use HTTP(S)`);
-    }
-    const method = requestInit.method?.toUpperCase() ?? "GET";
-    if ((response.status === 301 || response.status === 302) && method === "POST" || response.status === 303 && method !== "GET" && method !== "HEAD") {
-      const headers = new Headers(requestInit.headers);
-      for (const name of API_REQUEST_BODY_HEADERS) headers.delete(name);
-      const { body: _body, ...withoutBody } = requestInit;
-      requestInit = { ...withoutBody, method: "GET", headers };
-    }
-    if (next.origin !== current.origin) {
-      const headers = new Headers(requestInit.headers);
-      for (const name of credentialHeaders) headers.delete(name);
-      requestInit = { ...requestInit, headers };
-    }
-    current = next;
-  }
-}
-var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS;
-var init_utils = __esm({
-  "utils.ts"() {
-    API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
-    API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
-    MAX_API_REDIRECTS = 5;
-  }
-});
-
 // proxy-transport.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join as join2 } from "node:path";
+import { join } from "node:path";
+import { readWebAccessConfig } from "../../metis-config.ts";
+import { webAccessAgentDir } from "../../web-access-config.ts";
 function normalizeProxyUrl(value, source) {
   if (value === void 0 || value === null) return null;
   if (typeof value !== "string") throw new Error(`${source} must be an http(s) or socks proxy URL string`);
@@ -178,7 +89,7 @@ function redactProxyUrl(value) {
   return parsed.toString();
 }
 function loadConfiguredProxy() {
-  const configured = loadWebAccessConfig().proxy;
+  const configured = readWebAccessConfig(webAccessAgentDir()).proxy;
   if (configured === void 0) return null;
   return normalizeProxyUrl(configured, "webAccess.proxy");
 }
@@ -186,18 +97,10 @@ function runWithProxy(proxy, fn) {
   if (proxy === void 0) {
     const configured = loadConfiguredProxy();
     if (configured === null) return fn();
-    installGlobalProxyFetch();
     return proxyStorage.run(configured, fn);
   }
   const normalized = normalizeProxyUrl(proxy, "proxy");
-  if (normalized !== null) installGlobalProxyFetch();
   return proxyStorage.run(normalized, fn);
-}
-function getActiveProxy() {
-  return proxyStorage.getStore() ?? null;
-}
-function hasScopedProxyDecision() {
-  return proxyStorage.getStore() !== void 0;
 }
 function noProxyEntryMatches(hostname2, port, entry) {
   const trimmed = entry.trim();
@@ -233,34 +136,55 @@ function isProxyBypassedUrl(url) {
   const noProxy = process.env.NO_PROXY || process.env.no_proxy;
   return Boolean(noProxy && noProxy.split(",").some((entry) => noProxyEntryMatches(hostname2, port, entry)));
 }
-function installGlobalProxyFetch() {
-  const current = globalThis.fetch;
-  if (typeof current !== "function" || current.__piWebAccessProxyFetch === true) return;
-  const nativeFetch = current;
-  const wrapped = (async (input, init) => {
-    const proxy = init?.__proxy ?? getActiveProxy();
-    if (!proxy) return nativeFetch(input, init);
-    let url = null;
-    try {
-      url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
-    } catch {
-      url = null;
+function resolveWebProxy(url, explicitProxy) {
+  const configured = loadConfiguredProxy();
+  const scoped = proxyStorage.getStore();
+  let proxy = explicitProxy !== void 0 ? normalizeProxyUrl(explicitProxy, "proxy") : scoped !== void 0 ? scoped : configured;
+  let environment = false;
+  if (proxy === null && explicitProxy === void 0 && scoped === void 0 && configured === null) {
+    const candidates = url.protocol === "https:" ? [process.env.HTTPS_PROXY, process.env.https_proxy, process.env.HTTP_PROXY, process.env.http_proxy, process.env.ALL_PROXY, process.env.all_proxy] : [process.env.HTTP_PROXY, process.env.http_proxy, process.env.ALL_PROXY, process.env.all_proxy];
+    for (const candidate of candidates) {
+      if (!candidate?.trim()) continue;
+      try {
+        proxy = normalizeProxyUrl(candidate, "proxy environment");
+      } catch {
+        continue;
+      }
+      if (proxy) {
+        environment = true;
+        break;
+      }
     }
-    if (!url || url.protocol !== "http:" && url.protocol !== "https:" || isProxyBypassedUrl(url)) {
-      return nativeFetch(input, init);
-    }
-    if (input instanceof Request) {
-      const request = new Request(input, init);
-      request.signal.throwIfAborted();
-      const body = request.body === null ? null : new Uint8Array(await new Response(
-        request.body.pipeThrough(new TransformStream(), { signal: request.signal })
-      ).arrayBuffer());
-      init = { ...init, method: request.method, headers: request.headers, body, signal: request.signal, redirect: request.redirect };
-    }
-    return fetchViaCurl(url, init ?? {}, proxy);
-  });
-  wrapped.__piWebAccessProxyFetch = true;
-  globalThis.fetch = wrapped;
+  }
+  if (isProxyBypassedUrl(url)) proxy = null;
+  return {
+    proxy,
+    operatorControlled: proxy !== null && (environment || proxy === configured),
+    remoteDns: proxy !== null && ["http:", "https:", "socks4a:", "socks5h:"].includes(new URL(proxy).protocol)
+  };
+}
+async function webFetch(input, init, nativeFetch = globalThis.fetch) {
+  let url = null;
+  try {
+    url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+  } catch {
+    url = null;
+  }
+  if (!url || url.protocol !== "http:" && url.protocol !== "https:") {
+    return nativeFetch(input, init);
+  }
+  if (init?.__validated && init.__validated.url !== url.toString()) throw new Error("Validated route belongs to a different URL");
+  const proxy = init?.__validated ? init.__validated.proxy : resolveWebProxy(url, init?.__proxy).proxy;
+  if (!proxy) return nativeFetch(input, init);
+  if (input instanceof Request) {
+    const request = new Request(input, init);
+    request.signal.throwIfAborted();
+    const body = request.body === null ? null : new Uint8Array(await new Response(
+      request.body.pipeThrough(new TransformStream(), { signal: request.signal })
+    ).arrayBuffer());
+    init = { ...init, method: request.method, headers: request.headers, body, signal: request.signal, redirect: request.redirect };
+  }
+  return fetchViaCurl(url, init ?? {}, proxy);
 }
 function parseHeaderDump(dump, keepLengthHeaders) {
   const blocks = dump.split(/\r?\n\r?\n/).filter((block2) => /^HTTP\/[\d.]+\s+\d{3}/.test(block2.trim()));
@@ -285,6 +209,16 @@ function parseHeaderDump(dump, keepLengthHeaders) {
     }
   }
   return { status, statusText, headers };
+}
+function curlConfigValue(value) {
+  return `"${value.replace(/[\\"\t\n\r\v]/g, (character) => ({
+    "\\": "\\\\",
+    '"': '\\"',
+    "	": "\\t",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\v": "\\v"
+  })[character])}"`;
 }
 async function fetchViaCurl(url, init, proxyUrl) {
   let current = url;
@@ -322,30 +256,39 @@ async function fetchViaCurl(url, init, proxyUrl) {
 async function fetchViaCurlOnce(url, init, proxyUrl) {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  const dir = await mkdtemp(join2(tmpdir(), "pi-web-access-proxy-"));
-  const headerFile = join2(dir, "headers");
-  const bodyFile = join2(dir, "body");
-  const requestBodyFile = join2(dir, "request-body");
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-access-proxy-"));
+  const headerFile = join(dir, "headers");
+  const bodyFile = join(dir, "body");
+  const requestBodyFile = join(dir, "request-body");
   const args = [
+    "--disable",
     "--silent",
     "--show-error",
     "--compressed",
     "--connect-timeout",
     "20",
-    "-x",
-    proxyUrl,
     "-D",
     headerFile,
     "--output",
     bodyFile,
     "--write-out",
-    "%{json}"
+    "%{json}",
+    "--config",
+    "-"
   ];
+  const config = [`proxy = ${curlConfigValue(proxyUrl)}`, `noproxy = ""`, `url = ${curlConfigValue(url.toString())}`];
+  const addresses = init.__validated?.addresses;
+  if (addresses?.length) {
+    const address = addresses[0].address;
+    const target = address.includes(":") ? `[${address}]` : address;
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    config.push(`connect-to = ${curlConfigValue(`${url.hostname}:${port}:${target}:${port}`)}`);
+  }
   if (method === "HEAD") args.push("--head");
   else if (method !== "GET") args.push("-X", method);
   for (const [name, value] of headers.entries()) {
     if (value === "") continue;
-    args.push("-H", `${name}: ${value}`);
+    config.push(`header = ${curlConfigValue(`${name}: ${value}`)}`);
   }
   const body = init.body;
   if (body !== void 0 && body !== null) {
@@ -355,13 +298,12 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
     else if (body instanceof ArrayBuffer) buffer = Buffer.from(body);
     else if (ArrayBuffer.isView(body)) buffer = Buffer.from(body.buffer, body.byteOffset, body.byteLength);
     else throw new Error(`Unsupported request body type for proxy fetch: ${typeof body}`);
-    await writeFile(requestBodyFile, buffer);
+    await writeFile(requestBodyFile, buffer, { mode: 384 });
     args.push("--data-binary", `@${requestBodyFile}`);
-    if (method === "GET") args.unshift("-X", "GET");
+    if (method === "GET") args.push("-X", "GET");
   } else if ((method === "POST" || method === "PUT") && !headers.has("content-length")) {
-    args.push("-H", "Content-Length: 0");
+    config.push(`header = ${curlConfigValue("Content-Length: 0")}`);
   }
-  args.push(url.toString());
   const signal = init.signal ?? null;
   let stdout;
   try {
@@ -388,6 +330,9 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
       child.stderr?.on("data", (chunk) => {
         if (stderr.length < 4096) stderr += chunk.toString("utf-8");
       });
+      child.stdin?.on("error", (err) => {
+        if (err.code !== "EPIPE") reject(new CurlTransportError(`curl configuration pipe failed: ${err.message}`));
+      });
       child.once("error", (err) => {
         signal?.removeEventListener("abort", onAbort);
         reject(new CurlTransportError(err.code === "ENOENT" ? "curl executable not found on PATH; proxy transport requires curl" : `curl failed to start: ${err.message}`));
@@ -396,10 +341,13 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
         signal?.removeEventListener("abort", onAbort);
         if (signal?.aborted) return reject(new DOMException("The operation was aborted.", "AbortError"));
         if (code !== 0) {
-          return reject(new CurlTransportError(`curl exited with code ${code ?? "unknown"} via ${redactProxyUrl(proxyUrl)}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+          const pinHint = addresses?.length && ["http:", "https:"].includes(new URL(proxyUrl).protocol) && /CONNECT/i.test(stderr) ? ". Strict DNS pinning requires CONNECT support; for an operator-controlled remote-DNS proxy, set ssrf.trustEnvProxy=true." : "";
+          return reject(new CurlTransportError(`curl exited with code ${code ?? "unknown"} via ${redactProxyUrl(proxyUrl)}${stderr.trim() ? `: ${stderr.trim()}` : ""}${pinHint}`));
         }
         resolve2(out);
       });
+      child.stdin?.end(`${config.join("\n")}
+`);
     });
   } catch (err) {
     await rm(dir, { recursive: true, force: true }).catch(() => {
@@ -444,10 +392,102 @@ async function fetchViaCurlOnce(url, init, proxyUrl) {
 var proxyStorage, CurlTransportError;
 var init_proxy_transport = __esm({
   "proxy-transport.ts"() {
-    init_utils();
     proxyStorage = new AsyncLocalStorage();
     CurlTransportError = class extends Error {
     };
+  }
+});
+
+// utils.ts
+import { isIP } from "node:net";
+import { join as join2 } from "node:path";
+import { metisConfigPath, readWebAccessConfig as readWebAccessConfig2, updateWebAccessConfig } from "../../metis-config.ts";
+import { webAccessAgentDir as webAccessAgentDir2, WEB_CREDENTIALS_FILE } from "../../web-access-config.ts";
+function getWebSearchConfigDir() {
+  return webAccessAgentDir2();
+}
+function getWebSearchConfigPath() {
+  return join2(getWebSearchConfigDir(), WEB_CREDENTIALS_FILE);
+}
+function getWebAccessConfigPath() {
+  return metisConfigPath(getWebSearchConfigDir());
+}
+function loadWebAccessConfig() {
+  return readWebAccessConfig2(getWebSearchConfigDir());
+}
+function saveWebAccessConfig(patch) {
+  updateWebAccessConfig(getWebSearchConfigDir(), patch);
+}
+function isLoopbackHostname(hostnameValue) {
+  const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
+}
+function resolveApiBaseUrl(options) {
+  const fromEnvironment = options.environmentValue !== void 0;
+  const value = fromEnvironment ? options.environmentValue : options.configuredValue;
+  if (value === void 0) return options.defaultValue;
+  const source = fromEnvironment ? options.environmentKey : `webAccess.${options.configKey} in ${getWebAccessConfigPath()}`;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${source} must be an absolute HTTP(S) URL`);
+  }
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error(`${source} must be an absolute HTTP(S) URL`);
+  }
+  if (url.protocol !== "https:" && (url.protocol !== "http:" || !isLoopbackHostname(url.hostname))) {
+    throw new Error(`${source} must be an absolute HTTPS URL`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${source} must not include credentials`);
+  }
+  if (url.search || url.hash) {
+    throw new Error(`${source} must not include query parameters or fragments`);
+  }
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  return url.toString().replace(/\/+$/, "");
+}
+async function fetchWithCredentialRedirects(url, init, credentialHeaders, credentialQueryParameters = []) {
+  let current = new URL(url);
+  let requestInit = init;
+  for (let redirects = 0; ; redirects++) {
+    const response = await webFetch(current, { ...requestInit, redirect: "manual" });
+    if (!API_REDIRECT_STATUSES.has(response.status)) return response;
+    const location = response.headers.get("location");
+    if (!location) return response;
+    if (redirects === MAX_API_REDIRECTS) {
+      throw new Error(`Too many API redirects from ${url}`);
+    }
+    const next = new URL(location, current);
+    if (next.protocol !== "http:" && next.protocol !== "https:") {
+      throw new Error(`API redirect from ${current.origin} must use HTTP(S)`);
+    }
+    const method = requestInit.method?.toUpperCase() ?? "GET";
+    if ((response.status === 301 || response.status === 302) && method === "POST" || response.status === 303 && method !== "GET" && method !== "HEAD") {
+      const headers = new Headers(requestInit.headers);
+      for (const name of API_REQUEST_BODY_HEADERS) headers.delete(name);
+      const { body: _body, ...withoutBody } = requestInit;
+      requestInit = { ...withoutBody, method: "GET", headers };
+    }
+    if (next.origin !== current.origin) {
+      for (const name of credentialQueryParameters) next.searchParams.delete(name);
+      const headers = new Headers(requestInit.headers);
+      for (const name of credentialHeaders) headers.delete(name);
+      requestInit = { ...requestInit, headers };
+    }
+    current = next;
+  }
+}
+var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS;
+var init_utils = __esm({
+  "utils.ts"() {
+    init_proxy_transport();
+    API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+    API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
+    MAX_API_REDIRECTS = 5;
   }
 });
 
@@ -1872,8 +1912,9 @@ async function exchangeRefreshToken(cfg, signal) {
     refresh_token: cfg.refresh_token ?? "",
     grant_type: "refresh_token"
   });
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await webFetch(TOKEN_ENDPOINT, {
     method: "POST",
+    redirect: "error",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
     signal
@@ -1908,8 +1949,9 @@ async function exchangeServiceAccountJwt(cfg, signal) {
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
     assertion: jwt
   });
-  const res = await fetch(cfg.token_uri || TOKEN_ENDPOINT, {
+  const res = await webFetch(cfg.token_uri || TOKEN_ENDPOINT, {
     method: "POST",
+    redirect: "error",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
     signal
@@ -1958,6 +2000,7 @@ var DEFAULT_ADC_PATH, TOKEN_ENDPOINT, VERTEX_HOST, VERTEX_API_VERSION, REFRESH_S
 var init_gemini_adc = __esm({
   "gemini-adc.ts"() {
     init_utils();
+    init_proxy_transport();
     init_credential_source();
     DEFAULT_ADC_PATH = join4(homedir(), ".config", "gcloud", "application_default_credentials.json");
     TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -2081,7 +2124,7 @@ async function fetchGeminiApi(url, init = {}, apiKey) {
     }
   }
   try {
-    const response = await fetch(parsedUrl, { ...init, headers });
+    const response = await fetchWithCredentialRedirects(parsedUrl.toString(), { ...init, headers }, ["x-goog-api-key", "cf-aig-authorization", "Authorization"]);
     responseCredentials.set(response, { apiKey: resolvedApiKey, cloudflareApiKey, adcToken });
     return response;
   } catch (error) {
@@ -2876,10 +2919,7 @@ function createGeminiFetch(undiciImpl) {
     maxHeaderSize: GEMINI_MAX_HEADER_SIZE,
     pipelining: 1
   });
-  return (input, init) => undiciImpl.fetch(
-    input,
-    { ...init, dispatcher: agent }
-  );
+  return (input, init) => webFetch(input, { ...init, dispatcher: agent }, undiciImpl.fetch);
 }
 async function resolveGeminiFetch() {
   if (geminiFetchOverride) return geminiFetchOverride;
@@ -2888,7 +2928,7 @@ async function resolveGeminiFetch() {
   try {
     undici = await import("undici");
   } catch {
-    geminiFetchImpl = fetch;
+    geminiFetchImpl = webFetch;
     return geminiFetchImpl;
   }
   geminiFetchImpl = createGeminiFetch(undici);
@@ -3201,6 +3241,7 @@ var init_gemini_web = __esm({
   "gemini-web.ts"() {
     init_chrome_cookies();
     init_gemini_web_config();
+    init_proxy_transport();
     GEMINI_APP_URL = "https://gemini.google.com/app";
     GEMINI_STREAM_GENERATE_URL = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate";
     GEMINI_UPLOAD_URL = "https://content-push.googleapis.com/upload";
@@ -3222,9 +3263,15 @@ var init_gemini_web = __esm({
 });
 
 // search-types.ts
-var SearchHttpError;
+var SearchUnsupportedFilterError, SearchHttpError;
 var init_search_types = __esm({
   "search-types.ts"() {
+    SearchUnsupportedFilterError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "SearchUnsupportedFilterError";
+      }
+    };
     SearchHttpError = class extends Error {
       status;
       constructor(status, message) {
@@ -3341,6 +3388,9 @@ function isPerplexityAvailable() {
 async function postPerplexity(url, body, options) {
   checkRateLimit();
   const apiKey = await getApiKey2(options.signal);
+  options.signal?.throwIfAborted();
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
   const activityId = activityMonitor.logStart({ type: "api", query: options.activityQuery });
   activityMonitor.updateRateLimit({
     used: requestTimestamps.length,
@@ -3348,40 +3398,41 @@ async function postPerplexity(url, body, options) {
     oldestTimestamp: requestTimestamps[0] ?? null,
     windowMs: RATE_LIMIT.windowMs
   });
-  let response;
   try {
-    response = await fetch(url, {
+    const response = await fetchWithCredentialRedirects(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(body),
-      ...options.signal ? { signal: options.signal } : {}
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) {
-      activityMonitor.logComplete(activityId, 0);
-    } else {
-      activityMonitor.logError(activityId, redactedMessage);
+      signal
+    }, ["Authorization"]);
+    if (!response.ok) {
+      const errorText = redactCredential(await response.text(), apiKey);
+      throw new SearchHttpError(response.status, `Perplexity API error ${response.status}: ${errorText}`);
     }
-    if (redactedMessage === message) throw err;
-    const redactedError = new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
-  }
-  activityMonitor.logComplete(activityId, response.status);
-  if (!response.ok) {
-    const errorText = redactCredential(await response.text(), apiKey);
-    throw new SearchHttpError(response.status, `Perplexity API error ${response.status}: ${errorText}`);
-  }
-  try {
-    return await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+      throw new Error(`Perplexity API returned invalid JSON: ${err.message}`);
+    }
+    activityMonitor.logComplete(activityId, response.status);
+    return data;
   } catch (err) {
+    if (options.signal?.aborted) {
+      activityMonitor.logComplete(activityId, 0);
+      throw new Error("Aborted");
+    }
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Perplexity API returned invalid JSON: ${message}`);
+    const redactedMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "Perplexity request timed out after 60s" : redactCredential(message, apiKey);
+    if (err instanceof SearchHttpError) activityMonitor.logComplete(activityId, err.status);
+    else activityMonitor.logError(activityId, redactedMessage);
+    if (redactedMessage === message) throw err;
+    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
+    throw redactedError;
   }
 }
 async function searchWithPerplexity(query, options = {}) {
@@ -3425,7 +3476,7 @@ async function askPerplexity(prompt, options = {}) {
   const content = data.choices?.[0]?.message?.content;
   return typeof content === "string" ? content : "";
 }
-var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH3, RATE_LIMIT, requestTimestamps, cachedConfig5;
+var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH3, REQUEST_TIMEOUT_MS, RATE_LIMIT, requestTimestamps, cachedConfig5;
 var init_perplexity = __esm({
   "perplexity.ts"() {
     init_utils();
@@ -3438,12 +3489,29 @@ var init_perplexity = __esm({
     PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
     PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
     CONFIG_PATH3 = getWebSearchConfigPath();
+    REQUEST_TIMEOUT_MS = 6e4;
     RATE_LIMIT = {
       maxRequests: 10,
       windowMs: 60 * 1e3
     };
     requestTimestamps = [];
     cachedConfig5 = null;
+  }
+});
+
+// search-error-redaction.ts
+function redactSearchFailure(error, credential) {
+  const message = error instanceof Error ? error.message : String(error);
+  const redacted = redactCredential(message, credential);
+  if (redacted === message) return { message, error };
+  const safeError = error instanceof SearchHttpError ? new SearchHttpError(error.status, redacted) : new Error(redacted);
+  if (error instanceof Error) safeError.name = error.name;
+  return { message: redacted, error: safeError };
+}
+var init_search_error_redaction = __esm({
+  "search-error-redaction.ts"() {
+    init_credential_source();
+    init_search_types();
   }
 });
 
@@ -3660,7 +3728,7 @@ async function parallelFetch(url, body, signal) {
   const activityId = activityMonitor.logStart(activityContext(url, body));
   let response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithCredentialRedirects(url, {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
@@ -3668,7 +3736,7 @@ async function parallelFetch(url, body, signal) {
       },
       body: JSON.stringify(body),
       signal: requestSignal2(signal)
-    });
+    }, ["x-api-key"]);
   } catch (err) {
     const message = errorMessage2(err);
     const redactedMessage = redactCredential(message, apiKey);
@@ -3728,7 +3796,7 @@ var init_parallel = __esm({
 
 // parallel-mcp.ts
 function requestSignal3(signal) {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS2);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 function errorMessage3(err) {
@@ -3762,7 +3830,7 @@ async function callParallelMcp(toolName, args, signal) {
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   let response;
   try {
-    response = await fetch(PARALLEL_MCP_URL, {
+    response = await webFetch(PARALLEL_MCP_URL, {
       method: "POST",
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: toolName, arguments: args } }),
@@ -3895,10 +3963,11 @@ async function extractWithParallelMcp(url, signal, options = {}) {
     throw err;
   }
 }
-var PARALLEL_MCP_URL, CONFIG_PATH8, REQUEST_TIMEOUT_MS;
+var PARALLEL_MCP_URL, CONFIG_PATH8, REQUEST_TIMEOUT_MS2;
 var init_parallel_mcp = __esm({
   "parallel-mcp.ts"() {
     init_activity();
+    init_proxy_transport();
     init_credential_source();
     init_domain_filter_normalization();
     init_parallel();
@@ -3906,7 +3975,7 @@ var init_parallel_mcp = __esm({
     init_utils();
     PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
     CONFIG_PATH8 = getWebSearchConfigPath();
-    REQUEST_TIMEOUT_MS = 6e4;
+    REQUEST_TIMEOUT_MS2 = 6e4;
   }
 });
 
@@ -3979,7 +4048,7 @@ function buildSearchUrl(query, options, page) {
 async function tinyFishJsonRequest(label, url, apiKey, init, timeoutMs, signal) {
   let response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithCredentialRedirects(url, {
       ...init,
       headers: {
         "X-API-Key": apiKey,
@@ -3987,7 +4056,7 @@ async function tinyFishJsonRequest(label, url, apiKey, init, timeoutMs, signal) 
         ...init.headers
       },
       signal: requestSignal4(signal, timeoutMs)
-    });
+    }, ["X-API-Key", "Authorization", "Cookie"]);
   } catch (err) {
     const message = errorMessage4(err);
     const redactedMessage = redactCredential(message, apiKey);
@@ -4109,7 +4178,8 @@ async function searchWithTinyFish(query, options = {}) {
       combined.push(...mapSearchResults2(data.results));
       if (data.results.length < 10) break;
     }
-    const results = deduplicateResults(combined, numResults);
+    const domains = normalizeDomainFilters(options.domainFilter);
+    const results = deduplicateResults(combined.filter((result) => matchesDomainFilter(result.url, domains)), numResults);
     const response = { answer: formatSearchResultsAsAnswer(results), results };
     if (options.includeContent && results.length > 0) {
       const inlineContent = await fetchInlineContent(results.map((result) => result.url), apiKey, options.signal);
@@ -4209,9 +4279,6 @@ function isSearch1APIAvailable() {
     environmentValue: process.env.SEARCH1API_KEY
   });
 }
-function errorMessage5(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function requestSignal5(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -4235,7 +4302,7 @@ function buildSearchBody(query, options) {
 async function search1APIJsonRequest(label, url, apiKey, body, timeoutMs, signal) {
   let response;
   try {
-    response = await fetch(url, {
+    response = await webFetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -4245,12 +4312,7 @@ async function search1APIJsonRequest(label, url, apiKey, body, timeoutMs, signal
       signal: requestSignal5(signal, timeoutMs)
     });
   } catch (err) {
-    const message = errorMessage5(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    throw redactSearchFailure(err, apiKey).error;
   }
   const raw = await response.text();
   if (!response.ok) {
@@ -4310,14 +4372,10 @@ async function searchWithSearch1API(query, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return response;
   } catch (err) {
-    const message = errorMessage5(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
 }
 async function extractWithSearch1API(url, signal, options = {}) {
@@ -4349,20 +4407,18 @@ async function extractWithSearch1API(url, signal, options = {}) {
       error: null
     };
   } catch (err) {
-    const message = errorMessage5(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
 }
 var SEARCH1API_SEARCH_URL, SEARCH1API_CRAWL_URL, CONFIG_PATH10, SEARCH_TIMEOUT_MS5, CRAWL_TIMEOUT_MS, cachedConfig11;
 var init_search1api = __esm({
   "search1api.ts"() {
+    init_search_error_redaction();
     init_search_types();
+    init_proxy_transport();
     init_domain_filter_normalization();
     init_utils();
     init_activity();
@@ -4406,7 +4462,7 @@ function isQueritAvailable() {
     environmentValue: process.env.QUERIT_API_KEY
   });
 }
-function errorMessage7(err) {
+function errorMessage5(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function requestSignal7(signal, timeoutMs) {
@@ -4467,7 +4523,7 @@ function buildContentsBody(urls, options = {}) {
 async function queritJsonRequest(label, url, apiKey, body, timeoutMs, signal) {
   let response;
   try {
-    response = await fetch(url, {
+    response = await webFetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -4478,7 +4534,7 @@ async function queritJsonRequest(label, url, apiKey, body, timeoutMs, signal) {
       signal: requestSignal7(signal, timeoutMs)
     });
   } catch (err) {
-    const message = errorMessage7(err);
+    const message = errorMessage5(err);
     const isRequestAbort = err instanceof Error ? err.name === "AbortError" || err.name === "TimeoutError" || /abort|timeout/i.test(message) : /abort|timeout/i.test(message);
     if (!signal?.aborted && isRequestAbort) {
       const timeoutError = new Error(`Querit ${label} API request timed out after ${Math.ceil(timeoutMs / 1e3)} seconds`);
@@ -4588,7 +4644,8 @@ async function searchWithQuerit(query, options = {}) {
       options.signal
     );
     assertApiSuccess("Search", data);
-    const results = mapSearchResults5(data);
+    const domains = normalizeDomainFilters(options.domainFilter);
+    const results = mapSearchResults5(data).filter((result) => matchesDomainFilter(result.url, domains)).slice(0, normalizeSearchResultCount(options.numResults));
     const response = { answer: formatSearchResultsAsAnswer(results), results };
     if (options.includeContent && results.length > 0) {
       const inlineContent = await fetchInlineContent2(results.map((result) => result.url), apiKey, options.signal);
@@ -4597,7 +4654,7 @@ async function searchWithQuerit(query, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return response;
   } catch (err) {
-    const message = errorMessage7(err);
+    const message = errorMessage5(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (options.signal?.aborted) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -4624,7 +4681,7 @@ async function extractWithQuerit(url, signal, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return null;
   } catch (err) {
-    const message = errorMessage7(err);
+    const message = errorMessage5(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (signal?.aborted) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -4638,6 +4695,7 @@ var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH12, SEARCH_TIMEOUT_MS7, C
 var init_querit = __esm({
   "querit.ts"() {
     init_utils();
+    init_proxy_transport();
     init_activity();
     init_domain_filter_normalization();
     init_credential_source();
@@ -4657,6 +4715,7 @@ var init_querit = __esm({
 // ssrf-protection.ts
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 function loadConfigRoot() {
   return loadWebAccessConfig();
 }
@@ -4731,14 +4790,22 @@ async function defaultLookup(hostname2) {
   return dnsLookup(hostname2, { all: true, verbatim: true });
 }
 async function validateRemoteUrl(rawUrl, options = {}) {
-  const url = rawUrl instanceof URL ? rawUrl : new URL(rawUrl);
+  return (await resolveRemoteUrl(rawUrl, options)).url;
+}
+async function resolveRemoteUrl(rawUrl, options = {}) {
+  const url = new URL(rawUrl.toString());
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Only HTTP and HTTPS URLs can be fetched remotely");
   }
   const hostname2 = normalizeHostname(url.hostname);
   if (!hostname2) throw new Error("URL must include a hostname");
+  const route = resolveWebProxy(url, options.proxy);
   if (hostname2 === "localhost") {
-    if (options.allowLoopback === true) return url;
+    if (options.allowLoopback === true) return {
+      url,
+      proxy: route.proxy,
+      addresses: [{ address: "127.0.0.1", family: 4 }, { address: "::1", family: 6 }]
+    };
     throw new Error(`Blocked internal hostname: ${hostname2}`);
   }
   if (hostname2.endsWith(".localhost")) {
@@ -4749,47 +4816,73 @@ async function validateRemoteUrl(rawUrl, options = {}) {
   if (net.isIP(hostname2)) {
     const addressAllowRanges = options.allowLoopback === true ? [...allowRanges, ...parseAllowRanges(LOOPBACK_ALLOW_RANGES)] : allowRanges;
     assertPublicAddress(hostname2, hostname2, addressAllowRanges);
-    return url;
+    return { url, proxy: route.proxy, addresses: [{ address: hostname2, family: net.isIP(hostname2) }] };
   }
-  const trustProxy = options.trustEnvProxy === true;
-  const proxy = options.proxy !== void 0 ? normalizeProxyUrl(options.proxy, "proxy") : hasScopedProxyDecision() ? getActiveProxy() : void 0;
-  if (proxy === void 0 ? shouldTrustEnvProxy(url, trustProxy) : trustProxy && isConfiguredRemoteDnsProxy(url, proxy)) return url;
+  const trustProxy = options.trustEnvProxy === true && route.operatorControlled && route.remoteDns;
+  if (trustProxy) return { url, proxy: route.proxy, addresses: void 0 };
   let addresses;
   try {
     addresses = await (options.lookup ?? defaultLookup)(hostname2);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const hint = !trustProxy && proxy && isConfiguredRemoteDnsProxy(url, proxy) ? ". If your configured proxy resolves hostnames, set ssrf.trustEnvProxy to true in web-search.json." : "";
+    const hint = route.proxy && route.operatorControlled && route.remoteDns ? ". If your configured proxy resolves hostnames, set ssrf.trustEnvProxy to true in web-search.json." : "";
     throw new Error(`Failed to resolve ${hostname2}: ${message}${hint}`);
   }
   if (addresses.length === 0) throw new Error(`Failed to resolve ${hostname2}: no addresses returned`);
   for (const { address } of addresses) {
     assertPublicAddress(address, hostname2, allowRanges);
   }
-  return url;
+  return { url, proxy: route.proxy, addresses: addresses.map(({ address }) => ({ address: normalizeHostname(address), family: net.isIP(normalizeHostname(address)) })) };
 }
 async function fetchRemoteUrl(url, init = {}, options = {}) {
-  const fetchImpl = options.fetch ?? fetch;
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
-  let current = await validateRemoteUrl(url, options);
-  const configuredOrigin = current.origin;
+  const validationOptions = { ...options, proxy: options.proxy ?? init.__proxy };
+  let resolved = await resolveRemoteUrl(url, validationOptions);
+  const configuredOrigin = resolved.url.origin;
   let requestInit = init;
   for (let redirects = 0; redirects <= maxRedirects; redirects++) {
-    const response = await fetchImpl(current, { ...requestInit, redirect: "manual" });
+    const current = resolved.url;
+    if (options.beforeRequest) requestInit = await options.beforeRequest(new URL(current.toString()), requestInit);
+    const addresses = resolved.addresses;
+    const checkedHostname = normalizeHostname(current.hostname);
+    const dispatcher = resolved.proxy === null && addresses?.length ? new Agent({ connect: {
+      lookup(hostname2, lookupOptions, callback) {
+        if (normalizeHostname(hostname2) !== checkedHostname) {
+          callback(new Error("Unexpected hostname for validated DNS route"), "", 4);
+        } else if (lookupOptions.all) callback(null, addresses);
+        else callback(null, addresses[0].address, addresses[0].family);
+      }
+    } }) : void 0;
+    const pinnedInit = {
+      ...requestInit,
+      redirect: "manual",
+      __validated: { url: current.toString(), proxy: resolved.proxy, addresses },
+      ...dispatcher ? { dispatcher } : {}
+    };
+    let response;
+    try {
+      response = await (options.fetch ? options.fetch(current, pinnedInit) : webFetch(current, pinnedInit, undiciFetch));
+    } catch (error) {
+      await dispatcher?.destroy();
+      throw error;
+    }
+    if (dispatcher) void dispatcher.close().catch(() => {
+    });
     if (!REDIRECT_STATUSES.has(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) return response;
     if (redirects === maxRedirects) throw new Error(`Too many redirects fetching ${current.toString()}`);
     const from = current;
     const next = new URL(location, current);
-    current = await validateRemoteUrl(next, next.origin === configuredOrigin ? options : { ...options, allowLoopback: false });
+    await response.body?.cancel();
+    resolved = await resolveRemoteUrl(next, next.origin === configuredOrigin ? validationOptions : { ...validationOptions, allowLoopback: false });
     if (response.status === 303 || (response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST") {
       const { body: _body, ...nextInit } = requestInit;
       requestInit = { ...nextInit, method: "GET" };
     }
-    if (options.onRedirect) requestInit = options.onRedirect({ from, to: current, init: requestInit, response });
+    if (options.onRedirect) requestInit = options.onRedirect({ from, to: resolved.url, init: requestInit, response });
   }
-  throw new Error(`Too many redirects fetching ${current.toString()}`);
+  throw new Error(`Too many redirects fetching ${resolved.url.toString()}`);
 }
 function normalizeHostname(hostname2) {
   return hostname2.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
@@ -4805,25 +4898,6 @@ function assertDomainPolicy(hostname2, policy) {
 }
 function domainMatches(hostname2, entry) {
   return hostname2 === entry || hostname2.endsWith(`.${entry}`);
-}
-function getProxyForProtocol(protocol) {
-  const candidates = protocol === "http:" ? [process.env.HTTP_PROXY, process.env.http_proxy, process.env.ALL_PROXY, process.env.all_proxy] : protocol === "https:" ? [process.env.HTTPS_PROXY, process.env.https_proxy, process.env.HTTP_PROXY, process.env.http_proxy, process.env.ALL_PROXY, process.env.all_proxy] : [];
-  for (const candidate of candidates) {
-    const value = candidate?.trim();
-    if (!value) continue;
-    try {
-      const proxyUrl = new URL(value);
-      if ((proxyUrl.protocol === "http:" || proxyUrl.protocol === "https:") && proxyUrl.hostname) return value;
-    } catch {
-    }
-  }
-  return "";
-}
-function shouldTrustEnvProxy(url, enabled) {
-  return enabled && Boolean(getProxyForProtocol(url.protocol)) && !isProxyBypassedUrl(url);
-}
-function isConfiguredRemoteDnsProxy(url, proxy) {
-  return proxy !== null && REMOTE_DNS_PROXY_PROTOCOLS.has(new URL(proxy).protocol) && !isProxyBypassedUrl(url) && proxy === loadConfiguredProxy();
 }
 function assertPublicAddress(address, hostname2, allowRanges = []) {
   const normalized = normalizeHostname(address);
@@ -4974,7 +5048,7 @@ function bytesMatchPrefix(addr, network, prefix) {
   }
   return true;
 }
-var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, REMOTE_DNS_PROXY_PROTOCOLS, WEB_SEARCH_CONFIG_PATH, DEFAULT_DOMAIN_POLICY;
+var DEFAULT_MAX_REDIRECTS, REDIRECT_STATUSES, LOOPBACK_ALLOW_RANGES, WEB_SEARCH_CONFIG_PATH, DEFAULT_DOMAIN_POLICY;
 var init_ssrf_protection = __esm({
   "ssrf-protection.ts"() {
     init_utils();
@@ -4982,7 +5056,6 @@ var init_ssrf_protection = __esm({
     DEFAULT_MAX_REDIRECTS = 5;
     REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     LOOPBACK_ALLOW_RANGES = ["127.0.0.0/8", "::1", "::ffff:127.0.0.0/104"];
-    REMOTE_DNS_PROXY_PROTOCOLS = /* @__PURE__ */ new Set(["http:", "https:", "socks4a:", "socks5h:"]);
     WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
     DEFAULT_DOMAIN_POLICY = { allow: [], deny: [] };
   }
@@ -5085,11 +5158,11 @@ function requestSignal9(timeoutMs, signal) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
-function errorMessage10(err) {
+function errorMessage8(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function isAbortError2(err) {
-  return errorMessage10(err).toLowerCase().includes("abort");
+  return errorMessage8(err).toLowerCase().includes("abort");
 }
 function ssrfOptions(options) {
   const config = loadSsrfConfig();
@@ -5102,31 +5175,19 @@ function ssrfOptions(options) {
 function firecrawlApiSsrfOptions(options, allowLoopback) {
   return { ...ssrfOptions(options), allowLoopback };
 }
-function withoutSensitiveHeaders(headers) {
-  const next = { ...headers };
-  delete next.Authorization;
-  delete next.authorization;
-  delete next.Cookie;
-  delete next.cookie;
-  delete next["X-API-Key"];
-  delete next["x-api-key"];
-  return next;
-}
 async function fetchFirecrawlApi(url, init, options) {
   const allowLoopback = isLoopbackHostname(new URL(url).hostname);
-  let current = await validateRemoteUrl(url, firecrawlApiSsrfOptions(options, allowLoopback));
-  let headers = init.headers;
-  for (let redirects = 0; redirects <= DEFAULT_MAX_REDIRECTS2; redirects++) {
-    const response = await fetch(current, { ...init, headers, redirect: "manual" });
-    if (!REDIRECT_STATUSES2.has(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!location) return response;
-    if (redirects === DEFAULT_MAX_REDIRECTS2) throw new Error(`Too many redirects fetching ${current.toString()}`);
-    const next = await validateRemoteUrl(new URL(location, current), firecrawlApiSsrfOptions(options, allowLoopback));
-    if (next.origin !== current.origin) headers = withoutSensitiveHeaders(headers);
-    current = next;
-  }
-  throw new Error(`Too many redirects fetching ${current.toString()}`);
+  return fetchRemoteUrl(url, init, {
+    ...firecrawlApiSsrfOptions(options, allowLoopback),
+    fetch: options?.fetch,
+    onRedirect: ({ from, to, init: next }) => {
+      const headers = new Headers(next.headers);
+      if (from.origin !== to.origin) {
+        for (const name of ["Authorization", "Cookie", "X-API-Key"]) headers.delete(name);
+      }
+      return { ...next, method: init.method, body: init.body, headers };
+    }
+  });
 }
 function scrapeBody(url) {
   return {
@@ -5237,7 +5298,7 @@ async function firecrawlFetch(endpoint, body, signal, options, label = endpoint,
     activityMonitor.logComplete(activityId, response.status);
     return envelope;
   } catch (err) {
-    const message = errorMessage10(err), redactedMessage = redactCredential(message, apiKey);
+    const message = errorMessage8(err), redactedMessage = redactCredential(message, apiKey);
     if (isAbortError2(err)) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
     if (redactedMessage === message) throw err;
@@ -5288,7 +5349,7 @@ async function extractWithFirecrawl(url, signal, options) {
   const title = typeof metadataTitle === "string" && metadataTitle.trim() ? metadataTitle.trim() : typeof scrape.title === "string" ? scrape.title.trim() : "";
   return { url, title, content: withPdfTruncationNotice(content, scrape.metadata), error: null };
 }
-var CONFIG_PATH15, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, DEFAULT_MAX_REDIRECTS2, REDIRECT_STATUSES2, SUPPORTED_API_VERSIONS, cachedConfig16;
+var CONFIG_PATH15, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, SUPPORTED_API_VERSIONS, cachedConfig16;
 var init_firecrawl = __esm({
   "firecrawl.ts"() {
     init_utils();
@@ -5303,8 +5364,6 @@ var init_firecrawl = __esm({
     DEFAULT_API_VERSION = "v2";
     EXTRACT_TIMEOUT_MS = 6e4;
     SEARCH_TIMEOUT_MS10 = 6e4;
-    DEFAULT_MAX_REDIRECTS2 = 5;
-    REDIRECT_STATUSES2 = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     SUPPORTED_API_VERSIONS = ["v1", "v2"];
     cachedConfig16 = null;
   }
@@ -5334,7 +5393,7 @@ Create a key at https://kagi.com/settings?p=api`
   }
   return apiKey;
 }
-function errorMessage13(err) {
+function errorMessage10(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse(message) {
@@ -5411,13 +5470,25 @@ function isKagiAvailable() {
 async function searchWithKagi(query, options = {}) {
   const apiKey = await requireApiKey5(options.signal);
   const numResults = normalizeSearchResultCount(options.numResults);
+  const domains = normalizeDomainFilters(options.domainFilter);
+  const hasDomains = domains.include.length > 0 || domains.exclude.length > 0;
+  const days = options.recencyFilter ? { day: 1, week: 7, month: 30, year: 365 }[options.recencyFilter] : void 0;
+  const after = days ? new Date(Date.now() - days * 864e5).toISOString().slice(0, 10) : void 0;
   const activityId = activityMonitor.logStart({ type: "api", query });
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS13);
   try {
-    const response = await fetch(KAGI_SEARCH_URL, {
+    const response = await webFetch(KAGI_SEARCH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query, limit: numResults }),
+      body: JSON.stringify({
+        query,
+        limit: hasDomains ? 20 : numResults,
+        ...after ? { filters: { after } } : {},
+        ...hasDomains ? { lens: {
+          ...domains.include.length ? { sites_included: domains.include } : {},
+          ...domains.exclude.length ? { sites_excluded: domains.exclude } : {}
+        } } : {}
+      }),
       signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal
     });
     if (!response.ok) {
@@ -5432,7 +5503,7 @@ async function searchWithKagi(query, options = {}) {
       throw new Error("Kagi API returned invalid JSON");
     }
     const parsed = parseSearchResponse(rawData);
-    const results = parsed.results.slice(0, numResults);
+    const results = parsed.results.filter((result) => matchesDomainFilter(result.url, domains)).slice(0, numResults);
     const mapped = { answer: formatSearchResultsAsAnswer(results), results };
     if (options.includeContent) {
       const urls = new Set(results.map((result) => result.url));
@@ -5446,7 +5517,7 @@ async function searchWithKagi(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage13(err);
+    const message = errorMessage10(err);
     const safeMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "Kagi request timed out after 60s" : redactCredential(message, apiKey);
     const outgoing = safeMessage === message && err instanceof Error ? err : err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage) : err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
     if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
@@ -5476,6 +5547,7 @@ async function extractWithKagi(url, signal, options = {}) {
       body: JSON.stringify({ pages: [{ url }] }),
       signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal
     }, {
+      fetch: options.fetch,
       allowRanges: ssrf.allowRanges,
       trustEnvProxy: ssrf.trustEnvProxy,
       onRedirect: ({ from, to, init }) => to.origin === from.origin ? init : { ...init, headers: { "Content-Type": "application/json", Accept: "application/json" } },
@@ -5500,7 +5572,7 @@ async function extractWithKagi(url, signal, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage13(err);
+    const message = errorMessage10(err);
     const safeMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "Kagi extract request timed out" : redactCredential(message, apiKey);
     const outgoing = safeMessage === message && err instanceof Error ? err : err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage) : err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
     if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
@@ -5512,10 +5584,12 @@ var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH18, SEARCH_TIMEOUT_MS13, cache
 var init_kagi = __esm({
   "kagi.ts"() {
     init_search_types();
+    init_proxy_transport();
     init_utils();
     init_activity();
     init_search_answer_formatting();
     init_search_result_count_normalization();
+    init_domain_filter_normalization();
     init_credential_source();
     init_ssrf_protection();
     KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
@@ -5550,7 +5624,7 @@ Create a key at https://ollama.com/settings/keys`
   }
   return apiKey;
 }
-function errorMessage15(err) {
+function errorMessage11(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse3(message) {
@@ -5582,19 +5656,22 @@ function isOllamaAvailable() {
   return hasCredentialSource({ provider: "Ollama", configuredValue: loadConfig20().ollamaApiKey, environmentValue: process.env.OLLAMA_API_KEY });
 }
 async function searchWithOllama(query, options = {}) {
+  if (options.recencyFilter) throw new SearchUnsupportedFilterError("Ollama web search does not support recencyFilter");
   const apiKey = await requireApiKey7(options.signal);
   const numResults = normalizeSearchResultCount(options.numResults, { max: 10 });
+  const filters = normalizeDomainFilters(options.domainFilter);
+  const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
   const activityId = activityMonitor.logStart({ type: "api", query });
   let response;
   try {
-    response = await fetch(OLLAMA_SEARCH_URL, {
+    response = await webFetch(OLLAMA_SEARCH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query, max_results: numResults }),
+      body: JSON.stringify({ query, max_results: hasDomains ? 10 : numResults }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS15), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS15)
     });
   } catch (err) {
-    const message = errorMessage15(err);
+    const message = errorMessage11(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -5613,20 +5690,21 @@ async function searchWithOllama(query, options = {}) {
     rawData = await response.json();
   } catch (err) {
     activityMonitor.logComplete(activityId, response.status);
-    throw new Error(`Ollama API returned invalid JSON: ${errorMessage15(err)}`);
+    throw new Error(`Ollama API returned invalid JSON: ${errorMessage11(err)}`);
   }
   let data;
   try {
     data = parseSearchResponse3(rawData);
   } catch (err) {
-    activityMonitor.logError(activityId, errorMessage15(err));
+    activityMonitor.logError(activityId, errorMessage11(err));
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
-  const results = data.results.slice(0, numResults).map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
+  const retained = data.results.filter((result) => matchesDomainFilter(result.url, filters)).slice(0, numResults);
+  const results = retained.map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
   const mapped = { answer: formatSearchResultsAsAnswer(results), results };
   if (options.includeContent) {
-    const inlineContent = data.results.slice(0, numResults).filter((result) => result.content.trim().length > 0).map((result) => ({ url: result.url, title: result.title, content: result.content, error: null }));
+    const inlineContent = retained.filter((result) => result.content.trim().length > 0).map((result) => ({ url: result.url, title: result.title, content: result.content, error: null }));
     if (inlineContent.length > 0) mapped.inlineContent = inlineContent;
   }
   return mapped;
@@ -5653,13 +5731,14 @@ async function extractWithOllama(url, signal, options = {}) {
       body: JSON.stringify({ url }),
       signal: signal ? AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS15), signal]) : AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS15)
     }, {
+      fetch: options.fetch,
       allowRanges: ssrf.allowRanges,
       trustEnvProxy: ssrf.trustEnvProxy,
       onRedirect: ({ from, to, init }) => to.origin === from.origin ? init : { ...init, headers: { "Content-Type": "application/json" } },
       ...options.lookup ? { lookup: options.lookup } : {}
     });
   } catch (err) {
-    const message = errorMessage15(err);
+    const message = errorMessage11(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -5678,13 +5757,13 @@ async function extractWithOllama(url, signal, options = {}) {
     rawData = await response.json();
   } catch (err) {
     activityMonitor.logComplete(activityId, response.status);
-    throw new Error(`Ollama Web Fetch returned invalid JSON: ${errorMessage15(err)}`);
+    throw new Error(`Ollama Web Fetch returned invalid JSON: ${errorMessage11(err)}`);
   }
   let data;
   try {
     data = parseFetchResponse(rawData);
   } catch (err) {
-    activityMonitor.logError(activityId, errorMessage15(err));
+    activityMonitor.logError(activityId, errorMessage11(err));
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -5696,8 +5775,10 @@ var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH20, SEARCH_TIMEOUT_MS15, cac
 var init_ollama = __esm({
   "ollama.ts"() {
     init_utils();
+    init_proxy_transport();
     init_activity();
     init_search_types();
+    init_domain_filter_normalization();
     init_search_answer_formatting();
     init_search_result_count_normalization();
     init_credential_source();
@@ -6173,14 +6254,14 @@ Format as markdown.`;
 // youtube-extract.ts
 import { execFile as execFile5 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-function errorMessage29(err) {
+function errorMessage22(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function shouldRethrow2(err) {
-  return errorMessage29(err).startsWith("Failed to parse ");
+  return errorMessage22(err).startsWith("Failed to parse ");
 }
 function addAttemptError(errors, label, err) {
-  const message = errorMessage29(err).replace(/\s+/g, " ").trim();
+  const message = errorMessage22(err).replace(/\s+/g, " ").trim();
   if (message) errors.push(`${label}: ${message}`);
 }
 function normalizePreferredModel2(value, fallback) {
@@ -6314,7 +6395,7 @@ async function extractYouTubeFrames(videoId, timestamps, streamInfo, signal) {
 }
 async function fetchYouTubeThumbnail(videoId) {
   try {
-    const res = await fetch(`https://img.youtube.com/vi/${videoId}/hqdefault.jpg`, {
+    const res = await webFetch(`https://img.youtube.com/vi/${videoId}/hqdefault.jpg`, {
       signal: AbortSignal.timeout(5e3)
     });
     if (!res.ok) return null;
@@ -6396,6 +6477,7 @@ var execFileAsync2, YOUTUBE_PROMPT, YOUTUBE_REGEX, defaults, cachedConfig36;
 var init_youtube_extract = __esm({
   "youtube-extract.ts"() {
     init_utils();
+    init_proxy_transport();
     init_media_errors();
     init_activity();
     init_feature_config();
@@ -7137,7 +7219,7 @@ function sleep(ms, signal) {
 }
 async function fetchDatalab(url, init, apiKey) {
   try {
-    return await fetch(url, { ...init, redirect: init.redirect ?? "error" });
+    return await webFetch(url, { ...init, redirect: init.redirect ?? "error" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const redacted = redactCredential(message, apiKey);
@@ -7205,6 +7287,7 @@ var DEFAULT_API_HOST2, API_PREFIX, DEFAULT_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS,
 var init_datalab_pdf_extract = __esm({
   "datalab-pdf-extract.ts"() {
     init_utils();
+    init_proxy_transport();
     init_credential_source();
     DEFAULT_API_HOST2 = "https://www.datalab.to";
     API_PREFIX = "/api/v1";
@@ -7569,11 +7652,11 @@ function validOwner(owner) {
 function validRepo(repo) {
   return /^[A-Za-z0-9._-]{1,100}$/.test(repo) && repo !== "." && repo !== "..";
 }
-function errorMessage30(err) {
+function errorMessage23(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function isAbortError4(err) {
-  return errorMessage30(err).toLowerCase().includes("abort");
+  return errorMessage23(err).toLowerCase().includes("abort");
 }
 function parseGitHubIssuePrUrl(url) {
   let parsed;
@@ -7746,6 +7829,7 @@ async function restJson(url, options, signal) {
   const ssrf = loadSsrfConfig();
   const domainPolicy = loadFetchContentDomainPolicy();
   const response = await fetchRemoteUrl(url, { headers: REST_HEADERS, ...signal ? { signal } : {} }, {
+    fetch: options?.fetch,
     allowRanges: ssrf.allowRanges,
     trustEnvProxy: ssrf.trustEnvProxy,
     domainPolicy,
@@ -7809,7 +7893,7 @@ async function restFallback(url, info, options, signal) {
     return { data: { url, owner: info.owner, repo: info.repo, kind: info.kind, number: info.number, anchor: info.anchor, view, reviewThreads, fallbackNotes: notes } };
   } catch (err) {
     if (signal?.aborted || isAbortError4(err)) return { url, title: "", content: "", error: "Aborted" };
-    const message = errorMessage30(err);
+    const message = errorMessage23(err);
     return { url, title: `${info.owner}/${info.repo}#${info.number}`, content: message, error: `GitHub REST fallback failed: ${message}` };
   }
 }
@@ -8364,7 +8448,7 @@ function requestSignal13(timeoutMs, signal) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
-function errorMessage31(err) {
+function errorMessage24(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function isAbortException(err) {
@@ -8400,6 +8484,7 @@ async function extractWithCrawl4ai(url, signal, options) {
   const activityId = activityMonitor.logStart({ type: "fetch", url: requestUrl.toString() });
   try {
     const response = await fetchRemoteUrl(requestUrl, init, {
+      fetch: options?.fetch,
       ...ssrf,
       allowLoopback: isLoopbackHostname(requestUrl.hostname),
       onRedirect: ({ to, init: redirectInit, response: response2 }) => {
@@ -8441,7 +8526,7 @@ async function extractWithCrawl4ai(url, signal, options) {
     return { url, title: firstHeadingTitle(content), content, error: null };
   } catch (err) {
     if (signal?.aborted || isAbortException(err)) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, errorMessage31(err));
+    else activityMonitor.logError(activityId, errorMessage24(err));
     throw err;
   }
 }
@@ -8519,11 +8604,11 @@ function requestSignal14(timeoutMs, signal) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
-function errorMessage32(err) {
+function errorMessage25(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function isAbortError5(err) {
-  return errorMessage32(err).toLowerCase().includes("abort");
+  return errorMessage25(err).toLowerCase().includes("abort");
 }
 function ssrfOptions3(options) {
   return {
@@ -8532,29 +8617,18 @@ function ssrfOptions3(options) {
     ...options?.lookup ? { lookup: options.lookup } : {}
   };
 }
-function withoutSensitiveHeaders2(headers) {
-  const next = { ...headers };
-  delete next.Authorization;
-  delete next.authorization;
-  delete next.Cookie;
-  delete next.cookie;
-  delete next["X-API-Key"];
-  delete next["x-api-key"];
-  return next;
-}
 async function fetchBrightDataApi(url, init, options) {
-  let current = await validateRemoteUrl(url, ssrfOptions3(options));
-  let headers = init.headers;
-  for (let redirects = 0; ; redirects++) {
-    const response = await fetch(current, { ...init, headers, redirect: "manual" });
-    if (!REDIRECT_STATUSES3.has(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!location) return response;
-    if (redirects === DEFAULT_MAX_REDIRECTS3) throw new Error(`Too many redirects fetching ${current.toString()}`);
-    const next = await validateRemoteUrl(new URL(location, current), ssrfOptions3(options));
-    if (next.origin !== current.origin) headers = withoutSensitiveHeaders2(headers);
-    current = next;
-  }
+  return fetchRemoteUrl(url, init, {
+    ...ssrfOptions3(options),
+    fetch: options?.fetch,
+    onRedirect: ({ from, to, init: next }) => {
+      const headers = new Headers(next.headers);
+      if (from.origin !== to.origin) {
+        for (const name of ["Authorization", "Cookie", "X-API-Key"]) headers.delete(name);
+      }
+      return { ...next, method: init.method, body: init.body, headers };
+    }
+  });
 }
 function unlockerBody(url, zone) {
   return {
@@ -8586,7 +8660,7 @@ async function brightDataRequest(url, zone, signal, options) {
     activityMonitor.logComplete(activityId, response.status);
     return text4;
   } catch (err) {
-    const message = errorMessage32(err);
+    const message = errorMessage25(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (isAbortError5(err)) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -8617,7 +8691,7 @@ async function extractWithBrightDataUnlocker(url, signal, options) {
   if (!content) return null;
   return { url, title: headingTitle(content), content, error: null };
 }
-var CONFIG_PATH37, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, DEFAULT_MAX_REDIRECTS3, REDIRECT_STATUSES3, ZONE_PATTERN2, cachedConfig40;
+var CONFIG_PATH37, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, ZONE_PATTERN2, cachedConfig40;
 var init_brightdata_unlocker = __esm({
   "brightdata-unlocker.ts"() {
     init_utils();
@@ -8627,8 +8701,6 @@ var init_brightdata_unlocker = __esm({
     CONFIG_PATH37 = getWebSearchConfigPath();
     BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request";
     EXTRACT_TIMEOUT_MS3 = 6e4;
-    DEFAULT_MAX_REDIRECTS3 = 5;
-    REDIRECT_STATUSES3 = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     ZONE_PATTERN2 = /^[a-z0-9_-]+$/i;
     cachedConfig40 = null;
   }
@@ -9135,21 +9207,21 @@ async function extractWithDefuddle(text4, url) {
   }
   const result = await resultPromise;
   if (processingError !== void 0) {
-    throw new Error(`Defuddle failed to process document: ${errorMessage33(processingError)}`);
+    throw new Error(`Defuddle failed to process document: ${errorMessage26(processingError)}`);
   }
   return typeof result.content === "string" ? { title: result.title, content: result.content } : null;
 }
 function loadSsrfAllowRanges() {
   return loadSsrfConfig().allowRanges;
 }
-function errorMessage33(err) {
+function errorMessage26(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function isConfigParseError(err) {
-  return errorMessage33(err).startsWith("Failed to parse ");
+  return errorMessage26(err).startsWith("Failed to parse ");
 }
 function isAbortError6(err) {
-  return errorMessage33(err).toLowerCase().includes("abort");
+  return errorMessage26(err).toLowerCase().includes("abort");
 }
 function isAbortException2(err) {
   return err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError");
@@ -9164,50 +9236,36 @@ function imageGateError() {
   try {
     return isImageEnabled() ? null : "Image fetching is disabled by image.enabled";
   } catch (err) {
-    return errorMessage33(err);
+    return errorMessage26(err);
   }
 }
 async function resolveAuthCookieHeader(url, profile) {
   const parsed = assertAuthFetchUrl(profile, url.toString());
   const result = await getBrowserCookiesForHosts({ hosts: [parsed.hostname], profile: profile.chromeProfile, requestUrl: parsed });
-  if (!result.ok) {
+  if (result.ok === false) {
     throw new Error(`Authenticated fetch profile ${profile.name} could not read browser cookies: ${result.diagnostic.message}`);
   }
   if (result.cookieHeader) return result.cookieHeader;
   throw new Error(`Authenticated fetch profile ${profile.name} could not build a cookie header`);
 }
 async function fetchAuthenticatedRemoteUrl(url, init, validationOptions, profile) {
-  let current = await validateRemoteUrl(url, {
+  return fetchRemoteUrl(url, init, {
     allowRanges: validationOptions.ssrf.allowRanges,
     trustEnvProxy: validationOptions.ssrf.trustEnvProxy,
     domainPolicy: validationOptions.domainPolicy,
     proxy: validationOptions.proxy,
-    ...validationOptions.lookup ? { lookup: validationOptions.lookup } : {}
-  });
-  let requestInit = init;
-  for (let redirects = 0; redirects <= 5; redirects++) {
-    const cookieHeader = await resolveAuthCookieHeader(current, profile);
-    const headers = { ...requestInit.headers, cookie: cookieHeader };
-    const response = await fetch(current, { ...requestInit, headers, redirect: "manual" });
-    if (!REDIRECT_STATUSES4.has(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!location) return response;
-    if (redirects === 5) throw new Error(`Too many redirects fetching ${current.toString()}`);
-    const from = current;
-    current = await validateRemoteUrl(new URL(location, current), {
-      allowRanges: validationOptions.ssrf.allowRanges,
-      trustEnvProxy: validationOptions.ssrf.trustEnvProxy,
-      domainPolicy: validationOptions.domainPolicy,
-      proxy: validationOptions.proxy,
-      ...validationOptions.lookup ? { lookup: validationOptions.lookup } : {}
-    });
-    authFetchRedirectGuard(profile, from, current);
-    if (response.status === 303 || (response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST") {
-      const { body: _body, ...nextInit } = requestInit;
-      requestInit = { ...nextInit, method: "GET" };
+    fetch: validationOptions.fetch,
+    ...validationOptions.lookup ? { lookup: validationOptions.lookup } : {},
+    async beforeRequest(current, requestInit) {
+      const headers = new Headers(requestInit.headers);
+      headers.set("cookie", await resolveAuthCookieHeader(current, profile));
+      return { ...requestInit, headers };
+    },
+    onRedirect({ from, to, init: nextInit }) {
+      authFetchRedirectGuard(profile, from, to);
+      return nextInit;
     }
-  }
-  throw new Error(`Too many redirects fetching ${current.toString()}`);
+  });
 }
 function loadFetchRouting() {
   const raw = loadWebAccessConfig();
@@ -9296,7 +9354,7 @@ async function extractWithJinaReader(url, timeoutMs, signal, lookup) {
       domainPolicy,
       ...lookup ? { lookup } : {}
     });
-    const res = await fetch(jinaUrl, {
+    const res = await webFetch(jinaUrl, {
       headers: {
         "Accept": "text/markdown",
         "X-No-Cache": "true"
@@ -9337,7 +9395,7 @@ function safeVideoInfo(url) {
     const info = isVideoFile(url);
     return info ? { status: "video", info } : { status: "not-video" };
   } catch (err) {
-    return { status: "invalid", error: errorMessage33(err) };
+    return { status: "invalid", error: errorMessage26(err) };
   }
 }
 async function extractContent(url, signal, options) {
@@ -9362,7 +9420,7 @@ async function extractContent(url, signal, options) {
         ...options?.lookup ? { lookup: options.lookup } : {}
       });
     } catch (err) {
-      return { url, title: "", content: "", error: errorMessage33(err) };
+      return { url, title: "", content: "", error: errorMessage26(err) };
     }
   }
   if (options?.authFetchProfile || options?.mode === "raw") {
@@ -9370,7 +9428,7 @@ async function extractContent(url, signal, options) {
       const { failure: _failure, declaredLinks: _links, ...result } = await extractViaHttp(url, resolveFetchTimeoutMs(options), signal, options);
       return result;
     } catch (err) {
-      return { url, title: "", content: "", error: errorMessage33(err) };
+      return { url, title: "", content: "", error: errorMessage26(err) };
     }
   }
   if (options?.frames || options?.timestamp) {
@@ -9398,20 +9456,20 @@ async function extractContent(url, signal, options) {
       };
     } catch (err) {
       if (isAbortError6(err)) return abortedResult(url);
-      return { url, title: "", content: "", error: errorMessage33(err) };
+      return { url, title: "", content: "", error: errorMessage26(err) };
     }
   }
   try {
     if (!remoteUrl) new URL(url);
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage33(err) };
+    return { url, title: "", content: "", error: errorMessage26(err) };
   }
   try {
     const ghIssuePrResult = await extractGitHubIssuePr(url, signal, options);
     if (ghIssuePrResult) return ghIssuePrResult;
     if (signal?.aborted) return abortedResult(url);
   } catch (err) {
-    const message = errorMessage33(err);
+    const message = errorMessage26(err);
     if (isAbortError6(err)) return abortedResult(url);
     if (isConfigParseError(err)) {
       return { url, title: "", content: "", error: message };
@@ -9422,7 +9480,7 @@ async function extractContent(url, signal, options) {
     if (ghResult) return ghResult;
     if (signal?.aborted) return abortedResult(url);
   } catch (err) {
-    const message = errorMessage33(err);
+    const message = errorMessage26(err);
     if (isAbortError6(err)) return abortedResult(url);
     if (isConfigParseError(err)) {
       return { url, title: "", content: "", error: message };
@@ -9433,7 +9491,7 @@ async function extractContent(url, signal, options) {
   try {
     youtubeEnabled = isYouTubeEnabled();
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage33(err) };
+    return { url, title: "", content: "", error: errorMessage26(err) };
   }
   if (ytInfo.isYouTube && youtubeEnabled) {
     try {
@@ -9441,7 +9499,7 @@ async function extractContent(url, signal, options) {
       if (ytResult) return ytResult;
       if (signal?.aborted) return abortedResult(url);
     } catch (err) {
-      const message = errorMessage33(err);
+      const message = errorMessage26(err);
       if (isAbortError6(err)) return abortedResult(url);
       return { url, title: "", content: "", error: message };
     }
@@ -9457,13 +9515,13 @@ async function extractContent(url, signal, options) {
   try {
     fetchTimeoutMs = resolveFetchTimeoutMs(options);
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage33(err) };
+    return { url, title: "", content: "", error: errorMessage26(err) };
   }
   let fetchRouting;
   try {
     fetchRouting = loadFetchRouting();
   } catch (err) {
-    return { url, title: "", content: "", error: errorMessage33(err) };
+    return { url, title: "", content: "", error: errorMessage26(err) };
   }
   const providerOrder = remoteUrl && !fetchRouting.allowRemoteHostedProviders ? fetchRouting.providers.filter((provider) => !REMOTE_HOSTED_FETCH_PROVIDERS.has(provider)) : fetchRouting.providers;
   if (providerOrder.length === 0) {
@@ -9524,6 +9582,7 @@ async function extractContent(url, signal, options) {
           const ssrf = loadSsrfConfig();
           const firecrawlResult = await extractWithFirecrawl(url, signal, {
             timeoutMs: options?.timeoutMs,
+            fetch: options?.fetch,
             ...options?.lookup ? { lookup: options.lookup } : {},
             ssrf
           });
@@ -9531,7 +9590,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        firecrawlError = errorMessage33(err);
+        firecrawlError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(firecrawlError);
       }
       continue;
@@ -9542,6 +9601,7 @@ async function extractContent(url, signal, options) {
           const ssrf = loadSsrfConfig();
           const crawl4aiResult = await extractWithCrawl4ai(url, signal, {
             timeoutMs: options?.timeoutMs,
+            fetch: options?.fetch,
             ...options?.lookup ? { lookup: options.lookup } : {},
             ssrf
           });
@@ -9549,7 +9609,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (signal?.aborted || isAbortException2(err)) return abortedResult(url);
-        crawl4aiError = errorMessage33(err);
+        crawl4aiError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(crawl4aiError);
       }
       continue;
@@ -9567,7 +9627,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        tinyfishError = errorMessage33(err);
+        tinyfishError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(tinyfishError);
       }
       continue;
@@ -9580,7 +9640,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        search1apiError = errorMessage33(err);
+        search1apiError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(search1apiError);
       }
       continue;
@@ -9593,7 +9653,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        queritError = errorMessage33(err);
+        queritError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(queritError);
       }
       continue;
@@ -9604,6 +9664,7 @@ async function extractContent(url, signal, options) {
           const ssrf = loadSsrfConfig();
           const kagiResult = await extractWithKagi(url, signal, {
             timeoutMs: options?.timeoutMs,
+            fetch: options?.fetch,
             ...options?.lookup ? { lookup: options.lookup } : {},
             ssrf
           });
@@ -9611,7 +9672,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        kagiError = errorMessage33(err);
+        kagiError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(kagiError);
       }
       continue;
@@ -9622,6 +9683,7 @@ async function extractContent(url, signal, options) {
           const ssrf = loadSsrfConfig();
           const ollamaResult = await extractWithOllama(url, signal, {
             timeoutMs: options?.timeoutMs,
+            fetch: options?.fetch,
             ...options?.lookup ? { lookup: options.lookup } : {},
             ssrf
           });
@@ -9629,7 +9691,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        ollamaError = errorMessage33(err);
+        ollamaError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(ollamaError);
       }
       continue;
@@ -9642,7 +9704,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        parallelError = errorMessage33(err);
+        parallelError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(parallelError);
       }
       continue;
@@ -9653,7 +9715,7 @@ async function extractContent(url, signal, options) {
         if (parallelMcpResult) return withDeclaredLinks(parallelMcpResult);
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        parallelMcpError = errorMessage33(err);
+        parallelMcpError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(parallelMcpError);
       }
       continue;
@@ -9664,6 +9726,7 @@ async function extractContent(url, signal, options) {
           const ssrf = loadSsrfConfig();
           const brightdataResult = await extractWithBrightDataUnlocker(url, signal, {
             timeoutMs: options?.timeoutMs,
+            fetch: options?.fetch,
             ...options?.lookup ? { lookup: options.lookup } : {},
             ssrf
           });
@@ -9671,7 +9734,7 @@ async function extractContent(url, signal, options) {
         }
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
-        brightdataError = errorMessage33(err);
+        brightdataError = errorMessage26(err);
         if (isConfigParseError(err)) return parseErrorResult(brightdataError);
       }
       continue;
@@ -9683,7 +9746,7 @@ async function extractContent(url, signal, options) {
       } catch (err) {
         if (isAbortError6(err)) return abortedResult(url);
         if (err instanceof CredentialResolutionError || isConfigParseError(err)) {
-          return parseErrorResult(errorMessage33(err));
+          return parseErrorResult(errorMessage26(err));
         }
       }
       if (geminiResult) return withDeclaredLinks(geminiResult);
@@ -9818,7 +9881,7 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
         "Upgrade-Insecure-Requests": "1"
       }
     };
-    const response = authProfile ? await fetchAuthenticatedRemoteUrl(url, requestInit, { ssrf, domainPolicy, proxy: options?.proxy, ...options?.lookup ? { lookup: options.lookup } : {} }, authProfile) : await fetchRemoteUrl(
+    const response = authProfile ? await fetchAuthenticatedRemoteUrl(url, requestInit, { ssrf, domainPolicy, proxy: options?.proxy, fetch: options?.fetch, ...options?.lookup ? { lookup: options.lookup } : {} }, authProfile) : await fetchRemoteUrl(
       url,
       requestInit,
       {
@@ -9826,6 +9889,7 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
         trustEnvProxy: ssrf.trustEnvProxy,
         domainPolicy,
         proxy: options?.proxy,
+        fetch: options?.fetch,
         ...options?.lookup ? { lookup: options.lookup } : {}
       }
     );
@@ -9898,7 +9962,7 @@ async function extractViaHttp(url, timeoutMs, signal, options, preferMarkdown = 
           status: response.status
         };
       } catch (err) {
-        const message = errorMessage33(err);
+        const message = errorMessage26(err);
         activityMonitor.logError(activityId, message);
         return { url, title: "", content: "", error: message, mimeType, status: response.status };
       }
@@ -10082,10 +10146,11 @@ async function fetchAllContent(urls, signal, options) {
     return sanitized.omissions.length > 0 ? { ...result, content: sanitized.text } : result;
   });
 }
-var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_SEARCH_CONFIG_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, REDIRECT_STATUSES4, turndownInstance, fetchLimit, PDFSizeLimitError, JINA_READER_BASE, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
+var DEFAULT_TIMEOUT_MS3, MAX_CONFIGURED_TIMEOUT_MS, CONCURRENT_LIMIT, WEB_SEARCH_CONFIG_PATH3, NON_RECOVERABLE_ERRORS, MIN_USEFUL_CONTENT2, SUPPORTED_IMAGE_TYPES, FETCH_PROVIDERS, DEFAULT_FETCH_PROVIDER_ORDER, REMOTE_HOSTED_FETCH_PROVIDERS, turndownInstance, fetchLimit, PDFSizeLimitError, JINA_READER_BASE, BROWSER_ACCEPT, MARKDOWN_FIRST_ACCEPT;
 var init_extract = __esm({
   "extract.ts"() {
     init_content();
+    init_proxy_transport();
     init_media_frames();
     init_utils();
     init_activity();
@@ -10124,7 +10189,6 @@ var init_extract = __esm({
     FETCH_PROVIDERS = ["http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini"];
     DEFAULT_FETCH_PROVIDER_ORDER = ["http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "brightdata", "gemini"];
     REMOTE_HOSTED_FETCH_PROVIDERS = /* @__PURE__ */ new Set(["jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini"]);
-    REDIRECT_STATUSES4 = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     fetchLimit = pLimit(CONCURRENT_LIMIT);
     PDFSizeLimitError = class extends Error {
       limitMB;
@@ -10430,6 +10494,7 @@ init_gemini_api();
 
 // gemini-search.ts
 init_utils();
+init_proxy_transport();
 init_activity();
 init_credential_source();
 init_gemini_api();
@@ -10437,6 +10502,24 @@ init_gemini_adc();
 init_gemini_web();
 init_search_types();
 init_domain_filter_normalization();
+
+// search-response-policy.ts
+init_domain_filter_normalization();
+init_search_answer_formatting();
+function filterSearchResponseByDomain(response, domainFilter) {
+  const filters = normalizeDomainFilters(domainFilter);
+  if (filters.include.length === 0 && filters.exclude.length === 0) return response;
+  const results = response.results.filter((result) => matchesDomainFilter(result.url, filters));
+  const urls = new Set(results.map((result) => result.url));
+  const inlineContent = response.inlineContent?.filter((content) => urls.has(content.url));
+  return {
+    answer: formatSearchResultsAsAnswer(results),
+    results,
+    inlineContent: inlineContent?.length ? inlineContent : void 0
+  };
+}
+
+// gemini-search.ts
 function errorMessage(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -10480,15 +10563,22 @@ async function searchWithGeminiApi(query, options = {}) {
     AbortSignal.timeout(12e4),
     ...options.signal ? [options.signal] : []
   ]);
-  const apiKey = isGeminiAdcAvailable() ? null : await getApiKey(requestSignal15);
-  if (!apiKey && !isGatewayConfigured() && !isGeminiAdcAvailable()) return null;
+  const adcMode = isGeminiAdcAvailable();
+  const apiKey = adcMode ? null : await getApiKey(requestSignal15);
+  if (!apiKey && !isGatewayConfigured() && !adcMode) return null;
   const activityId = activityMonitor.logStart({ type: "api", query });
   try {
     const configuredModel = loadWebAccessConfig().searchModel;
     const model = typeof configuredModel === "string" && configuredModel.trim() ? configuredModel.trim() : DEFAULT_MODEL;
+    const days = options.recencyFilter ? { day: 1, week: 7, month: 30, year: 365 }[options.recencyFilter] : void 0;
+    const end = Date.now();
+    const timeRangeFilter = days && !adcMode ? {
+      startTime: new Date(end - days * 864e5).toISOString(),
+      endTime: new Date(end).toISOString()
+    } : void 0;
     const body = {
-      contents: [{ role: "user", parts: [{ text: query }] }],
-      tools: [{ google_search: {} }]
+      contents: [{ role: "user", parts: [{ text: options.domainFilter?.length || adcMode && options.recencyFilter ? buildSearchPrompt(query, options) : query }] }],
+      tools: [{ google_search: { ...timeRangeFilter ? { timeRangeFilter } : {} } }]
     };
     const res = await fetchGeminiApi(`${getVersionedApiBase()}/models/${model}:generateContent`, {
       method: "POST",
@@ -10506,7 +10596,7 @@ async function searchWithGeminiApi(query, options = {}) {
     const metadata = data.candidates?.[0]?.groundingMetadata;
     const results = await resolveGroundingChunks(metadata?.groundingChunks, options.signal);
     if (!answer && results.length === 0) return null;
-    return { answer, results };
+    return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes("abort")) {
@@ -10531,7 +10621,7 @@ async function searchWithGeminiWeb(query, options = {}) {
     });
     activityMonitor.logComplete(activityId, 200);
     const results = extractSourceUrls(text4);
-    return { answer: text4, results };
+    return filterSearchResponseByDomain({ answer: text4, results }, options.domainFilter);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes("abort")) {
@@ -10600,7 +10690,7 @@ async function resolveGroundingChunks(chunks, signal) {
 }
 async function resolveRedirect(proxyUrl, signal) {
   try {
-    const res = await fetch(proxyUrl, {
+    const res = await webFetch(proxyUrl, {
       method: "HEAD",
       redirect: "manual",
       signal: AbortSignal.any([
@@ -10620,6 +10710,7 @@ init_search_types();
 
 // exa.ts
 init_utils();
+init_proxy_transport();
 init_activity();
 init_search_types();
 init_credential_source();
@@ -10742,7 +10833,7 @@ function toSearchResponse(answer, results, inlineContent) {
   return response;
 }
 async function callExaMcp(toolName, args, signal) {
-  const response = await fetch(`${EXA_MCP_URL}?tools=${toolName}`, {
+  const response = await webFetch(`${EXA_MCP_URL}?tools=${toolName}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -10985,6 +11076,7 @@ async function searchWithExa(query, options = {}) {
 }
 
 // brave.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_search_answer_formatting();
@@ -11164,7 +11256,7 @@ function buildBraveQuery(query, filters) {
   if (filters.include.length === 1) {
     parts.push(`site:${filters.include[0]}`);
   } else if (filters.include.length > 1) {
-    parts.push(filters.include.map((domain) => `site:${domain}`).join(" OR "));
+    parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
   }
   for (const domain of filters.exclude) {
     parts.push(`NOT site:${domain}`);
@@ -11258,17 +11350,13 @@ Get a key at https://brave.com/search/api/`
     const answer = formatSearchResultsAsAnswer(results);
     return { answer, results };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) {
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) {
       activityMonitor.logComplete(activityId, 0);
     } else {
-      activityMonitor.logError(activityId, redactedMessage);
+      activityMonitor.logError(activityId, failure.message);
     }
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    throw failure.error;
   }
 }
 
@@ -11276,9 +11364,9 @@ Get a key at https://brave.com/search/api/`
 init_utils();
 init_activity();
 init_domain_filter_normalization();
+import { randomUUID } from "node:crypto";
 init_search_types();
 init_credential_source();
-import { randomUUID } from "node:crypto";
 var OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 var CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 var CONFIG_PATH6 = getWebSearchConfigPath();
@@ -11704,9 +11792,11 @@ function addResult(results, seen, url, title, snippet = "") {
     snippet
   });
 }
-function extractSearchResults(output, numResults) {
+function extractSearchResults(output, numResults, domainFilter) {
   const results = [];
   const seenUrls = /* @__PURE__ */ new Set();
+  const filters = normalizeDomainFilters(domainFilter);
+  const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
   for (const item of output) {
     if (!item || typeof item !== "object" || item.type !== "message") continue;
     const content = item.content;
@@ -11723,7 +11813,7 @@ function extractSearchResults(output, numResults) {
           seenUrls,
           annotation.url,
           annotation.title,
-          extractSnippetAround(text4, annotation.start_index, annotation.end_index)
+          hasDomains ? "" : extractSnippetAround(text4, annotation.start_index, annotation.end_index)
         );
       }
     }
@@ -11742,10 +11832,11 @@ function extractSearchResults(output, numResults) {
       }
     }
   }
+  const filtered = hasDomains ? results.filter((result) => matchesDomainFilter(result.url, filters)) : results;
   if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {
-    return results.slice(0, Math.min(Math.floor(numResults), 20));
+    return filtered.slice(0, Math.min(Math.floor(numResults), 20));
   }
-  return results;
+  return filtered;
 }
 function extractAnswer(output) {
   const parts = [];
@@ -11893,18 +11984,18 @@ async function runOpenAISearch(query, options, auth, ctx) {
     if (useAlphaSearch) {
       const result = await parseAlphaSearchResponse(response, options.numResults);
       activityMonitor.logComplete(activityId, response.status);
-      return result;
+      return filterSearchResponseByDomain(result, options.domainFilter);
     }
     const parsed = await parseOpenAIResponse(response);
     const output = Array.isArray(parsed.payload.output) ? parsed.payload.output : [];
     if (!parsed.webSearchCallSeen) throw new Error("OpenAI web_search returned no web_search_call");
     const answer = extractAnswer(output);
-    const results = extractSearchResults(output, options.numResults);
+    const results = extractSearchResults(output, options.numResults, options.domainFilter);
     if (!answer && results.length === 0) {
       throw new Error("OpenAI web_search returned no answer or sources");
     }
     activityMonitor.logComplete(activityId, response.status);
-    return { answer, results };
+    return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const redactedMessage = redactCredential(message, auth.apiKey);
@@ -11944,7 +12035,9 @@ init_tinyfish();
 init_search1api();
 
 // searchinfinity.ts
+init_search_error_redaction();
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_utils();
 init_activity();
@@ -11981,9 +12074,6 @@ function isSearchinfinityAvailable() {
     configuredValue: loadConfig11().searchinfinityApiKey,
     environmentValue: process.env.SEARCHINFINITY_API_KEY
   });
-}
-function errorMessage6(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function requestSignal6(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -12022,7 +12112,7 @@ function businessErrorStatus(codeN, code, message) {
 async function searchinfinityJsonRequest(apiKey, body, signal) {
   let response;
   try {
-    response = await fetch(SEARCHINFINITY_SEARCH_URL, {
+    response = await webFetch(SEARCHINFINITY_SEARCH_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -12032,12 +12122,7 @@ async function searchinfinityJsonRequest(apiKey, body, signal) {
       signal: requestSignal6(signal, SEARCH_TIMEOUT_MS6)
     });
   } catch (err) {
-    const message = errorMessage6(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    throw redactSearchFailure(err, apiKey).error;
   }
   const raw = await response.text();
   if (!response.ok) {
@@ -12086,14 +12171,10 @@ async function searchWithSearchinfinity(query, options = {}) {
     activityMonitor.logComplete(activityId, 200);
     return response;
   } catch (err) {
-    const message = errorMessage6(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
 }
 
@@ -12165,7 +12246,7 @@ function requestSignal8(signal) {
   const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS8);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function errorMessage8(err) {
+function errorMessage6(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function mapResults2(results, numResults) {
@@ -12223,7 +12304,7 @@ async function searchWithTavily(query, options = {}) {
     else {
       const status = tavilyErrorStatus(err);
       if (status > 0) activityMonitor.logComplete(activityId, status);
-      else activityMonitor.logError(activityId, errorMessage8(err));
+      else activityMonitor.logError(activityId, errorMessage6(err));
     }
     throw err;
   }
@@ -12272,7 +12353,7 @@ async function tavilyRequest(apiUrl, apiKey, body, signal) {
       signal
     }, ["Authorization"]);
   } catch (err) {
-    const message = errorMessage8(err);
+    const message = errorMessage6(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage === message) throw err;
     const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
@@ -12330,7 +12411,7 @@ function mapDomainFilter7(domainFilter) {
     ...exclude_domains.length > 0 ? { exclude_domains } : {}
   };
 }
-function errorMessage9(err) {
+function errorMessage7(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function parseWebResults(value) {
@@ -12379,7 +12460,7 @@ async function searchWithYou(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage9(err);
+    const message = errorMessage7(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`You.com request timed out after ${Math.round(SEARCH_TIMEOUT_MS9 / 1e3)}s`) : (() => {
       const redactedMessage = redactCredential(message, apiKey);
@@ -12388,7 +12469,7 @@ async function searchWithYou(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage9(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage7(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -12420,6 +12501,7 @@ init_firecrawl();
 
 // jina-search.ts
 init_utils();
+init_proxy_transport();
 init_activity();
 init_credential_source();
 init_search_types();
@@ -12470,7 +12552,7 @@ function requestSignal10(signal) {
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   };
 }
-function errorMessage11(err) {
+function errorMessage9(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function parseItems(value) {
@@ -12510,7 +12592,7 @@ function rethrowRequestError(err, apiKey, activityId, request, callerSignal) {
     activityMonitor.logComplete(activityId, 408);
     throw new SearchHttpError(408, "Jina Search API error 408: request timed out");
   }
-  const message = errorMessage11(err);
+  const message = errorMessage9(err);
   const redactedMessage = redactCredential(message, apiKey);
   if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
   else activityMonitor.logError(activityId, redactedMessage);
@@ -12534,7 +12616,7 @@ async function searchWithJina(query, options = {}) {
   const request = requestSignal10(options.signal);
   let response;
   try {
-    response = await fetch(url, {
+    response = await webFetch(url, {
       headers: {
         "Accept": "application/json",
         "Authorization": `Bearer ${apiKey}`,
@@ -12571,7 +12653,7 @@ async function searchWithJina(query, options = {}) {
   try {
     mapped = mapItems(parseItems(raw), numResults, filters);
   } catch (err) {
-    const message = errorMessage11(err);
+    const message = errorMessage9(err);
     const redactedMessage = redactCredential(message, apiKey);
     activityMonitor.logError(activityId, redactedMessage);
     if (redactedMessage === message) throw err;
@@ -12589,7 +12671,9 @@ async function searchWithJina(query, options = {}) {
 }
 
 // serpdive.ts
+init_search_error_redaction();
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_utils();
@@ -12645,9 +12729,6 @@ function applyRecencyHint(query, recencyFilter) {
 function requestSignal11(signal) {
   const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS12);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-function errorMessage12(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function mapResults3(results, numResults, filters) {
   if (!Array.isArray(results)) return [];
@@ -12705,7 +12786,7 @@ async function searchWithSerpdive(query, options = {}) {
   const activityId = activityMonitor.logStart({ type: "api", query });
   let response;
   try {
-    response = await fetch(SERPDIVE_API_URL, {
+    response = await webFetch(SERPDIVE_API_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -12715,14 +12796,10 @@ async function searchWithSerpdive(query, options = {}) {
       signal: requestSignal11(options.signal)
     });
   } catch (err) {
-    const message = errorMessage12(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
   if (!response.ok) {
     activityMonitor.logComplete(activityId, response.status);
@@ -12754,7 +12831,9 @@ async function searchWithSerpdive(query, options = {}) {
 init_kagi();
 
 // bocha.ts
+init_search_error_redaction();
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_search_result_count_normalization();
 init_utils();
@@ -12802,9 +12881,6 @@ function mapFreshness(value) {
       return "noLimit";
   }
 }
-function errorMessage14(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function invalidResponse2(message) {
   return new Error(`Bocha API returned invalid response: ${message}`);
 }
@@ -12846,21 +12922,17 @@ async function searchWithBocha(query, options = {}) {
   const activityId = activityMonitor.logStart({ type: "api", query });
   let response;
   try {
-    response = await fetch(BOCHA_SEARCH_URL, {
+    response = await webFetch(BOCHA_SEARCH_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ query, count: numResults, freshness: mapFreshness(options.recencyFilter), summary: true }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS14), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS14)
     });
   } catch (err) {
-    const message = errorMessage14(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
   if (!response.ok) {
     activityMonitor.logComplete(activityId, response.status);
@@ -12879,13 +12951,9 @@ async function searchWithBocha(query, options = {}) {
   try {
     parsed = parseSearchResponse2(rawData);
   } catch (err) {
-    const message = errorMessage14(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
   activityMonitor.logComplete(activityId, response.status);
   const results = parsed.results.filter((result) => matchesDomainFilter(result.url, filters)).slice(0, numResults);
@@ -12978,7 +13046,7 @@ function buildSearXNGQuery(query, filters) {
   if (filters.include.length === 1) {
     parts.push(`site:${filters.include[0]}`);
   } else if (filters.include.length > 1) {
-    parts.push(filters.include.map((domain) => `site:${domain}`).join(" OR "));
+    parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
   }
   for (const domain of filters.exclude) parts.push(`-site:${domain}`);
   return parts.join(" ");
@@ -13014,6 +13082,8 @@ async function searchWithSearXNG(query, options = {}) {
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS16), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS16)
     }, {
       ...loadSsrfConfig(),
+      fetch: options.fetch,
+      ...options.lookup ? { lookup: options.lookup } : {},
       onRedirect: ({ from, to, init }) => from.origin === to.origin ? init : { ...init, headers: { Accept: "application/json" } }
     });
     if (!response.ok) {
@@ -13156,7 +13226,7 @@ function buildQuery(query, filters) {
 function resultText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
-function errorMessage16(err) {
+function errorMessage12(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse4(message) {
@@ -13208,6 +13278,8 @@ async function searchWithDegoog(query, options = {}) {
       signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal
     }, {
       ...loadSsrfConfig(),
+      fetch: options.fetch,
+      ...options.lookup ? { lookup: options.lookup } : {},
       // Credentials and reverse-proxy headers must not follow a cross-origin redirect.
       onRedirect: ({ from, to, init }) => from.origin === to.origin ? init : { ...init, headers: { Accept: "application/json", "Content-Type": "application/json" } }
     });
@@ -13234,7 +13306,7 @@ async function searchWithDegoog(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage16(err);
+    const message = errorMessage12(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`degoog request timed out after ${Math.round(SEARCH_TIMEOUT_MS17 / 1e3)}s`) : (() => {
       const redactedMessage = redactSecrets(message, secrets);
@@ -13243,7 +13315,7 @@ async function searchWithDegoog(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactSecrets(errorMessage16(outgoing), secrets));
+    activityMonitor.logError(activityId, redactSecrets(errorMessage12(outgoing), secrets));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -13275,6 +13347,7 @@ async function searchWithDegoog(query, options = {}) {
 
 // duckduckgo.ts
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_search_answer_formatting();
 init_activity();
@@ -13295,11 +13368,12 @@ function isDuckDuckGoAvailable() {
   return true;
 }
 async function searchWithDuckDuckGo(query, options = {}) {
+  if (options.recencyFilter) throw new SearchUnsupportedFilterError("DuckDuckGo HTML adapter does not support recencyFilter");
   const url = new URL(SEARCH_URL);
   url.searchParams.set("q", query);
   const activityId = activityMonitor.logStart({ type: "api", query });
   try {
-    const response = await fetch(url, {
+    const response = await webFetch(url, {
       method: "GET",
       headers: {
         Accept: "text/html",
@@ -13344,7 +13418,10 @@ async function searchWithDuckDuckGo(query, options = {}) {
 }
 
 // anysearch.ts
+init_search_error_redaction();
 init_search_types();
+init_domain_filter_normalization();
+init_proxy_transport();
 init_utils();
 init_activity();
 init_search_answer_formatting();
@@ -13363,9 +13440,6 @@ async function getApiKey17(signal) {
     environmentValue: process.env.ANYSEARCH_API_KEY,
     signal
   });
-}
-function errorMessage17(err) {
-  return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse5(message) {
   return new Error(`AnySearch API returned invalid response: ${message}`);
@@ -13406,13 +13480,16 @@ function isAnySearchAvailable() {
   return true;
 }
 async function searchWithAnySearch(query, options = {}) {
+  if (options.recencyFilter) throw new SearchUnsupportedFilterError("AnySearch search adapter does not support recencyFilter");
   const apiKey = await getApiKey17(options.signal);
   const numResults = normalizeSearchResultCount(options.numResults);
-  const body = { query, max_results: numResults };
+  const filters = normalizeDomainFilters(options.domainFilter);
+  const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
+  const body = { query, max_results: hasDomains ? 20 : numResults };
   const activityId = activityMonitor.logStart({ type: "api", query });
   let response;
   try {
-    response = await fetch(ANYSEARCH_API_URL, {
+    response = await webFetch(ANYSEARCH_API_URL, {
       method: "POST",
       headers: {
         ...apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -13422,14 +13499,10 @@ async function searchWithAnySearch(query, options = {}) {
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS19), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS19)
     });
   } catch (err) {
-    const message = errorMessage17(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
   if (!response.ok) {
     activityMonitor.logComplete(activityId, response.status);
@@ -13452,14 +13525,15 @@ async function searchWithAnySearch(query, options = {}) {
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
-  const results = data.data.results.slice(0, numResults).map((result) => ({
+  const retained = data.data.results.filter((result) => matchesDomainFilter(result.url, filters)).slice(0, numResults);
+  const results = retained.map((result) => ({
     title: result.title,
     url: result.url,
     snippet: result.snippet
   }));
   const mapped = { answer: formatSearchResultsAsAnswer(results), results };
   if (options.includeContent) {
-    const inlineContent = data.data.results.slice(0, numResults).filter((result) => result.content.length > 0).map((result) => ({ url: result.url, title: result.title, content: result.content, error: null }));
+    const inlineContent = retained.filter((result) => result.content.length > 0).map((result) => ({ url: result.url, title: result.title, content: result.content, error: null }));
     if (inlineContent.length > 0) mapped.inlineContent = inlineContent;
   }
   return mapped;
@@ -13467,6 +13541,7 @@ async function searchWithAnySearch(query, options = {}) {
 
 // xcrawl.ts
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_utils();
 init_activity();
@@ -13491,7 +13566,7 @@ async function getApiKey18(signal) {
 function isXcrawlAvailable() {
   return hasCredentialSource({ provider: "XCrawl", configuredValue: loadConfig24().xcrawlApiKey, environmentValue: process.env.XCRAWL_API_KEY });
 }
-function errorMessage18(err) {
+function errorMessage13(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse6(message) {
@@ -13556,7 +13631,7 @@ async function searchWithXCrawl(query, options = {}) {
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS20);
   let response;
   try {
-    response = await fetch(XCRAWL_API_URL, {
+    response = await webFetch(XCRAWL_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -13566,7 +13641,7 @@ async function searchWithXCrawl(query, options = {}) {
       signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal
     });
   } catch (err) {
-    const message = errorMessage18(err);
+    const message = errorMessage13(err);
     if (options.signal?.aborted) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
@@ -13580,7 +13655,7 @@ async function searchWithXCrawl(query, options = {}) {
       outgoing = redactedMessage === message && err instanceof Error ? err : new Error(redactedMessage);
       if (err instanceof Error && outgoing.name === "Error") outgoing.name = err.name;
     }
-    activityMonitor.logError(activityId, redactCredential(errorMessage18(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage13(outgoing), apiKey));
     throw outgoing;
   }
   if (!response.ok) {
@@ -13793,9 +13868,11 @@ function extractAnswer2(output) {
   }
   return parts.join("\n").trim();
 }
-function extractSearchResults2(output, citations, numResults) {
+function extractSearchResults2(output, citations, numResults, domainFilter) {
   const results = [];
   const seenUrls = /* @__PURE__ */ new Set();
+  const filters = normalizeDomainFilters(domainFilter);
+  const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
   for (const item of output) {
     if (!item || typeof item !== "object" || item.type !== "message") continue;
     const content = item.content;
@@ -13813,7 +13890,7 @@ function extractSearchResults2(output, citations, numResults) {
           seenUrls,
           annotation.url,
           annotation.title,
-          extractSnippetAround2(text4, annotation.start_index, annotation.end_index)
+          hasDomains ? "" : extractSnippetAround2(text4, annotation.start_index, annotation.end_index)
         );
       }
     }
@@ -13827,10 +13904,11 @@ function extractSearchResults2(output, citations, numResults) {
     for (const group of [actionSources, value.sources, value.results]) addSources(results, seenUrls, group);
   }
   addSources(results, seenUrls, citations);
+  const filtered = hasDomains ? results.filter((result) => matchesDomainFilter(result.url, filters)) : results;
   if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {
-    return results.slice(0, Math.min(Math.floor(numResults), 20));
+    return filtered.slice(0, Math.min(Math.floor(numResults), 20));
   }
-  return results;
+  return filtered;
 }
 async function searchWithXai(query, options = {}, ctx) {
   const tools = resolveConfiguredSearchTools(loadConfig25().xaiSearchTools);
@@ -13845,7 +13923,7 @@ async function searchWithXai(query, options = {}, ctx) {
   }
   const activityId = activityMonitor.logStart({ type: "api", query });
   try {
-    const response = await fetch(XAI_RESPONSES_URL, {
+    const response = await fetchWithCredentialRedirects(XAI_RESPONSES_URL, {
       method: "POST",
       headers: {
         ...toRequestHeaders2(auth.headers),
@@ -13858,7 +13936,7 @@ async function searchWithXai(query, options = {}, ctx) {
         tools: tools.map((type) => ({ type }))
       }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS21), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS21)
-    });
+    }, ["Authorization", ...Object.keys(auth.headers)]);
     if (!response.ok) {
       activityMonitor.logError(activityId, `HTTP ${response.status}`);
       const errorText = redactCredential(await response.text(), auth.apiKey);
@@ -13873,12 +13951,12 @@ async function searchWithXai(query, options = {}, ctx) {
     }
     const output = Array.isArray(parsed.output) ? parsed.output : [];
     const answer = extractAnswer2(output);
-    const results = extractSearchResults2(output, parsed.citations, options.numResults);
+    const results = extractSearchResults2(output, parsed.citations, options.numResults, options.domainFilter);
     if (!answer && results.length === 0) {
       throw new Error(`xAI ${tools.join("+")} returned no answer or sources`);
     }
     activityMonitor.logComplete(activityId, response.status);
-    return { answer, results };
+    return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const redactedMessage = redactCredential(message, auth.apiKey);
@@ -13896,6 +13974,7 @@ async function searchWithXai(query, options = {}, ctx) {
 
 // brightdata.ts
 init_utils();
+init_proxy_transport();
 init_activity();
 init_domain_filter_normalization();
 init_search_answer_formatting();
@@ -13981,7 +14060,7 @@ function buildSearchQuery2(query, filters) {
   if (filters.include.length === 1) {
     parts.push(`site:${filters.include[0]}`);
   } else if (filters.include.length > 1) {
-    parts.push(filters.include.map((domain) => `site:${domain}`).join(" OR "));
+    parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
   }
   for (const domain of filters.exclude) {
     parts.push(`-site:${domain}`);
@@ -14000,7 +14079,7 @@ function requestSignal12(signal) {
   const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS22);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function errorMessage19(err) {
+function errorMessage14(err) {
   return err instanceof Error ? err.message : String(err);
 }
 var STATUS_SHAPED_PATTERN = /\b(?:error|status|http)[\s:=-]{1,4}(\d{3})\b/gi;
@@ -14097,7 +14176,7 @@ async function searchWithBrightData(query, options = {}) {
   const activityId = activityMonitor.logStart({ type: "api", query: searchQuery });
   let response;
   try {
-    response = await fetch(BRIGHTDATA_API_URL, {
+    response = await webFetch(BRIGHTDATA_API_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -14107,7 +14186,7 @@ async function searchWithBrightData(query, options = {}) {
       signal: requestSignal12(options.signal)
     });
   } catch (err) {
-    const message = errorMessage19(err);
+    const message = errorMessage14(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
     else activityMonitor.logError(activityId, redactedMessage);
@@ -14194,7 +14273,7 @@ function buildQuery2(query, filters) {
   for (const domain of filters.exclude) parts.push(`-site:${domain}`);
   return parts.join(" ");
 }
-function errorMessage20(err) {
+function errorMessage15(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse8(message) {
@@ -14226,10 +14305,10 @@ async function searchWithSerpBase(query, options = {}) {
   const activityId = activityMonitor.logStart({ type: "api", query });
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS23);
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithCredentialRedirects(url.toString(), {
       headers: { Accept: "application/json" },
       signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal
-    });
+    }, [], ["api_key"]);
     if (!response.ok) {
       const errorText = redactCredential(await response.text(), apiKey);
       throw new SearchHttpError(response.status, `SerpBase API error ${response.status}: ${errorText.slice(0, 300)}`);
@@ -14261,7 +14340,7 @@ async function searchWithSerpBase(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage20(err);
+    const message = errorMessage15(err);
     const safeMessage = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError" ? "SerpBase request timed out after 60s" : redactCredential(message, apiKey);
     const outgoing = safeMessage === message && err instanceof Error ? err : err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage) : err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
     if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
@@ -14318,7 +14397,7 @@ function buildQuery3(query, filters) {
   for (const domain of filters.exclude) parts.push(`-site:${domain}`);
   return parts.join(" ");
 }
-function errorMessage21(err) {
+function errorMessage16(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse9(message) {
@@ -14350,10 +14429,10 @@ async function searchWithSerpApi(query, options = {}) {
   let response;
   let entries;
   try {
-    response = await fetch(url, {
+    response = await fetchWithCredentialRedirects(url.toString(), {
       headers: { Accept: "application/json" },
       signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal
-    });
+    }, [], ["api_key"]);
     if (!response.ok) {
       const errorText = await response.text();
       throw new SearchHttpError(response.status, `SerpApi error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);
@@ -14371,7 +14450,7 @@ async function searchWithSerpApi(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage21(err);
+    const message = errorMessage16(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`SerpApi request timed out after ${Math.round(SEARCH_TIMEOUT_MS24 / 1e3)}s`) : (() => {
       const redactedMessage = redactCredential(message, apiKey);
@@ -14380,7 +14459,7 @@ async function searchWithSerpApi(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage21(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage16(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -14400,6 +14479,7 @@ async function searchWithSerpApi(query, options = {}) {
 }
 
 // serper.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -14447,9 +14527,6 @@ function buildQuery4(query, filters) {
   for (const domain of filters.exclude) parts.push(`-site:${domain}`);
   return parts.join(" ");
 }
-function errorMessage22(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function invalidResponse10(message) {
   return new Error(`Serper API returned invalid response: ${message}`);
 }
@@ -14470,21 +14547,17 @@ async function searchWithSerper(query, options = {}) {
   const activityId = activityMonitor.logStart({ type: "api", query });
   let response;
   try {
-    response = await fetch(SERPER_SEARCH_URL, {
+    response = await fetchWithCredentialRedirects(SERPER_SEARCH_URL, {
       method: "POST",
       headers: { "X-API-KEY": apiKey, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ q: buildQuery4(query, filters), num: requestCount, ...options.recencyFilter ? { tbs: RECENCY_TBS4[options.recencyFilter] } : {} }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS25), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS25)
-    });
+    }, ["X-API-KEY"]);
   } catch (err) {
-    const message = errorMessage22(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
   if (!response.ok) {
     activityMonitor.logComplete(activityId, response.status);
@@ -14570,7 +14643,7 @@ function buildQuery5(query, filters) {
   for (const domain of filters.exclude) parts.push(`-site:${domain}`);
   return parts.join(" ");
 }
-function errorMessage23(err) {
+function errorMessage17(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse11(message) {
@@ -14621,7 +14694,7 @@ async function searchWithSerply(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage23(err);
+    const message = errorMessage17(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`Serply request timed out after ${Math.round(SEARCH_TIMEOUT_MS26 / 1e3)}s`) : (() => {
       const redactedMessage = redactCredential(message, apiKey);
@@ -14630,7 +14703,7 @@ async function searchWithSerply(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage23(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage17(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -14658,6 +14731,7 @@ async function searchWithSerply(query, options = {}) {
 
 // baizhi.ts
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_utils();
 init_activity();
@@ -14719,7 +14793,7 @@ async function searchWithBaizhi(query, options = {}) {
     fetch: async (url, init) => {
       if (String(url) !== MCP_URL) throw new Error("Baizhi endpoint changed unexpectedly");
       const requestSignal15 = cleaningUp ? AbortSignal.timeout(1500) : signal;
-      return fetch(url, { ...init, redirect: "error", signal: !cleaningUp && init?.signal ? AbortSignal.any([init.signal, requestSignal15]) : requestSignal15 });
+      return webFetch(url, { ...init, redirect: "error", signal: !cleaningUp && init?.signal ? AbortSignal.any([init.signal, requestSignal15]) : requestSignal15 });
     },
     reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1e3, maxReconnectionDelay: 1e3, reconnectionDelayGrowFactor: 1 }
   });
@@ -14762,6 +14836,7 @@ async function searchWithBaizhi(query, options = {}) {
 
 // zai.ts
 init_search_types();
+init_proxy_transport();
 init_domain_filter_normalization();
 init_utils();
 init_activity();
@@ -14858,7 +14933,7 @@ async function searchWithZai(query, options = {}) {
     fetch: async (url, init) => {
       if (String(url) !== mcpUrl) throw new Error("Z.ai endpoint changed unexpectedly");
       const requestSignal15 = cleaningUp ? AbortSignal.timeout(1500) : signal;
-      return fetch(url, { ...init, redirect: "error", signal: !cleaningUp && init?.signal ? AbortSignal.any([init.signal, requestSignal15]) : requestSignal15 });
+      return webFetch(url, { ...init, redirect: "error", signal: !cleaningUp && init?.signal ? AbortSignal.any([init.signal, requestSignal15]) : requestSignal15 });
     },
     reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1e3, maxReconnectionDelay: 1e3, reconnectionDelayGrowFactor: 1 }
   });
@@ -14899,6 +14974,7 @@ async function searchWithZai(query, options = {}) {
 }
 
 // valyu.ts
+init_search_error_redaction();
 init_search_types();
 init_domain_filter_normalization();
 init_utils();
@@ -14950,9 +15026,6 @@ function recencyToStartDate2(filter) {
 function text(value, limit) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "";
 }
-function errorMessage24(err) {
-  return err instanceof Error ? err.message : String(err);
-}
 function invalidResponse12(message) {
   return new Error(`Valyu API returned invalid response: ${message}`);
 }
@@ -14969,25 +15042,22 @@ function isValyuAvailable() {
 async function searchWithValyu(query, options = {}) {
   const apiKey = await requireApiKey13(options.signal);
   const numResults = normalizeSearchResultCount(options.numResults);
+  const domains = normalizeDomainFilters(options.domainFilter);
   const startDate = recencyToStartDate2(options.recencyFilter);
   const activityId = activityMonitor.logStart({ type: "api", query });
   let response;
   try {
-    response = await fetch(VALYU_SEARCH_URL, {
+    response = await fetchWithCredentialRedirects(VALYU_SEARCH_URL, {
       method: "POST",
       headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ query, max_num_results: numResults, ...mapDomainFilter8(options.domainFilter), ...startDate ? { start_date: startDate } : {} }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS29), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS29)
-    });
+    }, ["x-api-key"]);
   } catch (err) {
-    const message = errorMessage24(err);
-    const redactedMessage = redactCredential(message, apiKey);
-    if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-    else activityMonitor.logError(activityId, redactedMessage);
-    if (redactedMessage === message) throw err;
-    const redactedError = err instanceof SearchHttpError ? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
-    if (err instanceof Error) redactedError.name = err.name;
-    throw redactedError;
+    const failure = redactSearchFailure(err, apiKey);
+    if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+    else activityMonitor.logError(activityId, failure.message);
+    throw failure.error;
   }
   if (!response.ok) {
     activityMonitor.logComplete(activityId, response.status);
@@ -15015,7 +15085,7 @@ async function searchWithValyu(query, options = {}) {
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const url = text(entry.url, Number.MAX_SAFE_INTEGER);
-    if (!url) continue;
+    if (!url || !matchesDomainFilter(url, domains)) continue;
     const title = text(entry.title, Number.MAX_SAFE_INTEGER) || `Source ${results.length + 1}`;
     const content = text(entry.content, MAX_CONTENT_CHARS);
     const description = text(entry.description, MAX_SNIPPET_CHARS);
@@ -15070,7 +15140,7 @@ function publishedAfter(recency) {
 function text2(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
-function errorMessage25(err) {
+function errorMessage18(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse13(message) {
@@ -15133,7 +15203,7 @@ async function searchWithKeenable(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage25(err);
+    const message = errorMessage18(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`Keenable request timed out after ${Math.round(SEARCH_TIMEOUT_MS30 / 1e3)}s`) : (() => {
       const redactedMessage = redactCredential(message, apiKey);
@@ -15142,7 +15212,7 @@ async function searchWithKeenable(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage25(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage18(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -15215,7 +15285,7 @@ function buildQuery7(query, filters) {
 function text3(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
-function errorMessage26(err) {
+function errorMessage19(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse14(message) {
@@ -15242,6 +15312,7 @@ function isCeramicAvailable() {
   return hasCredentialSource({ provider: "Ceramic", configuredValue: loadConfig34().ceramicApiKey, environmentValue: process.env.CERAMIC_API_KEY });
 }
 async function searchWithCeramic(query, options = {}) {
+  if (options.recencyFilter) throw new SearchUnsupportedFilterError("Ceramic search adapter does not support recencyFilter");
   const apiKey = await requireApiKey14(options.signal);
   const numResults = normalizeSearchResultCount(options.numResults);
   const filters = normalizeDomainFilters(options.domainFilter);
@@ -15283,7 +15354,7 @@ async function searchWithCeramic(query, options = {}) {
       activityMonitor.logComplete(activityId, 0);
       throw new Error("Aborted");
     }
-    const message = errorMessage26(err);
+    const message = errorMessage19(err);
     const providerTimeout = timeoutSignal.aborted || err instanceof Error && err.name === "TimeoutError";
     const outgoing = providerTimeout ? new Error(`Ceramic request timed out after ${Math.round(SEARCH_TIMEOUT_MS31 / 1e3)}s`) : (() => {
       const redactedMessage = redactCredential(message, apiKey);
@@ -15292,7 +15363,7 @@ async function searchWithCeramic(query, options = {}) {
       if (err instanceof Error) redactedError.name = err.name;
       return redactedError;
     })();
-    activityMonitor.logError(activityId, redactCredential(errorMessage26(outgoing), apiKey));
+    activityMonitor.logError(activityId, redactCredential(errorMessage19(outgoing), apiKey));
     throw outgoing;
   }
   activityMonitor.logComplete(activityId, response.status);
@@ -15322,6 +15393,7 @@ async function searchWithCeramic(query, options = {}) {
 }
 
 // kimi-search.ts
+init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_credential_source();
@@ -15414,6 +15486,7 @@ async function isKimiSearchAvailable(ctx) {
   }
 }
 async function searchWithKimi(query, options = {}, ctx) {
+  if (options.recencyFilter) throw new SearchUnsupportedFilterError("Kimi Code search adapter does not support recencyFilter");
   const auth = await resolveKimiAuth(ctx);
   if (!auth) {
     throw new Error("Kimi Code web search unavailable. Run /login kimi-coding to authenticate a Kimi Code Plan account.");
@@ -15422,12 +15495,12 @@ async function searchWithKimi(query, options = {}, ctx) {
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS32);
   const requestSignal15 = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
   try {
-    const response = await fetch(KIMI_SEARCH_URL, {
+    const response = await fetchWithCredentialRedirects(KIMI_SEARCH_URL, {
       method: "POST",
       headers: buildRequestHeaders(auth),
       body: JSON.stringify({ text_query: query }),
       signal: requestSignal15
-    });
+    }, ["Authorization", ...Object.keys(auth.headers)]);
     if (!response.ok) {
       activityMonitor.logError(activityId, `HTTP ${response.status}`);
       const errorText = redactCredential(await response.text(), auth.apiKey);
@@ -15468,6 +15541,7 @@ async function searchWithKimi(query, options = {}, ctx) {
 
 // mistral-search.ts
 init_utils();
+init_proxy_transport();
 init_activity();
 init_domain_filter_normalization();
 init_search_types();
@@ -15529,7 +15603,7 @@ function buildSearchPrompt2(query, options, numResults) {
 
 ${query}` : query;
 }
-function errorMessage27(err) {
+function errorMessage20(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function invalidResponse15(message) {
@@ -15573,7 +15647,7 @@ function parseConversationResponse(value, options, numResults) {
   }
   const answer = answerParts.join("\n").trim();
   if (!answer && results.length === 0) throw invalidResponse15("no answer or sources");
-  return { answer, results };
+  return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
 }
 async function getApiKey26(signal) {
   const apiKey = await resolveCredential({
@@ -15615,7 +15689,7 @@ async function searchWithMistral(query, options = {}) {
   const requestSignal15 = options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS33), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS33);
   const activityId = activityMonitor.logStart({ type: "api", query });
   try {
-    const response = await fetch(MISTRAL_CONVERSATIONS_URL, {
+    const response = await webFetch(MISTRAL_CONVERSATIONS_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -15637,13 +15711,13 @@ async function searchWithMistral(query, options = {}) {
     try {
       parsed = await response.json();
     } catch (err) {
-      throw new Error(`Mistral API returned invalid JSON: ${errorMessage27(err)}`);
+      throw new Error(`Mistral API returned invalid JSON: ${errorMessage20(err)}`);
     }
     const result = parseConversationResponse(parsed, options, numResults);
     activityMonitor.logComplete(activityId, response.status);
     return result;
   } catch (err) {
-    const message = errorMessage27(err);
+    const message = errorMessage20(err);
     const redactedMessage = redactCredential(message, apiKey);
     if (redactedMessage.toLowerCase().includes("abort")) {
       activityMonitor.logComplete(activityId, 0);
@@ -15770,11 +15844,14 @@ function normalizeSearchProviderSelection(value, label = "provider") {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return SEARCH_PROVIDERS.includes(normalized) ? normalized : "auto";
 }
-function errorMessage28(err) {
+function errorMessage21(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function isAbortError3(err) {
-  return errorMessage28(err).toLowerCase().includes("abort");
+  return errorMessage21(err).toLowerCase().includes("abort");
+}
+function stopsAutomaticFallback(err) {
+  return err instanceof SearchUnsupportedFilterError || isAbortError3(err);
 }
 async function tryOpenAIInAuto(query, options, fallbackErrors) {
   try {
@@ -15783,8 +15860,8 @@ async function tryOpenAIInAuto(query, options, fallbackErrors) {
       return { ...result, provider: "openai" };
     }
   } catch (err) {
-    if (isAbortError3(err)) throw err;
-    fallbackErrors.push(`OpenAI: ${errorMessage28(err)}`);
+    if (stopsAutomaticFallback(err)) throw err;
+    fallbackErrors.push(`OpenAI: ${errorMessage21(err)}`);
   }
   return null;
 }
@@ -15795,14 +15872,16 @@ function providerErrorStatus(message) {
 }
 function classifyProviderError(provider, err) {
   if (err instanceof SearchProviderError) return err;
-  const message = errorMessage28(err);
+  const message = errorMessage21(err);
   const lower = message.toLowerCase();
   const status = err instanceof SearchHttpError || err instanceof OpenAIAlphaSearchUnsupportedError ? err.status : providerErrorStatus(message);
   const openAIStreamError = provider === "openai" && lower.includes("openai api stream error");
   const text4 = openAIStreamError ? lower.replace(/_/g, " ") : lower;
   let kind = "unknown";
   const mentionsUnsupportedWebSearch = /(?:web[_ -]?search|web[_ -]?search_preview|(?:the )?tool)\b.*\b(?:unsupported|not supported|does not support|doesn't support|unknown|unrecognized|unavailable|not found)|\b(?:unsupported|not supported|does not support|doesn't support|unknown|unrecognized|unavailable|not found)\b.*\b(?:web[_ -]?search|web[_ -]?search_preview|(?:the )?tool)/i.test(lower);
-  if (err instanceof CredentialResolutionError || /(?:api )?key (?:not found|missing)|credential resolution/.test(lower)) {
+  if (err instanceof SearchUnsupportedFilterError) {
+    kind = "invalid-request";
+  } else if (err instanceof CredentialResolutionError || /(?:api )?key (?:not found|missing)|credential resolution/.test(lower)) {
     kind = "credential";
   } else if (isAbortError3(err)) {
     kind = "aborted";
@@ -15972,9 +16051,10 @@ async function searchWithProviders(query, options, selectedProviders) {
   for (let index = 0; index < settled.length; index++) {
     const outcome = settled[index];
     if (outcome.status === "fulfilled") {
-      successes.push(outcome.value);
+      const response = outcome.value;
+      successes.push(response.provider === "baizhi" && response.results.length === 0 ? response : { ...response, ...filterSearchResponseByDomain(response, options.domainFilter) });
     } else {
-      failures.push({ provider: providers[index], error: errorMessage28(outcome.reason) });
+      failures.push({ provider: providers[index], error: errorMessage21(outcome.reason) });
     }
   }
   if (successes.length === 0) {
@@ -16031,7 +16111,7 @@ async function searchWithConfiguredRouting(query, options, routing) {
       return await searchWithResolvedProvider(provider, query, options, useCurrentModel);
     } catch (err) {
       const classified = classifyProviderError(provider, err);
-      diagnostics.push(`${provider} [${classified.kind}]: ${errorMessage28(err)}`);
+      diagnostics.push(`${provider} [${classified.kind}]: ${errorMessage21(err)}`);
       if (!routing.fallbackOn.includes(classified.kind)) {
         throw classified;
       }
@@ -16040,7 +16120,7 @@ async function searchWithConfiguredRouting(query, options, routing) {
   throw new Error(`Configured search routing exhausted:
   - ${diagnostics.join("\n  - ")}`);
 }
-async function search(query, options = {}) {
+async function searchWithoutDomainProjection(query, options) {
   const config = getSearchConfig();
   const provider = options.provider === void 0 || options.provider === "auto" ? config.searchProvider : options.provider;
   assertSearchProviderSelectionAllowed(provider, "Requested provider");
@@ -16059,8 +16139,8 @@ async function search(query, options = {}) {
       const result = await searchWithSearXNG(query, options);
       return { ...result, provider: "searxng" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`SearXNG: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`SearXNG: ${errorMessage21(err)}`);
     }
   }
   let triedOpenAI = false;
@@ -16074,8 +16154,8 @@ async function search(query, options = {}) {
       const result = await searchWithExa(query, options);
       if (result) return { ...result, provider: "exa" };
     } catch (err) {
-      if (err instanceof CredentialResolutionError || isAbortError3(err)) throw err;
-      fallbackErrors.push(`Exa: ${errorMessage28(err)}`);
+      if (err instanceof CredentialResolutionError || stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Exa: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("openai") && !triedOpenAI) {
@@ -16087,8 +16167,8 @@ async function search(query, options = {}) {
       const result = await searchWithBrave(query, options);
       return { ...result, provider: "brave" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Brave: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Brave: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("parallel") && isParallelAvailable()) {
@@ -16096,8 +16176,8 @@ async function search(query, options = {}) {
       const result = await searchWithParallel(query, options);
       return { ...result, provider: "parallel" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Parallel: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Parallel: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("tinyfish") && isTinyFishAvailable()) {
@@ -16105,8 +16185,8 @@ async function search(query, options = {}) {
       const result = await searchWithTinyFish(query, options);
       return { ...result, provider: "tinyfish" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`TinyFish: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`TinyFish: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("search1api") && isSearch1APIAvailable()) {
@@ -16114,8 +16194,8 @@ async function search(query, options = {}) {
       const result = await searchWithSearch1API(query, options);
       return { ...result, provider: "search1api" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Search1API: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Search1API: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("searchinfinity") && isSearchinfinityAvailable()) {
@@ -16123,8 +16203,8 @@ async function search(query, options = {}) {
       const result = await searchWithSearchinfinity(query, options);
       return { ...result, provider: "searchinfinity" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Searchinfinity: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Searchinfinity: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("querit") && isQueritAvailable()) {
@@ -16132,8 +16212,8 @@ async function search(query, options = {}) {
       const result = await searchWithQuerit(query, options);
       return { ...result, provider: "querit" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Querit: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Querit: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("tavily") && isTavilyAvailable()) {
@@ -16141,8 +16221,8 @@ async function search(query, options = {}) {
       const result = await searchWithTavily(query, options);
       return { ...result, provider: "tavily" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Tavily: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Tavily: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("firecrawl") && isFirecrawlAvailable()) {
@@ -16150,8 +16230,8 @@ async function search(query, options = {}) {
       const result = await searchWithFirecrawl(query, options);
       return { ...result, provider: "firecrawl" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Firecrawl: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Firecrawl: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("jina") && isJinaSearchAvailable()) {
@@ -16159,8 +16239,8 @@ async function search(query, options = {}) {
       const result = await searchWithJina(query, options);
       return { ...result, provider: "jina" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Jina: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Jina: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("serpdive") && isSerpdiveAvailable()) {
@@ -16168,8 +16248,8 @@ async function search(query, options = {}) {
       const result = await searchWithSerpdive(query, options);
       return { ...result, provider: "serpdive" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`SERPdive: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`SERPdive: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("kagi") && isKagiAvailable()) {
@@ -16177,8 +16257,8 @@ async function search(query, options = {}) {
       const result = await searchWithKagi(query, options);
       return { ...result, provider: "kagi" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Kagi: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Kagi: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("bocha") && isBochaAvailable()) {
@@ -16186,8 +16266,8 @@ async function search(query, options = {}) {
       const result = await searchWithBocha(query, options);
       return { ...result, provider: "bocha" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Bocha: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Bocha: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("ollama") && isOllamaAvailable()) {
@@ -16195,8 +16275,8 @@ async function search(query, options = {}) {
       const result = await searchWithOllama(query, options);
       return { ...result, provider: "ollama" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Ollama: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Ollama: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("perplexity") && isPerplexityAvailable()) {
@@ -16204,16 +16284,16 @@ async function search(query, options = {}) {
       const result = await searchWithPerplexity(query, options);
       return { ...result, provider: "perplexity" };
     } catch (err) {
-      if (isAbortError3(err)) throw err;
-      fallbackErrors.push(`Perplexity: ${errorMessage28(err)}`);
+      if (stopsAutomaticFallback(err)) throw err;
+      fallbackErrors.push(`Perplexity: ${errorMessage21(err)}`);
     }
   }
   if (allowed.has("gemini")) try {
     const geminiResult = await searchWithGemini(query, options, false);
     if (geminiResult) return { ...geminiResult, provider: "gemini" };
   } catch (err) {
-    if (isAbortError3(err)) throw err;
-    fallbackErrors.push(`Gemini: ${errorMessage28(err)}`);
+    if (stopsAutomaticFallback(err)) throw err;
+    fallbackErrors.push(`Gemini: ${errorMessage21(err)}`);
   }
   if (fallbackErrors.length > 0) {
     throw new Error(`Auto provider search failed:
@@ -16228,6 +16308,14 @@ async function search(query, options = {}) {
   5. Sign into gemini.google.com in a supported Chromium-based browser
   6. Explicitly select provider: "anysearch" for anonymous AnySearch, "xcrawl" for XCrawl, "xai" for Grok, "mistral" for Mistral Conversations web search, "brightdata" with brightdataSerpZone for paid Bright Data SERP, "serpbase", "serpapi", "serper", or "serply" for Google SERP, "you" for You.com, "zai" for Z.ai GLM Coding Plan search, "valyu" for research search, "keenable" for keyless Keenable search, or "ceramic" for Ceramic search`
   );
+}
+async function search(query, options = {}) {
+  const response = await searchWithoutDomainProjection(query, options);
+  if (response.providerResponses || response.provider === "baizhi" && response.results.length === 0) return response;
+  return {
+    ...response,
+    ...filterSearchResponseByDomain(response, options.domainFilter)
+  };
 }
 
 // storage.ts
@@ -16687,7 +16775,10 @@ function generateCuratorPage(queries, sessionToken, timeout, availableProviders,
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.umd.js"
+  integrity="sha384-N2BlPYJH0HRuJRIZOGNTL/ymqHb++FCViUqW4rdB5/7fH+KvFTqyCvPPQ8X4nElj" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js"
+  integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous"></script>
 <style>
 ${CSS}
 </style>
@@ -18128,6 +18219,8 @@ var SCRIPT = `(function() {
   var heroTitle = document.querySelector(".hero-title");
   var heroDesc = document.querySelector(".hero-desc");
   var resultCardsEl = document.getElementById("result-cards");
+  var ownedResultCards = new WeakSet();
+  var cardCheckboxes = new WeakMap();
   var btnSend = document.getElementById("btn-send");
   var btnSendRaw = document.getElementById("btn-send-raw");
   var sendRawRow = document.getElementById("send-raw-row");
@@ -18186,22 +18279,19 @@ var SCRIPT = `(function() {
 
   function sanitizeHref(url) {
     var value = typeof url === "string" ? url.trim() : "";
-    return /^https?:///i.test(value) ? value : "#";
+    return /^https?:\\/\\//i.test(value) ? value : "#";
   }
 
   function sanitizeMarkdownHtml(html) {
+    if (!window.DOMPurify || !window.DOMPurify.isSupported) return escHtml(html);
     var container = document.createElement("div");
-    container.innerHTML = html;
-
-    container.querySelectorAll("script, iframe, object, embed, form, style, link, meta, base")
-      .forEach(function(el) { el.remove(); });
-
-    var nodes = container.querySelectorAll("*");
-    nodes.forEach(function(node) {
-      for (var i = node.attributes.length - 1; i >= 0; i--) {
-        var attr = node.attributes[i];
-        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
-      }
+    container.innerHTML = window.DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: ["p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote",
+        "ul", "ol", "li", "strong", "em", "b", "i", "del", "s", "pre", "code", "a", "img",
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "sup", "sub"],
+      ALLOWED_ATTR: ["href", "src", "alt", "title", "colspan", "rowspan", "start"],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
     });
 
     var anchors = container.querySelectorAll("a[href]");
@@ -18223,6 +18313,12 @@ var SCRIPT = `(function() {
     });
 
     return container.innerHTML;
+  }
+
+  function getResultCards() {
+    return resultCardsEl ? Array.from(resultCardsEl.children).filter(function(card) {
+      return ownedResultCards.has(card);
+    }) : [];
   }
 
   function post(path, body) {
@@ -18499,9 +18595,9 @@ var SCRIPT = `(function() {
       addSearchEl.style.pointerEvents = disableAddSearch ? "none" : "";
     }
 
-    var cards = resultCardsEl ? resultCardsEl.querySelectorAll(".result-card") : [];
+    var cards = getResultCards();
     cards.forEach(function(card) {
-      var cb = card.querySelector("input[type=checkbox]");
+      var cb = cardCheckboxes.get(card);
       if (!cb) return;
       var searching = card.classList.contains("searching");
       var error = card.classList.contains("error");
@@ -18538,7 +18634,7 @@ var SCRIPT = `(function() {
 
   function updateSummaryText() {
     if (completedCount <= 0) return;
-    var totalCards = resultCardsEl.querySelectorAll(".result-card").length;
+    var totalCards = getResultCards().length;
     var searchingCount = totalCards - completedCount;
     if (searchingCount > 0) {
       heroTitle.textContent = completedCount + " of " + totalCards + " Searches Complete";
@@ -18830,6 +18926,7 @@ var SCRIPT = `(function() {
 
   function createSearchingCard(queryText, provider) {
     var card = document.createElement("div");
+    ownedResultCards.add(card);
     card.className = "result-card searching";
     card.innerHTML =
       '<div class="result-card-header">' +
@@ -18843,6 +18940,7 @@ var SCRIPT = `(function() {
         "</div>" +
       "</div>" +
       buildAltChipsHtml(provider, queryText);
+    cardCheckboxes.set(card, card.querySelector("input[type=checkbox]"));
     return card;
   }
 
@@ -18852,7 +18950,7 @@ var SCRIPT = `(function() {
       resultCardsEl.insertBefore(card, afterCard.nextSibling);
       return;
     }
-    var slotCards = resultCardsEl.querySelectorAll('.result-card[data-slot="' + slotId + '"]');
+    var slotCards = getResultCards().filter(function(existing) { return existing.dataset.slot === String(slotId); });
     var lastCard = slotCards.length > 0 ? slotCards[slotCards.length - 1] : null;
     if (lastCard) resultCardsEl.insertBefore(card, lastCard.nextSibling);
     else resultCardsEl.appendChild(card);
@@ -19386,7 +19484,7 @@ var SCRIPT = `(function() {
     var queryText = data.query || queries[data.queryIndex] || "";
     var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
     if (typeof slotId !== "number") slotId = data.queryIndex;
-    var card = resultCardsEl.querySelector('.result-card[data-qi="' + data.queryIndex + '"]');
+    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
     if (!card) {
       card = createSearchingCard(queryText, data.provider);
       card.dataset.qi = data.queryIndex;
@@ -19405,7 +19503,7 @@ var SCRIPT = `(function() {
     var queryText = data.query || queries[data.queryIndex] || "";
     var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
     if (typeof slotId !== "number") slotId = data.queryIndex;
-    var card = resultCardsEl.querySelector('.result-card[data-qi="' + data.queryIndex + '"]');
+    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
     if (!card) {
       card = createSearchingCard(queryText, data.provider);
       card.dataset.qi = data.queryIndex;
@@ -19514,6 +19612,7 @@ var SCRIPT = `(function() {
     var expandEl = card.querySelector(".result-card-expand");
 
     if (!header || !cb) return;
+    cardCheckboxes.set(card, cb);
 
     header.addEventListener("click", function(e) {
       if (e.target.tagName === "A") return;
@@ -19544,11 +19643,11 @@ var SCRIPT = `(function() {
 
   function getSelectedIndices() {
     var indices = [];
-    var cards = resultCardsEl.querySelectorAll(".result-card");
+    var cards = getResultCards();
     cards.forEach(function(card) {
       if (card.dataset.completed !== "true") return;
       if (card.classList.contains("error")) return;
-      var cb = card.querySelector("input[type=checkbox]");
+      var cb = cardCheckboxes.get(card);
       if (!cb || !cb.checked) return;
       var qi = parseInt(card.dataset.qi, 10);
       if (!Number.isNaN(qi)) indices.push(qi);
@@ -19558,7 +19657,7 @@ var SCRIPT = `(function() {
 
   function getCompletedSelectableIndices() {
     var indices = [];
-    var cards = resultCardsEl.querySelectorAll(".result-card");
+    var cards = getResultCards();
     cards.forEach(function(card) {
       if (card.dataset.completed !== "true") return;
       if (card.classList.contains("error")) return;
@@ -19569,7 +19668,7 @@ var SCRIPT = `(function() {
   }
 
   function hasPendingSearchCards() {
-    var cards = resultCardsEl.querySelectorAll(".result-card");
+    var cards = getResultCards();
     for (var i = 0; i < cards.length; i++) {
       var card = cards[i];
       if (card.dataset.completed !== "true") return true;
@@ -20135,10 +20234,10 @@ var SCRIPT = `(function() {
     if (e.key.toLowerCase() === "a" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       if (stage !== "results") return;
-      var boxes = resultCardsEl.querySelectorAll(".result-card input[type=checkbox]");
+      var boxes = getResultCards().map(function(card) { return cardCheckboxes.get(card); });
       var selectable = [];
       boxes.forEach(function(cb) {
-        if (cb.disabled) return;
+        if (!cb || cb.disabled) return;
         selectable.push(cb);
       });
       if (selectable.length === 0) return;

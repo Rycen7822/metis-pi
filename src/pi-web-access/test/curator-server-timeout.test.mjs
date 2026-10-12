@@ -311,6 +311,11 @@ test("curator accepts SerpApi and Parallel MCP and projects their labels into th
 		assert.match(html, /data-provider="parallel-mcp"[^>]*>Parallel MCP<\/button>/);
 		const script = html.match(/<script>\n([\s\S]*?)\n<\/script>/)[1];
 		new Script(script);
+		const hrefSource = script.match(/function sanitizeHref\(url\) \{[\s\S]*?\n  \}/)[0];
+		const sanitizeHref = new Script(`(${hrefSource})`).runInNewContext();
+		assert.equal(sanitizeHref(" https://example.test/page "), "https://example.test/page");
+		assert.equal(sanitizeHref("http://example.test/page"), "http://example.test/page");
+		assert.equal(sanitizeHref("/relative-page"), "#");
 		const data = JSON.parse(script.match(/var DATA = ([^\n]+);/)[1]);
 		assert.equal(data.providerLabels["parallel-mcp"], "Parallel MCP");
 		assert.equal(data.providerLabels.serpapi, "SerpApi");

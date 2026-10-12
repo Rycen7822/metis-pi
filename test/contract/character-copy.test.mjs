@@ -25,6 +25,39 @@ test("Bash escapes preserve original characters through tokens, colors and comma
   }
 });
 
+test("long shell command caps keep complete graphemes and OSC8 sequences", () => {
+  const prefix = "echo " + "a".repeat(1194);
+  const osc = "\x1b]8;;https://example.test\x1b\\", endOsc = "\x1b]8;;\x1b\\";
+  for (const grapheme of ["e\u0301", "😀", "👩‍👩‍👦"]) {
+    for (const colorLevel of [{ kind: "none" }, { kind: "truecolor" }]) {
+      const command = `${osc}echo${endOsc} ${"a".repeat(1194)}${grapheme}${"Z".repeat(20)}`;
+      const component = shell.makeShellCall({ name: "bash", bullet: "•", title: "Ran", args: { command },
+        options: { expanded: true }, theme, context: {}, expandHint: "expand", colorLevel });
+      const frame = copyFrame(component, 80);
+      assert.equal(select(frame, 0, undefined, () => ({ start: 0, end: 80 })).text, `${prefix} …`);
+      for (const row of frame.root.lines) {
+        assert.ok(row.isWellFormed());
+        assert.ok(Tui.visibleWidth(row) <= 80);
+        assert.doesNotMatch(Tui.stripTerminalSequences(row), /\x1b/);
+      }
+    }
+  }
+});
+
+test("thinking rail recognizes an existing prefix through SGR and OSC8 while keeping its copy source", () => {
+  const osc = "\x1b]8;;https://example.test\x1b\\", endOsc = "\x1b]8;;\x1b\\";
+  for (const source of [`\x1b[36m▏\x1b[39m existing`, `${osc}▏${endOsc} existing`]) {
+    const rail = new CodexThinkingRailComponent(new Tui.Text(source, 0, 0), { kind: "truecolor" });
+    const frame = copyFrame(rail, 40);
+    assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "▏ existing");
+    assert.equal(select(frame).text, "▏ existing");
+  }
+  const rail = new CodexThinkingRailComponent(new Tui.Text(`${osc}普通é😀${endOsc}`, 0, 0), { kind: "truecolor" });
+  const frame = copyFrame(rail, 40);
+  assert.equal(Tui.stripTerminalSequences(frame.root.lines[0]).trimEnd(), "▏ 普通é😀");
+  assert.equal(select(frame).text, "普通é😀");
+});
+
 test("real shell components copy consumed spaces, ANSI text and Unicode across physical wraps", () => {
   for (const text of ["alpha   beta  gamma  ", "alpha \x1b[31mRED\x1b[0m  omega", "甲é 👩‍👩‍👦  fin", "RED", "first\nsecond"]) {
     const expected = Tui.stripTerminalSequences(text);

@@ -63,6 +63,10 @@ Bundled PTY and image helpers and their retained native/tools utility sources ar
 derived from OpenAI Codex, copyright OpenAI and its contributors, Apache-2.0
 (see LICENSE-APACHE-2.0). V8 host and apply-patch are no longer redistributed.
 
+The static Linux x64 helpers include musl libc, copyright (c) 2005-2020
+Rich Felker and contributors. Copyright and permission notices, including
+subsidiary licenses, are retained in docs/provenance/execution/musl-NOTICES.
+
 MCP configuration validation in src/mcp/config.ts is derived from Pi 1.0.0.
 Upstream: https://github.com/earendil-works/pi
 Commit: a13d35a742c6ef8462812a28fbe1d8c8b7431c32 (v1.0.0).

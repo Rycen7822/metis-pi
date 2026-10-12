@@ -56,8 +56,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     const lines = Pi.highlightCode(text, language);
     return Array.isArray(lines) ? lines.join("\n") : String(lines);
   };
-  // Gray composer surface painters, built from the REAL Tui helpers so src/
-  // keeps its no-host-import rule.
+  // Resolve host Tui capabilities here; the surface painters use one color context.
   const surface = makeSurfaceOps(
     colorLevel,
     (text) => `\x1b[38;2;${CODEX_CYAN_RGB}m${text}\x1b[39m`,

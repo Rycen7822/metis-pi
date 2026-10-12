@@ -20,11 +20,6 @@ const CONTEXTS_KEY = Symbol.for("metis-pi.native-renderer-contexts.v1");
 const shared = globalThis as unknown as Record<symbol, unknown>;
 const LOOKUP_CONTEXTS = (shared[CONTEXTS_KEY] ??= new WeakMap<object, WeakRef<object>>()) as WeakMap<object, WeakRef<object>>;
 type RegisteredRenderers = { name: string; call: unknown; result: unknown; shell: unknown };
-const EXPECTED = {
-  getCallRenderer: "returnthis.toolDefinition?.renderCall;",
-  getResultRenderer: "returnthis.toolDefinition?.renderResult;",
-  getRenderShell: 'returnthis.toolDefinition?.renderShell??"default";',
-};
 export interface AdapterOptions {
   getTools(): readonly unknown[];
   enabled(): boolean;
@@ -42,10 +37,49 @@ export interface AdapterHandle {
   dispose(): void;
 }
 function skipped(reason: string): AdapterHandle { return { installed: false, reason, dispose() {} }; }
-function methodBody(fn: Function): string {
-  const text = Function.prototype.toString.call(fn);
-  return text.slice(text.indexOf("{") + 1, text.lastIndexOf("}"))
-    .replace(/\s+/g, "").replace(/'/g, '"').replace(/;?$/, ";");
+function supportsSelector(key: typeof SELECTORS[number], select: UiMethod): boolean {
+  const field = ({ getCallRenderer: "renderCall", getResultRenderer: "renderResult", getRenderShell: "renderShell" } as const)[key];
+  const definition = { renderCall() {}, renderResult() {}, renderShell: "self" };
+  const definitions: (Partial<typeof definition> | undefined)[] = [undefined, {}, definition];
+  try {
+    return definitions.every(toolDefinition => select.call({ toolDefinition }) ===
+      (toolDefinition?.[field] ?? (key === "getRenderShell" ? "default" : undefined)));
+  } catch { return false; }
+}
+
+function supportsSelfShellRender(render: UiMethod): boolean {
+  // The adapter needs the host to compose text and images and update mouse height.
+  // Exercise that capability without constructing a row or executing a tool.
+  const widths: number[] = [];
+  const component = (lines: string[]) => ({ render(width: number) { widths.push(width); return lines; } });
+  const row = {
+    hideComponent: false, hasRendererDefinition: () => true, getRenderShell: () => "self",
+    selfRenderContainer: component(["call", "result"]), selfRenderHeight: -1,
+    imageSpacers: [component(["spacer"])], imageComponents: [component(["image"])],
+  };
+  try {
+    const lines = render.call(row, 37);
+    return Array.isArray(lines) && lines.length === 5 && lines.every((line, i) => line === ["", "call", "result", "spacer", "image"][i])
+      && row.selfRenderHeight === 2 && widths.length === 3 && widths.every(width => width === 37);
+  } catch { return false; }
+}
+
+function supportsRendererLookup(lookup: UiMethod): boolean {
+  const name = "__metis_renderer_capability__";
+  const definition = { renderCall() {}, renderResult() {}, renderShell: "self" };
+  const resolved = { ...definition, renderCall() {} };
+  let read = false, resolve = false;
+  const session = {
+    getToolDefinition(toolName: string) { read = toolName === name; return definition; },
+    extensionRunner: { resolveToolRenderers(toolName: string, next: () => unknown) {
+      const base = asRecord(next());
+      resolve = toolName === name && base.renderCall === definition.renderCall
+        && base.renderResult === definition.renderResult && base.renderShell === "self";
+      return resolved;
+    } },
+  };
+  try { return lookup.call({ session }, name) === resolved && read && resolve; }
+  catch { return false; }
 }
 
 export function installAdapter(prototype: object, options: AdapterOptions): AdapterHandle {
@@ -56,13 +90,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (!descriptor || typeof descriptor.value !== "function" || !descriptor.configurable || !descriptor.writable) {
       return skipped(`Unrecognized or read-only Pi UI method: ${key}`);
     }
-    if (key !== "render" && methodBody(descriptor.value) !== EXPECTED[key]) {
+    if (key !== "render" && !supportsSelector(key, descriptor.value)) {
       return skipped(`Unrecognized or already modified Pi UI selector: ${key}`);
     }
     if (key === "render") {
-      // These are the stock image-aware/self-shell branch and its mouse-height update.
-      const body = methodBody(descriptor.value);
-      if (!["this.selfRenderContainer.render(", "this.selfRenderHeight=", "this.imageComponents"].every((s) => body.includes(s))) {
+      if (!supportsSelfShellRender(descriptor.value)) {
         return skipped("Unrecognized or already modified Pi tool-row render method");
       }
     }
@@ -80,20 +112,19 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       typeof lookup.value !== "function" ||
       !lookup.configurable ||
       !lookup.writable ||
-      methodBody(lookup.value) !==
-        "returnthis.session.extensionRunner.resolveToolRenderers(toolName,()=>withBuiltIn" +
-          "Renderers(toolName,this.session.getToolDefinition(toolName)));")
+      !supportsRendererLookup(lookup.value))
   ) {
     return skipped("Unrecognized or already modified Pi renderer lookup");
   }
   const sessionGetter = definitionPrototype && Object.getOwnPropertyDescriptor(definitionPrototype, "session");
-  if (
-    sessionGetter &&
-    (!sessionGetter.configurable ||
-      typeof sessionGetter.get !== "function" ||
-      methodBody(sessionGetter.get) !== "returnthis.runtimeHost.session;")
-  ) {
-    return skipped("Unrecognized or already modified Pi session lookup");
+  if (sessionGetter) {
+    const session = {};
+    try {
+      if (!sessionGetter.configurable || typeof sessionGetter.get !== "function"
+          || sessionGetter.get.call({ runtimeHost: { session } }) !== session) {
+        return skipped("Unrecognized or already modified Pi session lookup");
+      }
+    } catch { return skipped("Unrecognized or already modified Pi session lookup"); }
   }
   const captureContext = function (this: object): unknown {
     if (active) LOOKUP_CONTEXTS.set(definitionPrototype!, new WeakRef(this));
@@ -140,6 +171,11 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (typeof name !== "string") return;
     const definition = asRecord(current.toolDefinition);
     if (Object.keys(definition).length === 0) return;
+    // A compatible wrapper may still override a particular row. Check actual
+    // selector results before claiming it, in addition to registered provenance.
+    if (hooks.get("getCallRenderer")!.original.value.call(row) !== definition.renderCall
+        || hooks.get("getResultRenderer")!.original.value.call(row) !== definition.renderResult
+        || hooks.get("getRenderShell")!.original.value.call(row) !== (definition.renderShell ?? "default")) return;
     if (definitionPrototype) {
       const base = registered.get(definition)
         ?? registeredRenderers(LOOKUP_CONTEXTS.get(definitionPrototype)?.deref(), name);

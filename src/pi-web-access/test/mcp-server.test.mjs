@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -164,23 +165,19 @@ test("client cancellation aborts the signal passed to the core", { timeout: 5_00
 
 // The built bin runs from a directory whose node_modules mirrors the repo's
 // without typebox or @earendil-works/*, proving the bundle carries typebox and
-// needs no Pi packages. A preload mocks globalThis.fetch; config is isolated.
-const ARTICLE_URL = "http://93.184.216.34/article";
-const IMAGE_URL = "http://93.184.216.34/pixel.png";
-const fetchMock = `
-import { appendFileSync } from "node:fs";
+// needs no Pi packages. Metadata APIs are stubbed; page/image content uses real local HTTP.
 const articleHtml = "<html><head><title>MCP Article</title></head><body><article><h1>MCP Article</h1>"
 	+ "<p>" + "The MCP server fetched this readable paragraph without the Pi runtime. ".repeat(12) + "</p></article></body></html>";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+const fetchMock = `
+import { appendFileSync } from "node:fs";
 globalThis.fetch = async (input, init) => {
 	const url = String(input instanceof Request ? input.url : input);
 	appendFileSync(process.env.MCP_TEST_REQUEST_LOG, JSON.stringify({ url, body: typeof init?.body === "string" ? init.body : undefined }) + "\\n");
 	if (url.startsWith("https://api.search.brave.com/")) {
-		return Response.json({ web: { results: [{ title: "MCP Article", url: ${JSON.stringify(ARTICLE_URL)}, description: "Brave snippet" }] } });
+		return Response.json({ web: { results: [{ title: "MCP Article", url: process.env.MCP_TEST_ARTICLE_URL, description: "Brave snippet" }] } });
 	}
 	if (url === "https://api.exa.ai/search") return Response.json({ results: [] });
-	if (url === ${JSON.stringify(ARTICLE_URL)}) return new Response(articleHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
-	if (url === ${JSON.stringify(IMAGE_URL)}) return new Response(png, { headers: { "content-type": "image/png" } });
 	throw new Error("Unexpected fetch: " + url);
 };
 `;
@@ -221,11 +218,28 @@ async function startBin(t, config) {
 	initializeMetisConfig(home);
 	const requestLog = join(home, "requests.log");
 	await writeFile(requestLog, "");
+	const origin = createServer(async (request, response) => {
+		const url = `http://127.0.0.1:${origin.address().port}${request.url}`;
+		await appendFile(requestLog, JSON.stringify({ url, method: request.method }) + "\n");
+		if (request.url === "/article") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" }); response.end(articleHtml);
+		} else if (request.url === "/pixel.png") {
+			response.writeHead(200, { "content-type": "image/png" }); response.end(png);
+		} else { response.writeHead(404); response.end(); }
+	});
+	await new Promise(resolve => origin.listen(0, "127.0.0.1", resolve));
+	t.after(async () => { origin.closeAllConnections(); await new Promise(resolve => origin.close(resolve)); });
+	const articleUrl = `http://127.0.0.1:${origin.address().port}/article`;
+	const imageUrl = `http://127.0.0.1:${origin.address().port}/pixel.png`;
 	const transport = new StdioClientTransport({
 		command: process.execPath,
 		args: ["--import", join(dir, "mock-fetch.mjs"), join(dir, "src", "pi-web-access", "dist", "mcp-cli.js")],
 		cwd: dir,
-		env: { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key", MCP_TEST_REQUEST_LOG: requestLog },
+		env: {
+			HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key",
+			MCP_TEST_REQUEST_LOG: requestLog, MCP_TEST_ARTICLE_URL: articleUrl,
+			...(process.env.NODE_OPTIONS ? { NODE_OPTIONS: process.env.NODE_OPTIONS } : {}),
+		},
 		stderr: "pipe",
 	});
 	const transportErrors = [];
@@ -237,6 +251,8 @@ async function startBin(t, config) {
 	await client.connect(transport);
 	return {
 		client,
+		articleUrl,
+		imageUrl,
 		transportErrors,
 		stderr: () => stderr,
 		requests: async () => (await readFile(requestLog, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)),
@@ -246,37 +262,45 @@ async function startBin(t, config) {
 const text = (result) => result.content.map((part) => part.text ?? "").join("\n");
 
 test("built pi-web-access-mcp bin runs the real tools over stdio without Pi packages", { timeout: 30_000 }, async (t) => {
-	const bin = await startBin(t, {});
-	const { client } = bin;
+	const bin = await startBin(t, { ssrf: { allowRanges: ["127.0.0.1/32"] } });
+	const { client, articleUrl, imageUrl } = bin;
 	assert.equal(client.getServerVersion().name, "pi-web-access");
 	assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), TOOL_NAMES);
 
 	const search = await client.callTool({ name: "web_search", arguments: { query: "mcp e2e", provider: "brave" } });
 	assert.notEqual(search.isError, true, text(search));
-	assert.match(text(search), /MCP Article\n {3}http:\/\/93\.184\.216\.34\/article/);
+	assert.ok(text(search).includes(`MCP Article\n   ${articleUrl}`));
 	const responseId = text(search).match(/stored as responseId "([^"]+)"/)[1];
 	const stored = await client.callTool({ name: "get_search_content", arguments: { responseId, queryIndex: 0 } });
 	assert.notEqual(stored.isError, true, text(stored));
-	assert.match(text(stored), /### MCP Article\nhttp:\/\/93\.184\.216\.34\/article\n\nBrave snippet/);
+	assert.ok(text(stored).includes(`### MCP Article\n${articleUrl}\n\nBrave snippet`));
 
-	const fetched = await client.callTool({ name: "fetch_content", arguments: { url: ARTICLE_URL } });
+	const fetched = await client.callTool({ name: "fetch_content", arguments: { url: articleUrl } });
 	assert.notEqual(fetched.isError, true, text(fetched));
 	assert.match(text(fetched), /readable paragraph without the Pi runtime/);
 	assert.doesNotMatch(text(fetched), /<p>|<article>/);
 
 	const checked = await client.callTool({ name: "source_check", arguments: { claim: "The MCP server fetched a page", provider: "brave", fetchContent: true } });
 	assert.notEqual(checked.isError, true, text(checked));
-	assert.match(text(checked), /# Source check: The MCP server fetched a page[\s\S]*## Sources[\s\S]*http:\/\/93\.184\.216\.34\/article/);
+	assert.match(text(checked), /# Source check: The MCP server fetched a page[\s\S]*## Sources/);
+	assert.ok(text(checked).includes(articleUrl));
+	const artifactId = text(checked).match(/Artifact responseId: (\S+)/)[1];
+	const evidence = await client.callTool({ name: "get_search_content", arguments: { responseId: artifactId } });
+	assert.notEqual(evidence.isError, true, text(evidence));
+	const artifact = JSON.parse(text(evidence));
+	assert.equal(artifact.sources[0].url, articleUrl);
+	assert.equal(artifact.sources[0].fetched, true);
+	assert.match(artifact.sources[0].content_hash, /^sha256:[a-f0-9]{64}$/);
 
 	await client.callTool({ name: "web_search", arguments: { query: "papers", provider: "exa", category: "research paper" } });
 	const exaBody = JSON.parse((await bin.requests()).find((request) => request.url === "https://api.exa.ai/search").body);
 	assert.equal(exaBody.category, "research paper");
 
 	const requestsBefore = (await bin.requests()).length;
-	const image = await client.callTool({ name: "fetch_content", arguments: { url: IMAGE_URL } });
+	const image = await client.callTool({ name: "fetch_content", arguments: { url: imageUrl } });
 	assert.equal(image.isError, true);
 	assert.match(text(image), /Direct image fetch is not supported over MCP/);
-	assert.deepEqual((await bin.requests()).slice(requestsBefore).map((request) => request.url), [IMAGE_URL]);
+	assert.deepEqual((await bin.requests()).slice(requestsBefore).map((request) => request.url), [imageUrl]);
 
 	const closeStarted = Date.now();
 	await client.close();

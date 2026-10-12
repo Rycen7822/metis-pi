@@ -280,6 +280,7 @@ async function restJson(url: string, options?: ExtractOptions, signal?: AbortSig
 	const ssrf = loadSsrfConfig();
 	const domainPolicy = loadFetchContentDomainPolicy();
 	const response = await fetchRemoteUrl(url, { headers: REST_HEADERS, ...(signal ? { signal } : {}) }, {
+		fetch: options?.fetch,
 		allowRanges: ssrf.allowRanges,
 		trustEnvProxy: ssrf.trustEnvProxy,
 		domainPolicy,

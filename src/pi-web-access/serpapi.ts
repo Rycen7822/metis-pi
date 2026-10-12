@@ -1,6 +1,6 @@
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -99,10 +99,10 @@ export async function searchWithSerpApi(query: string, options: SearchOptions = 
 	let response: Response;
 	let entries: SerpApiOrganicResult[];
 	try {
-		response = await fetch(url, {
+		response = await fetchWithCredentialRedirects(url.toString(), {
 			headers: { Accept: "application/json" },
 			signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal,
-		});
+		}, [], ["api_key"]);
 		if (!response.ok) {
 			const errorText = await response.text();
 			throw new SearchHttpError(response.status, `SerpApi error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);

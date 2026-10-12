@@ -1,4 +1,5 @@
 import { activityMonitor } from "./activity.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { redactCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { matchesDomainFilter, normalizeDomain, normalizeDomainFilters } from "./domain-filter-normalization.ts";

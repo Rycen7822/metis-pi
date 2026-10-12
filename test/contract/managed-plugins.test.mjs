@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +73,7 @@ test("Pi package filters disable web access while retaining session recall", asy
 test("owned web entrypoint registers tools from the existing Metis TOML", async (t) => {
   const extensions = await loadManaged(t, [], {
     toolActivation: "eager", toolNames: { webSearch: "lookup_web" }, tools: { sourceCheck: { enabled: false } },
+    ssrf: { allowRanges: ["127.0.0.1"] },
   }, true);
   assert.deepEqual(extensions.flatMap(extension => [...extension.tools.keys()]).sort(), [
     ...webTools, ...recallTools,
@@ -86,14 +88,18 @@ test("owned web entrypoint registers tools from the existing Metis TOML", async 
   const error = web.renderResult({ content: [{ type: "text", text: "Missing responseId" }], details: {} },
     { expanded: false, isPartial: false }, { fg: (_style, text) => text }, { isError: true });
   assert.match(error.render(80).join("\n"), /Missing responseId/);
-  const previousFetch = globalThis.fetch;
-  t.after(() => { globalThis.fetch = previousFetch; });
-  const url = "https://93.184.216.34/grouped-fixture";
-  globalThis.fetch = async input => {
-    assert.equal(String(input instanceof Request ? input.url : input), url);
-    return new Response("Local fixture material. ".repeat(1600), { headers: { "content-type": "text/plain" } });
-  };
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ method: request.method, path: request.url });
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("Local fixture material. ".repeat(1600));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const url = `http://127.0.0.1:${server.address().port}/grouped-fixture`;
   const fetched = await web.execute("fetch", { action: "fetch", params: { url, mode: "raw" } });
+  assert.deepEqual(requests, [{ method: "GET", path: "/grouped-fixture" }]);
+  assert.notEqual(fetched.isError, true);
   const text = fetched.content.filter(item => item.type === "text").map(item => item.text).join("\n");
   assert.match(text, /tools\.web_access\(\{ action: "content", params:/);
   assert.doesNotMatch(text, /get_search_content\(/);

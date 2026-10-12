@@ -1,4 +1,6 @@
+import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
@@ -78,10 +80,6 @@ export function isSearch1APIAvailable(): boolean {
 	});
 }
 
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
 	const timeout = AbortSignal.timeout(timeoutMs);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -125,14 +123,7 @@ async function search1APIJsonRequest<T>(
 			signal: requestSignal(signal, timeoutMs),
 		});
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		throw redactSearchFailure(err, apiKey).error;
 	}
 
 	const raw = await response.text();
@@ -199,16 +190,10 @@ export async function searchWithSearch1API(
 		activityMonitor.logComplete(activityId, 200);
 		return response;
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, failure.message);
+		throw failure.error;
 	}
 }
 
@@ -247,15 +232,9 @@ export async function extractWithSearch1API(
 			error: null,
 		};
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, failure.message);
+		throw failure.error;
 	}
 }

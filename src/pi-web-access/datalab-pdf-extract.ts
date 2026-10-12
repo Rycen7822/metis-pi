@@ -1,4 +1,5 @@
 import { loadWebAccessConfig } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import {
 	hasCredentialSource,
 	resolveCredential,

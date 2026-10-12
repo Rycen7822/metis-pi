@@ -16,6 +16,10 @@ import type { ToolCallIndexer } from "./indexer.ts";
 import { ARGUMENT_HISTORY } from "./argument-history.ts";
 import { isDerived, retainSources, type Obligation } from "./occ-protection.ts";
 import type { ContextPruneConfig } from "./types.ts";
+import {
+  METIS_EVENTS, isBeforeRemoteCompactRequest, isOccStatusRequest,
+  type CodexCompactionOwnerRequest, type CondenseProjectRequest, type ExecutionStatusRequest, type GoalSnapshotRequest, type OccFinished,
+} from "../collaboration.ts";
 
 const STATE = "metis-occ-state";
 const HOLD_WORK = 4;
@@ -77,8 +81,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   const projection = (ctx: ExtensionContext) => ctx.sessionManager.buildSessionProjection();
   const visible = (ctx: ExtensionContext) => {
     const projected = projection(ctx);
-    const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages, api: ctx.model?.api, maintenance: true };
-    pi.events.emit("metis:condense-project", request);
+    const request = { sessionId: ctx.sessionManager.getSessionId(), messages: projected.messages, api: ctx.model?.api, maintenance: true } satisfies CondenseProjectRequest;
+    pi.events.emit(METIS_EVENTS.condenseProject, request);
     return { messages: request.messages, sources: projected.entries.filter(e => e.messages.length).map(e => e.sourceEntry.id) };
   };
   const signature = (ctx: ExtensionContext) => hash([
@@ -107,8 +111,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     } catch { return undefined; }
   }
   const capability = (ctx: ExtensionContext) => {
-    const request = { busy: false };
-    pi.events.emit("metis:execution-status", request);
+    const request: ExecutionStatusRequest = { busy: false };
+    pi.events.emit(METIS_EVENTS.executionStatus, request);
     return !!ctx.model && !request.busy;
   };
   const rewrite = (ctx: ExtensionContext) => {
@@ -231,13 +235,13 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       const requirements = discarded.flatMap((e) =>
         e.messages.filter((m) => m.role === "user").map((m) => ({ source: e.sourceEntry.id, content: m.content })),
       );
-      const request = { sessionId, messages: discardedMessages, api: ctx.model.api, busy: false, maintenance: true };
-      pi.events.emit("metis:condense-project", request);
+      const request = { sessionId, messages: discardedMessages, api: ctx.model.api, busy: false, maintenance: true } satisfies CondenseProjectRequest;
+      pi.events.emit(METIS_EVENTS.condenseProject, request);
       if (request.busy) return reject("projection-busy");
       if (hasUnavailableNestedEvidence(projected.entries.flatMap((entry) => entry.messages)))
         return reject("nested-evidence-unavailable");
-      const goal = { snapshot: undefined as unknown };
-      pi.events.emit("metis:goal-snapshot", goal);
+      const goal: GoalSnapshotRequest = { snapshot: undefined };
+      pi.events.emit(METIS_EVENTS.goalSnapshot, goal);
       const obligations = captureUnindexedBatchesFromSession(
         discarded.flatMap((e) => e.messages.map((message) => ({ ...e.sourceEntry, type: "message", message }))),
         { isSummarized: () => false },
@@ -467,8 +471,16 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   pi.on("session_before_compact", (event, ctx) => {
     // Remote Codex checkpoints (and their raw-history recovery) have their own
     // publisher. OCC must not spend a summary request or override that result.
-    const remote = { ctx, owns: false };
-    pi.events.emit("metis:codex-compaction-owner", remote);
+    const model = ctx.model;
+    const remote: CodexCompactionOwnerRequest = {
+      model: model && { api: model.api, provider: model.provider },
+      sessionManager: {
+        buildSessionProjection: () => ctx.sessionManager.buildSessionProjection(),
+        getBranch: () => ctx.sessionManager.getBranch(),
+      },
+      owns: false,
+    };
+    pi.events.emit(METIS_EVENTS.codexCompactionOwner, remote);
     if (remote.owns) return;
     compactionSignal = event.signal;
     if (enabled()) return prepare(event, ctx);
@@ -506,7 +518,7 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
   pi.on("agent_settled", async (_event, ctx) => {
     if (running) return;
     if (!enabled() || !ready || !ctx.isIdle() || ctx.hasPendingMessages()) {
-      pi.events.emit("metis:occ-finished", { cancelled });
+      pi.events.emit(METIS_EVENTS.occFinished, { cancelled } satisfies OccFinished);
       cancelled = false;
       return;
     }
@@ -524,17 +536,19 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
       if (state.request) spentRequests.add(state.request);
       rewrite(ctx);
       running = false;
-      pi.events.emit("metis:occ-finished", { cancelled });
+      pi.events.emit(METIS_EVENTS.occFinished, { cancelled } satisfies OccFinished);
       cancelled = false;
     }
   });
   const off = [
-    pi.events.on("metis:before-remote-compact", (value: any) => {
+    pi.events.on(METIS_EVENTS.beforeRemoteCompact, (value) => {
+      if (!isBeforeRemoteCompactRequest(value)) return;
       // Remote safety rejection is not a user abort. Its earlier handler can
       // short-circuit dispatch before our normal before_compact observer runs.
       compactionSignal = value.signal;
     }),
-    pi.events.on("metis:occ-status", (data: any) => {
+    pi.events.on(METIS_EVENTS.occStatus, (data) => {
+      if (!isOccStatusRequest(data)) return;
       // Let native post-run capacity handling finish before issuing the owed
       // continuation. Settled immediately releases it when no compaction runs.
       data.deferGoal = running || (enabled() && (ready || !!state.capacityWaiting)); data.running = running;

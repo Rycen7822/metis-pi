@@ -50,7 +50,7 @@ for (const scenario of ["import-timer", "import-elapsed", "html-processing", "im
 				};
 				mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
 				try {
-					const pending = extractContent("https://example.com/article", controller.signal, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+					const pending = extractContent("https://example.com/article", controller.signal, { fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 					if (!image) {
 						await started;
 						if (scenario === "import-timer") mock.timers.tick(100);

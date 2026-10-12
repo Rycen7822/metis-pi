@@ -448,7 +448,7 @@ test("fetch_content uses Querit after local and earlier hosted extraction fail",
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-		const result = await extractContent("https://example.com/app", undefined, { lookup });
+		const result = await extractContent("https://example.com/app", undefined, { fetch: globalThis.fetch, lookup });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{
@@ -544,7 +544,7 @@ test("Querit provider timeout continues to the next fetch_content fallback", asy
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
-		const result = await extractContent("https://example.com/timeout", undefined, { lookup, timeoutMs: 1 });
+		const result = await extractContent("https://example.com/timeout", undefined, { fetch: globalThis.fetch, lookup, timeoutMs: 1 });
 		console.log(JSON.stringify({ calls, result }));
 	`,
 		{

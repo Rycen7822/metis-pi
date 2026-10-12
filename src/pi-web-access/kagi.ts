@@ -1,10 +1,12 @@
 import { SearchHttpError } from "./search-types.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type SsrfConfig } from "./ssrf-protection.ts";
 
@@ -21,7 +23,7 @@ interface KagiSearchOptions extends SearchOptions {
 	includeContent?: boolean;
 }
 
-export interface KagiExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup"> {
+export interface KagiExtractOptions extends Pick<ExtractOptions, "timeoutMs" | "lookup" | "fetch"> {
 	ssrf?: SsrfConfig;
 }
 
@@ -140,13 +142,24 @@ export function isKagiAvailable(): boolean {
 export async function searchWithKagi(query: string, options: KagiSearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
+	const domains = normalizeDomainFilters(options.domainFilter);
+	const hasDomains = domains.include.length > 0 || domains.exclude.length > 0;
+	const days = options.recencyFilter ? { day: 1, week: 7, month: 30, year: 365 }[options.recencyFilter] : undefined;
+	const after = days ? new Date(Date.now() - days * 86400000).toISOString().slice(0, 10) : undefined;
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	try {
 		const response = await fetch(KAGI_SEARCH_URL, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-			body: JSON.stringify({ query, limit: numResults }),
+			body: JSON.stringify({
+				query, limit: hasDomains ? 20 : numResults,
+				...(after ? { filters: { after } } : {}),
+				...(hasDomains ? { lens: {
+					...(domains.include.length ? { sites_included: domains.include } : {}),
+					...(domains.exclude.length ? { sites_excluded: domains.exclude } : {}),
+				} } : {}),
+			}),
 			signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal,
 		});
 		if (!response.ok) {
@@ -161,7 +174,7 @@ export async function searchWithKagi(query: string, options: KagiSearchOptions =
 			throw new Error("Kagi API returned invalid JSON");
 		}
 		const parsed = parseSearchResponse(rawData);
-		const results = parsed.results.slice(0, numResults);
+		const results = parsed.results.filter(result => matchesDomainFilter(result.url, domains)).slice(0, numResults);
 		const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
 		if (options.includeContent) {
 			const urls = new Set(results.map(result => result.url));
@@ -210,6 +223,7 @@ export async function extractWithKagi(url: string, signal?: AbortSignal, options
 			body: JSON.stringify({ pages: [{ url }] }),
 			signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
 		}, {
+			fetch: options.fetch,
 			allowRanges: ssrf.allowRanges,
 			trustEnvProxy: ssrf.trustEnvProxy,
 			onRedirect: ({ from, to, init }) => to.origin === from.origin ? init : { ...init, headers: { "Content-Type": "application/json", Accept: "application/json" } },

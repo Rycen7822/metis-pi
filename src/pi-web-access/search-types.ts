@@ -1,4 +1,5 @@
 import type { ExtractedContent } from "./content.ts";
+import type { Lookup } from "./ssrf-protection.ts";
 
 export interface SearchResult {
 	title: string;
@@ -17,6 +18,9 @@ export interface SearchOptions {
 	recencyFilter?: "day" | "week" | "month" | "year";
 	domainFilter?: string[];
 	signal?: AbortSignal;
+	/** Optional request implementation for guarded provider endpoints; never a tool/config parameter. */
+	fetch?: typeof globalThis.fetch;
+	lookup?: Lookup;
 }
 
 export interface QueryResultData {
@@ -26,6 +30,14 @@ export interface QueryResultData {
 	error: string | null;
 	provider?: string;
 	providers?: string[];
+}
+
+/** An adapter cannot honor this filter; callers must choose a supported provider. */
+export class SearchUnsupportedFilterError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "SearchUnsupportedFilterError";
+	}
 }
 
 /** An HTTP failure fact, independent of provider diagnostic wording. */

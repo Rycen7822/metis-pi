@@ -15,7 +15,7 @@ test("local HTTP fetch sends the compatible User-Agent", async () => {
 		return new Response("body", { headers: { "content-type": "text/plain" } });
 	};
 
-	await extractContent("https://example.com/article", undefined, { mode: "raw", lookup });
+	await extractContent("https://example.com/article", undefined, { fetch: globalThis.fetch, mode: "raw", lookup });
 	assert.equal(userAgent, "OpenAI File Downloader, XaiImageApiFetch/1.0");
 });
 
@@ -30,13 +30,13 @@ test("readable fetch prefers server markdown while raw mode keeps the normal rep
 			: new Response("<html><body><p>html</p></body></html>", { headers: { "content-type": "text/html" } });
 	};
 
-	const readable = await extractContent("https://docs.example.com/install", undefined, { lookup });
+	const readable = await extractContent("https://docs.example.com/install", undefined, { fetch: globalThis.fetch, lookup });
 	assert.equal(readable.error, null);
 	assert.equal(readable.title, "Install Guide");
 	assert.ok(readable.content.startsWith(markdown.trim()));
 	assert.match(readable.content, /https:\/\/docs\.example\.com\/openapi\.json/);
 
-	const raw = await extractContent("https://docs.example.com/install", undefined, { mode: "raw", lookup });
+	const raw = await extractContent("https://docs.example.com/install", undefined, { fetch: globalThis.fetch, mode: "raw", lookup });
 	assert.match(raw.content, /<p>html<\/p>/);
 	assert.equal(accepts.length, 2);
 	assert.doesNotMatch(accepts[1], /text\/markdown/);
@@ -49,7 +49,7 @@ test("a near-empty negotiated markdown reply falls back to the page's HTML", asy
 		? new Response("# Loading", { headers: { "content-type": "text/markdown" } })
 		: new Response(article, { headers: { "content-type": "text/html" } });
 
-	const result = await extractContent("https://spa.example.com/guide", undefined, { lookup });
+	const result = await extractContent("https://spa.example.com/guide", undefined, { fetch: globalThis.fetch, lookup });
 	assert.equal(result.error, null);
 	assert.match(result.content, /explains every configuration option/);
 });
@@ -63,7 +63,7 @@ async function negotiate(normal, markdown = text(shortMarkdown, "text/markdown")
 		calls.push(String(url));
 		return new Headers(init.headers).get("accept").startsWith("text/markdown") ? markdown() : normal();
 	};
-	const result = await extractContent("https://docs.example.com/changelog", undefined, { lookup, ...options });
+	const result = await extractContent("https://docs.example.com/changelog", undefined, { fetch: globalThis.fetch, lookup, ...options });
 	return { result, calls };
 }
 
@@ -118,7 +118,7 @@ test("caller abort during the browser retry returns an aborted result", async ()
 		controller.abort();
 		throw new DOMException("This operation was aborted", "AbortError");
 	};
-	const result = await extractContent("https://docs.example.com/changelog", controller.signal, { lookup });
+	const result = await extractContent("https://docs.example.com/changelog", controller.signal, { fetch: globalThis.fetch, lookup });
 	assert.equal(result.error, "Aborted");
 	assert.equal(result.content, "");
 });
@@ -128,12 +128,12 @@ test("raw mode returns textual non-2xx bodies but rejects images", async () => {
 		? new Response(png, { status: 200, headers: { "content-type": "image/png" } })
 		: new Response('{"error":"missing"}', { status: 404, headers: { "content-type": "application/json; charset=utf-8" } });
 
-	const text = await extractContent("https://example.com/missing", undefined, { mode: "raw", lookup });
+	const text = await extractContent("https://example.com/missing", undefined, { fetch: globalThis.fetch, mode: "raw", lookup });
 	assert.equal(text.error, null);
 	assert.equal(text.status, 404);
 	assert.equal(text.content, '{"error":"missing"}');
 
-	const image = await extractContent("https://example.com/pixel.png", undefined, { mode: "raw", lookup });
+	const image = await extractContent("https://example.com/pixel.png", undefined, { fetch: globalThis.fetch, mode: "raw", lookup });
 	assert.match(image.error, /Unsupported content type in raw mode: image\/png/);
 	assert.equal(image.thumbnail, undefined);
 });
@@ -142,13 +142,13 @@ test("raw mode keeps data URIs in the exact HTTP body", async () => {
 	const body = "exact data:text/plain,hello%20world body";
 	globalThis.fetch = async () => new Response(body, { headers: { "content-type": "text/plain" } });
 
-	const [result] = await fetchAllContent(["https://example.com/data"], undefined, { mode: "raw", lookup });
+	const [result] = await fetchAllContent(["https://example.com/data"], undefined, { fetch: globalThis.fetch, mode: "raw", lookup });
 	assert.equal(result.content, body);
 });
 
 test("readable mode returns supported image content", async () => {
 	globalThis.fetch = async () => new Response(png, { status: 200, headers: { "content-type": "image/png" } });
-	const result = await extractContent("https://example.com/pixel.png", undefined, { lookup });
+	const result = await extractContent("https://example.com/pixel.png", undefined, { fetch: globalThis.fetch, lookup });
 
 	assert.equal(result.error, null);
 	assert.equal(result.mimeType, "image/png");

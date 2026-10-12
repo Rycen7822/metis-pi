@@ -1,4 +1,5 @@
 import { loadWebAccessConfig } from "./utils.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
 import { CredentialResolutionError } from "./credential-source.ts";
 import { DEFAULT_MODEL, getApiKey, getVersionedApiBase, fetchGeminiApi, isGatewayConfigured, redactGeminiApiResponse } from "./gemini-api.ts";
@@ -6,6 +7,7 @@ import { isGeminiAdcAvailable } from "./gemini-adc.ts";
 import { getGeminiWebAvailability, isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
+import { filterSearchResponseByDomain } from "./search-response-policy.ts";
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -61,17 +63,24 @@ export async function searchWithGeminiApi(query: string, options: SearchOptions 
 		AbortSignal.timeout(120000),
 		...(options.signal ? [options.signal] : []),
 	]);
-	const apiKey = isGeminiAdcAvailable() ? null : await getApiKey(requestSignal);
-	if (!apiKey && !isGatewayConfigured() && !isGeminiAdcAvailable()) return null;
+	const adcMode = isGeminiAdcAvailable();
+	const apiKey = adcMode ? null : await getApiKey(requestSignal);
+	if (!apiKey && !isGatewayConfigured() && !adcMode) return null;
 
 	const activityId = activityMonitor.logStart({ type: "api", query });
 
 	try {
 		const configuredModel = loadWebAccessConfig().searchModel;
 		const model = typeof configuredModel === "string" && configuredModel.trim() ? configuredModel.trim() : DEFAULT_MODEL;
+		const days = options.recencyFilter ? { day: 1, week: 7, month: 30, year: 365 }[options.recencyFilter] : undefined;
+		const end = Date.now();
+		const timeRangeFilter = days && !adcMode ? {
+			startTime: new Date(end - days * 86400000).toISOString(),
+			endTime: new Date(end).toISOString(),
+		} : undefined;
 		const body = {
-			contents: [{ role: "user", parts: [{ text: query }] }],
-			tools: [{ google_search: {} }],
+			contents: [{ role: "user", parts: [{ text: options.domainFilter?.length || (adcMode && options.recencyFilter) ? buildSearchPrompt(query, options) : query }] }],
+			tools: [{ google_search: { ...(timeRangeFilter ? { timeRangeFilter } : {}) } }],
 		};
 
 		const res = await fetchGeminiApi(`${getVersionedApiBase()}/models/${model}:generateContent`, {
@@ -96,7 +105,7 @@ export async function searchWithGeminiApi(query: string, options: SearchOptions 
 		const results = await resolveGroundingChunks(metadata?.groundingChunks, options.signal);
 
 		if (!answer && results.length === 0) return null;
-		return { answer, results };
+		return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {
@@ -126,7 +135,7 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): 
 		activityMonitor.logComplete(activityId, 200);
 
 		const results = extractSourceUrls(text);
-		return { answer: text, results };
+		return filterSearchResponseByDomain({ answer: text, results }, options.domainFilter);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {

@@ -1,5 +1,5 @@
 import { extractHeadingTitle, type ExtractedContent, type ExtractOptions, type RegisteredToolNames } from "./content.ts";
-import type { ProxiedRequestInit } from "./proxy-transport.ts";
+import { webFetch as fetch, type ProxiedRequestInit } from "./proxy-transport.ts";
 import { extractMediaFrames } from "./media-frames.ts";
 import { getWebSearchConfigPath, loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import type TurndownService from "turndown";
@@ -156,52 +156,36 @@ function imageGateError(): string | null {
 async function resolveAuthCookieHeader(url: string | URL, profile: AuthFetchProfile): Promise<string> {
 	const parsed = assertAuthFetchUrl(profile, url.toString());
 	const result = await getBrowserCookiesForHosts({ hosts: [parsed.hostname], profile: profile.chromeProfile, requestUrl: parsed });
-	if (!result.ok) {
+	if (result.ok === false) {
 		throw new Error(`Authenticated fetch profile ${profile.name} could not read browser cookies: ${result.diagnostic.message}`);
 	}
 	if (result.cookieHeader) return result.cookieHeader;
 	throw new Error(`Authenticated fetch profile ${profile.name} could not build a cookie header`);
 }
 
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-
 async function fetchAuthenticatedRemoteUrl(
 	url: string,
 	init: RequestInit,
-	validationOptions: { ssrf: SsrfConfig; domainPolicy: DomainPolicy; lookup?: Lookup; proxy?: string },
+	validationOptions: { ssrf: SsrfConfig; domainPolicy: DomainPolicy; lookup?: Lookup; proxy?: string; fetch?: typeof globalThis.fetch },
 	profile: AuthFetchProfile,
 ): Promise<Response> {
-	let current = await validateRemoteUrl(url, {
+	return fetchRemoteUrl(url, init, {
 		allowRanges: validationOptions.ssrf.allowRanges,
 		trustEnvProxy: validationOptions.ssrf.trustEnvProxy,
 		domainPolicy: validationOptions.domainPolicy,
 		proxy: validationOptions.proxy,
+		fetch: validationOptions.fetch,
 		...(validationOptions.lookup ? { lookup: validationOptions.lookup } : {}),
+		async beforeRequest(current, requestInit) {
+			const headers = new Headers(requestInit.headers);
+			headers.set("cookie", await resolveAuthCookieHeader(current, profile));
+			return { ...requestInit, headers };
+		},
+		onRedirect({ from, to, init: nextInit }) {
+			authFetchRedirectGuard(profile, from, to);
+			return nextInit;
+		},
 	});
-	let requestInit = init;
-	for (let redirects = 0; redirects <= 5; redirects++) {
-		const cookieHeader = await resolveAuthCookieHeader(current, profile);
-		const headers = { ...(requestInit.headers as Record<string, string>), cookie: cookieHeader };
-		const response = await fetch(current, { ...requestInit, headers, redirect: "manual" });
-		if (!REDIRECT_STATUSES.has(response.status)) return response;
-		const location = response.headers.get("location");
-		if (!location) return response;
-		if (redirects === 5) throw new Error(`Too many redirects fetching ${current.toString()}`);
-		const from = current;
-		current = await validateRemoteUrl(new URL(location, current), {
-			allowRanges: validationOptions.ssrf.allowRanges,
-			trustEnvProxy: validationOptions.ssrf.trustEnvProxy,
-			domainPolicy: validationOptions.domainPolicy,
-			proxy: validationOptions.proxy,
-			...(validationOptions.lookup ? { lookup: validationOptions.lookup } : {}),
-		});
-		authFetchRedirectGuard(profile, from, current);
-		if (response.status === 303 || ((response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST")) {
-			const { body: _body, ...nextInit } = requestInit;
-			requestInit = { ...nextInit, method: "GET" };
-		}
-	}
-	throw new Error(`Too many redirects fetching ${current.toString()}`);
 }
 
 function loadFetchRouting(): FetchRouting {
@@ -607,6 +591,7 @@ export async function extractContent(
 					const ssrf = loadSsrfConfig();
 					const firecrawlResult = await extractWithFirecrawl(url, signal, {
 						timeoutMs: options?.timeoutMs,
+						fetch: options?.fetch,
 						...(options?.lookup ? { lookup: options.lookup } : {}),
 						ssrf,
 					});
@@ -626,6 +611,7 @@ export async function extractContent(
 					const ssrf = loadSsrfConfig();
 					const crawl4aiResult = await extractWithCrawl4ai(url, signal, {
 						timeoutMs: options?.timeoutMs,
+						fetch: options?.fetch,
 						...(options?.lookup ? { lookup: options.lookup } : {}),
 						ssrf,
 					});
@@ -693,6 +679,7 @@ export async function extractContent(
 					const ssrf = loadSsrfConfig();
 					const kagiResult = await extractWithKagi(url, signal, {
 						timeoutMs: options?.timeoutMs,
+						fetch: options?.fetch,
 						...(options?.lookup ? { lookup: options.lookup } : {}),
 						ssrf,
 					});
@@ -712,6 +699,7 @@ export async function extractContent(
 					const ssrf = loadSsrfConfig();
 					const ollamaResult = await extractWithOllama(url, signal, {
 						timeoutMs: options?.timeoutMs,
+						fetch: options?.fetch,
 						...(options?.lookup ? { lookup: options.lookup } : {}),
 						ssrf,
 					});
@@ -757,6 +745,7 @@ export async function extractContent(
 					const ssrf = loadSsrfConfig();
 					const brightdataResult = await extractWithBrightDataUnlocker(url, signal, {
 						timeoutMs: options?.timeoutMs,
+						fetch: options?.fetch,
 						...(options?.lookup ? { lookup: options.lookup } : {}),
 						ssrf,
 					});
@@ -974,7 +963,7 @@ async function extractViaHttp(
 			},
 		};
 		const response = authProfile
-			? await fetchAuthenticatedRemoteUrl(url, requestInit, { ssrf, domainPolicy, proxy: options?.proxy, ...(options?.lookup ? { lookup: options.lookup } : {}) }, authProfile)
+			? await fetchAuthenticatedRemoteUrl(url, requestInit, { ssrf, domainPolicy, proxy: options?.proxy, fetch: options?.fetch, ...(options?.lookup ? { lookup: options.lookup } : {}) }, authProfile)
 			: await fetchRemoteUrl(
 				url,
 				requestInit,
@@ -983,6 +972,7 @@ async function extractViaHttp(
 					trustEnvProxy: ssrf.trustEnvProxy,
 					domainPolicy,
 					proxy: options?.proxy,
+					fetch: options?.fetch,
 					...(options?.lookup ? { lookup: options.lookup } : {}),
 				},
 			);

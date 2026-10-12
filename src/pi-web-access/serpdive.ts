@@ -1,4 +1,6 @@
+import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
@@ -104,10 +106,6 @@ function requestSignal(signal?: AbortSignal): AbortSignal {
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 // SERPdive has no domain parameter; local filtering can only narrow the results.
 function mapResults(
 	results: SerpdiveResult[] | undefined,
@@ -188,16 +186,10 @@ export async function searchWithSerpdive(query: string, options: SerpdiveSearchO
 			signal: requestSignal(options.signal),
 		});
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, failure.message);
+		throw failure.error;
 	}
 
 	if (!response.ok) {

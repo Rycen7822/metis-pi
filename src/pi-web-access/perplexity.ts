@@ -1,4 +1,4 @@
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { SearchHttpError, type SearchResult, type SearchResponse, type SearchOptions } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -9,6 +9,7 @@ import { normalizeSearchResultCount } from "./search-result-count-normalization.
 const PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
 const PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
 const CONFIG_PATH = getWebSearchConfigPath();
+const REQUEST_TIMEOUT_MS = 60_000;
 
 const RATE_LIMIT = {
 	maxRequests: 10,
@@ -82,6 +83,9 @@ async function postPerplexity(
 	checkRateLimit();
 
 	const apiKey = await getApiKey(options.signal);
+	options.signal?.throwIfAborted();
+	const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
 	const activityId = activityMonitor.logStart({ type: "api", query: options.activityQuery });
 
 	activityMonitor.updateRateLimit({
@@ -91,43 +95,43 @@ async function postPerplexity(
 		windowMs: RATE_LIMIT.windowMs,
 	});
 
-	let response: Response;
 	try {
-		response = await fetch(url, {
+		const response = await fetchWithCredentialRedirects(url, {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(body),
-			...(options.signal ? { signal: options.signal } : {}),
-		});
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) {
-			activityMonitor.logComplete(activityId, 0);
-		} else {
-			activityMonitor.logError(activityId, redactedMessage);
+			signal,
+		}, ["Authorization"]);
+		if (!response.ok) {
+			const errorText = redactCredential(await response.text(), apiKey);
+			throw new SearchHttpError(response.status, `Perplexity API error ${response.status}: ${errorText}`);
 		}
-		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
-	}
-
-	activityMonitor.logComplete(activityId, response.status);
-
-	if (!response.ok) {
-		const errorText = redactCredential(await response.text(), apiKey);
-		throw new SearchHttpError(response.status, `Perplexity API error ${response.status}: ${errorText}`);
-	}
-
-	try {
-		return await response.json();
+		let data: Record<string, unknown>;
+		try {
+			data = await response.json();
+		} catch (err) {
+			if (!(err instanceof SyntaxError)) throw err;
+			throw new Error(`Perplexity API returned invalid JSON: ${err.message}`);
+		}
+		activityMonitor.logComplete(activityId, response.status);
+		return data;
 	} catch (err) {
+		if (options.signal?.aborted) {
+			activityMonitor.logComplete(activityId, 0);
+			throw new Error("Aborted");
+		}
 		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Perplexity API returned invalid JSON: ${message}`);
+		const redactedMessage = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError")
+			? "Perplexity request timed out after 60s" : redactCredential(message, apiKey);
+		if (err instanceof SearchHttpError) activityMonitor.logComplete(activityId, err.status);
+		else activityMonitor.logError(activityId, redactedMessage);
+		if (redactedMessage === message) throw err;
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage) : new Error(redactedMessage);
+		throw redactedError;
 	}
 }
 

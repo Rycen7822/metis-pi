@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
-import initializeExtension from "../index.ts";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 import {
   assessClaim,
   buildResearchArtifact,
@@ -11,6 +11,10 @@ import {
   storeResearchArtifact,
 } from "../source-check.ts";
 import { clearResults } from "../storage.ts";
+
+const extraction = injectExtractFetch();
+const { default: initializeExtension } = await import("../index.ts");
+after(() => extraction.dispose());
 
 const result = (url, snippet, rank = 1) => ({ url, title: "Example", snippet, rank });
 
@@ -185,10 +189,13 @@ test("source_check retains a rejected page fetch in the artifact", async () => {
   const previousFetch = globalThis.fetch;
   const previousKey = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = "source-check-test-key";
+  const pageUrl = "https://93.184.216.34/api";
+  const pageRequests = [];
+  extraction.setFetch(async url => { pageRequests.push(String(url)); throw new Error("fetch rejected"); });
   globalThis.fetch = async (url) => {
     if (String(url) === "https://api.openai.com/v1/responses") {
       return new Response(JSON.stringify({
-        output: [{ type: "web_search_call", action: { sources: [{ title: "API docs", url: "https://example.com/api" }] } }],
+        output: [{ type: "web_search_call", action: { sources: [{ title: "API docs", url: pageUrl }] } }],
       }), { status: 200 });
     }
     throw new Error("fetch rejected");
@@ -197,8 +204,11 @@ test("source_check retains a rejected page fetch in the artifact", async () => {
     const { tool } = registerSourceCheck();
     const response = await tool.execute("call", { claim: "API docs", provider: "openai", fetchContent: true }, undefined, undefined, { modelRegistry: {} });
     assert.equal(response.details.sourceCount, 1);
+    assert.equal(response.details.artifact.sources[0].url, pageUrl);
+    assert.ok(pageRequests.includes(pageUrl));
     assert.match(response.details.artifact.sources[0].fetch_error, /^fetch rejected/);
   } finally {
+    extraction.setFetch(undefined);
     globalThis.fetch = previousFetch;
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;

@@ -56,6 +56,7 @@ pub struct ReadResponse {
     pub exited: bool,
     pub exit_code: Option<i32>,
     pub closed: bool,
+    /// Output capture failure does not change the process exit status.
     pub failure: Option<String>,
 }
 

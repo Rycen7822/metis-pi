@@ -1,4 +1,4 @@
-import { metisConfigPath, readMetisConfig } from "../src/metis-config.ts";
+import { isMetisConfigTable, metisConfigPath, readMetisConfig } from "../src/metis-config.ts";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DYNAMIC_AGENTS_STATE, globalPaths, loadGlobal, loadPolicy, projectInstructions, projectMessages, replaceGlobal,
   type AgentFile, type ModelIdentity, type Policy } from "../src/dynamic-agents.ts";
@@ -10,7 +10,10 @@ const identity = (model?: ModelIdentity) => model ? JSON.stringify([model.provid
 export default function dynamicAgents(pi: ExtensionAPI): void {
   const configPath = metisConfigPath(getAgentDir());
   const configured = () => {
-    try { return readMetisConfig(getAgentDir()).config.dynamicAgents.enabled === true; }
+    try {
+      const section = readMetisConfig(getAgentDir()).config.dynamicAgents;
+      return isMetisConfigTable(section) && section.enabled === true;
+    }
     catch { return true; } // Invalid config must surface and restore a previously selected policy.
   };
   let sources = new Set(globalPaths(getAgentDir()));

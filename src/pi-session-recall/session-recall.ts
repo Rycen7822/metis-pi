@@ -37,7 +37,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { readMetisConfig } from "../metis-config.ts";
+import { isMetisConfigTable, readMetisConfig } from "../metis-config.ts";
 import { createRecallRequest } from "./context.ts";
 import { searchFiles, searchLines } from "./search.ts";
 
@@ -47,7 +47,8 @@ import { searchFiles, searchLines } from "./search.ts";
  * Resolve the query model from Metis TOML → fallback to current session model.
  */
 function resolveQueryModel(ctx: ExtensionContext): Model<Api> | undefined {
-	const identifier = readMetisConfig(getAgentDir()).config["sessionRecall"]?.["queryModel"];
+	const section = readMetisConfig(getAgentDir()).config["sessionRecall"];
+	const identifier = isMetisConfigTable(section) ? section["queryModel"] : undefined;
 	if (typeof identifier === "string" && identifier !== "default") {
 		const slash = identifier.indexOf("/");
 		if (slash > 0 && slash < identifier.length - 1) {

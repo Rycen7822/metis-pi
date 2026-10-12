@@ -1,5 +1,5 @@
 import type { ContextUsage } from "@earendil-works/pi-coding-agent";
-import { defaultMetisConfig } from "../metis-config.ts";
+import { defaultMetisConfig, isMetisConfigTable } from "../metis-config.ts";
 import type { ContextMetricsSnapshot } from "./types.ts";
 
 // Ceiling on what the budget triggers treat as the context window. Advertised
@@ -13,7 +13,8 @@ export interface SummaryBudgetPolicy {
   targetBaseTokens: number; targetPerCallTokens: number; growthHeadroomTokens: number; nativeTargetTokens: number;
 }
 /** Defaults; runtime paths explicitly pass the validated current policy. */
-export const SUMMARY_POLICY = defaultMetisConfig().contextPrune.summaryBudget as SummaryBudgetPolicy;
+const bundledDefaults = defaultMetisConfig().contextPrune;
+export const SUMMARY_POLICY = (isMetisConfigTable(bundledDefaults) ? bundledDefaults.summaryBudget : undefined) as SummaryBudgetPolicy;
 export const MAX_BUDGET_WINDOW = SUMMARY_POLICY.maxBudgetWindowTokens;
 
 export function summaryBudget(before: number, fixed: number, calls: number, policy = SUMMARY_POLICY) {

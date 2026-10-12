@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
 const storageUrl = new URL("../storage.ts", import.meta.url).href;
+const extractFetchFixtureUrl = new URL("./extract-fetch-fixture.mjs", import.meta.url).href;
 
 async function runScenario(maxInlineContentChars) {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-web-access-inline-content-"));
@@ -15,13 +16,17 @@ async function runScenario(maxInlineContentChars) {
 	}
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
-			import initializeExtension from ${JSON.stringify(indexUrl)};
+			import { injectExtractFetch } from ${JSON.stringify(extractFetchFixtureUrl)};
 			import { clearResults } from ${JSON.stringify(storageUrl)};
+			const extractionFixture = injectExtractFetch(globalThis.fetch);
+			try {
+			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
 			clearResults();
 			globalThis.fetch = async () => new Response("A".repeat(40000) + "TAIL", {
 				status: 200,
 				headers: { "content-type": "text/plain" },
 			});
+			extractionFixture.setFetch(globalThis.fetch);
 			const tools = [];
 			initializeExtension({ registerTool(tool) { tools.push(tool); }, registerCommand() {}, registerShortcut() {}, on() {}, appendEntry() {} });
 			const fetchTool = tools.find(tool => tool.name === "fetch_content");
@@ -39,6 +44,7 @@ async function runScenario(maxInlineContentChars) {
 				tail: tail.content[0].text.includes("TAIL"),
 				rejectedMax: rejected.details.maxLimit,
 			}));
+			} finally { extractionFixture.dispose(); }
 		`,
 		encoding: "utf8",
 		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, XDG_CONFIG_HOME: undefined },

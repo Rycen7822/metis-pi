@@ -1,4 +1,5 @@
 import { SearchHttpError } from "./search-types.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomain, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";

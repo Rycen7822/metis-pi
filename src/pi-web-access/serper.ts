@@ -1,6 +1,7 @@
+import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
 import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -63,10 +64,6 @@ function buildQuery(query: string, filters: DomainFilters): string {
 	return parts.join(" ");
 }
 
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 function invalidResponse(message: string): Error {
 	return new Error(`Serper API returned invalid response: ${message}`);
 }
@@ -90,23 +87,17 @@ export async function searchWithSerper(query: string, options: SearchOptions = {
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let response: Response;
 	try {
-		response = await fetch(SERPER_SEARCH_URL, {
+		response = await fetchWithCredentialRedirects(SERPER_SEARCH_URL, {
 			method: "POST",
 			headers: { "X-API-KEY": apiKey, "Content-Type": "application/json", Accept: "application/json" },
 			body: JSON.stringify({ q: buildQuery(query, filters), num: requestCount, ...(options.recencyFilter ? { tbs: RECENCY_TBS[options.recencyFilter] } : {}) }),
 			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-		});
+		}, ["X-API-KEY"]);
 	} catch (err) {
-		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = err instanceof SearchHttpError
-			? new SearchHttpError(err.status, redactedMessage)
-			: new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const failure = redactSearchFailure(err, apiKey);
+		if (failure.message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, failure.message);
+		throw failure.error;
 	}
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);

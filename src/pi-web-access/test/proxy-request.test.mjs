@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-import { installGlobalProxyFetch, runWithProxy } from "../proxy-transport.ts";
+import { webFetch, runWithProxy } from "../proxy-transport.ts";
 
 const nativeFetch = globalThis.fetch;
 const target = "http://request.example.test/resource";
@@ -23,7 +24,6 @@ async function withProxy(t, respond = (_request, response) => response.end("ok")
 	process.env.NO_PROXY = "";
 	process.env.no_proxy = "";
 	globalThis.fetch = nativeFetch;
-	installGlobalProxyFetch();
 	t.after(async () => {
 		globalThis.fetch = nativeFetch;
 		if (previousNoProxy === undefined) delete process.env.NO_PROXY;
@@ -34,8 +34,69 @@ async function withProxy(t, respond = (_request, response) => response.end("ok")
 		await new Promise((resolve) => server.close(resolve));
 	});
 	const proxy = `http://127.0.0.1:${server.address().port}`;
-	return { calls, fetch: (input, init) => runWithProxy(proxy, () => fetch(input, init)) };
+	return { calls, proxy, fetch: (input, init) => runWithProxy(proxy, () => webFetch(input, init)) };
 }
+
+test("Web proxy requests leave the host global fetch delegated to its owner", { skip: curlSkip }, async (t) => {
+	const proxy = await withProxy(t);
+	const hostCalls = [];
+	const hostFetch = async (input) => { hostCalls.push(input); return new Response("host transport"); };
+	t.mock.method(globalThis, "fetch", hostFetch);
+	const hostDelegate = globalThis.fetch;
+	assert.equal(await runWithProxy(proxy.proxy, async () => (await globalThis.fetch(target)).text()), "host transport");
+	assert.equal(globalThis.fetch, hostDelegate);
+	assert.deepEqual(hostCalls, [target]);
+	assert.equal(proxy.calls.length, 0);
+	assert.equal(await runWithProxy(proxy.proxy, async () => (await webFetch(target)).text()), "ok");
+	assert.equal(globalThis.fetch, hostDelegate);
+	assert.deepEqual(hostCalls, [target]);
+	assert.equal(proxy.calls.length, 1);
+});
+
+test("actual curl argv omits credentials while stdin config preserves escaped wire values", {
+	skip: curlSkip || (process.platform !== "linux" && "requires Linux process argv"), timeout: 5000,
+}, async (t) => {
+	let acknowledge;
+	const received = new Promise(resolve => { acknowledge = resolve; });
+	let heldResponse;
+	const proxy = await withProxy(t, (_request, response) => { heldResponse = response; acknowledge(); });
+	const proxyUrl = new URL(proxy.proxy);
+	const username = 'argv-proxy-user"\\';
+	const password = 'argv-proxy-pass\\"';
+	proxyUrl.username = username;
+	proxyUrl.password = password;
+	const url = new URL(target);
+	const key = 'argv-query-key"\\';
+	url.searchParams.set("api_key", key);
+	const authorization = 'Bearer argv-auth-key"\\';
+	const cookie = 'session=argv-cookie-key\\"';
+	const apiHeader = 'argv-api-header"\\';
+	const body = new Uint8Array([0, 255, 13, 10, 34, 92]);
+	const pending = runWithProxy(proxyUrl.toString(), () => webFetch(url, {
+		method: "POST", headers: { Authorization: authorization, Cookie: cookie, "X-Api-Key": apiHeader },
+		body, signal: AbortSignal.timeout(4000),
+	}));
+	// Hold the real HTTP response so its curl process is inspectable, not a spawn stub.
+	try {
+		await received;
+		const pids = (await readFile(`/proc/${process.pid}/task/${process.pid}/children`, "utf8")).trim().split(/\s+/).filter(Boolean);
+		const commandLines = await Promise.all(pids.map(pid => readFile(`/proc/${pid}/cmdline`, "utf8")));
+		const curlCommand = commandLines.find(line => /(?:^|\/)curl\0/.test(line));
+		assert.ok(curlCommand, "actual curl subprocess is running");
+		assert.ok(curlCommand.includes("--config\0-\0"));
+		assert.ok(!curlCommand.includes("argv-"), "headers, query key and proxy user/password are absent from argv");
+		const call = proxy.calls[0];
+		assert.equal(call.headers.authorization, authorization);
+		assert.equal(call.headers.cookie, cookie);
+		assert.equal(call.headers["x-api-key"], apiHeader);
+		assert.equal(new URL(call.url).searchParams.get("api_key"), key);
+		assert.equal(Buffer.from(call.headers["proxy-authorization"].slice("Basic ".length), "base64").toString(), `${username}:${password}`);
+		assert.deepEqual(call.body, Buffer.from(body));
+	} finally {
+		heldResponse?.end("ok");
+		await pending.then(response => response.text());
+	}
+});
 
 test("proxied Request retains its method, headers and JSON body", { skip: curlSkip }, async (t) => {
 	const proxy = await withProxy(t);

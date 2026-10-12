@@ -6,7 +6,7 @@ import { sanitizeShellLine, DIM_ON, INTENSITY_RESET, type ColorLevel } from "./p
 import { styleToolOutputLine } from "./output-style.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
-import { stripAnsi, wrapWithProvenance } from "./selection-copy/wrap.ts";
+import { stripAnsi, styledParts, wrapWithProvenance } from "./selection-copy/wrap.ts";
 import { truncateToWidth as truncateStyled } from "@earendil-works/pi-tui";
 
 export const COMMAND_CONTINUATION_PREFIX = "  │ ";
@@ -46,30 +46,25 @@ const MAX_LOGICAL_LINE_CHARS = 1200;
 
 /**
  * Length cap for oversized logical lines. ANSI-aware: escape sequences are
- * preserved verbatim (never cut mid-sequence); only VISIBLE characters count
- * against the cap. A trailing lone surrogate is dropped to avoid splits.
+ * preserved verbatim (never cut mid-sequence); only visible characters count
+ * against the cap and a grapheme is retained whole or omitted whole.
  */
 function shorten(line: string): string {
   // The cap counts visible chars only — raw length includes ANSI sequences.
   if (stripAnsi(line).length <= MAX_LOGICAL_LINE_CHARS) return line;
   let out = "";
   let visible = 0;
-  let index = 0;
-  while (index < line.length && visible < MAX_LOGICAL_LINE_CHARS) {
-    const char = line[index]!;
-    if (char === "\x1b") {
-      const match = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(line.slice(index));
-      if (match) {
-        out += match[0];
-        index += match[0].length;
-        continue;
-      }
+  for (const part of styledParts(line)) {
+    if (part.ansi !== undefined) {
+      out += part.ansi;
+      continue;
     }
-    out += char;
-    visible += 1;
-    index += 1;
+    const grapheme = part.grapheme!;
+    if (visible + grapheme.length > MAX_LOGICAL_LINE_CHARS) break;
+    out += grapheme;
+    visible += grapheme.length;
   }
-  return `${out.replace(/[\ud800-\udbff]$/, "")} …`;
+  return `${out} …`;
 }
 
 /**

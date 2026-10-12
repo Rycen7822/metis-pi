@@ -72,7 +72,7 @@ async function runJina(config, options = {}) {
 			const result = await extractContent(
 				"https://example.com/routed",
 				undefined,
-				{ ...${JSON.stringify(options)}, lookup: async () => [{ address: "93.184.216.34", family: 4 }] },
+				{ ...${JSON.stringify(options)}, fetch: globalThis.fetch, lookup: async () => [{ address: "93.184.216.34", family: 4 }] },
 			);
 			console.log(JSON.stringify({ calls, httpTimeoutCalls, timeoutCalls, result }));
 		`,

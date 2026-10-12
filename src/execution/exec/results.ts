@@ -18,6 +18,7 @@ export interface ExecResultSessionState extends ExecOutputSessionState {
 	startedAt: number;
 	updatedAt: number;
 	terminating: boolean;
+	outputError?: string | undefined;
 }
 
 function fromSnapshot(
@@ -36,6 +37,10 @@ function fromSnapshot(
   else result.exit_code = session.exitCode;
   if (snapshot.output.length < originalChars) session.buffer.archive?.preserve();
   Object.assign(result, session.buffer.archive?.info());
+  if (session.outputError) {
+    result.fullOutputComplete = false;
+    result.fullOutputError ??= session.outputError;
+  }
   return result;
 }
 

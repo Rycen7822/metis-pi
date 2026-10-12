@@ -4,10 +4,12 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "./pdf-fixture.mjs";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
 const envNames = ["PI_CODING_AGENT_DIR", "TMPDIR", "TMP", "TEMP"];
 const previousEnv = new Map(envNames.map(name => [name, process.env[name]]));
-const originalFetch = globalThis.fetch;
+const unexpectedFetch = async () => { throw new Error("Unexpected network request in PDF answer test"); };
+const fetchFixture = injectExtractFetch(unexpectedFetch);
 const root = await mkdtemp(join(tmpdir(), "pi-fetch-pdf-answer-"));
 for (const name of envNames) process.env[name] = root;
 const configPath = join(root, "web-search.json");
@@ -49,12 +51,12 @@ beforeEach(async () => {
 	requests.length = 0;
 	contextWindow = 10_000;
 	await writeFile(configPath, JSON.stringify(config));
-	globalThis.fetch = async () => { throw new Error("Unexpected network request in PDF answer test"); };
+	fetchFixture.setFetch(unexpectedFetch);
 });
 
 after(async () => {
 	clearResults();
-	globalThis.fetch = originalFetch;
+	fetchFixture.dispose();
 	for (const [name, value] of previousEnv) {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
@@ -76,7 +78,7 @@ function suppliedContent(request) {
 }
 
 test("PDF answer mode supplies extracted Markdown, saves the file, and retains original content for retrieval", async () => {
-	globalThis.fetch = async () => pdfResponse("The annual fee is 42 dollars.");
+	fetchFixture.setFetch(async () => pdfResponse("The annual fee is 42 dollars."));
 	const result = await execute({
 		url: "https://93.184.216.34/fees.pdf", mode: "answer", prompt: "What is the annual fee?",
 	});
@@ -102,7 +104,7 @@ test("PDF answer mode supplies extracted Markdown, saves the file, and retains o
 });
 
 test("readable PDF mode preserves the file-path presentation without calling an answer model", async () => {
-	globalThis.fetch = async () => pdfResponse("Readable PDF body.");
+	fetchFixture.setFetch(async () => pdfResponse("Readable PDF body."));
 	const result = await execute({ url: "https://93.184.216.34/readable.pdf" });
 	assert.equal(result.details.successful, 1);
 	assert.equal(requests.length, 0);
@@ -117,7 +119,7 @@ test("readable PDF mode preserves the file-path presentation without calling an 
 });
 
 test("batch PDF answers receive each document's own body even when output filenames collide", async () => {
-	globalThis.fetch = async url => pdfResponse(String(url).includes("/first/") ? "First document body." : "Second document body.");
+	fetchFixture.setFetch(async url => pdfResponse(String(url).includes("/first/") ? "First document body." : "Second document body."));
 	const result = await execute({
 		urls: ["https://93.184.216.34/first/report.pdf", "https://93.184.216.34/second/report.pdf"],
 		mode: "answer", prompt: "What does this document say?",
@@ -132,7 +134,7 @@ test("batch PDF answers receive each document's own body even when output filena
 });
 
 test("PDF answers keep the model input bound while retaining the full extracted text", async () => {
-	globalThis.fetch = async () => pdfResponse("Long PDF body. ".repeat(100));
+	fetchFixture.setFetch(async () => pdfResponse("Long PDF body. ".repeat(100)));
 	contextWindow = 6_200;
 	const result = await execute({ url: "https://93.184.216.34/long.pdf", mode: "answer", prompt: "Summarize." });
 	assert.equal(result.details.successful, 1);
@@ -145,10 +147,10 @@ test("PDF answers keep the model input bound while retaining the full extracted 
 });
 
 test("HTML answer mode still supplies the extracted page body", async () => {
-	globalThis.fetch = async () => new Response(
+	fetchFixture.setFetch(async () => new Response(
 		`<!doctype html><html><head><title>HTML page</title></head><body><article><h1>HTML page</h1><p>${"HTML original body. ".repeat(80)}</p></article></body></html>`,
 		{ headers: { "content-type": "text/html" } },
-	);
+	));
 	const result = await execute({ url: "https://93.184.216.34/page", mode: "answer", prompt: "Summarize." });
 	assert.equal(result.details.successful, 1);
 	assert.match(suppliedContent(requests[0]), /HTML original body/);
@@ -156,7 +158,7 @@ test("HTML answer mode still supplies the extracted page body", async () => {
 });
 
 test("disabled PDF extraction and raw binary fetches do not call an answer model", async () => {
-	globalThis.fetch = async () => pdfResponse("Do not answer this.");
+	fetchFixture.setFetch(async () => pdfResponse("Do not answer this."));
 	await writeFile(configPath, JSON.stringify({ ...config, pdf: { enabled: false, provider: "unpdf" } }));
 	const disabled = await execute({ url: "https://93.184.216.34/disabled.pdf", mode: "answer", prompt: "Summarize." });
 	assert.match(disabled.details.error, /PDF extraction is disabled/);

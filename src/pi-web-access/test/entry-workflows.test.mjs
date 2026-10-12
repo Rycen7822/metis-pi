@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+const metisEntryUrl = new URL("../../../extensions/web-access.ts", import.meta.url).href;
 const coreUrl = new URL("../web-tool-core.ts", import.meta.url).href;
 const storageUrl = new URL("../storage.ts", import.meta.url).href;
 const configUrl = new URL("../utils.ts", import.meta.url).href;
@@ -48,7 +49,7 @@ globalThis.fetch = async (input, init) => {
 const { default: initialize } = await import(${JSON.stringify(indexUrl)});
 const instances = [];
 let nextCall = 0;
-function instance() {
+function instance(branch = []) {
 	const tools = new Map(), commands = new Map(), handlers = new Map();
 	let reveal;
 	const curatorUrl = new Promise(resolve => { reveal = resolve; });
@@ -58,7 +59,7 @@ function instance() {
 	};
 	const ctx = {
 		hasUI: true, modelRegistry: { getAvailable() { return []; }, find() {} },
-		scopedModels: [], sessionManager: { getBranch() { return []; } },
+		scopedModels: [], sessionManager: { getBranch() { return branch; } },
 		cwd: process.cwd(), isProjectTrusted() { return true; },
 		ui: { notify: show, setWidget() {}, theme: { fg(_name, text) { return text; } } },
 	};
@@ -70,6 +71,8 @@ function instance() {
 	});
 	const current = {
 		curatorUrl,
+		tool(name) { return tools.get(name); },
+		toolNames() { return [...tools.keys()]; },
 		async emit(event) { for (const handler of handlers.get(event) ?? []) await handler({ type: event }, ctx); },
 		call(name, params, signal, onUpdate = show) { return tools.get(name).execute("entry-" + nextCall++, params, signal, onUpdate, ctx); },
 		command(name, args) { return commands.get(name).handler(args, ctx); },
@@ -123,11 +126,53 @@ test("grouped web_access continuation is executable for every stored result kind
 	}
 });
 
-test("another instance's start, tree and shutdown leave a pending Curator open", () => {
-	const out = run(harness + `
+test("Metis bundled deferred web_access executes stored-content continuation", () => {
+	const out = run(harness.replace(JSON.stringify(indexUrl), JSON.stringify(metisEntryUrl)) + `
+		const content = "Stored original text. ".repeat(200);
+		const timestamp = Date.now();
+		const fixtures = [
+			{ id: "metis-fetch", type: "fetch", timestamp, urls: [{ url: "https://example.com/page", title: "Page", content, error: null }] },
+			{ id: "metis-search", type: "search", timestamp, queries: [{ query: "Query", answer: content, results: [], error: null }] },
+			{ id: "metis-research", type: "research", timestamp, artifact: { id: "metis-research", type: "research", timestamp, query: "Claim", sources: [], passages: [], summary: content } },
+		];
+		const a = instance(fixtures.map(data => ({ type: "custom", customType: "web-search-results", data })));
+		await a.emit("session_start");
+		try {
+			const described = await a.call("web_access", { action: "describe", target: "content" });
+			const outcomes = [];
+			for (const fixture of fixtures) {
+				const page = await a.call("web_access", { action: "content", params: { responseId: fixture.id, queryIndex: 0, urlIndex: 0, limit: 1000 } });
+				const expression = page.content[0].text.match(/Use (.+) for the next slice\\./)?.[1];
+				let invocation;
+				const next = await Function("tools", "return " + expression)({ web_access: params => {
+					invocation = params;
+					return a.call("web_access", params);
+				} });
+				outcomes.push({ id: fixture.id, invocation, error: next.details?.error, text: next.content[0].text, action: next.details?.metisAction });
+			}
+			console.log(JSON.stringify({ names: a.toolNames(), exposure: a.tool("web_access").exposure, described: described.structuredContent, outcomes }));
+		} finally { await closeAll(); }
+	`, { maxInlineContentChars: 1000 });
+	assert.deepEqual(out.names, ["web_access"]);
+	assert.equal(out.exposure, "deferred");
+	assert.equal(out.described.action, "content");
+	assert.equal(out.described.parameters.properties.responseId.type, "string");
+	for (const result of out.outcomes) {
+		assert.equal(result.invocation.action, "content");
+		assert.equal(result.invocation.params.responseId, result.id);
+		assert.ok(result.invocation.params.offset > 0);
+		assert.equal(result.error, undefined);
+		assert.equal(result.action, "content");
+		assert.ok(result.text.length > 0);
+	}
+});
+
+for (const bundled of [false, true]) test(`${bundled ? "Metis bundled: " : ""}another instance's start, tree and shutdown leave a pending Curator open`, () => {
+	const params = { query: "q", provider: "brave", workflow: "summary-review" };
+	const out = run((bundled ? harness.replace(JSON.stringify(indexUrl), JSON.stringify(metisEntryUrl)) : harness) + `
 		const a = instance(); await a.emit("session_start");
 		const controller = new AbortController();
-		const pending = a.call("web_search", { query: "q", provider: "brave", workflow: "summary-review" }, controller.signal);
+		const pending = a.call(${JSON.stringify(bundled ? "web_access" : "web_search")}, ${JSON.stringify(bundled ? { action: "search", params } : params)}, controller.signal);
 		try {
 			const url = await urlFrom(a);
 			const statuses = [(await nativeFetch(url)).status];

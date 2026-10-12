@@ -119,12 +119,12 @@ test("authenticated fetch sends only browser-scoped cookies with raw values", (t
 		const output = runModule(root, `
 			const calls = [];
 			globalThis.fetch = async (url, init = {}) => {
-				calls.push({ url: String(url), cookie: init.headers?.cookie ?? null, redirect: init.redirect });
+				calls.push({ url: String(url), cookie: new Headers(init.headers).get("cookie"), redirect: init.redirect });
 				return new Response("private body", { status: 200, headers: { "content-type": "text/plain" } });
 			};
 			const { resolveAuthFetchProfile } = await import(${JSON.stringify(authFetchUrl)});
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://app.example.com/private/page", undefined, { mode: "raw", authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://app.example.com/private/page", undefined, { fetch: globalThis.fetch, mode: "raw", authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`, { PATH: `${bin}:${process.env.PATH ?? ""}` });
 		assert.equal(output.calls.length, 1);
@@ -163,7 +163,7 @@ test("authenticated same-origin redirects recompute path-scoped cookies", (t) =>
 		const output = runModule(root, `
 			const calls = [];
 			globalThis.fetch = async (url, init = {}) => {
-				calls.push({ url: String(url), cookie: init.headers?.cookie ?? null, redirect: init.redirect });
+				calls.push({ url: String(url), cookie: new Headers(init.headers).get("cookie"), redirect: init.redirect });
 				if (String(url) === "https://app.example.com/start/page") {
 					return new Response("", { status: 302, headers: { location: "/next/page" } });
 				}
@@ -171,7 +171,7 @@ test("authenticated same-origin redirects recompute path-scoped cookies", (t) =>
 			};
 			const { resolveAuthFetchProfile } = await import(${JSON.stringify(authFetchUrl)});
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://app.example.com/start/page", undefined, { mode: "raw", authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://app.example.com/start/page", undefined, { fetch: globalThis.fetch, mode: "raw", authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`, { PATH: `${bin}:${process.env.PATH ?? ""}` });
 		assert.equal(output.calls.length, 2);
@@ -197,7 +197,7 @@ test("authenticated fetch failure does not fall through to hosted providers", ()
 			globalThis.fetch = async (url) => { calls.push(String(url)); return new Response("hosted", { status: 200 }); };
 			const { resolveAuthFetchProfile } = await import(${JSON.stringify(authFetchUrl)});
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://example.com/private", undefined, { authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://example.com/private", undefined, { fetch: globalThis.fetch, authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`);
 		assert.deepEqual(output.calls, []);
@@ -223,7 +223,7 @@ test("authenticated Cloudflare challenge stays direct-only", (t) => {
 			};
 			const { resolveAuthFetchProfile } = await import(${JSON.stringify(authFetchUrl)});
 			const { extractContent } = await import(${JSON.stringify(extractUrl)});
-			const result = await extractContent("https://app.example.com/private", undefined, { authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			const result = await extractContent("https://app.example.com/private", undefined, { fetch: globalThis.fetch, authFetchProfile: resolveAuthFetchProfile("work"), lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
 			console.log(JSON.stringify({ calls, result }));
 		`, { PATH: `${bin}:${process.env.PATH ?? ""}` });
 		assert.deepEqual(output.calls, ["https://app.example.com/private"]);

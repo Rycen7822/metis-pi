@@ -221,7 +221,7 @@ exclude = []
 | `maxInlineContentChars` | 内联内容字符上限；保留原模块的默认和边界规则。 |
 | `proxy` | 不含用户名密码的 HTTP(S)/SOCKS 代理；含认证信息时放 JSON。 |
 | `cacheRoot` | 缓存父目录，始终另建 web-search-cache 子目录；PI_WEB_ACCESS_CACHE_ROOT 可覆盖。 |
-| `ssrf.allowRanges` / `trustEnvProxy` | CIDR 例外与环境代理策略。 |
+| `ssrf.allowRanges` / `trustEnvProxy` | CIDR 例外；默认固定校验后的 DNS 地址，非信任 HTTP 代理须支持 CONNECT。true 将环境/已配置代理的远端 DNS 安全交给代理。 |
 | `fetchContent.domainPolicy.allow` / `deny` | 抓取域名允许和拒绝列表。 |
 | `allowBrowserCookies` / `browserCookies.browser` / `profile` | Cookie 读取许可、浏览器 preset 和 profile 目录名；不是 Cookie 值。 |
 | `authFetch.<profile>.hosts` / `chromeProfile` / `redirects` / `cache` | 认证抓取的域名范围、profile、same-origin 重定向和 session/off 缓存策略。 |

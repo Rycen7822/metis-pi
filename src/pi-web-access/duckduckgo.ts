@@ -1,4 +1,5 @@
-import { SearchHttpError } from "./search-types.ts";
+import { SearchHttpError, SearchUnsupportedFilterError } from "./search-types.ts";
+import { webFetch as fetch } from "./proxy-transport.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { activityMonitor } from "./activity.ts";
@@ -24,6 +25,7 @@ export function isDuckDuckGoAvailable(): boolean {
 }
 
 export async function searchWithDuckDuckGo(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
+	if (options.recencyFilter) throw new SearchUnsupportedFilterError("DuckDuckGo HTML adapter does not support recencyFilter");
 	const url = new URL(SEARCH_URL);
 	url.searchParams.set("q", query);
 	const activityId = activityMonitor.logStart({ type: "api", query });

@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import initializeExtension from "../index.ts";
-import { clearResults, getResult } from "../storage.ts";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
-const originalFetch = globalThis.fetch;
-after(() => { globalThis.fetch = originalFetch; });
+const fetchFixture = injectExtractFetch(async () => { throw new Error("Unexpected fetch in answer storage test"); });
+const { default: initializeExtension } = await import("../index.ts");
+const { clearResults, getResult } = await import("../storage.ts");
+after(() => { fetchFixture.dispose(); });
 
 test("answer mode stores original fetched content instead of its answer presentation", async () => {
 	clearResults();
 	const originalContent = "Original page content. ".repeat(60);
-	globalThis.fetch = async () => new Response(
+	fetchFixture.setFetch(async () => new Response(
 		`<!doctype html><html><head><title>Stored Page</title></head><body><article><h1>Stored Page</h1><p>${originalContent}</p></article></body></html>`,
 		{ status: 200, headers: { "content-type": "text/html" } },
-	);
+	));
 	const tools = [];
 	initializeExtension({
 		registerTool(tool) { tools.push(tool); },

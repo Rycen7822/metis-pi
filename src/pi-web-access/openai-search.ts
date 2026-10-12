@@ -2,7 +2,8 @@ import { getWebAccessConfigPath, loadWebAccessConfig, fetchWithCredentialRedirec
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomainFilters as normalizeSharedDomainFilters } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters as normalizeSharedDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { filterSearchResponseByDomain } from "./search-response-policy.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -554,9 +555,11 @@ function addResult(results: SearchResult[], seen: Set<string>, url: unknown, tit
 	});
 }
 
-function extractSearchResults(output: unknown[], numResults: number | undefined): SearchResult[] {
+function extractSearchResults(output: unknown[], numResults: number | undefined, domainFilter?: string[]): SearchResult[] {
 	const results: SearchResult[] = [];
 	const seenUrls = new Set<string>();
+	const filters = normalizeSharedDomainFilters(domainFilter);
+	const hasDomains = filters.include.length > 0 || filters.exclude.length > 0;
 
 	for (const item of output) {
 		if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
@@ -574,7 +577,7 @@ function extractSearchResults(output: unknown[], numResults: number | undefined)
 					seenUrls,
 					(annotation as { url?: unknown }).url,
 					(annotation as { title?: unknown }).title,
-					extractSnippetAround(text, (annotation as { start_index?: unknown }).start_index, (annotation as { end_index?: unknown }).end_index),
+					hasDomains ? "" : extractSnippetAround(text, (annotation as { start_index?: unknown }).start_index, (annotation as { end_index?: unknown }).end_index),
 				);
 			}
 		}
@@ -597,10 +600,11 @@ function extractSearchResults(output: unknown[], numResults: number | undefined)
 		}
 	}
 
+	const filtered = hasDomains ? results.filter(result => matchesDomainFilter(result.url, filters)) : results;
 	if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {
-		return results.slice(0, Math.min(Math.floor(numResults), 20));
+		return filtered.slice(0, Math.min(Math.floor(numResults), 20));
 	}
-	return results;
+	return filtered;
 }
 
 function extractAnswer(output: unknown[]): string {
@@ -767,20 +771,20 @@ async function runOpenAISearch(
 		if (useAlphaSearch) {
 			const result = await parseAlphaSearchResponse(response, options.numResults);
 			activityMonitor.logComplete(activityId, response.status);
-			return result;
+			return filterSearchResponseByDomain(result, options.domainFilter);
 		}
 		const parsed = await parseOpenAIResponse(response);
 		const output = Array.isArray(parsed.payload.output) ? parsed.payload.output : [];
 		if (!parsed.webSearchCallSeen) throw new Error("OpenAI web_search returned no web_search_call");
 		const answer = extractAnswer(output);
-		const results = extractSearchResults(output, options.numResults);
+		const results = extractSearchResults(output, options.numResults, options.domainFilter);
 
 		if (!answer && results.length === 0) {
 			throw new Error("OpenAI web_search returned no answer or sources");
 		}
 
 		activityMonitor.logComplete(activityId, response.status);
-		return { answer, results };
+		return filterSearchResponseByDomain({ answer, results }, options.domainFilter);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		const redactedMessage = redactCredential(message, auth.apiKey);

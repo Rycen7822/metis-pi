@@ -6,6 +6,7 @@ import {
   decodePruneConfig,
   defaultMetisConfig,
   encodePruneConfig,
+  isMetisConfigTable,
   MetisConfigError,
   metisConfigPath,
   parseMetisConfig,
@@ -13,7 +14,9 @@ import {
   updateMetisConfig,
 } from "../metis-config.ts";
 
-export const DEFAULT_CONFIG = decodePruneConfig(defaultMetisConfig().contextPrune) as ContextPruneConfig;
+const bundledDefaults = defaultMetisConfig().contextPrune;
+// The bundled table is the domain's defaults; user tables still go through normalize.
+export const DEFAULT_CONFIG = decodePruneConfig(isMetisConfigTable(bundledDefaults) ? bundledDefaults : {}) as unknown as ContextPruneConfig;
 
 export const settingsPath = () => metisConfigPath(getAgentDir());
 export const SETTINGS_KEY = "contextPrune" as const;
@@ -199,7 +202,8 @@ function normalize(existing: Partial<ContextPruneConfig>): ContextPruneConfig {
 }
 export async function loadConfig(): Promise<ContextPruneConfig> {
   try {
-    return normalize(decodePruneConfig(readMetisConfig(getAgentDir()).config[SETTINGS_KEY] ?? {}));
+    const raw = readMetisConfig(getAgentDir()).config[SETTINGS_KEY];
+    return normalize(decodePruneConfig(isMetisConfigTable(raw) ? raw : {}));
   } catch (error) {
     if (error instanceof MetisConfigError) return structuredClone(DEFAULT_CONFIG);
     throw error;

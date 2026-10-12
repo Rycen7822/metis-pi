@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+const extractFetchFixtureUrl = new URL("./extract-fetch-fixture.mjs", import.meta.url).href;
 
 function runScenario(config, body) {
 	const agentDir = mkdtempSync(join(tmpdir(), "pi-web-access-fetch-modes-"));
@@ -14,8 +15,12 @@ function runScenario(config, body) {
 	}
 	return spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
-			import initializeExtension from ${JSON.stringify(indexUrl)};
-			${body}
+			import { injectExtractFetch } from ${JSON.stringify(extractFetchFixtureUrl)};
+			const extractionFixture = injectExtractFetch(globalThis.fetch);
+			try {
+				const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
+				${body}
+			} finally { extractionFixture.dispose(); }
 		`,
 		encoding: "utf8",
 		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, XDG_CONFIG_HOME: "", HOME: join(agentDir, "home"), USERPROFILE: join(agentDir, "home") },
@@ -45,6 +50,7 @@ test("absent config exposes all modes and defaults execution to readable", () =>
 			fetchCalls++;
 			return new Response("plain readable body", { headers: { "content-type": "text/plain" } });
 		};
+		extractionFixture.setFetch(globalThis.fetch);
 		const tools = [];
 		initializeExtension({ registerTool(tool) { tools.push(tool); }, registerCommand() {}, registerShortcut() {}, on() {}, appendEntry() {} });
 		const tool = tools.find(({ name }) => name === "fetch_content");
@@ -75,6 +81,7 @@ test("configured modes align schema and execution and reject disabled modes befo
 			fetchCalls++;
 			return new Response("<html>exact raw body</html>", { status: 404, headers: { "content-type": "text/html" } });
 		};
+		extractionFixture.setFetch(globalThis.fetch);
 		const tools = [];
 		initializeExtension({ registerTool(tool) { tools.push(tool); }, registerCommand() {}, registerShortcut() {}, on() {}, appendEntry() {} });
 		const tool = tools.find(({ name }) => name === "fetch_content");

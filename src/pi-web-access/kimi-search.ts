@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { fetchWithCredentialRedirects } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { redactCredential } from "./credential-source.ts";
-import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
+import { SearchHttpError, SearchUnsupportedFilterError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -113,6 +114,7 @@ export async function searchWithKimi(
 	options: SearchOptions = {},
 	ctx?: ExtensionContext,
 ): Promise<SearchResponse> {
+	if (options.recencyFilter) throw new SearchUnsupportedFilterError("Kimi Code search adapter does not support recencyFilter");
 	const auth = await resolveKimiAuth(ctx);
 	if (!auth) {
 		throw new Error("Kimi Code web search unavailable. Run /login kimi-coding to authenticate a Kimi Code Plan account.");
@@ -124,12 +126,12 @@ export async function searchWithKimi(
 		? AbortSignal.any([timeoutSignal, options.signal])
 		: timeoutSignal;
 	try {
-		const response = await fetch(KIMI_SEARCH_URL, {
+		const response = await fetchWithCredentialRedirects(KIMI_SEARCH_URL, {
 			method: "POST",
 			headers: buildRequestHeaders(auth),
 			body: JSON.stringify({ text_query: query }),
 			signal: requestSignal,
-		});
+		}, ["Authorization", ...Object.keys(auth.headers)]);
 
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);

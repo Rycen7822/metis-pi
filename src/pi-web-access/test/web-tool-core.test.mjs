@@ -90,7 +90,7 @@ function runStandalone(body, { config = {}, env = {} } = {}) {
 
 test("standalone auto search skips Pi-only routes and only calls where nothing succeeded are errors", () => {
 	const { out, blocked } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		return {
 			auto: await core.webSearch({ query: "standalone core" }),
 			failed: await core.webSearch({ query: "brave-fails", provider: "brave" }),
@@ -116,7 +116,7 @@ test("standalone auto search skips Pi-only routes and only calls where nothing s
 
 test("standalone includeContent waits for page content before returning", () => {
 	const { out, blocked } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		const result = await core.webSearch({ query: "standalone core", provider: "brave", includeContent: true });
 		const fetchId = result.details.fetchId;
 		const page = await core.getSearchContent({ responseId: fetchId, urlIndex: 0 });
@@ -131,7 +131,7 @@ test("standalone includeContent waits for page content before returning", () => 
 
 test("standalone includeContent keeps provider page content and fetches only uncovered URLs", () => {
 	const { out, requests } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		const result = await core.webSearch({ query: "partial content", provider: "anysearch", includeContent: true });
 		const pages = [];
 		for (const urlIndex of [0, 1]) pages.push((await core.getSearchContent({ responseId: result.details.fetchId, urlIndex })).content[0].text);
@@ -145,7 +145,7 @@ test("standalone includeContent keeps provider page content and fetches only unc
 
 test("standalone rejects Pi-only providers and fetch modes before any network call", () => {
 	const { out, requests } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		return {
 			kimiSourceCheck: await core.sourceCheck({ claim: "c", provider: ["brave", "kimi"] }),
 			answer: await core.fetchContent({ url: ${JSON.stringify(ARTICLE_URL)}, mode: "answer" }),
@@ -161,7 +161,7 @@ test("standalone rejects Pi-only providers and fetch modes before any network ca
 
 test("standalone direct image fetch fails clearly without loading Pi or Pi-only modules", () => {
 	const { out, blocked, loaded } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		return core.fetchContent({ url: ${JSON.stringify(IMAGE_URL)} });
 	`);
 	assert.deepEqual(blocked, []);
@@ -174,7 +174,7 @@ test("standalone direct image fetch fails clearly without loading Pi or Pi-only 
 
 test("standalone store evicts the oldest stored result past its bound", () => {
 	const { out } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		const ids = [];
 		for (let i = 0; i < 51; i++) ids.push((await core.fetchContent({ url: ${JSON.stringify(ARTICLE_URL)} })).details.responseId);
 		const oldest = await core.getSearchContent({ responseId: ids[0] });
@@ -189,7 +189,7 @@ test("standalone store evicts the oldest stored result past its bound", () => {
 
 test("standalone validation failures are flagged as errors before any network call", () => {
 	const { out, requests, blocked } = runStandalone(`
-		const core = createStandaloneWebToolCore();
+		const core = createStandaloneWebToolCore(globalThis.fetch);
 		return {
 			noQuery: await core.webSearch({}),
 			noClaim: await core.sourceCheck({}),

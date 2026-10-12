@@ -4,8 +4,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, afterEach, test } from "node:test";
+import { injectExtractFetch } from "./extract-fetch-fixture.mjs";
 
-const originalFetch = globalThis.fetch;
+const unexpectedFetch = async () => { throw new Error("Unexpected fetch in cache storage test"); };
+const fetchFixture = injectExtractFetch(unexpectedFetch);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalDateNow = Date.now;
 const testAgentDir = await mkdtemp(join(tmpdir(), "pi-web-access-fetch-cache-"));
@@ -27,12 +29,13 @@ const {
 } = await import("../storage.ts");
 
 afterEach(() => {
-	globalThis.fetch = originalFetch;
+	fetchFixture.setFetch(unexpectedFetch);
 	Date.now = originalDateNow;
 	clearResults();
 });
 
 after(() => {
+	fetchFixture.dispose();
 	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 	rmSync(testAgentDir, { recursive: true, force: true });
@@ -80,7 +83,7 @@ function fetchedData(id, content = "cached content") {
 test("fetch_content stores full content in cache and writes a bounded session entry", async () => {
 	await useTempAgentDir();
 	const pageContent = "Cached page content. ".repeat(4_000);
-	globalThis.fetch = async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } });
+	fetchFixture.setFetch(async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } }));
 
 	const { entries, fetchTool, getContentTool } = registerTools();
 	assert.ok(fetchTool);
@@ -132,7 +135,7 @@ test("loaded cached fetched content expires after the result lifetime", async ()
 	Date.now = () => startedAt;
 	await useTempAgentDir();
 	const pageContent = "expiring cache-backed content";
-	globalThis.fetch = async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } });
+	fetchFixture.setFetch(async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } }));
 
 	const { entries, fetchTool, getContentTool } = registerTools();
 	assert.ok(fetchTool);
@@ -156,7 +159,7 @@ test("loaded cached fetched content expires after the result lifetime", async ()
 test("missing cache files return an actionable fetched-content error", async () => {
 	const agentDir = await useTempAgentDir();
 	const pageContent = "cache-backed content";
-	globalThis.fetch = async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } });
+	fetchFixture.setFetch(async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } }));
 
 	const { entries, fetchTool, getContentTool } = registerTools();
 	assert.ok(fetchTool);
