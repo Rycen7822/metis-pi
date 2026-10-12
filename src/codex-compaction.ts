@@ -10,20 +10,31 @@ const MARKER = "[Metis Codex remote checkpoint ";
 const TIMEOUT = 300_000;
 const MAX_BYTES = 8 * 1024 * 1024;
 type Item = Record<string, any>;
-interface Checkpoint { version: 1; marker: string; binding: string; history: Item[] }
+interface Checkpoint { version: 1; marker: string; binding: string; history: Item[]; protocol?: "responses" }
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const record = (value: unknown): Item => value && typeof value === "object" && !Array.isArray(value) ? value : {};
-const ours = (entry: SessionEntry): entry is CompactionEntry => entry.type === "compaction" && entry.summary.startsWith(MARKER);
+const ours = (entry: SessionEntry): entry is CompactionEntry => entry.type === "compaction"
+  && (entry.fromHook === true || Object.hasOwn(record(entry.details), KEY))
+  && entry.summary.startsWith(MARKER) && /^[\da-f-]{36}\]$/.test(entry.summary.slice(MARKER.length));
 
-function isCodexModel(model: ExtensionContext["model"]): model is Model<Api> {
-  return model?.api === "openai-codex-responses"
+function isRemoteModel(model: ExtensionContext["model"]): model is Model<Api> {
+  return (model?.api === "openai-codex-responses" || model?.api === "openai-responses")
     && (model.provider === "openai" || model.provider === "openai-codex");
+}
+
+function responsesHistory(value: unknown): value is Item[] {
+  if (!Array.isArray(value) || !value.length || !value.every(item => item && typeof item === "object" && !Array.isArray(item))) return false;
+  const checkpoints = value.filter(item => item.type === "compaction");
+  return checkpoints.length > 0 && checkpoints.every(item => typeof item.encrypted_content === "string"
+    && item.encrypted_content.length > 0 && (!item.status || item.status === "completed"));
 }
 
 function checkpoint(entry: CompactionEntry): Checkpoint | undefined {
   const data = record(record(entry.details)[KEY]);
   if (data.version !== 1 || data.marker !== entry.summary || typeof data.binding !== "string" || !Array.isArray(data.history)) return;
   if (JSON.stringify(data.history).length > MAX_BYTES) return;
+  if (data.protocol === "responses") return responsesHistory(data.history) ? data as Checkpoint : undefined;
+  if (data.protocol !== undefined) return;
   const last = record(data.history.at(-1));
   if (last.type !== "compaction" || typeof last.encrypted_content !== "string" || !last.encrypted_content) return;
   if (!data.history.slice(0, -1).every((item: unknown) => record(item).role === "user" && (!record(item).type || record(item).type === "message"))) return;
@@ -67,19 +78,46 @@ function summaryText(marker: string): string {
   const message = convertToLlm([{ role: "compactionSummary", summary: marker, tokensBefore: 0, timestamp: 0 }])[0];
   return typeof message.content === "string" ? message.content : message.content.map(part => part.type === "text" ? part.text : "").join("");
 }
+function matchesMarker(item: Item, expected: string): boolean {
+  if (item.role !== "user" || item.type && item.type !== "message") return false;
+  if (typeof item.content === "string") return item.content === expected;
+  return Array.isArray(item.content)
+    && item.content.map((part: Item) => part.type === "input_text" ? part.text : "").join("") === expected;
+}
 function replaceMarker(payload: unknown, data: Checkpoint): Item {
   const body = record(payload);
   if (!Array.isArray(body.input)) throw new Error("Codex payload has no input");
   const expected = summaryText(data.marker);
   let matches = 0;
   const input = body.input.flatMap((item: Item) => {
-    const text = typeof item.content === "string" ? item.content : Array.isArray(item.content)
-      ? item.content.map((part: Item) => part.type === "input_text" ? part.text : "").join("") : undefined;
-    if (item.role !== "user" || text !== expected) return [item];
+    if (!matchesMarker(item, expected)) return [item];
     matches++; return data.history;
   });
   if (matches !== 1) throw new Error("Codex checkpoint marker missing or ambiguous");
   return { ...body, input };
+}
+
+function responsesCompactionFetch(capture: (output: unknown) => void): typeof fetch {
+  return async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (!url.pathname.endsWith("/responses") || typeof init?.body !== "string")
+      throw new Error("Codex provider did not expose native input");
+    url.pathname += "/compact";
+    const { model, input: history, instructions } = JSON.parse(init.body);
+    const headers = new Headers(init.headers);
+    headers.delete("content-length");
+    headers.set("accept", "application/json");
+    const response = await globalThis.fetch(url, { ...init, headers, body: JSON.stringify({ model, input: history, instructions }) });
+    if (!response.ok) return response;
+    const compacted = record(await response.json());
+    capture(compacted.object === "response.compaction" && !compacted.error ? compacted.output : undefined);
+    // The native adapter supplies encoding, auth, retries and usage. Bridge the
+    // non-streaming compact response back to its completion event contract.
+    const event = { type: "response.completed", response: {
+      id: compacted.id, status: compacted.status ?? "completed", usage: compacted.usage,
+    } };
+    return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "content-type": "text/event-stream" } });
+  };
 }
 
 async function authoredUserInput(request: Awaited<ReturnType<typeof requestBinding>>, messages: Parameters<typeof convertToLlm>[0], signal: AbortSignal): Promise<Item[]> {
@@ -125,12 +163,13 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   let preparedModel: Model<Api> | undefined;
   let preparedSession: string | undefined;
   let preparedGeneration = 0;
+  let preparedMarker: string | undefined;
   let unsubscribeOwner: (() => void) | undefined;
   const subscribeOwner = () => {
     unsubscribeOwner?.();
     unsubscribeOwner = pi.events.on("metis:codex-compaction-owner", value => {
       const request = value as { ctx: ExtensionContext; owns: boolean };
-      request.owns = isCodexModel(request.ctx.model) || Boolean(active(request.ctx));
+      request.owns = isRemoteModel(request.ctx.model) || Boolean(active(request.ctx));
     });
   };
   subscribeOwner();
@@ -149,19 +188,28 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     preparedModel = ctx.model ? { ...ctx.model } : undefined;
     preparedSession = ctx.sessionManager.getSessionId();
     preparedGeneration = generation;
+    preparedMarker = undefined;
     const current = active(ctx);
     if (!current) return;
-    if (current.data && isCodexModel(ctx.model)) {
-      try { if (current.data.binding === await binding(ctx, ctx.model)) return; } catch { /* Restore instead of sending an opaque marker. */ }
+    if (current.data && isRemoteModel(ctx.model)) {
+      try {
+        if (current.data.binding === await binding(ctx, ctx.model)) {
+          preparedMarker = current.entry.summary;
+          return;
+        }
+      } catch { /* Restore instead of sending an opaque marker. */ }
     }
     return { messages: buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages.filter(m => m.role !== "system") };
   });
   pi.on("before_provider_request", async (event, ctx) => {
-    // Detect the already-built carrier BEFORE checking current route/data: edits
-    // or model changes may have invalidated it during asynchronous preparation.
-    if (!JSON.stringify(event.payload).includes(MARKER)) return;
+    // Only an exact carrier prepared from a real checkpoint is ours. Ordinary
+    // source code, user text and tool output can contain the same marker literal.
+    if (!preparedMarker) return;
+    const expected = summaryText(preparedMarker);
+    const input = record(event.payload).input;
+    if (!Array.isArray(input) || !input.some(item => matchesMarker(record(item), expected))) return;
     const requestModel = preparedModel ?? ctx.model;
-    if (!isCodexModel(requestModel)
+    if (!isRemoteModel(requestModel)
       || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation)
       return { ...record(event.payload), input: [{ type: "metis_checkpoint_route_changed" }] };
     const source = hash(ctx.sessionManager.getBranch());
@@ -188,10 +236,10 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
-    const codex = isCodexModel(ctx.model);
+    const remote = isRemoteModel(ctx.model);
     try {
       const previous = active(ctx);
-      if (!codex && !previous) return;
+      if (!remote && !previous) return;
       const waits: Promise<void>[] = [];
       pi.events.emit("metis:before-remote-compact", { waits, signal: event.signal });
       await Promise.all(waits);
@@ -201,7 +249,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const authorized = authority();
       const branch = ctx.sessionManager.getBranch();
       const session = ctx.sessionManager.getSessionId(), source = hash(branch);
-      const request = codex && model ? await requestBinding(ctx, model) : undefined;
+      const request = remote && model ? await requestBinding(ctx, model) : undefined;
       const identity = request?.identity;
       const reusable = previous?.data && previous.data.binding === identity;
       const projected = buildSessionProjection(reusable || !previous ? branch : rawBranch(branch));
@@ -211,7 +259,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const files = record(previous?.entry.details);
       for (const path of Array.isArray(files.readFiles) ? files.readFiles : []) if (typeof path === "string") event.preparation.fileOps.read.add(path);
       for (const path of Array.isArray(files.modifiedFiles) ? files.modifiedFiles : []) if (typeof path === "string") event.preparation.fileOps.edited.add(path);
-      if (!codex) {
+      if (!remote) {
         // Pi will run its unchanged native summarizer, but over recoverable raw
         // history, not the opaque fallback marker from the Codex session.
         event.preparation.previousSummary = prefix.find(m => m.role === "compactionSummary")?.summary;
@@ -221,17 +269,19 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         event.preparation.tokensBefore = projected.messages.reduce((n, m) => n + estimateTokens(m), 0);
         return;
       }
-      if (!isCodexModel(model) || !request || !identity) throw new Error("Unsupported Codex API");
+      if (!isRemoteModel(model) || !request || !identity) throw new Error("Unsupported Codex API");
+      const responses = model.api === "openai-responses";
       if (!prefix.some(m => m.role !== "system")) throw new Error("No discarded history to compact");
       pending?.abort(); const controller = new AbortController(); pending = controller;
       const signal = AbortSignal.any([event.signal, controller.signal, AbortSignal.timeout(TIMEOUT)]);
-      let input: Item[] | undefined, completed = false, failed = false;
-      const items: Item[] = []; let outputItems = 0;
+      let inputPrepared = false, completed = false, failed = false;
+      const items: Item[] = [];
+      let compactedWindow: unknown;
       const messages = prefix.filter(m => m.role !== "system");
       const authored = projected.entries.slice(0, cut).flatMap(entry =>
         entry.sourceEntry.type === "message" && entry.sourceEntry.message.role === "user"
           ? entry.messages.filter(message => message.role === "user") : []);
-      const retainedInput = [
+      const retainedInput = responses ? [] : [
         ...(reusable && previous?.data ? previous.data.history.slice(0, -1) : []),
         ...await authoredUserInput(request, authored, signal),
       ];
@@ -244,14 +294,18 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const result = await request.provider.streamSimple(request.model, context, {
         apiKey: request.auth.apiKey, env: request.auth.env,
         signal, transport: "sse", cacheRetention: "none", maxRetries: 2,
-        sessionId: session, headers: { ...request.auth.headers, "x-codex-beta-features": "remote_compaction_v2" },
+        sessionId: session,
+        headers: responses ? request.auth.headers : { ...request.auth.headers, "x-codex-beta-features": "remote_compaction_v2" },
+        fetch: responses ? responsesCompactionFetch(output => { compactedWindow = output; }) : undefined,
         onPayload(payload) {
           const body = reusable && previous?.data ? replaceMarker(payload, previous.data) : record(payload);
           if (!Array.isArray(body.input)) throw new Error("Codex provider did not expose native input");
-          input = structuredClone(body.input);
-          items.length = 0; outputItems = 0; completed = false; failed = false;
-          return { ...body, instructions: event.customInstructions ? `${body.instructions ?? ""}\n\nCompaction focus: ${event.customInstructions}` : body.instructions,
-            input: [...body.input, { type: "compaction_trigger" }], store: false, stream: true };
+          inputPrepared = true;
+          items.length = 0; completed = false; failed = false;
+          const instructions = event.customInstructions
+            ? `${body.instructions ?? ""}\n\nCompaction focus: ${event.customInstructions}` : body.instructions;
+          return { ...body, instructions,
+            input: responses ? body.input : [...body.input, { type: "compaction_trigger" }], store: false, stream: true };
         },
         onProviderStreamEvent(value) {
           const data = record(value);
@@ -260,7 +314,6 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
             // Like OMP, only compaction items become durable replacement history.
             // Auxiliary reasoning/message outputs are not additional checkpoints.
             if (item.type === "compaction") {
-              outputItems++;
               if (items.length === 0 && JSON.stringify(item).length <= MAX_BYTES) items.push(structuredClone(item));
               else failed = true;
             }
@@ -273,11 +326,18 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         },
       }).result();
       if (pending === controller) pending = undefined;
-      if (signal.aborted || result.stopReason === "error" || result.stopReason === "aborted" || failed || !completed || !input
-        || outputItems !== 1 || items.length !== 1 || typeof items[0].encrypted_content !== "string" || !items[0].encrypted_content)
+      if (signal.aborted || result.stopReason === "error" || result.stopReason === "aborted" || failed || !completed || !inputPrepared)
         throw new Error("Codex did not complete exactly one encrypted checkpoint");
-      const { status: _status, ...compactionItem } = items[0];
-      const history = [...retainedUsers(retainedInput), compactionItem];
+      let history: Item[];
+      if (responses) {
+        if (!responsesHistory(compactedWindow)) throw new Error("Responses did not return a valid compacted window");
+        history = compactedWindow;
+      } else {
+        if (items.length !== 1 || typeof items[0].encrypted_content !== "string" || !items[0].encrypted_content)
+          throw new Error("Codex did not complete exactly one encrypted checkpoint");
+        const { status: _status, ...compactionItem } = items[0];
+        history = [...retainedUsers(retainedInput), compactionItem];
+      }
       if (JSON.stringify(history).length > MAX_BYTES) throw new Error("Codex checkpoint too large");
       const finalBinding = await binding(ctx, model);
       if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== hash(ctx.sessionManager.getBranch())
@@ -289,12 +349,23 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const modifiedFiles = [...new Set([...event.preparation.fileOps.written, ...event.preparation.fileOps.edited])];
       return { compaction: { summary: marker, firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore, usage: result.usage,
-        details: { readFiles, modifiedFiles, [KEY]: { version: 1, marker, binding: identity, history } satisfies Checkpoint } } };
+        details: { readFiles, modifiedFiles, [KEY]: {
+          version: 1, marker, binding: identity, history, ...(responses ? { protocol: "responses" as const } : {}),
+        } satisfies Checkpoint } } };
     } catch (error) {
       pending?.abort(); pending = undefined;
-      const safeReasons = ["Codex authentication unavailable", "Compaction boundary is no longer visible", "Unsupported Codex API", "No discarded history to compact", "Codex provider did not expose native input", "Codex did not complete exactly one encrypted checkpoint", "Codex checkpoint too large", "Compaction source changed"];
+      const safeReasons = [
+        "Codex authentication unavailable", "Compaction boundary is no longer visible", "Unsupported Codex API",
+        "No discarded history to compact", "Codex provider did not expose native input",
+        "Codex did not complete exactly one encrypted checkpoint", "Responses did not return a valid compacted window",
+        "Codex checkpoint too large", "Compaction source changed",
+      ];
       const reason = error instanceof Error && safeReasons.includes(error.message) ? error.message : "provider request failed";
-      if (!event.signal.aborted) try { ctx.ui.notify(`Codex remote compaction cancelled: ${reason}; history was preserved. Check authentication/permissions and retry.`, "warning"); } catch { /* UI teardown must not turn cancellation into native fallback. */ }
+      const service = ctx.model?.api === "openai-responses" ? "OpenAI Responses" : "Codex";
+      if (!event.signal.aborted) try {
+        ctx.ui.notify(`${service} remote compaction cancelled: ${reason}; history was preserved. ` +
+          "Check authentication/permissions and retry.", "warning");
+      } catch { /* UI teardown must not turn cancellation into native fallback. */ }
       // The runner swallows thrown handler errors; explicitly cancel so it never
       // falls through to a plaintext summary or aborts the entire agent turn.
       return { cancel: true };

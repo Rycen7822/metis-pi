@@ -10,6 +10,7 @@ import { FAKE_API_KEY, modelNamed } from "../helpers/native-provider.mjs";
 
 const root = new URL("../../", import.meta.url);
 const model = modelNamed("gpt-6-astra");
+const responsesModel = { ...model, provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
 const key = "metisCodexRemoteCompaction";
 const usage = (input = 100) => ({ input, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: input + 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 const assistant = (text, input = 100) => ({ role: "assistant", content: [{ type: "text", text }], api: model.api, provider: model.provider, model: model.id, usage: usage(input), stopReason: "stop", timestamp: Date.now() });
@@ -33,7 +34,7 @@ function checkpointEvents(n = 1) {
   return [{ type: "response.created", response: { id: "r", status: "in_progress" } }, { type: "response.output_item.done", output_index: 0, item }, completed([item])];
 }
 async function host(t, {
-  auto = false, condense = false, existing, response, normalResponse, other = false, routeModel = model,
+  auto = false, condense = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -70,15 +71,24 @@ async function host(t, {
     resourceLoader: loader, model: routeModel, thinkingLevel: "off",
   });
   assert.deepEqual(extensionsResult.errors, []);
-  const errors = [], notices = [], bodies = [], headers = [];
+  const errors = [], notices = [], bodies = [], headers = [], urls = [];
   let count = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    assert.match(String(url), /\/responses$/);
+    assert.match(String(url), /\/responses(?:\/compact)?$/);
+    urls.push(String(url));
     const h = new Headers(options.headers);
     let bytes = typeof options.body === "string" ? Buffer.from(options.body) : Buffer.from(options.body);
     if (h.get("content-encoding") === "zstd") bytes = zstdDecompressSync(bytes);
     if (h.get("content-encoding") === "gzip") bytes = gunzipSync(bytes);
     const body = JSON.parse(bytes.toString()); bodies.push(body); headers.push(h);
+    if (String(url).endsWith("/responses/compact")) {
+      count++;
+      if (compactResponse) return compactResponse({ body, sm, session, count });
+      return Response.json({ object: "response.compaction", id: `compact-${count}`, output: [
+        ...body.input.filter(item => item.role === "user"),
+        { type: "compaction", id: `cmp-${count}`, encrypted_content: `opaque-${count}` },
+      ], usage: { input_tokens: 100, output_tokens: 2, total_tokens: 102 } });
+    }
     if (body.input.at(-1)?.type !== "compaction_trigger") return normalResponse ? normalResponse({ body }) : answer();
     count++;
     return response ? await response({ body, sm, session, count }) : sse(checkpointEvents(count));
@@ -88,7 +98,7 @@ async function host(t, {
     try { await session.extensionRunner.emit({ type: "session_shutdown" }); assert.deepEqual(errors, []); }
     finally { session.dispose(); if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); }
   });
-  return { session, sm, dir, bodies, headers, notices, errors, runtime, eventBus };
+  return { session, sm, dir, bodies, headers, urls, notices, errors, runtime, eventBus };
 }
 const compactions = h => h.sm.getBranch().filter(e => e.type === "compaction");
 
@@ -127,16 +137,128 @@ test("Codex transport under openai persists and replays its native encrypted che
   assert.equal(JSON.stringify(h.bodies.at(-1)).includes(result.summary), false);
 });
 
-test("official openai Responses retains native compaction without Codex beta requests", async t => {
+test("official Responses preserves the complete compacted window across reload and repeated compaction", async t => {
+  const window = [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "RETAINED USER" }] },
+    { type: "compaction", id: "compact-checkpoint", encrypted_content: "opaque-responses" },
+    { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "RETAINED ANSWER" }] },
+    { type: "function_call", call_id: "retained-call", name: "read", arguments: '{"path":"notes.md"}' },
+    { type: "function_call_output", call_id: "retained-call", output: "RETAINED RESULT" },
+  ];
   const h = await host(t, {
-    routeModel: { ...model, provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+    routeModel: responsesModel, condense: true,
+    compactResponse: () => Response.json({ object: "response.compaction", output: window }),
   });
-  const result = await h.session.compact();
-  assert.equal(result.summary, "OK");
-  assert.equal(compactions(h).at(-1).details?.[key], undefined);
-  assert.ok(h.bodies.length > 0);
+  const result = await h.session.compact("Preserve the active goal");
+  const entry = compactions(h).at(-1);
+  assert.equal(entry.fromHook, true);
+  assert.deepEqual(entry.details[key].history, window);
+  assert.equal(h.urls[0], "https://api.openai.com/v1/responses/compact");
+  assert.deepEqual(Object.keys(h.bodies[0]).sort(), ["input", "instructions", "model"]);
+  assert.match(h.bodies[0].instructions, /Preserve the active goal/);
+  assert.equal(h.headers[0].get("authorization"), `Bearer ${FAKE_API_KEY}`);
+  assert.equal(h.bodies.length, 1, "OCC must not generate another summary");
   assert.ok(h.bodies.every(body => !body.input.some(item => item.type === "compaction_trigger")));
   assert.ok(h.headers.every(headers => !headers.has("x-codex-beta-features")));
+  const next = await host(t, { routeModel: responsesModel, existing: h.sm.getSessionFile() });
+  await next.session.prompt("AFTER RELOAD");
+  const assertWindow = input => {
+    const start = input.findIndex(item => item.content?.[0]?.text === "RETAINED USER");
+    assert.ok(start >= 0);
+    assert.deepEqual(input.slice(start, start + window.length), window);
+  };
+  assertWindow(next.bodies[0].input);
+  assert.equal(JSON.stringify(next.bodies[0]).includes(result.summary), false);
+  assert.equal(JSON.stringify(next.bodies[0].input).split("KEPT TAIL").length - 1, 1);
+  await next.session.compact();
+  const compactInput = next.bodies[next.urls.findIndex(url => url.endsWith("/responses/compact"))].input;
+  assertWindow(compactInput);
+  assert.equal(compactInput.filter(item => item.type === "compaction").length, 1);
+  await next.session.prompt("AFTER SECOND COMPACT");
+  assert.ok(next.bodies.at(-1).input.some(item => item.encrypted_content === "opaque-1"));
+});
+
+test("ordinary marker text in user messages, arguments and tool output never becomes a checkpoint", async t => {
+  for (const routeModel of [model, responsesModel]) await t.test(routeModel.api, async sub => {
+    const h = await host(sub, { routeModel });
+    const literal = 'const MARKER = "[Metis Codex remote checkpoint ";';
+    const call = { type: "toolCall", id: "read-source", name: "read", arguments: { path: literal } };
+    h.sm.appendMessage({ ...assistant(""), content: [call], stopReason: "toolUse" });
+    h.sm.appendMessage({ role: "toolResult", toolCallId: call.id, toolName: "read", isError: false,
+      content: [{ type: "text", text: literal }], timestamp: Date.now() });
+    await h.session.prompt(`Explain this source: ${literal}`);
+    const input = h.bodies.at(-1).input;
+    assert.ok(input.every(item => !item.type?.startsWith("metis_")));
+    assert.ok(JSON.stringify(input).includes("const MARKER"));
+    assert.equal(compactions(h).length, 0);
+  });
+});
+
+test("official Responses rejects invalid compacted windows without default summarization", async t => {
+  for (const kind of ["missing", "empty", "incomplete", "stale"]) await t.test(kind, async sub => {
+    const h = await host(sub, { routeModel: responsesModel,
+      compactResponse({ sm }) {
+        if (kind === "stale") sm.appendMessage(user("ARRIVED DURING COMPACTION"));
+        return Response.json({ object: "response.compaction", status: kind === "incomplete" ? "incomplete" : "completed",
+          output: kind === "missing" ? [] : [{ type: "compaction", encrypted_content: kind === "empty" ? "" : "opaque" }],
+        });
+      },
+    });
+    await assert.rejects(h.session.compact(), /cancel/i);
+    assert.equal(compactions(h).length, 0);
+    assert.equal(h.bodies.length, 1);
+    assert.ok(h.urls[0].endsWith("/responses/compact"));
+  });
+});
+
+test("a native plaintext summary that quotes a complete marker remains ordinary text", async t => {
+  const h = await host(t, { routeModel: responsesModel });
+  const marker = "[Metis Codex remote checkpoint 00000000-0000-0000-0000-000000000000]";
+  const kept = h.sm.getBranch().find(entry => entry.type === "message" && entry.message.content === "KEPT TAIL");
+  h.sm.appendCompaction(marker, kept.id, 100, {}, false);
+  await h.session.prompt("CONTINUE AFTER PLAINTEXT SUMMARY");
+  assert.ok(JSON.stringify(h.bodies.at(-1).input).includes(marker));
+  assert.ok(h.bodies.at(-1).input.every(item => !item.type?.startsWith("metis_")));
+});
+
+test("official Responses uses remote compaction for automatic and overflow recovery", async t => {
+  for (const reason of ["automatic", "overflow"]) await t.test(reason, async sub => {
+    let ordinary = 0;
+    const h = await host(sub, { routeModel: responsesModel, condense: true, auto: reason === "automatic",
+      normalResponse() {
+        if (++ordinary === 1 && reason === "overflow") return Response.json({
+          error: { code: "context_length_exceeded", message: "Your input exceeds the context window of this model." },
+        }, { status: 400 });
+        return answer();
+      },
+    });
+    await h.session.prompt("CONTINUE AFTER CAPACITY RECOVERY");
+    assert.equal(h.urls.filter(url => url.endsWith("/responses/compact")).length, 1);
+    assert.equal(compactions(h).length, 1);
+    assert.ok(h.bodies.at(-1).input.some(item => item.type === "compaction"));
+  });
+});
+
+test("official Responses retains native retries and cancellation for the compact endpoint", async t => {
+  const h = await host(t, { routeModel: responsesModel,
+    compactResponse({ count }) {
+      if (count === 1) return Response.json({ error: { message: "rate limited" } },
+        { status: 429, headers: { "retry-after-ms": "1" } });
+      return Response.json({ object: "response.compaction", output: [{ type: "compaction", encrypted_content: "after-retry" }] });
+    },
+  });
+  await h.session.compact();
+  assert.equal(h.bodies.length, 2);
+  assert.deepEqual(h.bodies[0], h.bodies[1]);
+  assert.equal(compactions(h).at(-1).details[key].history[0].encrypted_content, "after-retry");
+  const aborted = await host(t, { routeModel: responsesModel,
+    compactResponse({ session }) {
+      session.abortCompaction();
+      return Response.json({ object: "response.compaction", output: [{ type: "compaction", encrypted_content: "aborted" }] });
+    },
+  });
+  await assert.rejects(aborted.session.compact(), /cancel/i);
+  assert.equal(compactions(aborted).length, 0);
 });
 
 test("auto compaction uses the same remote transport before the next inference", async t => {
