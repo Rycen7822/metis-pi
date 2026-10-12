@@ -27,8 +27,38 @@ contains no Codex marketplace installer or standalone runtime npm dependency.
 
 ## Native Pi entry
 
-The `extensions/subagents.ts` entry registers the nine `pi_*` daily tools. It keeps
-Pi's current tool set; users can call the same tools through native codemode.
+The `extensions/subagents.ts` entry registers the nine `pi_*` daily tools as
+`deferred` in the `subagents` namespace. Their names, schemas and native backend
+stay unchanged; the default model interface is Pi native codemode, not nine
+independent declarations. Other selected tools are preserved. At session start,
+Metis activates an available `builtin:codemode` without changing settings or
+turning on `tool_search`. If codemode is missing or excluded, it warns once; an
+explicit later deactivation is respected. A same-name third-party replacement is
+not assumed to provide native codemode APIs and is not overwritten. If tool
+selection excludes all native subagent tools, Metis neither advertises the
+namespace nor activates an unneeded codemode dependency. Enable/allow native
+codemode and the required `pi_*` tools to resume script calls. Explicitly
+activating a `pi_*` tool still permits direct API calls.
+
+A short structured system-prompt section advertises this namespace without
+inlining the tool schemas. Discover only what is needed inside codemode:
+
+```javascript
+text(await describeNamespace("subagents"));
+text(await searchTools("terminal result", { namespace: "subagents", limit: 1 }));
+// Once a name and its arguments are known, discovery need not be repeated.
+const result = await tools.pi_list_agents({ limit: 10 });
+text({ total: result.total, agents: result.agents });
+```
+
+Script-side discovery does not activate independent declarations. The separate
+`tool_search` route does load matched tools into subsequent model requests; it
+is optional, not enabled by this entry. Deferred tools stay out of the inline
+catalog even at the default budget, so no global `only` mode or zero inline
+budget is required for these nine tools. Discovery output still accumulates in
+history. Check `isError` and retain operation IDs, questions, errors and missed
+inputs when selecting script output; partial script success is not rolled back.
+
 Native calls bind the current scope automatically and save a request ID for each
 mutation. Normally omit `request_id`; an uncertain error retains the original key
 for identical recovery. A new call is a new operation, even with identical text.

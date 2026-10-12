@@ -1,9 +1,15 @@
-import { getAgentDir, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
-import { runtimePackage } from "../src/subagents/client.ts";
-import { SubagentSession } from "../src/subagents/session.ts";
-import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/rendering.ts";
 import { isMetisConfigTable, readMetisConfig } from "../src/metis-config.ts";
+import { runtimePackage } from "../src/subagents/client.ts";
+import { subagentAttentionRenderer, subagentToolRenderers } from "../src/subagents/rendering.ts";
+import { SubagentSession } from "../src/subagents/session.ts";
+
+const namespace = {
+  name: "subagents",
+  description: "Create, observe, message, answer and interrupt persistent Pi subagents in this parent session.",
+};
+const guidance = "Subagent tools are deferred in the subagents namespace. Use codemode: discover with describeNamespace('subagents') or searchTools(query, {namespace:'subagents', limit:1}), then call tools.<name>(args). Check result.isError and preserve IDs, request_id, errors, questions and not_consumed inputs in output. Partial script success is not rolled back; do not blindly rerun mutations.";
 
 export default function subagents(pi: ExtensionAPI) {
   if (process.env.PI_AGENTS_MANAGED_CHILD === "1" || process.platform !== "linux") return;
@@ -20,8 +26,21 @@ export default function subagents(pi: ExtensionAPI) {
     pi.on("session_start", (_event, ctx) => { ctx.ui.notify(`Metis subagents unavailable: ${String(error)}`, "warning"); }); return;
   }
   let owner: SubagentSession | undefined, blocked = false;
+  let warnedCodemode = false;
+  const codemodeReady = (ctx: ExtensionContext, activate = false) => {
+    const active = pi.getActiveTools();
+    const native = pi.getAllTools().some(tool => tool.name === "codemode" && tool.sourceInfo.path === "builtin:codemode");
+    if (native && activate && !active.includes("codemode")) pi.setActiveTools([...active, "codemode"]);
+    const ready = native && pi.getActiveTools().includes("codemode");
+    if (!ready && !warnedCodemode) {
+      ctx.ui.notify("Metis subagents use deferred tools and need native codemode. Enable builtin:codemode and allow the codemode tool.", "warning");
+      warnedCodemode = true;
+    }
+    return ready;
+  };
   const ownNames = new Set(runtime.tools.map(tool => tool.name));
   const ownPath = fileURLToPath(import.meta.url);
+  const hasTools = () => pi.getAllTools().some(tool => ownNames.has(tool.name) && tool.sourceInfo.path === ownPath && tool.exposure === "deferred");
   const conflict = () =>
     pi
       .getAllTools()
@@ -38,6 +57,8 @@ export default function subagents(pi: ExtensionAPI) {
     parameters: tool.inputSchema,
     outputSchema: tool.outputSchema,
     annotations: tool.annotations,
+    namespace,
+    exposure: "deferred",
     executionMode: "parallel",
     ...subagentToolRenderers(tool.name),
     execute: async (id, args, signal, _update, ctx) => {
@@ -50,6 +71,7 @@ export default function subagents(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     await owner?.close();
     owner = undefined;
+    warnedCodemode = false;
     blocked = conflict();
     if (blocked) {
       for (const definition of definitions)
@@ -63,12 +85,14 @@ export default function subagents(pi: ExtensionAPI) {
     }
     for (const definition of definitions) pi.registerTool(definition);
     owner = new SubagentSession(pi, runtime, ctx, agentDir);
+    if (hasTools()) codemodeReady(ctx, true);
   });
   pi.on("session_shutdown", async () => {
     await owner?.close();
     owner = undefined;
   });
-  pi.on("before_agent_start", async (_event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    delete event.systemPromptOptions.sections.metis_subagents;
     if (conflict()) {
       blocked = true;
       await owner?.close();
@@ -78,6 +102,7 @@ export default function subagents(pi: ExtensionAPI) {
           pi.registerTool({ ...definition, exposure: "hidden" });
     }
     owner?.update(ctx);
+    if (owner && hasTools() && codemodeReady(ctx)) event.systemPromptOptions.sections.metis_subagents = guidance;
   });
   pi.on("tool_result", (event) => owner?.result(event));
   pi.on("turn_end", (event, ctx) => owner?.boundary(event, ctx));

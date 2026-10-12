@@ -138,7 +138,7 @@ with open(sys.argv[1], 'rb') as lock:
 }
 
 test(
-  "metis owns native direct and codemode subagents with one wait receipt and isolated SDK children",
+  "metis discovers deferred native subagents through codemode and preserves explicit direct calls and receipts",
   { timeout: 45000 },
   async (t) => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -190,17 +190,25 @@ test(
         const stream = createAssistantMessageEventStream();
         turn++;
         let call;
-        if (turn === 1)
+        if (turn === 1) {
+          const systemMessages = context.messages.filter(message => message.role === "system");
+          assert.match(systemMessages.map(message => message.sections?.metis_subagents ?? "").join("\n"), /Subagent tools are deferred in the subagents namespace/);
+          const modelTools = systemMessages.flatMap(message => message.toolsAdded ?? []);
+          assert.ok(modelTools.some(tool => tool.name === "codemode"));
+          assert.ok(runtimePackage().tools.every(tool => !modelTools.some(declared => declared.name === tool.name)), "model receives no independent native subagent declarations");
           call = {
             name: "codemode",
             arguments: {
               code:
-                'const a=await tools.pi_spawn_agent({name:"nested-proof",task:"nested ' +
+                'const ns=await describeNamespace("subagents"); if(!ns || !ns.tools.includes("pi_spawn_agent")) throw new Error("namespace missing"); ' +
+                'const found=await searchTools("spawn task",{namespace:"subagents",limit:1}); if(found[0]?.name!=="pi_spawn_agent") throw new Error("spawn discovery failed"); ' +
+                'const a=await tools[found[0].name]({name:"nested-proof",task:"nested ' +
                 'proof",access:"read",profile:"viewer",model:"pi-mock-offline/mock"}); if(!a.request_id) throw ' +
                 'new Error("missing operation identity"); text(await ' +
                 'tools.pi_wait_agent({agent_ids:["nested-proof"],timeout_seconds:15}));',
             },
           };
+        }
         if (turn === 3)
           call = {
             name: "pi_spawn_agent",
@@ -480,17 +488,27 @@ test(
       if (event.type === "tool_execution_end" && event.parentToolCallId) nested.push(event);
     });
     await loaded.session.bindExtensions({ onError: (error) => errors.push(error), uiContext, mode: "tui" });
-    loaded.session.setActiveToolsByName([...loaded.session.getActiveToolNames(), "codemode"]);
-    assert.ok(loaded.session.getActiveToolNames().includes("pi_spawn_agent"));
-    assert.ok(loaded.session.getActiveToolNames().includes("bash"), "parent keeps native tools");
+    const initialTools = loaded.session.getActiveToolNames();
+    assert.ok(initialTools.includes("codemode"), "native codemode dependency activates without changing caller settings");
+    for (const tool of runtimePackage().tools) {
+      assert.equal(initialTools.includes(tool.name), false, "native tools are not initially declared directly");
+      const registered = loaded.session.getAllTools().find(item => item.name === tool.name);
+      assert.equal(registered.exposure, "deferred");
+      assert.equal(registered.namespace.name, "subagents");
+    }
+    assert.equal(initialTools.includes("tool_search"), false);
+    assert.ok(initialTools.includes("bash"), "parent keeps native tools");
     await loaded.session.prompt("Run nested proof");
     await loaded.session.waitForIdle();
-    assert.equal(turn, 2, JSON.stringify(errors));
+    assert.equal(turn, 2, JSON.stringify({ errors, assistantErrors: loaded.session.state.messages.filter(message => message.role === "assistant").map(message => message.errorMessage?.slice(0, 1200)) }));
     assert.equal(
       nested.filter((event) => event.toolName === "pi_wait_agent" && !event.isError).length,
       1,
       JSON.stringify(loaded.session.state.messages.filter((message) => message.role === "toolResult")),
     );
+    assert.ok(runtimePackage().tools.every(tool => !loaded.session.getActiveToolNames().includes(tool.name)), "script discovery does not activate independent declarations");
+    // Direct API compatibility is opt-in; the default model interface stays codemode.
+    loaded.session.setActiveToolsByName([...initialTools, ...runtimePackage().tools.map(tool => tool.name)]);
     await loaded.session.prompt("Run direct proof");
     await loaded.session.waitForIdle();
     assert.equal(turn, 5, JSON.stringify(errors));
