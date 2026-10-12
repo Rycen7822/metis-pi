@@ -1,8 +1,10 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
+import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { ExtractedContent } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent } from "./content.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -81,43 +83,6 @@ function resolveModel(): SerpdiveModel {
 	return (MODELS as readonly string[]).includes(value) ? value as SerpdiveModel : DEFAULT_MODEL;
 }
 
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
-}
-
-function parseDomainFilter(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	if (!domainFilter?.length) return filters;
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function domainMatches(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-// SERPdive exposes no include/exclude domain parameter, so the filter is applied
-// here, on what came back. It can therefore only ever narrow a page of results —
-// it cannot ask the engine for more pages from a given domain.
-function passesDomainFilters(url: string, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (filters.exclude.some((domain) => domainMatches(hostname, domain))) return false;
-	if (filters.include.length === 0) return true;
-	return filters.include.some((domain) => domainMatches(hostname, domain));
-}
-
 // SERPdive has NO time-range parameter. Recency is expressed inside the question
 // and read by the engine, which biases ranking toward recent pages — it is a
 // hint, never a guaranteed freshness filter, and results outside the window can
@@ -143,6 +108,7 @@ function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+// SERPdive has no domain parameter; local filtering can only narrow the results.
 function mapResults(
 	results: SerpdiveResult[] | undefined,
 	numResults: number,
@@ -151,7 +117,7 @@ function mapResults(
 	if (!Array.isArray(results)) return [];
 	const mapped: SearchResponse["results"] = [];
 	for (const item of results) {
-		if (!item?.url || !passesDomainFilters(item.url, filters)) continue;
+		if (!item?.url || !matchesDomainFilter(item.url, filters)) continue;
 		mapped.push({
 			title: item.title || `Source ${mapped.length + 1}`,
 			url: item.url,
@@ -165,7 +131,7 @@ function mapResults(
 function mapInlineContent(results: SerpdiveResult[] | undefined, filters: DomainFilters): ExtractedContent[] {
 	if (!Array.isArray(results)) return [];
 	return results.flatMap((item) => {
-		if (!item?.url || !passesDomainFilters(item.url, filters)) return [];
+		if (!item?.url || !matchesDomainFilter(item.url, filters)) return [];
 		if (typeof item.content !== "string" || item.content.trim().length === 0) return [];
 		return [{
 			url: item.url,
@@ -182,12 +148,7 @@ function mapInlineContent(results: SerpdiveResult[] | undefined, filters: Domain
 // real answer and use it when it comes back.
 function buildAnswer(apiAnswer: string | null | undefined, results: SearchResponse["results"]): string {
 	if (typeof apiAnswer === "string" && apiAnswer.trim().length > 0) return apiAnswer;
-	return results
-		.map((result) => {
-			if (result.snippet) return `${result.snippet}\nSource: ${result.title} (${result.url})`;
-			return `Source: ${result.title} (${result.url})`;
-		})
-		.join("\n\n");
+	return formatSearchResultsAsAnswer(results);
 }
 
 export function isSerpdiveAvailable(): boolean {
@@ -200,15 +161,15 @@ export function isSerpdiveAvailable(): boolean {
 
 export async function searchWithSerpdive(query: string, options: SerpdiveSearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
-	const numResults = normalizeSearchResultCount(options.numResults);
-	const filters = parseDomainFilter(options.domainFilter);
+	const numResults = normalizeSearchResultCount(options.numResults, { max: 10 });
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const model = resolveModel();
 	const body: Record<string, unknown> = {
 		query: applyRecencyHint(query, options.recencyFilter),
 		model,
 		// max_results is a CAP, never a minimum: the engine returns what it
 		// judges relevant, up to this many. Asking for more does not produce more.
-		max_results: Math.min(numResults, 10),
+		max_results: numResults,
 		// krill has no answer synthesis — asking for one there is silently ignored
 		// by the API, so it is not asked for at all.
 		...(model === "krill" ? {} : { answer: true }),
@@ -232,7 +193,9 @@ export async function searchWithSerpdive(query: string, options: SerpdiveSearchO
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
@@ -240,7 +203,7 @@ export async function searchWithSerpdive(query: string, options: SerpdiveSearchO
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`SERPdive API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `SERPdive API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 
 	let data: SerpdiveResponse;
@@ -248,7 +211,8 @@ export async function searchWithSerpdive(query: string, options: SerpdiveSearchO
 		data = await response.json() as SerpdiveResponse;
 	} catch (err) {
 		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`SERPdive API returned invalid JSON: ${errorMessage(err)}`);
+		if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+		throw new Error("SERPdive API returned invalid JSON");
 	}
 
 	activityMonitor.logComplete(activityId, response.status);

@@ -116,9 +116,10 @@ test("session_recall query reads its model from global TOML at each call", async
     model: current,
     modelRegistry: {
       find: (provider, id) => [dedicated, codex].find(model => model.provider === provider && model.id === id),
-      getApiKeyAndHeaders: async (model) => {
+      getApiKeyAndHeaders: () => { assert.fail("Recall must let the host runtime resolve request-time auth"); },
+      streamSimple: (model) => {
         selected = model;
-        return { ok: false, error: "Model selection captured without a provider request" };
+        return { result: async () => ({ stopReason: "error", errorMessage: "Model selection captured without a provider request", content: [] }) };
       },
     },
   };

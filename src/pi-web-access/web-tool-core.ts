@@ -1,4 +1,5 @@
-import { getWebSearchConfigPath, loadWebAccessConfig, getWebAccessConfigPath, runWithProxy } from "./utils.ts";
+import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { runWithProxy } from "./proxy-transport.ts";
 // Host-neutral execution core for web_search (non-curator path), fetch_content,
 // get_search_content, and source_check. The Pi extension (index.ts) and the MCP
 // server both run tools through createWebToolCore; everything that differs per
@@ -8,7 +9,7 @@ import { getWebSearchConfigPath, loadWebAccessConfig, getWebAccessConfigPath, ru
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import pLimit from "p-limit";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { normalizeFetchContentParams, type FetchContentParams } from "./fetch-params.ts";
 import { resolveAuthFetchProfile, type AuthFetchProfile } from "./auth-fetch.ts";
 import { findContent, type FindMode } from "./content-find.ts";
@@ -16,12 +17,10 @@ import {
 	assertSearchProviderSelectionAllowed,
 	normalizeSearchProviderSelection,
 	search,
-	type SearchProvider,
-	type SearchProviderSelection,
-} from "./gemini-search.ts";
-import { isOpenAISearchAvailable } from "./openai-search.ts";
-import type { SearchResult } from "./perplexity.ts";
-import { deleteResult, generateId, getResult, storeResult, type QueryResultData, type StoredSearchData } from "./storage.ts";
+} from "./search-router.ts";
+import type { SearchProvider, SearchProviderSelection } from "./search-providers.ts";
+import type { SearchResult, QueryResultData } from "./search-types.ts";
+import { generateId, getResult, storeResult, type StoredSearchData } from "./storage.ts";
 import {
 	buildResearchArtifact,
 	getResearchArtifact,
@@ -1151,7 +1150,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 				};
 			}
 			const { endOffset, text } = sliceWithContinuation(serialized, offset, limit, maxInlineContentChars, (end) =>
-				`\n\n---\nShowing chars ${offset}-${end} of ${serialized.length}. Use ${toolNames.getSearchContent}({ responseId: "${artifact.id}", offset: ${end}, limit: ${limit} }) for the next slice.`);
+				`\n\n---\nShowing chars ${offset}-${end} of ${serialized.length}. Use ${storedContentCall(`responseId: "${artifact.id}", offset: ${end}, limit: ${limit}`)} for the next slice.`);
 			const hasMore = endOffset < serialized.length;
 			return {
 				content: [{ type: "text", text }],
@@ -1235,7 +1234,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 			}
 			const queryIndex = data.queries.indexOf(queryData);
 			const { endOffset, text } = sliceWithContinuation(fullResults, offset, limit, maxInlineContentChars, (end) =>
-				`\n\n---\nShowing chars ${offset}-${end} of ${fullResults.length}. Use ${toolNames.getSearchContent}({ responseId: "${params.responseId}", queryIndex: ${queryIndex}, offset: ${end}, limit: ${limit} }) for the next slice.`);
+				`\n\n---\nShowing chars ${offset}-${end} of ${fullResults.length}. Use ${storedContentCall(`responseId: "${params.responseId}", queryIndex: ${queryIndex}, offset: ${end}, limit: ${limit}`)} for the next slice.`);
 			const returnedChars = endOffset - offset;
 			const hasMore = endOffset < fullResults.length;
 			return {
@@ -1343,7 +1342,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 			if (hasMore || offset > 0) {
 				text += `\n\n---\nShowing chars ${offset}-${endOffset} of ${urlData.content.length}.`;
 				if (hasMore) {
-					text += ` Use ${toolNames.getSearchContent}({ responseId: "${params.responseId}", urlIndex: ${selectedUrlIndex}, offset: ${endOffset}, limit: ${limit} }) for the next slice.`;
+					text += ` Use ${storedContentCall(`responseId: "${params.responseId}", urlIndex: ${selectedUrlIndex}, offset: ${endOffset}, limit: ${limit}`)} for the next slice.`;
 				}
 			}
 
@@ -1377,18 +1376,6 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 	};
 }
 
-const MAX_STORED_RESULTS = 50;
-const STANDALONE_DIRECT_IMAGE_ERROR = "Direct image fetch is not supported over MCP; fetch_content returns text there. Fetch images from the Pi extension instead.";
-
-export interface StandaloneWebToolCore extends WebToolCore {
-	/** Default names of the tools web-search.json enables; hosts list only these. */
-	enabledToolNames: string[];
-}
-
-function standaloneError(error: string): WebToolResult {
-	return { content: [{ type: "text", text: `Error: ${error}` }], details: { error }, isError: true };
-}
-
 // Marks a final tool result as failed (`isError: true`) for both the Pi tools
 // and the MCP server. A result with details.error is an error, and so is a call
 // where nothing requested succeeded: every web_search query, every fetch_content
@@ -1400,97 +1387,4 @@ export function markToolError<T extends Omit<WebToolResult, "structuredContent">
 		|| (typeof urlCount === "number" && urlCount > 0 && successful === 0)
 		|| (typeof searchCount === "number" && searchCount > 0 && (artifact as ResearchArtifact).errors?.length === searchCount);
 	return error !== undefined || nothingSucceeded ? { ...result, isError: true } : result;
-}
-
-// Explicit requests for providers that need Pi's model registry or login state
-// fail here instead of silently falling back. Automatic selection already skips
-// them without a Pi context and picks among the providers usable here.
-async function standaloneProviderRejection(requested: unknown): Promise<string | undefined> {
-	let selection: SearchProviderSelection;
-	try {
-		selection = resolveRequestedProvider(requested);
-	} catch {
-		return undefined; // The core reports the same validation error.
-	}
-	const explicit: string[] = Array.isArray(selection) ? selection : [selection];
-	if (explicit.includes("kimi")) {
-		return "Kimi search is not supported over MCP: it authenticates only through Pi's /login kimi-coding. Choose another provider, or search from Pi.";
-	}
-	if (explicit.includes("openai")) {
-		let available: boolean;
-		try {
-			available = await isOpenAISearchAvailable();
-		} catch {
-			return undefined; // The core reports the same configuration error.
-		}
-		if (!available) {
-			return `OpenAI search over MCP needs an API key: set openaiApiKey in ${getWebSearchConfigPath()} or OPENAI_API_KEY. ` +
-				"ChatGPT/Codex sign-in, openaiUseProviderBaseUrl, and Pi model credentials work only inside Pi.";
-		}
-	}
-	return undefined;
-}
-
-function standaloneFetchRejection(params: FetchContentCallParams, fetchModes: FetchModeConfig): string | undefined {
-	if (params.mode === "answer") {
-		return "fetch_content mode \"answer\" is not supported over MCP: page answers use Pi's models. Use mode \"readable\" or \"raw\".";
-	}
-	if (params.mode === undefined && fetchModes.defaultMode === "answer") {
-		return `fetch.defaultMode in ${WEB_SEARCH_CONFIG_PATH} is "answer", which is not supported over MCP. Pass mode "readable" or "raw".`;
-	}
-	return undefined;
-}
-
-/** Core for hosts without Pi: no extension context, curator, or summaries; results
- * live in a bounded in-memory store; includeContent waits for the page fetch. */
-export function createStandaloneWebToolCore(): StandaloneWebToolCore {
-	const config = loadConfig();
-	const settings: WebToolCoreSettings = {
-		toolNames: { ...DEFAULT_TOOL_NAMES },
-		enabledTools: {
-			webSearch: isToolEnabled(config, "webSearch"),
-			sourceCheck: isToolEnabled(config, "sourceCheck"),
-			fetchContent: isToolEnabled(config, "fetchContent"),
-			getSearchContent: isToolEnabled(config, "getSearchContent"),
-		},
-		maxInlineContentChars: getMaxInlineContentChars(config),
-		fetchModes: resolveFetchModeConfig(config),
-	};
-	const storedIds: string[] = [];
-	const remember = (id: string) => {
-		storedIds.push(id);
-		while (storedIds.length > MAX_STORED_RESULTS) deleteResult(storedIds.shift()!);
-	};
-	const core = createWebToolCore({
-		settings,
-		storeFetchedContent(id, data) {
-			storeResult(id, data);
-			remember(id);
-		},
-		publishResult(data) {
-			remember(data.id);
-		},
-		extractOptions: { rejectDirectImages: STANDALONE_DIRECT_IMAGE_ERROR },
-	});
-
-	return {
-		enabledToolNames: (Object.keys(DEFAULT_TOOL_NAMES) as (keyof ToolNames)[])
-			.filter((key) => settings.enabledTools[key])
-			.map((key) => DEFAULT_TOOL_NAMES[key]),
-		async webSearch(params, signal) {
-			const rejection = await standaloneProviderRejection(params.provider);
-			return rejection ? standaloneError(rejection) : markToolError(await core.webSearch(params, signal));
-		},
-		async fetchContent(params, signal) {
-			const rejection = standaloneFetchRejection(params, settings.fetchModes);
-			return rejection ? standaloneError(rejection) : markToolError(await core.fetchContent(params, signal));
-		},
-		async getSearchContent(params, signal) {
-			return markToolError(await core.getSearchContent(params, signal));
-		},
-		async sourceCheck(params, signal) {
-			const rejection = await standaloneProviderRejection(params.provider);
-			return rejection ? standaloneError(rejection) : markToolError(await core.sourceCheck(params, signal));
-		},
-	};
 }

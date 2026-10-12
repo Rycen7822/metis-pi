@@ -1,7 +1,7 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { fetchRemoteUrl, loadSsrfConfig, validateRemoteUrl, type Lookup, type SsrfConfig } from "./ssrf-protection.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();

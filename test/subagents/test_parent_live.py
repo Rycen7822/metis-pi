@@ -10,7 +10,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 
-from test_transport import McpHarness, ROOT
+from paths import ROOT, TEST_ROOT
+from test_transport import McpHarness
 
 
 class LiveParentWakeup(McpHarness, unittest.IsolatedAsyncioTestCase):

@@ -1,8 +1,8 @@
 // Structured source evidence and machine-readable research artifacts.
 import { createHash } from "node:crypto";
 import { generateId, getResult, storeResult } from "./storage.ts";
-import type { SearchResult } from "./perplexity.ts";
-import type { ExtractedContent } from "./extract.ts";
+import type { SearchResult } from "./search-types.ts";
+import type { ExtractedContent } from "./content.ts";
 
 export type SourceQuality = "official_docs" | "vendor_docs" | "repo_issue" | "blog" | "forum" | "news" | "unknown";
 export type ClaimStatus = "supported" | "contradicted" | "unclear" | "missing-evidence";
@@ -52,16 +52,6 @@ export interface ResearchArtifact {
 	filters?: { recency?: RecencyFilter; domain_include?: string[]; domain_exclude?: string[] };
 	errors?: Array<{ query: string; error: string }>;
 }
-
-export interface ResearchSearchRequest {
-	query: string;
-	numResults: number;
-	recencyFilter?: RecencyFilter;
-	domainFilter?: string[];
-}
-export interface ResearchSearchResult { url: string; title: string; snippet: string; rank: number }
-export interface ResearchSearchResponse { provider: string; results: ResearchSearchResult[]; summary?: string }
-export interface ResearchProvider { name: string; search(req: ResearchSearchRequest): Promise<ResearchSearchResponse> }
 
 const OFFICIAL_DOCS_HOSTS = /^(developers\.|docs\.|learn\.|reference\.)|\.github\.io$/i;
 const OFFICIAL_DOCS_PATHS = /\/(docs?|reference)(\/|\b)/i;

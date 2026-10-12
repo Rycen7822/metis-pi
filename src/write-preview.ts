@@ -84,7 +84,7 @@ export function renderWritePreview(
   },
 ): string[] {
   const { width, stage, expanded, theme, colorLevel, gutter } = options;
-  const totalBudget = Math.max(1, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
+  const totalBudget = Math.max(0, options.maxRows ?? WRITE_PREVIEW_MAX_ROWS);
   const headerRows = Math.max(0, options.headerRows ?? 0);
   // A renderer must never take the host process down — degrade to ASCII layout ops when missing.
   const layout: DiffLayoutOps = options.layout ?? {
@@ -98,7 +98,7 @@ export function renderWritePreview(
   // Number width from the ACTUAL last line number, not the total — they differ once truncation starts.
   const raw = safePrefix(contentPrefix);
   const normalized = raw ? (raw.endsWith("\n") ? raw.slice(0, -1) : raw) : "";
-  const allLines = normalized ? normalized.split("\n").map((line) => line.replace(/\r$/, "")) : [];
+  const allLines = totalBudget > 0 && normalized ? normalized.split("\n").map((line) => line.replace(/\r$/, "")) : [];
   const totalLogicalLines = allLines.length;
   const numberWidth = Math.min(maxNumber, Math.max(1, String(Math.max(1, totalLogicalLines)).length));
   const bodyWidth = Math.max(1, width - gutterWidth - numberWidth - 1);
@@ -106,11 +106,12 @@ export function renderWritePreview(
   const stageInfo = stageLabel(stage, theme);
   const dim = colorLevel.kind === "none" ? "" : "\x1b[2m";
   const dimOff = colorLevel.kind === "none" ? "" : "\x1b[22m";
-  const stageText = totalLogicalLines > 0
+  const stageText = normalized
     ? stageInfo.label
     : stage === "receiving-arguments" ? "Receiving arguments…" : stageInfo.label;
   const stageRow = `${dim}${gutter}${stageText}${dimOff}`;
   const copy = options.copyOut;
+  const copyStart = copy?.length ?? 0;
   const prefixWidth = gutterWidth + numberWidth + 1;
 
   if (!allLines.length) {
@@ -170,10 +171,10 @@ export function renderWritePreview(
       // The hint consumes body budget: drop the OLDEST rendered row to keep the newest content within the total bound.
       if (out.length >= totalBudget) {
         out.splice(1, 1);
-        copy?.splice(1, 1);
+        copy?.splice(copyStart + 1, 1);
         // The drop may expose a soft continuation as the new window head.
-        const head = copy?.[1];
-        if (copy && head) copy[1] = { ...head, breakBefore: "hard" };
+        const head = copy?.[copyStart + 1];
+        if (copy && head) copy[copyStart + 1] = { ...head, breakBefore: "hard" };
       }
       const hint = `${dim}${gutter}… earlier output (${hiddenLogical} logical line${hiddenLogical === 1 ? "" : "s"}, physical rows elided)${dimOff}`;
       out.push(hint);

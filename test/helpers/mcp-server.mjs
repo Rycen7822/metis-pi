@@ -5,11 +5,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 export const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
-const tools = (type) => [
+const tools = (type, annotations = { readOnlyHint: true }) => [
   {
     name: "echo",
     description: "Return a value, optionally delay or fail",
-    annotations: { readOnlyHint: true },
+    annotations,
     inputSchema: {
       type: "object",
       properties: { value: { type }, delayMs: { type: "number" }, domainError: { type: "boolean" } },
@@ -39,7 +39,7 @@ async function rpc(message, state) {
     };
   }
   if (method === "tools/list") {
-    const result = tools(state.schema ? JSON.parse(readFileSync(state.schema, "utf8")).type : state.type);
+    const result = tools(state.schema ? JSON.parse(readFileSync(state.schema, "utf8")).type : state.type, state.annotations);
     await state.onList?.();
     return { tools: result };
   }

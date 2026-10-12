@@ -1,6 +1,6 @@
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import { execFile } from "node:child_process";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { checkGhAvailable, showGhHint } from "./github-api.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig } from "./ssrf-protection.ts";
 

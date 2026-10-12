@@ -1,8 +1,9 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -102,14 +103,9 @@ function mapRecencyFilter(recency: SearchOptions["recencyFilter"]): string | und
 }
 
 function buildSearchBody(query: string, options: SearchinfinitySearchOptions): Record<string, unknown> {
-	const includeSites: string[] = [];
-	const blockHosts: string[] = [];
-	for (const raw of options.domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? blockHosts : includeSites;
-		if (target.length < 5 && !target.includes(domain)) target.push(domain);
-	}
+	const domains = normalizeDomainFilters(options.domainFilter);
+	const includeSites = domains.include.slice(0, 5);
+	const blockHosts = domains.exclude.slice(0, 5);
 	const filter: Record<string, unknown> = {};
 	if (includeSites.length > 0) filter.Sites = includeSites.join("|");
 	if (blockHosts.length > 0) filter.BlockHosts = blockHosts.join("|");
@@ -156,30 +152,31 @@ async function searchinfinityJsonRequest(
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
 
 	const raw = await response.text();
 	if (!response.ok) {
-		throw new Error(`Searchinfinity Search API error ${response.status}: ${redactCredential(raw, apiKey).slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Searchinfinity Search API error ${response.status}: ${redactCredential(raw, apiKey).slice(0, 300)}`);
 	}
 	let data: SearchinfinitySearchResponse;
 	try {
 		data = JSON.parse(raw) as SearchinfinitySearchResponse;
-	} catch (err) {
-		throw new Error(`Searchinfinity Search API returned invalid JSON: ${errorMessage(err)}`);
+	} catch {
+		throw new Error(`Searchinfinity Search API returned invalid JSON`);
 	}
 	const businessError = data.ResponseMetadata?.Error;
-	if (businessError && (businessError.Code || businessError.Message)) {
+	if (businessError && (businessError.Code || businessError.Message || typeof businessError.CodeN === "number")) {
 		const code = typeof businessError.Code === "string" && businessError.Code ? businessError.Code : "unknown";
 		const message = typeof businessError.Message === "string" && businessError.Message ? businessError.Message : "unknown error";
 		const status = businessErrorStatus(businessError.CodeN, code, message);
 		const codeLabel = typeof businessError.CodeN === "number" ? `${businessError.CodeN} ${code}` : code;
-		throw new Error(
-			`Searchinfinity Search API error ${status ?? "unknown"}: ${message} (code ${codeLabel})`,
-		);
+		const detail = redactCredential(`Searchinfinity Search API error ${status ?? "unknown"}: ${message} (code ${codeLabel})`, apiKey);
+		throw status === undefined ? new Error(detail) : new SearchHttpError(status, detail);
 	}
 	return data;
 }
@@ -219,7 +216,9 @@ export async function searchWithSearchinfinity(
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}

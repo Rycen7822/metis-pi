@@ -30,6 +30,43 @@ test("extractPDFToMarkdown works on Node 22 without native Promise.try", () => {
 	assert.match(child.stdout, /Second \(line\)/);
 });
 
+test("default PDF artifacts keep source/content identity and preserve explicit filenames", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-web-access-pdf-identity-"));
+	writeFileSync(join(root, "web-search.json"), JSON.stringify({ pdf: { provider: "unpdf" } }));
+	try {
+		const child = spawnSync(process.execPath, ["--input-type=module"], {
+			input: `
+				import assert from "node:assert/strict";
+				import { readFile } from "node:fs/promises";
+				import { join } from "node:path";
+				import { makePdf } from ${JSON.stringify(fixtureUrl)};
+				const { extractPDFToMarkdown } = await import(${JSON.stringify(extractorUrl)});
+				const outputDir = join(process.env.PI_CODING_AGENT_DIR, "artifacts");
+				const first = await extractPDFToMarkdown(makePdf("First source PDF"), "https://example.test/a/report.pdf", { outputDir });
+				const other = await extractPDFToMarkdown(makePdf("Second source PDF"), "https://example.test/b/report.pdf", { outputDir });
+				const refreshed = await extractPDFToMarkdown(makePdf("Changed first source"), "https://example.test/a/report.pdf", { outputDir });
+				const repeated = await extractPDFToMarkdown(makePdf("First source PDF"), "https://example.test/a/report.pdf", { outputDir });
+				assert.notEqual(first.outputPath, other.outputPath);
+				assert.notEqual(first.outputPath, refreshed.outputPath);
+				assert.equal(first.outputPath, repeated.outputPath);
+				assert.match(await readFile(first.outputPath, "utf8"), /First source PDF/);
+				assert.match(await readFile(other.outputPath, "utf8"), /Second source PDF/);
+				assert.match(await readFile(refreshed.outputPath, "utf8"), /Changed first source/);
+				const explicit = await extractPDFToMarkdown(makePdf("Explicit output"), "https://example.test/report.pdf", { outputDir, filename: "chosen.md" });
+				assert.equal(explicit.outputPath, join(outputDir, "chosen.md"));
+				const overwritten = await extractPDFToMarkdown(makePdf("Explicit update"), "https://example.test/report.pdf", { outputDir, filename: "chosen.md" });
+				assert.equal(overwritten.outputPath, explicit.outputPath);
+				assert.match(await readFile(explicit.outputPath, "utf8"), /Explicit update/);
+			`,
+			encoding: "utf8", timeout: 15_000,
+			env: { ...process.env, HOME: root, USERPROFILE: root, PI_CODING_AGENT_DIR: root },
+		});
+		assert.equal(child.status, 0, child.stderr);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("extractPDFToMarkdown uses Gemini before loading unpdf", () => {
 	const loaderDir = mkdtempSync(
 		join(tmpdir(), "pi-web-access-pdf-gemini-first-"),
@@ -192,6 +229,7 @@ function buildChildScript(
         }
 
         const geminiMode = ${JSON.stringify(geminiMode)};
+        const remoteCalls = [];
         const datalabMode = ${JSON.stringify(datalabMode)};
         const provider = ${JSON.stringify(provider)};
         const configDir = await mkdtemp(join(tmpdir(), "pi-web-access-pdf-config-"));
@@ -222,6 +260,7 @@ function buildChildScript(
           globalThis.fetch = async (url, init) => {
             if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
             const urlString = String(url);
+            remoteCalls.push(urlString);
             if (urlString.includes("generateContent")) {
               if (provider === "datalab" || provider === "unpdf") {
                 throw new Error("Gemini called but provider=" + provider);
@@ -309,6 +348,9 @@ function buildChildScript(
         { outputDir },
       );
 
+      if ((provider === "datalab" || provider === "unpdf") && remoteCalls.some(url => url.includes("generateContent"))) {
+        throw new Error("Forbidden Gemini provider was called: " + JSON.stringify(remoteCalls));
+      }
       const saved = await readFile(result.outputPath, "utf8");
       if (result.content !== saved || result.chars !== saved.length) {
         throw new Error("Returned PDF Markdown must match the saved file and character count");

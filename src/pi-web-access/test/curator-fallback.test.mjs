@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const indexSrc = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+const browserSrc = readFileSync(new URL("../curator-browser.ts", import.meta.url), "utf8");
+const commandSrc = readFileSync(new URL("../tool-commands.ts", import.meta.url), "utf8");
 const readmeSrc = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 test("web_search curator auto-open failures keep the curator alive with a manual URL", () => {
@@ -41,24 +43,24 @@ test("cancel diagnostics include curator URL and browser-open error", () => {
 });
 
 test("manual websearch command reports browser-open fallback without closing curator", () => {
-	assert.match(indexSrc, /let browserOpenError: string \| null = null;/);
-	assert.match(indexSrc, /ctx\.ui\.notify\(`Search curator is running, but the browser did not open automatically\. Open manually: \$\{handle\.url\}`/);
-	assert.match(indexSrc, /if \(queries\.length > 0\) \{/);
+	assert.match(commandSrc, /let browserOpenError: string \| null = null;/);
+	assert.match(commandSrc, /ctx\.ui\.notify\(`Search curator is running, but the browser did not open automatically\. Open manually: \$\{handle\.url\}`/);
+	assert.match(commandSrc, /if \(queries\.length > 0\) \{/);
 });
 
 test("remote curator mode prints the manual URL unless auto-open is explicit", () => {
-	assert.match(indexSrc, /function shouldAutoOpenCuratorBrowser\(config: WebSearchConfig\): boolean \{/);
-	assert.match(indexSrc, /if \(resolveCuratorNetworkConfig\(\)\.enabled && config\.autoOpenBrowser !== true\) return false;/);
+	assert.match(browserSrc, /function shouldAutoOpenCuratorBrowser\(/);
+	assert.match(browserSrc, /if \(resolveCuratorNetworkConfig\(\)\.enabled && config\.autoOpenBrowser !== true\) return false;/);
 	assert.ok(indexSrc.includes('sendCuratorFallbackUpdate("Search curator is running. Open the curator URL manually.")'));
-	assert.ok(indexSrc.includes('ctx.ui.notify(`Search curator is running. Open manually: ${handle.url}`, "info")'));
+	assert.ok(commandSrc.includes('ctx.ui.notify(`Search curator is running. Open manually: ${handle.url}`, "info")'));
 });
 
 test("Linux curator browser launch detaches xdg-open but keeps immediate failures", () => {
-	assert.match(indexSrc, /spawn\("xdg-open", \[url\], \{ detached: true, stdio: "ignore" \}\)/);
-	assert.match(indexSrc, /child\.once\("error", \(err\) => \{/);
-	assert.match(indexSrc, /child\.once\("exit", \(code\) => \{/);
-	assert.match(indexSrc, /setTimeout\(resolve, 100\)/);
-	assert.match(indexSrc, /child\.unref\(\);/);
+	assert.match(browserSrc, /spawn\("xdg-open", \[url\], \{ detached: true, stdio: "ignore" \}\)/);
+	assert.match(browserSrc, /child\.once\("error", \(err\) => \{/);
+	assert.match(browserSrc, /child\.once\("exit", \(code\) => \{/);
+	assert.match(browserSrc, /setTimeout\(resolve, 100\)/);
+	assert.match(browserSrc, /child\.unref\(\);/);
 });
 
 test("README documents manual browser fallback", () => {

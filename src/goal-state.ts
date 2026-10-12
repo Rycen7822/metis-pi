@@ -107,10 +107,11 @@ function assistantUsageTokens(messages: unknown[]): number {
     };
     if (msg.role !== "assistant" || !msg.usage) continue;
     const input = Math.max(0, msg.usage.input ?? 0);
-    const cacheRead = Math.max(0, msg.usage.cacheRead ?? 0);
     const output = Math.max(0, msg.usage.output ?? 0);
-    const measured = Math.max(0, input - cacheRead) + output;
-    total += measured > 0 ? measured : Math.max(0, msg.usage.totalTokens ?? 0);
+    // Pi's input already excludes cacheRead. Only legacy usage without
+    // measured fields may use totalTokens; a fully cached request costs zero.
+    const measured = msg.usage.input !== undefined || msg.usage.output !== undefined;
+    total += measured ? input + output : Math.max(0, msg.usage.totalTokens ?? 0);
   }
   return total;
 }

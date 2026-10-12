@@ -86,6 +86,12 @@ test("fetchRouting.providers can put Jina first after explicit remote-hosted opt
 	assert.equal(output.result.title, "Routed");
 });
 
+test("a later HTTP provider reuses the completed origin gate after hosted failure", async () => {
+	const output = await runExtract({ fetchRouting: { providers: ["jina", "http"], allowRemoteHostedProviders: true } }, { jinaFails: true });
+	assert.deepEqual(output.calls, ["https://example.com/routed", "https://r.jina.ai/https://example.com/routed"]);
+	assert.match(output.result.error, /HTTP 403/);
+});
+
 test("remote hosted fetch providers are disabled by default", async () => {
 	const output = await runExtract({});
 	assert.deepEqual(output.calls, ["https://example.com/routed"]);
@@ -147,6 +153,14 @@ test("disabled PDF extraction does not fall through to hosted providers", async 
 	const output = await runTypedExtract({ pdf: { enabled: false }, fetchRouting: { providers: ["http", "jina"], allowRemoteHostedProviders: true } }, "application/pdf");
 	assert.deepEqual(output.calls, ["https://example.com/typed"]);
 	assert.match(output.result.error, /PDF extraction is disabled by pdf\.enabled/);
+});
+
+test("PDF direct download size rejection keeps the existing downstream fallback policy", async () => {
+	const output = await runTypedExtract({ pdf: { maxSizeMB: 2 / 1024 / 1024 }, fetchRouting: { providers: ["http", "jina"], allowRemoteHostedProviders: true } }, "application/pdf");
+	assert.deepEqual(output.calls, ["https://example.com/typed", "https://r.jina.ai/https://example.com/typed"]);
+	assert.equal(output.result.error, null);
+	assert.match(output.result.content, /content/);
+	assert.equal(output.result.failure, undefined);
 });
 
 test("malformed config returns a parse error without hosted fallback", async () => {

@@ -1,8 +1,10 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import type { ExtractedContent } from "./extract.ts";
+import { SearchHttpError, type SearchResult, type SearchResponse, type SearchOptions } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 const PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
 const PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
@@ -14,25 +16,6 @@ const RATE_LIMIT = {
 };
 
 const requestTimestamps: number[] = [];
-
-export interface SearchResult {
-	title: string;
-	url: string;
-	snippet: string;
-}
-
-export interface SearchResponse {
-	answer: string;
-	results: SearchResult[];
-	inlineContent?: ExtractedContent[];
-}
-
-export interface SearchOptions {
-	numResults?: number;
-	recencyFilter?: "day" | "week" | "month" | "year";
-	domainFilter?: string[];
-	signal?: AbortSignal;
-}
 
 interface WebSearchConfig {
 	perplexityApiKey?: unknown;
@@ -78,13 +61,6 @@ function checkRateLimit(): void {
 	requestTimestamps.push(now);
 }
 
-function validateDomainFilter(domains: string[]): string[] {
-	return domains.filter((d) => {
-		const domain = d.startsWith("-") ? d.slice(1) : d;
-		return /^[a-zA-Z0-9][a-zA-Z0-9-_.]*\.[a-zA-Z]{2,}$/.test(domain);
-	});
-}
-
 export function isPerplexityAvailable(): boolean {
 	return hasCredentialSource({
 		provider: "Perplexity",
@@ -105,6 +81,7 @@ async function postPerplexity(
 ): Promise<Record<string, unknown>> {
 	checkRateLimit();
 
+	const apiKey = await getApiKey(options.signal);
 	const activityId = activityMonitor.logStart({ type: "api", query: options.activityQuery });
 
 	activityMonitor.updateRateLimit({
@@ -113,8 +90,6 @@ async function postPerplexity(
 		oldestTimestamp: requestTimestamps[0] ?? null,
 		windowMs: RATE_LIMIT.windowMs,
 	});
-
-	const apiKey = await getApiKey(options.signal);
 
 	let response: Response;
 	try {
@@ -145,7 +120,7 @@ async function postPerplexity(
 
 	if (!response.ok) {
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Perplexity API error ${response.status}: ${errorText}`);
+		throw new SearchHttpError(response.status, `Perplexity API error ${response.status}: ${errorText}`);
 	}
 
 	try {
@@ -157,9 +132,7 @@ async function postPerplexity(
 }
 
 export async function searchWithPerplexity(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
-	const numResults = typeof options.numResults === "number" && Number.isFinite(options.numResults)
-		? Math.max(1, Math.min(Math.floor(options.numResults), 20))
-		: 5;
+	const numResults = normalizeSearchResultCount(options.numResults);
 
 	const requestBody: Record<string, unknown> = {
 		query,
@@ -173,7 +146,8 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 	}
 
 	if (options.domainFilter && options.domainFilter.length > 0) {
-		const validated = validateDomainFilter(options.domainFilter);
+		const filters = normalizeDomainFilters(options.domainFilter);
+		const validated = [...filters.include, ...filters.exclude.map(domain => `-${domain}`)];
 		if (validated.length > 0) {
 			requestBody.search_domain_filter = validated;
 		}

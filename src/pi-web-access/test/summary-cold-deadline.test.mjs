@@ -11,26 +11,22 @@ test("pre-aborted summary rejects without creating an unhandled abort contender"
 	await new Promise(resolve => setImmediate(resolve));
 });
 
-for (const mode of ["compat", "thinking"]) {
-	for (const scenario of ["pending-import", "expired-import", "expired-completion", "expired-throw", "expired-rejection", "caller-abort"]) {
-		test(`summary ${mode}: ${scenario} respects cancellation on cold first use`, () => {
-			const child = spawnSync(process.execPath, ["--input-type=module"], {
-				input: buildChildScript(mode, scenario),
-				encoding: "utf8",
-				timeout: 10_000,
-			});
-			assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stderr}`);
+for (const scenario of ["pending-import", "expired-import", "expired-completion", "expired-throw", "expired-rejection", "caller-abort"]) {
+	test(`summary thinking: ${scenario} respects cancellation on cold first use`, () => {
+		const child = spawnSync(process.execPath, ["--input-type=module"], {
+			input: buildChildScript(scenario),
+			encoding: "utf8",
+			timeout: 10_000,
 		});
-	}
+		assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stderr}`);
+	});
 }
 
-function buildChildScript(mode, scenario) {
-	const specifier = mode === "compat" ? "@earendil-works/pi-ai/compat" : "@earendil-works/pi-ai";
+function buildChildScript(scenario) {
+	const specifier = "@earendil-works/pi-ai";
 	const moduleSource = `
 		globalThis.importStarted();
 		await globalThis.importGate;
-		export const complete = (...args) => globalThis.testComplete(...args);
-		export const completeSimple = complete;
 		export const clampThinkingLevel = (_model, level) => level;
 	`;
 	const loaderSource = `
@@ -73,14 +69,14 @@ function buildChildScript(mode, scenario) {
 			find: (provider, id) => provider === model.provider && id === model.id ? model : undefined,
 			getAvailable: () => [model],
 			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-			...(${JSON.stringify(mode)} === "thinking" ? { complete: globalThis.testComplete } : {}),
+			complete: globalThis.testComplete,
 		};
 		const controller = new AbortController();
 		mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
 		try {
 			const pending = generateSummaryDraft([], {
 				modelRegistry: registry, scopedModels: [],
-			}, controller.signal, "test/model" + (${JSON.stringify(mode)} === "thinking" ? ":high" : ""), undefined, undefined, 100);
+			}, controller.signal, "test/model:high", undefined, undefined, 100);
 			// Wait for cold module evaluation before advancing the clock.
 			await importStarted;
 			if (scenario === "caller-abort") {

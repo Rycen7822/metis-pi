@@ -1,7 +1,7 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();

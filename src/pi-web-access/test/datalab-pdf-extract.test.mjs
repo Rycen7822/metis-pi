@@ -259,28 +259,42 @@ test("Datalab conversion rejects a streamed response above its byte limit", asyn
 	);
 });
 
-test("Datalab conversion rejects failed conversion status", async () => {
+for (const phase of ["submit", "poll"]) test(`Datalab HTTP 200 ${phase} failure masks the API key`, async () => {
+	const calls = [];
 	globalThis.fetch = async (url, init) => {
+		calls.push(String(url));
+		const failure = { status: "failed", success: false, error: "document is corrupt: synthetic-datalab-key" };
 		if (String(url).endsWith("/convert")) {
+			if (phase === "submit") return jsonResponse(failure);
 			return jsonResponse({
 				status: "processing",
 				request_check_url: "/check/abc",
 			});
 		}
 		if (String(url).endsWith("/check/abc")) {
-			return jsonResponse({
-				status: "failed",
-				success: false,
-				error: "document is corrupt",
-			});
+			return jsonResponse(failure);
 		}
 		return route(url, init);
 	};
 
 	await assert.rejects(
 		extractPDFViaDatalab(new ArrayBuffer(1), { maxPages: 1, title: "Doc" }),
-		/document is corrupt/,
+		error => {
+			assert.match(error.message, /document is corrupt.*\[redacted\]/);
+			assert.doesNotMatch(error.message, /synthetic-datalab-key/);
+			return true;
+		},
 	);
+	assert.equal(calls.filter(url => url.endsWith("/check/abc")).length, phase === "poll" ? 1 : 0);
+});
+
+test("Datalab HTTP errors mask the whole key before clipping the body", async () => {
+	globalThis.fetch = async () => new Response("x".repeat(290) + "synthetic-datalab-key", { status: 401 });
+	await assert.rejects(extractPDFViaDatalab(new ArrayBuffer(1), { maxPages: 1, title: "Doc" }), error => {
+		assert.match(error.message, /HTTP 401.*\[redacted\]/);
+		assert.doesNotMatch(error.message, /synthetic-/);
+		return true;
+	});
 });
 
 test("Datalab conversion rejects empty markdown", async () => {

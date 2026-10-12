@@ -1,8 +1,9 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { ExtractedContent } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent } from "./content.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -53,15 +54,7 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 }
 
 function mapDomainFilter(domainFilter: string[] | undefined): { included_sources?: string[]; excluded_sources?: string[] } {
-	if (!domainFilter?.length) return {};
-	const included_sources: string[] = [];
-	const excluded_sources: string[] = [];
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? excluded_sources : included_sources;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { include: included_sources, exclude: excluded_sources } = normalizeDomainFilters(domainFilter);
 	return {
 		...(included_sources.length > 0 ? { included_sources } : {}),
 		...(excluded_sources.length > 0 ? { excluded_sources } : {}),
@@ -117,21 +110,24 @@ export async function searchWithValyu(query: string, options: SearchOptions & { 
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Valyu API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Valyu API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 	let rawData: unknown;
 	try {
 		rawData = await response.json();
 	} catch (err) {
 		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`Valyu API returned invalid JSON: ${errorMessage(err)}`);
+		if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+		throw new Error("Valyu API returned invalid JSON");
 	}
 	let entries: ValyuResult[];
 	try {

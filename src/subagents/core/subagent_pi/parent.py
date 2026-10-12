@@ -246,7 +246,7 @@ class ParentNotifications:
                 worker = self.worker_for(run["agent_id"])
                 relevant = not notice["handled"] and (
                     notice["kind"] == "terminal"
-                    or bool(worker and worker.run_id == run["id"] and notice["ui_id"] in worker.ui)
+                    or bool(worker and worker.run.id == run["id"] and notice["ui_id"] in worker.run.ui)
                 )
                 waiting = any(
                     covering and sid == notice["scope"] and (ids is None or notice["run_id"] in ids)
@@ -304,7 +304,7 @@ class ParentNotifications:
         current=self.store.one('SELECT handled FROM parent_notifications WHERE id=?',(notice['id'],))
         run=self.store.run(notice['scope'],notice['run_id'])
         worker=self.worker_for(run['agent_id'])
-        relevant=not current['handled'] and (notice['kind']=='terminal' or bool(worker and worker.run_id==run['id'] and notice['ui_id'] in worker.ui))
+        relevant=not current['handled'] and (notice['kind']=='terminal' or bool(worker and worker.run.id==run['id'] and notice['ui_id'] in worker.run.ui))
         waiting=any(covering and sid==notice['scope'] and (ids is None or run['id'] in ids) for sid,ids,covering in self.waits.values())
         if not relevant or waiting:
             self.store.execute('UPDATE parent_notifications SET state=? WHERE id=?',('pending' if relevant else 'superseded',notice['id']))

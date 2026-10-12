@@ -72,6 +72,30 @@ test("binary pre-images and post-write deletion never produce a garbage diff", (
   assert.match(gone.reason, /missing|unreadable/);
 });
 
+test("native write ownership requires exact encoded bytes before display normalization", async (t) => {
+  const { file, start, end } = fixture(t);
+  const target = file("exact.txt", "old\n");
+  const write = createWriteToolDefinition(path.dirname(target));
+  for (const [id, requested, laterBytes] of [
+    ["line-endings", "fresh\n", Buffer.from("fresh\r\n")],
+    ["invalid-utf8", "\ufffd\n", Buffer.from([0xff, 0x0a])],
+  ]) {
+    fs.writeFileSync(target, "old\n");
+    start(id, target, requested);
+    await write.execute(id, { path: target, content: requested }, undefined);
+    assert.deepEqual(fs.readFileSync(target), Buffer.from(requested));
+    fs.writeFileSync(target, laterBytes);
+    const changed = end(id);
+    assert.equal(changed.kind, "unavailable", id);
+    assert.match(changed.reason, /mismatch|binary/, id);
+  }
+  // Node's specified UTF-8 encoding substitutes an unpaired surrogate.
+  fs.writeFileSync(target, "old\n");
+  start("encoding", target, "\ud800\n");
+  await write.execute("encoding", { path: target, content: "\ud800\n" }, undefined);
+  assert.equal(end("encoding").kind, "update", "native encoding is a verified write, not a later mutation");
+});
+
 test("writes are only tracked for builtin tools with sourceInfo (adapter installed)", (t) => {
   const { tracker, file } = fixture(t);
   for (const source of [FOREIGN, undefined]) {

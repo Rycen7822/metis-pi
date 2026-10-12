@@ -9,6 +9,7 @@ import { loadWebAccessConfig } from "./utils.ts";
  */
 
 import { writeFile, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { CredentialResolutionError } from "./credential-source.ts";
@@ -303,8 +304,11 @@ async function writeMarkdownResult(options: {
 	}
 
 	const content = lines.join("\n");
-	const outputFilename =
-		options.filename || sanitizeFilename(options.title) + ".md";
+	// Default artifacts retain source/content identity so earlier result paths
+	// remain readable when another PDF shares a title or this source changes.
+	// An explicit filename keeps the caller's chosen overwrite semantics.
+	const outputFilename = options.filename ||
+		`${sanitizeFilename(options.title)}-${createHash("sha256").update(JSON.stringify([options.url, content])).digest("hex")}.md`;
 	const outputPath = join(options.outputDir, outputFilename);
 
 	await mkdir(options.outputDir, { recursive: true });

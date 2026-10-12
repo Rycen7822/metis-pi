@@ -1,4 +1,3 @@
-import { chainMembers } from "./types.ts";
 import {
   type ContextPruneConfig,
   type SummarizerStats,
@@ -322,6 +321,7 @@ function startPrunerWidget(
 export function registerCommands(
   pi: ExtensionAPI,
   currentConfig: { value: ContextPruneConfig },
+  applyConfig: (config: ContextPruneConfig) => void,
   flushPending: (ctx: ExtensionCommandContext, options?: FlushOptions) => Promise<FlushResult>,
   capturePendingBatches: (ctx: ExtensionCommandContext) => CapturedBatch[],
   getStats: () => SummarizerStats,
@@ -353,13 +353,13 @@ export function registerCommands(
 
       // Commands and the overlay share scalar parsing/path writes, but not input policy.
       const setScalar = (id: string, value: ScalarValue) => {
-        currentConfig.value = writeScalar(currentConfig.value, scalarRow(id), value);
+        applyConfig(writeScalar(currentConfig.value, scalarRow(id), value));
         void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
       };
 
       switch (subcommand) {
         case "settings": {
-          await openPrunerSettings(ctx, currentConfig, save, (config) => {
+          await openPrunerSettings(ctx, currentConfig, applyConfig, save, (config) => {
             refreshOccStatus?.(ctx);
             setPruneStatusWidget(ctx, config, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
           });
@@ -470,11 +470,11 @@ export function registerCommands(
               ctx.ui.notify(parsed.error, "warning");
               return;
             }
-            currentConfig.value = {
+            applyConfig({
               ...currentConfig.value,
               summarizerModel: parsed.model,
               summarizerThinking: parsed.thinking ?? currentConfig.value.summarizerThinking,
-            };
+            });
             void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
             const thinkingText = parsed.thinking ? ` with thinking ${parsed.thinking}` : "";
             ctx.ui.notify(`Summarizer model set to: ${parsed.model}${thinkingText}`);
@@ -505,8 +505,8 @@ export function registerCommands(
               row.options.map((m) => `${m.value} — ${m.label}`),
             );
             if (!choice) return;
-            // Interactive selections historically write the first word directly,
-            // even for strict batching. Explicit arguments use the row parser.
+            // Legal selector results write their first word;
+            // explicit arguments use the row parser.
             raw = choice.split(/\s+/)[0];
           } else if (parseScalar(row, raw) === undefined) {
             const label = thinking ? "summarizer thinking level" : "batching mode";
@@ -631,22 +631,6 @@ export function registerCommands(
             break;
           }
 
-          if (result.reason === "skipped-oversized") {
-            ctx.ui.notify(
-              "pruner: skipped pruning " +
-                `${result.toolCallCount}` +
-                " tool call" +
-                `${result.toolCallCount === 1 ? "" : "s"}` +
-                " — summary was " +
-                `${result.summaryCharCount}` +
-                " chars vs " +
-                `${result.rawCharCount}` +
-                " raw chars; frontier advanced past this range",
-              "warning",
-            );
-            break;
-          }
-
           if (result.reason === "skipped-trivial") {
             ctx.ui.notify(
               "pruner: skipped " +
@@ -718,7 +702,7 @@ export function registerCommands(
           }
           const nextList = raw === "" || /^(none|clear)$/i.test(raw)
             ? [] : raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-          currentConfig.value = { ...currentConfig.value, [field]: nextList };
+          applyConfig({ ...currentConfig.value, [field]: nextList });
           void persistConfig((m, t) => ctx.ui.notify(m, t), currentConfig.value, save);
           ctx.ui.notify(`Protected ${label}: ${protectedToolsDisplay(nextList)}`);
           break;

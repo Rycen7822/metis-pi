@@ -218,6 +218,14 @@ export class SubagentSession {
       if (this.viewerAbort === abort) this.viewerAbort = undefined;
     }
   }
+  private attentionProof(content: unknown, details: unknown) {
+    const proof = details as (Pick<ReceiptProof, "sessionId" | "scope" | "digest" | "questions"> & { receipt: string }) | undefined;
+    if (
+      proof?.sessionId === this.sessionId && proof.scope === this.client.scope &&
+      typeof proof.receipt === "string" && proof.receipt.length > 0 &&
+      proof.digest === digest(content)
+    ) return proof;
+  }
   private async reconcile() {
     if (!this.valid()) return;
     const receipts = new Set<string>();
@@ -227,8 +235,8 @@ export class SubagentSession {
         if (data?.sessionId === this.sessionId && data.scope === this.client.scope && data.receipt) receipts.add(data.receipt);
       }
       if (entry.type === "custom_message" && entry.customType === ATTENTION) {
-        const data = entry.details as { sessionId?: string; scope?: string; receipt?: string };
-        if (data?.sessionId === this.sessionId && data.scope === this.client.scope && data.receipt) receipts.add(data.receipt);
+        const proof = this.attentionProof(entry.content, entry.details);
+        if (proof) receipts.add(proof.receipt);
       }
       if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
       const message = entry.message;
@@ -468,8 +476,7 @@ export class SubagentSession {
     for (const entry of [...this.ctx.sessionManager.getBranch()].reverse()) {
       let proof: (Partial<ReceiptProof> & { questions?: QuestionIdentity[] }) | undefined;
       if (entry.type === "custom_message" && entry.customType === ATTENTION) {
-        const detail = entry.details as typeof proof;
-        if (detail?.digest === digest(entry.content)) proof = detail;
+        proof = this.attentionProof(entry.content, entry.details);
       } else if (entry.type === "message" && entry.message.role === "toolResult") {
         const detail = entry.message.details as { metisSubagentReceipt?: ReceiptProof } | undefined;
         if (detail?.metisSubagentReceipt?.digest === digest(entry.message.content) && !entry.message.isError)

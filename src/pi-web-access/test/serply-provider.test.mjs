@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const serplyModuleUrl = new URL("../serply.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function createHome(config = {}) {
@@ -271,6 +271,8 @@ test("Serply redacts API errors and appears in the Curator", async () => {
 	const page = generateCuratorPage(["query"], "token", 20, available, "serply", "serply", [], null);
 	assert.match(page, /data-provider="serply"/);
 	assert.match(page, />Serply<\/button>/);
-	assert.match(page, /provider === "serply"\) return "Serply"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.serply, "Serply");
+	assert.ok(clientData.providers.includes("serply"));
 	await rm(home, { recursive: true, force: true });
 });

@@ -1,8 +1,8 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 // xAI's Agent Tools API: hosted `web_search` and opt-in `x_search` tools on an
@@ -106,7 +106,9 @@ async function resolvePiAuth(
 	modelOverride: string | undefined,
 	tools: readonly XaiSearchTool[],
 ): Promise<XaiAuth | undefined> {
-	for (const modelId of modelCandidatesForTools(tools)) {
+	const registeredOverride = modelOverride ? ctx.modelRegistry.find("xai", modelOverride) : undefined;
+	const modelIds = registeredOverride ? [registeredOverride.id] : modelCandidatesForTools(tools);
+	for (const modelId of modelIds) {
 		try {
 			const model = ctx.modelRegistry.find("xai", modelId);
 			if (!model) continue;
@@ -147,13 +149,15 @@ export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSigna
 export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<boolean> {
 	let config: WebSearchConfig;
 	let tools: XaiSearchTool[];
+	let modelOverride: string | undefined;
 	try {
 		config = loadConfig();
 		tools = resolveConfiguredSearchTools(config.xaiSearchTools);
+		modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 	} catch {
 		return false;
 	}
-	if (ctx && await resolvePiAuth(ctx, undefined, tools)) return true;
+	if (ctx && await resolvePiAuth(ctx, modelOverride, tools)) return true;
 	return hasCredentialSource({
 		provider: "xAI",
 		configuredValue: config.xaiApiKey,
@@ -195,14 +199,7 @@ function buildInput(query: string, options: SearchOptions, tools: readonly XaiSe
 		lines.push(`Prefer around ${Math.min(Math.floor(options.numResults), 20)} distinct sources.`);
 	}
 
-	const allowed: string[] = [];
-	const blocked: string[] = [];
-	for (const raw of options.domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? blocked : allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { include: allowed, exclude: blocked } = normalizeDomainFilters(options.domainFilter);
 	if (allowed.length > 0) lines.push(`Only use sources from: ${allowed.slice(0, 100).join(", ")}.`);
 	if (blocked.length > 0) lines.push(`Do not use sources from: ${blocked.slice(0, 100).join(", ")}.`);
 
@@ -349,7 +346,7 @@ export async function searchWithXai(
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);
 			const errorText = redactCredential(await response.text(), auth.apiKey);
-			throw new Error(`xAI API error ${response.status}: ${errorText.slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `xAI API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
 		let parsed: Record<string, unknown>;

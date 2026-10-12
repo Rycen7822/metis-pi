@@ -5,28 +5,41 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { auxiliaryToolRenderers, displayRecord } from "../execution/ui/auxiliary-tool.ts";
 import type { ToolCallIndexer } from "./indexer.ts";
 import { QUERY_TOOL_NAME, type ToolCallRecord } from "./types.ts";
+import { occKey } from "./occurrence-key.ts";
 
 const MAX_BYTES = 32768;
 interface Cursor { selection: string; index: number; offset: number; version?: string }
-interface Selection { ref: string; record?: ToolCallRecord }
+type Selection =
+  | { kind: "tool-record"; ref: string; record: ToolCallRecord }
+  | { kind: "historical-source" | "evidence-directory"; ref: string; text: string }
+  | { kind: "missing"; ref: string };
+type ByteSource =
+  | { kind: "text"; text: string }
+  | { kind: "archive"; path: string; prefix: string; snapshot?: { bytes: number } };
 interface Page {
   ref: string;
-  occurrence?: string;
-  legacy?: boolean;
-  source?: string;
-  archiveComplete?: boolean;
-  component?: string;
-  turnIndex?: number;
-  tool?: string;
-  status?: string;
-  argsPreview?: string;
-  argsTruncated?: boolean;
   offsetBytes?: number;
   totalBytes?: number;
   text?: string;
   complete: boolean;
   error?: string;
 }
+interface ToolPage extends Page {
+  occurrence: string;
+  legacy: boolean;
+  source: string;
+  archiveComplete?: boolean;
+  component: "output" | "arguments";
+  turnIndex: number;
+  tool: string;
+  status: "UNKNOWN" | "ERROR" | "OK";
+  argsPreview: string;
+  argsTruncated: boolean;
+}
+type MaterialPage = Page & (
+  | { source: "historical-source"; component: "historical-source" }
+  | { source: "evidence-directory"; component: "output" }
+);
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const encode = (cursor: Cursor) => Buffer.from(JSON.stringify(cursor)).toString("base64url");
@@ -47,23 +60,40 @@ function prefix(bytes: Buffer, length: number): string {
   return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, end));
 }
 
-async function readPage(record: ToolCallRecord, offset: number, budget: number) {
-  if (!record.spillPath) {
-    const bytes = Buffer.from(record.resultText, "utf8");
-    return { bytes: bytes.subarray(offset, offset + budget + 4), total: bytes.length, version: digest(record.resultText) };
+function outputSource(record: ToolCallRecord): ByteSource {
+  if (!record.spillPath) return { kind: "text", text: record.resultText };
+  return {
+    kind: "archive", path: record.spillPath,
+    prefix: record.resultPrefix && (record.archiveSource === "fused-command-output" || record.archiveSource === "fusion-journal")
+      ? `${record.resultPrefix}\n` : "",
+    ...(record.archiveAppendOnly ? { snapshot: { bytes: record.spillBytes! } } : {}),
+  };
+}
+
+/** Preserve the existing cursor identity format, including cursors for historical material. */
+function selectionIdentity(material: Selection, component: "output" | "arguments"): unknown[] {
+  if (material.kind === "missing") return [material.ref, undefined, undefined, undefined, undefined, undefined];
+  if (material.kind !== "tool-record") {
+    // This zero is an old cursor-format marker, not execution metadata.
+    return [material.ref, material.ref, undefined, 0, digest(material.text), undefined];
   }
-  const file = await open(record.spillPath, "r");
+  const record = material.record;
+  return [material.ref, record.toolCallId, record.resultTimestamp, record.timestamp,
+    component === "arguments" ? digest(JSON.stringify(record.args)) : record.contentHash ?? digest(record.resultText),
+    record.spillPath];
+}
+
+async function readPage(source: ByteSource, offset: number, budget: number) {
+  if (source.kind === "text") {
+    const bytes = Buffer.from(source.text, "utf8");
+    return { bytes: bytes.subarray(offset, offset + budget + 4), total: bytes.length, version: digest(source.text) };
+  }
+  const file = await open(source.path, "r");
   try {
     const stat = await file.stat();
-    const bodyBytes = record.archiveAppendOnly ? record.spillBytes! : stat.size;
+    const bodyBytes = source.snapshot ? source.snapshot.bytes : stat.size;
     if (stat.size < bodyBytes) throw new Error("Archived snapshot is incomplete");
-    const prefix = Buffer.from(
-      record.resultPrefix &&
-        (record.archiveSource === "fused-command-output" || record.archiveSource === "fusion-journal")
-        ? `${record.resultPrefix}\n`
-        : "",
-      "utf8",
-    );
+    const prefix = Buffer.from(source.prefix, "utf8");
     const total = prefix.length + bodyBytes;
     const bytes = Buffer.alloc(Math.min(budget + 4, Math.max(0, total - offset)));
     const prefixBytes =
@@ -77,7 +107,7 @@ async function readPage(record: ToolCallRecord, offset: number, budget: number) 
     return {
       bytes: bytes.subarray(0, prefixBytes + bytesRead),
       total,
-      version: record.archiveAppendOnly ? `${total}:${stat.ino}` : `${stat.size}:${stat.mtimeMs}:${stat.ino}`,
+      version: source.snapshot ? `${total}:${stat.ino}` : `${stat.size}:${stat.mtimeMs}:${stat.ino}`,
     };
   } finally {
     await file.close();
@@ -165,66 +195,50 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
       if (component === "arguments" && !params.toolCallIds && !params.parentToolCallId)
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
       const selected: Selection[] = params.sourceEntryIds
-        ? params.sourceEntryIds.map((ref) => {
+        ? params.sourceEntryIds.map((ref): Selection => {
             const entry = ctx.sessionManager.getBranch().find((entry) => entry.id === ref);
             const allowed =
               entry &&
               (entry.type === "message" ||
                 entry.type === "compaction" ||
                 (entry.type === "custom_message" && entry.customType === "context-prune-summary"));
-            return {
-              ref,
-              record: allowed
-                ? {
-                    toolCallId: ref,
-                    toolName: "historical-source",
-                    args: {},
-                    isError: false,
-                    turnIndex: -1,
-                    timestamp: 0,
-                    resultText: JSON.stringify(entry),
-                  }
-                : undefined,
-            };
+            return allowed
+              ? { kind: "historical-source", ref, text: JSON.stringify(entry) }
+              : { kind: "missing", ref };
           })
         : params.parentToolCallId
           ? (() => {
               const records = [...indexer.getIndex()].filter(([, r]) => r.parentToolCallId === params.parentToolCallId);
               return records.length
-                ? records.map(([ref, record]) => ({ ref, record }))
-                : [{ ref: params.parentToolCallId }];
+                ? records.map(([ref, record]): Selection => ({ kind: "tool-record", ref, record }))
+                : [{ kind: "missing" as const, ref: params.parentToolCallId }];
             })()
           : params.toolCallIds
-            ? params.toolCallIds.flatMap((ref) => {
+            ? params.toolCallIds.flatMap((ref): Selection[] => {
                 const records = indexer.getRecordsForId(ref);
-                return records.length ? records.map((record) => ({ ref, record })) : [{ ref }];
+                return records.length
+                  ? records.map((record) => ({ kind: "tool-record", ref, record }))
+                  : [{ kind: "missing", ref }];
               })
             : [
                 {
+                  kind: "evidence-directory",
                   ref: "directory",
-                  record: {
-                    toolCallId: "directory",
-                    toolName: "evidence-directory",
-                    args: {},
-                    isError: false,
-                    turnIndex: -1,
-                    timestamp: 0,
-                    resultText: [...indexer.getIndex()]
-                      .map(([key, r]) =>
-                        JSON.stringify({
-                          ref: indexer.getShortRefForToolCallId(key) ?? key,
-                          occurrence: key,
-                          tool: r.toolName,
-                          parentToolCallId: r.parentToolCallId,
-                          status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
-                          argsPreview: JSON.stringify(r.args).slice(0, 256),
-                          archive: r.spillPath,
-                          archiveComplete: r.archiveComplete,
-                          source: r.archiveSource ?? "tool-result",
-                        }),
-                      )
-                      .join("\n"),
-                  },
+                  text: [...indexer.getIndex()]
+                    .map(([key, r]) =>
+                      JSON.stringify({
+                        ref: indexer.getShortRefForToolCallId(key) ?? key,
+                        occurrence: key,
+                        tool: r.toolName,
+                        parentToolCallId: r.parentToolCallId,
+                        status: r.metadataUnavailable ? "UNKNOWN" : r.isError ? "ERROR" : "OK",
+                        argsPreview: JSON.stringify(r.args).slice(0, 256),
+                        archive: r.spillPath,
+                        archiveComplete: r.archiveComplete,
+                        source: r.archiveSource ?? "tool-result",
+                      }),
+                    )
+                    .join("\n"),
                 },
               ];
       // Stable across reloads and normal conversation growth; branch changes
@@ -234,16 +248,7 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
           ctx.sessionManager.getSessionId(),
           component,
           !!params.sourceEntryIds,
-          selected.map(({ ref, record: r }) => [
-            ref,
-            r?.toolCallId,
-            r?.resultTimestamp,
-            r?.timestamp,
-            component === "arguments" && r
-              ? digest(JSON.stringify(r.args))
-              : (r?.contentHash ?? (r && digest(r.resultText))),
-            r?.spillPath,
-          ]),
+          selected.map((material) => selectionIdentity(material, component)),
         ]),
       );
       let current: Cursor = params.cursor ? decode(params.cursor) : { selection, index: 0, offset: 0 };
@@ -258,55 +263,57 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
         });
       while (current.index < selected.length) {
         signal?.throwIfAborted();
-        const { ref, record } = selected[current.index]!;
+        const material = selected[current.index]!;
+        const { ref } = material;
         const nextRecord: Cursor = { selection, index: current.index + 1, offset: 0 };
         let page: Page = { ref, complete: false };
         let next = nextRecord;
-        if (!record) {
+        if (material.kind === "missing") {
           page.error = "Not found in this branch's archive index.";
         } else {
-          const args = JSON.stringify(record.args);
-          page = {
-            ...page,
-            occurrence:
-              record.resultTimestamp === undefined
-                ? record.toolCallId
-                : `${record.toolCallId}@${record.resultTimestamp}`,
-            legacy: record.resultTimestamp === undefined,
-            turnIndex: record.turnIndex,
-            component: params.sourceEntryIds ? "historical-source" : component,
-            source: params.sourceEntryIds
-              ? "historical-source"
-              : component === "arguments"
-                ? "tool-arguments"
-                : (record.archiveSource ?? "tool-result"),
-            archiveComplete: component === "arguments" ? !record.metadataUnavailable : record.archiveComplete,
-            tool: record.toolName,
-            status: record.metadataUnavailable ? "UNKNOWN" : record.isError ? "ERROR" : "OK",
-            argsPreview: args.slice(0, 256),
-            argsTruncated: args.length > 256,
-          };
-          if (component === "output" && record.archiveComplete === false)
-            page.error = "Execution archive is incomplete; only the captured prefix is available.";
-          if (record.metadataUnavailable)
-            page.error =
-              "Legacy dedup source metadata is unavailable; this is the shared historical body, not verified output of this occurrence.";
-          let source;
+          let byteSource: ByteSource;
+          if (material.kind === "tool-record") {
+            const record = material.record;
+            const args = JSON.stringify(record.args);
+            const toolPage: ToolPage = {
+              ...page,
+              occurrence: occKey(record.toolCallId, record.resultTimestamp),
+              legacy: record.resultTimestamp === undefined,
+              turnIndex: record.turnIndex,
+              component,
+              source: component === "arguments" ? "tool-arguments" : record.archiveSource ?? "tool-result",
+              archiveComplete: component === "arguments" ? !record.metadataUnavailable : record.archiveComplete,
+              tool: record.toolName,
+              status: record.metadataUnavailable ? "UNKNOWN" : record.isError ? "ERROR" : "OK",
+              argsPreview: args.slice(0, 256),
+              argsTruncated: args.length > 256,
+            };
+            page = toolPage;
+            if (component === "output" && record.archiveComplete === false)
+              page.error = "Execution archive is incomplete; only the captured prefix is available.";
+            if (record.metadataUnavailable)
+              page.error =
+                "Legacy dedup source metadata is unavailable; this is the shared historical body, not verified output of this occurrence.";
+            byteSource = component === "arguments" ? { kind: "text", text: args } : outputSource(record);
+          } else {
+            const materialPage: MaterialPage = material.kind === "historical-source"
+              ? { ...page, source: material.kind, component: "historical-source" }
+              : { ...page, source: material.kind, component: "output" };
+            page = materialPage;
+            byteSource = { kind: "text", text: material.text };
+          }
+          let chunk;
           try {
-            source = await readPage(
-              component === "arguments" ? { ...record, spillPath: undefined, resultText: args } : record,
-              current.offset,
-              budget,
-            );
+            chunk = await readPage(byteSource, current.offset, budget);
           } catch (error) {
             page.error = `Archive unavailable (${(error as NodeJS.ErrnoException).code ?? "read failed"}); preview is not the original output.`;
           }
           signal?.throwIfAborted();
-          if (source) {
-            if (current.offset > source.total || (current.version && current.version !== source.version)) {
+          if (chunk) {
+            if (current.offset > chunk.total || (current.version && current.version !== chunk.version)) {
               throw new Error("Archived output changed or cursor offset is invalid. Start a new query.");
             }
-            const { bytes, total, version } = source;
+            const { bytes, total, version } = chunk;
             page.offsetBytes = current.offset;
             page.totalBytes = total;
             // JSON escaping and metadata count toward the same response budget.

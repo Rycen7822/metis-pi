@@ -3,11 +3,8 @@ import type { PruneFrontier } from "./types.ts";
 import { CUSTOM_TYPE_FRONTIER } from "./types.ts";
 
 /**
- * Tracks the most recent completed prune-attempt boundary.
- *
- * The frontier advances when a prune attempt finishes, regardless of whether it
- * produced a persisted summary or was skipped because the summary was larger
- * than the raw tool outputs. It does not advance on operational failures.
+ * Tracks a published prune boundary and restores historical outcomes.
+ * Current oversized attempts leave a pending gap instead of advancing it.
  */
 export class PruneFrontierTracker {
   private frontier: PruneFrontier | null = null;

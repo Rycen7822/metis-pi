@@ -53,9 +53,9 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         )
         await self.until(self.rt.can_idle_shutdown)
         w = self.rt.workers[a["agent_id"]]
-        w.active_tools["test"] = {"name": "test"}
+        w.run.active_tools["test"] = {"name": "test"}
         self.assertFalse(self.rt.can_idle_shutdown())
-        w.active_tools.clear()
+        w.run.active_tools.clear()
         self.rt.parent_notifications.deliveries["test"] = object()
         self.assertFalse(self.rt.can_idle_shutdown())
         self.rt.parent_notifications.deliveries.clear()
@@ -67,7 +67,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_idle_shutdown_does_not_abandon_a_pending_question(self):
         a = await self.spawn("UI_CONFIRM")
-        await self.until(lambda: bool(self.rt.workers[a["agent_id"]].ui))
+        await self.until(lambda: bool(self.rt.workers[a["agent_id"]].run.ui))
         self.assertFalse(self.rt.can_idle_shutdown())
 
     async def test_native_reconnect_restores_only_authorized_memory_after_lease_validation(self):
@@ -249,7 +249,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                     source={"question": {**guard, **override}},
                 )
             self.assertEqual(stale.exception.code, "input_stale")
-        self.assertIn(q["id"], self.rt.workers[a["agent_id"]].ui)
+        self.assertIn(q["id"], self.rt.workers[a["agent_id"]].run.ui)
         await self.rt.dispatch(
             "answer",
             {
@@ -466,7 +466,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row["state"], "running")
             self.assertEqual(row["current_run"], new["run_id"])
             self.assertEqual(row["cleanup"], "not_checked")
-            self.assertIn("transport limit", old_worker.error)
+            self.assertIn("transport limit", old_worker.transport_error)
             with self.assertRaises(AgentError) as conflict:
                 await self.spawn("MUST_NOT_START", access="write")
             self.assertEqual(conflict.exception.code, "writer_conflict")
@@ -540,7 +540,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                     current = self.rt.workers[aid]
                     await self.rt.settle(old_worker, spawned["run_id"])
                     self.assertEqual(self.rt.store.agent(self.scope, aid)["current_run"], new["run_id"])
-                    self.assertEqual(current.run_id, new["run_id"])
+                    self.assertEqual(current.run.id, new["run_id"])
                     self.assertFalse((await self.wait(new["run_id"]))["timed_out"])
                     self.assertEqual((await self.result(new["run_id"]))["text"], "Completed: NEW")
                     await self.mutation("close", aid)
@@ -1064,7 +1064,10 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_wait_and_outstanding_use_bounded_scoped_reads(self):
         store = self.rt.store
-        reader = views.ReadViews(store, lambda aid: None, asyncio.Condition(), 60)
+        reader = views.ReadViews(
+            store, lambda aid: None, asyncio.Condition(), 60,
+            lambda sid, compact=False: {"enabled": False},
+        )
         store.execute(
             """INSERT INTO agents(id,scope,name,cwd,state,session_file,launch,created,updated)
                          VALUES(?,?,?,?,?,?,?,?,?)""",
@@ -1563,7 +1566,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 "title": "Choose",
             },
         )
-        self.assertEqual(w.ui["select-1"]["options"], options)
+        self.assertEqual(w.run.ui["select-1"]["options"], options)
         with self.assertRaises(AgentError):
             await self.mutation("answer", s["agent_id"], ui_request_id="select-1", answer=long_option[:170])
         with m.patch.object(w, "raw", new_callable=m.AsyncMock) as send:
@@ -1627,7 +1630,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             s = await self.spawn("parallel=1|delay=3|work", idle_timeout_seconds=1)
             done = await self.wait(s["run_id"])
             self.assertEqual(done["runs"][0]["state"], "completed", done)
-            self.assertEqual(self.rt.workers[s["agent_id"]].active_tools, {})
+            self.assertEqual(self.rt.workers[s["agent_id"]].run.active_tools, {})
         finally:
             loop.cancel()
             await asyncio.gather(loop, return_exceptions=True)
@@ -1635,14 +1638,14 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     async def test_tool_exit_restarts_silence_budget(self):
         s = await self.spawn("delay=1|after_tool=120|work", idle_timeout_seconds=1)
         w = self.rt.workers[s["agent_id"]]
-        await self.until(lambda: w.active_tools)
-        w.last_progress -= 3600
+        await self.until(lambda: w.run.active_tools)
+        w.run.last_progress -= 3600
         await self.rt.check_idle()
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
-        await self.until(lambda: not w.active_tools)
+        await self.until(lambda: not w.run.active_tools)
         await self.rt.check_idle()
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
-        w.last_progress -= 2
+        w.run.last_progress -= 2
         await self.rt.check_idle()
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "timed_out")
 
@@ -1652,7 +1655,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 s = await self.spawn("UI_CONFIRM", idle_timeout_seconds=1)
                 self.assertEqual((await self.wait(s["run_id"]))["runs"][0]["state"], "needs_input")
                 w = self.rt.workers[s["agent_id"]]
-                w.last_progress -= 3600
+                w.run.last_progress -= 3600
                 await self.rt.check_idle()
                 self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "needs_input")
                 if answered:
@@ -1662,7 +1665,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                     self.rt.on_event(w, {"type": "extension_ui_closed", "id": "ui-1"})
                     await self.rt.check_idle()
                     self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
-                    w.last_progress -= 2
+                    w.run.last_progress -= 2
                     await self.rt.check_idle()
                     self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "timed_out")
                 await self.mutation("close", s["agent_id"])
@@ -1672,7 +1675,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         w = self.rt.workers[s["agent_id"]]
         lock = self.rt.agent_locks[s["agent_id"]]
         async with lock:
-            w.last_progress -= 2
+            w.run.last_progress -= 2
             checking = asyncio.create_task(self.rt.check_idle())
             await asyncio.sleep(0)
             self.rt.on_event(
@@ -1685,11 +1688,11 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         s = await self.spawn("model=silent|delay=120|work", idle_timeout_seconds=1)
         w = self.rt.workers[s["agent_id"]]
         self.rt.on_event(w, {"type": "auto_retry_start", "delayMs": 5000})
-        w.last_progress -= 2
+        w.run.last_progress -= 2
         await self.rt.check_idle()
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "running")
         self.rt.on_event(w, {"type": "auto_retry_end"})
-        w.last_progress -= 2
+        w.run.last_progress -= 2
         self.rt.on_event(
             w, {"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": ""}}
         )

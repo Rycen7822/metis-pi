@@ -1,15 +1,15 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 const MISTRAL_CONVERSATIONS_URL = "https://api.mistral.ai/v1/conversations";
 const CONFIG_PATH = getWebSearchConfigPath();
 const SEARCH_TIMEOUT_MS = 60_000;
 const DEFAULT_SEARCH_MODEL = "mistral-small-latest";
 const DEFAULT_SEARCH_TOOL = "web_search";
-const MAX_RESULTS = 20;
 
 type MistralSearchTool = "web_search" | "web_search_premium";
 
@@ -17,11 +17,6 @@ interface WebSearchConfig {
 	mistralApiKey?: unknown;
 	mistralSearchModel?: unknown;
 	mistralSearchTool?: unknown;
-}
-
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
 }
 
 let cachedConfig: WebSearchConfig | null = null;
@@ -44,30 +39,6 @@ function resolveSearchTool(value: unknown): MistralSearchTool {
 		throw new Error(`mistralSearchTool in ${getWebAccessConfigPath()} must be either web_search or web_search_premium`);
 	}
 	return value;
-}
-
-function normalizeCount(value: number | undefined): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return 5;
-	return Math.max(1, Math.min(Math.floor(value), MAX_RESULTS));
-}
-
-function parseDomainFilters(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function passesDomainFilters(url: string, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	const hostname = new URL(url).hostname.toLowerCase();
-	const matches = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
-	if (filters.exclude.some(matches)) return false;
-	return filters.include.length === 0 || filters.include.some(matches);
 }
 
 function normalizeResultUrl(value: unknown): string | null {
@@ -98,7 +69,7 @@ function buildSearchPrompt(query: string, options: SearchOptions, numResults: nu
 		lines.push(`Prefer up to ${numResults} distinct sources.`);
 	}
 
-	const filters = parseDomainFilters(options.domainFilter);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	if (filters.include.length > 0) lines.push(`Only use sources from: ${filters.include.slice(0, 100).join(", ")}.`);
 	if (filters.exclude.length > 0) lines.push(`Do not use sources from: ${filters.exclude.slice(0, 100).join(", ")}.`);
 	return lines.length > 0 ? `${lines.join(" ")}\n\n${query}` : query;
@@ -122,7 +93,7 @@ function parseConversationResponse(value: unknown, options: SearchOptions, numRe
 	const answerParts: string[] = [];
 	const results: SearchResult[] = [];
 	const seenUrls = new Set<string>();
-	const domainFilters = parseDomainFilters(options.domainFilter);
+	const domainFilters = normalizeDomainFilters(options.domainFilter);
 
 	for (const output of outputs) {
 		if (!output || typeof output !== "object" || Array.isArray(output)) continue;
@@ -145,7 +116,7 @@ function parseConversationResponse(value: unknown, options: SearchOptions, numRe
 			if (part.type !== "tool_reference" || results.length >= numResults) continue;
 
 			const url = normalizeResultUrl(part.url);
-			if (!url || !passesDomainFilters(url, domainFilters) || seenUrls.has(url)) continue;
+			if (!url || !matchesDomainFilter(url, domainFilters) || seenUrls.has(url)) continue;
 			seenUrls.add(url);
 			const title = typeof part.title === "string" && part.title.trim() ? part.title.trim() : url;
 			const snippet = typeof part.description === "string" ? part.description : "";
@@ -195,7 +166,7 @@ export async function searchWithMistral(query: string, options: SearchOptions = 
 	const config = loadConfig();
 	const model = resolveSearchModel(config.mistralSearchModel);
 	const tool = resolveSearchTool(config.mistralSearchTool);
-	const numResults = normalizeCount(options.numResults);
+	const numResults = normalizeSearchResultCount(options.numResults);
 	const apiKey = await getApiKey(options.signal);
 	const requestSignal = options.signal
 		? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal])
@@ -220,7 +191,7 @@ export async function searchWithMistral(query: string, options: SearchOptions = 
 
 		if (!response.ok) {
 			const errorText = redactCredential(await response.text(), apiKey);
-			throw new Error(`Mistral API error ${response.status}: ${errorText.slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `Mistral API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
 		let parsed: unknown;

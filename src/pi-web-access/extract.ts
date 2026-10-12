@@ -1,4 +1,7 @@
-import { getWebSearchConfigPath, loadWebAccessConfig, formatSeconds, getWebAccessConfigPath, type ProxiedRequestInit } from "./utils.ts";
+import { extractHeadingTitle, type ExtractedContent, type ExtractOptions, type RegisteredToolNames } from "./content.ts";
+import type { ProxiedRequestInit } from "./proxy-transport.ts";
+import { extractMediaFrames } from "./media-frames.ts";
+import { getWebSearchConfigPath, loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import type TurndownService from "turndown";
 import pLimit from "p-limit";
 import { activityMonitor } from "./activity.ts";
@@ -6,7 +9,7 @@ import { extractRSCContent } from "./rsc-extract.ts";
 import { extractPDFToMarkdown, isPDF, loadPDFConfig } from "./pdf-extract.ts";
 import { extractGitHub } from "./github-extract.ts";
 import { extractGitHubIssuePr } from "./github-issue-pr.ts";
-import { isYouTubeURL, isYouTubeEnabled, extractYouTube, extractYouTubeFrame, extractYouTubeFrames, getYouTubeStreamInfo } from "./youtube-extract.ts";
+import { isYouTubeURL, isYouTubeEnabled, extractYouTube } from "./youtube-extract.ts";
 import { CredentialResolutionError } from "./credential-source.ts";
 import { extractWithUrlContext, extractWithGeminiWeb } from "./gemini-url-context.ts";
 import { extractWithParallel, isParallelAvailable } from "./parallel.ts";
@@ -19,12 +22,12 @@ import { extractWithOllama, isOllamaFetchAvailable } from "./ollama.ts";
 import { extractWithFirecrawl, isFirecrawlAvailable } from "./firecrawl.ts";
 import { extractWithCrawl4ai, isCrawl4aiAvailable } from "./crawl4ai.ts";
 import { extractWithBrightDataUnlocker, isBrightDataUnlockerAvailable } from "./brightdata-unlocker.ts";
-import { isVideoFile, extractVideo, extractVideoFrame, getLocalVideoDuration } from "./video-extract.ts";
+import { isVideoFile, extractVideo } from "./video-extract.ts";
 import { appendDeclaredWebLinks, discoverDeclaredWebLinks, type DeclaredWebLink } from "./declared-web-links.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type DomainPolicy, type Lookup, type SsrfConfig } from "./ssrf-protection.ts";
 import { isImageEnabled } from "./feature-config.ts";
 import { assertAuthFetchUrl, authFetchRedirectGuard, type AuthFetchProfile } from "./auth-fetch.ts";
-import { getBrowserCookiesForHosts, getLastBrowserCookieDiagnostic } from "./chrome-cookies.ts";
+import { getBrowserCookiesForHosts } from "./chrome-cookies.ts";
 import { sanitizeInlineDataUris } from "./data-uri-sanitize.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -153,11 +156,10 @@ function imageGateError(): string | null {
 async function resolveAuthCookieHeader(url: string | URL, profile: AuthFetchProfile): Promise<string> {
 	const parsed = assertAuthFetchUrl(profile, url.toString());
 	const result = await getBrowserCookiesForHosts({ hosts: [parsed.hostname], profile: profile.chromeProfile, requestUrl: parsed });
-	if (result?.cookieHeader) return result.cookieHeader;
-	if (!result) {
-		const diagnostic = getLastBrowserCookieDiagnostic();
-		throw new Error(`Authenticated fetch profile ${profile.name} could not read browser cookies${diagnostic ? `: ${diagnostic}` : ""}`);
+	if (!result.ok) {
+		throw new Error(`Authenticated fetch profile ${profile.name} could not read browser cookies: ${result.diagnostic.message}`);
 	}
+	if (result.cookieHeader) return result.cookieHeader;
 	throw new Error(`Authenticated fetch profile ${profile.name} could not build a cookie header`);
 }
 
@@ -241,13 +243,6 @@ function loadFetchRouting(): FetchRouting {
 	return { providers, allowRemoteHostedProviders: allowRemoteHostedProvidersValue === true };
 }
 
-/** Names of the search/fetch tools the caller has actually registered, so
- * failure guidance never points at tools that do not exist in the session. */
-export interface RegisteredToolNames {
-	webSearch?: string;
-	fetchContent?: string;
-}
-
 /** Guidance for definitive origin 404/410 responses: no extraction provider
  * can retrieve a page the origin says is gone, so point at the registered
  * search/fetch tools (when the caller knows them) instead of provider config. */
@@ -302,47 +297,16 @@ function getTurndown(): Promise<TurndownService> {
 
 const fetchLimit = pLimit(CONCURRENT_LIMIT);
 
-export interface VideoFrame {
-	data: string;
-	mimeType: string;
-	timestamp: string;
-}
+type HttpFailure = { kind: "pdf-size-limit"; limitMB: number };
+type HttpExtractedContent = ExtractedContent & { declaredLinks?: DeclaredWebLink[]; failure?: HttpFailure };
 
-export type FrameData = { data: string; mimeType: string };
-export type FrameResult = FrameData | { error: string };
-
-export interface ExtractedContent {
-	url: string;
-	title: string;
-	content: string;
-	error: string | null;
-	thumbnail?: { data: string; mimeType: string };
-	frames?: VideoFrame[];
-	duration?: number;
-	mimeType?: string;
-	status?: number;
-}
-
-type HttpExtractedContent = ExtractedContent & { declaredLinks?: DeclaredWebLink[] };
-
-export interface ExtractOptions {
-	timeoutMs?: number;
-	forceClone?: boolean;
-	prompt?: string;
-	timestamp?: string;
-	frames?: number;
-	model?: string;
-	mode?: "readable" | "raw" | "answer";
-	answerModel?: string;
-	authFetchProfile?: AuthFetchProfile;
-	toolNames?: RegisteredToolNames;
-	/** Optional HTTP(S) or SOCKS proxy URL; routed through the curl-backed transport. */
-	proxy?: string;
-	/** Reject direct image URLs with this error instead of decoding them with Pi's
-	 * resizeImage. Hosts without the Pi runtime set it; Pi leaves it unset. */
-	rejectDirectImages?: string;
-	/** Custom DNS resolver used for SSRF validation. Primarily a test seam. */
-	lookup?: Lookup;
+class PDFSizeLimitError extends Error {
+	readonly limitMB: number;
+	constructor(limitMB: number) {
+		super(`PDF exceeds configured pdf.maxSizeMB limit (${limitMB} MB)`);
+		this.name = "PDFSizeLimitError";
+		this.limitMB = limitMB;
+	}
 }
 
 /** Resolve the direct HTTP/Jina fetch budget, with a per-call override taking precedence. */
@@ -417,77 +381,6 @@ async function extractWithJinaReader(
 	}
 }
 
-function parseTimestamp(ts: string): number | null {
-	const num = Number(ts);
-	if (!isNaN(num) && num >= 0) return Math.floor(num);
-	const parts = ts.split(":").map(Number);
-	if (parts.some(p => isNaN(p) || p < 0)) return null;
-	if (parts.length === 3) return Math.floor(parts[0] * 3600 + parts[1] * 60 + parts[2]);
-	if (parts.length === 2) return Math.floor(parts[0] * 60 + parts[1]);
-	return null;
-}
-
-type TimestampSpec = { type: "single"; seconds: number } | { type: "range"; start: number; end: number };
-
-function parseTimestampSpec(ts: string): TimestampSpec | null {
-	const dashIdx = ts.indexOf("-", 1);
-	if (dashIdx > 0) {
-		const start = parseTimestamp(ts.slice(0, dashIdx));
-		const end = parseTimestamp(ts.slice(dashIdx + 1));
-		if (start !== null && end !== null && end > start) return { type: "range", start, end };
-	}
-	const seconds = parseTimestamp(ts);
-	return seconds !== null ? { type: "single", seconds } : null;
-}
-
-const DEFAULT_RANGE_FRAMES = 6;
-const MIN_FRAME_INTERVAL = 5;
-
-function computeRangeTimestamps(start: number, end: number, maxFrames: number = DEFAULT_RANGE_FRAMES): number[] {
-	if (maxFrames <= 1) return [start];
-	const duration = end - start;
-	const idealInterval = duration / (maxFrames - 1);
-	if (idealInterval < MIN_FRAME_INTERVAL) {
-		const timestamps: number[] = [];
-		for (let t = start; t <= end && timestamps.length < maxFrames; t += MIN_FRAME_INTERVAL) {
-			timestamps.push(t);
-		}
-		return timestamps;
-	}
-	return Array.from({ length: maxFrames }, (_, i) => Math.round(start + i * idealInterval));
-}
-
-function buildFrameResult(
-	url: string, label: string, requestedCount: number,
-	frames: VideoFrame[], error: string | null, duration?: number,
-): ExtractedContent {
-	if (frames.length === 0) {
-		const msg = error ?? "Frame extraction failed";
-		return { url, title: `Frames ${label} (0/${requestedCount})`, content: msg, error: msg };
-	}
-	return {
-		url,
-		title: `Frames ${label} (${frames.length}/${requestedCount})`,
-		content: `${frames.length} frames extracted from ${label}`,
-		error: null,
-		frames,
-		...(duration !== undefined ? { duration } : {}),
-	};
-}
-
-async function extractLocalFrames(
-	filePath: string, timestamps: number[],
-): Promise<{ frames: VideoFrame[]; error: string | null }> {
-	const results = await Promise.all(timestamps.map(async (t) => {
-		const frame = await extractVideoFrame(filePath, t);
-		if ("error" in frame) return { error: frame.error };
-		return { ...frame, timestamp: formatSeconds(t) };
-	}));
-	const frames = results.filter((f): f is VideoFrame => "data" in f);
-	const firstError = results.find((f): f is { error: string } => "error" in f);
-	return { frames, error: frames.length === 0 && firstError ? firstError.error : null };
-}
-
 type LocalVideoInfoResult =
 	| { status: "video"; info: NonNullable<ReturnType<typeof isVideoFile>> }
 	| { status: "not-video" }
@@ -535,7 +428,8 @@ export async function extractContent(
 
 	if (options?.authFetchProfile || options?.mode === "raw") {
 		try {
-			return await extractViaHttp(url, resolveFetchTimeoutMs(options), signal, options);
+			const { failure: _failure, declaredLinks: _links, ...result } = await extractViaHttp(url, resolveFetchTimeoutMs(options), signal, options);
+			return result;
 		} catch (err) {
 			return { url, title: "", content: "", error: errorMessage(err) };
 		}
@@ -546,138 +440,8 @@ export async function extractContent(
 		if (disabled) return { url, title: "", content: "", error: disabled };
 	}
 
-	if (options?.frames && !options.timestamp) {
-		const frameCount = options.frames;
-		const ytInfo = isYouTubeURL(url);
-		if (ytInfo.isYouTube && ytInfo.videoId) {
-			const streamInfo = await getYouTubeStreamInfo(ytInfo.videoId);
-			if ("error" in streamInfo) {
-				return { url, title: "Frames", content: streamInfo.error, error: streamInfo.error };
-			}
-			if (streamInfo.duration === null) {
-				const error = "Cannot determine video duration. Use a timestamp range instead.";
-				return { url, title: "Frames", content: error, error };
-			}
-			const dur = Math.floor(streamInfo.duration);
-			const timestamps = computeRangeTimestamps(0, dur, frameCount);
-			const result = await extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
-			const label = `${formatSeconds(0)}-${formatSeconds(dur)}`;
-			return buildFrameResult(url, label, timestamps.length, result.frames, result.error, streamInfo.duration);
-		}
-
-		const localVideo = safeVideoInfo(url);
-		if (localVideo.status === "invalid") {
-			return { url, title: "", content: "", error: localVideo.error };
-		}
-		if (localVideo.status === "video") {
-			const durationResult = await getLocalVideoDuration(localVideo.info.absolutePath);
-			if (typeof durationResult !== "number") {
-				return { url, title: "Frames", content: durationResult.error, error: durationResult.error };
-			}
-			const dur = Math.floor(durationResult);
-			const timestamps = computeRangeTimestamps(0, dur, frameCount);
-			const result = await extractLocalFrames(localVideo.info.absolutePath, timestamps);
-			const label = `${formatSeconds(0)}-${formatSeconds(dur)}`;
-			return buildFrameResult(url, label, timestamps.length, result.frames, result.error, durationResult);
-		}
-
-		return { url, title: "", content: "", error: "Frame extraction only works with YouTube and local video files" };
-	}
-
-	if (options?.timestamp) {
-		const spec = parseTimestampSpec(options.timestamp);
-		if (!spec) {
-			return {
-				url,
-				title: "",
-				content: "",
-				error: `Invalid timestamp format: "${options.timestamp}". Use "H:MM:SS", "MM:SS", "85", or "start-end".`,
-			};
-		}
-
-		const frameCount = options.frames;
-		const ytInfo = isYouTubeURL(url);
-		if (ytInfo.isYouTube && ytInfo.videoId) {
-			const streamInfo = await getYouTubeStreamInfo(ytInfo.videoId);
-			if ("error" in streamInfo) {
-				if (spec.type === "range") {
-					const label = `${formatSeconds(spec.start)}-${formatSeconds(spec.end)}`;
-					return { url, title: `Frames ${label}`, content: streamInfo.error, error: streamInfo.error };
-				}
-				if (frameCount) {
-					const end = spec.seconds + (frameCount - 1) * MIN_FRAME_INTERVAL;
-					const label = `${formatSeconds(spec.seconds)}-${formatSeconds(end)}`;
-					return { url, title: `Frames ${label}`, content: streamInfo.error, error: streamInfo.error };
-				}
-				return { url, title: `Frame at ${options.timestamp}`, content: streamInfo.error, error: streamInfo.error };
-			}
-
-			if (spec.type === "range") {
-				const label = `${formatSeconds(spec.start)}-${formatSeconds(spec.end)}`;
-				if (streamInfo.duration !== null && spec.end > streamInfo.duration) {
-					const error = `Timestamp ${formatSeconds(spec.end)} exceeds video duration (${formatSeconds(Math.floor(streamInfo.duration))})`;
-					return { url, title: `Frames ${label}`, content: error, error };
-				}
-				const timestamps = frameCount
-					? computeRangeTimestamps(spec.start, spec.end, frameCount)
-					: computeRangeTimestamps(spec.start, spec.end);
-				const result = await extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
-				return buildFrameResult(url, label, timestamps.length, result.frames, result.error, result.duration ?? undefined);
-			}
-
-			if (frameCount) {
-				const end = spec.seconds + (frameCount - 1) * MIN_FRAME_INTERVAL;
-				const label = `${formatSeconds(spec.seconds)}-${formatSeconds(end)}`;
-				if (streamInfo.duration !== null && end > streamInfo.duration) {
-					const error = `Timestamp ${formatSeconds(end)} exceeds video duration (${formatSeconds(Math.floor(streamInfo.duration))})`;
-					return { url, title: `Frames ${label}`, content: error, error };
-				}
-				const timestamps = computeRangeTimestamps(spec.seconds, end, frameCount);
-				const result = await extractYouTubeFrames(ytInfo.videoId, timestamps, streamInfo);
-				return buildFrameResult(url, label, timestamps.length, result.frames, result.error, result.duration ?? undefined);
-			}
-
-			if (streamInfo.duration !== null && spec.seconds > streamInfo.duration) {
-				const error = `Timestamp ${formatSeconds(spec.seconds)} exceeds video duration (${formatSeconds(Math.floor(streamInfo.duration))})`;
-				return { url, title: `Frame at ${options.timestamp}`, content: error, error };
-			}
-			const frame = await extractYouTubeFrame(ytInfo.videoId, spec.seconds, streamInfo);
-			if ("error" in frame) {
-				return { url, title: `Frame at ${options.timestamp}`, content: frame.error, error: frame.error };
-			}
-			return { url, title: `Frame at ${options.timestamp}`, content: `Video frame at ${options.timestamp}`, error: null, thumbnail: frame };
-		}
-
-		const localVideo = safeVideoInfo(url);
-		if (localVideo.status === "invalid") {
-			return { url, title: "", content: "", error: localVideo.error };
-		}
-		if (localVideo.status === "video") {
-			if (spec.type === "range") {
-				const timestamps = frameCount
-					? computeRangeTimestamps(spec.start, spec.end, frameCount)
-					: computeRangeTimestamps(spec.start, spec.end);
-				const result = await extractLocalFrames(localVideo.info.absolutePath, timestamps);
-				const label = `${formatSeconds(spec.start)}-${formatSeconds(spec.end)}`;
-				return buildFrameResult(url, label, timestamps.length, result.frames, result.error);
-			}
-
-			if (frameCount) {
-				const end = spec.seconds + (frameCount - 1) * MIN_FRAME_INTERVAL;
-				const timestamps = computeRangeTimestamps(spec.seconds, end, frameCount);
-				const result = await extractLocalFrames(localVideo.info.absolutePath, timestamps);
-				const label = `${formatSeconds(spec.seconds)}-${formatSeconds(end)}`;
-				return buildFrameResult(url, label, timestamps.length, result.frames, result.error);
-			}
-
-			const frame = await extractVideoFrame(localVideo.info.absolutePath, spec.seconds);
-			if ("error" in frame) {
-				return { url, title: `Frame at ${options.timestamp}`, content: frame.error, error: frame.error };
-			}
-			return { url, title: `Frame at ${options.timestamp}`, content: `Video frame at ${options.timestamp}`, error: null, thumbnail: frame };
-		}
-
-		return { url, title: "", content: "", error: "Timestamp extraction only works with YouTube and local video files" };
+	if (options?.frames || options?.timestamp) {
+		return extractMediaFrames(url, options, signal);
 	}
 
 	const localVideo = safeVideoInfo(url);
@@ -783,6 +547,7 @@ export async function extractContent(
 	}
 
 	let httpResult: ExtractedContent | null = null;
+	let httpFailure: HttpFailure | undefined;
 	let declaredLinks: DeclaredWebLink[] = [];
 	const withDeclaredLinks = (result: ExtractedContent): ExtractedContent => ({
 		...result,
@@ -792,11 +557,19 @@ export async function extractContent(
 		? { ...httpResult, error: message }
 		: { url, title: "", content: "", error: message };
 	const runHttpProvider = async (): Promise<ExtractedContent | null> => {
-		const { declaredLinks: discoveredLinks = [], ...result } = await extractViaHttp(url, fetchTimeoutMs, signal, options);
-		httpResult = result;
-		declaredLinks = discoveredLinks;
+		// The origin safety gate and an explicit HTTP slot share this completed
+		// attempt, including its format conversion and declared-link discovery.
+		if (!httpResult) {
+			const { declaredLinks: discoveredLinks = [], failure, ...result } = await extractViaHttp(url, fetchTimeoutMs, signal, options);
+			httpResult = result;
+			httpFailure = failure;
+			declaredLinks = discoveredLinks;
+		}
 		if (signal?.aborted) return abortedResult(url);
 		if (!httpResult.error) return httpResult;
+		// PDF maxSizeMB bounds the direct download. Preserve the existing
+		// downstream-provider policy using this fact, independent of its prose.
+		if (httpFailure?.kind === "pdf-size-limit") return null;
 		if (isNonRecoverableHttpError(httpResult.error) || httpResult.error === options?.rejectDirectImages) {
 			return httpResult;
 		}
@@ -1089,7 +862,7 @@ function isLikelyJSRendered(html: string): boolean {
 
 export async function readPDFResponseBuffer(response: Response, maxSizeMB: number): Promise<ArrayBuffer> {
 	const maxBytes = maxSizeMB * 1024 * 1024;
-	return readResponseBufferWithLimit(response, maxBytes, () => pdfSizeLimitError(maxSizeMB));
+	return readResponseBufferWithLimit(response, maxBytes, () => new PDFSizeLimitError(maxSizeMB));
 }
 
 async function readTextResponseWithLimit(response: Response, maxBytes: number): Promise<string> {
@@ -1152,10 +925,6 @@ async function readResponseBufferWithLimit(
 		offset += chunk.byteLength;
 	}
 	return combined.buffer;
-}
-
-function pdfSizeLimitError(maxSizeMB: number): Error {
-	return new Error(`PDF exceeds configured pdf.maxSizeMB limit (${maxSizeMB} MB)`);
 }
 
 function responseSizeLimitError(maxBytes: number): Error {
@@ -1248,8 +1017,9 @@ async function extractViaHttp(
 					title: "",
 					content: "",
 					error: pdfConfig
-						? pdfSizeLimitError(pdfConfig.maxSizeMB).message
+						? new PDFSizeLimitError(pdfConfig.maxSizeMB).message
 						: `Response too large (${Math.round(contentLength / 1024 / 1024)}MB)`,
+					...(pdfConfig ? { failure: { kind: "pdf-size-limit" as const, limitMB: pdfConfig.maxSizeMB } } : {}),
 				};
 			}
 		}
@@ -1314,8 +1084,8 @@ async function extractViaHttp(
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				activityMonitor.logError(activityId, message);
-				if (message.startsWith("PDF exceeds configured pdf.maxSizeMB limit")) {
-					return { url, title: "", content: "", error: message };
+				if (err instanceof PDFSizeLimitError) {
+					return { url, title: "", content: "", error: message, failure: { kind: "pdf-size-limit", limitMB: err.limitMB } };
 				}
 				if (err instanceof CredentialResolutionError || isConfigParseError(err)) {
 					return { url, title: "", content: "", error: message };
@@ -1488,13 +1258,6 @@ async function extractViaHttp(
 			return { url, title: "", content: "", error: "The operation was aborted." };
 		}
 	}
-}
-
-export function extractHeadingTitle(text: string): string | null {
-	const match = text.match(/^#{1,2}\s+(.+)/m);
-	if (!match) return null;
-	const cleaned = match[1].replace(/\*+/g, "").trim();
-	return cleaned || null;
 }
 
 function extractTextTitle(text: string, url: string): string {

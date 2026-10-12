@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,56 +101,21 @@ test("summary completion omits the session id when the session has none", async 
 	assert.equal(result.summary, "No session summary");
 });
 
-test("thinking summary completion passes the session id", () => {
-	const summaryUrl = new URL("../summary-review.ts", import.meta.url).href;
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		encoding: "utf8",
-		timeout: 10_000,
-		input: `
-			import assert from "node:assert/strict";
-			import { mkdtemp } from "node:fs/promises";
-			import { tmpdir } from "node:os";
-			import { join } from "node:path";
-			import { register } from "node:module";
 
-			const compatSource = \`
-				export const complete = () => { throw new Error("complete must not be used for a thinking request"); };
-				export const completeSimple = (...args) => globalThis.completeSimple(...args);
-			\`;
-			const aiSource = \`export const clampThinkingLevel = (_model, level) => level;\`;
-			const loaderSource = \`
-				export async function resolve(specifier, context, next) {
-					if (specifier === "@earendil-works/pi-ai/compat") return { url: "data:text/javascript," + encodeURIComponent(\${JSON.stringify(compatSource)}), shortCircuit: true };
-					if (specifier === "@earendil-works/pi-ai") return { url: "data:text/javascript," + encodeURIComponent(\${JSON.stringify(aiSource)}), shortCircuit: true };
-					return next(specifier, context);
-				}
-			\`;
-			register("data:text/javascript," + encodeURIComponent(loaderSource), import.meta.url);
-			const agentDir = await mkdtemp(join(tmpdir(), "summary-thinking-opencode-"));
-			process.env.PI_CODING_AGENT_DIR = agentDir;
-			let calls = 0;
-			globalThis.completeSimple = (_model, _request, options) => {
-				calls += 1;
-				assert.equal(options.sessionId, "thinking-session-385");
-				assert.equal(options.cacheRetention, "none");
-				assert.deepEqual(options.headers, { "x-existing": "kept" });
-				return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: "Thinking summary" }] });
-			};
-			const model = { provider: "opencode-go", id: "deepseek-v4-flash", api: "openai-completions", reasoning: true };
-			const { generateSummaryDraft } = await import(${JSON.stringify(summaryUrl)});
-			const result = await generateSummaryDraft(${JSON.stringify(results)}, {
-				modelRegistry: {
-					find: () => model,
-					getAvailable: () => [model],
-					getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: { "x-existing": "kept" } }),
-				},
-				sessionManager: { getSessionId: () => "thinking-session-385" },
-				scopedModels: [],
-			}, undefined, "opencode-go/deepseek-v4-flash:high");
-			assert.equal(result.summary, "Thinking summary");
-			assert.equal(result.meta.model, "opencode-go/deepseek-v4-flash");
-			assert.equal(calls, 1);
-		`,
+test("thinking summary uses native completion with session and provider-owned authentication", async () => {
+	const model = { ...openCodeModel(), reasoning: true };
+	let calls = 0;
+	const ctx = context([model], async (_model, _request, options) => {
+		calls++;
+		assert.equal(options.sessionId, "summary-session-385");
+		assert.equal(options.cacheRetention, "none");
+		assert.equal(options.apiKey, undefined);
+		assert.equal(options.headers, undefined);
+		assert.equal(options.reasoning, "high");
+		return { stopReason: "stop", content: [{ type: "text", text: "Thinking summary" }] };
 	});
-	assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stderr}`);
+	ctx.modelRegistry.getApiKeyAndHeaders = () => { throw new Error("native completion owns authentication"); };
+	const result = await generateSummaryDraft(results, ctx, undefined, "opencode-go/deepseek-v4-flash:high");
+	assert.equal(result.summary, "Thinking summary");
+	assert.equal(calls, 1);
 });

@@ -273,7 +273,7 @@ export async function extractPDFViaDatalab(
 		if (state.status === "complete") return toResult(state);
 		if (state.status === "failed") {
 			throw new Error(
-				`Datalab PDF conversion failed: ${state.error ?? "unknown error"}`,
+				`Datalab PDF conversion failed: ${redactCredential(String(state.error ?? "unknown error"), apiKey)}`,
 			);
 		}
 
@@ -297,7 +297,7 @@ export async function extractPDFViaDatalab(
 			if (next.status === "complete") return toResult(next);
 			if (next.status === "failed") {
 				throw new Error(
-					`Datalab PDF conversion failed: ${next.error ?? "unknown error"}`,
+					`Datalab PDF conversion failed: ${redactCredential(String(next.error ?? "unknown error"), apiKey)}`,
 				);
 			}
 		}
@@ -487,7 +487,7 @@ async function readJsonResponse(
 ): Promise<Record<string, unknown>> {
 	const text = await readResponseText(response);
 	if (!response.ok) {
-		const detail = text.trim().slice(0, MAX_ERROR_BODY_BYTES);
+		const detail = redactCredential(text.trim(), apiKey).slice(0, MAX_ERROR_BODY_BYTES);
 		const message = detail
 			? `Datalab PDF conversion failed: HTTP ${response.status} ${response.statusText}: ${detail}`
 			: `Datalab PDF conversion failed: HTTP ${response.status} ${response.statusText}`;
@@ -500,8 +500,8 @@ function parseJsonRecord(text: string): Record<string, unknown> {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
-	} catch (error) {
-		throw new Error("Datalab PDF conversion returned invalid JSON", { cause: error });
+	} catch {
+		throw new Error("Datalab PDF conversion returned invalid JSON");
 	}
 	if (Object.prototype.toString.call(parsed) !== "[object Object]") {
 		throw new Error("Datalab PDF conversion returned invalid JSON object");

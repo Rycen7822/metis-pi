@@ -43,6 +43,7 @@ function makeHost(t: TestContext) {
 
   return {
     ctx,
+    events: pi.events,
     statusCalls,
     entries,
     sent,
@@ -133,7 +134,8 @@ test("turn accounting stays with the goal that started the turn and stops at its
   tick(t, 2);
   await h.command("clear");
   await h.tool("create_goal", { objective: "new goal", token_budget: 20 });
-  const messages = [{ role: "assistant", stopReason: "stop", usage: { input: 15, cacheRead: 10, output: 15 } }];
+  // Pi input is uncached input: 5 measured + 10 cached + 15 output.
+  const messages = [{ role: "assistant", stopReason: "stop", usage: { input: 5, cacheRead: 10, output: 15 } }];
   await h.fire("agent_end", { messages }, h.ctx);
   assert.equal((await h.tool("get_goal", {})).details.goal.tokensUsed, 0);
   await h.fire("agent_start", {}, h.ctx);
@@ -166,6 +168,37 @@ test("settled errors stop continuation and context keeps only the current goal's
   await h.fire("agent_settled", { aborted: false }, h.ctx);
   assert.equal((await h.tool("get_goal", {})).details.goal.status, "usageLimited");
   assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [user]);
+});
+
+test("completion reports settled final-turn usage instead of the provisional tool snapshot", async (t) => {
+  const h = makeHost(t);
+  await h.tool("create_goal", { objective: "finish with accurate final usage", token_budget: 100 });
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 80, output: 0 } }] }, h.ctx);
+  await h.fire("agent_start", {}, h.ctx);
+  const receipt = (await h.tool("update_goal", { status: "complete" })).details;
+  assert.equal(receipt.goal.tokensUsed, 80);
+  assert.match(receipt.completionBudgetReport, /excludes the active turn/);
+  assert.equal(h.sent.filter((message: any) => message.customType === "goal-ui").length, 0);
+  await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 25, output: 0 } }] }, h.ctx);
+  assert.equal((await h.tool("get_goal", {})).details.goal.tokensUsed, 105);
+  assert.match((h.sent.at(-1) as { content: string }).content, /Final usage: tokens used: 105 of 100/);
+  const reports = h.sent.length;
+  await h.fire("agent_end", { messages: [] }, h.ctx);
+  assert.equal(h.sent.length, reports, "a settled completion reports once");
+});
+
+test("an internally invalidated checkpoint request leaves Goal active without a competing continuation", async (t) => {
+  const h = makeHost(t);
+  await h.command("preserve the active goal during context recovery");
+  await h.fire("agent_start", {}, h.ctx);
+  const sent = h.sent.length;
+  h.ctx.ui.confirm = async () => { assert.fail("an internal cancellation is not a user abort"); };
+  h.events.emit("metis:checkpoint-request-cancelled", {});
+  await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, h.ctx);
+  await h.fire("agent_settled", { aborted: true }, h.ctx);
+  assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+  assert.equal(h.sent.length, sent, "the user retry must rebuild one fresh request");
 });
 
 test("a goal stays active through all five attempts and blocks only after final settlement", async (t) => {

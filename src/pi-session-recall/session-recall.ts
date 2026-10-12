@@ -1,6 +1,6 @@
 // Maintained by metis-pi. Upstream: https://github.com/ogulcancelik/pi-extensions/tree/main/packages/pi-session-recall
 // Source version: 1.0.7; commit: 92964e4c7023ae88788181bb2eeea4497a97de9d
-// Local changes use Metis TOML configuration and retain OpenAI / OpenAI Codex compatibility. See METIS.md.
+// Local changes use Metis TOML and the host ModelRuntime. See METIS.md.
 
 /**
  * Session Recall Extension - Search and query past pi sessions
@@ -21,30 +21,25 @@
  *   session_query(path, "what approach did we take for X?")
  */
 
-import {
-	cleanupSessionResources,
-	type Model,
-	type Api,
-	type Message,
-} from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import type { Model, Api } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	getAgentDir,
 	SessionManager,
 	convertToLlm,
 	getMarkdownTheme,
-	serializeConversation,
-	type SessionEntry,
+	sessionEntryToContextMessages,
+	parseSessionEntries,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
-import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { readMetisConfig } from "../metis-config.ts";
+import { createRecallRequest } from "./context.ts";
+import { searchFiles, searchLines } from "./search.ts";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -114,12 +109,13 @@ function extractMessageText(jsonLine: string): { role: string; text: string } | 
 	try {
 		const entry = JSON.parse(jsonLine);
 		if (entry.type !== "message") return null;
-		const msg = entry.message;
-		const role = msg.role as string;
-		const texts = (msg.content ?? [])
-			.filter((c: any) => c.type === "text")
-			.map((c: any) => c.text)
-			.join(" ");
+		const msg = entry.message as { role?: unknown; content?: unknown } | undefined;
+		if (typeof msg?.role !== "string") return null;
+		const role = msg.role;
+		const texts = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content)
+			? msg.content.filter((block): block is { type: "text"; text: string } =>
+				block?.type === "text" && typeof block.text === "string").map(block => block.text).join(" ")
+			: "";
 		if (!texts) return null;
 		return { role, text: texts };
 	} catch {
@@ -138,391 +134,6 @@ function snippetAround(text: string, keyword: string, radius = 100): string {
 	const suffix = end < text.length ? "..." : "";
 	return prefix + text.slice(start, end) + suffix;
 }
-
-/** Rough token estimate: ~4 chars per token */
-function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
-}
-
-/** Create a UUIDv7 for Codex request routing, which is unreliable with UUIDv4. */
-function createUuidV7(): string {
-	const bytes = randomBytes(16);
-	const timestamp = BigInt(Date.now());
-
-	bytes[0] = Number((timestamp >> 40n) & 0xffn);
-	bytes[1] = Number((timestamp >> 32n) & 0xffn);
-	bytes[2] = Number((timestamp >> 24n) & 0xffn);
-	bytes[3] = Number((timestamp >> 16n) & 0xffn);
-	bytes[4] = Number((timestamp >> 8n) & 0xffn);
-	bytes[5] = Number(timestamp & 0xffn);
-	bytes[6] = 0x70 | (bytes[6] & 0x0f);
-	bytes[8] = 0x80 | (bytes[8] & 0x3f);
-
-	const hex = bytes.toString("hex");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-async function completeRecallRequest(
-	model: Model<Api>,
-	context: Parameters<typeof complete>[1],
-	options: NonNullable<Parameters<typeof complete>[2]>,
-): ReturnType<typeof complete> {
-	const codex = model.api === "openai-codex-responses"
-		&& (model.provider === "openai" || model.provider === "openai-codex");
-	if (!codex) return complete(model, context, options);
-
-	const sessionId = createUuidV7();
-	try {
-		return await complete(model, context, {
-			...options,
-			sessionId,
-			transport: "websocket",
-		});
-	} finally {
-		cleanupSessionResources(sessionId);
-	}
-}
-
-/**
- * Keep the conversational record and actions while dropping the two largest,
- * least useful sources of recall context: assistant thinking and tool output.
- */
-function prepareRecallMessages(messages: Message[]): Message[] {
-	const prepared: Message[] = [];
-
-	for (const message of messages) {
-		if (message.role === "toolResult") continue;
-		if (message.role === "assistant") {
-			const content = message.content.filter((block) => block.type !== "thinking");
-			if (content.length > 0) prepared.push({ ...message, content });
-		} else {
-			prepared.push(message);
-		}
-	}
-
-	return prepared;
-}
-
-/**
- * Extract keywords from a question for matching.
- * Strips common stop words and short words.
- */
-function extractKeywords(question: string): string[] {
-	const stopWords = new Set([
-		"a", "an", "the", "is", "was", "were", "are", "be", "been", "being",
-		"have", "has", "had", "do", "does", "did", "will", "would", "could",
-		"should", "may", "might", "can", "shall", "to", "of", "in", "for",
-		"on", "with", "at", "by", "from", "as", "into", "about", "like",
-		"through", "after", "over", "between", "out", "against", "during",
-		"without", "before", "under", "around", "among", "and", "but", "or",
-		"nor", "not", "so", "yet", "both", "either", "neither", "each",
-		"every", "all", "any", "few", "more", "most", "other", "some", "such",
-		"no", "only", "own", "same", "than", "too", "very", "just", "because",
-		"if", "when", "where", "how", "what", "which", "who", "whom", "this",
-		"that", "these", "those", "it", "its", "they", "them", "their", "we",
-		"us", "our", "you", "your", "he", "him", "his", "she", "her", "i", "me", "my",
-	]);
-	return question
-		.toLowerCase()
-		.replace(/[^\w\s-]/g, " ")
-		.split(/\s+/)
-		.filter((w) => w.length > 2 && !stopWords.has(w));
-}
-
-interface SerializedMessage {
-	index: number;
-	role: string;
-	text: string;
-	charCount: number;
-}
-
-/**
- * Build a context-windowed conversation text for large sessions.
- *
- * Strategy:
- * - Always include first few messages (setup/context) and last few (final state)
- * - Find messages matching question keywords
- * - Expand windows around matches until we hit the token budget
- * - Mark gaps with "[... N messages omitted ...]"
- */
-function buildWindowedContext(
-	serializedMessages: SerializedMessage[],
-	question: string,
-	tokenBudget: number,
-): string {
-	const BOOKEND_COUNT = 3;
-	const total = serializedMessages.length;
-
-	if (total <= BOOKEND_COUNT * 2 + 2) {
-		return serializedMessages.map((m) => `[${m.role}]\n${m.text}`).join("\n\n");
-	}
-
-	const keywords = extractKeywords(question);
-	const scores = serializedMessages.map((msg) => {
-		const lower = msg.text.toLowerCase();
-		let score = 0;
-		for (const kw of keywords) {
-			if (lower.includes(kw)) score++;
-		}
-		return score;
-	});
-
-	const included = new Set<number>();
-	for (let i = 0; i < Math.min(BOOKEND_COUNT, total); i++) included.add(i);
-	for (let i = Math.max(0, total - BOOKEND_COUNT); i < total; i++) included.add(i);
-
-	const matchIndices = scores
-		.map((score, i) => ({ score, i }))
-		.filter((x) => x.score > 0)
-		.sort((a, b) => b.score - a.score)
-		.map((x) => x.i);
-
-	for (const i of matchIndices) included.add(i);
-
-	const charBudget = tokenBudget * 4;
-	const currentChars = () =>
-		[...included].reduce((sum, i) => sum + serializedMessages[i].charCount + 20, 0);
-
-	let radius = 1;
-	while (currentChars() < charBudget * 0.8 && radius < total) {
-		const before = included.size;
-		for (const i of matchIndices) {
-			for (let d = -radius; d <= radius; d++) {
-				const idx = i + d;
-				if (idx >= 0 && idx < total) included.add(idx);
-			}
-		}
-		if (included.size === before) break;
-		radius++;
-	}
-
-	if (currentChars() < charBudget * 0.8) {
-		for (let i = BOOKEND_COUNT; i < total && currentChars() < charBudget * 0.8; i++) {
-			included.add(i);
-		}
-	}
-
-	const sortedIndices = [...included].sort((a, b) => a - b);
-	const parts: string[] = [];
-	let lastIdx = -1;
-
-	for (const i of sortedIndices) {
-		if (lastIdx >= 0 && i > lastIdx + 1) {
-			const gap = i - lastIdx - 1;
-			parts.push(`[... ${gap} message${gap > 1 ? "s" : ""} omitted ...]`);
-		}
-		const msg = serializedMessages[i];
-		parts.push(`[${msg.role}]\n${msg.text}`);
-		lastIdx = i;
-	}
-
-	if (lastIdx < total - 1 && !included.has(total - 1)) {
-		const gap = total - 1 - lastIdx;
-		parts.push(`[... ${gap} message${gap > 1 ? "s" : ""} omitted ...]`);
-	}
-
-	return parts.join("\n\n");
-}
-
-// ── Search Backend ───────────────────────────────────────────────────────────
-
-type SearchBackend = "rg" | "grep" | "node";
-let cachedBackend: SearchBackend | undefined;
-
-/** Detect best available search backend: rg → grep → node-native */
-function getSearchBackend(): SearchBackend {
-	if (cachedBackend !== undefined) return cachedBackend;
-
-	for (const cmd of ["rg", "grep"] as const) {
-		try {
-			execFileSync(cmd, ["--version"], { stdio: "ignore", timeout: 5000 });
-			cachedBackend = cmd;
-			return cmd;
-		} catch {
-			// not available, try next
-		}
-	}
-
-	cachedBackend = "node";
-	return "node";
-}
-
-interface FileMatchCount {
-	path: string;
-	count: number;
-}
-
-/** Recursively find all .jsonl files under a directory */
-function walkJsonlFiles(dir: string): string[] {
-	const results: string[] = [];
-	function walk(d: string) {
-		let entries;
-		try {
-			entries = readdirSync(d, { withFileTypes: true });
-		} catch {
-			return;
-		}
-		for (const entry of entries) {
-			const full = join(d, entry.name);
-			if (entry.isDirectory()) walk(full);
-			else if (entry.name.endsWith(".jsonl")) results.push(full);
-		}
-	}
-	walk(dir);
-	return results;
-}
-
-/**
- * Search for a query across all session files, returning files with match counts.
- * Falls back through rg → grep → node-native.
- */
-function searchFiles(query: string, sessionsDir: string, timeout = 10000): FileMatchCount[] {
-	const backend = getSearchBackend();
-
-	if (backend === "rg") {
-		try {
-			const output = execFileSync("rg", ["-i", "-c", "-F", query, sessionsDir], {
-				encoding: "utf-8",
-				timeout,
-				stdio: ["pipe", "pipe", "pipe"],
-			});
-			return parseCountOutput(output);
-		} catch (err: any) {
-			if (err.status === 1) return []; // no matches
-			// rg failed unexpectedly — try grep
-		}
-	}
-
-	if (backend === "rg" || backend === "grep") {
-		try {
-			const output = execFileSync(
-				"grep",
-				["-r", "-i", "-c", "-F", "--include=*.jsonl", query, sessionsDir],
-				{
-					encoding: "utf-8",
-					timeout,
-					stdio: ["pipe", "pipe", "pipe"],
-				},
-			);
-			return parseCountOutput(output);
-		} catch (err: any) {
-			if (err.status === 1) return []; // no matches
-			// grep failed too — fall through to node
-		}
-	}
-
-	// Node-native fallback
-	return nodeSearchFiles(query, sessionsDir);
-}
-
-/** Parse `file:count` output from rg -c / grep -c */
-function parseCountOutput(output: string): FileMatchCount[] {
-	return output
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => {
-			const lastColon = line.lastIndexOf(":");
-			return {
-				path: line.slice(0, lastColon),
-				count: parseInt(line.slice(lastColon + 1), 10),
-			};
-		})
-		.filter((m) => m.count > 0);
-}
-
-/** Node-native: count case-insensitive matches per file */
-function nodeSearchFiles(query: string, sessionsDir: string): FileMatchCount[] {
-	const files = walkJsonlFiles(sessionsDir);
-	const queryLower = query.toLowerCase();
-	const results: FileMatchCount[] = [];
-
-	for (const filePath of files) {
-		try {
-			const content = readFileSync(filePath, "utf-8");
-			const lower = content.toLowerCase();
-			let count = 0;
-			let idx = 0;
-			while ((idx = lower.indexOf(queryLower, idx)) !== -1) {
-				count++;
-				idx += queryLower.length;
-			}
-			if (count > 0) results.push({ path: filePath, count });
-		} catch {
-			continue;
-		}
-	}
-
-	return results;
-}
-
-/**
- * Find matching lines in a single file, up to maxMatches.
- * Falls back through rg → grep → node-native.
- */
-function searchLines(query: string, filePath: string, maxMatches: number): string[] {
-	const backend = getSearchBackend();
-
-	if (backend === "rg") {
-		try {
-			const output = execFileSync(
-				"rg",
-				["-i", "-F", "-m", String(maxMatches), query, filePath],
-				{ encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-			);
-			return output.trim().split("\n").filter(Boolean);
-		} catch (err: any) {
-			if (err.status === 1) return []; // no matches
-			// rg failed — try grep
-		}
-	}
-
-	if (backend === "rg" || backend === "grep") {
-		try {
-			const output = execFileSync(
-				"grep",
-				["-i", "-F", "-m", String(maxMatches), query, filePath],
-				{ encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-			);
-			return output.trim().split("\n").filter(Boolean);
-		} catch (err: any) {
-			if (err.status === 1) return []; // no matches
-			// grep failed too — fall through to node
-		}
-	}
-
-	// Node-native fallback
-	return nodeSearchLines(query, filePath, maxMatches);
-}
-
-/** Node-native: find matching lines in a file */
-function nodeSearchLines(query: string, filePath: string, maxMatches: number): string[] {
-	try {
-		const content = readFileSync(filePath, "utf-8");
-		const queryLower = query.toLowerCase();
-		const matches: string[] = [];
-		for (const line of content.split("\n")) {
-			if (matches.length >= maxMatches) break;
-			if (line.toLowerCase().includes(queryLower)) {
-				matches.push(line);
-			}
-		}
-		return matches;
-	} catch {
-		return [];
-	}
-}
-
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const QUERY_SYSTEM_PROMPT = `You are a session context assistant. Given the conversation history from a pi coding session and a question, provide a concise answer based on the session contents.
-
-Focus on:
-- Specific facts, decisions, and outcomes
-- File paths and code changes mentioned
-- Key context the user is asking about
-
-Be concise and direct. If the information isn't in the session, say so.`;
 
 const MAX_SEARCH_RESULTS = 10;
 const MAX_SNIPPETS_PER_SESSION = 3;
@@ -578,6 +189,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 		},
 		parameters: Type.Object({
 			query: Type.String({
+				minLength: 1,
 				description:
 					"Literal search pattern passed to fixed-string ripgrep-style search. Use one distinctive token or exact phrase, not a bag of unrelated keywords. Spaces mean exact spaces in an exact phrase.",
 			}),
@@ -596,76 +208,82 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 				return errorResult("No sessions directory found.");
 			}
 
-			const allMatches = searchFiles(query, sessionsDir);
+			try {
+				signal?.throwIfAborted();
+				const allMatches = await searchFiles(query, sessionsDir, signal);
 
-			if (allMatches.length === 0) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text:
-								`No sessions found matching "${query}".\n\n` +
-								"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
-						},
-					],
-					details: { matchCount: 0 },
-				};
-			}
-
-			const fileMatches = allMatches
-				.sort((a, b) => b.count - a.count || b.path.localeCompare(a.path))
-				.slice(0, MAX_SEARCH_RESULTS);
-
-			const results: string[] = [];
-
-			for (const { path: filePath, count } of fileMatches) {
-				if (signal?.aborted) break;
-
-				const project = projectFromPath(filePath);
-				const date = dateFromPath(filePath);
-
-				const matchLines = searchLines(query, filePath, MAX_SNIPPETS_PER_SESSION);
-				if (matchLines.length === 0) continue;
-
-				const snippets: string[] = [];
-				for (const line of matchLines) {
-					const msg = extractMessageText(line);
-					if (!msg) continue;
-					const snippet = snippetAround(msg.text, query);
-					snippets.push(`  [${msg.role}] ${snippet}`);
+				if (allMatches.length === 0) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text:
+									`No sessions found matching "${query}".\n\n` +
+									"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
+							},
+						],
+						details: { matchCount: 0 },
+					};
 				}
 
-				if (snippets.length === 0) continue;
+				const fileMatches = allMatches
+					.sort((a, b) => b.count - a.count || b.path.localeCompare(a.path))
+					.slice(0, MAX_SEARCH_RESULTS);
 
-				results.push(
-					`**${date}** · \`${project}\` · ${count} match${count > 1 ? "es" : ""}\n` +
-						`Session: \`${filePath}\`\n` +
-						snippets.join("\n"),
-				);
-			}
+				const results: string[] = [];
 
-			if (results.length === 0) {
+				for (const { path: filePath, count } of fileMatches) {
+					signal?.throwIfAborted();
+
+					const project = projectFromPath(filePath);
+					const date = dateFromPath(filePath);
+
+					const matchLines = await searchLines(query, filePath, MAX_SNIPPETS_PER_SESSION, signal);
+					if (matchLines.length === 0) continue;
+
+					const snippets: string[] = [];
+					for (const line of matchLines) {
+						const msg = extractMessageText(line);
+						if (!msg) continue;
+						const snippet = snippetAround(msg.text, query);
+						snippets.push(`  [${msg.role}] ${snippet}`);
+					}
+
+					if (snippets.length === 0) continue;
+
+					results.push(
+						`**${date}** · \`${project}\` · ${count} match${count > 1 ? "es" : ""}\n` +
+							`Session: \`${filePath}\`\n` +
+							snippets.join("\n"),
+					);
+				}
+
+				if (results.length === 0) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text:
+									`No readable matches found for "${query}".\n\n` +
+									"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
+							},
+						],
+						details: { matchCount: 0 },
+					};
+				}
+
+				const output =
+					`Found ${results.length} session${results.length > 1 ? "s" : ""} matching "${query}":\n\n` +
+					results.join("\n\n---\n\n");
+
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text:
-								`No readable matches found for "${query}".\n\n` +
-								"session_search is literal fixed-string search, not semantic search. Retry with one exact distinctive token or phrase, such as a filename, package name, error text, function name, issue id, or unique term.",
-						},
-					],
-					details: { matchCount: 0 },
+					content: [{ type: "text" as const, text: output }],
+					details: { matchCount: results.length, query },
 				};
+			} catch (error) {
+				if (signal?.aborted) return { content: [{ type: "text" as const, text: "Search was cancelled." }], details: { cancelled: true } };
+				return errorResult(`Error searching sessions: ${error}`);
 			}
-
-			const output =
-				`Found ${results.length} session${results.length > 1 ? "s" : ""} matching "${query}":\n\n` +
-				results.join("\n\n---\n\n");
-
-			return {
-				content: [{ type: "text" as const, text: output }],
-				details: { matchCount: results.length, query },
-			};
 		},
 	});
 
@@ -746,18 +364,19 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 			// Load the session
 			let sessionManager: SessionManager;
 			try {
-				sessionManager = SessionManager.open(sessionPath);
+				const entries = parseSessionEntries(await readFile(sessionPath, { encoding: "utf8", signal }));
+				signal?.throwIfAborted();
+				sessionManager = SessionManager.inMemory(ctx.cwd, undefined, entries);
 			} catch (err) {
+				if (signal?.aborted) return { content: [{ type: "text" as const, text: "Query was cancelled." }], details: { cancelled: true } };
 				return errorResult(`Error loading session: ${err}`);
 			}
 
+			// Recall reads the historical branch, including messages summarized by
+			// compaction. The live request projection would discard that evidence.
 			const branch = sessionManager.getBranch();
-			const messages = branch
-				.filter(
-					(entry): entry is SessionEntry & { type: "message" } =>
-						entry.type === "message",
-				)
-				.map((entry) => entry.message);
+			const messageCount = branch.filter(entry => entry.type === "message").length;
+			const messages = branch.flatMap(sessionEntryToContextMessages);
 
 			if (messages.length === 0) {
 				return {
@@ -781,60 +400,11 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 				);
 			}
 
-			// Serialize and check if we need windowing
-			const llmMessages = prepareRecallMessages(convertToLlm(messages));
-			const fullText = serializeConversation(llmMessages);
-			const fullTokens = estimateTokens(fullText);
-
-			// Reserve 20% of context for system prompt + question + response
-			const tokenBudget = Math.floor(queryModel.contextWindow * 0.8);
-			let conversationText: string;
-			let wasWindowed = false;
-
-			if (fullTokens <= tokenBudget) {
-				conversationText = fullText;
-			} else {
-				const serialized: SerializedMessage[] = [];
-				for (let i = 0; i < llmMessages.length; i++) {
-					const msg = llmMessages[i];
-					const text = serializeConversation([msg]);
-					serialized.push({
-						index: i,
-						role: msg.role,
-						text,
-						charCount: text.length,
-					});
-				}
-				conversationText = buildWindowedContext(serialized, question, tokenBudget);
-				wasWindowed = true;
-			}
-
 			try {
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(queryModel);
-				if (!auth.ok) {
-					return errorResult(`Error resolving model auth: ${auth.error}`);
-				}
-
-				const contextNote = wasWindowed
-					? "\n\n**Note:** This is a large session. The conversation has been windowed to focus on sections most relevant to your question. Some messages were omitted (marked with [...])."
-					: "";
-
-				const userMessage: Message = {
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text: `## Session Conversation${contextNote}\n\n${conversationText}\n\n## Question\n\n${question}`,
-						},
-					],
-					timestamp: Date.now(),
-				};
-
-				const response = await completeRecallRequest(
-					queryModel,
-					{ systemPrompt: QUERY_SYSTEM_PROMPT, messages: [userMessage] },
-					{ apiKey: auth.apiKey, headers: auth.headers, signal },
-				);
+				const { context, maxTokens, wasWindowed } = await createRecallRequest(convertToLlm(messages), question, queryModel, signal);
+				signal?.throwIfAborted();
+				const response = await ctx.modelRegistry.streamSimple(queryModel, context, { signal, maxTokens }).result();
+				signal?.throwIfAborted();
 
 				if (response.stopReason === "aborted") {
 					return {
@@ -877,11 +447,12 @@ export default function sessionRecallExtension(pi: ExtensionAPI, options: {
 					details: {
 						sessionPath,
 						question,
-						messageCount: messages.length,
+						messageCount,
 						wasWindowed,
 					},
 				};
 			} catch (err) {
+				if (signal?.aborted) return { content: [{ type: "text" as const, text: "Query was cancelled." }], details: { cancelled: true } };
 				return errorResult(`Error querying session: ${err}`);
 			}
 		},

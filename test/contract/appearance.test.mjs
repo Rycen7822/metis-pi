@@ -5,8 +5,9 @@ import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
 import { theme, toolInfo } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 import { altScreen } from "../helpers/ui-fixtures.mjs";
-import { CustomEditor, initTheme } from "@earendil-works/pi-coding-agent";
-import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import { CodexThinkingRailComponent } from "../../src/chrome/transcript-components.ts";
 import { stringify } from "smol-toml";
 const appearanceFile = config => path => path.endsWith("metis-pi.toml") ? stringify({ appearance: config }) : undefined;
 
@@ -93,6 +94,105 @@ async function session(t, bindings = {}, overrides = {}) {
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const widgetByKey = (slots, key) =>
   slots.widgetCalls.filter((c) => c.key === key && c.content !== undefined).at(-1);
+
+for (const rail of [false, true]) {
+  test(`rail setting ${rail} reaches the native assistant and diagnostics`, async t => {
+    class Assistant extends AssistantMessageComponent {
+      updateContent(message, isStreaming = this.isStreaming) { super.updateContent(message, isStreaming); }
+    }
+    let rails = 0;
+    const commands = new Map();
+    const { handlers, slots } = await session(t, {
+      getAgentDir: () => "/unused",
+      readFile: appearanceFile({ thinking: { rail, streaming: "full", completed: "full" } }),
+      assistantPrototype: Assistant.prototype,
+      makeSeparator: () => new Text("separator", 0, 0),
+      makeSpacer: () => new Spacer(1),
+      makeRail: child => { rails++; return new CodexThinkingRailComponent(child, { kind: "none" }); },
+      api: { registerCommand: (name, command) => commands.set(name, command) },
+    });
+    handlers.get("agent_start")();
+    const message = { role: "assistant", content: [{ type: "thinking", thinking: "RAIL_BODY" }] };
+    handlers.get("message_start")({ message });
+    handlers.get("message_update")({ message });
+    const assistant = new Assistant();
+    assistant.updateContent(message, true);
+    assert.match(plain(assistant.render(80).join("\n")), /RAIL_BODY/, "the native body is shown in both configurations");
+    assert.equal(rails, rail ? 1 : 0, "disabled rail must not construct a wrapper");
+    const report = [];
+    commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
+    assert.match(report.join("\n"), rail ? /thinking-rail=applied/ : /thinking-rail=disabled\(config\)/);
+    assert.doesNotMatch(slots.notifications.map(n => n.text).join("\n"), /decorations partially unavailable/,
+      "intentional disable is not an installation failure");
+  });
+}
+
+for (const enabled of [false, true]) {
+  test(`settled verdict survives with summary enabled=${enabled} until the next interaction`, async t => {
+    let now = 1_000;
+    t.mock.method(performance, "now", () => now);
+    t.mock.method(Date, "now", () => 1_700_000_000_000 + now);
+    const commands = new Map(), appended = [];
+    const { handlers } = await session(t, {
+      getAgentDir: () => "/unused", readFile: appearanceFile({ summary: { enabled } }),
+      api: {
+        appendEntry: (type, data) => appended.push({ type, data }),
+        registerCommand: (name, command) => commands.set(name, command),
+      },
+    });
+    const diagnostic = () => {
+      const report = [];
+      commands.get("codex-ui").handler("", { ui: { notify: text => report.push(text) } });
+      return report.join("\n");
+    };
+    handlers.get("agent_start")();
+    const message = { role: "assistant", content: [], stopReason: "error" };
+    handlers.get("message_start")({ message });
+    handlers.get("tool_execution_end")({ toolCallId: "failed-tool", toolName: "bash", result: {}, isError: true });
+    now += 2_000;
+    handlers.get("message_end")({ message });
+    handlers.get("agent_settled")();
+    handlers.get("agent_settled")();
+    assert.match(diagnostic(), /outcome: failed \(evidence=assistant-error, attempt=1, toolErrors=1\)/);
+    assert.equal(appended.length, enabled ? 1 : 0, "the summary toggle controls delivery, not verdict finalization");
+    now += 1_000;
+    handlers.get("agent_start")();
+    assert.match(diagnostic(), /outcome: pending \(attempts=0, toolErrors=0\)/, "a new interaction clears the prior verdict");
+  });
+}
+
+for (const acceptance of ["before", "after", "unavailable"]) {
+  test(`summary append ${acceptance} acceptance falls back without another append`, async t => {
+    let now = 1_000;
+    t.mock.method(performance, "now", () => now);
+    t.mock.method(Date, "now", () => 1_700_000_000_000 + now);
+    const manager = SessionManager.inMemory();
+    let attempts = 0;
+    const appendEntry = acceptance === "unavailable" ? undefined : (type, data) => {
+      attempts++;
+      if (acceptance === "after") manager.appendCustomEntry(type, data);
+      throw new Error("synthetic persistence failure");
+    };
+    const { handlers, slots } = await session(t, { api: { appendEntry } }, { sessionManager: manager });
+    handlers.get("agent_start")();
+    const message = { role: "assistant", content: [], stopReason: "stop" };
+    handlers.get("message_start")({ message });
+    now += 2_000;
+    handlers.get("message_end")({ message });
+    handlers.get("agent_settled")();
+    handlers.get("agent_settled")();
+    const fallback = slots.statuses.get("metis-pi:summary");
+    assert.match(fallback, /Worked for 2s/, "a failed append still delivers a visible summary");
+    assert.match(fallback, acceptance === "unavailable" ? /summary not saved/ : /summary save unconfirmed/);
+    assert.equal(attempts, acceptance === "unavailable" ? 0 : 1, "uncertain delivery must not cause a blind reappend");
+    const entries = manager.getEntries().filter(entry => entry.type === "custom");
+    assert.equal(entries.length, acceptance === "after" ? 1 : 0);
+    if (entries.length) assert.equal(entries[0].data.outcome, "completed", "accepted in-memory data is preserved");
+    now += 1_000;
+    handlers.get("agent_start")();
+    assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "transient display ends at the next interaction");
+  });
+}
 
 test("appearance installs the public native-status editor path for compaction timing", async t => {
   let now = 1_000;

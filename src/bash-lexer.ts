@@ -82,15 +82,14 @@ export function tokenizeBashLine(line: string): BashSpan[] {
     if (inComment) { push(char, "comment"); index += 1; continue; }
     if (escape) {
       if (quote === "double") push(char, "string");
-      else if (quote === "single") push(char, "string");
-      else { wordBuffer += char; push(char, "plain"); }
+      else wordBuffer += char;
       escape = false;
       index += 1;
       continue;
     }
     if (char === "\\" && quote !== "single") {
       if (quote === "double") { push(char, "string"); }
-      else { push(char, "plain"); }
+      else { wordStarted = true; wordBuffer += char; }
       escape = true;
       index += 1;
       continue;
@@ -169,7 +168,7 @@ export function tokenizeBashLine(line: string): BashSpan[] {
     if (wordStarted) endWord();
   }
 
-  return raw.map((span) => ({ text: span.text, token: span.token }));
+  return raw;
 }
 
 /** Highlight one line to an ANSI string with the Mocha palette. Plain spans

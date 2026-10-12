@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,15 +20,19 @@ export class McpServerSession {
   state = "disconnected";
   error?: string;
   private key?: string;
+  private commandIdentity?: string;
   private client?: McpClient;
   private connecting?: McpClient;
   private opening?: Promise<McpClient>;
   private closing?: Promise<void>;
   private shutdownTask?: Promise<void>;
+  private refreshTask?: Promise<void>;
   private readonly closes = new WeakMap<McpClient, Promise<void>>();
   private readonly retiring = new Set<McpClient>();
   private readonly uses = new Map<McpClient, number>();
+  private readonly toolDispatch = new AsyncLocalStorage<() => void>();
   private discovery = 0;
+  private catalogRevision = 0;
   private readonly lifetime = new AbortController();
   private active = 0;
   private timer?: ReturnType<typeof setTimeout>;
@@ -62,7 +67,8 @@ export class McpServerSession {
     let values: unknown;
     try { values = resolveValues("url" in config ? config.headers : config.env, false); }
     catch { values = "dynamic"; }
-    const scope = createHash("sha256").update(canonical({ authorization, values, environment: process.env })).digest("hex");
+    const scope = createHash("sha256").update(canonical({ authorization, values, commandIdentity: this.commandIdentity,
+      environment: process.env })).digest("hex");
     return { scope, key: this.cache.fingerprint(this.entry, this.cwd, this.context().isProjectTrusted(), authorization) };
   }
   async restore(): Promise<boolean> {
@@ -103,7 +109,10 @@ export class McpServerSession {
     try {
       const value = await fn({ signal: ownedSignal, timeoutMs: (this.entry.config.timeout ?? 60) * 1000 });
       this.assertCurrent(); ownedSignal.throwIfAborted(); return value;
-    } finally { this.active--; this.lastFinished = Date.now(); this.scheduleIdle(); }
+    } finally {
+      this.active--; this.lastFinished = Date.now(); this.scheduleIdle();
+      if (!this.active) for (const client of this.retiring) void this.releaseRetired(client);
+    }
   }
   private async getClient(): Promise<McpClient> {
     this.assertCurrent();
@@ -131,7 +140,9 @@ export class McpServerSession {
     this.lifetime.signal.addEventListener("abort", abort, { once: true });
     let ready = false, directoryChanged = false, refreshing = false;
     const refresh = () => {
+      if (this.client !== client && this.connecting !== client) return;
       directoryChanged = true;
+      this.discovery++;
       if (!ready || refreshing) return;
       refreshing = true;
       void (async () => {
@@ -154,11 +165,24 @@ export class McpServerSession {
     });
     let transport: McpTransport | undefined;
     try {
+      const configuredValues = "url" in config ? config.headers : config.env;
+      const values = resolveValues(configuredValues);
+      const nativeFetch = globalThis.fetch;
+      this.commandIdentity = Object.values(configuredValues ?? {}).some(value => value.startsWith("!"))
+        ? createHash("sha256").update(canonical(values)).digest("hex") : undefined;
       transport =
         "url" in config
           ? new StreamableHttpTransport({
               url: config.url,
-              headers: resolveValues(config.headers),
+              headers: values,
+              fetch: (input, init) => {
+                const guard = this.toolDispatch.getStore();
+                // Native headers/OAuth may await after callTool's first check. Only
+                // recheck tool sends here; discovery, OAuth and cancellation still pass.
+                if (guard && String(input) === new URL(config.url).href && init?.method === "POST" &&
+                  typeof init.body === "string" && JSON.parse(init.body)?.method === "tools/call") guard();
+                return nativeFetch(input, init);
+              },
               authProvider:
                 this.auth ??
                 (config.auth
@@ -169,7 +193,7 @@ export class McpServerSession {
               command: expandHome(config.command),
               args: config.args?.map(expandHome),
               cwd: serverCwd(this.entry, this.cwd),
-              env: resolveValues(config.env),
+              env: values,
               stderr: "pipe",
             });
       await client.connect(transport);
@@ -227,6 +251,7 @@ export class McpServerSession {
     if (before.scope !== identity.scope)
       throw new Error("MCP authorization or environment changed during discovery; refresh the directory");
     this.catalog = { tools, resources, resourceTemplates, hasResources, instructions: client.instructions };
+    this.catalogRevision = revision;
     this.scope = identity.scope;
     this.key = identity.key;
     this.cached = false;
@@ -246,6 +271,26 @@ export class McpServerSession {
     });
     if (suspend && !this.active && !this.policy.keepAliveServers.includes(this.entry.name)) await this.suspend();
   }
+  refresh(): Promise<void> {
+    return (this.refreshTask ??= this.refreshDirectory().finally(() => { this.refreshTask = undefined; }));
+  }
+  private async refreshDirectory(): Promise<void> {
+    await this.opening?.catch(() => {});
+    this.assertCurrent();
+    const client = this.client;
+    if (client) {
+      this.client = undefined;
+      this.cached = true; this.state = "disconnected";
+      this.retiring.add(client);
+      this.changed();
+      if (!this.active) await this.releaseRetired(client);
+    }
+    await this.discover(true);
+  }
+  private releaseRetired(client: McpClient): Promise<void> | undefined {
+    if (!this.retiring.has(client) || this.uses.has(client)) return;
+    return this.closeClient(client).catch(() => {}).finally(() => this.retiring.delete(client));
+  }
   private async request<T>(options: McpRequestOptions, fn: (client: McpClient) => Promise<T>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const client = await waitFor(this.getClient(), options.signal!);
@@ -259,14 +304,14 @@ export class McpServerSession {
         }
         if (!(error instanceof McpSessionExpiredError) || attempt > 0) throw error;
         if (this.client === client) this.client = undefined;
-        // Do not fail other requests sharing the expired session. Its owner closes it at shutdown.
+        // Do not fail other requests sharing the expired session; close after their uses finish.
         this.retiring.add(client);
       } finally {
         const remaining = (this.uses.get(client) ?? 1) - 1;
         if (remaining) this.uses.set(client, remaining);
         else {
           this.uses.delete(client);
-          if (this.retiring.has(client)) void this.closeClient(client).catch(() => {}).finally(() => this.retiring.delete(client));
+          void this.releaseRetired(client);
         }
       }
     }
@@ -274,19 +319,25 @@ export class McpServerSession {
   async callTool(tool: Tool, scope: string, args: Record<string, unknown>, options: McpRequestOptions) {
     return this.lease(options.signal, (owned) =>
       this.request(owned, async (client) => {
-        const live = this.catalog.tools.find((candidate) => candidate.name === tool.name);
-        if (
-          !live ||
-          scope !== this.scope ||
-          canonical(live.inputSchema) !== canonical(tool.inputSchema) ||
-          canonical(live.annotations) !== canonical(tool.annotations)
-        )
-          throw new Error("MCP directory changed; use the updated tool definition and retry");
+        const currentTool = () => {
+          this.assertCurrent(); owned.signal?.throwIfAborted();
+          const live = this.catalog.tools.find((candidate) => candidate.name === tool.name);
+          if (
+            !live || this.client !== client || this.catalogRevision !== this.discovery ||
+            scope !== this.scope ||
+            canonical(live.inputSchema) !== canonical(tool.inputSchema) ||
+            canonical(live.annotations) !== canonical(tool.annotations)
+          )
+            throw new Error("MCP directory changed; use the updated tool definition and retry");
+          return live;
+        };
+        const live = currentTool();
         const validated = validateToolArguments(
           { name: live.name, description: live.description ?? "", parameters: live.inputSchema as TSchema },
           { type: "toolCall", id: "mcp-validation", name: live.name, arguments: args as JsonObject },
         );
-        return client.callTool(live.name, validated, { ...owned, onProgress: options.onProgress });
+        return this.toolDispatch.run(currentTool, () =>
+          client.callTool(live.name, validated, { ...owned, onProgress: options.onProgress }));
       }),
     );
   }
@@ -348,6 +399,7 @@ export class McpServerSession {
       pending,
     ]);
     this.retiring.clear();
+    this.toolDispatch.disable();
     this.state = "closed";
   }
 }

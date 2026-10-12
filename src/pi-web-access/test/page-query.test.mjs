@@ -72,6 +72,7 @@ function contextFor(models, { sessionModel = pageModel("page-model"), auth = { o
 			getApiKeyAndHeaders: async () => auth,
 			complete: async (calledModel, context, options) => {
 				request = { model: calledModel, context, options };
+				if (!auth.ok) return { stopReason: "error", errorMessage: `No API key available for answer model ${calledModel.provider}/${calledModel.id}`, content: [] };
 				return { stopReason: "stop", content: [{ type: "text", text: "The configured answer." }] };
 			},
 		},
@@ -261,4 +262,20 @@ test("answerFromPage runs when the provider authenticates without an API key", a
 
 	assert.equal(result.text, "The configured answer.");
 	assert.equal(getRequest().model, configured);
+});
+
+
+test("page answering trusts native completion facts and authenticates only at that boundary", async () => {
+	await rm(configPath, { force: true });
+	const { ctx } = contextFor([pageModel("page-model")]);
+	ctx.modelRegistry.getApiKeyAndHeaders = () => { throw new Error("must not pre-authenticate native completion"); };
+	for (const response of [
+		{ stopReason: "error", errorMessage: "stream disconnected", content: [{ type: "text", text: "partial" }] },
+		{ stopReason: "stop", content: [] },
+	]) {
+		ctx.modelRegistry.complete = async () => response;
+		await assert.rejects(answerFromPage({ question: "Q", pageText: "P", sourceUrl: "https://example.com" }, ctx), /stream disconnected|empty response/);
+	}
+	ctx.modelRegistry.complete = async () => ({ stopReason: "stop", content: [{ type: "text", text: "complete answer" }] });
+	assert.equal((await answerFromPage({ question: "Q", pageText: "P", sourceUrl: "https://example.com" }, ctx)).text, "complete answer");
 });

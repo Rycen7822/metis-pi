@@ -6,13 +6,13 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import initializeExtension from "../index.ts";
-import { getActiveProxy, installGlobalProxyFetch, runWithProxy } from "../utils.ts";
+import { getActiveProxy, installGlobalProxyFetch, runWithProxy } from "../proxy-transport.ts";
 
 const originalFetch = globalThis.fetch;
 const originalPath = process.env.PATH;
 const originalNoProxy = process.env.NO_PROXY;
 const originalNoProxyLower = process.env.no_proxy;
-const utilsUrl = new URL("../utils.ts", import.meta.url).href;
+const utilsUrl = new URL("../proxy-transport.ts", import.meta.url).href;
 const ssrfProtectionUrl = new URL("../ssrf-protection.ts", import.meta.url).href;
 const indexUrl = new URL("../index.ts", import.meta.url).href;
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const mistralModuleUrl = new URL("../mistral-search.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function createHome(config) {
@@ -343,7 +343,13 @@ test("Curator page exposes Mistral as an available manual provider", async () =>
 		valyu: false,
 	};
 	const page = generateCuratorPage(["query"], "token", 20, available, "mistral", "mistral", [], null);
-	assert.match(page, /data-provider="mistral"/);
-	assert.match(page, />Mistral<\/button>/);
-	assert.match(page, /provider === "mistral"\) return "Mistral"/);
+	const initialButton = page.match(/<button\b[^>]*data-provider="mistral"[^>]*>Mistral<\/button>/)?.[0];
+	assert.ok(initialButton, "available Mistral has a visible labelled button");
+	assert.match(initialButton, /data-state="loading"/);
+	assert.match(initialButton, / disabled>/);
+	const idlePage = generateCuratorPage([], "token", 20, available, "mistral", "mistral", [], null);
+	const idleButton = idlePage.match(/<button\b[^>]*data-provider="mistral"[^>]*>Mistral<\/button>/)?.[0];
+	assert.ok(idleButton, "Mistral remains selectable with no active query");
+	assert.match(idleButton, /data-state="idle"/);
+	assert.doesNotMatch(idleButton, / disabled[\s>]/);
 });

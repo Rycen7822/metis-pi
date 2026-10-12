@@ -27,7 +27,7 @@ test("working phases and token opt-in have literal presentation contracts", () =
 test("real animation scheduler handles one timer, static colors, idle and disposal", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const repaint = t.mock.fn();
-  for (const colorKind of ["truecolor", "ansi16", "none"] as const) {
+  for (const colorKind of ["truecolor", "ansi256", "ansi16", "none"] as const) {
     let active = true;
     const component = createWorkingComponent({
       getSnapshot: () => ({ ...snapshot, active }), getShow: () => SHOW,

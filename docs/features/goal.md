@@ -23,7 +23,7 @@ UI 与模型权限不同；禁用入口见 [配置](../configuration.md)。
 
 - active 每秒刷新 Footer，只读快照；状态切换和回合结算按整秒记账，保留余毫秒。
 - 重载/关闭/分支恢复释放旧 timer/context；恢复目标只有一个计时器，不累计离线时间。
-- 用量属于开始该回合的目标，新目标不继承旧回合用量；input 去掉 cacheRead 后加 output，无测量值时回退 totalTokens。
+- 用量属于开始该回合的目标，新目标不继承旧回合用量；Pi 的 input 已排除 cacheRead，直接加 output，无测量字段时回退 totalTokens。完成工具回执显示当时用量，最终回复的用量在 agent_end 后结算。
 - 取分支最后一条 goal 记录；提示只保留当前目标最近续跑消息，移除 UI 消息。OCC 协调见 [condense](condense.md)。
 
 入口拥有宿主 I/O；`src/goal-state.ts` 拥有状态和计账。Apache-2.0 来源与修改归属见 [NOTICE](../../NOTICE)。

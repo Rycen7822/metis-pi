@@ -149,7 +149,8 @@ test("Baizhi supports shared credential source rules without credential-resoluti
 });
 test("Baizhi is explicit-only, available to provider arrays, labels and the Curator", async () => {
 	reset();
-	const { search, ALL_SEARCH_PROVIDERS, providerLabel } = await import("../gemini-search.ts");
+	const { search } = await import("../search-router.ts");
+	const { ALL_SEARCH_PROVIDERS, providerLabel } = await import("../search-providers.ts");
 	assert.ok(!ALL_SEARCH_PROVIDERS.includes("baizhi"));
 	await assert.rejects(search("q", { provider: "auto" }));
 	await assert.rejects(search("q", { provider: "all" }));
@@ -159,7 +160,12 @@ test("Baizhi is explicit-only, available to provider arrays, labels and the Cura
 	assert.equal(providerLabel("baizhi"), "Baizhi");
 	const { generateCuratorPage } = await import("../curator-page.ts");
 	const available = new Proxy({ all: false, baizhi: true }, { get: (target, property) => target[property] ?? false });
-	assert.match(generateCuratorPage(["q"], "token", 20, available, "baizhi", "baizhi", [], null), /data-provider="baizhi"/);
+	const page = generateCuratorPage(["q"], "token", 20, available, "baizhi", "baizhi", [], null);
+	assert.match(page, /data-provider="baizhi"/);
+	assert.match(page, />Baizhi<\/button>/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.baizhi, "Baizhi");
+	assert.ok(clientData.providers.includes("baizhi"));
 });
 
 test("real Pi resource loader, extension binding and agent prompt dispatch Baizhi; includeContent does not guess sources", async () => {
@@ -204,7 +210,7 @@ test("real Pi resource loader, extension binding and agent prompt dispatch Baizh
 
 test("routing keeps safe HTTP/network classifications and never falls back after caller cancellation", async () => {
 	const { spawnSync } = await import("node:child_process");
-	const moduleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+	const moduleUrl = new URL("../search-router.ts", import.meta.url).href;
 	for (const failure of ["http401", "http429", "http503", "network", "invalid-json", "abort"]) {
 		const dir = await mkdtemp(join(tmpdir(), "pi-baizhi-routing-"));
 		try {

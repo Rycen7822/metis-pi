@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const searchinfinityModuleUrl = new URL("../searchinfinity.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 const PROVIDER_ENV_KEYS = [

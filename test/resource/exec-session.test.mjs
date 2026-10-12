@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
 import { createExecSessionManager } from "../../src/execution/exec/session-manager.ts";
+import { createBridgeSessionRuntime } from "../../src/execution/exec/bridge-session.ts";
 import { createExecCommandTool } from "../../src/execution/exec/command-tool.ts";
 import { captureBatch } from "../../src/condense/batch-capture.ts";
 import { packToolResult } from "../../src/condense/packing.ts";
@@ -46,6 +47,99 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
     const quote = (text) => `'${text.replaceAll("'", `'"'"'`)}'`;
     return { cmd: `${quote(process.execPath)} -e ${quote(script)}`, shell: "/bin/sh", login: false, ...options };
   }
+
+  function retainedBridge(t, mode = "ready") {
+    const directory = fs.mkdtempSync(join(tmpdir(), "metis-retained-bridge-"));
+    const path = join(directory, "bridge.mjs");
+    const readStarted = join(directory, "read-started"), outputReady = join(directory, "output-ready"),
+      responsePath = join(directory, "read-response.json");
+    fs.writeFileSync(path, `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+import fs from "node:fs";
+const mode = ${JSON.stringify(mode)};
+const readStarted = ${JSON.stringify(readStarted)}, outputReady = ${JSON.stringify(outputReady)}, responsePath = ${JSON.stringify(responsePath)};
+const chunks = [
+  { seq: 1, stream: "stdout", chunk: Buffer.from([0xf0, 0x9f]).toString("base64") },
+  { seq: 2, stream: "stdout", chunk: Buffer.from([0x99, 0x82]).toString("base64") },
+];
+let available = mode === "arriving" ? chunks.slice(0, 1) : chunks;
+let closed = false;
+let queue = Promise.resolve();
+createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line);
+  queue = queue.then(async () => {
+    let result = {};
+    if (request.op === "read") {
+      if (mode === "held") {
+        fs.writeFileSync(readStarted, "waiting");
+        const deadline = Date.now() + (request.wait_ms ?? 0);
+        while (!fs.existsSync(outputReady) && Date.now() < deadline)
+          await new Promise(resolve => setTimeout(resolve, 2));
+      }
+      const emitted = mode === "held" && !fs.existsSync(outputReady) ? [] : available;
+      const selected = emitted.filter(chunk => chunk.seq > request.after_seq);
+      await new Promise(resolve => setTimeout(resolve, selected.length ? 20 : request.wait_ms ?? 0));
+      result = { chunks: selected, nextSeq: (emitted.at(-1)?.seq ?? 0) + 1, exited: closed, exitCode: closed ? 0 : undefined, closed };
+      fs.writeFileSync(responsePath, JSON.stringify({ sequences: selected.map(chunk => chunk.seq) }));
+      if (mode === "arriving") { available = chunks; closed = true; }
+    }
+    process.stdout.write(JSON.stringify({ request_id: request.request_id, ok: true, result }) + "\\n",
+      request.op === "shutdown" ? () => process.exit(0) : undefined);
+  });
+});
+`, { mode: 0o700 });
+    const runtime = createBridgeSessionRuntime(() => path);
+    t.after(async () => { try { await runtime.shutdown(); } finally { fs.rmSync(directory, { recursive: true, force: true }); } });
+    return { runtime, readStarted, outputReady, responsePath };
+  }
+
+  function retainedProcess(runtime, hooks) {
+    return runtime.create({ processId: "fixture",
+      input: { executionCommand: "fixture", executionEnv: {} },
+      workdir: process.cwd(), shell: "/bin/sh", hooks });
+  }
+
+  test("background and foreground polls commit each retained byte sequence once", async t => {
+    const { runtime } = retainedBridge(t);
+    let owned = true, output = "";
+    const hooks = { isOwned: () => owned, onOutput: text => { output += text; }, onExit() {} };
+    const process = retainedProcess(runtime, hooks);
+    await process.waitForStartup();
+    await Promise.all([process.poll(), process.poll()]);
+    assert.equal(output, "🙂", "retained replay must not reenter UTF-8 decoding");
+    owned = false;
+  });
+
+  test("concurrent foreground polls decode arriving bytes before closed exit delivery", async t => {
+    const { runtime } = retainedBridge(t, "arriving");
+    let owned = false, output = "", exits = 0;
+    const hooks = { isOwned: () => owned, onOutput: text => { output += text; }, onExit() { exits++; } };
+    const process = retainedProcess(runtime, hooks);
+    await process.waitForStartup();
+    owned = true;
+    await Promise.all([process.poll(), process.poll(), process.poll()]);
+    assert.equal(output, "🙂", "two arriving sequences form one Unicode character");
+    assert.equal(process.exitCode, 0, "closed full snapshots flush only after their final bytes");
+    assert.equal(exits, 1, "queued polls do not repeat the final exit notification");
+  });
+
+  test("an in-flight read cannot deliver bytes after its process owner releases it", async t => {
+    const { runtime, readStarted, outputReady, responsePath } = retainedBridge(t, "held");
+    let owned = true, output = "";
+    const hooks = { isOwned: () => owned, onOutput: text => { output += text; }, onExit() {} };
+    const process = retainedProcess(runtime, hooks);
+    await process.waitForStartup();
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(readStarted) && Date.now() < deadline)
+      await new Promise(resolve => setTimeout(resolve, 2));
+    assert.ok(fs.existsSync(readStarted), "the owner releases an actual in-flight native read");
+    owned = false;
+    fs.writeFileSync(outputReady, "emit");
+    // The fixture processes shutdown after its already-received read response.
+    await runtime.shutdown();
+    assert.deepEqual(JSON.parse(fs.readFileSync(responsePath, "utf8")).sequences, [1, 2], "late bytes actually reach the bridge client");
+    assert.equal(output, "", "released managers never receive late decoded output");
+  });
 
   test(
     "durable capture retains the entire decoded process stream before normalization and ring eviction",
@@ -318,6 +412,53 @@ describe("native exec session lifecycle", { skip: !nativeTest }, () => {
     assert.ok(directories.every((path) => !fs.existsSync(path)));
     assert.equal(manager.hasSession(running.session_id), false);
     await assert.rejects(manager.write({ session_id: running.session_id }), /shut down/);
+  });
+
+  test("post-exit idle cutoff retires dangling streams without flushing incomplete UTF-8", { timeout: 15000 }, async t => {
+    const directory = fs.mkdtempSync(join(tmpdir(), "metis-exec-late-tail-"));
+    const release = join(directory, "release"), emitted = join(directory, "emitted");
+    const { manager, exec } = nativeExec(t);
+    let exits = 0;
+    manager.onSessionExit(() => { exits++; });
+    const child = `
+      const fs = require("node:fs");
+      process.stdout.on("error", () => {});
+      process.stdout.write(Buffer.from([0xf0, 0x9f]), () => process.send("ready"));
+      const deadline = Date.now() + 5000;
+      const timer = setInterval(() => {
+        if (fs.existsSync(${JSON.stringify(release)})) {
+          clearInterval(timer);
+          process.stdout.write(Buffer.from([0x99, 0x82]), error =>
+            fs.writeFileSync(${JSON.stringify(emitted)}, error ? error.code : "tail"));
+        } else if (Date.now() >= deadline) {
+          clearInterval(timer);
+          fs.writeFileSync(${JSON.stringify(emitted)}, "timeout");
+        }
+      }, 10);
+    `;
+    const script = `const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(child)}],
+      { stdio: ["ignore", 1, 2, "ipc"] }); child.once("message", () => process.exit(0));`;
+    try {
+      const result = await exec(script, { yield_time_ms: 1000 });
+      fs.writeFileSync(release, "emit");
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(emitted) && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(fs.readFileSync(emitted, "utf8"), "tail", "the descendant actually emits the late bytes through its inherited pipe");
+      assert.equal(result.exit_code, 0, "the host retires the exited parent before the descendant is released");
+      assert.equal(result.output, "", "host inactivity is not stream EOF and cannot flush a half character");
+      assert.equal(exits, 1);
+      assert.equal(manager.hasSession(1), false);
+      const replay = await manager.write({ session_id: 1 });
+      assert.equal(replay.exit_code, 0);
+      assert.equal(replay.output, "", "late descendant output stays outside the host's bounded completed replay");
+    } finally {
+      fs.writeFileSync(release, "emit");
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(emitted) && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test(

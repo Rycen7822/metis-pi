@@ -1,31 +1,9 @@
 import assert from "node:assert/strict";
-import { access, unlink, writeFile } from "node:fs/promises";
-import { after, test } from "node:test";
-
-const curatorPageShim = new URL("../curator-page.js", import.meta.url);
-let wroteCuratorPageShim = false;
+import { test } from "node:test";
+import { Script } from "node:vm";
+import { startCuratorServer } from "../curator-server.ts";
 
 const TEST_TIMEOUT_MS = 8000;
-
-async function loadServer() {
-	try {
-		await access(curatorPageShim);
-	} catch {
-		await writeFile(
-			curatorPageShim,
-			'export { generateCuratorPage } from "./curator-page.ts";\n',
-			"utf8",
-		);
-		wroteCuratorPageShim = true;
-	}
-
-	return import(`../curator-server.ts?test=${Date.now()}`);
-}
-
-after(async () => {
-	if (!wroteCuratorPageShim) return;
-	await unlink(curatorPageShim).catch(() => {});
-});
 
 function baseOptions(timeout = 1) {
 	return {
@@ -56,12 +34,11 @@ function baseCallbacks(resolveCancel) {
 }
 
 function withTimeout(promise, label) {
-	return Promise.race([
-		promise,
-		new Promise((_, reject) => {
-			setTimeout(() => reject(new Error(`${label} timed out`)), TEST_TIMEOUT_MS);
-		}),
-	]);
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${label} timed out`)), TEST_TIMEOUT_MS);
+	});
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function readEventStreamUntil(response, marker, label) {
@@ -84,7 +61,6 @@ async function readEventStreamUntil(response, marker, label) {
 }
 
 test("curator times out when searches finish but no browser connects", async () => {
-	const { startCuratorServer } = await loadServer();
 	let resolveCancel;
 	const cancelPromise = new Promise((resolve) => { resolveCancel = resolve; });
 	const handle = await startCuratorServer(baseOptions(1), baseCallbacks(resolveCancel));
@@ -101,7 +77,6 @@ test("curator times out when searches finish but no browser connects", async () 
 });
 
 test("curator replays search events after SSE reconnect", async () => {
-	const { startCuratorServer } = await loadServer();
 	const handle = await startCuratorServer(baseOptions(20), baseCallbacks(() => {}));
 
 	try {
@@ -123,7 +98,6 @@ test("curator replays search events after SSE reconnect", async () => {
 });
 
 test("curator add-search indexes do not collide with reserved initial provider results", async () => {
-	const { startCuratorServer } = await loadServer();
 	const handle = await startCuratorServer({
 		...baseOptions(20),
 		queries: ["initial one", "initial two"],
@@ -161,7 +135,6 @@ test("curator add-search indexes do not collide with reserved initial provider r
 });
 
 test("curator submit rejects contradictory summary metadata", async () => {
-	const { startCuratorServer } = await loadServer();
 	const handle = await startCuratorServer(baseOptions(20), baseCallbacks(() => {}));
 
 	try {
@@ -183,7 +156,6 @@ test("curator submit rejects contradictory summary metadata", async () => {
 });
 
 test("curator assigns one selectable result index per provider", async () => {
-	const { startCuratorServer } = await loadServer();
 	const indexedEntries = [];
 	let summarySelection = [];
 	const callbacks = baseCallbacks(() => {});
@@ -234,7 +206,6 @@ test("curator assigns one selectable result index per provider", async () => {
 });
 
 test("curator heartbeat timeout finalizes connected idle browser sessions", async () => {
-	const { startCuratorServer } = await loadServer();
 	let resolveCancel;
 	const cancelPromise = new Promise((resolve) => { resolveCancel = resolve; });
 	const handle = await startCuratorServer(baseOptions(20), baseCallbacks(resolveCancel));
@@ -259,7 +230,6 @@ test("curator heartbeat timeout finalizes connected idle browser sessions", asyn
 });
 
 test("curator state replay keeps current results and compacts superseded history", async () => {
-	const { startCuratorServer } = await loadServer();
 	const handle = await startCuratorServer(baseOptions(20), baseCallbacks(() => {}));
 
 	try {
@@ -281,7 +251,6 @@ test("curator state replay keeps current results and compacts superseded history
 });
 
 test("curator state replay keeps all-provider entries that share one slot", async () => {
-	const { startCuratorServer } = await loadServer();
 	const handle = await startCuratorServer(baseOptions(20), baseCallbacks(() => {}));
 
 	try {
@@ -300,7 +269,6 @@ test("curator state replay keeps all-provider entries that share one slot", asyn
 });
 
 test("curator exposes and signals approve remaining searches for this prompt", async () => {
-	const { startCuratorServer } = await loadServer();
 	let resolveSubmit;
 	const submitPromise = new Promise((resolve) => { resolveSubmit = resolve; });
 	const callbacks = baseCallbacks(() => {});
@@ -330,3 +298,156 @@ test("curator exposes and signals approve remaining searches for this prompt", a
 		handle.close();
 	}
 });
+
+test("curator accepts SerpApi and Parallel MCP and projects their labels into the page", async () => {
+	const options = baseOptions(20);
+	options.availableProviders = { ...options.availableProviders, serpapi: true, "parallel-mcp": true };
+	const callbacks = baseCallbacks(() => {});
+	callbacks.onAddSearch = async (_query, provider) => [{ answer: "synthetic answer", results: [], provider }];
+	const handle = await startCuratorServer(options, callbacks);
+	try {
+		const html = await (await fetch(handle.url)).text();
+		assert.match(html, /data-provider="serpapi"[^>]*>SerpApi<\/button>/);
+		assert.match(html, /data-provider="parallel-mcp"[^>]*>Parallel MCP<\/button>/);
+		const script = html.match(/<script>\n([\s\S]*?)\n<\/script>/)[1];
+		new Script(script);
+		const data = JSON.parse(script.match(/var DATA = ([^\n]+);/)[1]);
+		assert.equal(data.providerLabels["parallel-mcp"], "Parallel MCP");
+		assert.equal(data.providerLabels.serpapi, "SerpApi");
+		for (const provider of ["serpapi", "parallel-mcp"]) {
+			const preference = await fetch(new URL("/provider", handle.url), {
+				method: "POST", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ token: "test-token", provider }),
+			});
+			assert.equal(preference.status, 200);
+			const response = await fetch(new URL("/search", handle.url), {
+				method: "POST", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ token: "test-token", query: "synthetic query", provider }),
+			});
+			assert.equal(response.status, 200);
+			assert.equal((await response.json()).entries[0].provider, provider);
+		}
+		const rejected = await fetch(new URL("/provider", handle.url), {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ token: "test-token", provider: "constructor" }),
+		});
+		assert.equal(rejected.status, 400);
+	} finally {
+		handle.close();
+	}
+});
+
+test("curator normal rewrite replies stay uncancelled and invalid sessions never call the worker", async () => {
+	let calls = 0;
+	let rewriteSignal;
+	const callbacks = baseCallbacks(() => {});
+	callbacks.onRewriteQuery = async (query, signal) => {
+		calls++;
+		rewriteSignal = signal;
+		await new Promise(resolve => setTimeout(resolve, 25));
+		assert.equal(signal.aborted, false);
+		return `rewritten ${query}`;
+	};
+	const handle = await startCuratorServer(baseOptions(20), callbacks);
+	try {
+		const response = await fetch(new URL("/rewrite", handle.url), {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ token: "test-token", query: "synthetic query" }),
+		});
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), { ok: true, query: "rewritten synthetic query" });
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(rewriteSignal.aborted, false);
+		const invalid = await fetch(new URL("/rewrite", handle.url), {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ token: "invalid-token", query: "synthetic query" }),
+		});
+		assert.equal(invalid.status, 403);
+		assert.equal(calls, 1);
+		handle.close();
+		assert.equal(rewriteSignal.aborted, false);
+	} finally {
+		handle.close();
+	}
+});
+
+test("curator aborts rewrite work on a real response disconnect and remains usable", async () => {
+	let resolveStarted, resolveAborted;
+	const started = new Promise(resolve => { resolveStarted = resolve; });
+	const aborted = new Promise(resolve => { resolveAborted = resolve; });
+	const callbacks = baseCallbacks(() => {});
+	callbacks.onRewriteQuery = (query, signal) => {
+		if (query === "later") return Promise.resolve("later rewrite");
+		resolveStarted(signal);
+		return new Promise((_, reject) => {
+			signal.addEventListener("abort", () => {
+				resolveAborted(signal.aborted);
+				reject(new Error("Synthetic rewrite aborted"));
+			}, { once: true });
+		});
+	};
+	const handle = await startCuratorServer(baseOptions(20), callbacks);
+	const client = new AbortController();
+	try {
+		const request = fetch(new URL("/rewrite", handle.url), {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ token: "test-token", query: "disconnect" }), signal: client.signal,
+		}).then(() => "unexpected response", error => error.name);
+		const signal = await withTimeout(started, "rewrite start");
+		assert.equal(signal.aborted, false);
+		client.abort();
+		assert.equal(await request, "AbortError");
+		assert.equal(await withTimeout(aborted, "rewrite disconnect cancellation"), true);
+		const later = await fetch(new URL("/rewrite", handle.url), {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ token: "test-token", query: "later" }),
+		});
+		assert.equal(later.status, 200);
+		assert.equal((await later.json()).query, "later rewrite");
+	} finally {
+		client.abort();
+		handle.close();
+		handle.server.closeAllConnections();
+	}
+});
+
+for (const finish of ["cancel", "close"]) {
+	test(`curator ${finish} cancels owned rewrite work without publishing a late success`, async () => {
+		let resolveStarted;
+		const started = new Promise(resolve => { resolveStarted = resolve; });
+		const callbacks = baseCallbacks(() => {});
+		callbacks.onRewriteQuery = (_query, signal) => {
+			resolveStarted(signal);
+			return new Promise((resolve, reject) => {
+				signal.addEventListener("abort", () => {
+					if (finish === "close") resolve("synthetic late success");
+					else reject(new Error("Synthetic rewrite aborted"));
+				}, { once: true });
+			});
+		};
+		const handle = await startCuratorServer(baseOptions(20), callbacks);
+		try {
+			const request = fetch(new URL("/rewrite", handle.url), {
+				method: "POST", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ token: "test-token", query: "synthetic query" }),
+			}).then(response => ({ response }), error => ({ error }));
+			const signal = await withTimeout(started, "rewrite start");
+			if (finish === "cancel") {
+				const cancelled = await fetch(new URL("/cancel", handle.url), {
+					method: "POST", headers: { "content-type": "application/json" },
+					body: JSON.stringify({ token: "test-token", reason: "user" }),
+				});
+				assert.equal(cancelled.status, 200);
+			} else {
+				handle.close();
+			}
+			assert.equal(signal.aborted, true);
+			const result = await withTimeout(request, "cancelled rewrite response");
+			assert.equal(result.error, undefined);
+			assert.equal(result.response.status, 409);
+		} finally {
+			handle.close();
+			handle.server.closeAllConnections();
+		}
+	});
+}

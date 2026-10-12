@@ -1,6 +1,6 @@
 import { ExecOutputArchive } from "./output-archive.ts";
 import { normalizePipeOutput, truncateOutput, truncateToTail } from "./output.ts";
-import { createBridgeSessionRuntime, type BridgeExecSession, type BridgeSessionHooks } from "./bridge-session.ts";
+import { createBridgeSessionRuntime, type BridgeExecProcess } from "./bridge-session.ts";
 import {
   DEFAULT_EXEC_YIELD_TIME_MS,
   DEFAULT_MAX_EMPTY_WRITE_YIELD_TIME_MS,
@@ -66,7 +66,23 @@ export interface WriteStdinInput {
 	max_output_tokens?: number | undefined;
 }
 
-type ExecSession = BridgeExecSession;
+interface ExecSession {
+  id: number;
+  process: BridgeExecProcess;
+  command: string;
+  tty: boolean;
+  buffer: ExecOutputBuffer;
+  emittedOffset: number;
+  outputVersion: number;
+  listeners: Set<() => void>;
+  nextEmptyPollYieldMs?: number | undefined;
+  startedAt: number;
+  updatedAt: number;
+  finalized: boolean;
+  exposed: boolean;
+  readonly exitCode: number | undefined;
+  readonly terminating: boolean;
+}
 
 export type ExecSessionUpdateCallback = (result: UnifiedExecResult) => void;
 
@@ -154,7 +170,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
   }
 
   function finishResult(session: ExecSession, waitMs: number, maxOutputTokens?: number): UnifiedExecResult {
-    const completed = session.exitCode !== undefined && session.exitCode !== null;
+    const completed = session.exitCode !== undefined;
     const replaySnapshot = completed
       ? makeSnapshotResult(session, waitMs, MAX_COMPLETED_SESSION_OUTPUT_TOKENS, true)
       : undefined;
@@ -206,7 +222,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
   }
 
   function exposeSession(session: ExecSession): void {
-    if (session.exposed || (session.exitCode !== undefined && session.exitCode !== null)) return;
+    if (session.exposed || session.exitCode !== undefined) return;
     session.exposed = true;
     notifyChanged("start");
   }
@@ -220,12 +236,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
     notify(session);
   }
 
-  const bridgeHooks: BridgeSessionHooks = {
-    isOwned: (session) => !shuttingDown && sessions.get(session.id) === session,
-    onOutput: (session, text) => appendOutput(session, text),
-    onExit: (session) => finalizeSession(session),
-  };
-
   return {
     exec: async (input, cwd, signal, onUpdate) => {
       if (shuttingDown) throw new Error("exec manager is shut down");
@@ -233,20 +243,21 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
       const shell = resolveShell(requestedShell);
       const workdir = resolveWorkdir(cwd, input.workdir);
       const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
-      const session = bridgeSessions.create({
-        id: nextSessionId++,
-        buffer: new ExecOutputBuffer(
-          configuredMaxSessionBufferChars ??
-            (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS),
-          input.archiveDirectory
-            ? new ExecOutputArchive(
-                input.archiveDirectory,
-                Math.min(32768, Math.max(256, (input.max_output_tokens ?? 10000) * 4)),
-              )
-            : undefined,
-        ),
+      const id = nextSessionId++;
+      const startedAt = Date.now();
+      const buffer = new ExecOutputBuffer(
+        configuredMaxSessionBufferChars ??
+          (input.tty ? DEFAULT_MAX_TTY_SESSION_BUFFER_CHARS : DEFAULT_MAX_PIPE_SESSION_BUFFER_CHARS),
+        input.archiveDirectory
+          ? new ExecOutputArchive(
+              input.archiveDirectory,
+              Math.min(32768, Math.max(256, (input.max_output_tokens ?? 10000) * 4)),
+            )
+          : undefined,
+      );
+      const processHandle = bridgeSessions.create({
+        processId: `pi-${id}`,
         input: {
-          command: input.cmd,
           executionCommand: execution.command,
           executionEnv: execution.env,
           ...(input.tty === undefined ? {} : { tty: input.tty }),
@@ -255,13 +266,39 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
         workdir,
         shell,
         ...(signal ? { signal } : {}),
-        hooks: bridgeHooks,
+        hooks: {
+          isOwned: () => !shuttingDown && sessions.get(id)?.process === processHandle,
+          onOutput: (text) => {
+            const session = sessions.get(id);
+            if (session) appendOutput(session, text);
+          },
+          onExit: () => {
+            const session = sessions.get(id);
+            if (session) finalizeSession(session);
+          },
+        },
       });
+      const session: ExecSession = {
+        id,
+        process: processHandle,
+        command: input.cmd,
+        tty: Boolean(input.tty),
+        buffer,
+        emittedOffset: 0,
+        outputVersion: 0,
+        listeners: new Set(),
+        startedAt,
+        updatedAt: startedAt,
+        finalized: false,
+        exposed: false,
+        get exitCode() { return processHandle.exitCode; },
+        get terminating() { return processHandle.terminating; },
+      };
       sessions.set(session.id, session);
       rememberCommand(session.id, session.command);
       const abortCleanup = registerAbortHandler(signal, () => {
-        if (session.exitCode === undefined || session.exitCode === null) {
-          void bridgeSessions.terminate(session).catch(() => {});
+        if (session.exitCode === undefined) {
+          void session.process.terminate().catch(() => {});
         }
       });
 
@@ -270,7 +307,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
         const execYieldMs = clampExecYieldTime(
           input.yield_time_ms,
           defaultExecYieldTimeMs,
-          session.interactive,
+          session.tty,
           minNonInteractiveExecYieldTimeMs,
           input.max_yield_time_ms,
         );
@@ -285,9 +322,9 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
         if (signal?.aborted) {
           throw signal.reason instanceof Error ? signal.reason : new Error("exec aborted");
         }
-        await bridgeSessions.waitForStartup(session, signal);
-        if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
-        if (session.exitCode === undefined || session.exitCode === null)
+        await session.process.waitForStartup(signal);
+        if (session.process.started && !session.finalized) await session.process.poll(0);
+        if (session.exitCode === undefined)
           session.nextEmptyPollYieldMs = growEmptyPollYield(Math.max(execYieldMs, waitedMs), maxEmptyWriteYieldTimeMs);
         return finishResult(session, waitedMs, input.max_output_tokens);
       } catch (error) {
@@ -319,10 +356,10 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
       const chars = input.chars ?? "";
       const isEmptyPoll = chars.length === 0;
       if (!isEmptyPoll) {
-        if (!session.interactive) {
+        if (!session.tty) {
           throw new Error("stdin is closed for this session; rerun exec_command with tty=true to keep stdin open");
         }
-        await bridgeSessions.write(session, chars);
+        await session.process.write(chars);
         session.nextEmptyPollYieldMs = undefined;
       }
       onUpdate?.(makeSnapshotSince(session, 0, updateBaseline, input.max_output_tokens));
@@ -349,9 +386,9 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
                 : undefined,
             )
           : 0;
-      await bridgeSessions.waitForStartup(session, signal);
-      if (session.started && !session.finalized) await bridgeSessions.poll(session, bridgeHooks, 0);
-      if (isEmptyPoll && (session.exitCode === undefined || session.exitCode === null))
+      await session.process.waitForStartup(signal);
+      if (session.process.started && !session.finalized) await session.process.poll(0);
+      if (isEmptyPoll && session.exitCode === undefined)
         session.nextEmptyPollYieldMs = growEmptyPollYield(effectiveYieldMs, maxEmptyWriteYieldTimeMs);
       return finishResult(session, waitedMs, input.max_output_tokens);
     },
@@ -361,7 +398,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
       const snapshotsById = new Map<number, ExecSessionSnapshot>();
       for (const session of sessions.values()) {
         if (!session.exposed) continue;
-        if (session.exitCode !== undefined && session.exitCode !== null) continue;
+        if (session.exitCode !== undefined) continue;
         snapshotsById.set(session.id, snapshotSession(session, maxOutputChars));
       }
       return Array.from(snapshotsById.values()).sort((a, b) => a.id - b.id);
@@ -369,12 +406,11 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
     terminateSession: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session || session.exitCode !== undefined || session.terminating) return false;
-      session.terminating = true;
-      void bridgeSessions.terminate(session).catch(() => {});
+      void session.process.terminate().catch(() => {});
       setTimeout(() => {
         if (shuttingDown) return;
-        if (session.exitCode === undefined || session.exitCode === null)
-          void bridgeSessions.terminate(session).catch(() => {});
+        if (session.exitCode === undefined)
+          void session.process.terminate().catch(() => {});
       }, TERMINATE_ESCALATE_MS).unref?.();
       notify(session, "terminate");
       return true;

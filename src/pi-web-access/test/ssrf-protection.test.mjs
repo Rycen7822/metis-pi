@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { fetchRemoteUrl, validateRemoteUrl } from "../ssrf-protection.ts";
-import { runWithProxy } from "../utils.ts";
+import { isProxyBypassedUrl, runWithProxy } from "../proxy-transport.ts";
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
 
@@ -489,6 +489,34 @@ test("trustEnvProxy still performs DNS for NO_PROXY hosts", async () => {
 
 		await validateRemoteUrl("https://other.example.test/", { trustEnvProxy: true, lookup });
 		assert.equal(lookups, 2);
+	} finally {
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+});
+
+
+test("proxy transport and environment trust share port-aware NO_PROXY routing", async () => {
+	const previous = Object.fromEntries(["HTTPS_PROXY", "NO_PROXY", "no_proxy"].map(key => [key, process.env[key]]));
+	try {
+		process.env.HTTPS_PROXY = "http://proxy.example.test:8080";
+		process.env.NO_PROXY = "public.example.test:443, .internal.example.test, [2606:4700:4700::1111]:8443";
+		delete process.env.no_proxy;
+		for (const [address, bypass] of [
+			["https://public.example.test/", true],
+			["https://public.example.test:8443/", false],
+			["https://api.internal.example.test:8443/", true],
+			["https://[2606:4700:4700::1111]:8443/", true],
+			["https://[2606:4700:4700::1111]/", false],
+		]) assert.equal(isProxyBypassedUrl(new URL(address)), bypass, address);
+		let lookups = 0;
+		const lookup = async () => { lookups++; return [{ address: "93.184.216.34", family: 4 }]; };
+		await validateRemoteUrl("https://public.example.test/", { trustEnvProxy: true, lookup });
+		assert.equal(lookups, 1);
+		await validateRemoteUrl("https://public.example.test:8443/", { trustEnvProxy: true, lookup });
+		assert.equal(lookups, 1);
 	} finally {
 		for (const [key, value] of Object.entries(previous)) {
 			if (value === undefined) delete process.env[key];

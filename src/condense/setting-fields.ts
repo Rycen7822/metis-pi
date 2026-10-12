@@ -1,7 +1,7 @@
 // Scalar settings fields shared by the SettingsList overlay (settings.ts) and
 // the /pruner command verbs (commands.ts). Each row is one config location
-// with its option cycle, parse kind and description text; the helpers below
-// are the single implementation of display, legality and write. The two entry
+// with its option cycle, raw-string parsing and description text. Config owns
+// the legal fields, values and typed accessors. The two entry
 // points keep their own illegal-value policy — the overlay stores
 // `fallbackValue(row)`, a command reports an error and saves nothing — so
 // `parseScalar` only answers legality. Complex shapes (model picker, protected
@@ -13,8 +13,12 @@ import {
   MIN_BATCH_CHARS_PRESETS, RECOVERY_GRACE_PRESETS,
   SUMMARIZER_IDLE_TIMEOUT_PRESETS, SUMMARIZER_MAX_TIMEOUT_PRESETS,
   AUTO_BUDGET_PRESETS, ROLLING_WINDOW_PRESETS,
-  PURGE_COOLDOWN_PRESETS, PURGE_MIN_ARG_PRESETS, DEFAULT_CONFIG,
-} from "./types.ts";
+  PURGE_COOLDOWN_PRESETS, PURGE_MIN_ARG_PRESETS,
+} from "./setting-presets.ts";
+import {
+  DEFAULT_CONFIG, applyScalarConfig, isScalarConfigValue, readScalarConfig, scalarConfigKind,
+} from "./config.ts";
+import type { ScalarConfigKey, ScalarConfigValue } from "./config.ts";
 
 export interface FieldOption {
   readonly value: string;
@@ -22,25 +26,18 @@ export interface FieldOption {
 }
 
 /** A parsed or written field value. `null` is only the auto-budget "off" state. */
-export type ScalarValue = boolean | number | string | null;
-
-export type ScalarKind = "boolean" | "enum" | "integer" | "fraction";
+export type ScalarValue = ScalarConfigValue;
 
 export interface ScalarRow {
   readonly id: string;
-  /** Config location: a top-level key or "group.key". */
-  readonly path: string;
+  /** An existing scalar field owned by config. */
+  readonly path: ScalarConfigKey;
   readonly label: string;
   readonly options: readonly FieldOption[];
-  /**
-   * `boolean` accepts "true"/"false"; `enum` its own option values (any raw
-   * string while `loose`); `integer`/`fraction` a number at or above `min`
-   * (default 0) / in (0, 1]. Integer and fraction rows show an out-of-cycle
-   * persisted value as the matching default preset.
-   */
-  readonly kind: ScalarKind;
   readonly description: string | ((config: ContextPruneConfig) => string);
+  /** An entry-specific minimum, such as cooldown UI >= 1 while files allow 0. */
   readonly min?: number;
+  /** Preserve the command/overlay's historical loose pruneOn strings. */
   readonly loose?: boolean;
 }
 
@@ -276,7 +273,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "enabled",
     path: "enabled",
     label: "Enabled",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: "Enable or disable context pruning",
   },
@@ -284,7 +280,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "showPruneStatusLine",
     path: "showPruneStatusLine",
     label: "Prune status line",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: pruneStatusLineDescription,
   },
@@ -292,7 +287,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "showOccStatusLine",
     path: "showOccStatusLine",
     label: "OCC status line",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: "Show OCC progress and retain its latest result in the footer. Does not affect compaction.",
   },
@@ -300,7 +294,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "compactionSummaryMaxTokens",
     path: "compactionSummaryMaxTokens",
     label: "Native summary token limit",
-    kind: "integer",
     options: ["0", "4096", "8192", "16384", "32768", "65536"].map((value) => ({
       value,
       label: value === "0" ? "Pi default" : value,
@@ -317,7 +310,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "pruneOn",
     path: "pruneOn",
     label: "Prune trigger",
-    kind: "enum",
     loose: true,
     options: PRUNE_ON_MODES,
     description: pruneTriggerDescription,
@@ -326,7 +318,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "summarizerThinking",
     path: "summarizerThinking",
     label: "Summarizer thinking",
-    kind: "enum",
     options: SUMMARIZER_THINKING_LEVELS,
     description: summarizerThinkingDescription,
   },
@@ -334,7 +325,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "batchingMode",
     path: "batchingMode",
     label: "Batching mode",
-    kind: "enum",
     options: BATCHING_MODES,
     description: batchingModeDescription,
   },
@@ -342,7 +332,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "quietOversizedSkips",
     path: "quietOversizedSkips",
     label: "Quiet skip notifications",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: quietOversizedSkipsDescription,
   },
@@ -350,7 +339,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "minBatchChars",
     path: "minBatchChars",
     label: "Min batch chars",
-    kind: "integer",
     options: MIN_BATCH_CHARS_PRESETS,
     description: minBatchCharsDescription,
   },
@@ -358,7 +346,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "recoveryGraceTurns",
     path: "recoveryGraceTurns",
     label: "Recovery grace (user-turn-groups)",
-    kind: "integer",
     options: RECOVERY_GRACE_PRESETS,
     description: recoveryGraceDescription,
   },
@@ -366,7 +353,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "summarizerIdleTimeoutMs",
     path: "summarizerIdleTimeoutMs",
     label: "Summarizer idle timeout",
-    kind: "integer",
     options: SUMMARIZER_IDLE_TIMEOUT_PRESETS,
     description: idleTimeoutDescription,
   },
@@ -374,7 +360,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "summarizerMaxTimeoutMs",
     path: "summarizerMaxTimeoutMs",
     label: "Summarizer max timeout",
-    kind: "integer",
     options: SUMMARIZER_MAX_TIMEOUT_PRESETS,
     description: maxTimeoutDescription,
   },
@@ -382,7 +367,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "autoBudgetThreshold",
     path: "autoBudgetThreshold",
     label: "Auto-flush at context %",
-    kind: "fraction",
     options: AUTO_BUDGET_PRESETS,
     description: autoBudgetThresholdDescription,
   },
@@ -390,7 +374,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "dedupByContentHash",
     path: "dedupByContentHash",
     label: "Dedup by content hash",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: dedupByContentHashDescription,
   },
@@ -398,7 +381,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "chainCompressionEnabled",
     path: "chainCompression.enabled",
     label: "Chain compression",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: chainCompressionEnabledDescription,
   },
@@ -406,7 +388,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "chainCompressionRollingWindow",
     path: "chainCompression.rollingWindow",
     label: "Chain window (K)",
-    kind: "integer",
     min: 0,
     options: ROLLING_WINDOW_PRESETS,
     description: chainWindowDescription,
@@ -415,7 +396,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "chainCompressionStripThinking",
     path: "chainCompression.stripFinalAssistantThinking",
     label: "Strip final thinking",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: stripThinkingDescription,
   },
@@ -423,7 +403,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "chainCompressionFuseRange",
     path: "chainCompression.fuseRangeSummary",
     label: "Fuse range summary",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: fuseRangeDescription,
   },
@@ -431,7 +410,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "purgeErrorsEnabled",
     path: "purgeErrors.enabled",
     label: "Error purge",
-    kind: "boolean",
     options: BOOLEAN_OPTIONS,
     description: purgeErrorsEnabledDescription,
   },
@@ -439,7 +417,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "purgeErrorsCooldown",
     path: "purgeErrors.cooldownTurns",
     label: "Error purge cooldown (turns)",
-    kind: "integer",
     min: 1,
     options: PURGE_COOLDOWN_PRESETS,
     description: purgeCooldownDescription,
@@ -448,7 +425,6 @@ export const SCALAR_ROWS: readonly ScalarRow[] = [
     id: "purgeErrorsMinArgChars",
     path: "purgeErrors.minArgChars",
     label: "Error purge min arg chars",
-    kind: "integer",
     options: PURGE_MIN_ARG_PRESETS,
     description: purgeMinArgCharsDescription,
   },
@@ -470,51 +446,42 @@ export function optionLabel(id: string, value: string): string {
 
 /** Raw option string → legal value, or undefined when the entry point must reject it. */
 export function parseScalar(row: ScalarRow, raw: string): ScalarValue | undefined {
-  if (row.kind === "boolean") return raw === "true" ? true : raw === "false" ? false : undefined;
-  if (row.kind === "integer") {
+  const kind = scalarConfigKind(row.path);
+  if (kind === "boolean") return raw === "true" ? true : raw === "false" ? false : undefined;
+  if (kind === "integer") {
     const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= (row.min ?? 0) ? parsed : undefined;
+    return isScalarConfigValue(row.path, parsed) && (row.min === undefined || parsed >= row.min) ? parsed : undefined;
   }
-  if (row.kind === "fraction") {
+  if (kind === "fraction") {
     const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : undefined;
+    return isScalarConfigValue(row.path, parsed) ? parsed : undefined;
   }
-  return row.loose || row.options.some((option) => option.value === raw) ? raw : undefined;
+  return row.loose && row.path === "pruneOn" || isScalarConfigValue(row.path, raw) ? raw : undefined;
 }
 
 /** Current value formatted for the SettingsList cycle. */
 export function displayValue(row: ScalarRow, config: ContextPruneConfig): string {
-  const value = pathValue(config, row.path);
+  const value = readScalarConfig(config, row.path);
   const raw = value == null ? "0" : String(value);
   if (row.id === "compactionSummaryMaxTokens") return raw;
-  if (row.kind !== "integer" && row.kind !== "fraction") return raw;
+  const kind = scalarConfigKind(row.path);
+  if (kind !== "integer" && kind !== "fraction") return raw;
   return row.options.some((option) => option.value === raw)
     ? raw
-    : defaultPreset(row.options, pathValue(DEFAULT_CONFIG, row.path));
+    : defaultPreset(row.options, readScalarConfig(DEFAULT_CONFIG, row.path));
 }
 
 /** Value the overlay stores when `parseScalar` rejects a raw string. */
 export function fallbackValue(row: ScalarRow): ScalarValue {
-  return row.kind === "boolean" ? false : pathValue(DEFAULT_CONFIG, row.path);
+  return scalarConfigKind(row.path) === "boolean" ? false : readScalarConfig(DEFAULT_CONFIG, row.path);
 }
 
 export function writeScalar(config: ContextPruneConfig, row: ScalarRow, value: ScalarValue): ContextPruneConfig {
-  const dot = row.path.indexOf(".");
-  if (dot === -1) return { ...config, [row.path]: value } as ContextPruneConfig;
-  const group = row.path.slice(0, dot) as "chainCompression" | "purgeErrors";
-  const key = row.path.slice(dot + 1);
-  return { ...config, [group]: { ...config[group], [key]: value } } as ContextPruneConfig;
+  return applyScalarConfig(config, row.path, value);
 }
 
 export function rowDescription(row: ScalarRow, config: ContextPruneConfig): string {
   return typeof row.description === "function" ? row.description(config) : row.description;
-}
-
-function pathValue(config: ContextPruneConfig, path: string): ScalarValue {
-  const dot = path.indexOf(".");
-  if (dot === -1) return config[path as keyof ContextPruneConfig] as ScalarValue;
-  const group = config[path.slice(0, dot) as "chainCompression" | "purgeErrors"] as unknown as Record<string, ScalarValue>;
-  return group[path.slice(dot + 1)]!;
 }
 
 function defaultPreset(options: readonly FieldOption[], value: ScalarValue): string {

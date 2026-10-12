@@ -3,9 +3,26 @@ import assert from "node:assert/strict";
 import { record, queryFixture } from "../helpers/condense-query.mjs";
 import { pruneMessages } from "../../src/condense/pruner.ts";
 import { hashToolResult } from "../../src/condense/content-hash.ts";
-import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
+import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { modelNamed } from "../helpers/native-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
+
+test("directory and historical pages carry their material identity without fabricated execution metadata", async () => {
+  const { ctx, run, origin } = queryFixture([record("raw", "original output")]);
+  const directory = (await run({})).details.results[0];
+  assert.equal(directory.source, "evidence-directory");
+  assert.equal(JSON.parse(directory.text).occurrence, "raw@3");
+  const historical = (await run({ sourceEntryIds: [origin] })).details.results[0];
+  assert.equal(historical.source, "historical-source");
+  assert.equal(historical.component, "historical-source");
+  assert.deepEqual(JSON.parse(historical.text), ctx.sessionManager.getBranch().find((entry) => entry.id === origin));
+  for (const page of [directory, historical]) {
+    assert.equal(page.complete, true);
+    for (const field of ["occurrence", "legacy", "turnIndex", "tool", "status", "argsPreview", "argsTruncated"]) {
+      assert.equal(Object.hasOwn(page, field), false, `${page.source} is not a tool execution (${field})`);
+    }
+  }
+});
 
 test("recall pages round-trip Unicode, long lines, all repeated-ID occurrences and error status within one total budget", async () => {
   const a = '\uFEFFstart\\\n"中文😀\t'.repeat(3000) + "MIDDLE_FAILURE" + "末尾".repeat(7000);

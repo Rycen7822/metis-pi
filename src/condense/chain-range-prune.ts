@@ -111,16 +111,12 @@ export function applyChainCompressions(
 ): any[] {
   if (chainEntries.length === 0) return messages;
 
-  // Pre-scan: collect blockIds of synthetic chain messages already in the input.
-  // Skipping re-insertion for matching blockIds makes the transform idempotent —
-  // calling twice with the same chainEntries yields the same output.
+  // Only the projection owner's marker establishes synthetic identity. User
+  // text can quote the wrapper without claiming a committed representation.
   const existingSyntheticBlockIds = new Set<string>();
   for (const msg of messages) {
-    if (msg.role === "user") {
-      const text: string = msg.content?.[0]?.text ?? "";
-      const m = /^<compressed-chain id="([^"]+)"/.exec(text);
-      if (m) existingSyntheticBlockIds.add(m[1]);
-    }
+    if (msg.role === "user" && msg.metisDerived?.kind === "condense-chain")
+      existingSyntheticBlockIds.add(msg.metisDerived.blockId);
   }
 
   const resolved: { entry: SingleChainCompressionEntry; startIndex: number; endIndex: number }[] = [];

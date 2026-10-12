@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const xaiModuleUrl = new URL("../xai-search.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function createHome(config) {
@@ -372,4 +372,37 @@ test("xAI answers with no answer text and no sources fail loudly", async () => {
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.ok, false);
 	assert.match(output.error, /returned no answer or sources/);
+});
+
+test("xAI registered override authenticates the actual requested model for availability and search", async () => {
+	const home = await createHome({ xaiSearchModel: "grok-5-private" });
+	const child = runChild(`
+		const models = [
+			{ provider: "xai", id: "grok-4.5" },
+			{ provider: "xai", id: "grok-5-private" },
+		];
+		const selected = [], requests = [];
+		const ctx = { modelRegistry: {
+			find: (provider, id) => models.find(model => model.provider === provider && model.id === id),
+			getApiKeyAndHeaders: async model => {
+				selected.push(model.id);
+				return { ok: true, apiKey: model.id + "-key", headers: { "X-Model": model.id } };
+			},
+		} };
+		globalThis.fetch = async (url, init) => {
+			requests.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
+			return new Response(${JSON.stringify(successBody())}, { status: 200 });
+		};
+		const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+		const available = await isXaiSearchAvailable(ctx);
+		await searchWithXai("private model search", {}, ctx);
+		console.log(JSON.stringify({ available, selected, requests }));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const result = JSON.parse(child.stdout.trim());
+	assert.equal(result.available, true);
+	assert.deepEqual(result.selected, ["grok-5-private", "grok-5-private"]);
+	assert.equal(result.requests[0].body.model, "grok-5-private");
+	assert.equal(result.requests[0].headers.authorization, "Bearer grok-5-private-key");
+	assert.equal(result.requests[0].headers["x-model"], "grok-5-private");
 });

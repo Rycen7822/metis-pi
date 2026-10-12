@@ -7,13 +7,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { findModelWithProviderRouting } from "../summary-model-scope.ts";
-import { generateSummaryDraft, SUMMARY_GENERATION_DEADLINE_MS } from "../summary-review.ts";
+import { generateSummaryDraft, loadSummaryModelChoices, SUMMARY_GENERATION_DEADLINE_MS } from "../summary-review.ts";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
-const indexSrc = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 const readmeSrc = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const summarySrc = readFileSync(new URL("../summary-review.ts", import.meta.url), "utf8");
-const queryRewriteSrc = readFileSync(new URL("../query-rewrite.ts", import.meta.url), "utf8");
 
 function summaryContext(scopedModels = []) {
 	const model = { provider: "anthropic", id: "claude-haiku-4-5" };
@@ -22,6 +20,7 @@ function summaryContext(scopedModels = []) {
 			find: () => model,
 			getAvailable: () => [model],
 			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+			complete: async () => ({ stopReason: "stop", content: [{ type: "text", text: "Native summary" }] }),
 		},
 		scopedModels,
 	};
@@ -61,7 +60,7 @@ test("never-settling summary completion returns a deterministic deadline fallbac
 
 test("model resolution errors after the deadline return timeout fallback", async () => {
 	const context = summaryContext();
-	context.modelRegistry.getApiKeyAndHeaders = async () => {
+	context.modelRegistry.complete = async () => {
 		await new Promise(resolve => setTimeout(resolve, 30));
 		throw new Error("late auth failure");
 	};
@@ -306,38 +305,100 @@ async function summaryGenerationDeadline(config) {
 	}
 }
 
-test("summary generation deadline config defaults, validates, caps, and reaches both workflows", async () => {
+test("summary generation deadline config defaults, validates, and caps", async () => {
 	assert.equal(await summaryGenerationDeadline(undefined), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 150_000 }), 150_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 0 }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 1.5 }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: "150000" }), 30_000);
 	assert.equal(await summaryGenerationDeadline({ summaryGenerationDeadlineMs: 600_001 }), 600_000);
-	assert.match(indexSrc, /const MAX_SUMMARY_GENERATION_DEADLINE_MS = 600_000/);
-	assert.match(indexSrc, /generateSummaryDraft\(\s*selectedResults,\s*summaryContext,\s*signal,\s*modelOverride,\s*feedback,\s*undefined,\s*getSummaryGenerationDeadlineMs\(\),\s*getSummaryInstructions\(\),\s*\)/);
-	assert.equal((indexSrc.match(/getSummaryGenerationDeadlineMs\(\)/g) ?? []).length, 3);
 	assert.match(readmeSrc, /"summaryGenerationDeadlineMs": 30000/);
 	assert.match(readmeSrc, /summaryGenerationDeadlineMs.*capped at `600000`/);
 });
 
-test("summary generation no longer uses catalog fallback or first available model", () => {
-	assert.doesNotMatch(summarySrc, /getModel/);
-	assert.doesNotMatch(indexSrc, /getModel/);
-	assert.match(summarySrc, /findModelWithProviderRouting\(ctx\.modelRegistry, spec\.provider, spec\.id\)/);
-	assert.match(queryRewriteSrc, /findModelWithProviderRouting\(ctx\.modelRegistry, provider, id\)/);
-	assert.doesNotMatch(indexSrc, /defaultSummaryModel = summaryModels\[0\]\.value/);
-	assert.match(indexSrc, /isModelInScope\(model, summaryContext\.scopedModels\)/);
+test("summary choices and generation prefer the same available model rather than catalogue order", async () => {
+	const mini = { provider: "openai", id: "gpt-5-mini" };
+	const haiku = { provider: "anthropic", id: "claude-haiku-4-5" };
+	const context = summaryContext();
+	context.modelRegistry.getAvailable = () => [mini, haiku];
+	context.modelRegistry.find = (provider, id) => [mini, haiku].find(model => model.provider === provider && model.id === id);
+	context.modelRegistry.getApiKeyAndHeaders = () => { throw new Error("native calls must not pre-authenticate"); };
+	const calls = [];
+	context.modelRegistry.complete = async model => {
+		calls.push(model);
+		return { stopReason: "stop", content: [{ type: "text", text: "complete" }] };
+	};
+	const choices = await loadSummaryModelChoices(context);
+	assert.equal(choices.defaultSummaryModel, "anthropic/claude-haiku-4-5");
+	await generateSummaryDraft(summaryResults, context);
+	assert.deepEqual(calls, [haiku]);
 });
 
-test("summary and query rewrite defaults use the refreshed model order", () => {
-	for (const src of [summarySrc, indexSrc]) {
-		assert(src.indexOf('id: "claude-haiku-4-5"') < src.indexOf('id: "gpt-5.6-luna"'));
-		assert(src.indexOf('id: "gpt-5.6-luna"') < src.indexOf('id: "gpt-5.6-terra"'));
-		assert(src.indexOf('id: "gpt-5.6-terra"') < src.indexOf('id: "gemini-3.6-flash"'));
-		assert(src.indexOf('id: "gemini-3.6-flash"') < src.indexOf('id: "gpt-5-mini"'));
-		assert(src.indexOf('id: "gpt-5-mini"') < src.indexOf('id: "deepseek-v4-flash"'));
-		assert.doesNotMatch(src, /gpt-5\.3-codex-spark/);
-	}
-	assert.match(queryRewriteSrc, /id: "gpt-5-mini"/);
-	assert.doesNotMatch(queryRewriteSrc, /gpt-4\.1-mini/);
+test("summary error partial text is rejected while completed text succeeds", async () => {
+	const context = summaryContext();
+	context.modelRegistry.complete = async () => ({ stopReason: "error", errorMessage: "stream disconnected", content: [{ type: "text", text: "partial output" }] });
+	const failed = await generateSummaryDraft(summaryResults, context);
+	assert.equal(failed.meta.fallbackUsed, true);
+	assert.equal(failed.meta.phase, "deterministic-fallback");
+	assert.match(failed.meta.fallbackReason, /stream disconnected/);
+	assert.notEqual(failed.summary, "partial output");
+	context.modelRegistry.complete = async () => ({ stopReason: "stop", content: [{ type: "text", text: "completed output" }] });
+	const successful = await generateSummaryDraft(summaryResults, context);
+	assert.equal(successful.summary, "completed output");
+	assert.equal(successful.meta.fallbackUsed, false);
+});
+
+test("summary empty completion has its explicit fallback reason", async () => {
+	const context = summaryContext();
+	context.modelRegistry.complete = async () => ({ stopReason: "stop", content: [] });
+	const result = await generateSummaryDraft(summaryResults, context);
+	assert.equal(result.meta.fallbackReason, "summary-model-empty-response");
+	assert.equal(result.meta.phase, "deterministic-fallback");
+});
+
+
+test("native error wording containing abort remains failure, distinct from aborted finish", async () => {
+	const context = summaryContext();
+	context.modelRegistry.complete = async () => ({ stopReason: "error", errorMessage: "upstream server aborted its transaction", content: [{ type: "text", text: "partial" }] });
+	const failure = await generateSummaryDraft(summaryResults, context);
+	assert.equal(failure.meta.fallbackUsed, true);
+	assert.match(failure.meta.fallbackReason, /upstream server aborted/);
+	context.modelRegistry.complete = async () => ({ stopReason: "aborted", content: [{ type: "text", text: "partial" }] });
+	await assert.rejects(generateSummaryDraft(summaryResults, context), /Aborted/);
+});
+
+
+async function isolatedSummaryChoices({ models, current, scopedModels = [], configured }) {
+	const configDir = await mkdtemp(join(tmpdir(), "summary-choices-"));
+	try {
+		await writeFile(join(configDir, "web-search.json"), JSON.stringify({ summaryModel: configured }));
+		const summaryUrl = new URL("../summary-review.ts", import.meta.url).href;
+		const child = spawnSync(process.execPath, ["--input-type=module"], {
+			input: `
+				const { loadSummaryModelChoices } = await import(${JSON.stringify(summaryUrl)});
+				const models = ${JSON.stringify(models)};
+				const ctx = { model: ${JSON.stringify(current)}, scopedModels: ${JSON.stringify(scopedModels)}, modelRegistry: {
+					getAvailable: () => models,
+					find: (provider, id) => models.find(model => model.provider === provider && model.id === id),
+				} };
+				console.log(JSON.stringify(await loadSummaryModelChoices(ctx)));
+			`, encoding: "utf8", env: { ...process.env, PI_CODING_AGENT_DIR: configDir },
+		});
+		assert.equal(child.status, 0, child.stderr);
+		return JSON.parse(child.stdout);
+	} finally { await rm(configDir, { recursive: true, force: true }); }
+}
+
+test("summary choices retain routed thinking selectors and current-only options without using them as defaults", async () => {
+	const routed = { provider: "openrouter", id: "anthropic/claude-haiku-4-5" };
+	const current = { provider: "private", id: "current-only" };
+	const choices = await isolatedSummaryChoices({ models: [routed], current, configured: "anthropic/claude-haiku-4-5:high" });
+	assert.equal(choices.defaultSummaryModel, "anthropic/claude-haiku-4-5:high");
+	assert.deepEqual(choices.summaryModels.map(option => option.value), ["openrouter/anthropic/claude-haiku-4-5", "private/current-only", "anthropic/claude-haiku-4-5:high"]);
+	const none = await isolatedSummaryChoices({ models: [], current });
+	assert.equal(none.defaultSummaryModel, null);
+	assert.deepEqual(none.summaryModels.map(option => option.value), ["private/current-only"]);
+	const excluded = await isolatedSummaryChoices({ models: [routed], current, scopedModels: [{ model: routed }], configured: "invalid-selector" });
+	assert.equal(excluded.defaultSummaryModel, "openrouter/anthropic/claude-haiku-4-5");
+	assert.deepEqual(excluded.summaryModels.map(option => option.value), ["openrouter/anthropic/claude-haiku-4-5"]);
 });

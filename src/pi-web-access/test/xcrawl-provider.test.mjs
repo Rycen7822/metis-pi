@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const xcrawlModuleUrl = new URL("../xcrawl.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
 async function createHome(config) {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-xcrawl-"));

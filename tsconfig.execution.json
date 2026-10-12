@@ -1,15 +1,12 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "target": "ESNext",
     "lib": [
       "ESNext"
     ],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
     "allowJs": false,
     "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
@@ -28,8 +25,7 @@
     "noPropertyAccessFromIndexSignature": true,
     "noUncheckedSideEffectImports": true,
     "erasableSyntaxOnly": true,
-    "libReplacement": false,
-    "allowImportingTsExtensions": true
+    "libReplacement": false
   },
   "include": [
     "src/execution/**/*.ts",

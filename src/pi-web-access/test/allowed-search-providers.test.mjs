@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
-const searchUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchUrl = new URL("../search-router.ts", import.meta.url).href;
 
 function homeWith(config) {
   const home = mkdtempSync(join(tmpdir(), "pi-web-access-allowed-"));

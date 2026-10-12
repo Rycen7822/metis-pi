@@ -26,7 +26,7 @@
 // in the dispatcher, so toggling needs no TUI handle: `invalidate()` drops the
 // Box's cached lines and the host repaints.
 
-import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
+import { patchHostPrototype, type SkillPatchResult } from "./skill-host-patch.ts";
 
 export interface SkillFoldComponent {
   expanded: boolean;

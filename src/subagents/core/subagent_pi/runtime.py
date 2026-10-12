@@ -19,7 +19,7 @@ from .common import (TERMINAL, AgentError, RESIDENT_AGENT_STATES, bounded, crop,
 from .config import load_config, launch_spec
 from . import parent
 from .store import Store
-from .worker import (RESULT_CAP, Worker, message_text, ownership,
+from .worker import (RESULT_CAP, RunProjection, Worker, message_text, ownership,
     reap_orphan, terminate, write_bootstrap)
 
 def delegated_text(value: str, envelope: str) -> str:
@@ -53,7 +53,10 @@ class Runtime:
         self.request_locks = LockPool()
         self.admission = asyncio.Lock()
         self.changed = asyncio.Condition()
-        self.views = views.ReadViews(self.store, self.workers.get, self.changed, self.config["max_wait_seconds"])
+        self.views = views.ReadViews(
+            self.store, self.workers.get, self.changed, self.config["max_wait_seconds"],
+            lambda sid, compact=False: parent.status(self.store, sid, compact),
+        )
         self.shutdown_requested = asyncio.Event()
         self.closing = False
         self.background = set()
@@ -99,7 +102,7 @@ class Runtime:
         ):
             return False
         idle = {aid for _, aid, _, _ in self.evictable()}
-        if any(not w.closed and (aid not in idle or w.active_tools) for aid, w in self.workers.items()):
+        if any(not w.closed and (aid not in idle or w.run.active_tools) for aid, w in self.workers.items()):
             return False
         return not any(
             a["id"] not in idle
@@ -127,7 +130,7 @@ class Runtime:
         question, active run or unverified worker is never a candidate."""
         out=[]
         for aid,w in self.workers.items():
-            if w.closed or w.stopping or w.tainted or w.run_id or w.ui: continue
+            if w.closed or w.stopping or w.tainted or w.run.id or w.run.ui: continue
             a=self.store.one('SELECT * FROM agents WHERE id=?',(aid,))
             if not a or a['generation']!=w.generation or a['state']!='idle': continue
             out.append((w.last_activity or 0,aid,w,a))
@@ -181,8 +184,8 @@ class Runtime:
                     or w.closed
                     or w.stopping
                     or w.tainted
-                    or w.run_id
-                    or w.ui
+                    or w.run.id
+                    or w.run.ui
                     or fresh["state"] != "idle"
                     or fresh["generation"] != w.generation
                 ):
@@ -334,7 +337,7 @@ class Runtime:
         self.parent_notifications.schedule()
 
     def event(self, w, kind, payload):
-        self.store.event(w.agent["id"], w.run_id, w.generation, kind, bounded(payload, 4096))
+        self.store.event(w.agent["id"], w.run.id, w.generation, kind, bounded(payload, 4096))
         w.events_written += 1
         # Short generations still inherit this agent's existing event history.
         if w.events_written == 1 or w.events_written % 256 == 0:
@@ -349,7 +352,7 @@ class Runtime:
 
     def on_event(self, w, e):
         kind = e.get("type", "unknown")
-        if e.get("originRunId") and e["originRunId"] != w.run_id:
+        if e.get("originRunId") and e["originRunId"] != w.run.id:
             return
         if kind in {"protocol_warning", "protocol_error"}:
             self.event(w, kind, {"message": e["message"]})
@@ -361,7 +364,7 @@ class Runtime:
         if kind == "agent_start":
             # Defense against activity outside the managed SDK task queue.
             # Refuse output immediately, then stop only this owned worker.
-            if w.run_id is None and not w.stopping and a["state"] not in {"closed", "dormant"}:
+            if w.run.id is None and not w.stopping and a["state"] not in {"closed", "dormant"}:
                 w.tainted = "unowned_run"
                 self.store.agent_update(a["id"], state="dormant", current_run=None)
                 self.event(w, "unowned_run_started", {"run_id": None})
@@ -380,16 +383,16 @@ class Runtime:
                 and update.get("type") in {"text_delta", "thinking_delta", "toolcall_delta"}
                 and update.get("delta")
             ):
-                w.last_progress = time.monotonic()
+                w.run.last_progress = time.monotonic()
             return  # keep text deltas out of SQLite; message_end is canonical
         if kind in {"tool_execution_start", "tool_execution_update", "tool_execution_end"}:
             tool_id = e.get("toolCallId") or e.get("toolName")
             if kind == "tool_execution_start":
-                w.active_tools[tool_id] = e.get("toolName")
-                w.tool_uses += 1
+                w.run.active_tools[tool_id] = e.get("toolName")
+                w.run.tool_uses += 1
             if kind == "tool_execution_end":
-                w.active_tools.pop(tool_id, None)
-                w.last_progress = time.monotonic()
+                w.run.active_tools.pop(tool_id, None)
+                w.run.last_progress = time.monotonic()
             if kind != "tool_execution_update":
                 self.event(w, kind, e)
                 self.notify()
@@ -401,43 +404,43 @@ class Runtime:
             role = m.get("role")
             mt = message_text(m)
             if role == "assistant":
-                w.last_progress = time.monotonic()
+                w.run.last_progress = time.monotonic()
                 reason = m.get("stopReason")
                 # A final reply replaces tool-call preambles even when empty.
                 # Error/abort events may still leave useful partial output.
                 if mt or reason in {"stop", "length"}:
-                    w.last_text = crop(mt, RESULT_CAP)
-                    w.usage["result_truncated"] = len(mt.encode("utf-8")) > RESULT_CAP
+                    w.run.last_text = crop(mt, RESULT_CAP)
+                    w.run.usage["result_truncated"] = len(mt.encode("utf-8")) > RESULT_CAP
                 if reason:
-                    w.usage["stop_reason"] = reason
+                    w.run.usage["stop_reason"] = reason
                 if reason == "length":
-                    w.error = (
+                    w.run.error = (
                         "Model output limit reached (stopReason=length); the task did not complete. "
                         "Increase maxTokens in the Pi model configuration or continue this agent with "
                         "pi_followup_task."
                     )
                 elif reason in {"error", "aborted"}:
-                    w.error = crop(str(m.get("errorMessage") or reason), 2000)
+                    w.run.error = crop(str(m.get("errorMessage") or reason), 2000)
                 elif reason:
-                    w.error = None
+                    w.run.error = None
                 u = m.get("usage")
                 if isinstance(u, dict):
-                    w.usage["token_scope"] = "run_total"
-                    w.usage["assistant_messages"] = w.usage.get("assistant_messages", 0) + 1
+                    w.run.usage["token_scope"] = "run_total"
+                    w.run.usage["assistant_messages"] = w.run.usage.get("assistant_messages", 0) + 1
                     for key in ("input", "output", "cacheRead", "cacheWrite", "totalTokens"):
                         value = u.get(key)
                         if isinstance(value, (int, float)) and not isinstance(value, bool):
-                            w.usage[key] = w.usage.get(key, 0) + value
+                            w.run.usage[key] = w.run.usage.get(key, 0) + value
                             if key == "output":
-                                w.usage["last_message_output"] = value
-                                w.usage["max_message_output"] = max(w.usage.get("max_message_output", 0), value)
+                                w.run.usage["last_message_output"] = value
+                                w.run.usage["max_message_output"] = max(w.run.usage.get("max_message_output", 0), value)
                     cost = u.get("cost")
                     if isinstance(cost, dict) and isinstance(cost.get("total"), (int, float)):
-                        w.usage["cost_total"] = w.usage.get("cost_total", 0) + cost["total"]
-            if role == "user" and w.run_id:
+                        w.run.usage["cost_total"] = w.run.usage.get("cost_total", 0) + cost["total"]
+            if role == "user" and w.run.id:
                 receipt = self.store.one(
                     "SELECT * FROM receipts WHERE run_id=? AND message=? AND state IN ('queued','sending') ORDER BY created LIMIT 1",
-                    (w.run_id, mt),
+                    (w.run.id, mt),
                 )
                 if receipt:
                     self.store.execute(
@@ -471,13 +474,13 @@ class Runtime:
                         item["options"] = options.copy()
                     else:
                         item["_options_unavailable"] = True
-                w.ui[str(e["id"])] = item
+                w.run.ui[str(e["id"])] = item
                 self.store.agent_update(a["id"], state="needs_input")
-                if w.run_id:
-                    self.store.execute("UPDATE runs SET state='needs_input' WHERE id=?", (w.run_id,))
+                if w.run.id:
+                    self.store.execute("UPDATE runs SET state='needs_input' WHERE id=?", (w.run.id,))
                 self.event(w, "needs_input", e)
-                if w.run_id:
-                    self.store.attention(w.run_id, "question", str(e["id"]))
+                if w.run.id:
+                    self.store.attention(w.run.id, "question", str(e["id"]))
                 self.notify()
             return
         if kind == "extension_ui_closed":
@@ -487,38 +490,38 @@ class Runtime:
             # One low-level run finished. Pi may still retry, compact, run
             # before-settle work or continue with queued input afterwards, so
             # this stays a trajectory record.
-            self.event(w, "agent_end", {"run_id": w.run_id, "willRetry": bool(e.get("willRetry"))})
+            self.event(w, "agent_end", {"run_id": w.run.id, "willRetry": bool(e.get("willRetry"))})
             return
         if kind == "managed_control_end":
-            if e.get("runId") == w.run_id and e.get("receiptId"):
+            if e.get("runId") == w.run.id and e.get("receiptId"):
                 self.store.execute(
                     "UPDATE receipts SET state='not_consumed',updated=? WHERE id=? AND run_id=? AND state IN ('sending','queued')",
-                    (now(), e["receiptId"], w.run_id),
+                    (now(), e["receiptId"], w.run.id),
                 )
                 self.event(w, "input_rejected", e)
             return
         if kind == "managed_task_end":
-            if w.run_id and e.get("runId") == w.run_id:
+            if w.run.id and e.get("runId") == w.run.id:
                 if e.get("cancelled"):
-                    w.cancelled_run = True
+                    w.run.cancelled = True
                     self.cancel_queued(w.agent["id"], "Cancelled by Pi task interruption")
                 if e.get("error"):
-                    w.error = crop(str(e["error"]), 2000)
-                self.spawn_task(self.settle(w, w.run_id))
+                    w.run.error = crop(str(e["error"]), 2000)
+                self.spawn_task(self.settle(w, w.run.id))
             return
         if kind in {"auto_retry_start", "auto_retry_end", "auto_compaction_start", "auto_compaction_end"}:
             # A host-scheduled retry delay is not a stalled provider request.
             delay = e.get("delayMs", 0) if kind == "auto_retry_start" else 0
-            w.last_progress = time.monotonic() + max(0, float(delay)) / 1000
+            w.run.last_progress = time.monotonic() + max(0, float(delay)) / 1000
             self.event(w, kind, e)
 
     def dismiss_ui(self, w, ui_id):
-        if w.ui.pop(ui_id, None) is None:
+        if w.run.ui.pop(ui_id, None) is None:
             return
-        w.last_progress = time.monotonic()
-        if w.run_id and not w.ui:
+        w.run.last_progress = time.monotonic()
+        if w.run.id and not w.run.ui:
             self.store.agent_update(w.agent["id"], state="running")
-            self.store.execute("UPDATE runs SET state='running' WHERE id=? AND state='needs_input'", (w.run_id,))
+            self.store.execute("UPDATE runs SET state='running' WHERE id=? AND state='needs_input'", (w.run.id,))
         self.notify()
 
     def assert_writer_exclusive(self, aid, cwd):
@@ -609,7 +612,7 @@ class Runtime:
         receipt = new_id("msg_")
         self.store.execute(
             "INSERT INTO receipts VALUES(?,?,?,?,?,?,?,?)",
-            (receipt, w.agent["id"], w.run_id, w.agent["scope"], message, "sending", now(), now()),
+            (receipt, w.agent["id"], w.run.id, w.agent["scope"], message, "sending", now(), now()),
         )
         try:
             await w.rpc(kind, message=message, **({"receiptId": receipt} if kind == "native_input" else {}), **params)
@@ -628,20 +631,17 @@ class Runtime:
 
     def finish_idle_run(self, w, state, error=None):
         """Settle an owned task whose SDK call has ended or was rejected."""
-        self.store.finish(w.run_id, state, w.last_text, error, w.usage)
+        self.store.finish(w.run.id, state, w.run.last_text, error, w.run.usage)
         self.event(w, 'run_terminal', {'state': state})
-        w.run_id = None
-        w.ui.clear()
-        w.active_tools.clear()
+        w.run.finish()
         w.idle_since = time.monotonic()
         w.stopping = False
-        w.cancelled_run = False
         self.store.agent_update(w.agent['id'], state='idle', current_run=None,
                                 cleanup='not_checked')
         self.notify()
 
     async def advance_queue(self, w):
-        while not self.closing and not w.run_id and not w.stopping and w.proc.returncode is None:
+        while not self.closing and not w.run.id and not w.stopping and w.proc.returncode is None:
             queued = self.store.one("SELECT id FROM runs WHERE agent_id=? AND state='queued' ORDER BY created LIMIT 1",
                                     (w.agent['id'],))
             if not queued:
@@ -656,12 +656,15 @@ class Runtime:
     async def start_run(self,w,rid):
         r=self.store.run(w.agent['scope'],rid)
         if r['state'] not in {'queued','starting'}: return
-        w.run_id=rid; w.last_text=''; w.error=None; w.usage={}; w.stopping=False; w.ui.clear(); w.active_tools.clear(); w.tool_uses=0
-        w.last_progress=time.monotonic(); w.idle_since=None; w.cancelled_run=False
-        w.idle_timeout_seconds=r['idle_timeout_seconds'] or self.config['default_idle_timeout_seconds']
+        w.run = RunProjection(
+            id=rid,
+            idle_timeout_seconds=r['idle_timeout_seconds'] or self.config['default_idle_timeout_seconds'],
+        )
+        w.stopping=False
+        w.idle_since=None
         self.store.execute("UPDATE runs SET state='running',started=? WHERE id=?",(now(),rid))
         self.store.agent_update(w.agent['id'],state='running',current_run=rid)
-        self.event(w,'run_started',{'idle_timeout_seconds':w.idle_timeout_seconds})
+        self.event(w,'run_started',{'idle_timeout_seconds':w.run.idle_timeout_seconds})
         self.notify()
         try:
             return await self.deliver_input(w,'prompt',r['task'],runId=rid)
@@ -681,11 +684,11 @@ class Runtime:
         async with self.agent_locks[w.agent['id']]:
             a=self.store.one('SELECT generation FROM agents WHERE id=?',(w.agent['id'],))
             if (self.workers.get(w.agent['id']) is not w or not a or a['generation']!=w.generation
-                    or w.run_id!=rid or w.stopping or w.closed): return
+                    or w.run.id!=rid or w.stopping or w.closed): return
             # Only the SDK transport's identity-bound task completion can enter
             # here. Per-run Pi events and transient idle readings never settle it.
-            state='interrupted' if w.cancelled_run else 'failed' if w.error else 'completed'
-            self.finish_idle_run(w, state, w.error)
+            state='interrupted' if w.run.cancelled else 'failed' if w.run.error else 'completed'
+            self.finish_idle_run(w, state, w.run.error)
             await self.advance_queue(w)
 
     def cancel_queued(self,aid,reason):
@@ -724,9 +727,9 @@ class Runtime:
                 return
             w.stopping = True
             self.cancel_queued(w.agent["id"], "Worker protocol failed; queued task was not retried")
-            if w.run_id:
-                self.store.finish(w.run_id, "failed", w.last_text, error, w.usage)
-                w.run_id = None
+            if w.run.id:
+                self.store.finish(w.run.id, "failed", w.run.last_text, error, w.run.usage)
+            w.run.finish()
             await self.terminate_worker(w)
             self.store.agent_update(w.agent["id"], state="crashed", current_run=None)
             self.notify()
@@ -736,15 +739,15 @@ class Runtime:
             a = self.store.one("SELECT * FROM agents WHERE id=?", (w.agent["id"],))
             if not a or a["generation"] != w.generation:
                 return
-            if w.run_id:
+            if w.run.id:
                 self.store.finish(
-                    w.run_id,
+                    w.run.id,
                     "interrupted" if w.stopping else "crashed",
-                    w.last_text,
-                    w.error or f"Pi guard exited with code {code}; inspect partial changes",
-                    w.usage,
+                    w.run.last_text,
+                    w.transport_error or w.run.error or f"Pi guard exited with code {code}; inspect partial changes",
+                    w.run.usage,
                 )
-                w.run_id = None
+            w.run.finish()
             self.cancel_queued(a["id"], "Worker exited; queued task was not automatically retried")
             if a["state"] not in {"closed", "dormant"}:
                 verdict = ownership(self.home / "agents" / a["id"], a)
@@ -770,12 +773,10 @@ class Runtime:
         # Terminating only this verified process group also cancels input hooks,
         # authentication preflights and extension timers that Pi cannot abort.
         cleanup = await self.terminate_worker(w)
-        if w.run_id:
-            self.store.finish(w.run_id, terminal, w.last_text, reason, w.usage)
+        if w.run.id:
+            self.store.finish(w.run.id, terminal, w.run.last_text, reason, w.run.usage)
             self.event(w, "run_terminal", {"state": terminal})
-        w.run_id = None
-        w.ui.clear()
-        w.active_tools.clear()
+        w.run.finish()
         self.store.agent_update(a["id"], state="dormant", current_run=None, cleanup=cleanup)
         self.notify()
         return {"agent_id": a["id"], "state": "dormant", "cleanup": cleanup, "process_retained": False}
@@ -787,11 +788,11 @@ class Runtime:
             return {"agent_id": a["id"], "previous_status": previous, "runtime_retained": False}
         if w.tainted or w.stopping or w.proc.returncode is not None:
             raise AgentError("worker_unavailable", "Worker is settling or tainted; close/reap before reusing it")
-        if not w.run_id:
+        if not w.run.id:
             return {"agent_id": a["id"], "previous_status": previous, "runtime_retained": True}
-        rid = w.run_id
+        rid = w.run.id
         w.stopping = True
-        w.cancelled_run = True
+        w.run.cancelled = True
         self.store.agent_update(a["id"], state="stopping")
         self.cancel_queued(a["id"], "Cancelled because the active task was interrupted")
         try:
@@ -1079,7 +1080,7 @@ class Runtime:
                 "agent_id": aid,
                 "name": a["name"],
                 "generation": w.generation,
-                "run_id": w.run_id,
+                "run_id": w.run.id,
                 "state": a["state"],
                 "scope": sid,
                 "already_running": True,
@@ -1110,14 +1111,14 @@ class Runtime:
             not w
             or question["agent_id"] != aid
             or question["id"] != ui_id
-            or question["run_id"] != w.run_id
+            or question["run_id"] != w.run.id
             or question["generation"] != w.generation
         ):
             raise AgentError(
                 "input_stale",
                 "Delivered question belongs to an earlier task or worker; read the current question before answering",
             )
-        item = w.ui.get(ui_id) if w and not w.closed else None
+        item = w.run.ui.get(ui_id) if w and not w.closed else None
         if not item:
             raise AgentError("input_not_found", "No such pending Pi UI request")
         w = self.require_worker(a)
@@ -1143,14 +1144,14 @@ class Runtime:
         aid, sid = a["id"], a["scope"]
         msg = delegated_text(text(p.get("message")), "Delegated message (not a slash command):\n")
         a, w = await self.ensure_loaded(a, op)
-        if w.run_id:
+        if w.run.id:
             if self.store.pending_receipt_count(aid) >= 20:
                 raise AgentError("queue_full", "Too many unconsumed inputs")
             receipt = await self.deliver_input(w, "native_input", msg)
             return {
                 "agent_id": aid,
                 "name": a["name"],
-                "run_id": w.run_id,
+                "run_id": w.run.id,
                 "receipt_id": receipt,
                 "delivery": self.store.one("SELECT state FROM receipts WHERE id=?", (receipt,))["state"],
             }
@@ -1185,7 +1186,7 @@ class Runtime:
         else:
             a, w = await self.ensure_loaded(a, "send", wake=mode != "steer")
         if mode == "steer":
-            if not w.run_id:
+            if not w.run.id:
                 raise AgentError(
                     "agent_idle",
                     "Agent is idle; use mode=send, which wakes a dormant or closed agent. Steering never implicitly respawns.",
@@ -1196,17 +1197,17 @@ class Runtime:
             return {
                 "agent_id": aid,
                 "name": a["name"],
-                "run_id": w.run_id,
+                "run_id": w.run.id,
                 "receipt_id": receipt,
                 "execution": "after_current_sdk_call",
                 "delivery": self.store.one("SELECT state FROM receipts WHERE id=?", (receipt,))["state"],
             }
-        if mode == "send" and w.run_id:
+        if mode == "send" and w.run.id:
             raise AgentError("agent_busy", "Use steer, follow_up, or interrupt=true for an active agent")
         if len(self.store.all("SELECT id FROM runs WHERE agent_id=? AND state='queued'", (aid,))) >= 20:
             raise AgentError("queue_full", "Follow-up queue is full")
         rid = self.add_run(a, msg)
-        if not w.run_id:
+        if not w.run.id:
             await self.start_run(w, rid)
         self.notify()
         return {
@@ -1240,17 +1241,17 @@ class Runtime:
     async def check_idle(self):
         await self.park_expired()
         for w in list(self.workers.values()):
-            rid = w.run_id
-            idle = w.idle_seconds()
-            if idle is None or idle < w.idle_timeout_seconds:
+            rid = w.run.id
+            idle = w.run.idle_seconds()
+            if idle is None or idle < w.run.idle_timeout_seconds:
                 continue
             async with self.agent_locks[w.agent["id"]]:
                 # Recheck after waiting: progress, a tool, completion or a new
                 # worker/run must never be stopped by an obsolete observation.
-                if self.workers.get(w.agent["id"]) is not w or w.run_id != rid or w.stopping or w.closed:
+                if self.workers.get(w.agent["id"]) is not w or w.run.id != rid or w.stopping or w.closed:
                     continue
-                idle = w.idle_seconds()
-                if idle is None or idle < w.idle_timeout_seconds:
+                idle = w.run.idle_seconds()
+                if idle is None or idle < w.run.idle_timeout_seconds:
                     continue
                 try:
                     await self.interrupt(
@@ -1258,7 +1259,7 @@ class Runtime:
                         terminal="timed_out",
                         reason=(
                             "No model output or thinking progress for "
-                            f"{w.idle_timeout_seconds}"
+                            f"{w.run.idle_timeout_seconds}"
                             "s outside tool execution/parent input; filesystem effects may be partial"
                         ),
                     )

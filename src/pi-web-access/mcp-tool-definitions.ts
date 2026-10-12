@@ -6,7 +6,7 @@
 
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { RESOLVED_SEARCH_PROVIDERS } from "./gemini-search.ts";
+import { RESOLVED_SEARCH_PROVIDERS } from "./search-providers.ts";
 
 function stringEnum(values: readonly string[], description: string) {
 	return Type.Unsafe<string>({ type: "string", enum: [...values], description });

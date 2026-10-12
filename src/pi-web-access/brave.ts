@@ -1,9 +1,11 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
+import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath, resolveApiBaseUrl } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { BraveRateLimitCoordinator } from "./brave-rate-limit.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import type { SearchOptions, SearchResult, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1";
@@ -14,11 +16,6 @@ const braveRateLimit = new BraveRateLimitCoordinator();
 interface WebSearchConfig {
 	braveApiKey?: unknown;
 	braveBaseUrl?: unknown;
-}
-
-interface NormalizedDomainFilters {
-	allowed: string[];
-	blocked: string[];
 }
 
 let cachedConfig: WebSearchConfig | null = null;
@@ -46,56 +43,20 @@ function getApiUrl(): string {
 	})}/web/search`;
 }
 
-function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters {
-	const filters: NormalizedDomainFilters = { allowed: [], blocked: [] };
-	if (!domainFilter?.length) return filters;
-
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.blocked : filters.allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
-
-	return filters;
-}
-
-function buildBraveQuery(query: string, domainFilter: string[] | undefined): string {
-	const filters = normalizeDomainFilters(domainFilter);
+function buildBraveQuery(query: string, filters: DomainFilters): string {
 	const parts = [query];
 
-	if (filters.allowed.length === 1) {
-		parts.push(`site:${filters.allowed[0]}`);
-	} else if (filters.allowed.length > 1) {
-		parts.push(filters.allowed.map(domain => `site:${domain}`).join(" OR "));
+	if (filters.include.length === 1) {
+		parts.push(`site:${filters.include[0]}`);
+	} else if (filters.include.length > 1) {
+		parts.push(filters.include.map(domain => `site:${domain}`).join(" OR "));
 	}
 
-	for (const domain of filters.blocked) {
+	for (const domain of filters.exclude) {
 		parts.push(`NOT site:${domain}`);
 	}
 
 	return parts.join(" ");
-}
-
-function hostMatchesDomain(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-function matchesDomainFilters(url: string, filters: NormalizedDomainFilters): boolean {
-	if (filters.allowed.length === 0 && filters.blocked.length === 0) return true;
-
-	let hostname = "";
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-
-	if (filters.allowed.length > 0 && !filters.allowed.some(domain => hostMatchesDomain(hostname, domain))) {
-		return false;
-	}
-
-	return !filters.blocked.some(domain => hostMatchesDomain(hostname, domain));
 }
 
 export function isBraveAvailable(): boolean {
@@ -123,7 +84,7 @@ export async function searchWithBrave(
 
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const domainFilters = normalizeDomainFilters(options.domainFilter);
-	const searchQuery = buildBraveQuery(query, options.domainFilter);
+	const searchQuery = buildBraveQuery(query, domainFilters);
 	const activityId = activityMonitor.logStart({ type: "api", query: searchQuery });
 	const params = new URLSearchParams({
 		q: searchQuery,
@@ -172,17 +133,24 @@ export async function searchWithBrave(
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);
 			const errorText = redactCredential(await response.text(), apiKey);
-			throw new Error(`Brave Search API error ${response.status}: ${errorText.slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `Brave Search API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
-		const data = await response.json() as {
+		let rawData: unknown;
+		try {
+			rawData = await response.json();
+		} catch (err) {
+			if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+			throw new Error("Brave Search API returned invalid JSON");
+		}
+		const data = rawData as {
 			web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
 		};
 		activityMonitor.logComplete(activityId, response.status);
 
 		const results: SearchResult[] = [];
 		for (const item of data.web?.results ?? []) {
-			if (!item.url || !matchesDomainFilters(item.url, domainFilters)) continue;
+			if (!item.url || !matchesDomainFilter(item.url, domainFilters)) continue;
 			results.push({
 				title: item.title || item.url,
 				url: item.url,
@@ -191,12 +159,7 @@ export async function searchWithBrave(
 			if (results.length >= numResults) break;
 		}
 
-		const answer = results
-			.map((result) => {
-				if (result.snippet) return `${result.snippet}\nSource: ${result.title} (${result.url})`;
-				return `Source: ${result.title} (${result.url})`;
-			})
-			.join("\n\n");
+		const answer = formatSearchResultsAsAnswer(results);
 
 		return { answer, results };
 	} catch (err) {
@@ -208,7 +171,9 @@ export async function searchWithBrave(
 			activityMonitor.logError(activityId, redactedMessage);
 		}
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}

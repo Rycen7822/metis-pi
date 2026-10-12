@@ -1,171 +1,147 @@
 import { StringDecoder } from "node:string_decoder";
 import { getCodexShellArgs } from "../runtime-shell.ts";
 import { chunkToBytes, createExecBridgeClient, type BridgeReadResponse } from "./bridge-client.ts";
-import type { ExecOutputBuffer } from "./output-buffer.ts";
 
 const EXIT_OUTPUT_GRACE_MS = 100;
 
 export interface BridgeExecInput {
-	command: string;
 	executionCommand: string;
 	executionEnv: NodeJS.ProcessEnv;
 	tty?: boolean | undefined;
 	login?: boolean | undefined;
 }
 
-export interface BridgeExecSession {
-	id: number;
-	processId: string;
-	startup: Promise<void>;
-	started: boolean;
-	tty: boolean;
-	command: string;
-	buffer: ExecOutputBuffer;
-	emittedOffset: number;
-	outputVersion: number;
-	exitCode: number | null | undefined;
-	listeners: Set<() => void>;
-	interactive: boolean;
-	nextEmptyPollYieldMs?: number | undefined;
-	lastSeq: number;
-	startedAt: number;
-	updatedAt: number;
-	finalized: boolean;
-	exposed: boolean;
-	terminating: boolean;
-	outputDecoders: Record<"stdout" | "stderr" | "pty", StringDecoder>;
-	outputDecodersFlushed: boolean;
-	postExitIdleSince?: number | undefined;
-	observedExitCode?: number | null | undefined;
+/** A process handle; delivery, waits, retention and public IDs belong to its manager. */
+export interface BridgeExecProcess {
+	readonly started: boolean;
+	readonly exitCode: number | undefined;
+	readonly terminating: boolean;
+	poll(waitMs?: number): Promise<void>;
+	waitForStartup(signal?: AbortSignal): Promise<void>;
+	write(chars: string): Promise<void>;
+	terminate(): Promise<void>;
 }
 
 export interface BridgeSessionHooks {
-	isOwned(session: BridgeExecSession): boolean;
-	onOutput(session: BridgeExecSession, text: string): void;
-	onExit(session: BridgeExecSession): void;
+	isOwned(): boolean;
+	onOutput(text: string): void;
+	onExit(): void;
 }
 
 export interface BridgeSessionRuntime {
 	create(args: {
-		id: number;
-		buffer: ExecOutputBuffer;
+		processId: string;
 		input: BridgeExecInput;
 		workdir: string;
 		shell: string;
 		signal?: AbortSignal | undefined;
 		hooks: BridgeSessionHooks;
-	}): BridgeExecSession;
-	poll(session: BridgeExecSession, hooks: BridgeSessionHooks, waitMs?: number, maxBytes?: number): Promise<void>;
-	waitForStartup(session: BridgeExecSession, signal?: AbortSignal): Promise<void>;
-	write(session: BridgeExecSession, chars: string): Promise<void>;
-	terminate(session: BridgeExecSession): Promise<void>;
+	}): BridgeExecProcess;
 	shutdown(): Promise<void>;
 }
 
 export function createBridgeSessionRuntime(binaryPath?: () => string | undefined): BridgeSessionRuntime {
 	const bridge = createExecBridgeClient(binaryPath);
-	let pollQueue = Promise.resolve();
+	let backgroundQueue = Promise.resolve();
 
-	function setClosedExitCode(session: BridgeExecSession, code: number | null | undefined, signal?: string | null): void {
-		if (session.exitCode !== undefined && session.exitCode !== null) return;
-		if (session.terminating) {
-			session.exitCode = code && code !== 0 ? code : signal ? 128 + signalNumber(signal) : 143;
-			return;
-		}
-		session.exitCode = code ?? (signal ? 128 + signalNumber(signal) : 1);
-	}
+	function create(args: Parameters<BridgeSessionRuntime["create"]>[0]): BridgeExecProcess {
+		const { processId, input, workdir, shell, signal, hooks } = args;
+		let startup: Promise<void>;
+		let started = false;
+		let exitCode: number | undefined;
+		let terminating = false;
+		let lastSeq = 0;
+		let postExitIdleSince: number | undefined;
+		let observedExitCode: number | null | undefined;
+		let outputDecodersFlushed = false;
+		const outputDecoders = {
+			stdout: new StringDecoder("utf8"),
+			stderr: new StringDecoder("utf8"),
+			pty: new StringDecoder("utf8"),
+		};
+		let pollQueue = Promise.resolve();
 
-	async function poll(session: BridgeExecSession, hooks: BridgeSessionHooks, waitMs = 0, maxBytes?: number): Promise<void> {
-		if (!hooks.isOwned(session)) return;
-		const response = await bridge.request<BridgeReadResponse>({
-			op: "read",
-			process_id: session.processId,
-			after_seq: session.lastSeq,
-			max_bytes: maxBytes,
-			wait_ms: waitMs,
-		});
-		let receivedOutput = false;
-		for (const chunk of response.chunks ?? []) {
-			hooks.onOutput(session, session.outputDecoders[chunk.stream].write(chunkToBytes(chunk.chunk)));
-			session.lastSeq = Math.max(session.lastSeq, chunk.seq);
-			receivedOutput = true;
-		}
-		session.lastSeq = Math.max(session.lastSeq, response.nextSeq - 1);
-		if (response.exited) {
-			session.observedExitCode = response.exitCode;
-			if (session.postExitIdleSince === undefined || receivedOutput) session.postExitIdleSince = Date.now();
-		}
-		const postExitIdle = session.postExitIdleSince !== undefined
-			&& Date.now() - session.postExitIdleSince >= EXIT_OUTPUT_GRACE_MS;
-		if (response.closed || postExitIdle) {
-			if (!session.outputDecodersFlushed) {
-				session.outputDecodersFlushed = true;
-				for (const decoder of Object.values(session.outputDecoders)) hooks.onOutput(session, decoder.end());
-			}
-			setClosedExitCode(session, response.exitCode ?? session.observedExitCode);
-			hooks.onExit(session);
-		}
-	}
-
-	async function pollBackground(session: BridgeExecSession, hooks: BridgeSessionHooks): Promise<void> {
-		const previous = pollQueue;
-		let release!: () => void;
-		pollQueue = new Promise<void>((resolve) => { release = resolve; });
-		await previous;
-		try {
-			await poll(session, hooks, 250);
-		} finally {
-			release();
-		}
-	}
-
-	async function pollLoop(session: BridgeExecSession, hooks: BridgeSessionHooks): Promise<void> {
-		while (hooks.isOwned(session) && (session.exitCode === undefined || session.exitCode === null)) {
-			try {
-				await pollBackground(session, hooks);
-			} catch (error) {
-				hooks.onOutput(session, `${error instanceof Error ? error.message : String(error)}\n`);
-				session.exitCode = 1;
-				hooks.onExit(session);
+		function setExitCode(code: number | null | undefined, signal?: string | null): void {
+			if (exitCode !== undefined) return;
+			if (terminating) {
+				exitCode = code && code !== 0 ? code : signal ? 128 + signalNumber(signal) : 143;
 				return;
 			}
+			exitCode = code ?? (signal ? 128 + signalNumber(signal) : 1);
 		}
-	}
 
-	function create(args: Parameters<BridgeSessionRuntime["create"]>[0]): BridgeExecSession {
-		const { id, input, workdir, shell, signal, hooks } = args;
-		const session: BridgeExecSession = {
-			id,
-			processId: `pi-${id}`,
-			startup: Promise.resolve(),
-			started: false,
-			tty: Boolean(input.tty),
-			command: input.command,
-			buffer: args.buffer,
-			emittedOffset: 0,
-			outputVersion: 0,
-			exitCode: undefined,
-			listeners: new Set(),
-			interactive: Boolean(input.tty),
-			lastSeq: 0,
-			startedAt: Date.now(),
-			updatedAt: Date.now(),
-			finalized: false,
-			exposed: false,
-			terminating: false,
-			outputDecoders: {
-				stdout: new StringDecoder("utf8"),
-				stderr: new StringDecoder("utf8"),
-				pty: new StringDecoder("utf8"),
-			},
-			outputDecodersFlushed: false,
-		};
-		session.startup = (async () => {
+		async function readAndCommit(waitMs: number): Promise<void> {
+			if (!hooks.isOwned() || exitCode !== undefined) return;
+			const response = await bridge.request<BridgeReadResponse>({
+				op: "read",
+				process_id: processId,
+				after_seq: lastSeq,
+				wait_ms: waitMs,
+			});
+			if (!hooks.isOwned()) return;
+			let receivedOutput = false;
+			for (const chunk of response.chunks ?? []) {
+				if (chunk.seq <= lastSeq) continue;
+				const text = outputDecoders[chunk.stream].write(chunkToBytes(chunk.chunk));
+				lastSeq = chunk.seq;
+				hooks.onOutput(text);
+				receivedOutput = true;
+			}
+			lastSeq = Math.max(lastSeq, response.nextSeq - 1);
+			if (response.exited) {
+				observedExitCode = response.exitCode;
+				if (postExitIdleSince === undefined || receivedOutput) postExitIdleSince = Date.now();
+			}
+			const postExitIdle = postExitIdleSince !== undefined
+				&& Date.now() - postExitIdleSince >= EXIT_OUTPUT_GRACE_MS;
+			if (response.closed && !outputDecodersFlushed) {
+				outputDecodersFlushed = true;
+				for (const decoder of Object.values(outputDecoders)) hooks.onOutput(decoder.end());
+			}
+			if (response.closed || postExitIdle) {
+				// Descendants can keep pipes open after the main process exits. The host's
+				// idle cutoff stops waiting without treating their unfinished bytes as EOF.
+				setExitCode(response.exitCode ?? observedExitCode);
+				hooks.onExit();
+			}
+		}
+
+		function poll(waitMs = 0): Promise<void> {
+			// Capture the cursor inside this process's queue, after the preceding commit.
+			const pending = pollQueue.then(() => readAndCommit(waitMs));
+			pollQueue = pending.catch(() => {});
+			return pending;
+		}
+
+		function fail(error: unknown): void {
+			exitCode = 1;
+			if (!hooks.isOwned()) return;
+			hooks.onOutput(`${error instanceof Error ? error.message : String(error)}\n`);
+			hooks.onExit();
+		}
+
+		async function pollLoop(): Promise<void> {
+			while (hooks.isOwned() && exitCode === undefined) {
+				try {
+					// The helper reads requests serially: leave room for foreground operations
+					// instead of filling its input with one long background wait per process.
+					const pending = backgroundQueue.then(() => poll(250));
+					backgroundQueue = pending.catch(() => {});
+					await pending;
+				} catch (error) {
+					fail(error);
+					return;
+				}
+			}
+		}
+
+		// Return the handle before startup can notify the manager that publishes it.
+		startup = Promise.resolve().then(async () => {
 			try {
 				const shellArgs = getCodexShellArgs(shell, input.executionCommand, input.login ?? true);
 				await bridge.request({
 					op: "exec",
-					process_id: session.processId,
+					process_id: processId,
 					argv: [shell, ...shellArgs],
 					cwd: workdir,
 					env: input.executionEnv,
@@ -173,49 +149,52 @@ export function createBridgeSessionRuntime(binaryPath?: () => string | undefined
 					pipe_stdin: Boolean(input.tty),
 					arg0: null,
 				});
-				session.started = true;
+				started = true;
 				if (signal?.aborted) {
-					session.terminating = true;
-					await bridge.request({ op: "terminate", process_id: session.processId });
+					terminating = true;
+					await bridge.request({ op: "terminate", process_id: processId });
 				}
-				void pollLoop(session, hooks);
+				void pollLoop();
 			} catch (error) {
-				hooks.onOutput(session, `${error instanceof Error ? error.message : String(error)}\n`);
-				session.exitCode = 1;
-				hooks.onExit(session);
+				fail(error);
 			}
-		})();
-		return session;
-	}
-
-	async function waitForStartup(session: BridgeExecSession, signal?: AbortSignal): Promise<void> {
-		if (!signal) return session.startup;
-		if (signal.aborted) throw new Error("exec_command aborted");
-		let removeAbortListener = () => {};
-		const aborted = new Promise<never>((_, reject) => {
-			const onAbort = () => reject(new Error("exec_command aborted"));
-			signal.addEventListener("abort", onAbort, { once: true });
-			removeAbortListener = () => signal.removeEventListener("abort", onAbort);
 		});
-		try {
-			await Promise.race([session.startup, aborted]);
-		} finally {
-			removeAbortListener();
+
+		async function waitForStartup(signal?: AbortSignal): Promise<void> {
+			if (!signal) return startup;
+			if (signal.aborted) throw new Error("exec_command aborted");
+			let removeAbortListener = () => {};
+			const aborted = new Promise<never>((_, reject) => {
+				const onAbort = () => reject(new Error("exec_command aborted"));
+				signal.addEventListener("abort", onAbort, { once: true });
+				removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+			});
+			try {
+				await Promise.race([startup, aborted]);
+			} finally {
+				removeAbortListener();
+			}
 		}
+
+		return {
+			get started() { return started; },
+			get exitCode() { return exitCode; },
+			get terminating() { return terminating; },
+			poll,
+			waitForStartup,
+			write: async (chars) => {
+				await startup;
+				await bridge.request({ op: "write", process_id: processId, chunk: Array.from(Buffer.from(chars, "utf8")) });
+			},
+			terminate: async () => {
+				terminating = true;
+				await startup;
+				if (started && exitCode === undefined) await bridge.request({ op: "terminate", process_id: processId });
+			},
+		};
 	}
 
-	return {
-		create,
-		poll,
-		waitForStartup,
-		write: async (session, chars) => {
-			await bridge.request({ op: "write", process_id: session.processId, chunk: Array.from(Buffer.from(chars, "utf8")) });
-		},
-		terminate: async (session) => {
-			await bridge.request({ op: "terminate", process_id: session.processId });
-		},
-		shutdown: () => bridge.shutdown(),
-	};
+	return { create, shutdown: () => bridge.shutdown() };
 }
 
 function signalNumber(signal: string): number {

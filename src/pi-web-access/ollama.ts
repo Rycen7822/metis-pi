@@ -1,8 +1,9 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type Lookup, type SsrfConfig } from "./ssrf-protection.ts";
 
@@ -67,11 +68,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function normalizeCount(value: number | undefined): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return 5;
-	return Math.max(1, Math.min(Math.floor(value), 10));
-}
-
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -110,7 +106,7 @@ export function isOllamaAvailable(): boolean {
 
 export async function searchWithOllama(query: string, options: OllamaSearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
-	const numResults = normalizeCount(options.numResults);
+	const numResults = normalizeSearchResultCount(options.numResults, { max: 10 });
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let response: Response;
 	try {
@@ -134,7 +130,7 @@ export async function searchWithOllama(query: string, options: OllamaSearchOptio
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Ollama API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Ollama API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 
 	let rawData: unknown;
@@ -145,7 +141,13 @@ export async function searchWithOllama(query: string, options: OllamaSearchOptio
 		throw new Error(`Ollama API returned invalid JSON: ${errorMessage(err)}`);
 	}
 
-	const data = parseSearchResponse(rawData);
+	let data: OllamaSearchResponse;
+	try {
+		data = parseSearchResponse(rawData);
+	} catch (err) {
+		activityMonitor.logError(activityId, errorMessage(err));
+		throw err;
+	}
 	activityMonitor.logComplete(activityId, response.status);
 	const results = data.results.slice(0, numResults).map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
 	const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
@@ -209,7 +211,13 @@ export async function extractWithOllama(url: string, signal?: AbortSignal, optio
 		activityMonitor.logComplete(activityId, response.status);
 		throw new Error(`Ollama Web Fetch returned invalid JSON: ${errorMessage(err)}`);
 	}
-	const data = parseFetchResponse(rawData);
+	let data: OllamaFetchResponse;
+	try {
+		data = parseFetchResponse(rawData);
+	} catch (err) {
+		activityMonitor.logError(activityId, errorMessage(err));
+		throw err;
+	}
 	activityMonitor.logComplete(activityId, response.status);
 	const content = data.content.trim();
 	if (!content) return null;

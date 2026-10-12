@@ -1,8 +1,10 @@
 import { activityMonitor } from "./activity.ts";
 import { redactCredential } from "./credential-source.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
+import { matchesDomainFilter, normalizeDomain, normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { resolveParallelApiKey } from "./parallel.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
+import { SearchHttpError } from "./search-types.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 const PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
@@ -43,37 +45,10 @@ function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-function normalizeDomain(value: string): string | null {
-	let input = value.trim().toLowerCase();
-	if (input.startsWith("-")) input = input.slice(1).trim();
-	if (!input) return null;
-	try {
-		input = (input.includes("://") ? new URL(input) : new URL(`https://${input}`)).hostname;
-	} catch {
-		input = input.split("/")[0]?.split(":")[0] ?? "";
-	}
-	input = input.replace(/^\.+|\.+$/g, "");
-	return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(input) ? input : null;
-}
-
-function domainMatches(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
 function filterResults<T extends ParallelMcpSearchResult>(results: T[], domainFilter?: string[]): T[] {
 	if (!domainFilter?.length) return results;
-	const included = domainFilter.filter(value => !value.trim().startsWith("-")).map(normalizeDomain).filter((value): value is string => value !== null);
-	const excluded = domainFilter.filter(value => value.trim().startsWith("-")).map(normalizeDomain).filter((value): value is string => value !== null);
-	return results.filter(result => {
-		let hostname: string;
-		try {
-			hostname = new URL(result.url).hostname.toLowerCase();
-		} catch {
-			return false;
-		}
-		return (included.length === 0 || included.some(domain => domainMatches(hostname, domain))) &&
-			!excluded.some(domain => domainMatches(hostname, domain));
-	});
+	const filters = normalizeDomainFilters(domainFilter);
+	return results.filter(result => URL.canParse(result.url) && matchesDomainFilter(result.url, filters));
 }
 
 function buildSearchQuery(query: string, options: ParallelMcpSearchOptions): string {
@@ -121,9 +96,9 @@ async function callParallelMcp(
 	const safeBody = apiKey ? redactCredential(body, apiKey) : body;
 	if (!response.ok) {
 		if (response.status === 429) {
-			throw new Error(`Parallel MCP rate limit reached (429). Add parallelApiKey to ${CONFIG_PATH} or set PARALLEL_API_KEY for higher limits: ${safeBody.slice(0, 200)}`);
+			throw new SearchHttpError(response.status, `Parallel MCP rate limit reached (429). Add parallelApiKey to ${CONFIG_PATH} or set PARALLEL_API_KEY for higher limits: ${safeBody.slice(0, 200)}`);
 		}
-		throw new Error(`Parallel MCP error ${response.status}: ${safeBody.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Parallel MCP error ${response.status}: ${safeBody.slice(0, 300)}`);
 	}
 
 	let parsed: ParallelMcpResponse | null = null;

@@ -1,14 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { record, queryFixture } from "../helpers/condense-query.mjs";
-import { writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { temporaryDirectory } from "../helpers/temp-dir.mjs";
 import { captureBatch } from "../../src/condense/batch-capture.ts";
-import { spillOversizedBatch } from "../../src/condense/spill.ts";
-import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
+import { blobPathFor, spillOversizedBatch } from "../../src/condense/spill.ts";
+import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { ExecOutputArchive } from "../../src/execution/exec/output-archive.ts";
+
+test("spill paths preserve distinct occurrence bodies after reload and keep existing archive paths readable", async (t) => {
+  const dir = temporaryDirectory(t, "condense-spill-identity-");
+  const sm = SessionManager.create(dir, dir);
+  const { ctx, indexer, run } = queryFixture([], sm);
+  const originals = [
+    ["a:b", "COLON_BODY\nα😀"],
+    ["a/b", "SLASH_BODY\n中文"],
+    ["a_b", "UNDERSCORE_BODY"],
+  ];
+  const batch = {
+    turnIndex: 1,
+    timestamp: 2,
+    assistantText: "",
+    toolCalls: originals.map(([id, text]) => record(id, text, 3)),
+  };
+  await spillOversizedBatch({
+    batch, indexer, config: { ...DEFAULT_CONFIG, spillThreshold: 1, dedupByContentHash: false },
+    sessionDir: dir, sessionId: sm.getSessionId(),
+    appendEntry: (type, data) => sm.appendCustomEntry(type, data),
+  });
+  indexer.reconstructFromSession(ctx);
+  for (const [id, original] of originals) {
+    const page = (await run({ toolCallIds: [`${id}@3`] })).details.results[0];
+    assert.equal(page.text, original);
+    assert.equal(page.complete, true);
+  }
+  assert.equal(new Set(originals.map(([id]) => indexer.getRecord(`${id}@3`).spillPath)).size, originals.length);
+  for (const id of ["safe_id", "a:b@3", "a/b@3", "very-long:" + "中".repeat(500)]) {
+    const path = blobPathFor(dir, sm.getSessionId(), id);
+    assert.ok(Buffer.byteLength(basename(path)) <= 255);
+    assert.equal(path, blobPathFor(dir, sm.getSessionId(), id));
+  }
+
+  // Existing entries retain their recorded path; filename changes do not rename recovery evidence.
+  const legacyDirectory = join(dir, `${sm.getSessionId()}-blobs`);
+  mkdirSync(legacyDirectory, { recursive: true });
+  const legacyPath = join(legacyDirectory, "legacy_id_7.txt");
+  writeFileSync(legacyPath, "LEGACY_ORIGINAL");
+  sm.appendCustomEntry("context-prune-index", {
+    toolCalls: [record("legacy:id", "", 7, { spillPath: legacyPath, spillBytes: 15 })],
+  });
+  indexer.reconstructFromSession(ctx);
+  assert.equal((await run({ toolCallIds: ["legacy:id@7"] })).details.results[0].text, "LEGACY_ORIGINAL");
+});
 
 test("spill recall reaches the tail; archive loss cannot masquerade as a complete preview", async (t) => {
   const dir = temporaryDirectory(t, "condense-spill-");

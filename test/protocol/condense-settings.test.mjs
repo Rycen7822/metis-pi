@@ -4,8 +4,8 @@ import { SettingsList } from "@earendil-works/pi-tui";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { openPrunerSettings } from "../../src/condense/settings.ts";
 import { registerCommands } from "../../src/condense/commands.ts";
-import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
-import { loadConfig, saveConfig } from "../../src/condense/config.ts";
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../../src/condense/config.ts";
+import { displayValue, parseScalar, scalarRow, writeScalar } from "../../src/condense/setting-fields.ts";
 import { parseMetisConfig } from "../../src/metis-config.ts";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +22,16 @@ test("partial chain settings keep defaults, accept zero window and reject invali
       writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { chainCompression: given } }));
       assert.deepEqual((await loadConfig()).chainCompression, { ...DEFAULT_CONFIG.chainCompression, ...expected });
     }
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: {
+      minBatchChars: 17.9, pruneOn: "arbitrary", batchingMode: "legacy-mode",
+      purgeErrors: { cooldownTurns: 0, minArgChars: 8.9 },
+    } }));
+    const legacy = await loadConfig();
+    assert.equal(legacy.minBatchChars, 17);
+    assert.equal(legacy.purgeErrors.cooldownTurns, 0);
+    assert.equal(legacy.purgeErrors.minArgChars, 8);
+    assert.equal(legacy.pruneOn, DEFAULT_CONFIG.pruneOn);
+    assert.equal(legacy.batchingMode, "legacy-mode");
     assert.equal(DEFAULT_CONFIG.minBatchChars, 5000);
     assert.equal(DEFAULT_CONFIG.autoBudgetThreshold, 0.7);
     assert.equal(DEFAULT_CONFIG.enabled, false);
@@ -72,6 +82,28 @@ test("partial chain settings keep defaults, accept zero window and reject invali
   }
 });
 
+test("scalar enum legality comes from config rather than presentation options", () => {
+  const row = { ...scalarRow("summarizerThinking"), options: [{ value: "invented", label: "Test label" }] };
+  assert.equal(parseScalar(row, "invented"), undefined);
+  assert.equal(parseScalar(row, "low"), "low");
+});
+
+test("scalar writes preserve field types and entry-specific parsing", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.throws(() => writeScalar(config, scalarRow("minBatchChars"), true), /invalid.*minBatchChars/);
+  assert.throws(() => writeScalar(config, scalarRow("summarizerThinking"), "invented"), /invalid.*summarizerThinking/);
+  assert.equal(parseScalar(scalarRow("minBatchChars"), "17chars"), 17);
+  assert.equal(parseScalar(scalarRow("purgeErrorsCooldown"), "0"), undefined);
+  assert.equal(parseScalar(scalarRow("purgeErrorsCooldown"), "1turn"), 1);
+  const next = writeScalar(config, scalarRow("pruneOn"), "arbitrary");
+  assert.equal(next.pruneOn, "arbitrary");
+  assert.equal(config.pruneOn, DEFAULT_CONFIG.pruneOn);
+  const custom = writeScalar(next, scalarRow("minBatchChars"), 17);
+  assert.equal(custom.minBatchChars, 17);
+  assert.equal(displayValue(scalarRow("minBatchChars"), custom), String(DEFAULT_CONFIG.minBatchChars));
+  assert.deepEqual(custom.purgeErrors, config.purgeErrors);
+});
+
 async function openSettings(overrides = {}) {
   initTheme("dark", false);
   const current = { value: { ...structuredClone(DEFAULT_CONFIG), ...overrides } };
@@ -85,7 +117,7 @@ async function openSettings(overrides = {}) {
       custom: async (factory) => { list = factory(null, null, null, () => {}).children.find(child => child instanceof SettingsList); },
     },
   };
-  await openPrunerSettings(ctx, current, async (value) => { saved.push(value); }, (value) => { refreshed.push(value); });
+  await openPrunerSettings(ctx, current, (value) => { current.value = value; }, async (value) => { saved.push(value); }, (value) => { refreshed.push(value); });
   return { current, saved, refreshed, list, row: (id) => list.items.find((item) => item.id === id) };
 }
 
@@ -162,6 +194,7 @@ function prunerCommand({ select = async () => undefined, save = async () => {} }
   registerCommands(
     pi,
     current,
+    (value) => { current.value = value; },
     async () => ({ ok: true, reason: "flushed", batchCount: 0, toolCallCount: 0, rawCharCount: 0, summaryCharCount: 0 }),
     () => [],
     () => ({ callCount: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, chainsCompressed: 0 }),

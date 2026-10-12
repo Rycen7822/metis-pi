@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const search1apiModuleUrl = new URL("../search1api.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url)
 	.href;

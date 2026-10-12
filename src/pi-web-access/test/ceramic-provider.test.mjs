@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const ceramicModuleUrl = new URL("../ceramic.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function withHome(config, run) {
@@ -167,5 +167,7 @@ test("Ceramic reports API errors redacted, rejects malformed envelopes, and appe
 	const page = generateCuratorPage(["query"], "token", 20, available, "ceramic", "ceramic", [], null);
 	assert.match(page, /data-provider="ceramic"/);
 	assert.match(page, />Ceramic<\/button>/);
-	assert.match(page, /provider === "ceramic"\) return "Ceramic"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.ceramic, "Ceramic");
+	assert.ok(clientData.providers.includes("ceramic"));
 });

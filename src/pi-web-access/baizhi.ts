@@ -1,9 +1,10 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig } from "./utils.ts";
 import { isIP } from "node:net";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 const MCP_URL = "https://agent-toolkit.app.baizhi.cloud/mcp";
@@ -87,10 +88,12 @@ export async function searchWithBaizhi(query: string, options: SearchOptions = {
 		return { answer, results: [] };
 	} catch (err) {
 		let message: string;
+		let httpStatus: number | undefined;
 		if (options.signal?.aborted) message = "Aborted";
 		else if (timeoutSignal.aborted) message = "Baizhi request timed out after 60s";
 		else {
 			const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+			if (typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599) httpStatus = code;
 			// Never expose remote HTTP/JSON-RPC bodies or nested SDK errors: they
 			// can echo credentials in plain, encoded or transformed form.
 			message = typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599
@@ -101,7 +104,7 @@ export async function searchWithBaizhi(query: string, options: SearchOptions = {
 				: "Baizhi MCP request failed; check your connection, API key and account status";
 		}
 		activityMonitor.logError(activityId, message);
-		throw new Error(message);
+		throw httpStatus === undefined ? new Error(message) : new SearchHttpError(httpStatus, message);
 	} finally {
 		cleaningUp = true;
 		// Best effort, separately bounded DELETE; always close the local streams.

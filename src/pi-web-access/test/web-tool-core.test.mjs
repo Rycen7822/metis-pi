@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-const coreUrl = new URL("../web-tool-core.ts", import.meta.url).href;
+const standaloneUrl = new URL("../standalone-web-tools.ts", import.meta.url).href;
 
 // Every child runs with @earendil-works/* unresolvable, proving the standalone
 // core never needs the Pi runtime, and logs every module it loads.
@@ -65,7 +65,7 @@ function runStandalone(body, { config = {}, env = {} } = {}) {
 					parentURL: import.meta.url,
 					data: { logPath: ${JSON.stringify(logPath)} },
 				});
-				const { createStandaloneWebToolCore } = await import(${JSON.stringify(coreUrl)});
+				const { createStandaloneWebToolCore } = await import(${JSON.stringify(standaloneUrl)});
 				${fetchMock}
 				const out = await (async () => { ${body} })();
 				console.log(JSON.stringify({ out, requests }));

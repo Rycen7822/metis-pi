@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -165,6 +165,45 @@ test("malformed GitHub identifiers cannot delete outside the clone cache", async
 	assert.equal(child.status, 0, child.stderr);
 	assert.equal(JSON.parse(child.stdout), null);
 	assert.equal(await readFile(join(victim, "marker.txt"), "utf8"), "preserve");
+});
+
+test("root README extraction rejects a repository symlink to an outside file", { skip: process.platform === "win32" }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-web-access-readme-contained-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const agentDir = join(root, "agent");
+	const binDir = join(root, "bin");
+	const outside = join(root, "outside-fixture.txt");
+	await mkdir(agentDir);
+	await mkdir(binDir);
+	await writeFile(outside, "OUTSIDE_README_SYNTHETIC_FIXTURE");
+	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ githubClone: { clonePath: join(root, "clones") } }));
+	await writeFakeExecutable(binDir, "gh", `
+		const { mkdirSync, symlinkSync, writeFileSync } = require("node:fs");
+		const { join } = require("node:path");
+		const args = process.argv.slice(2);
+		if (args[0] === "--version") process.exit(0);
+		if (args[0] !== "repo" || args[1] !== "clone") process.exit(1);
+		mkdirSync(args[3], { recursive: true });
+		symlinkSync(process.env.OUTSIDE_README_FIXTURE, join(args[3], "README.md"));
+		writeFileSync(join(args[3], "readme.md"), "Contained README fallback");
+	`);
+	const child = spawnSync(process.execPath, ["--input-type=module"], {
+		input: `
+			const { clearCloneCache, extractGitHub } = await import(${JSON.stringify(extractModuleUrl)});
+			const result = await extractGitHub("https://github.com/owner/repo", undefined, true);
+			console.log(JSON.stringify(result));
+			clearCloneCache();
+		`,
+		encoding: "utf8",
+		timeout: 15_000,
+		env: { ...process.env, OUTSIDE_README_FIXTURE: outside, PATH: `${binDir}${delimiter}${process.env.PATH || ""}`, PI_CODING_AGENT_DIR: agentDir },
+	});
+	assert.equal(child.status, 0, child.stderr);
+	const result = JSON.parse(child.stdout);
+	assert.equal(result.error, null);
+	assert.doesNotMatch(result.content, /OUTSIDE_README_SYNTHETIC_FIXTURE/);
+	assert.match(result.content, /Contained README fallback/);
+	assert.equal(await readFile(outside, "utf8"), "OUTSIDE_README_SYNTHETIC_FIXTURE");
 });
 
 test("clearCloneCache removes only its runtime directory", { skip: process.platform === "win32" }, async () => {
@@ -750,89 +789,36 @@ test("clone runtime initialization preserves live, unknown, and symlink runtimes
 	}
 });
 
-test("normalizeClonePath expands ~ to HOME", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-github-expand-"));
-	const agentDir = join(root, "agent-dir");
-	await mkdir(agentDir, { recursive: true });
-	await writeFile(
-		join(agentDir, "web-search.json"),
-		JSON.stringify({ githubClone: { clonePath: "~/test-repos" } }),
-		"utf8",
-	);
-
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		input: `
-			const { extractGitHub } = await import(${JSON.stringify(extractModuleUrl)});
-			// Trigger config load by calling extractGitHub with a non-GitHub URL
-			// The config is loaded internally, so we check the clone path via a GitHub URL
-			const result = await extractGitHub("https://github.com/test/repo");
-			// If we got here without error, config loaded successfully
-			console.log(JSON.stringify({ success: true }));
-		`,
-		encoding: "utf8",
-		env: {
-			...process.env,
-			PI_CODING_AGENT_DIR: agentDir,
-		},
+for (const scenario of ["tilde", "environment", "absolute"]) {
+	test(`clonePath resolves the ${scenario} path at the clone command`, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "pi-web-access-clone-path-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const agentDir = join(root, "agent");
+		const binDir = join(root, "bin");
+		const fixtureHome = join(root, "home");
+		const expectedRoot = scenario === "absolute" ? join(root, "absolute-repos") : join(fixtureHome, "test-repos");
+		const clonePath = scenario === "tilde" ? "~/test-repos" : scenario === "environment" ? "$HOME/test-repos" : expectedRoot;
+		await mkdir(agentDir);
+		await mkdir(binDir);
+		await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ githubClone: { clonePath } }));
+		await writeControlledGh(binDir);
+		const destinationFile = join(root, "destination");
+		const child = spawnSync(process.execPath, ["--input-type=module"], {
+			input: `
+				const { clearCloneCache, extractGitHub } = await import(${JSON.stringify(extractModuleUrl)});
+				const result = await extractGitHub("https://github.com/owner/repo", undefined, true);
+				console.log(JSON.stringify(result));
+				clearCloneCache();
+			`,
+			encoding: "utf8", timeout: 15_000,
+			env: { ...process.env, HOME: fixtureHome, USERPROFILE: fixtureHome, GH_READY_FILE: destinationFile, PATH: `${binDir}${delimiter}${process.env.PATH || ""}`, PI_CODING_AGENT_DIR: agentDir },
+		});
+		assert.equal(child.status, 0, child.stderr);
+		const destination = await readFile(destinationFile, "utf8");
+		assert.equal(dirname(dirname(destination)), expectedRoot);
+		assert.equal(JSON.parse(child.stdout).content.match(/^Repository cloned to: (.+)$/m)?.[1], destination);
 	});
-
-	assert.equal(child.status, 0, child.stderr);
-	// The test passes if the config loads without error
-	// We can't directly test the expanded path without exporting loadGitHubConfig
-	// but we've verified the code doesn't crash
-});
-
-test("normalizeClonePath expands $HOME and other env vars", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-github-expand-env-"));
-	const agentDir = join(root, "agent-dir");
-	await mkdir(agentDir, { recursive: true });
-	await writeFile(
-		join(agentDir, "web-search.json"),
-		JSON.stringify({ githubClone: { clonePath: "$HOME/my-repos" } }),
-		"utf8",
-	);
-
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		input: `
-			const { extractGitHub } = await import(${JSON.stringify(extractModuleUrl)});
-			const result = await extractGitHub("https://github.com/test/repo");
-			console.log(JSON.stringify({ success: true }));
-		`,
-		encoding: "utf8",
-		env: {
-			...process.env,
-			PI_CODING_AGENT_DIR: agentDir,
-		},
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-});
-
-test("normalizeClonePath handles absolute paths without expansion", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-web-access-github-abs-"));
-	const agentDir = join(root, "agent-dir");
-	await mkdir(agentDir, { recursive: true });
-	await writeFile(
-		join(agentDir, "web-search.json"),
-		JSON.stringify({ githubClone: { clonePath: "/tmp/my-repos" } }),
-		"utf8",
-	);
-
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		input: `
-			const { extractGitHub } = await import(${JSON.stringify(extractModuleUrl)});
-			const result = await extractGitHub("https://github.com/test/repo");
-			console.log(JSON.stringify({ success: true }));
-		`,
-		encoding: "utf8",
-		env: {
-			...process.env,
-			PI_CODING_AGENT_DIR: agentDir,
-		},
-	});
-
-	assert.equal(child.status, 0, child.stderr);
-});
+}
 
 test("GitHub clones disable interactive credential prompts", { skip: process.platform === "win32" }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-access-github-noninteractive-"));

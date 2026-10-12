@@ -1,23 +1,17 @@
-use std::collections::{hash_map::Entry, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use codex_utils_pty::{ExecCommandSession, TerminalSize};
-use tokio::sync::{watch, Mutex, Notify};
+use tokio::sync::{Mutex, Notify};
 
-use crate::process::ExecProcessEventLog;
 use crate::protocol::{
-    ExecOutputStream, ExecParams, ExecResponse, ProcessOutputChunk, ReadParams, ReadResponse, TerminateParams,
-    TerminateResponse, WriteParams, WriteResponse, WriteStatus,
+    ExecOutputStream, ExecParams, ExecResponse, ProcessOutputChunk, ReadParams, ReadResponse,
+    TerminateParams, TerminateResponse, WriteParams, WriteResponse, WriteStatus,
 };
-use crate::{
-    ExecBackend, ExecProcess, ExecProcessEvent, ExecProcessEventReceiver, ExecServerError, ProcessId,
-    StartedExecProcess,
-};
+use crate::{ExecServerError, ProcessId};
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 8 * 1024 * 1024;
-const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
@@ -38,8 +32,6 @@ struct RunningProcess {
     retained_bytes: usize,
     next_seq: u64,
     exit_code: Option<i32>,
-    wake_tx: watch::Sender<u64>,
-    events: ExecProcessEventLog,
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
@@ -57,13 +49,6 @@ struct Inner {
 #[derive(Clone, Default)]
 pub struct LocalProcess {
     inner: Arc<Inner>,
-}
-
-struct LocalExecProcess {
-    process_id: ProcessId,
-    backend: LocalProcess,
-    wake_tx: watch::Sender<u64>,
-    events: ExecProcessEventLog,
 }
 
 impl Default for Inner {
@@ -91,10 +76,7 @@ impl LocalProcess {
         }
     }
 
-    async fn start_process(
-        &self,
-        params: ExecParams,
-    ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), ExecServerError> {
+    pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
         let process_id = params.process_id.clone();
         let (program, args) = params
             .argv
@@ -103,7 +85,9 @@ impl LocalProcess {
         {
             let mut process_map = self.inner.processes.lock().await;
             if process_map.contains_key(&process_id) {
-                return Err(ExecServerError::Message(format!("process {process_id} already exists")));
+                return Err(ExecServerError::Message(format!(
+                    "process {process_id} already exists"
+                )));
             }
             process_map.insert(process_id.clone(), ProcessEntry::Starting);
         }
@@ -153,8 +137,6 @@ impl LocalProcess {
         };
 
         let output_notify = Arc::new(Notify::new());
-        let (wake_tx, _wake_rx) = watch::channel(0);
-        let events = ExecProcessEventLog::new(PROCESS_EVENT_CHANNEL_CAPACITY, RETAINED_OUTPUT_BYTES_PER_PROCESS);
         {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
@@ -167,8 +149,6 @@ impl LocalProcess {
                     retained_bytes: 0,
                     next_seq: 1,
                     exit_code: None,
-                    wake_tx: wake_tx.clone(),
-                    events: events.clone(),
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
@@ -204,11 +184,7 @@ impl LocalProcess {
             Arc::clone(&self.inner),
             output_notify,
         ));
-        Ok((ExecResponse { process_id }, wake_tx, events))
-    }
-
-    pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.start_process(params).await.map(|(response, _, _)| response)
+        Ok(ExecResponse { process_id })
     }
 
     pub async fn exec_read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
@@ -219,9 +195,9 @@ impl LocalProcess {
         loop {
             let (response, output_notify) = {
                 let process_map = self.inner.processes.lock().await;
-                let process = process_map
-                    .get(&params.process_id)
-                    .ok_or_else(|| ExecServerError::Message(format!("unknown process id {}", params.process_id)))?;
+                let process = process_map.get(&params.process_id).ok_or_else(|| {
+                    ExecServerError::Message(format!("unknown process id {}", params.process_id))
+                })?;
                 let ProcessEntry::Running(process) = process else {
                     return Err(ExecServerError::Message(format!(
                         "process id {} is starting",
@@ -259,7 +235,8 @@ impl LocalProcess {
                     Arc::clone(&process.output_notify),
                 )
             };
-            let has_new_terminal_event = response.exited && after_seq < response.next_seq.saturating_sub(1);
+            let has_new_terminal_event =
+                response.exited && after_seq < response.next_seq.saturating_sub(1);
             if !response.chunks.is_empty()
                 || response.closed
                 || has_new_terminal_event
@@ -298,13 +275,18 @@ impl LocalProcess {
         writer_tx
             .send(params.chunk.into_inner())
             .await
-            .map_err(|_| ExecServerError::Message("failed to write to process stdin".to_string()))?;
+            .map_err(|_| {
+                ExecServerError::Message("failed to write to process stdin".to_string())
+            })?;
         Ok(WriteResponse {
             status: WriteStatus::Accepted,
         })
     }
 
-    pub async fn terminate_process(&self, params: TerminateParams) -> Result<TerminateResponse, ExecServerError> {
+    pub async fn terminate_process(
+        &self,
+        params: TerminateParams,
+    ) -> Result<TerminateResponse, ExecServerError> {
         let running = {
             let process_map = self.inner.processes.lock().await;
             match process_map.get(&params.process_id) {
@@ -319,65 +301,6 @@ impl LocalProcess {
             }
         };
         Ok(TerminateResponse { running })
-    }
-}
-
-#[async_trait]
-impl ExecBackend for LocalProcess {
-    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
-        let (response, wake_tx, events) = self.start_process(params).await?;
-        Ok(StartedExecProcess {
-            process: Arc::new(LocalExecProcess {
-                process_id: response.process_id,
-                backend: self.clone(),
-                wake_tx,
-                events,
-            }),
-        })
-    }
-}
-
-#[async_trait]
-impl ExecProcess for LocalExecProcess {
-    fn process_id(&self) -> &ProcessId {
-        &self.process_id
-    }
-    fn subscribe_wake(&self) -> watch::Receiver<u64> {
-        self.wake_tx.subscribe()
-    }
-    fn subscribe_events(&self) -> ExecProcessEventReceiver {
-        self.events.subscribe()
-    }
-    async fn read(
-        &self,
-        after_seq: Option<u64>,
-        max_bytes: Option<usize>,
-        wait_ms: Option<u64>,
-    ) -> Result<ReadResponse, ExecServerError> {
-        self.backend
-            .exec_read(ReadParams {
-                process_id: self.process_id.clone(),
-                after_seq,
-                max_bytes,
-                wait_ms,
-            })
-            .await
-    }
-    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        self.backend
-            .exec_write(WriteParams {
-                process_id: self.process_id.clone(),
-                chunk: chunk.into(),
-            })
-            .await
-    }
-    async fn terminate(&self) -> Result<(), ExecServerError> {
-        self.backend
-            .terminate_process(TerminateParams {
-                process_id: self.process_id.clone(),
-            })
-            .await?;
-        Ok(())
     }
 }
 
@@ -397,23 +320,15 @@ async fn stream_output(
             let seq = process.next_seq;
             process.next_seq += 1;
             process.retained_bytes += chunk.len();
-            process.output.push_back(RetainedOutputChunk {
-                seq,
-                stream,
-                chunk: chunk.clone(),
-            });
+            process
+                .output
+                .push_back(RetainedOutputChunk { seq, stream, chunk });
             while process.retained_bytes > RETAINED_OUTPUT_BYTES_PER_PROCESS {
                 let Some(evicted) = process.output.pop_front() else {
                     break;
                 };
                 process.retained_bytes = process.retained_bytes.saturating_sub(evicted.chunk.len());
             }
-            let _ = process.wake_tx.send(seq);
-            process.events.publish(ExecProcessEvent::Output(ProcessOutputChunk {
-                seq,
-                stream,
-                chunk: chunk.into(),
-            }));
         }
         output_notify.notify_waiters();
     }
@@ -430,11 +345,8 @@ async fn watch_exit(
     {
         let mut processes = inner.processes.lock().await;
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
-            let seq = process.next_seq;
             process.next_seq += 1;
             process.exit_code = Some(exit_code);
-            let _ = process.wake_tx.send(seq);
-            process.events.publish(ExecProcessEvent::Exited { seq, exit_code });
         }
     }
     output_notify.notify_waiters();
@@ -464,10 +376,7 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
             return;
         }
         process.closed = true;
-        let seq = process.next_seq;
         process.next_seq += 1;
-        let _ = process.wake_tx.send(seq);
-        process.events.publish(ExecProcessEvent::Closed { seq });
         Arc::clone(&process.output_notify)
     };
     output_notify.notify_waiters();
@@ -499,7 +408,11 @@ mod tests {
         backend
             .exec(ExecParams {
                 process_id: process_id.clone(),
-                argv: vec!["sh".to_string(), "-c".to_string(), "printf hello".to_string()],
+                argv: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "printf hello".to_string(),
+                ],
                 cwd: std::env::current_dir().unwrap(),
                 env: HashMap::new(),
                 tty: false,
@@ -524,6 +437,82 @@ mod tests {
             .flat_map(|chunk| chunk.chunk.into_inner())
             .collect::<Vec<_>>();
         assert_eq!(String::from_utf8(output).unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn pull_reads_retain_tail_after_root_exit_until_streams_close() {
+        let backend = LocalProcess::default();
+        let process_id = ProcessId::from("exit-before-output-close");
+        backend
+            .exec(ExecParams {
+                process_id: process_id.clone(),
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "exec 3<&0; (IFS= read -r line; printf '%s' \"$line\") <&3 & exit 7".into(),
+                ],
+                cwd: std::env::current_dir().unwrap(),
+                env: HashMap::new(),
+                tty: false,
+                pipe_stdin: true,
+                arg0: None,
+            })
+            .await
+            .unwrap();
+
+        // FD 3 preserves stdin across the shell's background-job /dev/null default.
+        // The descendant cannot produce its tail until this test sends stdin.
+        let exited = backend
+            .exec_read(ReadParams {
+                process_id: process_id.clone(),
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(2_000),
+            })
+            .await
+            .unwrap();
+        assert!(exited.exited);
+        assert_eq!(exited.exit_code, Some(7));
+        assert!(!exited.closed);
+        assert!(exited.chunks.is_empty());
+
+        let write = backend
+            .exec_write(WriteParams {
+                process_id: process_id.clone(),
+                chunk: ByteChunk(b"tail\n".to_vec()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(write.status, WriteStatus::Accepted);
+        let mut cursor = exited.next_seq.saturating_sub(1);
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let response = backend
+                    .exec_read(ReadParams {
+                        process_id: process_id.clone(),
+                        after_seq: Some(cursor),
+                        max_bytes: Some(8_192),
+                        wait_ms: Some(20),
+                    })
+                    .await
+                    .unwrap();
+                assert!(response.exited);
+                assert_eq!(response.exit_code, Some(7));
+                for chunk in response.chunks {
+                    assert!(chunk.seq > cursor);
+                    output.extend_from_slice(&chunk.chunk.0);
+                }
+                cursor = response.next_seq.saturating_sub(1);
+                if response.closed {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("output streams close after the descendant writes its tail");
+        assert_eq!(output, b"tail");
+        backend.shutdown().await;
     }
 
     #[tokio::test]

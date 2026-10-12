@@ -1,5 +1,4 @@
-import { stream } from "@earendil-works/pi-ai/compat";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   CapturedBatch,
@@ -53,17 +52,15 @@ ${EVIDENCE_RULES}
 - Keep any reference tokens like \`t12\` or \`b3\` intact.
 - Be concise: a short narrative or a few grouped bullets, not one bullet per step.`;
 
-export function summarizerThinkingOptions(config: ContextPruneConfig): Record<string, unknown> {
+export function summarizerThinkingOptions(config: ContextPruneConfig): Pick<ModelsSimpleStreamOptions, "reasoning"> {
   const level: SummarizerThinking = config.summarizerThinking;
   if (level === "default") {
     return {};
   }
 
-  // stream()/complete() accept provider-level options. For reasoning-capable providers,
-  // pi-ai adapters translate reasoningEffort into the provider-specific field.
-  // "off" intentionally sends no effort; adapters that support explicit disable
-  // handle that the same way as an absent effort, while preserving compatibility.
-  return { reasoningEffort: level === "off" ? undefined : level };
+  // The native registry accepts provider-neutral reasoning. An absent level
+  // selects the provider's non-thinking mode.
+  return { reasoning: level === "off" ? undefined : level };
 }
 
 function resolveModel(identifier: string, ctx: ExtensionContext): any {
@@ -124,7 +121,6 @@ export function isUsableSummary(llmText: string, stopReason: string): boolean {
 
 type RunOutcome =
   | { kind: "ok"; result: SummarizeResult }
-  | { kind: "auth"; message: string }
   | { kind: "unusable" }
   | { kind: "transient"; message: string; timedOut?: boolean };
 
@@ -143,8 +139,8 @@ function combineSignals(...signals: (AbortSignal | undefined)[]): AbortSignal | 
 /**
  * One summarization attempt against a specific model. Returns a classified
  * outcome instead of throwing (except aborts, which propagate so flushPending
- * can restore state). Auth failure is detected pre-stream and advances to the
- * next candidate. `unusable` = empty or length-truncated. Everything else
+ * can restore state). The native registry owns authentication and provider
+ * dispatch. `unusable` = empty or length-truncated. Everything else
  * that reaches the catch is `transient` (the outage bucket) — pi-ai surfaces
  * no structured status code on the throw, so classification is coarse by design.
  */
@@ -182,28 +178,11 @@ async function runOnce(
   try {
     if (options.signal?.aborted) throw new Error("summarize: aborted before authentication");
     if (!model) return { kind: "transient", message: "Summarizer model unavailable in registry" };
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (options.signal?.aborted) throw new Error("summarize: aborted during authentication");
-    if (!auth.ok) {
-      const authMessage = "error" in auth ? auth.error : "authentication failed";
-      return { kind: "auth", message: authMessage };
-    }
-
-    // Mirror the main loop (model-runtime stream): auth resolution can carry a
-    // seat-specific baseUrl (e.g. GitHub Copilot business/enterprise endpoints).
-    // The shipped model data pins the individual host, which 421s other seats,
-    // so the resolved auth baseUrl must win over the static model baseUrl.
-    const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
-    if (options.signal?.aborted) throw new Error("summarize: aborted before provider request");
-    const effectiveModel = providerAuth?.auth.baseUrl
-      ? { ...model, baseUrl: providerAuth.auth.baseUrl }
-      : model;
-
     // Pass the combined signal so the underlying fetch is cancelled immediately
     // either when the user presses Esc, or when an idle/ceiling timeout fires.
     options.onModelAttempt?.();
-    const responseStream = stream(
-      effectiveModel,
+    const responseStream = ctx.modelRegistry.streamSimple(
+      model,
       {
         messages: [
           {
@@ -214,8 +193,6 @@ async function runOnce(
         ],
       },
       {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
         signal: combineSignals(options.signal, timeoutController.signal),
         // Provider output includes model-specific tokenization/reasoning.
         // Keep its existing ceiling; enforce proxy limits on the rendered reply.
@@ -348,7 +325,7 @@ async function runSummarization(
     }
   };
 
-  let failure: Extract<RunOutcome, { kind: "auth" | "transient" }> | undefined;
+  let failure: Extract<RunOutcome, { kind: "transient" }> | undefined;
   for (let index = decision.index; index < chain.length; index++) {
     const outcome = await runOnce(chain[index], userMessage, config, ctx, options);
     if (outcome.kind === "ok") {

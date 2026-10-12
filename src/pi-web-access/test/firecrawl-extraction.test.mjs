@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 const firecrawlModuleUrl = new URL("../firecrawl.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
 function runChild(script, env = {}) {
 	const childEnv = { ...process.env };
@@ -32,6 +32,71 @@ async function configHome(config) {
 	await writeFile(join(home, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
 	return home;
 }
+
+test("invalid Firecrawl discovery leaves another provider usable and explicit requests diagnostic", async () => {
+	const home = await configHome({ searchRouting: { providers: ["firecrawl", "brave"], fallbackOn: ["network"] } });
+	const child = runChild(`
+		const calls = [];
+		globalThis.fetch = async url => {
+			calls.push(String(url));
+			return Response.json({ web: { results: [{ title: "Other provider", url: "https://example.com", description: "ok" }] } });
+		};
+		const { isFirecrawlAvailable, searchWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
+		const { search } = await import(${JSON.stringify(searchModuleUrl)});
+		const available = isFirecrawlAvailable();
+		const result = await search("discovery", { provider: "auto" });
+		let directError;
+		try { await searchWithFirecrawl("direct"); } catch (error) { directError = error.message; }
+		console.log(JSON.stringify({ available, provider: result.provider, directError, calls }));
+	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, FIRECRAWL_BASE_URL: "not-a-url", BRAVE_API_KEY: "synthetic-brave-key" });
+	assert.equal(child.status, 0, child.stderr);
+	const result = JSON.parse(child.stdout.trim());
+	assert.equal(result.available, false);
+	assert.equal(result.provider, "brave");
+	assert.match(result.directError, /Invalid Firecrawl base URL/);
+	assert.equal(result.calls.length, 1);
+	assert.ok(result.calls[0].startsWith("https://api.search.brave.com/"));
+});
+
+test("Firecrawl masks before clipping and omits credential-bearing JSON parser excerpts", async () => {
+	const home = await configHome({}), token = "abcdef12-3456-7890-abcd-ef1234567890";
+	const child = runChild(`
+		const token = ${JSON.stringify(token)}, bodies = ["x".repeat(290) + token, token + " malformed"];
+		let index = 0;
+		globalThis.fetch = async () => new Response(bodies[index], { status: index++ === 0 ? 401 : 200 });
+		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
+		const { activityMonitor } = await import(${JSON.stringify(new URL("../activity.ts", import.meta.url).href)});
+		const messages = [];
+		for (let i = 0; i < bodies.length; i++) {
+			try { await extractWithFirecrawl("https://example.com/doc", undefined, { lookup: ${PUBLIC_LOOKUP} }); }
+			catch (error) { messages.push(error.message); }
+		}
+		console.log(JSON.stringify({ messages, logged: activityMonitor.getEntries().map(entry => entry.error) }));
+	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, FIRECRAWL_BASE_URL: "https://crawl.example.com", FIRECRAWL_API_KEY: token });
+	assert.equal(child.status, 0, child.stderr);
+	const result = JSON.parse(child.stdout.trim());
+	assert.equal(result.messages.length, 2);
+	assert.match(result.messages[0], /error 401.*\[redacted\]/);
+	assert.match(result.messages[1], /returned invalid JSON/);
+	assert.doesNotMatch(JSON.stringify(result), /abcdef12/);
+});
+
+test("Firecrawl response-body cancellation retains the caller's abort", async () => {
+	const home = await configHome({});
+	const child = runChild(`
+		const controller = new AbortController();
+		globalThis.fetch = async () => ({ ok: true, status: 200, async json() {
+			controller.abort(new DOMException("cancelled", "AbortError")); throw controller.signal.reason;
+		} });
+		const { extractWithFirecrawl } = await import(${JSON.stringify(firecrawlModuleUrl)});
+		let outcome;
+		try { await extractWithFirecrawl("https://example.com/doc", controller.signal, { lookup: ${PUBLIC_LOOKUP} }); }
+		catch (error) { outcome = { name: error.name, message: error.message }; }
+		console.log(JSON.stringify(outcome));
+	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, FIRECRAWL_BASE_URL: "https://crawl.example.com" });
+	assert.equal(child.status, 0, child.stderr);
+	assert.deepEqual(JSON.parse(child.stdout.trim()), { name: "AbortError", message: "cancelled" });
+});
 
 test("Firecrawl extraction maps markdown, uses credentials, and defaults to lockdown", async () => {
 	const child = runChild(`

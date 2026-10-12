@@ -2,6 +2,7 @@ import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, linkSyn
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parse, stringify } from "smol-toml";
+import { lockSync } from "proper-lockfile";
 import { readLegacyWebAccess, splitWebAccessConfig, WEB_CREDENTIALS_FILE } from "./web-access-config.ts";
 
 export const METIS_CONFIG_FILE = "metis-pi.toml";
@@ -278,20 +279,43 @@ function persistWebCredentials(agentDir: string): void {
   } else if (!Object.keys(credentials).length) return;
   atomicWrite(target, `${JSON.stringify(credentials, null, 2)}\n`, legacy.path !== target);
 }
-/** All in-process writers use one synchronous read/merge/atomic-write boundary. */
+function withConfigLock<T>(agentDir: string, write: () => T): T {
+  mkdirSync(agentDir, { recursive: true });
+  const path = metisConfigPath(agentDir);
+  const deadline = Date.now() + 5_000;
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  let release: () => void;
+  for (;;) {
+    try {
+      release = lockSync(path, { realpath: false });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || Date.now() >= deadline) throw error;
+      Atomics.wait(wait, 0, 0, 10);
+    }
+  }
+  try { return write(); }
+  finally { release(); }
+}
+
+/** Serialize the fresh read, merge and publication across Pi processes. */
 export function updateMetisConfig(agentDir: string, patch: ObjectValue): void {
-  const current = readMetisConfig(agentDir);
-  atomicWrite(metisConfigPath(agentDir), renderMetisConfig(mergeMetisConfig(current.config, patch)));
-  if (current.legacy) persistWebCredentials(agentDir);
+  withConfigLock(agentDir, () => {
+    const current = readMetisConfig(agentDir);
+    atomicWrite(metisConfigPath(agentDir), renderMetisConfig(mergeMetisConfig(current.config, patch)));
+    if (current.legacy) persistWebCredentials(agentDir);
+  });
   // A documentation failure must not report a successfully persisted setting as lost.
   try { installGuide(agentDir); } catch { /* /metis-config init can retry guide installation */ }
 }
 /** Explicit initialization; mixed credential JSON is backed up before splitting. */
 export function initializeMetisConfig(agentDir: string): { created: boolean; legacy: boolean; path: string; notes: string[] } {
-  const state = readMetisConfig(agentDir), path = metisConfigPath(agentDir);
-  // The snapshot identifies absence; exclusive publication also guards another process's init.
-  const created = (!state.present || state.legacy) && atomicWrite(path, renderMetisConfig(state.config), true);
-  if (created) persistWebCredentials(agentDir);
+  const result = withConfigLock(agentDir, () => {
+    const state = readMetisConfig(agentDir), path = metisConfigPath(agentDir);
+    const created = (!state.present || state.legacy) && atomicWrite(path, renderMetisConfig(state.config), true);
+    if (created) persistWebCredentials(agentDir);
+    return { created, legacy: created && state.legacy, path, notes: created ? state.notes : [] };
+  });
   installGuide(agentDir);
-  return { created, legacy: created && state.legacy, path, notes: created ? state.notes : [] };
+  return result;
 }

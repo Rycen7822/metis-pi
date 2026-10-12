@@ -1,5 +1,7 @@
-import { loadWebAccessConfig, readExecError, trimErrorText, mapFfmpegError } from "./utils.ts";
-import { execFileSync } from "node:child_process";
+import { loadWebAccessConfig } from "./utils.ts";
+import { readExecError, trimErrorText, mapFfmpegError } from "./media-errors.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, extname, basename, join, dirname } from "node:path";
@@ -7,7 +9,9 @@ import { activityMonitor } from "./activity.ts";
 import { canAttachImages } from "./feature-config.ts";
 import { isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";
 import { queryGeminiApiWithVideo, getApiKey, fetchGeminiApi, getVersionedApiBase, getUploadBase, redactGeminiApiResponse } from "./gemini-api.ts";
-import { extractHeadingTitle, type ExtractedContent, type ExtractOptions, type FrameResult } from "./extract.ts";
+import { extractHeadingTitle, type ExtractedContent, type ExtractOptions, type FrameResult } from "./content.ts";
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_VIDEO_PROMPT = `Extract the complete content of this video. Include:
 1. Video title (infer from content if not explicit), duration
@@ -169,7 +173,7 @@ export async function extractVideo(
 
 	if (result) {
 		if (canAttachImages()) {
-			const thumbnail = await extractVideoFrame(info.absolutePath);
+			const thumbnail = await extractVideoFrame(info.absolutePath, 1, signal);
 			if (!("error" in thumbnail)) {
 				result.thumbnail = thumbnail;
 			}
@@ -194,32 +198,33 @@ function mapFfprobeError(err: unknown): string {
 	return snippet ? `ffprobe failed: ${snippet}` : "ffprobe failed";
 }
 
-export async function extractVideoFrame(filePath: string, seconds: number = 1): Promise<FrameResult> {
+export async function extractVideoFrame(filePath: string, seconds: number = 1, signal?: AbortSignal): Promise<FrameResult> {
 	try {
-		const buffer = execFileSync("ffmpeg", [
+		const { stdout: buffer } = await execFileAsync("ffmpeg", [
 			"-ss", String(seconds), "-i", filePath,
 			"-frames:v", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
-		], { maxBuffer: 5 * 1024 * 1024, timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+		], { maxBuffer: 5 * 1024 * 1024, timeout: 10000, encoding: "buffer", signal });
 		if (buffer.length === 0) return { error: "ffmpeg failed: empty output" };
 		return { data: buffer.toString("base64"), mimeType: "image/jpeg" };
 	} catch (err) {
-		return { error: mapFfmpegError(err) };
+		return { error: signal?.aborted ? "Aborted" : mapFfmpegError(err) };
 	}
 }
 
-export async function getLocalVideoDuration(filePath: string): Promise<number | { error: string }> {
+export async function getLocalVideoDuration(filePath: string, signal?: AbortSignal): Promise<number | { error: string }> {
 	try {
-		const output = execFileSync("ffprobe", [
+		const { stdout } = await execFileAsync("ffprobe", [
 			"-v", "quiet",
 			"-show_entries", "format=duration",
 			"-of", "csv=p=0",
 			filePath,
-		], { timeout: 10000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+		], { timeout: 10000, encoding: "utf8", signal });
+		const output = stdout.trim();
 		const duration = Number.parseFloat(output);
 		if (!Number.isFinite(duration)) return { error: "ffprobe failed: invalid duration output" };
 		return duration;
 	} catch (err) {
-		return { error: mapFfprobeError(err) };
+		return { error: signal?.aborted ? "Aborted" : mapFfprobeError(err) };
 	}
 }
 

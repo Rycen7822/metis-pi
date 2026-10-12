@@ -1,7 +1,8 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
@@ -47,30 +48,6 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 	});
 }
 
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
-}
-
-function parseDomainFilter(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function passesDomainFilters(url: URL, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	const hostname = url.hostname.toLowerCase();
-	const matches = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
-	if (filters.exclude.some(matches)) return false;
-	return filters.include.length === 0 || filters.include.some(matches);
-}
-
 // One domain uses the API's `site` field; the query syntax covers the rest, so no ranked
 // window has to be filtered down locally to find in-domain pages.
 function buildQuery(query: string, filters: DomainFilters, site: string | undefined): string {
@@ -111,7 +88,7 @@ export function isKeenableAvailable(): boolean {
 export async function searchWithKeenable(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await getApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
-	const filters = parseDomainFilter(options.domainFilter);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const site = filters.include.length === 1 ? filters.include[0] : undefined;
 	// Results are reapplied to the domain filters locally, so leave a little headroom.
 	const hasDomainClauses = filters.include.length > 1 || filters.exclude.length > 0;
@@ -144,14 +121,14 @@ export async function searchWithKeenable(query: string, options: SearchOptions =
 			const hint = response.status === 429 && !apiKey
 				? ` (keyless rate limit; set keenableApiKey or KEENABLE_API_KEY to raise it)`
 				: "";
-			throw new Error(`Keenable error ${response.status}: ${errorText}${hint}`);
+			throw new SearchHttpError(response.status, `Keenable error ${response.status}: ${errorText}${hint}`);
 		}
 		let rawData: unknown;
 		try {
 			rawData = await response.json();
 		} catch (err) {
-			if (err instanceof Error && err.name === "TimeoutError") throw err;
-			throw new Error(`Keenable returned invalid JSON: ${errorMessage(err)}`);
+			if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+			throw new Error("Keenable returned invalid JSON");
 		}
 		entries = parseResponse(rawData);
 	} catch (err) {
@@ -166,7 +143,9 @@ export async function searchWithKeenable(query: string, options: SearchOptions =
 			: (() => {
 				const redactedMessage = redactCredential(message, apiKey);
 				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = new Error(redactedMessage);
+				const redactedError = err instanceof SearchHttpError
+					? new SearchHttpError(err.status, redactedMessage)
+					: new Error(redactedMessage);
 				if (err instanceof Error) redactedError.name = err.name;
 				return redactedError;
 			})();
@@ -186,7 +165,7 @@ export async function searchWithKeenable(query: string, options: SearchOptions =
 			continue;
 		}
 		if (resultUrl.protocol !== "http:" && resultUrl.protocol !== "https:") continue;
-		if (!passesDomainFilters(resultUrl, filters)) continue;
+		if (!matchesDomainFilter(resultUrl, filters)) continue;
 		if (seen.has(resultUrl.href)) continue;
 		seen.add(resultUrl.href);
 		// The page text lives in `snippet`; `description` is usually empty and only a fallback.

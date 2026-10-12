@@ -78,7 +78,10 @@ def load_config(home: Path):
         if unknown: raise AgentError('invalid_config', f'Unknown config keys: {sorted(unknown)}')
         for key,value in raw.items():
             if key == 'profiles':
+                if 'default' in value:
+                    result['profiles']['default'] = {**result['profiles']['default'], **value['default']}
                 for name, profile in value.items():
+                    if name == 'default': continue
                     result['profiles'][name] = {**result['profiles'].get(name,result['profiles']['default']),**profile}
             elif key == 'inheritance':
                 if not isinstance(value,dict): raise AgentError('invalid_config','inheritance must be a table')

@@ -15,8 +15,10 @@
 | `execution.ts` | deferred 进程/图片工具、执行设置、后台 shell 和资源清理。 |
 | `mcp.ts` | 默认关闭；`src/mcp` 持有目录缓存、连接租约和工具装配，协议/OAuth/CLI/codemode/权限由 Pi 提供。 |
 | `subagents.ts` | `src/subagents` 持有父会话租约、接收票据和轻量交互；`core` 原生持有子代理 Runtime、账本、任务队列和进程管理。 |
+| `web-access.ts` | `src/pi-web-access` 管理搜索、提取、内容存储和 Curator；聚合工具沿 Pi deferred/codemode 发现与调用。 |
+| `session-recall.ts` | `src/pi-session-recall` 管理会话检索与回读；辅助模型请求使用当前 Pi ModelRuntime。 |
 
-全局 `metis-pi.toml` 的 `appearance.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。
+全局 `metis-pi.toml` 的 `appearance.enabled` 只控制 appearance，独立入口由 Pi 包过滤控制，见 [配置](configuration.md)。配置写入在跨进程锁内读取最新内容、合并并原子发布；参数说明文档不占用配置临界区。
 
 ## 显示数据流
 
@@ -50,9 +52,13 @@ Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 仅�
 
 显式启用 MCP 后，每个服务器由一个 session owner 共享连接；每个工具独立注册，调用经过 Pi 原执行链。目录缓存不授权执行，实时 schema/身份变化会拒绝旧调用；空闲回收、取消和关闭属于该 owner。MCP 协议与 OAuth 复用 Pi 公共包；服务器配置、凭据及 CLI 保持原生格式。切换步骤见 [配置](configuration.md#mcp)。
 
-condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。OCC 由 condense 在 `session_before_compact` 准备，执行模块只提供忙状态，goal 暂存续跑并在完成后复核；没有第二个 compaction owner。
+condense 分开持有原文、候选和已发布表示；父子引用、保护、错误和归档失败参与发布门禁。错误清理按 occurrence 配对，程序派生身份不由用户正文推断。配置模块拥有默认值和领域合法值，设置预设拥有 UI 标签；保存负责持久化，运行时应用配置并按相关政策决定失效范围。显示设置不会取消领域工作。OCC 由 condense 在 `session_before_compact` 准备，执行模块只提供忙状态，goal 暂存续跑并在完成后复核；没有第二个 compaction owner。
 
-子代理核心由 metis 完全维护并随包交付，不依赖独立 subagent-pi 仓库或运行包。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；不确定交付保留账本，wait、结果读取、状态检查和列表返回的终态通知自动消费，无需额外 ACK；结果文件保留，支持重复读取。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[管理入口](subagents/cli.md)。
+执行 bridge 持有每个进程的字节解码、序号、退出和串行轮询；manager 组合 process handle，独立持有等待、交付、保留与展示状态。查询分页共享字节来源，不把历史条目或证据目录伪装成工具执行。
+
+Web 搜索的公共结果归 `search-types.ts`，provider 身份与标签归 `search-providers.ts`，选择与回退归 `search-router.ts`；具体 adapter 保留各服务的协议、鉴权、能力与计费差异。HTTP 失败事实与展示文案分开，非空正文不代替完整传输或模型完成。网络代理和 SSRF 校验使用同一端口匹配规则；Curator 的资源与 Cookie 诊断归具体实例或操作。
+
+子代理核心由 metis 完全维护并随包交付，不依赖独立 subagent-pi 仓库或运行包。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；接收证明校验 session、scope、receipt 和正文 digest。不确定交付保留账本，wait、结果读取和状态检查按已交付票据消费终态通知；列表保留 attention，结果文件支持重复读取。Worker 的进程状态与每次 run 的投影分开，Runtime 仍是任务推进者。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[管理入口](subagents/cli.md)。
 
 ## 生命周期与交付
 

@@ -1,12 +1,5 @@
-import {
-	loadWebAccessConfig,
-	getActiveProxy,
-	getWebAccessConfigPath,
-	hasScopedProxyDecision,
-	isProxyBypassedUrl,
-	loadConfiguredProxy,
-	normalizeProxyUrl,
-} from "./utils.ts";
+import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
+import { getActiveProxy, hasScopedProxyDecision, isProxyBypassedUrl, loadConfiguredProxy, normalizeProxyUrl } from "./proxy-transport.ts";
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 
@@ -279,48 +272,8 @@ function getProxyForProtocol(protocol: string): string {
 	return "";
 }
 
-function hostnameMatchesNoProxy(hostname: string, port: string, entry: string): boolean {
-	const trimmed = entry.trim();
-	if (!trimmed) return false;
-	if (trimmed === "*") return true;
-
-	// NO_PROXY entries may include a port. Strip it only after handling
-	// bracketed IPv6 literals, which can contain several colons.
-	let hostEntry = trimmed;
-	let entryPort: string | undefined;
-	if (hostEntry.startsWith("[")) {
-		const closingBracket = hostEntry.indexOf("]");
-		if (closingBracket >= 0) {
-			const suffix = hostEntry.slice(closingBracket + 1);
-			if (/^:\\d+$/.test(suffix)) entryPort = suffix.slice(1);
-			hostEntry = hostEntry.slice(0, closingBracket + 1);
-		}
-	} else {
-		const colon = hostEntry.lastIndexOf(":");
-		if (colon > -1 && /^\d+$/.test(hostEntry.slice(colon + 1))) {
-			entryPort = hostEntry.slice(colon + 1);
-			hostEntry = hostEntry.slice(0, colon);
-		}
-	}
-	if (entryPort !== undefined && entryPort !== port) return false;
-
-	const normalizedEntry = normalizeHostname(hostEntry);
-	if (!normalizedEntry) return false;
-	if (normalizedEntry === hostname) return true;
-	const suffix = normalizedEntry.startsWith("*.")
-		? normalizedEntry.slice(1)
-		: normalizedEntry.startsWith(".")
-			? normalizedEntry
-			: `.${normalizedEntry}`;
-	return hostname.endsWith(suffix);
-}
-
 function shouldTrustEnvProxy(url: URL, enabled: boolean): boolean {
-	if (!enabled || !getProxyForProtocol(url.protocol)) return false;
-	const hostname = normalizeHostname(url.hostname);
-	const port = url.port || (url.protocol === "https:" ? "443" : "80");
-	const noProxy = process.env.NO_PROXY || process.env.no_proxy || "";
-	return !noProxy.split(",").some(entry => hostnameMatchesNoProxy(hostname, port, entry));
+	return enabled && Boolean(getProxyForProtocol(url.protocol)) && !isProxyBypassedUrl(url);
 }
 
 /** Only the operator's configured proxy qualifies: a model-supplied per-call proxy must not skip DNS validation. */

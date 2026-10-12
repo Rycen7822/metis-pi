@@ -1,7 +1,9 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -64,45 +66,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function normalizeCount(value: number | undefined): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return 10;
-	return Math.max(1, Math.min(Math.floor(value), 20));
-}
-
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
-}
-
-function parseDomainFilter(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	if (!domainFilter?.length) return filters;
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function domainMatches(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-function passesDomainFilters(url: string, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (filters.exclude.some((domain) => domainMatches(hostname, domain))) return false;
-	if (filters.include.length === 0) return true;
-	return filters.include.some((domain) => domainMatches(hostname, domain));
-}
-
 function buildQuery(query: string, filters: DomainFilters): string {
 	const parts = [query];
 	if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
@@ -137,8 +100,8 @@ export function isSerpBaseAvailable(): boolean {
 
 export async function searchWithSerpBase(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
-	const numResults = normalizeCount(options.numResults);
-	const filters = parseDomainFilter(options.domainFilter);
+	const numResults = normalizeSearchResultCount(options.numResults);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const url = new URL(SERPBASE_API_URL);
 	url.searchParams.set("q", buildQuery(query, filters));
 	// SerpBase's Google Search endpoint authenticates with an `api_key` query parameter.
@@ -146,46 +109,51 @@ export async function searchWithSerpBase(query: string, options: SearchOptions =
 	url.searchParams.set("num", String(numResults));
 	if (options.recencyFilter && RECENCY_TBS[options.recencyFilter]) url.searchParams.set("tbs", RECENCY_TBS[options.recencyFilter]);
 	const activityId = activityMonitor.logStart({ type: "api", query });
-	let response: Response;
+	const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	try {
-		response = await fetch(url, {
+		const response = await fetch(url, {
 			headers: { Accept: "application/json" },
-			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+			signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal,
 		});
+		if (!response.ok) {
+			const errorText = redactCredential(await response.text(), apiKey);
+			throw new SearchHttpError(response.status, `SerpBase API error ${response.status}: ${errorText.slice(0, 300)}`);
+		}
+		let rawData: unknown;
+		try {
+			rawData = await response.json();
+		} catch (err) {
+			if (options.signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))) throw err;
+			throw new Error("SerpBase API returned invalid JSON");
+		}
+		const data = parseResponse(rawData);
+		const results: SearchResponse["results"] = [];
+		for (const item of data.organic_results ?? []) {
+			if (!item || typeof item !== "object") continue;
+			const resultUrl = typeof item.link === "string" ? item.link : typeof item.url === "string" ? item.url : "";
+			if (!resultUrl || !matchesDomainFilter(resultUrl, filters)) continue;
+			results.push({
+				title: typeof item.title === "string" && item.title.trim() ? item.title : `Source ${results.length + 1}`,
+				url: resultUrl,
+				snippet: typeof item.snippet === "string" ? item.snippet : typeof item.description === "string" ? item.description : "",
+			});
+			if (results.length >= numResults) break;
+		}
+		activityMonitor.logComplete(activityId, response.status);
+		return { answer: formatSearchResultsAsAnswer(results), results };
 	} catch (err) {
+		if (options.signal?.aborted || (err instanceof Error && err.name === "AbortError" && !timeoutSignal.aborted)) {
+			activityMonitor.logComplete(activityId, 0);
+			throw new Error("Aborted");
+		}
 		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const safeMessage = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError")
+			? "SerpBase request timed out after 60s" : redactCredential(message, apiKey);
+		const outgoing = safeMessage === message && err instanceof Error ? err
+			: err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage)
+			: err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
+		if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
+		else activityMonitor.logError(activityId, safeMessage);
+		throw outgoing;
 	}
-	if (!response.ok) {
-		activityMonitor.logComplete(activityId, response.status);
-		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`SerpBase API error ${response.status}: ${errorText.slice(0, 300)}`);
-	}
-	let rawData: unknown;
-	try {
-		rawData = await response.json();
-	} catch (err) {
-		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`SerpBase API returned invalid JSON: ${errorMessage(err)}`);
-	}
-	const data = parseResponse(rawData);
-	activityMonitor.logComplete(activityId, response.status);
-	const results: SearchResponse["results"] = [];
-	for (const item of data.organic_results ?? []) {
-		const url = typeof item.link === "string" ? item.link : typeof item.url === "string" ? item.url : "";
-		if (!url || !passesDomainFilters(url, filters)) continue;
-		results.push({
-			title: typeof item.title === "string" && item.title.trim() ? item.title : `Source ${results.length + 1}`,
-			url,
-			snippet: typeof item.snippet === "string" ? item.snippet : typeof item.description === "string" ? item.description : "",
-		});
-		if (results.length >= numResults) break;
-	}
-	return { answer: formatSearchResultsAsAnswer(results), results };
 }

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const degoogModuleUrl = new URL("../degoog.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
+const providersModuleUrl = new URL("../search-providers.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 const activityModuleUrl = new URL("../activity.ts", import.meta.url).href;
 
@@ -256,7 +257,7 @@ test("degoog is env-overridable and appears in the Curator", async () => {
 	try {
 		const child = runChild(`
 			const { isDegoogAvailable } = await import(${JSON.stringify(degoogModuleUrl)});
-			const { RESOLVED_SEARCH_PROVIDERS, ALL_SEARCH_PROVIDERS, providerLabel } = await import(${JSON.stringify(searchModuleUrl)});
+			const { RESOLVED_SEARCH_PROVIDERS, ALL_SEARCH_PROVIDERS, providerLabel } = await import(${JSON.stringify(providersModuleUrl)});
 			console.log(JSON.stringify({
 				availableByDefault: isDegoogAvailable(),
 				resolved: RESOLVED_SEARCH_PROVIDERS.includes("degoog"),
@@ -288,7 +289,9 @@ test("degoog is env-overridable and appears in the Curator", async () => {
 	const page = generateCuratorPage(["query"], "token", 20, available, "degoog", "degoog", [], null);
 	assert.match(page, /data-provider="degoog"/);
 	assert.match(page, />degoog<\/button>/);
-	assert.match(page, /provider === "degoog"\) return "degoog"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.degoog, "degoog");
+	assert.ok(clientData.providers.includes("degoog"));
 });
 
 test("degoog groups multi-domain clauses, drops unusable links, and deduplicates", async () => {

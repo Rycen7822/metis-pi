@@ -7,7 +7,7 @@
 // injects the pipeline ColorLevel, so this module never imports the host
 // packages (src/ rule) while rendering exactly what it rendered before.
 
-import { registerProduct, productFor } from "../selection-copy/model.ts";
+import { registerProduct, productFor, publishRows } from "../selection-copy/model.ts";
 import type { CopyRow } from "../selection-copy/model.ts";
 import { peekHintText } from "../thinking-view.ts";
 import type { PeekWindow, ThinkingView, ThinkingViewControl } from "../thinking-view.ts";
@@ -44,7 +44,9 @@ export class CodexSeparatorComponent implements Component {
     const usable = Math.max(1, Math.floor(width));
     const level = this.#level;
     const line = "─".repeat(usable);
-    return [level.kind === "none" ? "-".repeat(usable) : `\x1b[2m${line}\x1b[22m`];
+    const rows = [level.kind === "none" ? "-".repeat(usable) : `\x1b[2m${line}\x1b[22m`];
+    publishRows(this, rows);
+    return rows;
   }
   invalidate(): void {}
 }
@@ -104,6 +106,7 @@ export class CodexWriteCallComponent implements Component {
   render(width: number): string[] {
     const expanded = this.#input.expanded === true;
     if (this.#cache && this.#lastWidth === width && this.#lastRevision === this.#revision && this.#lastExpanded === expanded) {
+      publishRows(this, this.#cache);
       return this.#cache;
     }
     const header = this.#input.headerText;
@@ -131,6 +134,7 @@ export class CodexWriteCallComponent implements Component {
     this.#lastWidth = width;
     this.#lastRevision = this.#revision;
     this.#lastExpanded = expanded;
+    publishRows(this, this.#cache);
     return this.#cache;
   }
 
@@ -162,7 +166,10 @@ export class CodexThinkingRailComponent implements Component {
     // scrolled in place returns a new array, so the rail must re-prefix it.
     // The child render itself is cached downstream (peek/markdown per width),
     // which is what makes this identity check cheap.
-    if (this.#cache && this.#lastWidth === width && this.#lastChildLines === childLines) return this.#cache;
+    if (this.#cache && this.#lastWidth === width && this.#lastChildLines === childLines) {
+      publishRows(this, this.#cache);
+      return this.#cache;
+    }
     const level = this.#level;
     const rail = level.kind === "none" ? "| " : `\x1b[38;2;${CODEX_CYAN_RGB}m▏\x1b[39m `;
     // Per-row shift: rows already carrying a rail pass through WITHOUT the
@@ -190,6 +197,7 @@ export class CodexThinkingRailComponent implements Component {
     }
     this.#lastWidth = width;
     this.#lastChildLines = childLines;
+    publishRows(this, this.#cache);
     return this.#cache;
   }
 
@@ -262,6 +270,7 @@ export class CodexThinkingPeekComponent implements Component {
     const window = this.#control.scroll.resolve(lines.length, this.#windowLines);
     const cached = this.#window;
     if (this.#rows && cached && cached.top === window.top && cached.above === window.above && cached.below === window.below) {
+      publishRows(this, this.#rows);
       return this.#rows;
     }
     const body = lines.slice(window.top, window.top + this.#windowLines);
@@ -286,6 +295,7 @@ export class CodexThinkingPeekComponent implements Component {
     }
     this.#window = window;
     this.#rows = rows;
+    publishRows(this, rows);
     return rows;
   }
 
@@ -330,7 +340,9 @@ export class CodexThinkingClickableComponent implements Component {
   }
 
   render(width: number): string[] {
-    return this.#child.render(width);
+    const rows = this.#child.render(width);
+    publishRows(this, rows);
+    return rows;
   }
 
   handleMouse(event: TranscriptMouseEvent): TranscriptMouseResult {

@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { subagentTheme } from "../helpers/subagent-theme.mjs";
 import { SubagentSession } from "../../src/subagents/session.ts";
-import { RuntimeError, SubagentClient } from "../../src/subagents/client.ts";
+import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
 
 const runtime = { root: "/unused-test-runtime", tools: [], baseEnvKeys: [], scopeEnvKeys: [], maxFrame: 8 * 1024 * 1024 };
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -241,6 +242,85 @@ test("an unpersisted automatic claim becomes uncertain at final settlement inste
   await f.boundary("turn_end"); assert.equal(f.owner.claims.size, 1);
   await f.owner.settled(f.ctx, true);
   assert.equal(uncertain, 1); assert.equal(f.owner.claims.size, 0); assert.deepEqual(f.warnings, []);
+});
+
+test("attention receipts and question answers require the same saved body proof", async t => {
+  for (const variant of ["unchanged", "boundary_edit", "body_tamper", "foreign_session", "foreign_scope", "missing_receipt"]) {
+    await t.test(variant, async t => {
+      const manager = SessionManager.inMemory(process.cwd()), sessionId = manager.getSessionId();
+      manager.appendCustomEntry("metis-subagent-scope", { sessionId, scope: "scope_test" });
+      const question = { id: "question", agent_id: "agent", run_id: "run", generation: 1, name: "child" };
+      const calls = [];
+      t.mock.method(SubagentClient.prototype, "call", async (op, params, signal, extra) => {
+        calls.push({ op, params, extra });
+        if (op === "pi_watch") return heldWatch(signal);
+        if (op === "pi_claim") return {
+          id: "delivery_question",
+          events: [{ notification_id: "notice", agent_id: "agent", run_id: "run", name: "child", event: "question", state: "needs_input" }],
+          runs: [], questions: [question],
+        };
+        return { sent: true };
+      });
+      const ctx = {
+        cwd: process.cwd(), mode: "rpc", sessionManager: manager,
+        isIdle: () => false, hasPendingMessages: () => false,
+        ui: { notify() {}, setWidget() {}, setStatus() {} },
+      };
+      const owner = new SubagentSession(
+        { appendEntry: (type, data) => manager.appendCustomEntry(type, data), sendMessage() {} },
+        { ...runtime, tools: runtimePackage().tools.filter(tool => tool.name === "pi_answer_agent") },
+        ctx, "/unused-test-agent-dir",
+      );
+      t.after(() => owner.close());
+      const entries = variant === "boundary_edit" ? [{ type: "custom", customType: "another-boundary-entry", data: { note: "unrelated" } }] : [];
+      const response = await owner.boundary({ type: "turn_end", outcome: "completed", entries }, ctx);
+      const original = response.entries.find(entry => entry.type === "custom_message"), draft = structuredClone(original);
+      if (variant === "body_tamper") draft.content = "The child question was removed by a later boundary handler.";
+      if (variant === "foreign_session") draft.details.sessionId = "another-parent-session";
+      if (variant === "foreign_scope") draft.details.scope = "scope_foreign";
+      if (variant === "missing_receipt") delete draft.details.receipt;
+      if (variant === "boundary_edit") draft.display = false;
+      for (const entry of response.entries) {
+        const saved = entry === original ? draft : entry;
+        if (saved.type === "custom") manager.appendCustomEntry(saved.customType, saved.data);
+        else manager.appendCustomMessageEntry(saved.customType, saved.content, saved.display, saved.details);
+      }
+      await owner.settled(ctx, true);
+      const valid = variant === "unchanged" || variant === "boundary_edit";
+      assert.deepEqual(calls.filter(call => call.op === "pi_observe").map(call => call.params.receipt), valid ? ["delivery_question"] : []);
+      assert.deepEqual(calls.filter(call => call.op === "pi_uncertain").map(call => call.params.receipt), valid ? [] : ["delivery_question"], "an unconfirmed body retains recoverable attention");
+      const answer = () => owner.execute("pi_answer_agent", { agent_id: "child", answer: "Use the current branch" }, "answer", ctx);
+      if (!valid) {
+        const rejected = await answer();
+        assert.equal(rejected.isError, true);
+        assert.equal(rejected.structuredContent.error.code, "input_not_delivered");
+        assert.equal(calls.filter(call => call.op === "pi_answer_agent").length, 0, "a rejected proof must not answer the question");
+        // Recovery uses the original saved delivery, not a new notification or new run.
+        manager.appendCustomMessageEntry(original.customType, original.content, original.display, original.details);
+        await owner.settled(ctx);
+        assert.deepEqual(calls.filter(call => call.op === "pi_observe").map(call => call.params.receipt), ["delivery_question"]);
+      }
+      const answered = await answer();
+      assert.equal(answered.isError, false);
+      const dispatched = calls.find(call => call.op === "pi_answer_agent");
+      assert.equal(dispatched.params.ui_request_id, question.id);
+      assert.deepEqual(dispatched.extra.question, { id: question.id, agent_id: question.agent_id, run_id: question.run_id, generation: question.generation });
+    });
+  }
+});
+
+test("a persisted receipt journal remains valid and is observed only once", async t => {
+  const observed = [];
+  const f = fixture(t, async (op, params, signal) => {
+    if (op === "pi_watch") return heldWatch(signal);
+    assert.equal(op, "pi_observe"); observed.push(params.receipt); return {};
+  });
+  f.branch.push({ type: "custom", customType: "metis-subagent-receipt", data: {
+    sessionId: "lifecycle-test", scope: "scope_test", receipt: "delivery_saved",
+  } });
+  await f.owner.settled(f.ctx); await f.owner.settled(f.ctx, true);
+  assert.deepEqual(observed, ["delivery_saved"]);
+  assert.deepEqual(f.warnings, []);
 });
 
 test("a normal idle reply cannot undo a real synchronization failure", async t => {

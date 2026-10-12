@@ -1,7 +1,8 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -54,14 +55,6 @@ function invalidResponse(message: string): Error {
 	return new Error(`XCrawl API returned invalid response: ${message}`);
 }
 
-function hostnameOf(url: string): string {
-	try {
-		return new URL(url).hostname.toLowerCase();
-	} catch {
-		return "";
-	}
-}
-
 // XCrawl's Google SERP results can carry links relative to the API origin
 // (e.g. "/goto?url=..." redirect stubs) instead of the documented absolute
 // URLs. Resolve those against the API origin so callers always receive a
@@ -77,25 +70,6 @@ function absolutizeLink(link: string): string {
 
 // XCrawl's SERP API has no server-side domain filter, so apply the shared
 // include/exclude domainFilter locally instead of returning off-domain results.
-function applyDomainFilter(results: SearchResponse["results"], domainFilter: NonNullable<SearchOptions["domainFilter"]>): SearchResponse["results"] {
-	const includes: string[] = [];
-	const excludes: string[] = [];
-	for (const raw of domainFilter) {
-		const normalized = normalizeDomain(raw);
-		if (!normalized) continue;
-		if (raw.trim().startsWith("-")) excludes.push(normalized);
-		else includes.push(normalized);
-	}
-	if (!includes.length && !excludes.length) return results;
-	return results.filter((result) => {
-		const host = hostnameOf(result.url);
-		if (!host) return false;
-		const matches = (domain: string) => host === domain || host.endsWith(`.${domain}`);
-		if (excludes.some(matches)) return false;
-		if (includes.length && !includes.some(matches)) return false;
-		return true;
-	});
-}
 
 function parseResponse(value: unknown): SearchResponse["results"] {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -140,6 +114,7 @@ function parseResponse(value: unknown): SearchResponse["results"] {
 export async function searchWithXCrawl(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await getApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	if (!apiKey) {
 		throw new Error(
 			"XCrawl search requires an API key. Set xcrawlApiKey in " + CONFIG_PATH +
@@ -198,7 +173,7 @@ export async function searchWithXCrawl(query: string, options: SearchOptions = {
 		} catch {
 			// keep raw text slice
 		}
-		throw new Error(`XCrawl API error (${response.status}): ${detail}`);
+		throw new SearchHttpError(response.status, `XCrawl API error (${response.status}): ${detail}`);
 	}
 	activityMonitor.logComplete(activityId, response.status);
 
@@ -206,10 +181,11 @@ export async function searchWithXCrawl(query: string, options: SearchOptions = {
 	try {
 		payload = await response.json();
 	} catch (err) {
-		throw invalidResponse(`response body is not valid JSON: ${errorMessage(err)}`);
+		if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+		throw invalidResponse("response body is not valid JSON");
 	}
 	const results = parseResponse(payload);
-	const filtered = (options.domainFilter?.length ? applyDomainFilter(results, options.domainFilter) : results).slice(0, numResults);
+	const filtered = results.filter(result => matchesDomainFilter(result.url, filters)).slice(0, numResults);
 
 	return {
 		answer: formatSearchResultsAsAnswer(filtered),

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { registerOcc } from "../../src/condense/occ.ts";
-import { DEFAULT_CONFIG } from "../../src/condense/types.ts";
+import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { TokenEstimator } from "../../src/condense/token-estimator.ts";
 import { detectChains } from "../../src/condense/chain-detector.ts";
 import { findCompressibleRange } from "../../src/condense/chain-compressor.ts";
@@ -8,7 +8,6 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -77,23 +76,6 @@ async function host(
     baseUrl: "http://invalid", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 1000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const calls = [], errors = [], notices = [];
-  if (localSummary) {
-    const stream = (m, context) => {
-      calls.push({ summarizing: true, local: true, context });
-      const out = createAssistantMessageEventStream();
-      const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
-        content: [{ type: "text", text: localSummary === "dense" ? "a".repeat(7200)
-          : "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
-        stopReason: "stop", timestamp: Date.now(), usage };
-      Promise.resolve().then(async () => {
-        if (autoAfterLocal) { settingsManager.setCompactionEnabled(true); await settingsManager.flush(); }
-        out.push({ type: "done", reason: "stop", message }); out.end(message);
-      }).catch(error => out.end({ ...message, stopReason: "error", errorMessage: String(error) }));
-      return out;
-    };
-    registerApiProvider({ api: model.api, stream, streamSimple: stream }, "occ-test-local-summary");
-    t.after(() => unregisterApiProviders("occ-test-local-summary"));
-  }
   let actualWork = 0;
   const workEvidence = index => localSummary === "dense" ? `NEW_WORK_EVIDENCE_${index}\n` + "界".repeat(6000)
     : `NEW_WORK_EVIDENCE_${index} `.repeat(localSummary ? 800 : 350);
@@ -102,6 +84,21 @@ async function host(
     api: model.api, apiKey: "local", baseUrl: model.baseUrl, models: [model],
     streamSimple(m, context, options) {
       const out = createAssistantMessageEventStream();
+      // The same native owner serves main, OCC and local evidence requests.
+      // Reply to the local summarizer's evidence prompt without another registry.
+      const local = localSummary && /<tool-call-batch>|<sub-task-summaries>/.test(JSON.stringify(context));
+      if (local) {
+        calls.push({ summarizing: true, local: true, context });
+        const message = { role: "assistant", api: m.api, provider: m.provider, model: m.id,
+          content: [{ type: "text", text: localSummary === "dense" ? "a".repeat(7200)
+            : "[[1:read]] Inspection complete; consult the archive for exact evidence." }],
+          stopReason: "stop", timestamp: Date.now(), usage };
+        Promise.resolve().then(async () => {
+          if (autoAfterLocal) { settingsManager.setCompactionEnabled(true); await settingsManager.flush(); }
+          out.push({ type: "done", reason: "stop", message }); out.end(message);
+        }).catch(error => out.end({ ...message, stopReason: "error", errorMessage: String(error) }));
+        return out;
+      }
       const summarizing = !JSON.stringify(context).includes("OCC_TEST");
       calls.push({ summarizing, context, maxTokens: options?.maxTokens });
       Promise.resolve().then(async () => {

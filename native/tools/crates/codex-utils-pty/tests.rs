@@ -225,7 +225,7 @@ async fn wait_for_python_repl_ready_via_probe(
 
     while tokio::time::Instant::now() < deadline {
         writer
-            .send(format!("print('{marker}'){newline}").into_bytes())
+            .send(format!("print('__codex_pty_' + 'ready__'){newline}").into_bytes())
             .await?;
 
         let probe_deadline = tokio::time::Instant::now() + probe_window;
@@ -372,7 +372,7 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     let mut output =
         wait_for_python_repl_ready(&mut output_rx, startup_timeout_ms, ready_marker).await?;
     writer
-        .send(format!("print('hello from pty'){newline}").into_bytes())
+        .send(format!("print('hello from ' + 'pty'){newline}").into_bytes())
         .await?;
     writer.send(format!("exit(){newline}").into_bytes()).await?;
 

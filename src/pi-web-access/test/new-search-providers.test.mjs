@@ -9,7 +9,7 @@ const kagiModuleUrl = new URL("../kagi.ts", import.meta.url).href;
 const bochaModuleUrl = new URL("../bocha.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 const ollamaModuleUrl = new URL("../ollama.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const serpbaseModuleUrl = new URL("../serpbase.ts", import.meta.url).href;
 
 async function createHome(config) {
@@ -190,5 +190,7 @@ test("Curator page exposes Bocha as a manual provider", async () => {
 	assert.match(page, /data-provider="bocha"/);
 	assert.match(page, />Bocha<\/button>/);
 	assert.match(page, /"bocha"/);
-	assert.match(page, /provider === "bocha"\) return "Bocha"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.bocha, "Bocha");
+	assert.ok(clientData.providers.includes("bocha"));
 });

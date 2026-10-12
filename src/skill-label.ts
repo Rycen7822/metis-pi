@@ -22,7 +22,7 @@
 // name not found, a node without a readable and writable text, an extra wrapper level —
 // leaves the host's rendering untouched.
 
-import { patchHostPrototype, type SkillPatchResult } from "./skill-tokens.ts";
+import { patchHostPrototype, type SkillPatchResult } from "./skill-host-patch.ts";
 
 const NESTED_SKILL = /<skill\s+name="([^"]+)"/g;
 const LABEL_TOKEN = "[skill]";

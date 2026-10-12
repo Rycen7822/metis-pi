@@ -1,9 +1,11 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
-import type { SearchOptions, SearchResult, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
+import { redactCredential } from "./credential-source.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
 const SEARCH_TIMEOUT_MS = 30_000;
@@ -11,11 +13,6 @@ const SEARCH_TIMEOUT_MS = 30_000;
 interface WebSearchConfig {
 	searxngBaseUrl?: unknown;
 	searxngHeaders?: unknown;
-}
-
-interface NormalizedDomainFilters {
-	allowed: string[];
-	blocked: string[];
 }
 
 interface SearXNGResult {
@@ -77,7 +74,7 @@ function normalizeHeaders(value: unknown): Record<string, string> {
 		// RFC 7230 token chars only — reject empty or malformed header names.
 		if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
 		if (!isValidHeaderValue(headerValue)) continue;
-		headers[name] = headerValue;
+		headers[name] = headerValue.trim();
 	}
 	return headers;
 }
@@ -109,42 +106,15 @@ function requireBaseUrl(): string {
 	return baseUrl;
 }
 
-function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters {
-	const filters: NormalizedDomainFilters = { allowed: [], blocked: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.blocked : filters.allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function buildSearXNGQuery(query: string, filters: NormalizedDomainFilters): string {
+function buildSearXNGQuery(query: string, filters: DomainFilters): string {
 	const parts = [query];
-	if (filters.allowed.length === 1) {
-		parts.push(`site:${filters.allowed[0]}`);
-	} else if (filters.allowed.length > 1) {
-		parts.push(filters.allowed.map(domain => `site:${domain}`).join(" OR "));
+	if (filters.include.length === 1) {
+		parts.push(`site:${filters.include[0]}`);
+	} else if (filters.include.length > 1) {
+		parts.push(filters.include.map(domain => `site:${domain}`).join(" OR "));
 	}
-	for (const domain of filters.blocked) parts.push(`-site:${domain}`);
+	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
 	return parts.join(" ");
-}
-
-function hostMatchesDomain(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-function matchesDomainFilters(url: string, filters: NormalizedDomainFilters): boolean {
-	if (filters.allowed.length === 0 && filters.blocked.length === 0) return true;
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (filters.allowed.length > 0 && !filters.allowed.some(domain => hostMatchesDomain(hostname, domain))) return false;
-	return !filters.blocked.some(domain => hostMatchesDomain(hostname, domain));
 }
 
 function mapTimeRange(recencyFilter: SearchOptions["recencyFilter"]): string | null {
@@ -170,10 +140,13 @@ export async function searchWithSearXNG(query: string, options: SearchOptions = 
 	url.searchParams.set("format", "json");
 	const timeRange = mapTimeRange(options.recencyFilter);
 	if (timeRange) url.searchParams.set("time_range", timeRange);
+	const configuredHeaders = getConfiguredHeaders();
+	const headers = mergeDefaultHeaders(configuredHeaders);
+	const secrets = Object.values(configuredHeaders);
+	const redact = (text: string) => secrets.reduce((message, secret) => redactCredential(message, secret), text);
 	const activityId = activityMonitor.logStart({ type: "api", query: searchQuery });
 
 	try {
-		const headers = mergeDefaultHeaders(getConfiguredHeaders());
 		const response = await fetchRemoteUrl(url, {
 			method: "GET",
 			headers,
@@ -187,22 +160,22 @@ export async function searchWithSearXNG(query: string, options: SearchOptions = 
 
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);
-			const errorText = await response.text();
-			throw new Error(`SearXNG search error ${response.status}: ${errorText.slice(0, 300)}`);
+			const errorText = redact(await response.text());
+			throw new SearchHttpError(response.status, `SearXNG search error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
 		let data: SearXNGResponse;
 		try {
 			data = await response.json() as SearXNGResponse;
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`SearXNG returned invalid JSON: ${message}`);
+			if (options.signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))) throw err;
+			throw new Error("SearXNG returned invalid JSON");
 		}
 
 		activityMonitor.logComplete(activityId, response.status);
 		const results: SearchResult[] = [];
 		for (const item of data.results ?? []) {
-			if (!item.url || !matchesDomainFilters(item.url, filters)) continue;
+			if (!item.url || !matchesDomainFilter(item.url, filters)) continue;
 			results.push({ title: item.title || item.url, url: item.url, snippet: item.content || "" });
 			if (results.length >= numResults) break;
 		}
@@ -214,8 +187,14 @@ export async function searchWithSearXNG(query: string, options: SearchOptions = 
 		return { answer: answerParts.join("\n\n"), results };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		if (message.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, message);
-		throw err;
+		const safeMessage = redact(message);
+		if (options.signal?.aborted || (err instanceof Error && err.name === "AbortError")) activityMonitor.logComplete(activityId, 0);
+		else activityMonitor.logError(activityId, safeMessage);
+		if (safeMessage === message) throw err;
+		if (err instanceof SearchHttpError) throw new SearchHttpError(err.status, safeMessage);
+		if (err instanceof TypeError) throw new TypeError(safeMessage);
+		const safeError = new Error(safeMessage);
+		if (err instanceof Error) safeError.name = err.name;
+		throw safeError;
 	}
 }

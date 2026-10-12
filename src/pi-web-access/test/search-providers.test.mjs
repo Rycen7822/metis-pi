@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,7 +11,7 @@ const openaiModuleUrl = new URL("../openai-search.ts", import.meta.url).href;
 const perplexityModuleUrl = new URL("../perplexity.ts", import.meta.url).href;
 const tavilyModuleUrl = new URL("../tavily.ts", import.meta.url).href;
 const searxngModuleUrl = new URL("../searxng.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const indexModuleUrl = new URL("../index.ts", import.meta.url).href;
 
 function runChild(script, env) {
@@ -49,8 +49,9 @@ function runChild(script, env) {
 	});
 }
 
-test("Brave search applies domain filters in the query and returned results", async () => {
+test("Brave search applies domain filters in the query and returned results", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brave-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedUrl = "";
 		let capturedHeaders = null;
@@ -93,8 +94,9 @@ test("Brave search applies domain filters in the query and returned results", as
 	assert.deepEqual(output.results.map((result) => result.url), ["https://github.com/nicobailon/pi-web-access"]);
 });
 
-test("Perplexity searches through the Search API and maps result snippets", async () => {
+test("Perplexity searches through the Search API and maps result snippets", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-perplexity-search-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const requests = [];
 		globalThis.fetch = async (url, init) => {
@@ -156,8 +158,9 @@ test("Perplexity searches through the Search API and maps result snippets", asyn
 	assert.deepEqual(output.counts, [1, 5, 3]);
 });
 
-test("Perplexity prose answers use Sonar chat completions", async () => {
+test("Perplexity prose answers use Sonar chat completions", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-perplexity-answer-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let request = null;
 		globalThis.fetch = async (url, init) => {
@@ -185,8 +188,9 @@ test("Perplexity prose answers use Sonar chat completions", async () => {
 	assert.equal(output.answer, "Video summary");
 });
 
-test("Tavily search uses bearer auth and maps filters/content", async () => {
+test("Tavily search uses bearer auth and maps filters/content", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-tavily-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedUrl = "";
 		let capturedHeaders = null;
@@ -239,8 +243,9 @@ test("Tavily search uses bearer auth and maps filters/content", async () => {
 	assert.deepEqual(output.result.inlineContent, [{ url: "https://docs.tavily.com/search", title: "Tavily Docs", content: "# Tavily Docs\nFull content", error: null }]);
 });
 
-test("Brave, keyed Exa, and Tavily honor base URL overrides without leaking credentials across origins", async () => {
+test("Brave, keyed Exa, and Tavily honor base URL overrides without leaking credentials across origins", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-provider-base-url-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
 		braveApiKey: "brave-config-key",
 		braveBaseUrl: "https://gateway.example.com/brave/res/v1/",
@@ -344,8 +349,9 @@ test("Brave, keyed Exa, and Tavily honor base URL overrides without leaking cred
 	assert.match(output.plaintextError, /^BRAVE_BASE_URL must be an absolute HTTPS URL$/);
 });
 
-test("provider base URLs allow HTTP only on exact loopback hosts", async () => {
+test("provider base URLs allow HTTP only on exact loopback hosts", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-loopback-base-url-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const calls = [];
 		globalThis.fetch = async (url, init = {}) => {
@@ -439,8 +445,9 @@ test("provider base URLs allow HTTP only on exact loopback hosts", async () => {
 	]);
 });
 
-test("SearXNG search is SSRF-guarded and preferred first when configured", async () => {
+test("SearXNG search is SSRF-guarded and preferred first when configured", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
@@ -478,8 +485,9 @@ test("SearXNG search is SSRF-guarded and preferred first when configured", async
 	assert.equal(output.auto.provider, "searxng");
 });
 
-test("SearXNG search merges configured custom headers", async () => {
+test("SearXNG search merges configured custom headers", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-headers-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
@@ -518,6 +526,7 @@ test("SearXNG search merges configured custom headers", async () => {
 	});
 
 	const overrideHome = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-headers-override-"));
+	t.after(() => rm(overrideHome, { recursive: true, force: true }));
 	const overrideChild = runChild(`
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(${JSON.stringify(overrideHome)} + "/web-search.json", JSON.stringify({
@@ -543,8 +552,9 @@ test("SearXNG search merges configured custom headers", async () => {
 	assert.deepEqual(JSON.parse(overrideChild.stdout.trim()).capturedHeaders, { accept: "application/custom-json" });
 });
 
-test("SearXNG search strips configured headers on cross-origin redirects", async () => {
+test("SearXNG search strips configured headers on cross-origin redirects", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-headers-redirect-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
@@ -584,8 +594,9 @@ test("SearXNG search strips configured headers on cross-origin redirects", async
 	assert.deepEqual(output.calls[1].headers, { Accept: "application/json" });
 });
 
-test("SearXNG redirect validation rejects an unapproved private target", async () => {
+test("SearXNG redirect validation rejects an unapproved private target", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-redirect-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
@@ -615,8 +626,9 @@ test("SearXNG redirect validation rejects an unapproved private target", async (
 	assert.match(output.error, /Blocked internal address/);
 });
 
-test("malformed SearXNG SSRF config fails before hosted auto fallback", async () => {
+test("malformed SearXNG SSRF config fails before hosted auto fallback", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-searxng-config-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const { writeFileSync } = await import("node:fs");
 		writeFileSync(${JSON.stringify(home)} + "/web-search.json", JSON.stringify({
@@ -646,8 +658,9 @@ test("malformed SearXNG SSRF config fails before hosted auto fallback", async ()
 	assert.match(output.error, /Invalid CIDR notation in ssrf\.allowRanges/);
 });
 
-test("auto provider falls through to Tavily after unavailable earlier providers", async () => {
+test("auto provider falls through to Tavily after unavailable earlier providers", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-tavily-auto-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const calls = [];
 		globalThis.fetch = async (url, init = {}) => {
@@ -682,8 +695,9 @@ test("auto provider falls through to Tavily after unavailable earlier providers"
 	assert.equal(output.result.answer, "Auto Tavily answer");
 });
 
-test("Exa direct API key ignores full legacy usage counter", async () => {
+test("Exa direct API key ignores full legacy usage counter", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-paid-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const dir = ${JSON.stringify(home)};
 		const { readFileSync, writeFileSync } = await import("node:fs");
@@ -733,8 +747,9 @@ test("Exa direct API key ignores full legacy usage counter", async () => {
 	assert.equal(output.usage.count, 1000);
 });
 
-test("Exa command source is lazy, overrides stale env, and rotates per request", async () => {
+test("Exa command source is lazy, overrides stale env, and rotates per request", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-command-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const commandPath = join(home, "read-key.sh");
 	const counterPath = join(home, "counter");
 	await writeFile(commandPath, `#!/bin/sh\ncount=0\n[ ! -f "$1" ] || count=$(cat "$1")\ncount=$((count + 1))\nprintf '%s' "$count" >"$1"\nprintf 'synthetic-exa-%s\\n' "$count"\n`, "utf8");
@@ -774,8 +789,9 @@ test("Exa command source is lazy, overrides stale env, and rotates per request",
 	});
 });
 
-test("failed Exa command source is redacted and blocks MCP or provider fallback", async () => {
+test("failed Exa command source is redacted and blocks MCP or provider fallback", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-command-failure-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const commandPath = join(home, "fail-key.sh");
 	await writeFile(commandPath, "#!/bin/sh\nprintf 'SYNTHETIC_SECRET_MUST_NOT_ESCAPE\\n' >&2\nexit 9\n", "utf8");
 	await chmod(commandPath, 0o700);
@@ -810,8 +826,9 @@ test("failed Exa command source is redacted and blocks MCP or provider fallback"
 	assert.equal(output.message.includes(commandPath), false);
 });
 
-test("Exa provider errors redact the resolved credential", async () => {
+test("Exa provider errors redact the resolved credential", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-redaction-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const secret = "SYNTHETIC_EXA_SECRET_MUST_NOT_ESCAPE";
 	const child = runChild(`
 		globalThis.fetch = async () => new Response(${JSON.stringify("provider echoed SYNTHETIC_EXA_SECRET_MUST_NOT_ESCAPE")}, { status: 400 });
@@ -832,8 +849,9 @@ test("Exa provider errors redact the resolved credential", async () => {
 	assert.equal(message.includes("[redacted]"), true);
 });
 
-test("keyless Exa search sends filters to the advanced MCP tool as parameters", async () => {
+test("keyless Exa search sends filters to the advanced MCP tool as parameters", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-mcp-advanced-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let captured = null;
 		globalThis.fetch = async (url, init) => {
@@ -891,8 +909,9 @@ test("keyless Exa search sends filters to the advanced MCP tool as parameters", 
 	}]);
 });
 
-test("keyless Exa search falls back to the default MCP tool when the advanced tool is missing", async () => {
+test("keyless Exa search falls back to the default MCP tool when the advanced tool is missing", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-exa-mcp-fallback-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const tools = [];
 		globalThis.fetch = async (url, init) => {
@@ -930,8 +949,9 @@ test("keyless Exa search falls back to the default MCP tool when the advanced to
 	assert.deepEqual(result.results, [{ title: "Basic result", url: "https://example.com/basic", snippet: "" }]);
 });
 
-test("failed Gemini command source is redacted and blocks browser fallback", async () => {
+test("failed Gemini command source is redacted and blocks browser fallback", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-command-failure-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const commandPath = join(home, "fail-key.sh");
 	await writeFile(commandPath, "#!/bin/sh\nprintf 'SYNTHETIC_GEMINI_SECRET_MUST_NOT_ESCAPE\\n' >&2\nexit 9\n", "utf8");
 	await chmod(commandPath, 0o700);
@@ -965,8 +985,9 @@ test("failed Gemini command source is redacted and blocks browser fallback", asy
 	assert.equal(output.message.includes(commandPath), false);
 });
 
-test("OpenAI search requires web_search and maps domain filters", async () => {
+test("OpenAI search requires web_search and maps domain filters", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedUrl = "";
 		let capturedHeaders = null;
@@ -1034,8 +1055,9 @@ test("OpenAI search requires web_search and maps domain filters", async () => {
 	]);
 });
 
-test("OpenAI search uses configured Responses endpoint", async () => {
+test("OpenAI search uses configured Responses endpoint", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-url-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
 		openaiApiKey: "sk-config-key",
 		openaiResponsesUrl: "https://gateway.example.com/v1/responses",
@@ -1111,8 +1133,9 @@ test("curator auto default follows the active model provider", async () => {
 	assert.equal(resolveCuratorDefaultProvider("auto", { ...available, openai: false, exa: false, bocha: true, ollama: true }), "bocha");
 });
 
-test("auto search prefers Codex-backed OpenAI search when the selected model is openai-codex", async () => {
+test("auto search prefers Codex-backed OpenAI search when the selected model is openai-codex", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-auto-codex-selected-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedUrl = "";
 		globalThis.fetch = async (url) => {
@@ -1151,8 +1174,9 @@ test("auto search prefers Codex-backed OpenAI search when the selected model is 
 	assert.equal(output.capturedUrl, "https://chatgpt.com/backend-api/codex/responses");
 });
 
-test("auto search keeps selected Codex-backed OpenAI for result counts and recency filters", async () => {
+test("auto search keeps selected Codex-backed OpenAI for result counts and recency filters", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-auto-codex-options-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		globalThis.fetch = async (url) => {
 			const requestUrl = String(url);
@@ -1201,8 +1225,9 @@ test("auto search keeps selected Codex-backed OpenAI for result counts and recen
 	assert.equal(result.answer, "codex option answer");
 });
 
-test("auto search falls through to Exa when selected Codex-backed OpenAI fails", async () => {
+test("auto search falls through to Exa when selected Codex-backed OpenAI fails", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-auto-codex-failure-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const calls = [];
 		globalThis.fetch = async (url) => {
@@ -1250,8 +1275,9 @@ test("auto search falls through to Exa when selected Codex-backed OpenAI fails",
 	assert.match(output.calls[1], /^https:\/\/mcp\.exa\.ai\/mcp/);
 });
 
-test("auto search prefers official OpenAI search when the selected openai model uses ChatGPT sign-in", async () => {
+test("auto search prefers official OpenAI search when the selected openai model uses ChatGPT sign-in", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-auto-openai-oauth-selected-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const requests = [];
 		globalThis.fetch = async (url, init) => {
@@ -1292,8 +1318,9 @@ test("auto search prefers official OpenAI search when the selected openai model 
 	assert.equal(output.requests[0].headers["chatgpt-account-id"], undefined);
 });
 
-test("auto search uses Exa before OpenAI when the selected model is not openai-codex", async () => {
+test("auto search uses Exa before OpenAI when the selected model is not openai-codex", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-auto-non-codex-selected-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedUrl = "";
 		globalThis.fetch = async (url) => {
@@ -1333,8 +1360,9 @@ test("auto search uses Exa before OpenAI when the selected model is not openai-c
 	assert.match(output.capturedUrl, /^https:\/\/mcp\.exa\.ai\/mcp/);
 });
 
-test("OpenAI search falls back to API key when model registry cannot enumerate", async () => {
+test("OpenAI search falls back to API key when model registry cannot enumerate", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-partial-registry-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedBody = null;
 		globalThis.fetch = async (url, init) => {
@@ -1362,8 +1390,9 @@ test("OpenAI search falls back to API key when model registry cannot enumerate",
 	assert.equal(output.model, "gpt-6-luna");
 });
 
-test("OpenAI search uses configured model with selected registry auth", async () => {
+test("OpenAI search uses configured model with selected registry auth", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-model-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
 		openaiSearchModel: "gateway-search-model",
 	}) + "\n");
@@ -1411,8 +1440,9 @@ test("OpenAI search uses configured model with selected registry auth", async ()
 	assert.equal(output.selectedModel, "gpt-5.10");
 });
 
-test("OpenAI search picks the newest Luna model from the registry", async () => {
+test("OpenAI search picks the newest Luna model from the registry", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-luna-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedBody = null;
 		globalThis.fetch = async (url, init) => {
@@ -1448,8 +1478,9 @@ test("OpenAI search picks the newest Luna model from the registry", async () => 
 	assert.equal(JSON.parse(child.stdout.trim()).requestModel, "gpt-6-luna");
 });
 
-test("OpenAI search honors configured provider priority", async () => {
+test("OpenAI search honors configured provider priority", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-providers-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
 		openaiSearchProviders: ["unregistered-provider", "openai-codex-work", "openai-codex"],
 	}) + "\n");
@@ -1491,8 +1522,9 @@ test("OpenAI search honors configured provider priority", async () => {
 	assert.equal(output.capturedAuthorization, "Bearer openai-codex-work-key");
 });
 
-test("OpenAI search rejects invalid openaiSearchProviders", async () => {
+test("OpenAI search rejects invalid openaiSearchProviders", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-openai-providers-invalid-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	await writeFile(join(home, "web-search.json"), JSON.stringify({
 		openaiSearchProviders: ["openai-codex", ""],
 	}) + "\n");
@@ -1537,8 +1569,9 @@ test("OpenAI search rejects invalid openaiSearchProviders", async () => {
 	assert.equal(output.fetchCalls, 0);
 });
 
-test("Gemini API search uses its search-only default model", async () => {
+test("Gemini API search uses its search-only default model", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-default-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		let capturedUrl = "";
 		let capturedBody = null;
@@ -1570,8 +1603,9 @@ test("Gemini API search uses its search-only default model", async () => {
 	assert.equal(output.provider, "gemini");
 });
 
-test("Gemini API search preserves the configured searchModel", async () => {
+test("Gemini API search preserves the configured searchModel", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-gemini-configured-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
 	const child = runChild(`
 		const { writeFile } = await import("node:fs/promises");
 		await writeFile(process.env.PI_CODING_AGENT_DIR + "/web-search.json", JSON.stringify({ searchModel: "custom-gemini-model" }));

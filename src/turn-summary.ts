@@ -101,11 +101,15 @@ export function formatSummaryLine(
   return parts.join(" · ");
 }
 
+/** A returned append call acknowledges host acceptance, not independent disk
+ * durability. A throw may occur after the host accepted the entry in memory. */
+export type SummaryAppendOutcome = "accepted" | "unconfirmed" | "unavailable";
+
 export class TurnSummary {
   #deps: TurnSummaryDeps;
-  /** One record per settled interaction id — reload/resume/duplicate events
-   * never append twice. */
-  #written = new Set<string>();
+  /** Cache the append acknowledgement, including uncertain attempts. The host
+   * may already hold an entry after a throw, so repetition must not reappend. */
+  #appends = new Map<string, SummaryAppendOutcome>();
 
   constructor(deps: TurnSummaryDeps) {
     this.#deps = deps;
@@ -124,13 +128,14 @@ export class TurnSummary {
       replyEndedAt?: number;
     },
     branchAnchor?: string,
-  ): void {
+  ): SummaryAppendOutcome {
     const interactionId = `i${snapshot.startedAt ?? 0}`;
-    if (this.#written.has(interactionId)) return;
-    this.#written.add(interactionId);
-    if (this.#written.size > 32) {
-      const first = this.#written.values().next().value;
-      if (first !== undefined) this.#written.delete(first);
+    const previous = this.#appends.get(interactionId);
+    if (previous) return previous;
+    this.#appends.set(interactionId, "unconfirmed");
+    if (this.#appends.size > 32) {
+      const first = this.#appends.keys().next().value;
+      if (first !== undefined) this.#appends.delete(first);
     }
 
     const data: InteractionSummaryData = {
@@ -157,22 +162,23 @@ export class TurnSummary {
       if (u.cacheWrite > 0) data.usage.cacheWrite = u.cacheWrite;
     }
 
-    if (this.#deps.persist && this.#deps.appendEntry) {
-      try {
-        this.#deps.appendEntry(SUMMARY_CUSTOM_TYPE, data);
-      } catch {
-        // Fall through to the ephemeral path below — never crash the host.
-      }
+    if (!this.#deps.persist || !this.#deps.appendEntry) {
+      this.#appends.set(interactionId, "unavailable");
+      return "unavailable";
+    }
+    try {
+      this.#deps.appendEntry(SUMMARY_CUSTOM_TYPE, data);
+      this.#appends.set(interactionId, "accepted");
+      return "accepted";
+    } catch {
+      // Keep the uncertain receipt; the caller owns transient display delivery.
+      return "unconfirmed";
     }
   }
 
   /** Reload/new session: old ids must not suppress new summaries. */
   forgetSession(): void {
-    this.#written.clear();
-  }
-
-  get writtenCount(): number {
-    return this.#written.size;
+    this.#appends.clear();
   }
 }
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const keenableModuleUrl = new URL("../keenable.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function createHome(config = {}) {
@@ -262,5 +262,7 @@ test("Keenable rejects malformed envelopes, redacts API errors, and appears in t
 	const page = generateCuratorPage(["query"], "token", 20, available, "keenable", "keenable", [], null);
 	assert.match(page, /data-provider="keenable"/);
 	assert.match(page, />Keenable<\/button>/);
-	assert.match(page, /provider === "keenable"\) return "Keenable"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.keenable, "Keenable");
+	assert.ok(clientData.providers.includes("keenable"));
 });

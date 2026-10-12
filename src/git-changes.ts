@@ -293,7 +293,11 @@ const sharedLineCounts = createLineCountCache();
  * this reports an error instead of guessing a baseline: a HEAD lookup that
  * failed transiently must never turn every file into an addition. */
 export async function readChangeSample(cwd: string, deps: ChangeReadDeps = {}): Promise<ChangeReadResult> {
-  if (!findGitDir(cwd)) return { kind: "no-repo" };
+  const gitDir = findGitDir(cwd);
+  if (!gitDir) return { kind: "no-repo" };
+  // Both tracked and untracked paths belong to one whole-repository sample.
+  // ls-files from a subdirectory otherwise omits unstaged new files outside it.
+  const root = dirname(gitDir);
   const exec = deps.exec ?? defaultExec;
   const counts = deps.lineCounts ?? sharedLineCounts;
 
@@ -307,14 +311,14 @@ export async function readChangeSample(cwd: string, deps: ChangeReadDeps = {}): 
   } else {
     return { kind: "error" };
   }
-  const tracked = await exec(["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", rev], cwd);
+  const tracked = await exec(["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", rev], root);
   if (!tracked.ok) return { kind: "error" };
-  const untracked = await exec(["ls-files", "--others", "--exclude-standard", "-z"], cwd);
+  const untracked = await exec(["ls-files", "--others", "--exclude-standard", "-z"], root);
   if (!untracked.ok) return { kind: "error" };
 
   const untrackedLines = new Map<string, number>();
   for (const path of parseUntracked(untracked.stdout).slice(0, MAX_UNTRACKED_FILES)) {
-    const count = await counts.count(join(cwd, path));
+    const count = await counts.count(join(root, path));
     if (count) untrackedLines.set(path, count.lines);
   }
   return { kind: "sample", sample: { tracked: parseNumstatZ(tracked.stdout), untracked: untrackedLines } };

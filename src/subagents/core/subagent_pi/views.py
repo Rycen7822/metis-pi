@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import time
 
-from . import parent
 from .common import TERMINAL, DEFAULT_WAIT_SECONDS, AgentError, crop, dumps, identifier, integer, label
 
 
@@ -30,14 +29,14 @@ def brief_agent(a, w=None):
     result.update(model_settings(a))
     if w and not w.closed:
         result.update(
-            current_tool=w.current_tool,
-            active_tools=list(w.active_tools.values()),
+            current_tool=w.run.current_tool,
+            active_tools=list(w.run.active_tools.values()),
             last_activity=w.last_activity,
-            idle_seconds=w.idle_seconds(),
-            idle_timeout_seconds=w.idle_timeout_seconds,
+            idle_seconds=w.run.idle_seconds(),
+            idle_timeout_seconds=w.run.idle_timeout_seconds,
         )
-        if w.ui:
-            result["pending_input"] = list(w.ui.values())[:4]
+        if w.run.ui:
+            result["pending_input"] = list(w.run.ui.values())[:4]
     return result
 
 
@@ -259,7 +258,7 @@ def run_page(store, worker_for, rows, question_ids=None):
                         "name": item["name"],
                         "generation": w.generation,
                     }
-                    for q in list(w.ui.values())[:4]
+                    for q in list(w.run.ui.values())[:4]
                     if question_ids is None or (row["id"], q["id"]) in question_ids
                 )
         runs.append(item)
@@ -284,11 +283,12 @@ def delivered_events(op, response):
 class ReadViews:
     """Read and wait using explicit data sources; no task control or mutations."""
 
-    def __init__(self, store, worker_for, changed, max_wait_seconds):
+    def __init__(self, store, worker_for, changed, max_wait_seconds, parent_status):
         self.store = store
         self.worker_for = worker_for
         self.changed = changed
         self.max_wait_seconds = max_wait_seconds
+        self.parent_status = parent_status
 
     def list(self, p):
         sid = p["scope"]
@@ -336,7 +336,7 @@ class ReadViews:
             "next_offset": next_offset,
             "has_more": next_offset < matched,
             "outstanding": self.outstanding(sid, limit),
-            "parent_notifications": parent.status(self.store, sid, compact=True),
+            "parent_notifications": self.parent_status(sid, compact=True),
         }
 
     def outstanding(self, sid, limit=20):
@@ -378,7 +378,7 @@ class ReadViews:
                 result["run"].update({k: run[k] for k in ("created", "started", "ended", "idle_timeout_seconds")})
                 result["run"].update(artifact_path=run["result_path"], usage=json.loads(run["usage"]))
         if detail == "full":
-            result["parent_notifications"] = parent.status(self.store, p["scope"])
+            result["parent_notifications"] = self.parent_status(p["scope"])
         # Large diagnostic metadata must not consume the event page's budget.
         if len(dumps(result).encode()) > budget:
             if run:

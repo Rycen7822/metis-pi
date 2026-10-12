@@ -1,7 +1,8 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -54,30 +55,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
-}
-
-function parseDomainFilter(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function passesDomainFilters(url: URL, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	const hostname = url.hostname.toLowerCase();
-	const matches = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
-	if (filters.exclude.some(matches)) return false;
-	return filters.include.length === 0 || filters.include.some(matches);
-}
-
 function buildQuery(query: string, filters: DomainFilters): string {
 	const parts = [query];
 	if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
@@ -109,7 +86,7 @@ export function isSerplyAvailable(): boolean {
 export async function searchWithSerply(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
-	const filters = parseDomainFilter(options.domainFilter);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const requestCount = options.domainFilter?.length ? Math.min(20, numResults + 5) : numResults;
 	const url = new URL(SERPLY_SEARCH_URL);
 	url.searchParams.set("q", buildQuery(query, filters));
@@ -126,14 +103,14 @@ export async function searchWithSerply(query: string, options: SearchOptions = {
 		}, ["X-Api-Key"]);
 		if (!response.ok) {
 			const errorText = await response.text();
-			throw new Error(`Serply error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `Serply error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);
 		}
 		let rawData: unknown;
 		try {
 			rawData = await response.json();
 		} catch (err) {
-			if (err instanceof Error && err.name === "TimeoutError") throw err;
-			throw new Error(`Serply returned invalid JSON: ${errorMessage(err)}`);
+			if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+			throw new Error("Serply returned invalid JSON");
 		}
 		entries = parseResponse(rawData);
 	} catch (err) {
@@ -148,7 +125,9 @@ export async function searchWithSerply(query: string, options: SearchOptions = {
 			: (() => {
 				const redactedMessage = redactCredential(message, apiKey);
 				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = new Error(redactedMessage);
+				const redactedError = err instanceof SearchHttpError
+					? new SearchHttpError(err.status, redactedMessage)
+					: new Error(redactedMessage);
 				if (err instanceof Error) redactedError.name = err.name;
 				return redactedError;
 			})();
@@ -167,7 +146,7 @@ export async function searchWithSerply(query: string, options: SearchOptions = {
 			continue;
 		}
 		if (resultUrl.protocol !== "http:" && resultUrl.protocol !== "https:") continue;
-		if (!passesDomainFilters(resultUrl, filters)) continue;
+		if (!matchesDomainFilter(resultUrl, filters)) continue;
 		results.push({
 			title: typeof entry.title === "string" && entry.title.trim() ? entry.title.trim() : `Source ${results.length + 1}`,
 			url: resultUrl.href,

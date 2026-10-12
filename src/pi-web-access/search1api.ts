@@ -1,9 +1,10 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -87,14 +88,7 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
 }
 
 function mapDomainFilter(domainFilter: string[] | undefined): { includeSites: string[]; excludeSites: string[] } {
-	const includeSites: string[] = [];
-	const excludeSites: string[] = [];
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? excludeSites : includeSites;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { include: includeSites, exclude: excludeSites } = normalizeDomainFilters(domainFilter);
 	return { includeSites, excludeSites };
 }
 
@@ -134,19 +128,21 @@ async function search1APIJsonRequest<T>(
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
 
 	const raw = await response.text();
 	if (!response.ok) {
-		throw new Error(`Search1API ${label} API error ${response.status}: ${redactCredential(raw, apiKey).slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Search1API ${label} API error ${response.status}: ${redactCredential(raw, apiKey).slice(0, 300)}`);
 	}
 	try {
 		return JSON.parse(raw) as T;
-	} catch (err) {
-		throw new Error(`Search1API ${label} API returned invalid JSON: ${errorMessage(err)}`);
+	} catch {
+		throw new Error(`Search1API ${label} API returned invalid JSON`);
 	}
 }
 
@@ -208,7 +204,9 @@ export async function searchWithSearch1API(
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
@@ -254,7 +252,9 @@ export async function extractWithSearch1API(
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}

@@ -3,6 +3,7 @@ name = "codex-exec-shim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [lib]
 path = "lib.rs"
@@ -14,7 +15,6 @@ path = "main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 codex-utils-pty = { workspace = true }
 serde = { workspace = true }

@@ -102,7 +102,7 @@ test("PDF streamed byte enforcement rejects a headerless response above the limi
 
 	await assert.rejects(
 		readPDFResponseBuffer(response, maxSizeMB),
-		/PDF exceeds configured pdf\.maxSizeMB limit/,
+		(error) => error instanceof Error && error.limitMB === maxSizeMB,
 	);
 });
 

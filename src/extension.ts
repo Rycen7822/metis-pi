@@ -218,19 +218,19 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         chrome.setWidgetVisible(false);
         const ui = hostData.ui as { setWorkingMessage?: (message?: string) => void };
         ui.setWorkingMessage?.();
-        if (!config.summary.enabled) return;
         const verdict = outcome.freeze();
-        if (config.summary.persist) {
-          turnSummary.record(snapshot, { ...verdict, replyEndedAt });
-        } else {
-          // Transient public-UI path (no third transcript patch): the settled
-          // line lives in the footer status row until the next interaction.
-          const line = `${formatSummaryLine(snapshot, verdict.outcome)} · ${formatBeijingTime(replyEndedAt ?? Date.now())}`;
-          const u = hostData.ui as { setStatus?: (key: string, text: string | undefined) => void };
-          try {
-            u.setStatus?.(SUMMARY_STATUS_KEY, line);
-          } catch { /* status slot is best-effort */ }
-        }
+        if (!config.summary.enabled) return;
+        const append = config.summary.persist ? turnSummary.record(snapshot, { ...verdict, replyEndedAt }) : undefined;
+        if (append === "accepted") return;
+        // This status delivers the display without claiming persistence or
+        // retrying an append the host may already have accepted in memory.
+        const saveStatus = append === "unconfirmed" ? " · summary save unconfirmed"
+          : append === "unavailable" ? " · summary not saved" : "";
+        const line = `${formatSummaryLine(snapshot, verdict.outcome)} · ${formatBeijingTime(replyEndedAt ?? Date.now())}${saveStatus}`;
+        const u = hostData.ui as { setStatus?: (key: string, text: string | undefined) => void };
+        try {
+          u.setStatus?.(SUMMARY_STATUS_KEY, line);
+        } catch { /* status slot is best-effort */ }
       },
     },
   );
@@ -242,13 +242,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     outputSpeed,
     gitChanges,
   });
+  const summaryApi = bindings.api as {
+    appendEntry?: (type: string, data?: unknown) => void;
+    registerEntryRenderer?: (type: string, renderer: unknown) => void;
+  } | undefined;
   const turnSummary = new TurnSummary({
-    appendEntry: (type, data) => {
-      (bindings.api as { appendEntry?: (t: string, d?: unknown) => void } | undefined)?.appendEntry?.(type, data);
-    },
-    registerEntryRenderer: (type, renderer) => {
-      (bindings.api as { registerEntryRenderer?: (t: string, r: unknown) => void } | undefined)?.registerEntryRenderer?.(type, renderer);
-    },
+    appendEntry: summaryApi?.appendEntry?.bind(summaryApi),
+    registerEntryRenderer: summaryApi?.registerEntryRenderer?.bind(summaryApi),
     persist: config.summary.persist,
     wall: () => Date.now(),
   });
@@ -346,7 +346,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         assistantPrototype: bindings.assistantPrototype,
         makeSeparator: bindings.makeSeparator,
         makeSpacer: bindings.makeSpacer ?? (() => undefined),
-        makeRail: bindings.makeRail,
+        makeRail: config.thinking.rail ? bindings.makeRail : undefined,
         makePeek: bindings.makePeek,
         makeClickable: bindings.makeClickable && ((input) => bindings.makeClickable!({
           ...input,
@@ -362,7 +362,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         isCollapsedLabel: bindings.isCollapsedLabel,
         enabled: () => enabled,
       });
-      const failedFeatures = decorations.features.filter((f) => !f.installed);
+      const failedFeatures = decorations.features.filter((f) => !f.installed && (f.name !== "thinking-rail" || config.thinking.rail));
       if (failedFeatures.length) {
         const detail = failedFeatures.map((f) => `${f.name}: ${f.reason}`).join("; ");
         ctx.ui.notify(`metis-pi: decorations partially unavailable (${detail}).`, "warning");
@@ -429,7 +429,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     hostData.bump();
     if (!chromeEnabled) return;
     metrics.agentSettled();
-    outcome.reset();
   });
 
   // Model/effort switches and session-structure events refresh the snapshot

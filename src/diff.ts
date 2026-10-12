@@ -10,7 +10,8 @@ import {
 
 import type { LayoutOps } from "./shell.ts";
 import type { CopyRow } from "./selection-copy/model.ts";
-import { stripAnsi } from "./selection-copy/wrap.ts";
+import { AnsiTracker, styledParts, stripAnsi } from "./selection-copy/wrap.ts";
+import { cellWidth } from "./segments.ts";
 
 export const DIFF_LEFT_INSET = 2;
 
@@ -174,61 +175,33 @@ function highlightBody(
 
 /**
  * ANSI-aware hard wrap for diff content (Codex wrap_styled_spans equivalent):
- * walks visible characters by display width; escape sequences ride along
- * without width, never split mid-sequence, and stay active across the wrap so
- * continuation rows keep the same style. A physical row never contains a
- * partial escape sequence.
+ * Pi owns grapheme widths; the shared ANSI tracker preserves continuation
+ * styling. Diff keeps source spaces rather than using prose word-wrap rules.
  */
 export function wrapStyledContent(text: string, width: number): string[] {
-  const widthOf = (char: string): number => {
-    const code = char.codePointAt(0)!;
-    if (code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a
-      || (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f)
-      || (code >= 0xac00 && code <= 0xd7a3)
-      || (code >= 0xf900 && code <= 0xfaff)
-      || (code >= 0xfe30 && code <= 0xfe6f)
-      || (code >= 0xff00 && code <= 0xff60)
-      || (code >= 0xffe0 && code <= 0xffe6)
-      || (code >= 0x1f300 && code <= 0x1f64f)
-      || (code >= 0x1f900 && code <= 0x1f9ff)
-      || (code >= 0x20000 && code <= 0x3fffd))) return 2;
-    return 1;
-  };
+  const usable = Math.max(1, Math.floor(width));
   const lines: string[] = [];
-  let current = "";
+  const tracker = new AnsiTracker();
+  let line = "";
   let cells = 0;
-  let index = 0;
-  // Style sequences seen since the last visible character; re-emitted at the
-  // start of a continuation row so the style state carries across the wrap.
-  let trailingStyles = "";
-  while (index < text.length) {
-    const char = text[index]!;
-    if (char === "\x1b") {
-      const match = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(text.slice(index));
-      if (match) {
-        current += match[0];
-        trailingStyles += match[0];
-        index += match[0].length;
-        continue;
-      }
+  for (const part of styledParts(text)) {
+    if (part.ansi !== undefined) {
+      line += part.ansi;
+      tracker.process(part.ansi);
+      continue;
     }
-    const w = widthOf(char);
-    if (cells + w > width && cells > 0) {
-      lines.push(current);
-      current = trailingStyles;
+    const grapheme = part.grapheme!;
+    const width = cellWidth(grapheme);
+    if (cells > 0 && cells + width > usable) {
+      lines.push(line + tracker.getLineEndReset());
+      line = tracker.getActiveCodes();
       cells = 0;
     }
-    current += char;
-    cells += w;
-    trailingStyles = "";
-    index += 1;
+    line += grapheme;
+    cells += width;
   }
-  lines.push(current);
-  // Drop a trailing row that is pure styling (nothing visible).
-  if (lines.length > 1 && lines.at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "") === "" && text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "") !== "") {
-    lines.pop();
-  }
-  return lines.length ? lines : [""];
+  lines.push(line);
+  return lines;
 }
 
 /** Render diff rows Codex-style from structured rows. Never returns empty. */

@@ -146,7 +146,7 @@ class PiNotifications:
         result = []
         for row in rows:
             w = self.worker_for(row["agent_id"])
-            relevant = row["kind"] == "terminal" or bool(w and w.run_id == row["run_id"] and row["ui_id"] in w.ui)
+            relevant = row["kind"] == "terminal" or bool(w and w.run.id == row["run_id"] and row["ui_id"] in w.run.ui)
             if not relevant:
                 self.store.execute("UPDATE parent_notifications SET state='superseded' WHERE id=?", (row["id"],))
                 continue
@@ -195,10 +195,10 @@ class PiNotifications:
                         w = self.worker_for(agent["id"])
                         if w and not w.closed:
                             agent.update(
-                                active_tools=list(w.active_tools.values()),
-                                tool_uses=w.tool_uses,
-                                total_tokens=w.usage.get("totalTokens", 0),
-                                response_preview=w.last_text[:200],
+                                active_tools=list(w.run.active_tools.values()),
+                                tool_uses=w.run.tool_uses,
+                                total_tokens=w.run.usage.get("totalTokens", 0),
+                                response_preview=w.run.last_text[:200],
                             )
                     cursor = hashlib.sha256(dumps([notifications, states]).encode()).hexdigest()
                     remaining = until - asyncio.get_running_loop().time()

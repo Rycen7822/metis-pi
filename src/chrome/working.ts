@@ -15,7 +15,7 @@
 // and dispose stop it (idle must leave zero timers).
 
 import { formatDuration, formatTokensCompact, type ActivityPhase } from "../ui-metrics.ts";
-import { stripAnsi } from "../selection-copy/wrap.ts";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface WorkingSnapshot {
   active: boolean;
@@ -166,7 +166,7 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
     const wants =
       active &&
       anim.enabled &&
-      (input.colorKind === "truecolor" || input.colorKind === "ansi256") &&
+      input.colorKind === "truecolor" &&
       anim.intervalMs >= 32 &&
       anim.intervalMs <= 1000;
     if (wants && !timerActive) {
@@ -210,13 +210,7 @@ export function createWorkingComponent(input: WorkingComponentInput): WorkingCom
       }
       if (f.tool) line += `${sep}${input.paint(f.tool, "dim")}`;
 
-      // Cell-width guard: hide decorations, never overflow the widget row.
-      const plain = stripAnsi(line);
-      if (plain.length > width) {
-        const budget = width - 3; // bullet + space + ellipsis
-        return budget >= 1 ? [`${bullet} ${plain.slice(0, budget)}…`] : [bullet.slice(0, Math.max(1, width))];
-      }
-      return [line];
+      return [truncateToWidth(line, Math.floor(width), "…")];
     },
     invalidate(): void {
       // Stateless per render — the snapshot getter owns freshness.

@@ -1,9 +1,10 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
-import type { SearchOptions, SearchResult, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -19,11 +20,6 @@ interface WebSearchConfig {
 	degoogApiKey?: unknown;
 	degoogEngines?: unknown;
 	degoogHeaders?: unknown;
-}
-
-interface NormalizedDomainFilters {
-	allowed: string[];
-	blocked: string[];
 }
 
 interface DegoogResult {
@@ -125,43 +121,16 @@ function requireBaseUrl(): string {
 	return baseUrl;
 }
 
-function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters {
-	const filters: NormalizedDomainFilters = { allowed: [], blocked: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.blocked : filters.allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function buildQuery(query: string, filters: NormalizedDomainFilters): string {
+function buildQuery(query: string, filters: DomainFilters): string {
 	const parts = [query];
-	if (filters.allowed.length === 1) {
-		parts.push(`site:${filters.allowed[0]}`);
-	} else if (filters.allowed.length > 1) {
+	if (filters.include.length === 1) {
+		parts.push(`site:${filters.include[0]}`);
+	} else if (filters.include.length > 1) {
 		// Group the alternatives so the query terms apply to every site branch.
-		parts.push(`(${filters.allowed.map(domain => `site:${domain}`).join(" OR ")})`);
+		parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
 	}
-	for (const domain of filters.blocked) parts.push(`-site:${domain}`);
+	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
 	return parts.join(" ");
-}
-
-function hostMatchesDomain(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-function matchesDomainFilters(url: string, filters: NormalizedDomainFilters): boolean {
-	if (filters.allowed.length === 0 && filters.blocked.length === 0) return true;
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (filters.allowed.length > 0 && !filters.allowed.some(domain => hostMatchesDomain(hostname, domain))) return false;
-	return !filters.blocked.some(domain => hostMatchesDomain(hostname, domain));
 }
 
 function resultText(value: unknown): string {
@@ -238,19 +207,19 @@ export async function searchWithDegoog(query: string, options: SearchOptions = {
 		if (!response.ok) {
 			const errorText = redactSecrets(await response.text(), secrets).slice(0, 300);
 			if (response.status === 401) {
-				throw new Error(
+				throw new SearchHttpError(response.status,
 					`degoog search error 401: this instance protects search routes. Set degoogApiKey in ${CONFIG_PATH} or DEGOOG_API_KEY. ${errorText.slice(0, 200)}`,
 				);
 			}
-			throw new Error(`degoog search error ${response.status}: ${errorText}`);
+			throw new SearchHttpError(response.status, `degoog search error ${response.status}: ${errorText}`);
 		}
 
 		let rawData: unknown;
 		try {
 			rawData = await response.json();
 		} catch (err) {
-			if (err instanceof Error && err.name === "TimeoutError") throw err;
-			throw new Error(`degoog returned invalid JSON: ${errorMessage(err)}`);
+			if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+			throw new Error("degoog returned invalid JSON");
 		}
 		entries = parseResponse(rawData);
 	} catch (err) {
@@ -267,7 +236,9 @@ export async function searchWithDegoog(query: string, options: SearchOptions = {
 			: (() => {
 				const redactedMessage = redactSecrets(message, secrets);
 				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = new Error(redactedMessage);
+				const redactedError = err instanceof SearchHttpError
+					? new SearchHttpError(err.status, redactedMessage)
+					: new Error(redactedMessage);
 				if (err instanceof Error) redactedError.name = err.name;
 				return redactedError;
 			})();
@@ -290,7 +261,7 @@ export async function searchWithDegoog(query: string, options: SearchOptions = {
 		}
 		// Only absolute HTTP(S) links are usable as citations or fetch targets.
 		if (resultUrl.protocol !== "http:" && resultUrl.protocol !== "https:") continue;
-		if (!matchesDomainFilters(resultUrl.href, filters)) continue;
+		if (!matchesDomainFilter(resultUrl.href, filters)) continue;
 		if (seen.has(resultUrl.href)) continue;
 		seen.add(resultUrl.href);
 		results.push({

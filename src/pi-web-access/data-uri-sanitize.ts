@@ -27,14 +27,9 @@ export interface DataUriOmission {
 }
 
 
-interface InternalDataUriOmission extends DataUriOmission {
-	markerStart: number;
-	markerEnd: number;
-}
-
 interface SanitizationState {
 	nextOrdinal: number;
-	omissions: InternalDataUriOmission[];
+	omissions: DataUriOmission[];
 }
 
 
@@ -306,7 +301,6 @@ function buildDataUriMarker(omission: DataUriOmission): string {
 function sanitizeTextInternal(text: string, sourcePath: string, state: SanitizationState): string {
 	let scanFrom = 0;
 	let retainedFrom = 0;
-	let outputLength = 0;
 	const pieces: string[] = [];
 
 	while (scanFrom < text.length) {
@@ -376,10 +370,7 @@ function sanitizeTextInternal(text: string, sourcePath: string, state: Sanitizat
 		const marker = buildDataUriMarker(omission);
 		const prefix = text.slice(retainedFrom, start);
 		pieces.push(prefix, marker);
-		outputLength += prefix.length;
-		const markerStart = outputLength;
-		outputLength += marker.length;
-		state.omissions.push({ ...omission, markerStart, markerEnd: outputLength });
+		state.omissions.push(omission);
 		retainedFrom = end;
 		scanFrom = end;
 	}
@@ -399,8 +390,6 @@ export function sanitizeInlineDataUris(
 	const sanitized = sanitizeTextInternal(text, sourcePath, state);
 	return {
 		text: sanitized,
-		omissions: state.omissions.map(({ markerStart: _start, markerEnd: _end, ...omission }) => omission),
+		omissions: state.omissions,
 	};
 }
-
-/** Sanitize every string leaf in a JSON-compatible value with one ordinal sequence. */

@@ -1,8 +1,8 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { generateCuratorPage } from "./curator-page.ts";
-import type { ProviderAvailability } from "./gemini-search.ts";
+import { SEARCH_PROVIDERS, type ProviderAvailability, type SearchProvider } from "./search-providers.ts";
 import type { SummaryMeta } from "./summary-review.ts";
-import { resolveCuratorNetworkConfig } from "./utils.ts";
+import { resolveCuratorNetworkConfig } from "./curator-network.ts";
 
 const STALE_THRESHOLD_MS = 30000;
 const WATCHDOG_INTERVAL_MS = 1000;
@@ -219,6 +219,7 @@ export function startCuratorServer(
 	let nextQueryIndex = Math.max(queries.length, initialResultIndexCapacity ?? queries.length);
 	let summarizeAbortController: AbortController | null = null;
 	let summarizeRequestSeq = 0;
+	const rewriteControllers = new Set<AbortController>();
 
 	let sseKeepalive: NodeJS.Timeout | null = null;
 
@@ -242,6 +243,8 @@ export function startCuratorServer(
 			sseKeepalive = null;
 		}
 		abortInFlightSummarize();
+		for (const controller of rewriteControllers) controller.abort();
+		rewriteControllers.clear();
 		if (sseResponse) {
 			try { sseResponse.end(); } catch {}
 			sseResponse = null;
@@ -275,44 +278,8 @@ export function startCuratorServer(
 	}
 
 	function isAvailableProvider(provider: string): boolean {
-		if (provider === "all") return availableProviders.all;
-		if (provider === "openai") return availableProviders.openai;
-		if (provider === "brave") return availableProviders.brave;
-		if (provider === "parallel") return availableProviders.parallel;
-		if (provider === "parallel-mcp") return availableProviders["parallel-mcp"];
-		if (provider === "tinyfish") return availableProviders.tinyfish;
-		if (provider === "search1api") return availableProviders.search1api;
-		if (provider === "searchinfinity") return availableProviders.searchinfinity;
-		if (provider === "querit") return availableProviders.querit;
-		if (provider === "tavily") return availableProviders.tavily;
-		if (provider === "firecrawl") return availableProviders.firecrawl;
-		if (provider === "jina") return availableProviders.jina;
-		if (provider === "serpdive") return availableProviders.serpdive;
-		if (provider === "kagi") return availableProviders.kagi;
-		if (provider === "bocha") return availableProviders.bocha;
-		if (provider === "ollama") return availableProviders.ollama;
-		if (provider === "searxng") return availableProviders.searxng;
-		if (provider === "degoog") return availableProviders.degoog;
-		if (provider === "duckduckgo") return availableProviders.duckduckgo;
-		if (provider === "perplexity") return availableProviders.perplexity;
-		if (provider === "exa") return availableProviders.exa;
-		if (provider === "gemini") return availableProviders.gemini;
-		if (provider === "kimi") return availableProviders.kimi;
-		if (provider === "anysearch") return availableProviders.anysearch;
-		if (provider === "xcrawl") return availableProviders.xcrawl;
-		if (provider === "xai") return availableProviders.xai;
-		if (provider === "mistral") return availableProviders.mistral;
-		if (provider === "brightdata") return availableProviders.brightdata;
-		if (provider === "serpbase") return availableProviders.serpbase;
-		if (provider === "serper") return availableProviders.serper;
-		if (provider === "serply") return availableProviders.serply;
-		if (provider === "you") return availableProviders.you;
-		if (provider === "baizhi") return availableProviders.baizhi;
-		if (provider === "zai") return availableProviders.zai;
-		if (provider === "valyu") return availableProviders.valyu;
-		if (provider === "keenable") return availableProviders.keenable;
-		if (provider === "ceramic") return availableProviders.ceramic;
-		return false;
+		const candidate = provider as SearchProvider;
+		return SEARCH_PROVIDERS.includes(candidate) && candidate !== "auto" && availableProviders[candidate] === true;
 	}
 
 	function writeSSE(res: ServerResponse, event: string, data: unknown): boolean {
@@ -590,16 +557,30 @@ export function startCuratorServer(
 					sendJson(res, 400, { ok: false, error: "Invalid query" });
 					return;
 				}
+				if (res.destroyed) return;
 				const controller = new AbortController();
-				req.on("close", () => controller.abort());
+				const abortOnDisconnect = (): void => {
+					if (!res.writableFinished) controller.abort();
+				};
+				rewriteControllers.add(controller);
+				res.once("close", abortOnDisconnect);
 				touchHeartbeat();
 				try {
 					const rewritten = await callbacks.onRewriteQuery(query.trim(), controller.signal);
+					if (res.destroyed) return;
+					if (controller.signal.aborted) {
+						sendJson(res, 409, { ok: false, error: "Rewrite request cancelled" });
+						return;
+					}
 					sendJson(res, 200, { ok: true, query: rewritten });
 				} catch (err) {
+					if (res.destroyed) return;
 					const message = err instanceof Error ? err.message : "Rewrite failed";
 					const status = controller.signal.aborted ? 409 : 500;
 					sendJson(res, status, { ok: false, error: message });
+				} finally {
+					res.off("close", abortOnDisconnect);
+					rewriteControllers.delete(controller);
 				}
 				return;
 			}

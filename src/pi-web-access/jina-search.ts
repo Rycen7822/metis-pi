@@ -1,8 +1,9 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import type { ExtractedContent } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent } from "./content.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -58,40 +59,14 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function normalizeDomain(value: string): string | null {
-	let input = value.trim().toLowerCase();
-	if (input.startsWith("-")) input = input.slice(1).trim();
-	if (!input) return null;
-	try {
-		const parsed = input.includes("://") ? new URL(input) : new URL(`https://${input}`);
-		input = parsed.hostname;
-	} catch {
-		input = input.split("/")[0]?.split(":")[0] ?? "";
-	}
-	input = input.replace(/^\.+|\.+$/g, "");
-	return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(input) ? input : null;
-}
-
-function mapDomainFilter(domainFilter: string[] | undefined): { includes: string[]; excludes: string[] } {
-	const includes: string[] = [];
-	const excludes: string[] = [];
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? excludes : includes;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return { includes, excludes };
-}
-
-function buildSearchRequest(query: string, options: JinaSearchOptions, numResults: number): { url: string; filters: ReturnType<typeof mapDomainFilter> } {
-	const filters = mapDomainFilter(options.domainFilter);
+function buildSearchRequest(query: string, options: JinaSearchOptions, numResults: number): { url: string; filters: DomainFilters } {
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const recency = options.recencyFilter ? ` published in the past ${options.recencyFilter}` : "";
-	const exclusions = filters.excludes.map((domain) => ` -site:${domain}`).join("");
+	const exclusions = filters.exclude.map((domain) => ` -site:${domain}`).join("");
 	const constrainedQuery = `${query.trim()}${exclusions}${recency}`.trim();
 	const url = new URL(encodeURIComponent(constrainedQuery), JINA_SEARCH_BASE_URL);
 	url.searchParams.set("count", String(numResults));
-	for (const domain of filters.includes) url.searchParams.append("site", domain);
+	for (const domain of filters.include) url.searchParams.append("site", domain);
 	return { url: url.toString(), filters };
 }
 
@@ -122,19 +97,7 @@ function parseItems(value: unknown): JinaSearchItem[] {
 	return envelope.data as JinaSearchItem[];
 }
 
-function passesDomainFilter(url: string, filters: ReturnType<typeof mapDomainFilter>): boolean {
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	const matches = (domain: string): boolean => hostname === domain || hostname.endsWith(`.${domain}`);
-	if (filters.includes.length > 0 && !filters.includes.some(matches)) return false;
-	return !filters.excludes.some(matches);
-}
-
-function mapItems(items: JinaSearchItem[], numResults: number, filters: ReturnType<typeof mapDomainFilter>): {
+function mapItems(items: JinaSearchItem[], numResults: number, filters: DomainFilters): {
 	results: SearchResponse["results"];
 	content: ExtractedContent[];
 } {
@@ -143,7 +106,7 @@ function mapItems(items: JinaSearchItem[], numResults: number, filters: ReturnTy
 	const seen = new Set<string>();
 	for (const item of items) {
 		const url = typeof item?.url === "string" ? item.url.trim() : "";
-		if (!url || seen.has(url) || !passesDomainFilter(url, filters)) continue;
+		if (!url || seen.has(url) || !URL.canParse(url) || !matchesDomainFilter(url, filters)) continue;
 		seen.add(url);
 		const title = typeof item.title === "string" && item.title.trim()
 			? item.title.trim()
@@ -169,7 +132,7 @@ function rethrowRequestError(
 ): never {
 	if (request.timeout.aborted && !callerSignal?.aborted) {
 		activityMonitor.logComplete(activityId, 408);
-		throw new Error("Jina Search API error 408: request timed out");
+		throw new SearchHttpError(408, "Jina Search API error 408: request timed out");
 	}
 	const message = errorMessage(err);
 	const redactedMessage = redactCredential(message, apiKey);
@@ -219,7 +182,7 @@ export async function searchWithJina(query: string, options: JinaSearchOptions =
 			rethrowRequestError(err, apiKey, activityId, request, options.signal);
 		}
 		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`Jina Search API error ${response.status}: ${body.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Jina Search API error ${response.status}: ${body.slice(0, 300)}`);
 	}
 
 	let raw: unknown;

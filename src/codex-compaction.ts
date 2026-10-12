@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { getCurrentSystemMessage, normalizeContext, type Model, type Api } from "@earendil-works/pi-ai";
+import { cleanupSessionResources, getCurrentSystemMessage, normalizeContext, type Model, type Api } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection, convertToLlm, estimateTokens,
   type ExtensionAPI, type ExtensionContext, type SessionEntry, type CompactionEntry,
@@ -12,6 +12,8 @@ const MAX_BYTES = 8 * 1024 * 1024;
 type Item = Record<string, any>;
 interface Checkpoint { version: 1; marker: string; binding: string; history: Item[]; protocol?: "responses" }
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const sourceHash = (branch: SessionEntry[]) => hash(branch.filter(entry =>
+  entry.type === "message" || entry.type === "context_edit" || entry.type === "compaction" || entry.type === "branch_summary"));
 const record = (value: unknown): Item => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const ours = (entry: SessionEntry): entry is CompactionEntry => entry.type === "compaction"
   && (entry.fromHook === true || Object.hasOwn(record(entry.details), KEY))
@@ -164,6 +166,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   let preparedSession: string | undefined;
   let preparedGeneration = 0;
   let preparedMarker: string | undefined;
+  let preparedSource: string | undefined;
+  let invalidatedMarker: string | undefined;
   let unsubscribeOwner: (() => void) | undefined;
   const subscribeOwner = () => {
     unsubscribeOwner?.();
@@ -182,6 +186,22 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   pi.on("session_before_tree", invalidate);
   pi.on("session_before_fork", invalidate);
 
+  const cancelRequest = (ctx: ExtensionContext): void => {
+    // Payload-handler throws are swallowed by Pi. Its public abort cancels
+    // the provider's signal synchronously. Cached Codex sockets skip the
+    // pre-send abort check, so clear this request's session resources as well.
+    // A fresh request will recover raw history in the context phase and run
+    // every domain/host projection; never rebuild only input at this stage.
+    invalidatedMarker = preparedMarker;
+    ctx.abort();
+    if (preparedModel?.api === "openai-codex-responses" && preparedSession)
+      cleanupSessionResources(preparedSession);
+    pi.events.emit("metis:checkpoint-request-cancelled", {});
+    try {
+      ctx.ui.notify("Request cancelled because its context or model changed. Retry to use the current context.", "warning");
+    } catch { /* UI teardown cannot undo request cancellation. */ }
+  };
+
   // A checkpoint is model/account bound, not a portable textual summary. Restore
   // the original canonical history for other routes, damaged metadata or edits.
   pi.on("context", async (_event, ctx) => {
@@ -189,9 +209,13 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     preparedSession = ctx.sessionManager.getSessionId();
     preparedGeneration = generation;
     preparedMarker = undefined;
+    // Native history/boundaries/edits determine checkpoint recovery. Extension
+    // journals and summary messages are projected by their own context hooks,
+    // which may legitimately publish them while preparing this same request.
+    preparedSource = sourceHash(ctx.sessionManager.getBranch());
     const current = active(ctx);
     if (!current) return;
-    if (current.data && isRemoteModel(ctx.model)) {
+    if (current.data && current.entry.summary !== invalidatedMarker && isRemoteModel(ctx.model)) {
       try {
         if (current.data.binding === await binding(ctx, ctx.model)) {
           preparedMarker = current.entry.summary;
@@ -210,28 +234,18 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     if (!Array.isArray(input) || !input.some(item => matchesMarker(record(item), expected))) return;
     const requestModel = preparedModel ?? ctx.model;
     if (!isRemoteModel(requestModel)
-      || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation)
-      return { ...record(event.payload), input: [{ type: "metis_checkpoint_route_changed" }] };
-    const source = hash(ctx.sessionManager.getBranch());
+      || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation
+      || preparedSource !== sourceHash(ctx.sessionManager.getBranch()))
+      return cancelRequest(ctx);
+    const source = sourceHash(ctx.sessionManager.getBranch());
     const current = active(ctx);
     try {
       if (!current?.data || preparedSession !== ctx.sessionManager.getSessionId() || hash(requestModel) !== hash(ctx.model)
         || current.data.binding !== await binding(ctx, requestModel)
-        || source !== hash(ctx.sessionManager.getBranch())) throw new Error("Checkpoint binding changed");
+        || source !== sourceHash(ctx.sessionManager.getBranch())) throw new Error("Checkpoint binding changed");
       return replaceMarker(event.payload, current.data);
     } catch {
-      if (preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation)
-        return { ...record(event.payload), input: [{ type: "metis_checkpoint_route_changed" }] };
-      // Payload-handler exceptions are swallowed by Pi. Build native raw input
-      // offline rather than accidentally transmitting the placeholder.
-      let rebuilt: Item | undefined;
-      try {
-        await ctx.modelRegistry.streamSimple(requestModel, normalizeContext({ messages: convertToLlm(buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages) }), {
-          maxRetries: 0, transport: "sse",
-          onPayload(body) { rebuilt = record(body); throw new Error("Offline raw-history capture complete"); },
-        }).result();
-      } catch { /* Controlled invalid input below fails closed, never sends the marker. */ }
-      return { ...record(event.payload), input: rebuilt?.input ?? [{ type: "metis_checkpoint_recovery_failed" }] };
+      return cancelRequest(ctx);
     }
   });
 

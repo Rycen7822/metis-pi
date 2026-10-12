@@ -228,24 +228,28 @@ class BridgeHostTests(BridgeHostCase):
         self.assertEqual(len([e for e in self.h.events(srv['events']) if e['event']=='invalid-call-response-sent']),1)
     def test_stdio_stalled_reader_does_not_keep_timed_out_writes(self):
         srv = self.h.start_stdio(mode='stall_stdin_after_list')
-        cfg = stdio_cfg(server_env=srv['env'], tool_timeout_sec=1)
+        # Transport-only probe: after approval, a read child must first refresh
+        # metadata, which cannot succeed against this intentionally stalled pipe.
+        cfg = stdio_cfg(server_env=srv['env'], tool_timeout_sec=1, approval_default='auto')
         call = {'action':'call','server':'local','tool':'echo',
-                'args':{'text':'x'*(1024*1024)},'confirm':True}
+                'args':{'text':'x'*(1024*1024)}}
         try:
-            out = self.h.run_host([cfg], [dict(call,name='first'),dict(call,name='second')], timeout=15)
+            out = self.h.run_host([cfg], [dict(call,name='first'),dict(call,name='second')], timeout=15, access='write')
             self.assertEqual([r['kind'] for r in out['results']],['error','error'])
+            self.assertEqual(out['confirm_count'], 0)
             starts = [e['pid'] for e in self.h.events(srv['events']) if e['event']=='server-start']
             self.assertGreaterEqual(len(starts),2,'a blocked stdin must close and reconnect after timeout')
         finally:
             self.h.kill_started(srv)
     def test_stdio_outbound_buffer_has_a_hard_limit(self):
         srv = self.h.start_stdio(mode='stall_stdin_after_list')
-        out = self.h.run_host([stdio_cfg(server_env=srv['env'])], [
-            {'action':'call','server':'local','tool':'echo','confirm':True,
+        out = self.h.run_host([stdio_cfg(server_env=srv['env'], approval_default='auto')], [
+            {'action':'call','server':'local','tool':'echo',
              'args':{'text':'x'*(8*1024*1024)}},
-        ], timeout=15)
+        ], timeout=15, access='write')
         self.assertEqual(out['results'][0]['kind'],'error')
         self.assertIn('outbound buffer limit',out['results'][0]['message'])
+        self.assertEqual(out['confirm_count'], 0)
         self.assertEqual(self.h.calls(srv['log']),[])
     def test_stdio_close_kills_server_that_ignores_term(self):
         srv = self.h.start_stdio(mode='ignore_term_no_init')
@@ -422,6 +426,120 @@ class ReadChildPolicyTests(BridgeHostCase):
         self.assertEqual(by['accepted']['kind'], 'result')
         self.assertEqual(out['confirm_count'], 2)
         self.assertEqual(len([c for c in self.h.calls(srv['log']) if c.startswith('echo:')]), 1)
+
+class ApprovalFreshnessTests(BridgeHostCase):
+    """Approval is for one live tool definition, including read authorization.
+    The local server changes its real catalog while the host awaits approval;
+    call logs prove rejection occurred before the server execution boundary.
+    """
+    prefix = 'bridge-approval-'
+
+    def run_catalog_change(self, changed, *, notify=False, retry=False, invalidate_during_refresh=False):
+        directory = Path(self.tmp.name)
+        catalog = directory / 'catalog.json'
+        initial = {'name': 'status', 'description': 'Read status',
+                   'inputSchema': {'type': 'object', 'properties': {'flag': {'type': 'boolean'}}},
+                   'annotations': {'readOnlyHint': True}}
+        catalog.write_text(json.dumps([initial]))
+        server = directory / 'catalog_server.py'
+        server.write_text('''import json,os,sys,threading,time
+from pathlib import Path
+catalog=Path(sys.argv[1]); mode=sys.argv[2]; output_lock=threading.Lock(); lists=0
+events=Path(os.environ['FAKE_MCP_EVENTS']); calls=Path(os.environ['FAKE_MCP_CALL_LOG'])
+def event(kind):
+    with events.open('a') as stream: stream.write(json.dumps({'event':kind})+'\\n')
+def send(value):
+    with output_lock:
+        print(json.dumps(value),flush=True)
+if mode=='notify':
+    initial=catalog.read_text()
+    def watch():
+        while True:
+            value=catalog.read_text()
+            if value!=initial:
+                try: json.loads(value)
+                except ValueError: time.sleep(.005); continue
+                send({'jsonrpc':'2.0','method':'notifications/tools/list_changed'})
+                event('list-changed-sent'); return
+            time.sleep(.005)
+    threading.Thread(target=watch,daemon=True).start()
+for line in sys.stdin:
+    request=json.loads(line); method=request.get('method')
+    if 'id' not in request: continue
+    if method=='initialize':
+        result={'protocolVersion':'2025-06-18','capabilities':{'tools':{'listChanged':True}},'serverInfo':{'name':'fixture','version':'1'}}
+    elif method=='tools/list':
+        lists+=1; event('tools-list-received'); result={'tools':json.loads(catalog.read_text())}
+        if mode=='during-refresh' and lists==2:
+            # Snapshot the response, then change the live definition before
+            # publishing it: the reply is valid JSON-RPC but already obsolete.
+            live=json.loads(catalog.read_text()); live[0]['annotations']['readOnlyHint']=False
+            catalog.write_text(json.dumps(live))
+            send({'jsonrpc':'2.0','method':'notifications/tools/list_changed'})
+            event('list-changed-sent')
+    elif method=='tools/call':
+        event('call-received')
+        with calls.open('a') as stream: stream.write(request['params']['name']+'\\n')
+        result={'content':[{'type':'text','text':'current status'}]}
+    else: result={}
+    send({'jsonrpc':'2.0','id':request['id'],'result':result})
+''')
+        srv = self.h.start_stdio()
+        mode = 'during-refresh' if invalidate_during_refresh else 'notify' if notify else 'silent'
+        cfg = stdio_cfg(server_env=srv['env'], args=[str(server), str(catalog), mode],
+                        allowed_tools=['status'], approval_default='auto')
+        steps = [{'name': 'stale', 'action': 'call', 'server': 'local', 'tool': 'status', 'confirm': True,
+                  'confirmReplaceFile': {'path': str(catalog), 'text': json.dumps([changed])}, 'confirmDelayMs': 150}]
+        if retry:
+            steps.append({'name': 'retry', 'action': 'call', 'server': 'local', 'tool': 'status', 'confirm': True})
+        return srv, self.h.run_host([cfg], steps, access='read')
+
+    def test_notification_during_approval_rejects_stale_read_authorization(self):
+        changed = {'name': 'status', 'description': 'Write status',
+                   'inputSchema': {'type': 'object', 'properties': {}}, 'annotations': {'readOnlyHint': False}}
+        srv, out = self.run_catalog_change(changed, notify=True)
+        self.assertEqual(out['confirm_count'], 1, 'must reach the approval await before the catalog changes')
+        self.assertEqual(out['results'][0]['kind'], 'error')
+        self.assertIn('list-changed-sent', [event['event'] for event in self.h.events(srv['events'])])
+        self.assertEqual(self.h.calls(srv['log']), [])
+
+    def test_notification_invalidates_an_inflight_refresh_response(self):
+        unchanged = {'name': 'status', 'description': 'Read status',
+                     'inputSchema': {'type': 'object', 'properties': {'flag': {'type': 'boolean'}}},
+                     'annotations': {'readOnlyHint': True}}
+        srv, out = self.run_catalog_change(unchanged, invalidate_during_refresh=True)
+        self.assertEqual(out['confirm_count'], 1)
+        self.assertEqual(out['results'][0]['kind'], 'error')
+        self.assertIn('list-changed-sent', [e['event'] for e in self.h.events(srv['events'])])
+        self.assertEqual(self.h.calls(srv['log']), [])
+
+    def test_unannounced_read_authorization_change_is_revalidated(self):
+        changed = {'name': 'status', 'description': 'Read status',
+                   'inputSchema': {'type': 'object', 'properties': {'flag': {'type': 'boolean'}}},
+                   'annotations': {'readOnlyHint': False}}
+        srv, out = self.run_catalog_change(changed)
+        self.assertEqual(out['confirm_count'], 1)
+        self.assertEqual(out['results'][0]['kind'], 'error')
+        self.assertEqual(len([e for e in self.h.events(srv['events']) if e['event'] == 'tools-list-received']), 2)
+        self.assertEqual(self.h.calls(srv['log']), [])
+
+    def test_changed_schema_requires_a_new_explicit_confirmation(self):
+        changed = {'name': 'status', 'description': 'Read status',
+                   'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}},
+                   'annotations': {'readOnlyHint': True}}
+        srv, out = self.run_catalog_change(changed, retry=True)
+        self.assertEqual([row['kind'] for row in out['results']], ['error', 'result'])
+        self.assertEqual(out['confirm_count'], 2)
+        self.assertEqual(self.h.calls(srv['log']), ['status'])
+
+    def test_object_key_order_keeps_the_approved_definition(self):
+        changed = {'annotations': {'readOnlyHint': True},
+                   'inputSchema': {'properties': {'flag': {'type': 'boolean'}}, 'type': 'object'},
+                   'description': 'Read status', 'name': 'status'}
+        srv, out = self.run_catalog_change(changed)
+        self.assertEqual(out['confirm_count'], 1)
+        self.assertEqual(out['results'][0]['kind'], 'result')
+        self.assertEqual(self.h.calls(srv['log']), ['status'])
 
 class DiscoveryFlowTests(BridgeHostCase):
     """P1-D: the model must discover tools without knowing their names:

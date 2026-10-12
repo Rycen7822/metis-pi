@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const parallelModuleUrl = new URL("../parallel.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 
 async function createHome(config = {}) {
@@ -211,4 +211,20 @@ test("fetch_content continues to Gemini when Parallel extract fails", async () =
 	);
 	assert.equal(output.result.error, null);
 	assert.match(output.result.content, /Gemini fallback/);
+});
+
+
+test("Parallel invalid JSON does not expose credential prefixes", async () => {
+	const home = await createHome(), token = "abcdef12-3456-7890-abcd-ef1234567890";
+	const child = runChild(`
+		globalThis.fetch = async () => new Response(${JSON.stringify(token)} + " malformed", { status: 200 });
+		const { searchWithParallel } = await import(${JSON.stringify(parallelModuleUrl)});
+		let error;
+		try { await searchWithParallel("invalid body"); } catch (caught) { error = caught.message; }
+		console.log(JSON.stringify({ error }));
+	`, { HOME: home, USERPROFILE: home, PARALLEL_API_KEY: token });
+	assert.equal(child.status, 0, child.stderr);
+	const { error } = JSON.parse(child.stdout.trim());
+	assert.match(error, /returned invalid JSON/);
+	assert.doesNotMatch(error, /abcdef12/);
 });

@@ -10,9 +10,10 @@ Metis owns the source in this directory. `references/pi-session-recall` is only
 temporary reference material. `extensions/session-recall.ts` loads this source
 directly; no standalone npm package is needed.
 
-The dedicated WebSocket path requires `openai-codex-responses` and accepts both
-`openai` and `openai-codex` provider names. Official `openai-responses` uses the
-normal Pi completion path. Transient Codex session cleanup is preserved.
+Queries use the current host ModelRegistry/ModelRuntime's provider-neutral
+streamSimple path. The host owns provider selection, request-time authentication,
+dynamic endpoint/env/header resolution, virtual-model routing and transport.
+Recall does not resolve a second auth snapshot or impose a Codex transport.
 Schema construction uses Metis's existing `typebox` peer, rather than relying on
 Pi's legacy `@sinclair/typebox` virtual alias.
 
@@ -27,5 +28,18 @@ The Metis entrypoint registers only deferred `session_recall`, with `search`,
 implementations and existing session files when updating this module; the
 registration callback keeps these operations internal to the grouped tool.
 Compare against the pinned upstream commit, preserve the
-API-aware compatibility check and TOML integration, update the provenance
-comment, and verify tool registration, model selection and query transport.
+native runtime boundary and TOML integration, update the provenance comment,
+and verify tool registration, model selection and query transport.
+
+Literal search counts matching JSONL lines consistently across rg, grep and the
+streaming Node fallback. Empty strings are rejected; other literal whitespace
+is preserved. Search and session reads are asynchronous and cancellable.
+Queries retain the original current-leaf historical branch, including raw
+messages already covered by compaction and native textual summaries. They do
+not reuse remote checkpoints in a separate helper request. Search still covers
+the whole file; an unselected branch can match search without belonging to the
+query branch. Final
+normalized input, including instructions, question and omission/truncation
+markers, stays within 80% of the selected model's context under Pi's native
+token estimate; output is explicitly capped to the reserved 20% and model cap.
+This is Pi's estimate, not an exact count for every provider tokenizer.

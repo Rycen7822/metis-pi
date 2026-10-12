@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const youModuleUrl = new URL("../you.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 const YOU_URL = "https://ydc-index.io/v1/search";
 
@@ -114,6 +114,8 @@ test("You.com redacts API errors and appears in the Curator", async () => {
 	const page = generateCuratorPage(["query"], "token", 20, available, "you", "you", [], null);
 	assert.match(page, /data-provider="you"/);
 	assert.match(page, />You\.com<\/button>/);
-	assert.match(page, /provider === "you"\) return "You\.com"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.you, "You.com");
+	assert.ok(clientData.providers.includes("you"));
 	await rm(home, { recursive: true, force: true });
 });

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const kimiModuleUrl = new URL("../kimi-search.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const { isKimiSearchAvailable, searchWithKimi } = await import(kimiModuleUrl);
 
 function registryContext({

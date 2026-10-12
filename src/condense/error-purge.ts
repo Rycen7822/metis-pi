@@ -22,16 +22,23 @@ import { hasProtectedNestedResults, isSubagentControl } from "./protected.ts";
  * This avoids threading a turn counter through index.ts.
  */
 export function purgeErroredArgs(messages: any[], config: ErrorPurgeConfig): any[] {
-  // Pass 1: collect errored toolCallIds → the turn index at which the error occurred.
-  // Turn index = number of AssistantMessages seen up to and including the one that
-  // issued the tool call (ToolResultMessages follow immediately after).
-  const erroredAtTurn = new Map<string, number>();
+  // Pair results within their assistant turn. Provider IDs can repeat later;
+  // only the actual failed call block earns permission to purge its arguments.
+  const erroredAtTurn = new Map<object, number>();
+  let open = new Map<string, any>();
   let turnCount = 0;
   for (const msg of messages) {
     if (msg.role === "assistant") {
       turnCount++;
-    } else if (msg.role === "toolResult" && msg.isError === true && !hasProtectedNestedResults(msg.details)) {
-      erroredAtTurn.set(msg.toolCallId, turnCount);
+      open = new Map((msg.content ?? []).filter((block: any) => block.type === "toolCall")
+        .map((block: any) => [block.id, block]));
+    } else if (msg.role === "toolResult") {
+      const block = open.get(msg.toolCallId);
+      if (!block) continue;
+      open.delete(msg.toolCallId);
+      if (msg.isError === true && !hasProtectedNestedResults(msg.details)) erroredAtTurn.set(block, turnCount);
+    } else {
+      open.clear();
     }
   }
 
@@ -47,7 +54,7 @@ export function purgeErroredArgs(messages: any[], config: ErrorPurgeConfig): any
     const newContent = (msg.content as any[]).map((block) => {
       if (block.type !== "toolCall" || isSubagentControl(block.name)) return block;
 
-      const errorTurn = erroredAtTurn.get(block.id);
+      const errorTurn = erroredAtTurn.get(block);
       if (errorTurn === undefined) return block;
 
       const age = currentTurnIndex - errorTurn;

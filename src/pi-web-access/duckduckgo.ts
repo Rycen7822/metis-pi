@@ -1,37 +1,12 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResult, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 const SEARCH_URL = "https://html.duckduckgo.com/html/";
 const SEARCH_TIMEOUT_MS = 30_000;
-
-interface NormalizedDomainFilters {
-	allowed: string[];
-	blocked: string[];
-}
-
-function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters {
-	const filters: NormalizedDomainFilters = { allowed: [], blocked: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.blocked : filters.allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function hostMatchesDomain(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-function matchesDomainFilters(url: string, filters: NormalizedDomainFilters): boolean {
-	if (filters.allowed.length === 0 && filters.blocked.length === 0) return true;
-	const hostname = new URL(url).hostname.toLowerCase();
-	if (filters.allowed.length > 0 && !filters.allowed.some(domain => hostMatchesDomain(hostname, domain))) return false;
-	return !filters.blocked.some(domain => hostMatchesDomain(hostname, domain));
-}
 
 function decodeResultUrl(href: string): string | null {
 	try {
@@ -66,7 +41,7 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
 		});
 		if (!response.ok) {
 			const body = await response.text();
-			throw new Error(`DuckDuckGo search error ${response.status}: ${body.slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `DuckDuckGo search error ${response.status}: ${body.slice(0, 300)}`);
 		}
 
 		const { parseHTML } = await import("linkedom");
@@ -82,7 +57,7 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
 			const resultUrl = href ? decodeResultUrl(href) : null;
 			if (!title || !resultUrl) continue;
 			parseableResults++;
-			if (!matchesDomainFilters(resultUrl, filters)) continue;
+			if (!matchesDomainFilter(resultUrl, filters)) continue;
 			const snippet = container.querySelector(".result__snippet")?.textContent?.trim() ?? "";
 			results.push({ title, url: resultUrl, snippet });
 			if (results.length >= normalizeSearchResultCount(options.numResults)) break;
@@ -92,9 +67,7 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
 		}
 
 		activityMonitor.logComplete(activityId, response.status);
-		const answer = results.map(result => result.snippet
-			? `${result.snippet}\nSource: ${result.title} (${result.url})`
-			: `Source: ${result.title} (${result.url})`).join("\n\n");
+		const answer = formatSearchResultsAsAnswer(results);
 		return { answer, results };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

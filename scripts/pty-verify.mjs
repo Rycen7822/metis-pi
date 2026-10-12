@@ -26,8 +26,7 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pcx-pty-"));
 // Keep the isolated directory owned even if bootstrap fails early.
 process.once("exit", () => fs.rmSync(ROOT, { recursive: true, force: true }));
 const HOME_DIR = path.join(ROOT, "home");
-// pi reads models.json/settings.json from $HOME/.pi/agent (PI_AGENT_DIR does
-// NOT relocate them — verified against pi 0.85.1).
+// Keep Pi discovery and HOME inside the same temporary agent directory.
 const AGENT_DIR = path.join(HOME_DIR, ".pi", "agent");
 let WORKSPACE = path.join(ROOT, "E1");
 const CLIPBOARD_SINK = path.join(ROOT, "clipboard.jsonl");
@@ -61,7 +60,7 @@ for (const probe of ["pcx-pty-mux-a", "pcx-pty-mux-b"]) {
 }
 // HOME isolation: the real ~/.pi/agent user extensions (including the
 // published copy of THIS extension) must not shadow the code under test.
-const ISOLATED_ENV = { ...process.env, HOME: HOME_DIR };
+const ISOLATED_ENV = { ...process.env, HOME: HOME_DIR, PI_CODING_AGENT_DIR: AGENT_DIR };
 
 const toolCall = (id, name, args, index = 0) => ({
   index, id, type: "function", function: { name, arguments: JSON.stringify(args) },
@@ -281,6 +280,7 @@ const bootPi = () => {
     "env -u DISPLAY -u WAYLAND_DISPLAY -u WSL_INTEROP -u WSL_DISTRO_NAME -u NO_COLOR " +
       "FORCE_COLOR=3 COLORTERM=truecolor HOME=" +
       `${HOME_DIR}` +
+      ` PI_CODING_AGENT_DIR=${AGENT_DIR}` +
       " PI_SKIP_VERSION_CHECK=1 PCX_PTY_CLIPBOARD_SINK=" +
       `${CLIPBOARD_SINK}` +
       " PCX_PTY_CLIPBOARD_READY=" +

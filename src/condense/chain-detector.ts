@@ -2,14 +2,8 @@ import { occKey, resultTimestampOf } from "./occurrence-key.ts";
 import { hasProtectedNestedResults } from "./protected.ts";
 import type { ChainRange } from "./types.ts";
 
-const COMPRESSED_CHAIN_PREFIX = "<compressed-chain";
-
 function isSyntheticChainMessage(msg: any): boolean {
-  const content = msg.content;
-  if (typeof content === "string") return content.trimStart().startsWith(COMPRESSED_CHAIN_PREFIX);
-  if (!Array.isArray(content)) return false;
-  const first = content[0];
-  return first?.type === "text" && typeof first.text === "string" && first.text.trimStart().startsWith(COMPRESSED_CHAIN_PREFIX);
+  return msg.metisDerived?.kind === "condense-chain";
 }
 
 function hasToolCalls(msg: any): boolean {

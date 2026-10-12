@@ -2,8 +2,8 @@ import { getWebAccessConfigPath, loadWebAccessConfig, fetchWithCredentialRedirec
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
+import { normalizeDomainFilters as normalizeSharedDomainFilters } from "./domain-filter-normalization.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -49,7 +49,14 @@ type ProviderHeaders = Record<string, string | null>;
 
 class CustomOpenAIBaseUrlError extends Error {}
 
-export class OpenAIAlphaSearchUnsupportedError extends Error {}
+export class OpenAIAlphaSearchUnsupportedError extends Error {
+	readonly status?: number;
+
+	constructor(message: string, status?: number) {
+		super(message);
+		this.status = status;
+	}
+}
 
 interface OpenAIAuth {
 	provider: string;
@@ -121,21 +128,11 @@ function loadConfig(): WebSearchConfig {
 }
 
 function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters | null {
-	if (!domainFilter?.length) return null;
-
-	const allowedDomains: string[] = [];
-	const blockedDomains: string[] = [];
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? blockedDomains : allowedDomains;
-		if (!target.includes(domain)) target.push(domain);
-	}
-
-	return allowedDomains.length > 0 || blockedDomains.length > 0
+	const { include, exclude } = normalizeSharedDomainFilters(domainFilter);
+	return include.length > 0 || exclude.length > 0
 		? {
-			...(allowedDomains.length > 0 ? { allowedDomains: allowedDomains.slice(0, 100) } : {}),
-			...(blockedDomains.length > 0 ? { blockedDomains: blockedDomains.slice(0, 100) } : {}),
+			...(include.length > 0 ? { allowedDomains: include.slice(0, 100) } : {}),
+			...(exclude.length > 0 ? { blockedDomains: exclude.slice(0, 100) } : {}),
 		}
 		: null;
 }
@@ -272,8 +269,12 @@ async function resolvePiAuth(ctx: ExtensionContext, responsesUrl: string, provid
 	} catch {
 		return undefined;
 	}
+	const hasRegisteredOverride = modelOverride !== undefined && models.some(model => providers.includes(model.provider) && model.id === modelOverride);
 	for (const provider of providers) {
-		const preferred = pickSearchModel(models.filter((model) => model.provider === provider));
+		const providerModels = models.filter(model => model.provider === provider);
+		const preferred = hasRegisteredOverride
+			? providerModels.find(model => model.id === modelOverride)
+			: pickSearchModel(providerModels);
 		if (!preferred) continue;
 		let resolved: Awaited<ReturnType<typeof ctx.modelRegistry.getApiKeyAndHeaders>>;
 		try {
@@ -355,8 +356,9 @@ export async function isOpenAISearchAvailable(ctx?: ExtensionContext): Promise<b
 	const responsesUrl = resolveConfiguredResponsesUrl(config.openaiResponsesUrl);
 	const useProviderBaseUrl = resolveUseProviderBaseUrl(config);
 	const providers = resolveConfiguredSearchProviders(config.openaiSearchProviders);
+	const modelOverride = resolveConfiguredSearchModel(config.openaiSearchModel);
 	try {
-		if (ctx && await resolvePiAuth(ctx, responsesUrl, providers, undefined, config.openaiResponsesUrl !== undefined, useProviderBaseUrl)) return true;
+		if (ctx && await resolvePiAuth(ctx, responsesUrl, providers, modelOverride, config.openaiResponsesUrl !== undefined, useProviderBaseUrl)) return true;
 	} catch (err) {
 		if (err instanceof CustomOpenAIBaseUrlError) return false;
 		throw err;
@@ -374,11 +376,16 @@ async function resolveCurrentModelAuth(ctx: ExtensionContext, signal?: AbortSign
 	if (!model || !isCurrentModelHostedSearchEligible(ctx)) {
 		throw new Error("Current model is not eligible for official OpenAI Hosted web search");
 	}
-	const target = resolveCurrentModelSearchTarget(model);
 	const resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	if (signal?.aborted) signal.throwIfAborted();
 	if (!resolved.ok) throw new Error(`OpenAI current model authentication failed: ${resolved.error}`);
 	if (!resolved.apiKey) throw new Error("OpenAI current model authentication failed: API key unavailable");
+	let target: CurrentModelSearchTarget;
+	try {
+		target = resolveCurrentModelSearchTarget({ ...model, baseUrl: resolved.baseUrl ?? model.baseUrl });
+	} catch {
+		throw new CustomOpenAIBaseUrlError("OpenAI current model authentication configuration: resolved endpoint is not eligible for official Hosted web search");
+	}
 	return {
 		provider: "openai",
 		apiKey: resolved.apiKey,
@@ -750,10 +757,11 @@ async function runOpenAISearch(
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);
 			const errorText = redactCredential(await response.text(), auth.apiKey);
-			const ErrorType = useAlphaSearch && [404, 405, 501].includes(response.status)
-				? OpenAIAlphaSearchUnsupportedError
-				: Error;
-			throw new ErrorType(`OpenAI ${useAlphaSearch ? "alpha/search " : ""}API error ${response.status}: ${errorText.slice(0, 300)}`);
+			const message = `OpenAI ${useAlphaSearch ? "alpha/search " : ""}API error ${response.status}: ${errorText.slice(0, 300)}`;
+			if (useAlphaSearch && [404, 405, 501].includes(response.status)) {
+				throw new OpenAIAlphaSearchUnsupportedError(message, response.status);
+			}
+			throw new SearchHttpError(response.status, message);
 		}
 
 		if (useAlphaSearch) {

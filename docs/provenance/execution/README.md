@@ -11,7 +11,8 @@
 ## 保留的本地差异
 
 - 进程/图片工具使用 Pi deferred 注册；Pi 持有工具选择、权限、provider、OAuth 和 JS codemode。
-- 进程会话保留协议帧、增量 UTF-8、交互输入、取消、完整归档和关闭；随包 helper 以绝对路径解析。
+- 进程会话使用 NDJSON 拉取协议，原生 helper 持有增量输出与 exited/closed 状态；保留增量 UTF-8、交互输入、取消、完整归档和关闭，随包 helper 以绝对路径解析。
+- Rust 工作区只构建随包的两个 helper，不发布独立库。图片 helper 验证并保留 original 字节或将 GIF 转为 PNG，不持有 provider 缩放策略或进程缓存。
 - 图片描述使用 Pi 注册表与认证；detail 按调用/序号恢复，original 字节保存到会话 blobs，分叉保留来源身份。
 - Pi edit/write 的 then_run 使用共享路径队列、修改快照和版本回执；命令走 native bash，输出先归档再截断。
 - condense 对 Pi nested 事件归档并传播保护/失败状态，不引入第二个 compaction owner。

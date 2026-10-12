@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { temporaryDirectory as tempDir } from "../helpers/temp-dir.mjs";
 import { git, committedRepository, trackedRepo, refreshAndExpectSample } from "../helpers/git.mts";
@@ -83,6 +83,21 @@ test("real git: untracked text counts; ignored, binary and oversized do not", as
   rmSync(join(dir, "a.txt"));
   writeFileSync(join(dir, "b.bin"), Buffer.from([0, 1, 2, 3]));
   await refreshAndExpectSample(tracker, 3, 3, 3);
+});
+
+test("a subdirectory samples the whole repository independently of staging", async (t) => {
+  const dir = committedRepository(t, { "tracked.txt": "base\n" });
+  const sub = join(dir, "sub");
+  mkdirSync(sub);
+  writeFileSync(join(dir, "tracked.txt"), "base\nchanged\n");
+  writeFileSync(join(dir, "outside-new.txt"), "outside-a\noutside-b\n");
+  writeFileSync(join(sub, "inside-new.txt"), "inside-a\ninside-b\ninside-c\n");
+  const root = trackedRepo(t, dir), child = trackedRepo(t, sub);
+  await refreshAndExpectSample(root, 6, 0, 3);
+  await refreshAndExpectSample(child, 6, 0, 3);
+  git(dir, "add", "outside-new.txt");
+  await refreshAndExpectSample(root, 6, 0, 3);
+  await refreshAndExpectSample(child, 6, 0, 3);
 });
 
 test("real git: an unborn HEAD counts staged new files and their unstaged edits", async (t) => {

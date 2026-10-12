@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const moduleUrl = new URL("../openai-search.ts", import.meta.url).href;
-const routingUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const routingUrl = new URL("../search-router.ts", import.meta.url).href;
 const indexUrl = new URL("../index.ts", import.meta.url).href;
 const storageUrl = new URL("../storage.ts", import.meta.url).href;
 const source = (url = "https://example.com/a", title = "Source", snippet = "Evidence") => ({ type: "text_result", url, title, snippet });
@@ -33,6 +33,7 @@ async function runScenario(t, scenario = {}) {
 			const scenario = ${JSON.stringify({ payload, ...scenario })};
 			const requests = [];
 			const authProviders = [];
+			const authModels = [];
 			const timeoutValues = [];
 			const originalTimeout = AbortSignal.timeout;
 			AbortSignal.timeout = (ms) => {
@@ -62,7 +63,8 @@ async function runScenario(t, scenario = {}) {
 				getAll: () => scenario.models ?? [model],
 				getApiKeyAndHeaders: async (selected) => {
 					authProviders.push(selected.provider);
-					return scenario.authByProvider?.[selected.provider] ?? { ok: true, apiKey: scenario.key ?? "registry-test-key", headers: scenario.headers ?? {}, ...(scenario.authBaseUrl ? { baseUrl: scenario.authBaseUrl } : {}) };
+					authModels.push(selected.id);
+					return scenario.authByModel?.[selected.id] ?? scenario.authByProvider?.[selected.provider] ?? { ok: true, apiKey: scenario.key ?? "registry-test-key", headers: scenario.headers ?? {}, ...(scenario.authBaseUrl ? { baseUrl: scenario.authBaseUrl } : {}) };
 				},
 			} } : undefined;
 			const c = new AbortController();
@@ -95,7 +97,7 @@ async function runScenario(t, scenario = {}) {
 					}
 				}
 			} catch (err) { error = err.message; name = err.name; kind = err.kind; }
-			console.log(JSON.stringify({ requests, authProviders, timeoutValues, result, error, name, kind }));
+			console.log(JSON.stringify({ requests, authProviders, authModels, timeoutValues, result, error, name, kind }));
 		`,
 	});
 	assert.equal(child.status, 0, child.stderr || String(child.error));
@@ -582,4 +584,43 @@ test("provider URL reuse traverses registered web_search and content retrieval",
 	assert.match(out.result.retrieved, /Plain search output/);
 	assert.equal(out.requests.length, 2);
 	assert.ok(out.requests.every(request => request.url === "https://gateway.example/v1/alpha/search"));
+});
+
+for (const availability of [false, true]) {
+	test(`registered OpenAI search model selects its own authentication and route (availability: ${availability})`, async (t) => {
+		const models = [
+			{ id: "gpt-6-luna", provider: "gateway", api: "openai-responses", baseUrl: "https://luna-model.example/v1" },
+			{ id: "gpt-6-main", provider: "gateway", api: "openai-responses", baseUrl: "https://main-model.example/v1" },
+		];
+		const out = await runScenario(t, {
+			registry: true, availability, models,
+			config: { openaiSearchProviders: ["gateway"], openaiSearchModel: "gpt-6-main", openaiUseProviderBaseUrl: true },
+			authByModel: {
+				"gpt-6-luna": { ok: true, apiKey: "luna-key", headers: { "X-Model": "luna" }, baseUrl: "https://luna-auth.example/v1" },
+				"gpt-6-main": { ok: true, apiKey: "main-key", headers: { "X-Model": "main" }, baseUrl: "https://main-auth.example/team/v1" },
+			},
+		});
+		assert.equal(out.error, undefined);
+		assert.deepEqual(out.authModels, ["gpt-6-main"]);
+		if (availability) {
+			assert.equal(out.result, true);
+			assert.deepEqual(out.requests, []);
+		} else {
+			assert.equal(out.requests[0].url, "https://main-auth.example/team/v1/alpha/search");
+			assert.equal(out.requests[0].body.model, "gpt-6-main");
+			assert.equal(out.requests[0].headers.authorization, "Bearer main-key");
+			assert.equal(out.requests[0].headers["x-model"], "main");
+		}
+	});
+}
+
+test("registered OpenAI model selects the matching configured provider before unrelated credentials", async (t) => {
+	const out = await runScenario(t, {
+		...providerCandidates,
+		config: { ...providerCandidates.config, openaiSearchModel: "gpt-5.6-terra" },
+	});
+	assert.equal(out.error, undefined);
+	assert.deepEqual(out.authProviders, ["second"]);
+	assert.equal(out.requests[0].headers.authorization, "Bearer second-provider-key");
+	assert.equal(out.requests[0].body.model, "gpt-5.6-terra");
 });

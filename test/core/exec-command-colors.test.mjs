@@ -7,6 +7,19 @@ import { renderExecCommandCall } from "../../src/execution/ui/rendering.ts";
 const theme = { fg: (_role, text) => text, bold: text => text };
 const colored = { ...theme, highlightCommandLines: lines => highlightBashScript(lines, { kind: "truecolor" }) };
 
+test("commands with side effects keep the full run display while pure formatting keeps exploration", () => {
+  const component = { render: width => [`width:${width}`] };
+  for (const command of ["cat files | xargs rm", "cat input | tee saved", "find . -delete", "find . -exec rm {} +",
+    "cat input | sort -o saved", "cat input | sed -i 's/a/b/' target", "cat input | tr a-z A-Z > saved"]) {
+    assert.equal(renderExecCommandCall(command, "done", { ...theme, renderCommandCall(actual) {
+      assert.equal(actual, command); return component;
+    } }), component, command);
+  }
+  const exploration = { ...theme, renderCommandCall() { assert.fail("pure formatting remains exploration"); } };
+  assert.match(renderExecCommandCall("cat input | head -n 3", "done", exploration), /Explored/);
+  assert.match(renderExecCommandCall("find . -name '*.ts'", "done", exploration), /Explored/);
+});
+
 test("the command color hook adds distinct token colors without changing visible text", () => {
   const command = "node --version && printf '%s' hello";
   const rendered = renderExecCommandCall(command, "done", colored, true);

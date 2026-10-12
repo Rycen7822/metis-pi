@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const serpApiModuleUrl = new URL("../serpapi.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function createHome(config = {}) {
@@ -215,5 +215,7 @@ test("SerpApi redacts API errors and appears in the Curator", async () => {
 	const page = generateCuratorPage(["query"], "token", 20, available, "serpapi", "serpapi", [], null);
 	assert.match(page, /data-provider="serpapi"/);
 	assert.match(page, />SerpApi<\/button>/);
-	assert.match(page, /provider === "serpapi"\) return "SerpApi"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	assert.equal(clientData.providerLabels.serpapi, "SerpApi");
+	assert.ok(clientData.providers.includes("serpapi"));
 });

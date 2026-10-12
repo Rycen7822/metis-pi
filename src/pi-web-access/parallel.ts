@@ -1,8 +1,8 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search";
@@ -161,18 +161,10 @@ function recencyToAfterDate(filter: string): string {
 }
 
 function mapDomainFilter(domainFilter: string[] | undefined): { include_domains?: string[]; exclude_domains?: string[] } {
-	if (!domainFilter?.length) return {};
-	const include_domains: string[] = [];
-	const exclude_domains: string[] = [];
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? exclude_domains : include_domains;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { include, exclude } = normalizeDomainFilters(domainFilter);
 	return {
-		...(include_domains.length ? { include_domains } : {}),
-		...(exclude_domains.length ? { exclude_domains } : {}),
+		...(include.length ? { include_domains: include } : {}),
+		...(exclude.length ? { exclude_domains: exclude } : {}),
 	};
 }
 
@@ -344,7 +336,7 @@ async function parallelFetch(
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Parallel API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Parallel API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 
 	try {
@@ -353,6 +345,7 @@ async function parallelFetch(
 		return data;
 	} catch (err) {
 		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`Parallel API returned invalid JSON: ${errorMessage(err)}`);
+		if (!(err instanceof SyntaxError)) throw err;
+		throw new Error("Parallel API returned invalid JSON");
 	}
 }

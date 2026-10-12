@@ -3,6 +3,7 @@
 // content at end; any uncertainty fails closed to an explicit "unavailable" fallback.
 
 import * as fs from "node:fs";
+import { isUtf8 } from "node:buffer";
 import type { DiffRow } from "./diff.ts";
 
 export interface WriteSnapshot {
@@ -54,7 +55,9 @@ export function snapshotFile(absolutePath: string): WriteSnapshot {
     if (buffer.length > MAX_SNAPSHOT_BYTES) {
       return { existed: true, content: null, binary: false, truncated: true };
     }
-    const binary = looksBinary(buffer);
+    // Decoding invalid UTF-8 would erase byte differences before ownership
+    // verification; such files cannot support an honest text diff.
+    const binary = looksBinary(buffer) || !isUtf8(buffer);
     return {
       existed: true,
       content: binary ? null : buffer.toString("utf8"),
@@ -313,7 +316,7 @@ export function computeWriteDiff(
   }
   // Verify the post-image against THIS call's expected content. If something
   // else wrote to the path in between, do not present a diff as ours.
-  if (expectedContent !== undefined && normalizeLf(post.content) !== normalizeLf(expectedContent)) {
+  if (expectedContent !== undefined && post.content !== Buffer.from(expectedContent, "utf8").toString("utf8")) {
     return { kind: "unavailable", added: 0, removed: 0, reason: "post-write mismatch (content changed by another writer)" };
   }
   if (!pre.existed) {

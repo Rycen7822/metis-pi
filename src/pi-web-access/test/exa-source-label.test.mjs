@@ -25,6 +25,18 @@ const resultUrls = [
 ];
 const expectedTitles = ["cdn.jsdelivr.net", "Source 2", "Source 3", "Source 4", "Kept title"];
 
+test("keyed Exa invalid JSON does not expose credential prefixes", async () => {
+	const token = "abcdef12-3456-7890-abcd-ef1234567890";
+	process.env.EXA_API_KEY = token;
+	globalThis.fetch = async () => new Response(token + " malformed", { status: 200 });
+	await assert.rejects(searchWithExa("invalid body"), error => {
+		assert.match(error.message, /Exa API returned invalid JSON/);
+		assert.doesNotMatch(error.message, /abcdef12/);
+		assert.equal(error.cause, undefined);
+		return true;
+	});
+});
+
 function assertLabels(result, includeContent) {
 	assert.deepEqual(result.results.map((item) => item.title), expectedTitles);
 	assert.deepEqual(

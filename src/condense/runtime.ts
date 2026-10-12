@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { registerOcc } from "./occ.ts";
-import { loadConfig, saveConfig } from "./config.ts";
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
+import { chainMembers, isSharedChain } from "./chain-model.ts";
 import { capImages, imageLimitFor } from "./image-cap.ts";
 import { captureBatch, captureUnindexedBatchesFromSession, deriveLiveTurnIndex, groupBatchesByMode, projectBranchMessages } from "./batch-capture.ts";
 import { ARGUMENT_HISTORY, argumentCandidates, projectArguments, type ArgumentHistory } from "./argument-history.ts";
@@ -9,7 +10,7 @@ import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summari
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
 import { pruneMessages, toolResultStub } from "./pruner.ts";
-import { isProtected } from "./protected.ts";
+import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { registerNestedCapture } from "./nested-capture.ts";
 import { registerQueryTool } from "./query-tool.ts";
 import { registerCommands, setPruneStatusWidget } from "./commands.ts";
@@ -28,8 +29,7 @@ import type {
   SharedChainCompressionEntry,
 } from "./types.ts";
 import {
-  DEFAULT_CONFIG, DEFERRED_REASON_LABELS,
-  chainMembers, isSharedChain, CUSTOM_TYPE_CHAIN,
+  DEFERRED_REASON_LABELS, CUSTOM_TYPE_CHAIN,
   CUSTOM_TYPE_SUMMARY,
   CUSTOM_TYPE_STATS,
   CUSTOM_TYPE_FRONTIER,
@@ -62,15 +62,23 @@ import { hashToolResult } from "./content-hash.ts";
 
 const EMPTY_METRICS_SNAPSHOT: ContextMetricsSnapshot = { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
 
+function policyFingerprint(config: ContextPruneConfig): string {
+  const { showOccStatusLine, showPruneStatusLine, quietOversizedSkips, ...policy } = config;
+  return JSON.stringify(policy);
+}
+
 export function createCondenseRuntime(pi: ExtensionAPI) {
   // Shared mutable config reference — updated by /pruner commands
   const currentConfig: { value: ContextPruneConfig } = {
     value: { ...DEFAULT_CONFIG },
   };
 
-  const effectiveProtection = () => currentConfig.value.opportunisticCompaction
-    ? { ...currentConfig.value, protectedTools: [...currentConfig.value.protectedTools, "context_tree_query"] }
-    : currentConfig.value;
+  const effectiveProtection = (): ProtectionConfig => ({
+    protectedTools: currentConfig.value.opportunisticCompaction
+      ? [...currentConfig.value.protectedTools, "context_tree_query"]
+      : currentConfig.value.protectedTools,
+    protectedPaths: currentConfig.value.protectedPaths,
+  });
   const protectionPredicate = (name: string, args: unknown) => isProtected(name, args, effectiveProtection());
 
   // Shared indexer — rebuilt from session on every session_start / session_tree
@@ -147,6 +155,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   });
   const occ = registerOcc(pi, indexer, currentConfig);
   let activeFlushAbort: AbortController | undefined;
+  const applyConfig = (config: ContextPruneConfig) => {
+    const previousPolicy = policyFingerprint(currentConfig.value);
+    currentConfig.value = config;
+    if (previousPolicy === policyFingerprint(config)) return;
+    maintenanceNext = undefined;
+    maintenanceAbort?.abort();
+    tokenEstimator.clear();
+    sharedApprovals.clear();
+    stagedChains.clear();
+    lastMaintenanceSource = undefined;
+    activeFlushAbort?.abort();
+  };
   let previousFraction: number | null = null;
   // Set on session_start/session_tree when the branch rescan finds recoverable
   // work but pendingBatches was just zeroed (reload/tree-switch). Lets the
@@ -209,7 +229,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (toolCalls.length === 0) return null;
 
     // The frontier tells us the last attempted boundary even when the attempt did
-    // not persist index entries (e.g. skipped-oversized). When the LLM prunes in
+    // not persist index entries (including historical skipped-oversized frontiers). When the LLM prunes in
     // the middle of a long tool chain, keep later tool calls from the same turn
     // instead of dropping the whole batch on the floor.
     if (!currentFrontier) return { ...batch, toolCalls };
@@ -313,7 +333,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const version = lifecycle;
     return async (text, entry, extraBody) => {
       const raw = ctx.sessionManager.buildSessionProjection().messages;
-      const source = projectionFingerprint(raw), config = JSON.stringify(currentConfig.value);
+      const source = projectionFingerprint(raw), config = policyFingerprint(currentConfig.value);
       const views = currentChainViews(raw, ctx);
       const render = (body: string) => projectContext(raw, ctx.model?.api, ctx,
         views.concat({ ...entry, rangeSummaryText: extraBody ? `${body}\n\n${extraBody}` : body }), true, entry.startUserTimestamp)
@@ -332,7 +352,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         assertCurrent(version);
         signal?.throwIfAborted();
         if (source !== projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
-          || config !== JSON.stringify(currentConfig.value)) throw new Error("This extension ctx is stale: fusion source changed");
+          || config !== policyFingerprint(currentConfig.value)) throw new Error("This extension ctx is stale: fusion source changed");
       };
       valid();
       const r = await summarizeRange(text, currentConfig.value, ctx, { controller: fallbackController, signal,
@@ -389,13 +409,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           const range = resolveRange(entry, messages);
           if (range) stagedChains.set(entry.startUserTimestamp, { entry,
             source: projectionFingerprint(messages.slice(range.startIndex, range.endIndex + 1)),
-            config: JSON.stringify(currentConfig.value) });
+            config: policyFingerprint(currentConfig.value) });
           return false; // Validate/publish only after the final is durable, in background.
         }
         const raw = ctx.sessionManager.buildSessionProjection().messages;
         if (!resolveRange(entry, raw)) return false; // A preview final is not a persistence receipt.
         const source = projectionFingerprint(raw);
-        const config = JSON.stringify(currentConfig.value);
+        const config = policyFingerprint(currentConfig.value);
         const before = projectContext(raw, ctx.model?.api, ctx, undefined, true).messages;
         const views = currentChainViews(raw, ctx).concat(entry);
         const after = projectContext(raw, ctx.model?.api, ctx, views, true, entry.startUserTimestamp).messages;
@@ -404,7 +424,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (!counts && automatic) lastMaintenanceSource = undefined;
         const accepted = !!counts && counts.piBefore > counts.piAfter && counts.proxyDelta > 0
           && source === projectionFingerprint(ctx.sessionManager.buildSessionProjection().messages)
-          && config === JSON.stringify(currentConfig.value);
+          && config === policyFingerprint(currentConfig.value);
         if (accepted) validatedGains.set(entry.blockId, counts!.proxyDelta);
         return accepted;
       },
@@ -871,7 +891,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         deferredBatches.push(record);
       };
 
-      const processedOutcome = (count = processedBatches.length): PruneFrontier["outcome"] =>
+      const processedOutcome = (count = processedBatches.length): "summarized" | "skipped-trivial" | "skipped-deduped" =>
         count > trivialBatches.length + dedupedBatches.length ? "summarized"
           : dedupedBatches.length ? "skipped-deduped" : "skipped-trivial";
       const completeRecord = (record: BatchRecord) => {
@@ -1781,7 +1801,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     maintenanceAbort = controller;
     const signal = controller.signal;
     const manager = ctx.sessionManager;
-    const config = JSON.stringify(currentConfig.value);
+    const config = policyFingerprint(currentConfig.value);
     const assertValid = () => {
       assertCurrent(version);
       signal.throwIfAborted();
@@ -1792,7 +1812,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         isCompactingChains ||
         occ.isRunning() ||
         occ.isCapacityWaiting() ||
-        config !== JSON.stringify(currentConfig.value)
+        config !== policyFingerprint(currentConfig.value)
       )
         throw new Error("Chain maintenance invalidated");
     };
@@ -2038,6 +2058,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   registerCommands(
     pi,
     currentConfig,
+    applyConfig,
     flushPending,
     ctx => splitPackingRuns(capturePendingBatches(ctx, { rethrow: true })),
     () => statsAccum.getStats(),
@@ -2046,13 +2067,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     () => diagnostics.counts(),
     (ctx: any) => computeMetricsSnapshot(ctx) ?? EMPTY_METRICS_SNAPSHOT,
     () => rearmedPending,
-    (config) => {
-      // Commands and the settings overlay share this persistence boundary.
-      maintenanceNext = undefined; maintenanceAbort?.abort(); tokenEstimator.clear();
-      sharedApprovals.clear(); stagedChains.clear(); lastMaintenanceSource = undefined;
-      activeFlushAbort?.abort();
-      return saveConfig(config);
-    },
+    saveConfig,
     (ctx) => occ.refreshStatus(ctx),
     () => statsAccum.getSessionTokens(),
   );

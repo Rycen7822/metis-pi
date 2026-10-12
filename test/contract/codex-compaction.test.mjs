@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync, gunzipSync } from "node:zlib";
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { normalizeContext } from "@earendil-works/pi-ai";
+import { closeOpenAICodexWebSocketSessions, streamSimple as streamSimpleOpenAICodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { FAKE_API_KEY, modelNamed } from "../helpers/native-provider.mjs";
 
 const root = new URL("../../", import.meta.url);
@@ -19,22 +21,23 @@ const sse = events => new Response(events.map(data => `data: ${JSON.stringify(da
 function completed(output) {
   return { type: "response.completed", response: { id: "r", status: "completed", output, usage: { input_tokens: 100, output_tokens: 2, total_tokens: 102 } } };
 }
-function answer() {
+function answerEvents() {
   const item = { type: "message", id: "msg", role: "assistant", status: "completed", content: [{ type: "output_text", text: "OK", annotations: [] }] };
-  return sse([
+  return [
     { type: "response.created", response: { id: "r", status: "in_progress" } },
     { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
     { type: "response.content_part.added", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
     { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "OK" },
     { type: "response.output_item.done", output_index: 0, item }, completed([item]),
-  ]);
+  ];
 }
+const answer = () => sse(answerEvents());
 function checkpointEvents(n = 1) {
   const item = { type: "compaction", id: `cmp-${n}`, encrypted_content: `opaque-${n}`, status: "completed" };
   return [{ type: "response.created", response: { id: "r", status: "in_progress" } }, { type: "response.output_item.done", output_index: 0, item }, completed([item])];
 }
 async function host(t, {
-  auto = false, condense = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model,
+  auto = false, condense = false, goal = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -54,11 +57,33 @@ async function host(t, {
     sm.appendMessage(assistant("more work ".repeat(100), auto ? model.contextWindow - 10 : 100));
     sm.appendMessage(user("KEPT TAIL"));
   }
+  if (goal) sm.appendCustomEntry("goal", { version: 2, action: "create", goal: {
+    id: "checkpoint-goal", objective: "preserve the active goal during context recovery", status: "active", tokenBudget: 1, tokensUsed: 0,
+  } });
   writeFileSync(join(dir, "metis-pi.toml"), "[contextPrune]\nenabled = true\nopportunisticCompaction = true\n[contextPrune.chainCompression]\nenabled = false\n[contextPrune.purgeErrors]\nenabled = false\n");
   const eventBus = createEventBus();
-  const settings = SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 1 }, retry: { enabled: false }, defaultThinkingLevel: "off" });
+  const settings = SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 1 }, retry: { enabled: false }, defaultThinkingLevel: "off", transport, cacheWarming: "off" });
   const paths = [fileURLToPath(new URL("extensions/codex-compaction.ts", root))];
+  if (providerOverride) {
+    const entry = join(dir, "configured-provider.ts");
+    const { id, name, reasoning, input, contextWindow, maxTokens, cost } = routeModel;
+    writeFileSync(entry, `export default function(pi) { pi.registerProvider(${JSON.stringify(routeModel.provider)}, {
+      api: ${JSON.stringify(routeModel.api)}, baseUrl: ${JSON.stringify(routeModel.baseUrl)}, apiKey: ${JSON.stringify(FAKE_API_KEY)},
+      models: [${JSON.stringify({ id, name, reasoning, input, contextWindow, maxTokens, cost, headers: { "X-Tenant": "tenant-A" } })}]
+    }); }`);
+    paths.push(entry);
+  }
+  if (contextJournal) {
+    const entry = join(dir, "context-journal.ts");
+    writeFileSync(entry, `export default function(pi) { pi.on("context", (event, ctx) => {
+      ctx.sessionManager.appendCustomEntry("projection-stats", { requests: 1 });
+      ctx.sessionManager.appendCustomMessageEntry("projection-summary", "PROJECTED DURABLE SUMMARY", false);
+      return { messages: ctx.sessionManager.buildSessionProjection().messages };
+    }); }`);
+    paths.push(entry);
+  }
   if (condense) paths.push(fileURLToPath(new URL("extensions/condense.ts", root)));
+  if (goal) paths.push(fileURLToPath(new URL("extensions/goal.ts", root)));
   if (other) {
     const entry = join(dir, "other-provider.ts");
     writeFileSync(entry, `export default function(pi) { pi.registerProvider("other-codex", { baseUrl:"https://offline.invalid/backend-api/codex", api:"openai-codex-responses", apiKey:${JSON.stringify(FAKE_API_KEY)}, models:[{ id:"other", name:"Other", reasoning:false, input:["text"], contextWindow:128000, maxTokens:16000, cost:{input:0,output:0,cacheRead:0,cacheWrite:0} }] }); }`);
@@ -93,7 +118,11 @@ async function host(t, {
     count++;
     return response ? await response({ body, sm, session, count }) : sse(checkpointEvents(count));
   });
-  await session.bindExtensions({ onError: e => errors.push(e), uiContext: { notify: message => notices.push(message), setStatus() {}, setWidget() {} } });
+  await session.bindExtensions({ onError: e => errors.push(e), uiContext: {
+    notify: message => notices.push(message), setStatus() {}, setWidget() {},
+    theme: { fg: (_key, text) => text },
+    confirm: async () => { assert.fail("internal request cancellation must not ask to pause Goal"); },
+  } });
   t.after(async () => {
     try { await session.extensionRunner.emit({ type: "session_shutdown" }); assert.deepEqual(errors, []); }
     finally { session.dispose(); if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); }
@@ -396,10 +425,15 @@ test("system deltas retain the original prompt and the effective tool loadout", 
   assert.equal(body.tools.some(tool => tool.name === "write"), false);
 });
 
-test("a covered edit during authentication cannot transmit the already-built checkpoint marker", async t => {
-  const h = await host(t);
+for (const routeModel of [model, responsesModel]) test(`${routeModel.api}: a late covered edit cancels; user retry applies every context projection`, async t => {
+  const h = await host(t, { goal: true, routeModel });
   const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
   await h.session.compact();
+  h.sm.appendCustomMessageEntry("goal-ui", "HIDDEN GOAL UI", true);
+  h.sm.appendCustomMessageEntry("goal-continuation", "STALE GOAL CONTINUATION", false, { goalId: "completed-old-goal" });
+  const before = h.bodies.length;
+  const ended = [];
+  t.after(h.session.subscribe(event => { if (event.type === "agent_end") ended.push(event); }));
   const getAuth = h.runtime.getAuth.bind(h.runtime);
   let reads = 0;
   t.mock.method(h.runtime, "getAuth", async (m, options) => {
@@ -408,10 +442,125 @@ test("a covered edit during authentication cannot transmit the already-built che
     return result;
   });
   await h.session.prompt("CONTINUE AFTER AUTH RACE");
+  assert.equal(h.bodies.length, before, "a stale native request must send neither opaque nor raw input");
+  assert.equal(ended.length, 1, "internal cancellation must not queue a competing Goal continuation");
+  assert.equal(ended[0].messages.at(-1).stopReason, "aborted");
+  const currentGoal = () => h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "goal").at(-1).data.goal;
+  assert.equal(currentGoal().status, "active");
+  assert.ok(h.notices.some(message => /cancelled.*Retry/.test(message)));
+  await h.session.prompt("RETRY WITH CURRENT CONTEXT");
   const body = h.bodies.at(-1);
   assert.ok(JSON.stringify(body.input).includes("EDITED WHILE AUTHENTICATING"));
+  assert.equal(JSON.stringify(body.input).includes("HIDDEN GOAL UI"), false);
+  assert.equal(JSON.stringify(body.input).includes("STALE GOAL CONTINUATION"), false);
   assert.equal(body.input.some(item => item.type === "compaction"), false);
   assert.equal(JSON.stringify(body).includes("Metis Codex remote checkpoint"), false);
+  assert.equal(currentGoal().status, "budgetLimited", "the explicit retry is accounted normally");
+});
+
+test("a history tail appended after context preparation cancels before the payload hook can accept it", async t => {
+  const h = await host(t);
+  await h.session.compact();
+  const before = h.bodies.length, getAuth = h.runtime.getAuth.bind(h.runtime); let appended = false;
+  t.mock.method(h.runtime, "getAuth", async (m, options) => {
+    const result = await getAuth(m, options);
+    if (options?.signal && !appended) { appended = true; h.sm.appendMessage(user("ADDED AFTER CONTEXT PREPARATION")); }
+    return result;
+  });
+  await h.session.prompt("CONTINUE AFTER TAIL RACE");
+  assert.equal(h.bodies.length, before, "the payload was built before the newly canonical user tail");
+  await h.session.prompt("RETRY THE TAIL RACE");
+  assert.ok(JSON.stringify(h.bodies.at(-1).input).includes("ADDED AFTER CONTEXT PREPARATION"));
+  await h.session.prompt("KEEP THE RECOVERED TAIL");
+  assert.ok(JSON.stringify(h.bodies.at(-1).input).includes("ADDED AFTER CONTEXT PREPARATION"), "recovery lasts until a fresh checkpoint");
+  h.sm.appendMessage(user("KEPT AFTER RECOVERY"));
+  await h.session.compact();
+  await h.session.prompt("USE THE FRESH CHECKPOINT");
+  assert.ok(h.bodies.at(-1).input.some(item => item.type === "compaction"), "a new checkpoint is usable after invalidation");
+});
+
+test("Condense composition and legitimate context publication keep a valid checkpoint request", async t => {
+  const h = await host(t, { condense: true, contextJournal: true });
+  await h.session.compact();
+  const before = h.bodies.length;
+  await h.session.prompt("CONTINUE THROUGH ALL CONTEXT OWNERS");
+  assert.equal(h.bodies.length, before + 1);
+  assert.ok(h.bodies.at(-1).input.some(item => item.type === "compaction"));
+  assert.ok(JSON.stringify(h.bodies.at(-1).input).includes("PROJECTED DURABLE SUMMARY"));
+  assert.equal(h.notices.some(message => /Request cancelled/.test(message)), false);
+});
+
+test("checkpoint replay preserves the native provider and configured model headers across reload", async t => {
+  const h = await host(t, { providerOverride: true });
+  const owner = h.runtime.getProvider(model.provider);
+  const catalog = owner.getModels();
+  await h.session.compact();
+  await h.session.prompt("PRESERVE THE CONFIGURED REQUEST");
+  assert.equal(h.runtime.getProvider(model.provider), owner, "checkpoint interception must not replace the native owner");
+  assert.deepEqual(owner.getModels(), catalog);
+  assert.equal(h.headers.at(-1).get("x-tenant"), "tenant-A");
+  await h.session.reload();
+  await h.session.prompt("PRESERVE CONFIGURATION AFTER RELOAD");
+  assert.equal(h.headers.at(-1).get("x-tenant"), "tenant-A");
+  assert.ok(h.bodies.at(-1).input.some(item => item.type === "compaction"));
+});
+
+
+test("a late edit evicts only the active native session's cached Codex WebSocket before send", async t => {
+  const sockets = [];
+  class OfflineWebSocket extends EventTarget {
+    constructor(url) {
+      super(); this.url = url; this.readyState = 0; this.sent = []; sockets.push(this);
+      setImmediate(() => { if (this.readyState === 0) { this.readyState = 1; this.dispatchEvent(new Event("open")); } });
+    }
+    send(text) {
+      assert.equal(this.readyState, 1); this.sent.push(JSON.parse(text));
+      setImmediate(() => { if (this.readyState === 1) for (const event of answerEvents()) this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) })); });
+    }
+    close(code, reason) {
+      if (this.readyState === 3) return;
+      this.readyState = 3; this.dispatchEvent(Object.assign(new Event("close"), { code, reason }));
+    }
+  }
+  t.mock.method(globalThis, "WebSocket", function (url) { return new OfflineWebSocket(url); });
+  const h = await host(t, { transport: "websocket-cached" });
+  const provider = h.runtime.getProvider(model.provider), nativeStream = provider.streamSimple.bind(provider);
+  const requestIds = [];
+  t.mock.method(provider, "streamSimple", (m, context, options) => {
+    if (options?.transport === "websocket-cached") requestIds.push(options.sessionId);
+    return nativeStream(m, context, options);
+  });
+  await h.session.prompt("WARM THE REAL SESSION SOCKET");
+  assert.equal(sockets.length, 1);
+  const activeSocket = sockets[0];
+  const unrelatedSession = "unrelated-offline-session";
+  t.after(() => closeOpenAICodexWebSocketSessions(unrelatedSession));
+  const unrelated = await streamSimpleOpenAICodexResponses(model, normalizeContext({ messages: [user("UNRELATED SESSION")] }), {
+    apiKey: FAKE_API_KEY, sessionId: unrelatedSession, transport: "websocket-cached",
+  }).result();
+  assert.equal(unrelated.stopReason, "stop");
+  const unrelatedSocket = sockets[1];
+  await h.session.compact();
+  const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
+  const getAuth = h.runtime.getAuth.bind(h.runtime); let reads = 0;
+  t.mock.method(h.runtime, "getAuth", async (m, options) => {
+    const result = await getAuth(m, options);
+    if (!options && ++reads === 2) h.sm.appendContextEdit(source.id, { content: "EDITED AFTER WS CACHE" });
+    return result;
+  });
+  const before = sockets.reduce((n, socket) => n + socket.sent.length, 0);
+  const httpBefore = h.bodies.length;
+  await h.session.prompt("CANCEL THE CACHED REQUEST");
+  assert.deepEqual(requestIds, [h.sm.getSessionId(), h.sm.getSessionId()], "actual native main requests use the captured SessionManager ID");
+  assert.equal(sockets.reduce((n, socket) => n + socket.sent.length, 0), before, "cached, new and fallback transports must send no stale frame");
+  assert.equal(h.bodies.length, httpBefore, "an aborted WebSocket request must not fall back to an HTTP send");
+  assert.equal(activeSocket.readyState, 3);
+  assert.equal(unrelatedSocket.readyState, 1, "scoped cleanup must retain the other session's cache");
+  assert.equal(h.session.messages.at(-1).stopReason, "aborted");
+  await h.session.prompt("RETRY THE WS REQUEST");
+  const sent = sockets.flatMap(socket => socket.sent).at(-1);
+  assert.ok(JSON.stringify(sent.input).includes("EDITED AFTER WS CACHE"));
+  assert.equal(sent.input.some(item => item.type === "compaction"), false);
 });
 
 test("a safety rejection hands off the real abort signal instead of cancelling owed continuation", async t => {

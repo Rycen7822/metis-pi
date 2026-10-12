@@ -1,7 +1,8 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -39,14 +40,7 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 }
 
 function mapDomainFilter(domainFilter: string[] | undefined): { include_domains?: string[]; exclude_domains?: string[] } {
-	const include_domains: string[] = [];
-	const exclude_domains: string[] = [];
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? exclude_domains : include_domains;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { include: include_domains, exclude: exclude_domains } = normalizeDomainFilters(domainFilter);
 	return {
 		...(include_domains.length > 0 ? { include_domains } : {}),
 		...(exclude_domains.length > 0 ? { exclude_domains } : {}),
@@ -90,14 +84,14 @@ export async function searchWithYou(query: string, options: SearchOptions = {}):
 		}, ["X-API-Key"]);
 		if (!response.ok) {
 			const errorText = await response.text();
-			throw new Error(`You.com error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `You.com error ${response.status}: ${redactCredential(errorText, apiKey).slice(0, 300)}`);
 		}
 		let rawData: unknown;
 		try {
 			rawData = await response.json();
 		} catch (err) {
-			if (err instanceof Error && err.name === "TimeoutError") throw err;
-			throw new Error(`You.com returned invalid JSON: ${errorMessage(err)}`);
+			if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+			throw new Error("You.com returned invalid JSON");
 		}
 		entries = parseWebResults(rawData);
 	} catch (err) {
@@ -112,7 +106,9 @@ export async function searchWithYou(query: string, options: SearchOptions = {}):
 			: (() => {
 				const redactedMessage = redactCredential(message, apiKey);
 				if (redactedMessage === message && err instanceof Error) return err;
-				const redactedError = new Error(redactedMessage);
+				const redactedError = err instanceof SearchHttpError
+					? new SearchHttpError(err.status, redactedMessage)
+					: new Error(redactedMessage);
 				if (err instanceof Error) redactedError.name = err.name;
 				return redactedError;
 			})();

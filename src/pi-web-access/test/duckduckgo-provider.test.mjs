@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const duckDuckGoModuleUrl = new URL("../duckduckgo.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
 function runChild(script, env = {}) {
 	const childEnv = { ...process.env };

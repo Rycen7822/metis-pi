@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const MAX_RESULT_TEXT = 256 * 1024;
 export const MAX_SCHEMA_BYTES = 64 * 1024;
 const MAX_PAGES = 20;
@@ -31,8 +33,9 @@ export interface ToolMeta {
   readOnly: boolean;
   inputSchema?: unknown;
   headerPlan: HeaderPlan;
+  definitionHash: string;
 }
-export interface ToolCatalog { tools: ToolMeta[]; truncated: boolean }
+export interface ToolCatalog { tools: ToolMeta[]; truncated: boolean; epoch: number }
 // x-mcp-header (MCP 2026-07-28): a tool may declare that a plain
 // string/integer/boolean argument is mirrored into an HTTP header. The plan is
 // computed once from the inputSchema at discovery and kept in memory only.
@@ -147,6 +150,13 @@ function toToolMeta(raw: unknown, mirrorHeaders: boolean): ToolMeta | null {
     description: typeof t.description === "string" ? t.description.slice(0, 200) : undefined,
     readOnly: t.annotations?.readOnlyHint === true,
     inputSchema: schema,
+    // Keep exact metadata identity without retaining oversized definitions.
+    // JSON object key order does not change the server's tool definition.
+    definitionHash: createHash("sha256").update(JSON.stringify(raw, (_key, value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+        : value,
+    )).digest("hex"),
     // stdio never parses or enforces x-mcp-header: an HTTP-only annotation must
     // not take a stdio tool out of the catalog.
     headerPlan: mirrorHeaders ? parseHeaderPlan(schema) : { ok: true, entries: [] },
@@ -176,9 +186,14 @@ export abstract class McpConnection {
     return this.request("tools/call", { name, arguments: args ?? {} }, timeoutSec, { signal });
   }
   abstract close(): void;
-  async ensureTools(signal?: AbortSignal): Promise<ToolCatalog> {
+  assertCatalogCurrent(catalog: ToolCatalog): void {
+    if (catalog.epoch !== this.catalogEpoch) {
+      throw new Error("MCP tool directory changed; discover the current tool and confirm it again");
+    }
+  }
+  async ensureTools(signal?: AbortSignal, refresh = false): Promise<ToolCatalog> {
     // Keep tools and completeness together across cache hits and invalidation.
-    if (this.toolsCache) return this.toolsCache;
+    if (!refresh && this.toolsCache) return this.toolsCache;
     const epochAtStart = this.catalogEpoch;
     const collected: ToolMeta[] = [];
     let cursor: string | undefined;
@@ -202,7 +217,7 @@ export abstract class McpConnection {
       pages += 1;
     } while (cursor && pages < MAX_PAGES && collected.length < MAX_TOOLS);
     if (cursor && (pages >= MAX_PAGES || collected.length >= MAX_TOOLS)) truncated = true;
-    const catalog = { tools: collected, truncated };
+    const catalog = { tools: collected, truncated, epoch: epochAtStart };
     if (this.catalogEpoch === epochAtStart) this.toolsCache = catalog;  // a list_changed that arrived mid-crawl must win
     return catalog;
   }

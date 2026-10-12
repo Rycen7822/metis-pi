@@ -3,20 +3,25 @@ import { awkDataFileOperand, sedReadPath } from "./command-operands.ts";
 export function isSmallFormattingCommand(tokens: string[]): boolean {
 	if (tokens.length === 0) return false;
 	const command = tokens[0]!;
+	if (tokens.some(token => /^(?:\d+)?[<>]/.test(token))) return false;
+	if (command === "sort" && tokens.some(token => token === "-o" || /^--output(?:=|$)/.test(token) || /^-[^-]*o/.test(token)))
+		return false;
+	if (command === "sed" && tokens.some(token => /^--in-place(?:=|$)/.test(token) || /^-[^-]*i/.test(token)))
+		return false;
 	if (
 		command === "wc" ||
 		command === "tr" ||
 		command === "cut" ||
 		command === "sort" ||
 		command === "uniq" ||
-		command === "tee" ||
 		command === "column" ||
 		command === "yes" ||
 		command === "printf"
 	) {
 		return true;
 	}
-	if (command === "xargs") return !isMutatingXargsCommand(tokens);
+	// An arbitrary xargs child is execution, not an output formatter.
+	if (command === "xargs") return false;
 	if (command === "awk")
 		return awkDataFileOperand(tokens.slice(1)) === undefined;
 	if (command === "head") {
@@ -43,49 +48,4 @@ export function isSmallFormattingCommand(tokens: string[]): boolean {
 	}
 	if (command === "sed") return sedReadPath(tokens.slice(1)) === undefined;
 	return false;
-}
-
-function isMutatingXargsCommand(tokens: string[]): boolean {
-	const subcommand = xargsSubcommand(tokens);
-	return subcommand?.length ? xargsIsMutatingSubcommand(subcommand) : false;
-}
-
-function xargsSubcommand(tokens: string[]): string[] | undefined {
-	if (tokens[0] !== "xargs") return undefined;
-	let index = 1;
-	while (index < tokens.length) {
-		const token = tokens[index]!;
-		if (token === "--") return tokens.slice(index + 1);
-		if (!token.startsWith("-")) return tokens.slice(index);
-		const takesValue =
-			token === "-E" ||
-			token === "-e" ||
-			token === "-I" ||
-			token === "-L" ||
-			token === "-n" ||
-			token === "-P" ||
-			token === "-s";
-		index += takesValue && token.length === 2 ? 2 : 1;
-	}
-	return undefined;
-}
-
-function xargsIsMutatingSubcommand(tokens: string[]): boolean {
-	const [head, ...tail] = tokens;
-	if (!head) return false;
-	if (head === "perl" || head === "ruby") return xargsHasInPlaceFlag(tail);
-	if (head === "sed")
-		return xargsHasInPlaceFlag(tail) || tail.includes("--in-place");
-	if (head === "rg") return tail.includes("--replace");
-	return false;
-}
-
-function xargsHasInPlaceFlag(tokens: string[]): boolean {
-	return tokens.some(
-		(token) =>
-			token === "-i" ||
-			token.startsWith("-i") ||
-			token === "-pi" ||
-			token.startsWith("-pi"),
-	);
 }

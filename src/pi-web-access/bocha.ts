@@ -1,8 +1,10 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const BOCHA_SEARCH_URL = "https://api.bochaai.com/v1/web-search";
@@ -41,11 +43,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function normalizeCount(value: number | undefined): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return 8;
-	return Math.max(1, Math.min(Math.floor(value), 20));
-}
-
 function mapFreshness(value: SearchOptions["recencyFilter"]): string {
 	switch (value) {
 		case "day": return "oneDay";
@@ -54,35 +51,6 @@ function mapFreshness(value: SearchOptions["recencyFilter"]): string {
 		case "year": return "oneYear";
 		default: return "noLimit";
 	}
-}
-
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
-}
-
-function parseDomainFilter(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function passesDomainFilters(url: string, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	const matches = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
-	if (filters.exclude.some(matches)) return false;
-	return filters.include.length === 0 || filters.include.some(matches);
 }
 
 function errorMessage(err: unknown): string {
@@ -133,8 +101,8 @@ export function isBochaAvailable(): boolean {
 
 export async function searchWithBocha(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
 	const apiKey = await requireApiKey(options.signal);
-	const numResults = normalizeCount(options.numResults);
-	const filters = parseDomainFilter(options.domainFilter);
+	const numResults = normalizeSearchResultCount(options.numResults);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let response: Response;
 	try {
@@ -150,21 +118,24 @@ export async function searchWithBocha(query: string, options: SearchOptions = {}
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Bocha API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Bocha API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 	let rawData: unknown;
 	try {
 		rawData = await response.json();
 	} catch (err) {
 		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`Bocha API returned invalid JSON: ${errorMessage(err)}`);
+		if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+		throw new Error("Bocha API returned invalid JSON");
 	}
 	let parsed: { results: SearchResponse["results"] };
 	try {
@@ -174,11 +145,13 @@ export async function searchWithBocha(query: string, options: SearchOptions = {}
 		const redactedMessage = redactCredential(message, apiKey);
 		activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
 	activityMonitor.logComplete(activityId, response.status);
-	const results = parsed.results.filter((result) => passesDomainFilters(result.url, filters)).slice(0, numResults);
+	const results = parsed.results.filter((result) => matchesDomainFilter(result.url, filters)).slice(0, numResults);
 	return { answer: formatSearchResultsAsAnswer(results), results };
 }

@@ -75,26 +75,22 @@ export function readMcpConfiguration(agentDir: string, cwd: string, trusted: boo
   return result;
 }
 
-const commandValues = new Map<string, string>();
 export function resolveValue(value: string, field: string, commands = true): string {
   if (value.startsWith("!")) {
     if (!commands) throw new Error("Dynamic credentials require discovery");
-    let result = commandValues.get(value);
-    if (result === undefined) {
-      try {
-        if (process.platform === "win32") {
-          const shell = getShellConfig(), stdin = shell.commandTransport === "stdin";
-          const child = spawnSync(shell.shell, stdin ? shell.args : [...shell.args, value.slice(1)], {
-            input: stdin ? value.slice(1) : undefined, encoding: "utf8", timeout: 10_000,
-            stdio: [stdin ? "pipe" : "ignore", "pipe", "ignore"], windowsHide: true,
-          });
-          if (child.error || child.status !== 0) throw new Error("command failed");
-          result = child.stdout.trim();
-        } else result = execSync(value.slice(1), { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
-      } catch { throw new Error(`Cannot resolve ${field}; credential command failed`); }
-      if (!result) throw new Error(`Cannot resolve ${field}; credential command returned no value`);
-      commandValues.set(value, result);
-    }
+    let result: string;
+    try {
+      if (process.platform === "win32") {
+        const shell = getShellConfig(), stdin = shell.commandTransport === "stdin";
+        const child = spawnSync(shell.shell, stdin ? shell.args : [...shell.args, value.slice(1)], {
+          input: stdin ? value.slice(1) : undefined, encoding: "utf8", timeout: 10_000,
+          stdio: [stdin ? "pipe" : "ignore", "pipe", "ignore"], windowsHide: true,
+        });
+        if (child.error || child.status !== 0) throw new Error("command failed");
+        result = child.stdout.trim();
+      } else result = execSync(value.slice(1), { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch { throw new Error(`Cannot resolve ${field}; credential command failed`); }
+    if (!result) throw new Error(`Cannot resolve ${field}; credential command returned no value`);
     return result;
   }
   return value.replace(/\$(\$|!|\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)/g, (_, token: string) => {

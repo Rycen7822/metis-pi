@@ -1,47 +1,10 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { SummaryBudgetPolicy } from "./budget.ts";
-import { defaultMetisConfig, decodePruneConfig } from "../metis-config.ts";
 /**
- * Shared types for the context-prune extension.
- *
- * Design decisions (Phase 1):
- *
- * SUMMARIZATION BATCH (Ph1 step 2):
- *   One batch = one completed assistant turn with tool calls, captured from
- *   the `turn_end` event when event.toolResults.length > 0.
- *   event.message = AssistantMessage (contains ToolCall content blocks with ids)
- *   event.toolResults = ToolResultMessage[] (one per tool call in this turn)
- *
- * STATE MODEL (Ph1 step 3):
- *   - Runtime state: Map<occurrenceKey, ToolCallRecord> rebuilt on session_start
- *   - Session metadata: pi.appendEntry("context-prune-index", IndexEntryData)
- *     stored once per summarized batch; NOT in LLM context
- *   - User config: global metis-pi.toml → [contextPrune], owned by metis-config.ts
- *
- * CONFIG FORMAT (Ph1 step 4):
- *   { "contextPrune": { "enabled": false, "summarizerModel": "default", "showPruneStatusLine": true } }
- *   summarizerModel: "default" = use current active model (ctx.model)
- *                   "provider/model-id" = explicit model via ctx.modelRegistry.find()
- *
- * SUMMARY MESSAGE FORMAT (Ph1 step 5):
- *   customType: "context-prune-summary"
- *   content: markdown with one bullet per tool call + short-id footer
- *   details: SummaryMessageDetails (toolCallRefs, toolNames, turnIndex, timestamp)
- *   The content itself includes short alias IDs in plain text so the model can
- *   reference them in future context_tree_query calls without needing details.
- *
- * API CONSTRAINTS (Ph1 step 6):
- *   - Pruning MUST happen in the `context` event via { messages: filtered },
- *     never by mutating session history (pi.appendEntry / session file untouched)
- *   - Summary injection uses pi.sendMessage(..., { deliverAs: "steer" }) from
- *     inside the turn_end handler so it lands before the next LLM call
- *   - Original full tool outputs are preserved in IndexEntryData (session custom
- *     entries) and accessible via context_tree_query at any time
- *   - v1 prunes only ToolResultMessage entries; the AssistantMessage tool-call
- *     blocks (which carry the toolCallIds) are intentionally kept so the model
- *     can still reference them when calling context_tree_query
- *   - "default" summarizer = ctx.model (current active model + its credentials),
- *     NOT a hidden side-channel. It makes an explicit LLM call from turn_end.
+ * Domain identities, policy values and durable records for condense.
+ * Captured originals, archived records and published summaries remain distinct.
+ * Config defaults and decoding belong to config.ts; UI choices to setting-presets.ts;
+ * shared-chain render views to chain-model.ts.
  */
 
 import type { FallbackController } from "./summarizer-fallback.ts";
@@ -116,7 +79,8 @@ export const PROGRESS_WIDGET_ID = "context-prune-progress";
  *                     (a turn with no tool calls), or when the agent loop ends (default)
  * - "on-demand"     : only when the user runs /pruner now
  */
-export type PruneOn = "on-demand" | "agent-message";
+export const PRUNE_ON_VALUES = ["on-demand", "agent-message"] as const;
+export type PruneOn = (typeof PRUNE_ON_VALUES)[number];
 
 /**
  * Granularity of pruning batches.
@@ -124,122 +88,11 @@ export type PruneOn = "on-demand" | "agent-message";
  * - "agent-message" : merge turns within one user task up to the input budget
  * Both modes split oversized turns into budget-bounded chunks.
  */
-export type BatchingMode = "turn" | "agent-message";
+export const BATCHING_MODE_VALUES = ["turn", "agent-message"] as const;
+export type BatchingMode = (typeof BATCHING_MODE_VALUES)[number];
 
-export type SummarizerThinking = "default" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
-export const SUMMARIZER_THINKING_LEVELS: { value: SummarizerThinking; label: string }[] = [
-  { value: "default", label: "Default" },
-  { value: "off", label: "Off" },
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
-];
-
-export const PURGE_COOLDOWN_PRESETS: { value: string; label: string }[] = [
-  { value: "1", label: "1" },
-  { value: "2", label: "2 (default)" },
-  { value: "3", label: "3" },
-  { value: "5", label: "5" },
-  { value: "10", label: "10" },
-];
-
-export const PURGE_MIN_ARG_PRESETS: { value: string; label: string }[] = [
-  { value: "100", label: "100" },
-  { value: "500", label: "500 (default)" },
-  { value: "1000", label: "1000" },
-  { value: "5000", label: "5000" },
-];
-
-export const BATCHING_MODES: { value: BatchingMode; label: string }[] = [
-  { value: "turn", label: "Per turn" },
-  { value: "agent-message", label: "Per agent message" },
-];
-
-/**
- * Cycling preset values for the `chainCompression.rollingWindow` setting.
- * Stored as strings because SettingsList cycles string values; converted to
- * number when applied.
- */
-export const ROLLING_WINDOW_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "0" },
-  { value: "1", label: "1" },
-  { value: "2", label: "2" },
-  { value: "3", label: "3 (default)" },
-  { value: "5", label: "5" },
-  { value: "10", label: "10" },
-];
-
-/**
- * Cycling preset values for the `minBatchChars` setting in the SettingsList.
- * Stored as strings because SettingsList cycles string values; converted to
- * number when applied. `"0"` is the disabled sentinel.
- */
-export const MIN_BATCH_CHARS_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "0 (disabled)" },
-  { value: "500", label: "500" },
-  { value: "1000", label: "1000" },
-  { value: "2000", label: "2000" },
-  { value: "5000", label: "5000 (default)" },
-];
-
-/**
- * Cycling presets for the `recoveryGraceTurns` setting in the SettingsList.
- * Stored as strings; converted to number when applied. "0" disables the grace
- * (recovery output stubs immediately, pre-feature behavior).
- */
-export const RECOVERY_GRACE_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "0 (disabled)" },
-  { value: "1", label: "1" },
-  { value: "3", label: "3 (default)" },
-  { value: "5", label: "5" },
-  { value: "8", label: "8" },
-];
-
-/**
- * Cycling presets for `summarizerIdleTimeoutMs` (stored as strings; the
- * settings UI cycles string values). "0" is the disabling sentinel.
- */
-export const SUMMARIZER_IDLE_TIMEOUT_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "0 (disabled)" },
-  { value: "10000", label: "10s" },
-  { value: "20000", label: "20s (default)" },
-  { value: "45000", label: "45s" },
-  { value: "90000", label: "90s" },
-];
-
-/**
- * Cycling presets for `summarizerMaxTimeoutMs` (stored as strings). "0" is
- * the disabling sentinel - no total-duration ceiling.
- */
-export const SUMMARIZER_MAX_TIMEOUT_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "0 (disabled)" },
-  { value: "120000", label: "120s" },
-  { value: "180000", label: "180s (default)" },
-  { value: "300000", label: "300s" },
-  { value: "600000", label: "600s" },
-];
-
-/**
- * Cycling presets for the `autoBudgetThreshold` setting (stored as strings;
- * the settings UI cycles string values). "0" is the disabled sentinel → null.
- * Other values are 0–1 fractions of the context window (e.g. "0.8" = flush at
- * 80% of the window, or at MAX_BUDGET_WINDOW tokens, whichever comes first).
- */
-export const AUTO_BUDGET_PRESETS: { value: string; label: string }[] = [
-  { value: "0", label: "Off" },
-  { value: "0.6", label: "60%" },
-  { value: "0.7", label: "70% (default)" },
-  { value: "0.8", label: "80%" },
-  { value: "0.9", label: "90%" },
-];
-
-export const PRUNE_ON_MODES: { value: PruneOn; label: string }[] = [
-  { value: "agent-message", label: "On agent message" },
-  { value: "on-demand", label: "On demand" },
-];
+export const SUMMARIZER_THINKING_VALUES = ["default", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type SummarizerThinking = (typeof SUMMARIZER_THINKING_VALUES)[number];
 
 /** Global metis-pi.toml [contextPrune]; agent-dir honors PI_CODING_AGENT_DIR. */
 export interface ContextPruneConfig {
@@ -525,17 +378,6 @@ export interface SharedChainCompressionEntry {
 
 export type ChainCompressionEntry = SingleChainCompressionEntry | SharedChainCompressionEntry;
 
-export function isSharedChain(entry: ChainCompressionEntry): entry is SharedChainCompressionEntry {
-  return "kind" in entry && entry.kind === "shared-v1";
-}
-
-/** Temporary render views; the durable shared body is stored only once. */
-export function chainMembers(entry: ChainCompressionEntry): SingleChainCompressionEntry[] {
-  return isSharedChain(entry) ? entry.members.map(member => ({ ...member,
-    blockId: entry.blockId, compressedAt: entry.compressedAt,
-    rangeSummaryText: entry.bodyText.slice(member.bodyStart, member.bodyEnd) })) : [entry];
-}
-
 export interface ChainCompressionConfig {
   enabled: boolean;
   /** Number of most-recently-closed chains to keep raw (not compressed). Default 3. */
@@ -558,8 +400,6 @@ export interface ErrorPurgeConfig {
   /** Only purge arg bodies larger than this many chars. Default 500. */
   minArgChars: number;
 }
-
-export const DEFAULT_CONFIG = decodePruneConfig(defaultMetisConfig().contextPrune) as ContextPruneConfig;
 
 export interface CapturedToolCall {
   /** Original assistant turn, retained across budget splitting and queue retries. */
@@ -842,7 +682,7 @@ export type BatchTextProgressCallback = (
 export type FlushResult =
   | {
       ok: true;
-      reason: "flushed" | "partial" | "skipped-oversized" | "skipped-trivial" | "skipped-deduped";
+      reason: "flushed" | "partial" | "skipped-trivial" | "skipped-deduped";
       batchCount: number;
       toolCallCount: number;
       rawCharCount: number;

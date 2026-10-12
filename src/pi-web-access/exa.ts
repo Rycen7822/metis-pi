@@ -1,7 +1,7 @@
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath, resolveApiBaseUrl } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import type { ExtractedContent } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent } from "./content.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const EXA_API_BASE_URL = "https://api.exa.ai";
@@ -216,11 +216,11 @@ export async function callExaMcp(
 	if (!response.ok) {
 		const errorText = await response.text();
 		if (response.status === 429) {
-			throw new Error(
+			throw new SearchHttpError(response.status,
 				`Exa MCP rate limit reached (429). Add "exaApiKey" to ${CONFIG_PATH} for unthrottled Exa search: ${errorText.slice(0, 200)}`,
 			);
 		}
-		throw new Error(`Exa MCP error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Exa MCP error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 
 	const body = await response.text();
@@ -459,10 +459,15 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 
 		if (!response.ok) {
 			const errorText = redactCredential(await response.text(), apiKey);
-			throw new Error(`Exa API error ${response.status}: ${errorText.slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `Exa API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
-		const data = await response.json() as ExaSearchResponse;
+		let data: ExaSearchResponse;
+		try { data = await response.json() as ExaSearchResponse; }
+		catch (err) {
+			if (!(err instanceof SyntaxError)) throw err;
+			throw new Error("Exa API returned invalid JSON");
+		}
 		activityMonitor.logComplete(activityId, response.status);
 
 		return toSearchResponse(

@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 const geminiApiModuleUrl = new URL("../gemini-api.ts", import.meta.url).href;
 const geminiAdcModuleUrl = new URL("../gemini-adc.ts", import.meta.url).href;
-const geminiSearchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const geminiSearchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 
 function runChild(script, env) {
 	const childEnv = { ...process.env };

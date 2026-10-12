@@ -1,10 +1,10 @@
 use std::env;
-use std::io::Read;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use codex_utils_image::{PromptImageMode, load_for_prompt_bytes};
+use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -51,9 +51,7 @@ fn main() -> anyhow::Result<()> {
     let ViewImageArgs { path, detail } = parse_args()?;
     match detail.as_deref() {
         None | Some("original") => {}
-        Some(detail) => anyhow::bail!(
-            "view_image.detail only supports `original`, got `{detail}`"
-        ),
+        Some(detail) => anyhow::bail!("view_image.detail only supports `original`, got `{detail}`"),
     }
 
     let path = PathBuf::from(path);
@@ -69,8 +67,11 @@ fn main() -> anyhow::Result<()> {
     }
     let file_bytes = fs::read(&abs_path)
         .with_context(|| format!("unable to read image at `{}`", abs_path.display()))?;
-    let image = load_for_prompt_bytes(abs_path.as_path(), file_bytes, PromptImageMode::Original)
+    let image = load_for_prompt_bytes(abs_path.as_path(), file_bytes)
         .with_context(|| format!("unable to process image at `{}`", abs_path.display()))?;
-    println!("{}", json!({ "image_url": image.into_data_url(), "detail": "original" }));
+    println!(
+        "{}",
+        json!({ "image_url": image.into_data_url(), "detail": "original" })
+    );
     Ok(())
 }

@@ -11,9 +11,8 @@ import {
   CUSTOM_TYPE_DEDUP_ALIAS,
   CUSTOM_TYPE_INDEX,
   CUSTOM_TYPE_SUMMARY,
-  chainMembers,
-  isSharedChain,
 } from "./types.ts";
+import { chainMembers, isSharedChain } from "./chain-model.ts";
 import {
   buildShortToolCallRefs,
   normalizeSummaryToolCallRefs,

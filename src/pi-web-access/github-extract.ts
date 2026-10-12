@@ -5,7 +5,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, resolve as resolvePath, sep as pathSep } from "node:path";
 import { activityMonitor } from "./activity.ts";
-import type { ExtractedContent } from "./extract.ts";
+import type { ExtractedContent } from "./content.ts";
 import { checkGhAvailable, checkRepoSize, fetchViaApi, showGhHint } from "./github-api.ts";
 
 const BINARY_EXTENSIONS = new Set([
@@ -755,14 +755,11 @@ function buildDirListing(rootPath: string, subPath: string): string {
 function readReadme(localPath: string): string | null {
 	const candidates = ["README.md", "readme.md", "README", "README.txt", "README.rst"];
 	for (const name of candidates) {
-		const readmePath = join(localPath, name);
-		if (existsSync(readmePath)) {
-			try {
-				const content = readFileSync(readmePath, "utf-8");
-				return content.length > 8192 ? content.slice(0, 8192) + "\n\n[README truncated at 8K chars]" : content;
-			} catch {
-				continue;
-			}
+		const readmePath = resolveWithinRepo(localPath, name);
+		if (!readmePath) continue;
+		const content = readTextFile(readmePath);
+		if (content !== null) {
+			return content.length > 8192 ? content.slice(0, 8192) + "\n\n[README truncated at 8K chars]" : content;
 		}
 	}
 	return null;

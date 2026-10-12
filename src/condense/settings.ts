@@ -67,6 +67,7 @@ function protectedPathsDescription(config: ContextPruneConfig): string {
 export async function openPrunerSettings(
   ctx: ExtensionCommandContext,
   currentConfig: { value: ContextPruneConfig },
+  applyConfig: (config: ContextPruneConfig) => void,
   save: (config: ContextPruneConfig) => Promise<void>,
   refreshStatus: (config: ContextPruneConfig) => void,
 ): Promise<void> {
@@ -163,7 +164,7 @@ export async function openPrunerSettings(
     } else {
       newConfig = currentConfig.value;
     }
-    currentConfig.value = newConfig;
+    applyConfig(newConfig);
     void persistConfig((m, t) => ctx.ui.notify(m, t), newConfig, save);
     refreshStatus(newConfig);
     settingsList?.invalidate();

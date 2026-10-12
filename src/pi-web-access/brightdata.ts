@@ -1,9 +1,9 @@
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
@@ -84,7 +84,7 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 //
 // Total by construction: an invalid zone is `null`, never a throw.
 // `isBrightDataAvailable()` reads this, and availability is evaluated outside its
-// callers' error handling — `gemini-search.ts` checks it before entering the
+// callers' error handling — `search-router.ts` checks it before entering the
 // per-provider try/catch, and `index.ts` awaits `getProviderAvailability()` on the
 // `web_search` path with nothing around it. A throw here would therefore take
 // `web_search` down for Brave and OpenAI too, over one mistyped Bright Data
@@ -148,23 +148,6 @@ function requireSerpZone(): string {
 	);
 }
 
-interface DomainFilters {
-	include: string[];
-	exclude: string[];
-}
-
-function parseDomainFilter(domainFilter: string[] | undefined): DomainFilters {
-	const filters: DomainFilters = { include: [], exclude: [] };
-	if (!domainFilter?.length) return filters;
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.exclude : filters.include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
 // Bright Data has no domain parameter, but the engine behind it is Google, so the
 // filter is expressed the way Google expresses it: as `site:` operators inside
 // the query. That asks the engine for the right pages instead of discarding the
@@ -195,26 +178,6 @@ function buildSerpUrl(searchQuery: string, numResults: number, recencyFilter: Se
 	return `https://www.google.com/search?${params.toString()}`;
 }
 
-function domainMatches(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-// `site:` narrows the SERP but does not guarantee it: Google still mixes in
-// related hosts, and an OR group is honoured loosely. The same filter is applied
-// again here so the contract holds on what is actually returned.
-function passesDomainFilters(url: string, filters: DomainFilters): boolean {
-	if (filters.include.length === 0 && filters.exclude.length === 0) return true;
-	let hostname: string;
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (filters.exclude.some((domain) => domainMatches(hostname, domain))) return false;
-	if (filters.include.length === 0) return true;
-	return filters.include.some((domain) => domainMatches(hostname, domain));
-}
-
 function requestSignal(signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -226,7 +189,7 @@ function errorMessage(err: unknown): string {
 
 // Text that did not originate here — a proxied response body, a `JSON.parse`
 // message quoting that body, a config value — is quoted into Error messages, and
-// `gemini-search.ts` classifies routing failures by reading a status back out of
+// `search-router.ts` classifies routing failures by reading a status back out of
 // the message text (`providerErrorStatus`, /\b(?:error|status|http)\s+(\d{3})\b/).
 // A proxied Google interstitial that merely mentions "Error 503" would otherwise
 // be read as *our* status and retried as a transient failure, when what actually
@@ -281,7 +244,7 @@ const QUOTA_SHAPED_PATTERN = /rate limit|quota|too many requests/gi;
 // `STATUS_SHAPED_PATTERN` requires `(\d{3})\b`, so `error 5031` is deliberately left
 // alone — it is not a status. Sanitising first and slicing second let the cut land on
 // the 4th digit and hand back a freshly forged `error 503`, which
-// `gemini-search.ts`'s `providerErrorStatus` then reads as *our* status: a billed 200
+// `search-router.ts`'s `providerErrorStatus` then reads as *our* status: a billed 200
 // classified `transient` and silently re-run on the next provider. Slicing first means
 // the rewrite always sees the exact text that will be quoted.
 //
@@ -370,7 +333,8 @@ function mapResults(
 	const mapped: SearchResponse["results"] = [];
 	for (const item of organic) {
 		const url = typeof item.link === "string" ? item.link.trim() : "";
-		if (!url || !passesDomainFilters(url, filters)) continue;
+		// Google may mix in related hosts, so enforce the requested domain policy again.
+		if (!url || !matchesDomainFilter(url, filters)) continue;
 		const title = typeof item.title === "string" ? item.title.trim() : "";
 		mapped.push({
 			title: title || `Source ${mapped.length + 1}`,
@@ -390,7 +354,7 @@ function mapResults(
 // instead of turning it into a failed search.
 //
 // It is also a pure predicate that cannot throw. Callers evaluate it outside
-// their error handling — `gemini-search.ts` before the per-provider try/catch,
+// their error handling — `search-router.ts` before the per-provider try/catch,
 // `index.ts` in the uncaught `getProviderAvailability()` await on the `web_search`
 // path — so any throw from a malformed Bright Data setting or an unparseable
 // config file would break search for every other provider too. Misconfiguration
@@ -414,7 +378,7 @@ export async function searchWithBrightData(query: string, options: BrightDataSea
 	const zone = requireSerpZone();
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
-	const filters = parseDomainFilter(options.domainFilter);
+	const filters = normalizeDomainFilters(options.domainFilter);
 	const searchQuery = buildSearchQuery(query, filters);
 	const body: Record<string, unknown> = {
 		url: buildSerpUrl(searchQuery, numResults, options.recencyFilter),
@@ -455,7 +419,7 @@ export async function searchWithBrightData(query: string, options: BrightDataSea
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = untrustedText(redactCredential(await response.text(), apiKey));
-		throw new Error(`Bright Data API error ${response.status} for zone ${zone}: ${errorText}`);
+		throw new SearchHttpError(response.status, `Bright Data API error ${response.status} for zone ${zone}: ${errorText}`);
 	}
 
 	// The body is read as text before parsing on purpose. `format: "raw"` means a

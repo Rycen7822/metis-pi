@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const moduleUrl = new URL("../parallel-mcp.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
@@ -30,13 +30,13 @@ test("Parallel MCP searches anonymously, maps filters, and supports explicit rou
 		globalThis.fetch = async (url, init) => {
 			calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
 			return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { structuredContent: { results: [
-				{ title: "Allowed", url: "https://docs.example.com/a", excerpts: ["Allowed excerpt"] },
+				{ title: "Allowed", url: "https://docs.example.com./a", excerpts: ["Allowed excerpt"] },
 				{ title: "Excluded", url: "https://private.docs.example.com/b", excerpts: ["Excluded excerpt"] },
 				{ title: "Outside", url: "https://example.net/c", excerpts: ["Outside excerpt"] }
 			] } } }), { status: 200 });
 		};
 		const { searchWithParallelMcp } = await import(${JSON.stringify(moduleUrl)});
-		const direct = await searchWithParallelMcp("docs", { numResults: 2, domainFilter: ["example.com", "-private.docs.example.com"], recencyFilter: "week", includeContent: true });
+		const direct = await searchWithParallelMcp("docs", { numResults: 2, domainFilter: [" HTTPS://Example.COM./path ", "-private.docs.example.com"], recencyFilter: "week", includeContent: true });
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
 		const routed = await search("route", { provider: "auto" });
 		console.log(JSON.stringify({ calls, direct, routedProvider: routed.provider }));
@@ -50,7 +50,7 @@ test("Parallel MCP searches anonymously, maps filters, and supports explicit rou
 	assert.match(output.calls[0].body.params.arguments.search_queries[0], /site:example\.com/);
 	assert.match(output.calls[0].body.params.arguments.search_queries[0], /-site:private\.docs\.example\.com/);
 	assert.match(output.calls[0].body.params.arguments.search_queries[0], /past week/);
-	assert.deepEqual(output.direct.results.map(result => result.url), ["https://docs.example.com/a"]);
+	assert.deepEqual(output.direct.results.map(result => result.url), ["https://docs.example.com./a"]);
 	assert.equal(output.direct.inlineContent[0].content, "Allowed excerpt");
 	assert.equal(output.routedProvider, "parallel-mcp");
 });
@@ -77,11 +77,13 @@ test("Parallel MCP sends optional Bearer auth and redacts it from errors", async
 			return new Response("credential ${secret}", { status: 401 });
 		};
 		const { searchWithParallelMcp } = await import(${JSON.stringify(moduleUrl)});
-		try { await searchWithParallelMcp("secret"); } catch (error) { console.log(JSON.stringify({ authorization, error: String(error) })); }
+		try { await searchWithParallelMcp("secret"); } catch (error) { console.log(JSON.stringify({ authorization, error: String(error), status: error.status, name: error.name })); }
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.authorization, `Bearer ${secret}`);
+	assert.equal(output.status, 401);
+	assert.equal(output.name, "SearchHttpError");
 	assert.doesNotMatch(output.error, new RegExp(secret));
 	assert.match(output.error, /\[redacted\]/);
 });
@@ -145,5 +147,9 @@ test("Curator page exposes a usable Parallel MCP provider entry", async () => {
 	const page = generateCuratorPage(["query"], "session-token", 20, available, "parallel-mcp", "parallel-mcp", [], null);
 	assert.match(page, /data-provider="parallel-mcp"/);
 	assert.match(page, />Parallel MCP<\/button>/);
-	assert.match(page, /"parallel", "parallel-mcp", "tinyfish"/);
+	const inline = page.match(/\bvar DATA = (\{[^\n]+\});/);
+	assert.ok(inline, "page includes browser provider data");
+	const data = JSON.parse(inline[1]);
+	assert.ok(data.providers.includes("parallel-mcp"));
+	assert.equal(data.providerLabels["parallel-mcp"], "Parallel MCP");
 });

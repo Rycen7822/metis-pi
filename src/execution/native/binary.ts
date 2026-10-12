@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TOOL_DIRS: Record<string, string> = {
@@ -18,7 +18,7 @@ export function getBundledToolBinaryPath(
   const exe = platform === "win32" ? `${toolName}.exe` : toolName;
   const custom = customDir?.trim();
   if (custom) {
-    const customBinary = join(custom, exe);
+    const customBinary = resolve(custom, exe);
     if (existsSync(customBinary)) return customBinary;
   }
   const toolsDirectory = fileURLToPath(new URL("../../../assets/native-tools/", import.meta.url));

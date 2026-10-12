@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const queritModuleUrl = new URL("../querit.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url)
 	.href;
@@ -561,4 +561,20 @@ test("Querit provider timeout continues to the next fetch_content fallback", asy
 	assert.ok(output.calls.includes("https://api.parallel.ai/v1/extract"));
 	assert.equal(output.result.title, "Parallel fallback");
 	assert.match(output.result.content, /Recovered by Parallel/);
+});
+
+
+test("Querit invalid JSON does not expose credential prefixes", async () => {
+	const home = await createHome(), token = "abcdef12-3456-7890-abcd-ef1234567890";
+	const child = runChild(`
+		globalThis.fetch = async () => new Response(${JSON.stringify(token)} + " malformed", { status: 200 });
+		const { searchWithQuerit } = await import(${JSON.stringify(queritModuleUrl)});
+		let error;
+		try { await searchWithQuerit("invalid body"); } catch (caught) { error = caught.message; }
+		console.log(JSON.stringify({ error }));
+	`, { HOME: home, USERPROFILE: home, QUERIT_API_KEY: token });
+	assert.equal(child.status, 0, child.stderr);
+	const { error } = JSON.parse(child.stdout.trim());
+	assert.match(error, /returned invalid JSON/);
+	assert.doesNotMatch(error, /abcdef12/);
 });

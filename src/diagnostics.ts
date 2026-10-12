@@ -143,10 +143,11 @@ const transcriptLine = (deps: DiagnosticsDeps): string => {
   return `  transcript: ${state}`;
 };
 
-const decorationsLine = (deps: DiagnosticsDeps): string => {
+const decorationsLine = (deps: DiagnosticsDeps, config: AppearanceConfig): string => {
   const decorations = deps.getDecorations();
   const detail = decorations
-    ? decorations.features.map((f) => `${f.name}=${f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
+    ? decorations.features.map((f) => `${f.name}=${f.name === "thinking-rail" && !config.thinking.rail
+      ? "disabled(config)" : f.installed ? "applied" : `failed: ${f.reason}`}`).join(", ")
     : "unavailable (no assistant prototype binding)";
   return `  decorations: ${detail}`;
 };
@@ -353,7 +354,7 @@ export function registerDiagnosticsCommand(deps: DiagnosticsDeps): void {
         outcomeLine(deps),
         chromeLine(deps),
         transcriptLine(deps),
-        decorationsLine(deps),
+        decorationsLine(deps, config),
         thinkingLine(deps, config),
         fullscreenMarginLine(deps, config),
         glyphsLine(deps),

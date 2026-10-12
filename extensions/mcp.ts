@@ -137,7 +137,7 @@ export default function mcp(pi: ExtensionAPI) {
           ctx.ui.notify("No matching MCP server", "warning");
           return;
         }
-        await Promise.all(selected.map((server) => server.discover(true).catch(() => {})));
+        await Promise.all(selected.map((server) => server.refresh().catch(() => {})));
       } else if (action) {
         ctx.ui.notify("Usage: /mcp [reload | refresh [server]]. Add/login/logout: pi mcp ...", "info");
         return;

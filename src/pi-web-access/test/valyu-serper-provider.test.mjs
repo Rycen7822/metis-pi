@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 const valyuModuleUrl = new URL("../valyu.ts", import.meta.url).href;
 const serperModuleUrl = new URL("../serper.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url).href;
 
 async function createHome(config) {
@@ -93,7 +93,11 @@ test("Curator page exposes usable Serper and Valyu provider entries", async () =
 	assert.match(page, />Serper<\/button>/);
 	assert.match(page, /data-provider="valyu"/);
 	assert.match(page, />Valyu<\/button>/);
-	assert.match(page, /"serpbase", "serpapi", "serper", "serply", "valyu"/);
+	const clientData = JSON.parse(page.match(/var DATA = (\{[^\n]+\});/)[1]);
+	for (const [provider, label] of [["serper", "Serper"], ["valyu", "Valyu"]]) {
+		assert.equal(clientData.providerLabels[provider], label);
+		assert.ok(clientData.providers.includes(provider));
+	}
 });
 
 test("Valyu maps domain and recency filters to documented request fields", async () => {

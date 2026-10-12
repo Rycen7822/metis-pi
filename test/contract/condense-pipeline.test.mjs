@@ -3,15 +3,16 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SessionManager, createEventBus } from "@earendil-works/pi-coding-agent";
+import { SessionManager, createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
+import { SettingsList } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
 import registerCondense from "../../extensions/condense.ts";
 import { TokenEstimator } from "../../src/condense/token-estimator.ts";
 import { summaryBudget, shouldBudgetFlush } from "../../src/condense/budget.ts";
 import { toolResultStub } from "../../src/condense/pruner.ts";
 import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
+import { loadConfig } from "../../src/condense/config.ts";
 
 const usage = {
   input: 12,
@@ -28,6 +29,27 @@ async function waitForSummarizer(f) {
   const deadline = Date.now() + 3000;
   while (!f.calls.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.ok(f.calls.length, "offline provider must start before checking in-flight state");
+}
+
+async function changeSetting(f, id) {
+  initTheme("dark", false);
+  f.ctx.ui.custom = async (factory) => {
+    const overlay = factory(null, null, null, () => {});
+    const list = overlay.children.find(child => child instanceof SettingsList);
+    assert.ok(list, "the settings command must open the actual SettingsList");
+    list.selectItem(id);
+    list.handleInput(" ");
+  };
+  await f.commands.get("pruner").handler("settings", f.ctx);
+}
+
+function addClosedChains(f) {
+  for (let i = 0; i < 2; i++) {
+    f.sm.appendMessage({ role: "user", content: `request-${i}`, timestamp: f.nextTimestamp() });
+    f.add(`raw-${i}`, `echo member-${i}`, `member-${i}`, "Independent intermediate reasoning. ".repeat(100));
+    f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: `final-${i}` }],
+      stopReason: "stop", timestamp: f.nextTimestamp() });
+  }
 }
 
 async function fixture(
@@ -95,7 +117,6 @@ async function fixture(
     if (!defer) queueMicrotask(finish);
     return output;
   };
-  registerApiProvider({ api, stream, streamSimple: stream }, api);
   const pi = {
     events,
     getAllTools: () => [...tools.values()],
@@ -129,8 +150,8 @@ async function fixture(
     getContextUsage: () => ({ tokens: capacity ? 96000 : 90000, contextWindow: 100000 }),
     modelRegistry: {
       find: () => model,
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "local" }),
-      getProviderAuth: async () => undefined,
+      getAvailable: () => [model],
+      streamSimple: stream,
     },
     ui: {
       setStatus: (id, value) => statuses.set(id, value),
@@ -189,7 +210,6 @@ async function fixture(
   t.after(async () => {
     await emit("session_shutdown");
     await Promise.allSettled(pendingFinishes);
-    unregisterApiProviders(api);
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
     rmSync(dir, { recursive: true, force: true });
   });
@@ -740,6 +760,32 @@ for (const stopReason of ["error", "length"]) test(`summary ${stopReason} record
   await f.finish(); assert.equal(f.calls.length, 2, "failed batches remain available for retry");
 });
 
+test("historical oversized frontiers retain their boundary without becoming live flush results", async t => {
+  const f = await fixture(t);
+  const old = f.add("HISTORICAL_RAW_EVIDENCE ".repeat(1500), "unknown-old-command", "historical-oversized");
+  f.sm.appendCustomEntry("context-prune-frontier", {
+    lastAttemptedToolCallId: old.id,
+    lastAttemptedToolName: "bash",
+    lastAttemptedResultTimestamp: old.result.timestamp,
+    lastAttemptedTurnIndex: 0,
+    lastAttemptedTimestamp: old.assistant.timestamp,
+    attemptedBatchCount: 1,
+    attemptedToolCallCount: 1,
+    rawCharCount: old.result.content[0].text.length,
+    summaryCharCount: old.result.content[0].text.length + 100,
+    outcome: "skipped-oversized",
+  });
+  await f.emit("session_start");
+  f.add("NEW_PENDING_EVIDENCE ".repeat(1500), "unknown-new-command", "new-pending");
+  await f.finish();
+  assert.equal(f.calls.length, 1);
+  assert.ok(!JSON.stringify(f.calls[0]).includes("HISTORICAL_RAW_EVIDENCE"), "reload honors the legacy attempted boundary");
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw })).messages;
+  assert.deepEqual(projected.find(m => m.toolCallId === old.id).content, old.result.content, "the legacy skip did not authorize hiding raw output");
+  assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "summarized");
+});
+
 test("effective rescan preserves raw frontier ordinals after global compaction", async t => {
   const f = await fixture(t, { occ: true });
   for (let i = 0; i < 12; i++) f.sm.appendMessage({ role: "assistant", content: [{ type: "text", text: `old ${i}` }], timestamp: 100 + i });
@@ -1225,6 +1271,88 @@ test("pruner off silently aborts an active flush, records cancellation and retai
   assert.ok(!f.notices.some(([message]) => /summarization failed|summarize: aborted/.test(message)));
   assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier" || e.customType === "context-prune-summary"));
   assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === source.id).content[0].text, source.result.content[0].text);
+});
+
+test("display settings save without aborting an active summary", async t => {
+  for (const field of ["showOccStatusLine", "showPruneStatusLine", "quietOversizedSkips"])
+    await t.test(field, async t => {
+      const f = await fixture(t, { defer: true });
+      const initial = (await loadConfig())[field];
+      f.add("semantic source ".repeat(2000), "unknown-command", "display-stable");
+      const finishing = f.finish(false);
+      await waitForSummarizer(f);
+      await changeSetting(f, field);
+      assert.equal((await loadConfig())[field], !initial, "the display change is still persisted");
+      assert.equal(f.requests[0].signal.aborted, false, "display changes cannot invalidate provider work");
+      f.releaseAll();
+      await finishing;
+      assert.equal(f.calls.length, 1);
+      assert.ok(f.sm.getBranch().some(e => e.details?.representation === "summary"));
+    });
+});
+
+test("real policy changes cancel an active summary and retain its source", async t => {
+  for (const command of ["thinking low", "protected-tools bash"])
+    await t.test(command, async t => {
+      const f = await fixture(t, { defer: true });
+      const source = f.add("semantic source ".repeat(2000), "unknown-command", "policy-changed");
+      const finishing = f.finish(false);
+      await waitForSummarizer(f);
+      await f.commands.get("pruner").handler(command, f.ctx);
+      await finishing;
+      assert.equal(f.requests[0].signal.aborted, true);
+      assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-summary" || e.customType === "context-prune-frontier"));
+      assert.deepEqual(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === source.id).content, source.result.content);
+      assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.outcome, "aborted");
+    });
+});
+
+test("display changes retain published chain approvals and cached measurements", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  const compare = TokenEstimator.prototype.compare;
+  let comparisons = 0;
+  t.mock.method(TokenEstimator.prototype, "compare", function (...args) {
+    comparisons++;
+    return compare.apply(this, args);
+  });
+  addClosedChains(f);
+  await f.emit("agent_settled");
+  await f.waitMaintenance();
+  const raw = () => f.sm.buildSessionProjection().messages;
+  const before = (await f.emit("context", { messages: raw() })).messages;
+  assert.ok(before.some(m => m.metisDerived?.kind === "condense-chain"));
+  const measured = comparisons;
+  for (const field of ["showOccStatusLine", "showPruneStatusLine", "quietOversizedSkips"]) await changeSetting(f, field);
+  assert.deepEqual((await f.emit("context", { messages: raw() })).messages, before, "display changes retain the existing authorized projection");
+  await f.emit("agent_settled");
+  await f.waitMaintenance();
+  assert.equal(comparisons, measured, "display changes do not discard the existing gain authorization");
+});
+
+test("display changes do not cancel in-flight chain maintenance", async t => {
+  const f = await fixture(t, { pruneOn: "on-demand", chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+  const compare = TokenEstimator.prototype.compare;
+  let signal, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  t.mock.method(TokenEstimator.prototype, "compare", async function (...args) {
+    signal = args[2];
+    await gate;
+    return compare.apply(this, args);
+  });
+  try {
+    addClosedChains(f);
+    await f.emit("agent_settled");
+    const deadline = Date.now() + 3000;
+    while (!signal && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(signal, "maintenance must reach gain measurement before changing display settings");
+    for (const field of ["showOccStatusLine", "showPruneStatusLine", "quietOversizedSkips"]) await changeSetting(f, field);
+    assert.equal(signal.aborted, false);
+  } finally {
+    release();
+    await f.waitMaintenance();
+  }
+  assert.ok(f.sm.getBranch().some(e => e.customType === "context-prune-chain"), "the unchanged candidate remains publishable");
+  assert.equal(f.calls.length, 0);
 });
 
 test("manual progress uses the same packed/semantic runs as execution", async t => {

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-import { installGlobalProxyFetch, runWithProxy } from "../utils.ts";
+import { installGlobalProxyFetch, runWithProxy } from "../proxy-transport.ts";
 
 const nativeFetch = globalThis.fetch;
 const target = "http://request.example.test/resource";
@@ -188,4 +188,24 @@ test("proxied Request rejects a consumed body before sending a request", { skip:
 	assert.equal(proxy.calls.length, 0);
 	await proxy.fetch(request, { body: "replacement" });
 	assert.equal(proxy.calls[0].body.toString(), "replacement");
+});
+
+
+test("proxied response rejects curl partial-transfer failure after HTTP 200 headers", { skip: curlSkip }, async (t) => {
+	const proxy = await withProxy(t, (_request, response) => {
+		response.writeHead(200, { "Content-Length": "30", Connection: "close" });
+		response.end("partial");
+	});
+	await assert.rejects(proxy.fetch(target), /curl exited with code 18/);
+	assert.equal(proxy.calls.length, 1);
+});
+
+test("proxied complete HTTP errors remain responses rather than transport failures", { skip: curlSkip }, async (t) => {
+	const proxy = await withProxy(t, (_request, response) => {
+		response.writeHead(503);
+		response.end("service unavailable");
+	});
+	const response = await proxy.fetch(target);
+	assert.equal(response.status, 503);
+	assert.equal(await response.text(), "service unavailable");
 });

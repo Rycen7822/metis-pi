@@ -14,6 +14,9 @@ const chatgptToken = `header.${Buffer.from(JSON.stringify({ "https://api.openai.
 const codex = "https://chatgpt.com/backend-api/codex/responses";
 
 const cases = [
+	{ name: "current model rejects auth-resolved custom routing", current: true, baseUrl: "https://api.openai.com/v1", authBaseUrl: gateway, currentBlocked: true },
+	{ name: "current model rejects malformed auth-resolved routing", current: true, baseUrl: "https://api.openai.com/v1", authBaseUrl: "not a URL", currentBlocked: true },
+	{ name: "current model accepts official auth-resolved routing", current: true, baseUrl: "https://api.openai.com/v1", authBaseUrl: "https://api.openai.com/v1/", expectedUrl: official },
 	{ name: "invalid explicit endpoint remains an availability error", endpoint: "not a URL", configError: true },
 	{ name: "custom Pi base URL refuses before fetch", baseUrl: gateway, blocked: true },
 	{ name: "auth-resolved custom URL overrides official model URL", baseUrl: "https://api.openai.com/v1", authBaseUrl: gateway, blocked: true },
@@ -49,7 +52,7 @@ for (const scenario of cases) {
 					const scenario = ${JSON.stringify(scenario)};
 					const requests = [];
 					const model = { id: "gpt-5.6-terra", provider: scenario.provider ?? "openai", api: "openai-responses", baseUrl: scenario.baseUrl };
-					const ctx = scenario.standalone ? undefined : { modelRegistry: {
+					const ctx = scenario.standalone ? undefined : { model, modelRegistry: {
 						getAll: () => [model],
 						getApiKeyAndHeaders: async () => ({ ok: true, apiKey: scenario.apiKey ?? "pi-gateway-test-key", headers: { "X-Gateway": "test" }, baseUrl: scenario.authBaseUrl }),
 					} };
@@ -60,9 +63,9 @@ for (const scenario of cases) {
 							{ type: "message", content: [{ type: "output_text", text: "Test answer" }] },
 						] }), { status: 200 });
 					};
-					const { searchWithOpenAI, isOpenAISearchAvailable } = await import(${JSON.stringify(moduleUrl)});
+					const { searchWithOpenAI, searchWithCurrentModelOpenAI, isOpenAISearchAvailable } = await import(${JSON.stringify(moduleUrl)});
 					let error, availabilityError, available;
-					try { await searchWithOpenAI("private query", {}, ctx); } catch (err) { error = err.message; }
+					try { await (scenario.current ? searchWithCurrentModelOpenAI : searchWithOpenAI)("private query", {}, ctx); } catch (err) { error = err.message; }
 					try { available = await isOpenAISearchAvailable(ctx); } catch (err) { availabilityError = err.message; }
 					console.log(JSON.stringify({ requests, error, available, availabilityError }));
 				`,
@@ -73,6 +76,10 @@ for (const scenario of cases) {
 				assert.deepEqual(output.requests, []);
 				assert.match(output.error, /openaiResponsesUrl.*absolute http\(s\) URL/);
 				assert.equal(output.availabilityError, output.error);
+			} else if (scenario.currentBlocked) {
+				assert.deepEqual(output.requests, []);
+				assert.match(output.error, /authentication configuration.*resolved endpoint/);
+				assert.ok(!output.error.includes("pi-gateway-test-key"));
 			} else if (scenario.blocked) {
 				assert.deepEqual(output.requests, []);
 				assert.match(output.error, /custom baseUrl.*openaiResponsesUrl/);

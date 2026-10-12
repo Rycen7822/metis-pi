@@ -111,6 +111,8 @@ export function summarizeDiscoveryCommand(
 			: { kind: "list", command: joinCommandTokens(mainCommand), path };
 	}
 	if (head === "find") {
+		if (tail.some(token => ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(token)))
+			return unknownCommand(mainCommand);
 		const [query, path] = parseFindQueryAndPath(tail);
 		return query
 			? { kind: "search", command: joinCommandTokens(mainCommand), query, path }

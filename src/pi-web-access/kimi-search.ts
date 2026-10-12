@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { redactCredential } from "./credential-source.ts";
-import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
+import { SearchHttpError, type SearchOptions, type SearchResponse, type SearchResult } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -16,11 +16,6 @@ type ProviderHeaders = Record<string, string | null>;
 interface KimiAuth {
 	apiKey: string;
 	headers: ProviderHeaders;
-}
-
-interface NormalizedDomainFilters {
-	allowed: string[];
-	blocked: string[];
 }
 
 function buildRequestHeaders(auth: KimiAuth): Headers {
@@ -69,38 +64,6 @@ async function resolveKimiAuth(ctx?: ExtensionContext): Promise<KimiAuth | undef
 	return undefined;
 }
 
-function normalizeDomainFilters(domainFilter: string[] | undefined): NormalizedDomainFilters {
-	const filters: NormalizedDomainFilters = { allowed: [], blocked: [] };
-	if (!domainFilter?.length) return filters;
-
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? filters.blocked : filters.allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return filters;
-}
-
-function hostMatchesDomain(hostname: string, domain: string): boolean {
-	return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-function matchesDomainFilters(url: string, filters: NormalizedDomainFilters): boolean {
-	if (filters.allowed.length === 0 && filters.blocked.length === 0) return true;
-
-	let hostname = "";
-	try {
-		hostname = new URL(url).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	if (filters.allowed.length > 0 && !filters.allowed.some((domain) => hostMatchesDomain(hostname, domain))) {
-		return false;
-	}
-	return !filters.blocked.some((domain) => hostMatchesDomain(hostname, domain));
-}
-
 function normalizeResultUrl(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 	const input = value.trim();
@@ -126,7 +89,7 @@ function parseResults(value: unknown, options: SearchOptions): SearchResult[] {
 		if (!item || typeof item !== "object") continue;
 		const record = item as Record<string, unknown>;
 		const url = normalizeResultUrl(record.url);
-		if (!url || !matchesDomainFilters(url, filters)) continue;
+		if (!url || !matchesDomainFilter(url, filters)) continue;
 		results.push({
 			title: typeof record.title === "string" && record.title.trim() ? record.title : url,
 			url,
@@ -171,7 +134,7 @@ export async function searchWithKimi(
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);
 			const errorText = redactCredential(await response.text(), auth.apiKey);
-			throw new Error(`Kimi Code search API error ${response.status}: ${errorText.slice(0, 300)}`);
+			throw new SearchHttpError(response.status, `Kimi Code search API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
 		let parsed: unknown;

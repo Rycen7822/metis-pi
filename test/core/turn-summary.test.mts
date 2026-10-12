@@ -1,7 +1,27 @@
-// Summary text rules and legacy entry rendering; persistence is owned by contract/appearance.
+// Summary text, legacy rendering and append acknowledgements; display delivery is covered by contract/appearance.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatSummaryLine, SUMMARY_CUSTOM_TYPE, makeEntryRenderer } from "../../src/turn-summary.ts";
+import { formatSummaryLine, SUMMARY_CUSTOM_TYPE, makeEntryRenderer, TurnSummary } from "../../src/turn-summary.ts";
+
+test("summary append acknowledgement retains uncertain attempts without retry until a session reset", () => {
+  let attempts = 0, fail = true;
+  const summary = new TurnSummary({ persist: true, wall: () => 3_000, appendEntry() {
+    attempts++;
+    if (fail) throw new Error("append acknowledgement unavailable");
+  } });
+  const snapshot = { active: false, phase: "idle" as const, startedAt: 1_000, elapsedMs: 2_000,
+    thinkingMs: 0, thinkingOpen: false, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tools: undefined };
+  const verdict = { outcome: "completed" as const, evidence: "assistant-stop" as const,
+    reason: "normal stop", attempt: 1, toolErrorsObserved: 0 };
+  assert.equal(summary.record(snapshot, verdict), "unconfirmed");
+  assert.equal(summary.record(snapshot, verdict), "unconfirmed");
+  assert.equal(attempts, 1, "a repeated record cannot reappend an uncertain interaction");
+  summary.forgetSession();
+  fail = false;
+  assert.equal(summary.record(snapshot, verdict), "accepted");
+  assert.equal(summary.record(snapshot, verdict), "accepted");
+  assert.equal(attempts, 2, "the session reset releases prior interaction identities");
+});
 
 test("completed/interrupted/failed/incomplete/unknown label grammar", () => {
   const base = { elapsedMs: 65_000, thinkingMs: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };

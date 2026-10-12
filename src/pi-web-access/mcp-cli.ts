@@ -5,7 +5,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pkg from "./package.json" with { type: "json" };
 import { createMcpServer } from "./mcp-server.ts";
-import { createStandaloneWebToolCore } from "./web-tool-core.ts";
+import { createStandaloneWebToolCore } from "./standalone-web-tools.ts";
 
 // Keep stray console output from dependencies off the JSON-RPC stream.
 console.log = console.info = console.debug = console.error;

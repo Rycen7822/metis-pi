@@ -84,12 +84,12 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_question_interrupt_retains_worker_and_rejects_old_answer(self):
         a=await self.spawn('UI_CONFIRM')
-        await self.until(lambda: self.rt.workers[a['agent_id']].ui)
+        await self.until(lambda: self.rt.workers[a['agent_id']].run.ui)
         stopped=await self.mutation('soft_interrupt',a['agent_id'])
         self.assertTrue(stopped['runtime_retained'])
         with self.assertRaises(AgentError):
             await self.mutation('answer',a['agent_id'],ui_request_id='ui-1',answer=True)
-        self.assertFalse(self.rt.workers[a['agent_id']].ui)
+        self.assertFalse(self.rt.workers[a['agent_id']].run.ui)
 
     async def test_native_followup_joins_current_run(self):
         a=await self.spawn('delay=1|first')
@@ -127,10 +127,10 @@ class V2RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
     async def test_idle_timer_excludes_active_task_and_question(self):
         a=await self.spawn('UI_CONFIRM')
-        await self.until(lambda: self.rt.workers[a['agent_id']].ui)
+        await self.until(lambda: self.rt.workers[a['agent_id']].run.ui)
         w=self.rt.workers[a['agent_id']]; w.idle_since=time.monotonic()-1801
         await self.rt.park_expired()
-        self.assertFalse(w.closed); self.assertTrue(w.ui)
+        self.assertFalse(w.closed); self.assertTrue(w.run.ui)
 
     async def test_expiry_rechecks_idle_epoch_after_waiting_for_lock(self):
         a=await self.spawn(); await self.wait(a['run_id'])

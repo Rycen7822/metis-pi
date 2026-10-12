@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const brightdataModuleUrl = new URL("../brightdata.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const activityModuleUrl = new URL("../activity.ts", import.meta.url).href;
 
 // Every child starts from a config-less HOME. Deleting PI_CODING_AGENT_DIR and
@@ -269,7 +269,7 @@ test("a malformed zone is rejected before the request instead of becoming an opa
 });
 
 // The reason `normalizeZone` is total and availability cannot throw. Availability
-// is evaluated outside its callers' error handling (`gemini-search.ts` checks it
+// is evaluated outside its callers' error handling (`search-router.ts` checks it
 // before the per-provider try/catch; `index.ts` awaits `getProviderAvailability()`
 // uncaught on the `web_search` path), so a throw from one mistyped Bright Data
 // setting would take web search down for Brave and OpenAI as well.
@@ -356,8 +356,7 @@ test("an HTTP error surfaces the status and never leaks the key", async () => {
 	// A paid failure throws. It never degrades into an empty result set that
 	// looks like "the web had no answer".
 	assert.equal(output.results, null);
-	// The status has to be in the message: gemini-search.ts classifies routing
-	// failures by reading it back out of the text.
+	// The received status remains in the diagnostic; routing uses its typed HTTP fact.
 	assert.match(output.error, /Bright Data API error 401/);
 	assert.match(output.error, /unauthorized/);
 	assert.match(output.error, /\[redacted\]/);
@@ -419,7 +418,7 @@ test("a billed 200 that is not SERP JSON fails loudly and quotes what came back"
 	assert.match(errors[7], /`unblocker`/);
 });
 
-// gemini-search.ts reads a status back out of our error text to decide whether a
+// search-router.ts reads a status back out of our error text to decide whether a
 // failure is retryable. Upstream text is quoted into that same message, so a
 // proxied page that merely mentions a 5xx must not be able to forge our status:
 // a billed 200 is not a transient failure, and silently re-running the query on
@@ -779,33 +778,19 @@ test("no prefix of the credential survives into a message, however the body is s
 	}
 });
 
-// `gemini-search.ts` classifies a provider failure by matching keyword phrases against
+// `search-router.ts` classifies a provider failure by matching keyword phrases against
 // our message, and `searchRouting.fallbackOn` accepts transient, quota and network. Of
 // those, only the quota branch runs before the invalid-response branch this module's
 // wording triggers — so an upstream page that merely says "rate limit" could make a
 // BILLED 200 look like a quota failure, and be silently retried on the next provider
 // with no diagnostic. That is the exact outcome this module exists to prevent, so the
 // classifier's ordering assumption is pinned here rather than trusted.
-test("a billed 200 quoting rate-limit text cannot classify as a silently-retryable failure", async () => {
-	// Transcribed from origin/main gemini-search.ts classifyProviderError, in order.
-	const classify = (message) => {
-		const lower = message.toLowerCase();
-		const status = (message.match(/\b(?:error|status|http)\s+(\d{3})\b/i) ?? [])[1];
-		const code = status === undefined ? undefined : Number(status);
-		if (/(?:api )?key (?:not found|missing)|credential resolution/.test(lower)) return "credential";
-		if (code === 401 || code === 403) return "auth";
-		if (code === 400 || code === 422) return "invalid-request";
-		if (code === 402 || code === 429) return "quota";
-		if (code !== undefined && (code === 408 || code === 425 || code >= 500)) return "transient";
-		if (/rate limit|quota|too many requests/.test(lower)) return "quota";
-		if (/unauthorized|forbidden|permission denied/.test(lower)) return "auth";
-		if (/bad request|invalid request/.test(lower)) return "invalid-request";
-		if (/invalid json|no parseable response|returned invalid response|returned empty response/.test(lower)) return "invalid-response";
-		if (/temporar|service unavailable|server error/.test(lower)) return "transient";
-		if (/fetch failed|network|econnreset|econnrefused|enotfound|etimedout|timed out|socket/.test(lower)) return "network";
-		return "unknown";
-	};
-
+test("a billed 200 quoting rate-limit text cannot trigger configured provider fallback", async () => {
+	const home = await createHome({
+		brightdataApiKey: "bd-test-key",
+		brightdataSerpZone: "pi_serp",
+		searchRouting: { providers: ["brightdata", "brave"], fallbackOn: ["transient", "quota", "network"] },
+	});
 	const child = runChild(`
 		const bodies = [
 			"<html>You have exceeded your rate limit for this zone.</html>",
@@ -815,28 +800,27 @@ test("a billed 200 quoting rate-limit text cannot classify as a silently-retryab
 			"<html>socket timed out, network unreachable</html>",
 		];
 		let index = 0;
-		globalThis.fetch = async () => new Response(bodies[index++], { status: 200 });
-		const { searchWithBrightData } = await import(${JSON.stringify(brightdataModuleUrl)});
-		const messages = [];
+		const calls = [];
+		globalThis.fetch = async (url) => {
+			calls.push(String(url));
+			if (String(url) === "https://api.brightdata.com/request") return new Response(bodies[index++], { status: 200 });
+			return new Response(JSON.stringify({ web: { results: [{ title: "brave", url: "https://example.com/brave", description: "ok" }] } }), { status: 200 });
+		};
+		const { search } = await import(${JSON.stringify(searchModuleUrl)});
+		const outcomes = [];
 		for (let i = 0; i < bodies.length; i++) {
-			try { await searchWithBrightData("q"); messages.push(null); }
-			catch (err) { messages.push(err.message); }
+			try { outcomes.push({ returned: await search("q", { provider: "auto" }) }); }
+			catch (err) { outcomes.push({ kind: err.kind, message: err.message }); }
 		}
-		console.log(JSON.stringify({ messages }));
-	`, { BRIGHTDATA_API_KEY: "bd-test-key", BRIGHTDATA_SERP_ZONE: "pi_serp" });
+		console.log(JSON.stringify({ outcomes, calls }));
+	`, { PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "synthetic-brave-key" });
 
 	assert.equal(child.status, 0, child.stderr);
-	const { messages } = JSON.parse(child.stdout.trim());
-	assert.equal(messages.length, 5);
-	const retryable = new Set(["transient", "quota", "network"]);
-	for (const message of messages) {
-		assert.equal(typeof message, "string", "a billed 200 did not throw");
-		const kind = classify(message);
-		assert.ok(!retryable.has(kind), `a billed 200 classified as ${kind}, which fallbackOn can silently retry: ${message}`);
-		assert.equal(kind, "invalid-response", `expected invalid-response, got ${kind}: ${message}`);
-	}
-	// The rewrite keeps the information while removing the trigger.
-	assert.match(messages[0], /upstream rate-limit notice/);
+	const { outcomes, calls } = JSON.parse(child.stdout.trim());
+	assert.equal(outcomes.length, 5);
+	assert.deepEqual(outcomes.map(outcome => outcome.kind), Array(5).fill("invalid-response"));
+	assert.deepEqual(calls, Array(5).fill("https://api.brightdata.com/request"), "an unreadable paid response cannot silently call the next provider");
+	assert.match(outcomes[0].message, /upstream rate-limit notice/);
 });
 
 // activityMonitor is what the TUI shows while a search is in flight, and a billed

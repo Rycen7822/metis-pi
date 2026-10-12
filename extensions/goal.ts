@@ -83,7 +83,12 @@ function isUnfinishedGoal(goal: Goal): boolean {
   return goal.status !== "complete";
 }
 
-function goalResponse(goal: Goal | null, sessionId: string, includeCompletionReport = false) {
+function finalGoalUsage(goal: Goal): string {
+  const tokens = goal.tokenBudget === undefined ? String(goal.tokensUsed) : `${goal.tokensUsed} of ${goal.tokenBudget}`;
+  return `Goal achieved. Final usage: tokens used: ${tokens}; time used: ${formatElapsedSeconds(goal.timeUsedSeconds)}.`;
+}
+
+function goalResponse(goal: Goal | null, sessionId: string, includeCompletionReport = false, usagePending = false) {
   const wireGoal = goal
     ? {
         threadId: sessionId,
@@ -99,16 +104,9 @@ function goalResponse(goal: Goal | null, sessionId: string, includeCompletionRep
   const remainingTokens = goal?.tokenBudget === undefined ? null : Math.max(0, goal.tokenBudget - goal.tokensUsed);
   let completionBudgetReport: string | null = null;
   if (includeCompletionReport && goal?.status === "complete") {
-    const parts: string[] = [];
-    if (goal.tokenBudget !== undefined) {
-      parts.push(`tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`);
-    }
-    if (goal.timeUsedSeconds > 0) {
-      parts.push(`time used: ${formatElapsedSeconds(goal.timeUsedSeconds)}`);
-    }
-    if (parts.length > 0) {
-      completionBudgetReport = `Goal achieved. Report final budget usage to the user: ${parts.join("; ")}.`;
-    }
+    completionBudgetReport = usagePending
+      ? "Goal achieved. Usage in this tool reply excludes the active turn. Final usage will be reported after the turn settles; do not report these provisional values as final."
+      : `${finalGoalUsage(goal)} Report the final usage to the user.`;
   }
   return {
     goal: wireGoal,
@@ -321,6 +319,9 @@ export default function goalExtension(pi: ExtensionAPI) {
   let revision = 0;
   let inputGeneration = 0;
   let pendingError: { errorMessage?: string } | undefined;
+  let inAgentTurn = false;
+  let completionReportGoalId: string | undefined;
+  let requestInvalidated = false;
   let owed: { token: string; goalId: string; revision: number; input: number; session: string } | undefined;
   const clearOwed = () => {
     if (owed) state.continuationQueued = false;
@@ -342,6 +343,11 @@ export default function goalExtension(pi: ExtensionAPI) {
     // Pi defers this command until settled handlers return. At execution it
     // can see user input that was invisibly queued during maintenance.
     pi.sendUserMessage(`/goal __continue_${owed.token}`, { expandPromptTemplates: true });
+  });
+  const stopCheckpointCancellation = pi.events.on("metis:checkpoint-request-cancelled", () => {
+    requestInvalidated = true;
+    pendingError = undefined;
+    clearOwed();
   });
 
   // Local patch (not upstream): keep the footer status fresh once a second so the
@@ -378,6 +384,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       revision++;
       clearOwed();
       pendingError = undefined;
+      completionReportGoalId = undefined;
     }
     pi.appendEntry(STATE_TYPE, {
       version: 2,
@@ -449,6 +456,9 @@ export default function goalExtension(pi: ExtensionAPI) {
     stopStatusTimer();
     clearOwed();
     pendingError = undefined;
+    inAgentTurn = false;
+    completionReportGoalId = undefined;
+    requestInvalidated = false;
     state.restore(ctx.sessionManager.getBranch());
     updateStatus(ctx);
   }
@@ -461,6 +471,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     pendingError = undefined;
     stopGoalSnapshot();
     stopOccFinished();
+    stopCheckpointCancellation();
   });
 
   pi.on("before_agent_start", async (event) => {
@@ -488,16 +499,31 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.on("agent_start", async (_event, _ctx) => {
     pendingError = undefined;
+    inAgentTurn = true;
+    requestInvalidated = false;
     state.startTurn();
   });
 
   pi.on("agent_end", async (event, ctx) => {
+    inAgentTurn = false;
+    const cancelledRequest = requestInvalidated;
+    requestInvalidated = false;
     if (!state.current) return;
     const { changed, limited } = state.accountTurn(event.messages);
     if (limited) showGoalMessage(budgetLimitMessage(state.current));
     if (changed) persist("account");
     updateStatus(ctx);
     state.finishTurn();
+
+    if (state.current.status === "complete" && completionReportGoalId === state.current.id) {
+      completionReportGoalId = undefined;
+      showGoalMessage(finalGoalUsage(state.snapshot()!));
+    }
+
+    // This cancellation rejected a stale request before transport. It is not
+    // a user abort or exhausted provider retry; an explicit retry builds a
+    // fresh context through every owner rather than queuing a competing turn.
+    if (cancelledRequest) return;
 
     if (state.current.status !== "active") return;
 
@@ -699,7 +725,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   function toolResult(ctx: ExtensionContext, complete = false) {
-    const response = goalResponse(state.snapshot(), ctx.sessionManager.getSessionId(), complete);
+    const response = goalResponse(state.snapshot(), ctx.sessionManager.getSessionId(), complete, complete && inAgentTurn);
     return { content: [{ type: "text" as const, text: JSON.stringify(response, null, 2) }], details: response };
   }
 
@@ -772,6 +798,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       state.transition(params.status);
       persist("status");
       updateStatus(ctx);
+      if (params.status === "complete" && inAgentTurn) completionReportGoalId = state.current!.id;
       return toolResult(ctx, params.status === "complete");
     },
   });

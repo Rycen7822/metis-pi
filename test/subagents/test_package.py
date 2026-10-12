@@ -79,6 +79,27 @@ class ProcessIdentity(unittest.TestCase):
         self.assertEqual(crop('🙂字',4),'🙂')
         self.assertEqual(crop('🙂字',3),'')
 
+class ProfileDefaultsOrder(unittest.TestCase):
+    def test_table_order_keeps_custom_profile_launch_settings(self):
+        from subagent_pi.config import load_config, launch_spec
+        for native in (True, False):
+            with self.subTest(native=native), tempfile.TemporaryDirectory(prefix='profile-order-') as tmp:
+                root = Path(tmp)
+                prefix = 'subagents.profiles' if native else 'profiles'
+                default = f'[{prefix}.default]\ntools=["read"]\nmodel="mock"\nprovider="offline"\n'
+                custom = f'[{prefix}.review]\nskills=[]\n'
+                observations = []
+                for text in (custom + default, default + custom):
+                    path = root / ('metis-pi.toml' if native else 'config.toml')
+                    path.write_text(text)
+                    with patch.dict(os.environ, {'METIS_PI_CONFIG': str(root / 'metis-pi.toml')}):
+                        config = load_config(root)
+                    config['pi_command'] = [sys.executable]
+                    spec = launch_spec(config, 'review', None, tmp, 'write')
+                    observations.append((spec['builtins'], spec['model'], spec['argv'][spec['argv'].index('--provider') + 1]))
+                    self.assertEqual(config['profiles']['reader']['tools'], ['read', 'grep', 'find', 'ls'])
+                self.assertEqual(observations, [(['read'], 'mock', 'offline')] * 2)
+
 class SdkTransport(unittest.TestCase):
     def test_managed_explicit_allowlist_bounds_mcp_registration(self):
         # Real SDK + stock MCP extension + local stdio fixture. No prompt/model

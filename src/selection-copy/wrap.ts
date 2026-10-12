@@ -112,7 +112,7 @@ function formatOsc8(link: Osc8Link): string {
 }
 
 /** SGR/OSC8 state replica (attribute flags re-emitted on continuation rows). */
-class AnsiTracker {
+export class AnsiTracker {
   bold = false; dim = false; italic = false; underline = false;
   blink = false; inverse = false; hidden = false; strikethrough = false;
   fgColor: string | null = null;
@@ -368,7 +368,7 @@ interface RawRow {
   bridge: string;
 }
 
-function* styledParts(styled: string): Generator<{ ansi?: string; grapheme?: string }> {
+export function* styledParts(styled: string): Generator<{ ansi?: string; grapheme?: string }> {
   let i = 0;
   while (i < styled.length) {
     const ansi = extractAnsiCode(styled, i);

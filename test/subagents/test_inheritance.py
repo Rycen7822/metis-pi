@@ -24,7 +24,7 @@ from subagent_pi.inheritance import capture_scope_env, collect_skills, reference
 from subagent_pi.mcp_config import CODEX_MCP_BASELINE, parse_mcp_servers, read_access_diagnostics, resolve_environment
 from subagent_pi.runtime import Runtime
 from subagent_pi.store import SCHEMA_VERSION, Store
-from subagent_pi.worker import write_bootstrap
+from subagent_pi.worker import Worker, write_bootstrap
 
 def parse_surface(text: str) -> dict:
     """Latest structured evidence line the shipped managed-surface extension
@@ -498,21 +498,23 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         # and the worker does not linger.
         (self.codex/'config.toml').write_text(
             '[mcp_servers.broken]\ncommand = "/definitely/missing/binary"\nrequired = true\n')
-        before=self.fake_prompt_count()
-        with self.assertRaises(AgentError) as cm:
-            await self.spawn()
+        commands = []
+        raw = Worker.raw
+
+        async def observe_commands(worker, value, timeout=None):
+            commands.append(value.get('type'))
+            return await raw(worker, value, timeout=timeout)
+
+        with mock.patch.object(Worker, 'raw', observe_commands):
+            with self.assertRaises(AgentError) as cm:
+                await self.spawn()
         self.assertEqual(cm.exception.code,'inheritance_required_server_failed')
         self.assertTrue(all(r[0] not in ('starting','running','queued') for r in self.run_rows()),
                         f'runs not terminal: {self.run_rows()}')
         self.assertTrue(all(w.closed for w in self.rt.workers.values()))
-        self.assertEqual(self.fake_prompt_count(),before+1)  # the failed run is recorded, never sent
+        self.assertIn('get_state', commands)  # the child was reached before receipt rejection
+        self.assertNotIn('prompt', commands)
         (self.codex/'config.toml').write_text(STDIO_TOML)
-    def fake_prompt_count(self):
-        con=sqlite3.connect(f'file:{self.home}/registry.sqlite?mode=ro',uri=True)
-        try:
-            rows=con.execute("SELECT task FROM runs").fetchall()
-        finally: con.close()
-        return len(rows)
     def run_rows(self):
         con=sqlite3.connect(f'file:{self.home}/registry.sqlite?mode=ro',uri=True)
         try:
@@ -960,13 +962,14 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
     def spawn(self,rid):
         return self.rt.dispatch('spawn',{'scope':self.scope,'request_id':rid,
             'cwd':str(self.workspace),'task':'simple','access':'read'})
-    def stderr_of(self,aid):
+    async def stderr_of(self,aid):
         path=self.home/'agents'/aid/'stderr.log'
-        deadline=time.monotonic()+20
-        while time.monotonic()<deadline:
+        loop=asyncio.get_running_loop()
+        deadline=loop.time()+20
+        while loop.time()<deadline:
             text=path.read_text(errors='replace') if path.exists() else ''
             if 'subagent-pi-surface applied' in text and 'PROBE_TOOLS ' in text: return text
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
         return path.read_text(errors='replace') if path.exists() else ''
     def write_probe_extension(self, override=()):
         """An ambient Pi extension in the bound agent directory. It registers
@@ -1078,7 +1081,7 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tool_path(baseline, "bash"), str(probe_ext))
         s = await self.spawn("live-override-2")
         aid = s["agent_id"]
-        stderr = self.stderr_of(aid)
+        stderr = await self.stderr_of(aid)
         probe = json.loads(stderr.split("PROBE_TOOLS ", 1)[1].splitlines()[0])
         self.assertEqual(self.tool_path(probe, "bash"), str(probe_ext))
         self.assertIn("bash", self.active_tools(probe))
@@ -1098,7 +1101,7 @@ class RealPiSkillBoundary(unittest.IsolatedAsyncioTestCase):
         self.write_probe_extension()
         s = await self.spawn("live-surface-3")
         aid = s["agent_id"]
-        stderr = self.stderr_of(aid)
+        stderr = await self.stderr_of(aid)
         probe = json.loads(stderr.split("PROBE_TOOLS ", 1)[1].splitlines()[0])
         for name in ("bash", "edit", "write", "powershell"):
             self.assertEqual(self.tool_path(probe, name), f"builtin:{name}")  # registered by Pi ...

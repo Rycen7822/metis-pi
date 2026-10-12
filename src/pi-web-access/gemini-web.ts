@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { getLastGoogleCookieDiagnostic, getLastGoogleCookieDiagnosticDetails, type BrowserCookieDiagnosticDetails, type CookieMap, getGoogleCookies } from "./chrome-cookies.ts";
+import { type BrowserCookieOutcome, type BrowserCookieDiagnosticDetails, type CookieMap, getGoogleCookies } from "./chrome-cookies.ts";
 import { getBrowserCookieSelectionFromConfig, isBrowserCookieAccessAllowed, normalizeChromeProfile } from "./gemini-web-config.ts";
 
 const GEMINI_APP_URL = "https://gemini.google.com/app";
@@ -102,25 +102,28 @@ export interface GeminiWebFile {
 	mimeType: string;
 }
 
-export async function isGeminiWebAvailable(chromeProfile?: string): Promise<CookieMap | null> {
-	if (!isBrowserCookieAccessAllowed()) return null;
+export async function getGeminiWebAvailability(chromeProfile?: string): Promise<BrowserCookieOutcome | undefined> {
+	if (!isBrowserCookieAccessAllowed()) return undefined;
 
 	const configured = getBrowserCookieSelectionFromConfig();
-	const result = await getGoogleCookies({
+	return getGoogleCookies({
 		browser: configured.browser,
 		profile: normalizeChromeProfile(chromeProfile) ?? configured.profile,
 		requiredCookies: REQUIRED_COOKIES,
 	});
-	if (!result) return null;
-	return result.cookies;
 }
 
-export function getGeminiWebAvailabilityDiagnostic(): string | null {
-	return isBrowserCookieAccessAllowed() ? getLastGoogleCookieDiagnostic() : null;
+export async function isGeminiWebAvailable(chromeProfile?: string): Promise<CookieMap | null> {
+	const outcome = await getGeminiWebAvailability(chromeProfile);
+	return outcome?.ok ? outcome.cookies : null;
 }
 
-export function getGeminiWebAvailabilityDiagnosticDetails(): BrowserCookieDiagnosticDetails | null {
-	return isBrowserCookieAccessAllowed() ? getLastGoogleCookieDiagnosticDetails() : null;
+export function getGeminiWebAvailabilityDiagnostic(outcome?: BrowserCookieOutcome): string | null {
+	return outcome?.ok === false ? outcome.diagnostic.message : null;
+}
+
+export function getGeminiWebAvailabilityDiagnosticDetails(outcome?: BrowserCookieOutcome): BrowserCookieDiagnosticDetails | null {
+	return outcome?.ok === false ? outcome.diagnostic : null;
 }
 
 export async function getActiveGoogleEmail(cookies: CookieMap): Promise<string | null> {

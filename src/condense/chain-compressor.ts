@@ -1,4 +1,5 @@
-import { chainMembers, CUSTOM_TYPE_CHAIN } from "./types.ts";
+import { CUSTOM_TYPE_CHAIN } from "./types.ts";
+import { chainMembers } from "./chain-model.ts";
 import type { ChainRange, ChainCompressionEntry, SingleChainCompressionEntry, ToolCallRecord } from "./types.ts";
 import type { BlockRefIssuer } from "./block-refs.ts";
 import type { DiagnosticSink } from "./diagnostics.ts";

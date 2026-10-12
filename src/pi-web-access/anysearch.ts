@@ -1,9 +1,10 @@
+import { SearchHttpError } from "./search-types.ts";
 import { loadWebAccessConfig } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import type { ExtractedContent } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent } from "./content.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 
 const ANYSEARCH_API_URL = "https://api.anysearch.com/v1/search";
@@ -119,7 +120,9 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
 		else activityMonitor.logError(activityId, redactedMessage);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
@@ -127,7 +130,7 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`AnySearch API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `AnySearch API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 
 	let rawData: unknown;
@@ -135,7 +138,8 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 		rawData = await response.json();
 	} catch (err) {
 		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`AnySearch API returned invalid JSON: ${errorMessage(err)}`);
+		if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+		throw new Error("AnySearch API returned invalid JSON");
 	}
 
 	let data: AnySearchResponse;

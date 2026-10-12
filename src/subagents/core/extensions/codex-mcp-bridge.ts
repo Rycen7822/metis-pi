@@ -208,10 +208,12 @@ export default async function (pi: ExtensionAPI) {
       throw new Error(`Tool ${serverName}.${toolName} is excluded by the inherited server policy`);
     }
     const conn = await ensureConnection(cfg);
-    let { tools } = await conn.ensureTools(signal);
+    let catalog = await conn.ensureTools(signal);
+    let { tools } = catalog;
     let toolMeta = tools.find((t) => t.name === toolName);
     if (!toolMeta) {
-      ({ tools } = await conn.ensureTools(signal)); // cache may be stale after list_changed
+      catalog = await conn.ensureTools(signal); // cache may be stale after list_changed
+      ({ tools } = catalog);
       toolMeta = tools.find((t) => t.name === toolName);
       if (!toolMeta) throw new Error(`Tool ${toolName} is not offered by ${serverName}; use action=list with server=${serverName} to discover tools`);
     }
@@ -238,8 +240,10 @@ export default async function (pi: ExtensionAPI) {
         `Tool ${serverName}.${toolName} is not available to this managed child (access=${access}; only explicitly read-only tools are exposed)`,
       );
     }
-    const headerPlan = callableHeaderPlan(serverName, toolName, toolMeta);
-    if (needsConfirmation(cfg, toolMeta)) {
+    conn.assertCatalogCurrent(catalog);
+    let headerPlan = callableHeaderPlan(serverName, toolName, toolMeta);
+    const confirmationRequired = needsConfirmation(cfg, toolMeta);
+    if (confirmationRequired) {
       const argsPreview = JSON.stringify(params.args ?? {}).slice(0, 500);
       const ok = await ctx.ui.confirm(
         "MCP tool call",
@@ -251,6 +255,19 @@ export default async function (pi: ExtensionAPI) {
           details: { confirmed: false },
         }; // denial is not an error
       }
+      // Approval covers the discovered definition, never a later tool behind
+      // the same name. A notification can invalidate it during the UI await;
+      // an unannounced change is caught by the fresh catalog read as well.
+      conn.assertCatalogCurrent(catalog);
+      const currentCatalog = await conn.ensureTools(signal, true);
+      conn.assertCatalogCurrent(currentCatalog);
+      const current = currentCatalog.tools.find((tool) => tool.name === toolName);
+      if (!current || !toolVisible(cfg, current) ||
+          current.definitionHash !== toolMeta.definitionHash ||
+          needsConfirmation(cfg, current) !== confirmationRequired) {
+        throw new Error(`Tool ${serverName}.${toolName} changed while awaiting approval; discover it and confirm again`);
+      }
+      headerPlan = callableHeaderPlan(serverName, toolName, current);
     }
     if (signal?.aborted) throw new CancelledError(false);
     try {

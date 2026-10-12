@@ -1,8 +1,9 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomainFilters } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath, resolveApiBaseUrl } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { ExtractedContent } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent } from "./content.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
@@ -83,15 +84,7 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 }
 
 function mapDomainFilter(domainFilter: string[] | undefined): { include_domains?: string[]; exclude_domains?: string[] } {
-	if (!domainFilter?.length) return {};
-	const include_domains: string[] = [];
-	const exclude_domains: string[] = [];
-	for (const raw of domainFilter) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? exclude_domains : include_domains;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { include: include_domains, exclude: exclude_domains } = normalizeDomainFilters(domainFilter);
 	return {
 		...(include_domains.length > 0 ? { include_domains } : {}),
 		...(exclude_domains.length > 0 ? { exclude_domains } : {}),
@@ -184,7 +177,7 @@ export async function searchWithTavily(query: string, options: TavilySearchOptio
 }
 
 function tavilyErrorStatus(err: unknown): number {
-	return Number(errorMessage(err).match(/^Tavily API error (\d{3}):/)?.[1] ?? 0);
+	return err instanceof SearchHttpError ? err.status : 0;
 }
 
 async function requestWithKeyFailover(apiUrl: string, body: Record<string, unknown>, signal: AbortSignal): Promise<TavilyResponse> {
@@ -223,19 +216,22 @@ async function tavilyRequest(apiUrl: string, apiKey: string, body: Record<string
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);
 		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
+		const redactedError = err instanceof SearchHttpError
+			? new SearchHttpError(err.status, redactedMessage)
+			: new Error(redactedMessage);
 		if (err instanceof Error) redactedError.name = err.name;
 		throw redactedError;
 	}
 
 	if (!response.ok) {
 		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Tavily API error ${response.status}: ${errorText.slice(0, 300)}`);
+		throw new SearchHttpError(response.status, `Tavily API error ${response.status}: ${errorText.slice(0, 300)}`);
 	}
 
 	try {
 		return await response.json() as TavilyResponse;
 	} catch (err) {
-		throw new Error(`Tavily API returned invalid JSON: ${errorMessage(err)}`);
+		if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
+		throw new Error("Tavily API returned invalid JSON");
 	}
 }

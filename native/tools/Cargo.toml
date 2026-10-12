@@ -2,7 +2,6 @@
 members = [
   "exec",
   "view-image",
-  "crates/codex-utils-cache",
   "crates/codex-utils-image",
   "crates/codex-utils-pty",
 ]
@@ -12,25 +11,22 @@ resolver = "2"
 edition = "2024"
 license = "Apache-2.0"
 version = "0.0.0"
+publish = false
 
 [workspace.dependencies]
 anyhow = "1"
-async-trait = "0.1"
 base64 = "0.22.1"
-codex-utils-cache = { path = "crates/codex-utils-cache" }
 codex-utils-image = { path = "crates/codex-utils-image" }
 codex-utils-pty = { path = "crates/codex-utils-pty" }
 image = { version = "^0.25.9", default-features = false }
 lazy_static = "1"
 libc = "0.2"
 log = "0.4"
-lru = "0.16.3"
 mime_guess = "2.0.5"
 portable-pty = "0.9"
 pretty_assertions = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha1 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "macros", "rt", "rt-multi-thread", "sync"] }
 

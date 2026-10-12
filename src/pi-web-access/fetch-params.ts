@@ -1,4 +1,4 @@
-import { normalizeProxyUrl } from "./utils.ts";
+import { normalizeProxyUrl } from "./proxy-transport.ts";
 
 export interface FetchContentParams {
 	url?: unknown;

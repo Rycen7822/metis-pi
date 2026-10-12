@@ -1,12 +1,7 @@
-import type { CapturedBatch } from "./types.ts";
+import type { CapturedBatch, SummaryToolCallRef } from "./types.ts";
 import { resultTimestampOf } from "./occurrence-key.ts";
 
-export interface SummaryToolCallRef {
-  shortId: string;
-  toolCallId: string;
-  /** ToolResultMessage timestamp; combines with toolCallId into the occurrence key. */
-  resultTimestamp?: number;
-}
+export type { SummaryToolCallRef } from "./types.ts";
 
 export interface SummaryMessageDetailsLike {
   toolCallRefs?: SummaryToolCallRef[];

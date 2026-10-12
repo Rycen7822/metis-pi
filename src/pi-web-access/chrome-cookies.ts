@@ -49,6 +49,10 @@ export interface BrowserCookieDiagnosticDetails {
 	attempts: BrowserCookieAttemptDiagnostic[];
 }
 
+export type BrowserCookieOutcome =
+	| { ok: true; cookies: CookieMap; warnings: string[]; cookieHeader?: string }
+	| { ok: false; diagnostic: BrowserCookieDiagnosticDetails };
+
 interface BrowserCookieEntry {
 	name: string;
 	value: string;
@@ -85,26 +89,12 @@ const WINDOWS_BROWSER_CONFIGS: BrowserConfig[] = [
 ];
 
 const browserPasswordCache = new Map<string, Promise<BrowserPassword[]>>();
-let lastCookieDiagnostic: string | null = null;
-let lastCookieDiagnosticDetails: BrowserCookieDiagnosticDetails | null = null;
 let sqliteModule: typeof import("node:sqlite") | null = null;
 let sqliteImportAttempted = false;
 
-export function getLastGoogleCookieDiagnostic(): string | null {
-	return lastCookieDiagnostic;
-}
-
-export function getLastBrowserCookieDiagnostic(): string | null {
-	return lastCookieDiagnostic;
-}
-
-export function getLastGoogleCookieDiagnosticDetails(): BrowserCookieDiagnosticDetails | null {
-	return lastCookieDiagnosticDetails;
-}
-
 export async function getGoogleCookies(
 	options?: { browser?: BrowserCookiePreset; profile?: string; requiredCookies?: string[] },
-): Promise<{ cookies: CookieMap; warnings: string[] } | null> {
+): Promise<BrowserCookieOutcome> {
 	return getBrowserCookiesForHosts({
 		hosts: GOOGLE_ORIGINS.map((origin) => new URL(origin).hostname),
 		browser: options?.browser,
@@ -117,41 +107,35 @@ export async function getGoogleCookies(
 
 export async function getBrowserCookiesForHosts(
 	options: { hosts: string[]; browser?: BrowserCookiePreset; profile?: string; requiredCookies?: string[]; cookieNames?: Iterable<string>; requiredLabel?: string; requestUrl?: URL },
-): Promise<{ cookies: CookieMap; warnings: string[]; cookieHeader?: string } | null> {
-	lastCookieDiagnostic = null;
-	lastCookieDiagnosticDetails = null;
+): Promise<BrowserCookieOutcome> {
+	const attempts: BrowserCookieAttemptDiagnostic[] = [];
+	const failure = (message: string): BrowserCookieOutcome => ({ ok: false, diagnostic: { message, attempts } });
 	if (!isBrowserCookieAccessAllowed()) {
-		setCookieDiagnostic("Browser cookie access is disabled; enable allowBrowserCookies to use browser cookies.");
-		return null;
+		return failure("Browser cookie access is disabled; enable allowBrowserCookies to use browser cookies.");
 	}
 
 	const currentPlatform = process.platform;
 	const platformConfigs = currentPlatform === "darwin" ? MACOS_BROWSER_CONFIGS : currentPlatform === "linux" ? LINUX_BROWSER_CONFIGS : currentPlatform === "win32" ? WINDOWS_BROWSER_CONFIGS : [];
 	const configs = options.browser ? platformConfigs.filter((config) => config.id === options.browser) : platformConfigs;
 	if (options.browser && configs.length === 0) {
-		setCookieDiagnostic(`Browser preset '${options.browser}' is not supported on this platform.`);
-		return null;
+		return failure(`Browser preset '${options.browser}' is not supported on this platform.`);
 	}
 	if (configs.length === 0) {
-		setCookieDiagnostic("Chromium cookie extraction is unsupported on this platform.");
-		return null;
+		return failure("Chromium cookie extraction is unsupported on this platform.");
 	}
 
 	const warningSet = new Set<string>();
 	const rawProfile = typeof options.profile === "string" ? options.profile.trim() : "";
 	const requestedProfile = normalizeProfileName(options.profile);
 	if (rawProfile && !requestedProfile) {
-		setCookieDiagnostic("Configured Chromium profile must be a profile directory name, not a path.");
-		return null;
+		return failure("Configured Chromium profile must be a profile directory name, not a path.");
 	}
 	const requiredCookies = normalizeCookieNames(options.requiredCookies);
 	const cookieNames = normalizeCookieNames(options.cookieNames ? [...options.cookieNames] : undefined);
 	const hosts = normalizeHosts(options.hosts);
 	if (hosts.length === 0) {
-		setCookieDiagnostic("No valid cookie hosts were requested.");
-		return null;
+		return failure("No valid cookie hosts were requested.");
 	}
-	const attempts: BrowserCookieAttemptDiagnostic[] = [];
 	const home = currentPlatform === "win32" ? process.env.USERPROFILE || homedir() : homedir();
 	let sawCookieDatabase = false;
 	let sawRequiredCookies = false;
@@ -286,6 +270,7 @@ export async function getBrowserCookiesForHosts(
 					continue;
 				}
 				return {
+					ok: true,
 					cookies,
 					warnings: [...warningSet],
 					...(options.requestUrl ? { cookieHeader: buildCookieHeader(entries) } : {}),
@@ -297,36 +282,30 @@ export async function getBrowserCookiesForHosts(
 	}
 
 	if (sawBackendFailure === "unavailable") {
-		setCookieDiagnostic("SQLite backend unavailable: install sqlite3 or use a runtime with SQLite support.", attempts);
+		return failure("SQLite backend unavailable: install sqlite3 or use a runtime with SQLite support.");
 	} else if (sawBackendFailure === "query") {
-		setCookieDiagnostic("SQLite query failed while reading the copied Chromium cookie database.", attempts);
+		return failure("SQLite query failed while reading the copied Chromium cookie database.");
 	} else if (sawUnsafeProfilePath) {
-		setCookieDiagnostic("Configured Chromium profile must resolve inside the browser profile root.", attempts);
+		return failure("Configured Chromium profile must resolve inside the browser profile root.");
 	} else if (!sawCookieDatabase) {
-		setCookieDiagnostic(requestedProfile
+		return failure(requestedProfile
 			? `Chromium profile '${requestedProfile}' does not contain a cookie database.`
-			: "No detected Chromium profile contains a cookie database.", attempts);
+			: "No detected Chromium profile contains a cookie database.");
 	} else if (requiredCookies?.length && !sawRequiredCookies) {
-		setCookieDiagnostic(`No detected Chromium profile contains the required ${options.requiredLabel ?? "browser"} cookies.`, attempts);
+		return failure(`No detected Chromium profile contains the required ${options.requiredLabel ?? "browser"} cookies.`);
 	} else if (sawWindowsAppBoundCookie) {
-		setCookieDiagnostic("Windows Chromium v20 app-bound cookies are not supported.", attempts);
+		return failure("Windows Chromium v20 app-bound cookies are not supported.");
 	} else if (warningSet.size > 0) {
-		setCookieDiagnostic([...warningSet][0], attempts);
+		return failure([...warningSet][0]);
 	} else if (sawDecryptionFailure) {
-		setCookieDiagnostic(`Required ${options.requiredLabel ?? "browser"} cookies could not be decrypted.`, attempts);
+		return failure(`Required ${options.requiredLabel ?? "browser"} cookies could not be decrypted.`);
 	} else if (!sawAnyHostCookie) {
-		setCookieDiagnostic(options.requestUrl
+		return failure(options.requestUrl
 			? "No detected Chromium profile contains cookies for the requested URL."
-			: "No detected Chromium profile contains cookies for the requested host.", attempts);
+			: "No detected Chromium profile contains cookies for the requested host.");
 	} else {
-		setCookieDiagnostic("Required Gemini cookies were not available or could not be decrypted.", attempts);
+		return failure("Required Gemini cookies were not available or could not be decrypted.");
 	}
-	return null;
-}
-
-function setCookieDiagnostic(message: string, attempts: BrowserCookieAttemptDiagnostic[] = []): void {
-	lastCookieDiagnostic = message;
-	lastCookieDiagnosticDetails = { message, attempts };
 }
 
 function recordCookieAttempt(attempts: BrowserCookieAttemptDiagnostic[], config: BrowserConfig, profile: string, status: BrowserCookieAttemptStatus): void {

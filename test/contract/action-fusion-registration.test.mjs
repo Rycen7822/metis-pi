@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createAgentSession,
-  createEventBus,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -20,7 +19,7 @@ const vendorEntry = fileURLToPath(new URL("../../extensions/execution.ts", impor
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 for (const reverseOrder of [false, true])
-  test(`fusion entry controls native and conversion schemas with reverse load order=${reverseOrder}`, async (t) => {
+  test(`fusion entry controls native schemas with reverse load order=${reverseOrder}`, async (t) => {
     const cwd = mkdtempSync(join(tmpdir(), "metis-fusion-switch-"));
     const prior = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = cwd;
@@ -48,12 +47,10 @@ for (const reverseOrder of [false, true])
       },
     ];
     const settingsManager = SettingsManager.inMemory({ packages: reverseOrder ? [] : packages(false) });
-    const events = createEventBus();
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: cwd,
       settingsManager,
-      eventBus: events,
       additionalExtensionPaths: reverseOrder ? [vendorEntry, fusionEntry] : [],
       noSkills: true,
       noThemes: true,
@@ -90,9 +87,6 @@ for (const reverseOrder of [false, true])
       );
       for (const name of ["edit", "write"])
         assert.equal(Boolean(tools.find((tool) => tool.name === name)?.parameters.properties.then_run), !disabled);
-      const availability = { enabled: false };
-      events.emit("metis:action-fusion-availability", availability);
-      assert.equal(availability.enabled, !disabled, "reload must not retain the previous entry's availability");
     }
     assert.deepEqual(errors, []);
   });

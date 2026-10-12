@@ -1,7 +1,8 @@
+import { SearchHttpError } from "./search-types.ts";
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import type { ExtractedContent, ExtractOptions } from "./extract.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { ExtractedContent, ExtractOptions } from "./content.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
@@ -140,46 +141,50 @@ export async function searchWithKagi(query: string, options: KagiSearchOptions =
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const activityId = activityMonitor.logStart({ type: "api", query });
-	let response: Response;
+	const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	try {
-		response = await fetch(KAGI_SEARCH_URL, {
+		const response = await fetch(KAGI_SEARCH_URL, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
 			body: JSON.stringify({ query, limit: numResults }),
-			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+			signal: options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal,
 		});
+		if (!response.ok) {
+			const errorText = redactCredential(await response.text(), apiKey);
+			throw new SearchHttpError(response.status, `Kagi API error ${response.status}: ${errorText.slice(0, 300)}`);
+		}
+		let rawData: unknown;
+		try {
+			rawData = await response.json();
+		} catch (err) {
+			if (options.signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))) throw err;
+			throw new Error("Kagi API returned invalid JSON");
+		}
+		const parsed = parseSearchResponse(rawData);
+		const results = parsed.results.slice(0, numResults);
+		const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
+		if (options.includeContent) {
+			const urls = new Set(results.map(result => result.url));
+			const inlineContent = parsed.inlineContent.filter(content => urls.has(content.url));
+			if (inlineContent.length > 0) mapped.inlineContent = inlineContent;
+		}
+		activityMonitor.logComplete(activityId, response.status);
+		return mapped;
 	} catch (err) {
+		if (options.signal?.aborted || (err instanceof Error && err.name === "AbortError" && !timeoutSignal.aborted)) {
+			activityMonitor.logComplete(activityId, 0);
+			throw new Error("Aborted");
+		}
 		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const safeMessage = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError")
+			? "Kagi request timed out after 60s" : redactCredential(message, apiKey);
+		const outgoing = safeMessage === message && err instanceof Error ? err
+			: err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage)
+			: err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
+		if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
+		else activityMonitor.logError(activityId, safeMessage);
+		throw outgoing;
 	}
-	if (!response.ok) {
-		activityMonitor.logComplete(activityId, response.status);
-		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Kagi API error ${response.status}: ${errorText.slice(0, 300)}`);
-	}
-	let rawData: unknown;
-	try {
-		rawData = await response.json();
-	} catch (err) {
-		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`Kagi API returned invalid JSON: ${errorMessage(err)}`);
-	}
-	const parsed = parseSearchResponse(rawData);
-	activityMonitor.logComplete(activityId, response.status);
-	const results = parsed.results.slice(0, numResults);
-	const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
-	if (options.includeContent) {
-		const urls = new Set(results.map(result => result.url));
-		const inlineContent = parsed.inlineContent.filter(content => urls.has(content.url));
-		if (inlineContent.length > 0) mapped.inlineContent = inlineContent;
-	}
-	return mapped;
 }
 
 export function isKagiExtractAvailable(): boolean {
@@ -197,42 +202,46 @@ export async function extractWithKagi(url: string, signal?: AbortSignal, options
 	});
 	const apiKey = await requireApiKey(signal);
 	const activityId = activityMonitor.logStart({ type: "api", query: `kagi extract: ${url}` });
-	let response: Response;
+	const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS);
 	try {
-		response = await fetchRemoteUrl(KAGI_EXTRACT_URL, {
+		const response = await fetchRemoteUrl(KAGI_EXTRACT_URL, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
 			body: JSON.stringify({ pages: [{ url }] }),
-			signal: signal ? AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS),
+			signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
 		}, {
 			allowRanges: ssrf.allowRanges,
 			trustEnvProxy: ssrf.trustEnvProxy,
 			onRedirect: ({ from, to, init }) => to.origin === from.origin ? init : { ...init, headers: { "Content-Type": "application/json", Accept: "application/json" } },
 			...(options.lookup ? { lookup: options.lookup } : {}),
 		});
+		if (!response.ok) {
+			const errorText = redactCredential(await response.text(), apiKey);
+			throw new SearchHttpError(response.status, `Kagi Extract API error ${response.status}: ${errorText.slice(0, 300)}`);
+		}
+		let rawData: unknown;
+		try {
+			rawData = await response.json();
+		} catch (err) {
+			if (signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))) throw err;
+			throw new Error("Kagi Extract API returned invalid JSON");
+		}
+		const parsed = parseExtractResponse(rawData, url);
+		activityMonitor.logComplete(activityId, response.status);
+		return parsed;
 	} catch (err) {
+		if (signal?.aborted || (err instanceof Error && err.name === "AbortError" && !timeoutSignal.aborted)) {
+			activityMonitor.logComplete(activityId, 0);
+			throw new Error("Aborted");
+		}
 		const message = errorMessage(err);
-		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) activityMonitor.logComplete(activityId, 0);
-		else activityMonitor.logError(activityId, redactedMessage);
-		if (redactedMessage === message) throw err;
-		const redactedError = new Error(redactedMessage);
-		if (err instanceof Error) redactedError.name = err.name;
-		throw redactedError;
+		const safeMessage = timeoutSignal.aborted || (err instanceof Error && err.name === "TimeoutError")
+			? "Kagi extract request timed out" : redactCredential(message, apiKey);
+		const outgoing = safeMessage === message && err instanceof Error ? err
+			: err instanceof SearchHttpError ? new SearchHttpError(err.status, safeMessage)
+			: err instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
+		if (outgoing instanceof SearchHttpError) activityMonitor.logComplete(activityId, outgoing.status);
+		else activityMonitor.logError(activityId, safeMessage);
+		throw outgoing;
 	}
-	if (!response.ok) {
-		activityMonitor.logComplete(activityId, response.status);
-		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Kagi Extract API error ${response.status}: ${errorText.slice(0, 300)}`);
-	}
-	let rawData: unknown;
-	try {
-		rawData = await response.json();
-	} catch (err) {
-		activityMonitor.logComplete(activityId, response.status);
-		throw new Error(`Kagi Extract API returned invalid JSON: ${errorMessage(err)}`);
-	}
-	const parsed = parseExtractResponse(rawData, url);
-	activityMonitor.logComplete(activityId, response.status);
-	return parsed;
 }

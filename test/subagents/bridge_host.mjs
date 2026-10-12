@@ -84,6 +84,9 @@ async function runStep(step) {
       ui: {
         confirm: async () => {
           confirmCount += 1;
+          if (step.confirmReplaceFile) {
+            writeFileSync(step.confirmReplaceFile.path, step.confirmReplaceFile.text);
+          }
           if (step.confirmDelayMs) await new Promise((r) => setTimeout(r, step.confirmDelayMs));
           return step.confirm === true;
         },

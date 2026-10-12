@@ -3,6 +3,7 @@ ownership. The Runtime owns state; this module owns the process-facing mechanics
 from __future__ import annotations
 import asyncio
 import contextlib
+from dataclasses import dataclass, field
 import fcntl
 import json
 import os
@@ -31,6 +32,39 @@ def message_text(message):
     if not isinstance(content,list): return ''
     return '\n'.join(str(p.get('text','')) for p in content if isinstance(p,dict) and p.get('type')=='text')
 
+@dataclass
+class RunProjection:
+    """Task observations; Runtime decides when this projection starts and ends."""
+    id: str | None = None
+    last_text: str = ''
+    error: str | None = None
+    usage: dict = field(default_factory=dict)
+    ui: dict = field(default_factory=dict)
+    active_tools: dict = field(default_factory=dict)
+    tool_uses: int = 0
+    last_progress: float = field(default_factory=time.monotonic)
+    cancelled: bool = False
+    idle_timeout_seconds: int = 0
+
+    @property
+    def current_tool(self):
+        return next(iter(self.active_tools.values()), None)
+
+    def idle_seconds(self):
+        # Tool execution and parent input are owned waits, not model silence.
+        if not self.id or self.active_tools or self.ui:
+            return None
+        return max(0, time.monotonic() - self.last_progress)
+
+    def finish(self):
+        # Keep the settled task's output/usage for idle diagnostics, while no
+        # question, active tool or cancellation flag can carry into new work.
+        self.id = None
+        self.ui.clear()
+        self.active_tools.clear()
+        self.cancelled = False
+
+
 class Worker:
     def __init__(self, agent, proc, stderr_path, rpc_timeout, idle_timeout,
                  spawn_task, on_event, on_failure, on_exit, on_retire):
@@ -40,20 +74,12 @@ class Worker:
         self.on_failure, self.on_exit, self.on_retire = on_failure, on_exit, on_retire
         self.generation = agent['generation']
         self.pending = {}
-        self.run_id = None
-        self.last_text = ''
-        self.error = None
-        self.usage = {}
+        self.run = RunProjection(idle_timeout_seconds=idle_timeout)
+        self.transport_error = None
         self.stopping = False
         self.closed = False
-        self.ui = {}
-        self.active_tools = {}
-        self.tool_uses = 0
         self.last_activity = now()
-        self.last_progress = time.monotonic()
         self.idle_since = None
-        self.cancelled_run = False
-        self.idle_timeout_seconds = idle_timeout
         self.events_written = 0
         self.tasks = []
         self.write_lock = asyncio.Lock()
@@ -64,13 +90,6 @@ class Worker:
         # Set when the host starts work no daemon run owns (see Runtime.stop_unowned):
         # the worker is being stopped and none of its output may be absorbed.
         self.tainted = None
-    @property
-    def current_tool(self):
-        return next(iter(self.active_tools.values()),None)
-    def idle_seconds(self):
-        # Tool execution and parent input are owned waits, not model silence.
-        if not self.run_id or self.active_tools or self.ui: return None
-        return max(0,time.monotonic()-self.last_progress)
     def start(self):
         self.tasks = [self.spawn_task(self.read_stdout()),self.spawn_task(self.read_stderr()),self.spawn_task(self.watch_exit())]
         for task in self.tasks: task.add_done_callback(self.retire)
@@ -126,9 +145,9 @@ class Worker:
                     self.on_event(self,e)
         except asyncio.CancelledError: raise
         except Exception as exc:
-            self.error = f'RPC reader failed: {type(exc).__name__}: {exc}'
-            with contextlib.suppress(Exception): self.on_event(self,{'type':'protocol_error','message':crop(self.error,1000)})
-            self.spawn_task(self.on_failure(self,self.error))
+            self.transport_error = f'RPC reader failed: {type(exc).__name__}: {exc}'
+            with contextlib.suppress(Exception): self.on_event(self,{'type':'protocol_error','message':crop(self.transport_error,1000)})
+            self.spawn_task(self.on_failure(self,self.transport_error))
     async def read_stderr(self):
         with self.stderr_path.open('ab') as f:
             total = f.tell()

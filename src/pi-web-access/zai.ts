@@ -1,8 +1,9 @@
+import { SearchHttpError } from "./search-types.ts";
+import { normalizeDomain, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { normalizeDomain } from "./domain-filter-normalization.ts";
-import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
@@ -56,6 +57,7 @@ function parseResults(text: string, limit: number, domain: string | undefined): 
 	if (typeof value === "string") value = JSON.parse(value);
 	if (!Array.isArray(value)) throw new Error("Z.ai returned invalid response: expected a result list");
 	const results: SearchResponse["results"] = [];
+	const filters = { include: domain ? [domain] : [], exclude: [] };
 	for (const entry of value) {
 		if (!entry || typeof entry !== "object") continue;
 		const { link, title, content } = entry as Record<string, unknown>;
@@ -68,8 +70,7 @@ function parseResults(text: string, limit: number, domain: string | undefined): 
 		}
 		if (url.protocol !== "http:" && url.protocol !== "https:") continue;
 		// The remote filter is undocumented, so enforce it locally too.
-		const host = url.hostname.toLowerCase().replace(/\.+$/, "");
-		if (domain && host !== domain && !host.endsWith(`.${domain}`)) continue;
+		if (!matchesDomainFilter(url, filters)) continue;
 		results.push({
 			title: typeof title === "string" && title.trim() ? title.trim() : `Source ${results.length + 1}`,
 			url: url.href,
@@ -128,10 +129,12 @@ export async function searchWithZai(query: string, options: SearchOptions = {}):
 		return { answer: formatSearchResultsAsAnswer(results), results };
 	} catch (err) {
 		let message: string;
+		let httpStatus: number | undefined;
 		if (options.signal?.aborted) message = "Aborted";
 		else if (timeoutSignal.aborted) message = "Z.ai request timed out after 60s";
 		else {
 			const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+			if (typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599) httpStatus = code;
 			// Never expose remote HTTP/JSON-RPC bodies or nested SDK errors: they
 			// can echo credentials in plain, encoded or transformed form.
 			message = typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599
@@ -142,7 +145,7 @@ export async function searchWithZai(query: string, options: SearchOptions = {}):
 				: "Z.ai MCP request failed; check your connection and GLM Coding Plan key";
 		}
 		activityMonitor.logError(activityId, redactCredential(message, apiKey));
-		throw new Error(message);
+		throw httpStatus === undefined ? new Error(message) : new SearchHttpError(httpStatus, message);
 	} finally {
 		cleaningUp = true;
 		// Best effort, separately bounded DELETE; always close the local streams.

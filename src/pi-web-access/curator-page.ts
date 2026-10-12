@@ -1,4 +1,4 @@
-import type { ProviderAvailability } from "./gemini-search.ts";
+import { SEARCH_PROVIDERS, SEARCH_PROVIDER_LABELS, providerLabel, type ProviderAvailability } from "./search-providers.ts";
 
 function safeInlineJSON(data: unknown): string {
 	return JSON.stringify(data)
@@ -14,55 +14,14 @@ function buildProviderButtons(
 	selected: string,
 	hasInitialQueries: boolean,
 ): string {
-	const providers = [
-		{ value: "all", label: "All", available: available.all },
-		{ value: "openai", label: "OpenAI", available: available.openai },
-		{ value: "exa", label: "Exa", available: available.exa },
-		{ value: "brave", label: "Brave", available: available.brave },
-		{ value: "parallel", label: "Parallel", available: available.parallel },
-		{ value: "parallel-mcp", label: "Parallel MCP", available: available["parallel-mcp"] },
-		{ value: "tinyfish", label: "TinyFish", available: available.tinyfish },
-		{ value: "search1api", label: "Search1API", available: available.search1api },
-		{ value: "searchinfinity", label: "Searchinfinity", available: available.searchinfinity },
-		{ value: "querit", label: "Querit", available: available.querit },
-		{ value: "tavily", label: "Tavily", available: available.tavily },
-		{ value: "firecrawl", label: "Firecrawl", available: available.firecrawl },
-		{ value: "jina", label: "Jina", available: available.jina },
-		{ value: "serpdive", label: "SERPdive", available: available.serpdive },
-		{ value: "kagi", label: "Kagi", available: available.kagi },
-		{ value: "bocha", label: "Bocha", available: available.bocha },
-		{ value: "ollama", label: "Ollama", available: available.ollama },
-		{ value: "searxng", label: "SearXNG", available: available.searxng },
-		{ value: "degoog", label: "degoog", available: available.degoog },
-		{ value: "duckduckgo", label: "DuckDuckGo", available: available.duckduckgo },
-		{ value: "perplexity", label: "Perplexity", available: available.perplexity },
-		{ value: "gemini", label: "Gemini", available: available.gemini },
-		{ value: "kimi", label: "Kimi", available: available.kimi },
-		{ value: "anysearch", label: "AnySearch", available: available.anysearch },
-		{ value: "xcrawl", label: "XCrawl", available: available.xcrawl },
-		{ value: "xai", label: "xAI", available: available.xai },
-		{ value: "mistral", label: "Mistral", available: available.mistral },
-		{ value: "brightdata", label: "Bright Data", available: available.brightdata },
-		{ value: "serpbase", label: "SerpBase", available: available.serpbase },
-		{ value: "serpapi", label: "SerpApi", available: available.serpapi },
-		{ value: "serper", label: "Serper", available: available.serper },
-		{ value: "serply", label: "Serply", available: available.serply },
-		{ value: "you", label: "You.com", available: available.you },
-		{ value: "baizhi", label: "Baizhi", available: available.baizhi },
-		{ value: "zai", label: "Z.ai", available: available.zai },
-		{ value: "valyu", label: "Valyu", available: available.valyu },
-		{ value: "keenable", label: "Keenable", available: available.keenable },
-		{ value: "ceramic", label: "Ceramic", available: available.ceramic },
-	];
-
-	return providers
-		.filter(p => p.available)
-		.map((p) => {
-			const isDefault = p.value === selected;
+	return SEARCH_PROVIDERS
+		.filter(provider => provider !== "auto" && available[provider])
+		.map((provider) => {
+			const isDefault = provider === selected;
 			const state = isDefault && hasInitialQueries ? "loading" : "idle";
 			const classes = ["provider-btn", state, isDefault ? "is-default" : ""].filter(Boolean).join(" ");
 			const disabled = state === "loading" ? " disabled" : "";
-			return `<button type="button" class="${classes}" data-provider="${p.value}" data-state="${state}"${disabled}>${p.label}</button>`;
+			return `<button type="button" class="${classes}" data-provider="${provider}" data-state="${state}"${disabled}>${providerLabel(provider)}</button>`;
 		})
 		.join("");
 }
@@ -78,7 +37,7 @@ export function generateCuratorPage(
 	defaultSummaryModel: string | null,
 ): string {
 	const providerButtonsHtml = buildProviderButtons(availableProviders, defaultProvider, queries.length > 0);
-	const inlineData = safeInlineJSON({ queries, sessionToken, timeout, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, availableProviders });
+	const inlineData = safeInlineJSON({ queries, sessionToken, timeout, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, availableProviders, providers: SEARCH_PROVIDERS, providerLabels: SEARCH_PROVIDER_LABELS });
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -1479,7 +1438,8 @@ const SCRIPT = `(function() {
   var token = DATA.sessionToken;
   var timeoutSec = DATA.timeout;
   var queries = Array.isArray(DATA.queries) ? DATA.queries : [];
-  var providers = ["auto", "all", "openai", "exa", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "firecrawl", "jina", "serpdive", "kagi", "bocha", "ollama", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "anysearch", "xcrawl", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "baizhi", "you", "zai", "keenable", "ceramic"];
+  var providers = DATA.providers;
+  var providerLabels = DATA.providerLabels;
   var availProviders = DATA.availableProviders && typeof DATA.availableProviders === "object" ? DATA.availableProviders : {};
   var workflow = "summary-review";
   var initialDefaultProvider = typeof DATA.defaultProvider === "string" ? DATA.defaultProvider : "exa";
@@ -1683,45 +1643,7 @@ const SCRIPT = `(function() {
   }
 
   function providerLabel(provider) {
-    if (provider === "auto") return "Auto";
-    if (provider === "all") return "All";
-    if (provider === "openai") return "OpenAI";
-    if (provider === "brave") return "Brave";
-    if (provider === "parallel") return "Parallel";
-    if (provider === "tinyfish") return "TinyFish";
-    if (provider === "search1api") return "Search1API";
-    if (provider === "searchinfinity") return "Searchinfinity";
-    if (provider === "querit") return "Querit";
-    if (provider === "tavily") return "Tavily";
-    if (provider === "firecrawl") return "Firecrawl";
-    if (provider === "jina") return "Jina";
-    if (provider === "serpdive") return "SERPdive";
-    if (provider === "kagi") return "Kagi";
-    if (provider === "bocha") return "Bocha";
-    if (provider === "ollama") return "Ollama";
-    if (provider === "searxng") return "SearXNG";
-    if (provider === "degoog") return "degoog";
-    if (provider === "duckduckgo") return "DuckDuckGo";
-    if (provider === "perplexity") return "Perplexity";
-    if (provider === "exa") return "Exa";
-    if (provider === "gemini") return "Gemini";
-    if (provider === "kimi") return "Kimi";
-    if (provider === "anysearch") return "AnySearch";
-    if (provider === "xcrawl") return "XCrawl";
-    if (provider === "xai") return "xAI";
-    if (provider === "mistral") return "Mistral";
-    if (provider === "brightdata") return "Bright Data";
-    if (provider === "serpbase") return "SerpBase";
-    if (provider === "serpapi") return "SerpApi";
-    if (provider === "serper") return "Serper";
-    if (provider === "serply") return "Serply";
-    if (provider === "you") return "You.com";
-    if (provider === "baizhi") return "Baizhi";
-    if (provider === "zai") return "Z.ai";
-    if (provider === "valyu") return "Valyu";
-    if (provider === "keenable") return "Keenable";
-    if (provider === "ceramic") return "Ceramic";
-    return "Unknown";
+    return typeof providerLabels[provider] === "string" ? providerLabels[provider] : "Unknown";
   }
 
   function providerTagHtml(provider) {

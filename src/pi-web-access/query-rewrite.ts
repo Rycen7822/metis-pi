@@ -1,17 +1,16 @@
-import type { complete, Api, Model, ProviderHeaders } from "@earendil-works/pi-ai/compat";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SummaryGenerationContext } from "./summary-review.ts";
-import { awaitWithAbort } from "./abortable.ts";
 import { findModelWithProviderRouting, isModelInScope } from "./summary-model-scope.ts";
 
-async function resolveFirstAvailableModel(
+function resolveFirstAvailableModel(
 	ctx: SummaryGenerationContext,
 	candidates: Array<{ provider: string; id: string }>,
-): Promise<{ model: Model<Api>; apiKey?: string; headers?: ProviderHeaders }> {
+): Model<Api> {
+	const available = ctx.modelRegistry.getAvailable();
 	for (const { provider, id } of candidates) {
 		const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id);
 		if (!model || !isModelInScope(model, ctx.scopedModels)) continue;
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-		if (auth.ok) return { model, apiKey: auth.apiKey, headers: auth.headers };
+		if (available.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return model;
 	}
 	throw new Error(`No enabled model available: ${candidates.map(candidate => `${candidate.provider}/${candidate.id}`).join(", ")}`);
 }
@@ -21,17 +20,13 @@ export async function rewriteSearchQuery(
 	ctx: SummaryGenerationContext,
 	signal: AbortSignal,
 ): Promise<string> {
-	const { model, apiKey, headers } = await resolveFirstAvailableModel(ctx, [
+	if (signal.aborted) throw new Error("Aborted");
+	const model = resolveFirstAvailableModel(ctx, [
 		{ provider: "anthropic", id: "claude-haiku-4-5" },
 		{ provider: "google", id: "gemini-3.6-flash" },
 		{ provider: "openai", id: "gpt-5-mini" },
 	]);
-	const registry = ctx.modelRegistry as typeof ctx.modelRegistry & { complete?: typeof complete };
-	const usesRegistryComplete = typeof registry.complete === "function";
-	if (signal.aborted) throw new Error("Aborted");
-	const completeFn = usesRegistryComplete ? registry.complete!.bind(registry) : (await awaitWithAbort(import("@earendil-works/pi-ai/compat"), signal)).complete;
-	if (signal.aborted) throw new Error("Aborted");
-	const response = await completeFn(
+	const response = await ctx.modelRegistry.complete(
 		model,
 		{
 			messages: [{
@@ -40,9 +35,10 @@ export async function rewriteSearchQuery(
 				timestamp: Date.now(),
 			}],
 		},
-		usesRegistryComplete ? { signal } : { apiKey, headers, signal },
+		{ signal },
 	);
-	if (response.stopReason === "aborted") throw new Error("Aborted");
+	if (signal.aborted || response.stopReason === "aborted") throw new Error("Aborted");
+	if (response.stopReason === "error") throw new Error(response.errorMessage || "Query rewrite failed");
 	const contentParts = Array.isArray(response.content) ? response.content : [];
 	const text = contentParts
 		.map((part: unknown) => part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "")

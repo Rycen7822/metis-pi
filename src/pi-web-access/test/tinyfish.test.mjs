@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const tinyfishModuleUrl = new URL("../tinyfish.ts", import.meta.url).href;
-const searchModuleUrl = new URL("../gemini-search.ts", import.meta.url).href;
+const searchModuleUrl = new URL("../search-router.ts", import.meta.url).href;
 const extractModuleUrl = new URL("../extract.ts", import.meta.url).href;
 const curatorPageModuleUrl = new URL("../curator-page.ts", import.meta.url)
 	.href;
@@ -414,4 +414,20 @@ test("curator page exposes TinyFish as a manual provider", async () => {
 	assert.match(page, /data-provider="tinyfish"/);
 	assert.match(page, />TinyFish<\/button>/);
 	assert.match(page, /provider-tag\.provider-tinyfish/);
+});
+
+
+test("TinyFish invalid JSON does not expose credential prefixes", async () => {
+	const home = await createHome(), token = "abcdef12-3456-7890-abcd-ef1234567890";
+	const child = runChild(`
+		globalThis.fetch = async () => new Response(${JSON.stringify(token)} + " malformed", { status: 200 });
+		const { searchWithTinyFish } = await import(${JSON.stringify(tinyfishModuleUrl)});
+		let error;
+		try { await searchWithTinyFish("invalid body"); } catch (caught) { error = caught.message; }
+		console.log(JSON.stringify({ error }));
+	`, { HOME: home, USERPROFILE: home, TINYFISH_API_KEY: token });
+	assert.equal(child.status, 0, child.stderr);
+	const { error } = JSON.parse(child.stdout.trim());
+	assert.match(error, /returned invalid JSON/);
+	assert.doesNotMatch(error, /abcdef12/);
 });
