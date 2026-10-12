@@ -696,7 +696,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         old_pi = self.root / "old-pi"
         (old_pi / "dist/bundle").mkdir(parents=True)
         (old_pi / "package.json").write_text(
-            json.dumps({"name": "@earendil-works/pi-coding-agent", "version": "0.99.0"})
+            json.dumps({"name": "@earendil-works/pi-coding-agent", "version": "1.0.4"})
         )
         (old_pi / "dist/index.js").write_text('throw new Error("old SDK must not run");')
         marker = self.root / "old-pi-ran"
@@ -722,8 +722,8 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["result"]["isError"])
         error = self.unpack(response)["error"]
         self.assertEqual(error["code"], "unsupported_pi_version")
-        self.assertIn("0.99.1", error["message"])
-        self.assertIn("0.99.0", error["message"])
+        self.assertIn("1.1.0", error["message"])
+        self.assertIn("1.0.4", error["message"])
         self.assertFalse(marker.exists())
 
     async def test_mcp_protocol_errors_and_ping(self):
@@ -906,7 +906,7 @@ class LivePiLifecycleTests(McpHarness, unittest.IsolatedAsyncioTestCase):
     made; Pi, its agent dir and HOME are all isolated under the test root.
     SUBAGENT_PI_LIVE_PI_BIN selects an isolated Pi install (default: PATH).
 
-    Uses the plugin-owned SDK child against an unmodified Pi >=0.99.1 installation.
+    Uses the plugin-owned SDK child against an unmodified Pi >=1.1.0 installation.
     """
     BIN=os.environ.get('SUBAGENT_PI_LIVE_PI_BIN','pi')
     BEFORE_SETTLE='PI_MOCK_BEFORE_SETTLE'

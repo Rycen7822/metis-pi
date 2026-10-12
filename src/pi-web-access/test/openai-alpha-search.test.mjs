@@ -20,6 +20,7 @@ async function runScenario(t, scenario = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "pi-openai-alpha-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	await writeFile(join(dir, "web-search.json"), JSON.stringify({
+		toolActivation: "eager",
 		openaiApiKey: "alpha-test-key",
 		openaiUseAlphaSearch: true,
 		...scenario.config,

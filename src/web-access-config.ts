@@ -7,15 +7,15 @@ type ReadFile = (path: string) => string | undefined;
 export const WEB_CREDENTIALS_FILE = "web-search.json";
 
 export function webAccessAgentDir(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR;
+  const configured = process.env["PI_CODING_AGENT_DIR"];
   if (!configured) return join(homedir(), ".pi", "agent");
   return configured.replace(/^~(?=$|[\\/])/, () => homedir());
 }
 
 function legacyPaths(agentDir: string): string[] {
   const paths = [join(agentDir, WEB_CREDENTIALS_FILE)];
-  if (process.env.PI_CODING_AGENT_DIR || resolve(agentDir) !== resolve(webAccessAgentDir())) return paths;
-  if (process.env.XDG_CONFIG_HOME) paths.push(join(process.env.XDG_CONFIG_HOME, "pi", WEB_CREDENTIALS_FILE));
+  if (process.env["PI_CODING_AGENT_DIR"] || resolve(agentDir) !== resolve(webAccessAgentDir())) return paths;
+  if (process.env["XDG_CONFIG_HOME"]) paths.push(join(process.env["XDG_CONFIG_HOME"], "pi", WEB_CREDENTIALS_FILE));
   paths.push(join(homedir(), ".pi", WEB_CREDENTIALS_FILE));
   return paths;
 }

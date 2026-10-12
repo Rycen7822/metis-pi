@@ -199,9 +199,8 @@ test("foreign codemode and nested renderer resolvers retain their own presentati
   assert.match(plain(first.row), /FOREIGN CODEMODE/);
   first.handle.dispose();
   const foreignRead = { renderCall: () => bindings.makeText("FOREIGN READ"), renderResult: () => bindings.makeText("foreign result") };
-  const hasResolvers = InteractiveMode.prototype.getRegisteredToolDefinition.toString().includes("resolveToolRenderers");
-  const second = setup(t, hasResolvers ? {} : { read: foreignRead });
-  if (hasResolvers) second.context.runtimeHost.session.extensionRunner.resolveToolRenderers = (name, next) => name === "read"
+  const second = setup(t, {});
+  second.context.runtimeHost.session.extensionRunner.resolveToolRenderers = (name, next) => name === "read"
     ? { ...next(), ...foreignRead } : next();
   second.capture(1, "read", { path: "note.md" }, { content: [{ type: "text", text: "body" }], details: {} });
   second.row.updateResult({ content: [], details: { calls: [call(1, "read", { path: "note.md" })] } }, false);

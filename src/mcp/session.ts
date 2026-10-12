@@ -124,7 +124,7 @@ export class McpServerSession {
   }
   private async open(): Promise<McpClient> {
     const config = this.entry.config;
-    const client = new McpClient({ name: "pi", version: "1.0.0", requestTimeoutMs: (config.timeout ?? 60) * 1000,
+    const client = new McpClient({ name: "pi", version: "1.1.0", requestTimeoutMs: (config.timeout ?? 60) * 1000,
       roots: [{ uri: pathToFileURL(this.cwd).href, name: basename(this.cwd) }] });
     this.connecting = client; this.state = "connecting";
     const abort = () => { void this.closeClient(client).catch(() => {}); };

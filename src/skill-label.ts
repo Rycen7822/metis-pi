@@ -18,8 +18,7 @@
 // for the joined list, and the search starts after the `[skill]` token so a
 // skill literally named "skill" cannot hit the token itself. Labels are found by a
 // bounded search over `children`/`child` links that stops at the first level holding
-// text nodes — Pi 0.86 renders them as `Box → MouseRegion → Container → Text/Markdown`,
-// 0.85 renders them as direct children. Anything unexpected — no token in the label,
+// text nodes inside the host's containers. Anything unexpected — no token in the label,
 // name not found, a node without a readable and writable text, an extra wrapper level —
 // leaves the host's rendering untouched.
 

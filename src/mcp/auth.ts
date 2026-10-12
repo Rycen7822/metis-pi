@@ -48,7 +48,7 @@ export class McpCredentials {
   }
   async load(): Promise<McpOAuthState | undefined> {
     return this.locked(states => {
-      // Pi 1.0.0 itself claims URL-keyed state for the first named server.
+      // Claim URL-keyed saved state for the first named server.
       const take = !states[this.key] && Boolean(states[this.url]);
       if (take) { states[this.key] = states[this.url]; delete states[this.url]; }
       const value = states[this.key];

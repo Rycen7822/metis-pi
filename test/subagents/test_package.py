@@ -168,7 +168,7 @@ class SdkTransport(unittest.TestCase):
         from subagent_pi.worker import managed_command
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
-            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.0.0"}')
+            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.1.0"}')
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli')
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
@@ -177,16 +177,18 @@ class SdkTransport(unittest.TestCase):
             self.assertEqual(argv[1:],[str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--mode','rpc'])
             self.assertEqual({p:p.read_bytes() for p in before},before)
 
-    def test_stock_pi_command_rejects_unknown_sdk_metadata(self):
+    def test_stock_pi_command_rejects_old_and_unknown_sdks(self):
         from subagent_pi.worker import managed_command
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
             manifest=root/'package.json'
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli')
+            cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
-            for version in (None, 'unknown'):
-                with self.subTest(version=version):
-                    manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
-                    with self.assertRaises(AgentError) as error:
-                        managed_command([str(cli),'--mode','rpc'])
-                    self.assertEqual(error.exception.code,'unsupported_pi_version')
+            for version in (None, 'unknown', '1.0.0', '1.0.4'):
+                manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
+                for sdk_path in (None, str(sdk)):
+                    with self.subTest(version=version, sdk_path=sdk_path):
+                        with self.assertRaises(AgentError) as error:
+                            managed_command([str(cli),'--mode','rpc'], sdk_path=sdk_path)
+                        self.assertEqual(error.exception.code,'unsupported_pi_version')

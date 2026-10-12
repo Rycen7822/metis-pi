@@ -80,11 +80,9 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       typeof lookup.value !== "function" ||
       !lookup.configurable ||
       !lookup.writable ||
-      ![
-        "returnwithBuiltInRenderers(toolName,this.session.getToolDefinition(toolName));",
+      methodBody(lookup.value) !==
         "returnthis.session.extensionRunner.resolveToolRenderers(toolName,()=>withBuiltIn" +
-          "Renderers(toolName,this.session.getToolDefinition(toolName)));",
-      ].includes(methodBody(lookup.value)))
+          "Renderers(toolName,this.session.getToolDefinition(toolName)));")
   ) {
     return skipped("Unrecognized or already modified Pi renderer lookup");
   }

@@ -163,7 +163,7 @@ test("settled errors stop continuation and context keeps only the current goal's
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "rate limit" }] }, h.ctx);
   assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
-  await h.fire("agent_settled", {}, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
   assert.equal((await h.tool("get_goal", {})).details.goal.status, "usageLimited");
   assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [user]);
 });
@@ -181,13 +181,13 @@ test("a goal stays active through all five attempts and blocks only after final 
     assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
     assert.equal(h.sent.length, sent, "goal continuation must not compete with native retry");
   }
-  await h.fire("agent_settled", {}, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
   const goal = (await h.tool("get_goal", {})).details.goal;
   assert.equal(goal.status, "blocked");
   assert.equal(goal.timeUsedSeconds, 5);
   const statuses = h.entries.filter(entry => entry.data.action === "status");
   assert.equal(statuses.length, 1);
-  await h.fire("agent_settled", {}, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
   assert.equal(h.entries.filter(entry => entry.data.action === "status").length, 1);
 });
 
@@ -203,7 +203,7 @@ test("a successful retry clears the failed attempt and resumes goal continuation
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
   assert.equal(h.sent.length, sent + 1);
-  await h.fire("agent_settled", {}, h.ctx);
+  await h.fire("agent_settled", { aborted: false }, h.ctx);
   assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
   assert.equal(h.entries.filter(entry => entry.data.action === "status").length, 0);
 });

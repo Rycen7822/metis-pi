@@ -75,8 +75,7 @@ if (args.tools?.length && !args.tools.every((name) => /^[+-]/.test(name))) {
       `Unsupported managed tool allowlist pattern: ${ambiguous}; use exact ordinary tool names and explicit mcp__ names or globs`,
     );
   if (!args.tools.some((name) => name.startsWith("mcp__"))) {
-    // 1.0 treats mcp__* literally (the allowlist already excludes MCP); 1.1
-    // matches it. Resource gateways also need explicit permission by name.
+    // Resource gateways also need explicit permission by name.
     const denied = ["mcp__*", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].filter(
       (name) => !args.tools.includes(name),
     );

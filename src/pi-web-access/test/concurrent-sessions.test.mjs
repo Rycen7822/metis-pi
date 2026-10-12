@@ -158,7 +158,9 @@ test("a session forked from history keeps the clones its results point at after 
 	const binDir = join(root, "bin");
 	await mkdir(agentDir, { recursive: true });
 	await mkdir(binDir, { recursive: true });
-	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ githubClone: { clonePath: join(root, "repos") } }), "utf8");
+	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({
+		toolActivation: "eager", githubClone: { clonePath: join(root, "repos") },
+	}), "utf8");
 	const fake = async (name, source) => writeFile(join(binDir, name), `#!/usr/bin/env node\n${source}\n`, { mode: 0o755 });
 	await fake("gh", "process.exit(1);");
 	await fake("git", `

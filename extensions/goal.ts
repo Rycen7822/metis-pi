@@ -546,7 +546,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     const error = pendingError;
     pendingError = undefined;
     if (!error || state.current?.status !== "active") return;
-    if ("aborted" in event && event.aborted) return;
+    if (event.aborted) return;
     const status = goalStopStatusForAssistantError(error);
     state.transition(status);
     persist("status");

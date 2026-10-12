@@ -21846,14 +21846,6 @@ var CAPABILITY_LABELS = {
   fetch: "content fetching",
   "stored-content": "stored-result retrieval"
 };
-function supportsDynamicTools(pi) {
-  if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return false;
-  const unsubscribe = pi.on("session_start", () => {
-  });
-  if (typeof unsubscribe !== "function") return false;
-  unsubscribe();
-  return true;
-}
 function addsToolsWithoutCheckpoint(model) {
   const compat = model?.compat;
   if (!model || compat?.supportsMidConvoSystemMessages !== true) return false;
@@ -21882,10 +21874,6 @@ function transcriptToolNames(messages) {
 }
 function registerWebToolActivation(pi, tools, mode) {
   if (tools.length === 0) return;
-  if (!supportsDynamicTools(pi)) {
-    console.warn("[pi-web-access] Dynamic tool activation requires Pi 0.86.0 or newer; web tools remain eagerly available.");
-    return;
-  }
   const names = tools.map((tool) => tool.name);
   const capabilities = tools.map((tool) => CAPABILITY_LABELS[tool.capability]).join(", ");
   const parameters = Type.Object({}, { additionalProperties: false });

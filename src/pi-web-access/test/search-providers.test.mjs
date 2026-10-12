@@ -1425,7 +1425,7 @@ test("OpenAI search picks the newest Luna model from the registry", async () => 
 			}), { status: 200, headers: { "content-type": "application/json" } });
 		};
 
-		// The ChatGPT subscription model list as Pi 1.0.4 registers it.
+		// A ChatGPT subscription registry with multiple Luna generations.
 		const models = ["gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]
 			.map((id) => ({ provider: "openai-codex", id }));
 		const ctx = {

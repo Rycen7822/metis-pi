@@ -38,7 +38,7 @@ const hostRedirectHook = `
 		});
 	`;
 
-function run({ messages = [], hook = "", legacyHost = false } = {}) {
+function run({ messages = [], hook = "" } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-version-"));
 	writeFileSync(join(root, "web-search.json"), JSON.stringify({ toolActivation: "dynamic" }), "utf8");
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
@@ -54,7 +54,7 @@ function run({ messages = [], hook = "", legacyHost = false } = {}) {
 			const pi = {
 				registerTool(tool) { tools.set(tool.name, tool); active.push(tool.name); },
 				registerCommand() {}, registerShortcut() {},
-				on(event, handler) { const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list); if (!${legacyHost}) return () => {}; },
+				on(event, handler) { const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list); return () => {}; },
 				getAllTools() { return [...tools.values()]; },
 				getActiveTools() { return [...active]; },
 				setActiveTools(names) { active = [...names]; },
@@ -100,12 +100,4 @@ test("a host-redirected warm session restores exactly the tools it recorded", ()
 	assert.deepEqual(state.warnings, []);
 	assert.ok(state.active.includes("web_search"), `expected restored web_search, got ${state.active.join(", ")}`);
 	assert.equal(state.active.includes("fetch_content"), false, `fetch_content was never recorded, got ${state.active.join(", ")}`);
-});
-
-test("a host older than 0.86.0 falls back to eager web tools without crashing", () => {
-	const state = run({ legacyHost: true });
-	assert.equal(state.warnings.length, 1);
-	assert.match(state.warnings[0], /requires Pi 0\.86\.0 or newer/);
-	assert.equal(state.active.includes("web_enable"), false);
-	assert.ok(state.active.includes("web_search"), `expected eager web_search, got ${state.active.join(", ")}`);
 });

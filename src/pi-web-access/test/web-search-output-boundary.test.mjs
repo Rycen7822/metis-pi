@@ -12,7 +12,7 @@ const LARGE_ANSWER_LENGTH = 116_000;
 function runBoundaryScenario(config = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-output-boundary-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider: "openai", ...config }));
+		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider: "openai", toolActivation: "eager", ...config }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			const answer = "A".repeat(${LARGE_ANSWER_LENGTH} - 11) + "LATE_ANSWER";
@@ -72,7 +72,7 @@ function runIncludeContentScenario(mode) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-output-guidance-"));
 	const provider = mode === "inline" ? "anysearch" : "openai";
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider, maxInlineContentChars: 1_000 }));
+		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider, toolActivation: "eager", maxInlineContentChars: 1_000 }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			const answer = "A".repeat(${LARGE_ANSWER_LENGTH});
@@ -202,7 +202,7 @@ test("truncated background-fetch search retains state, fetchId, and search retri
 test("background includeContent keeps provider page content and fetches only uncovered URLs", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-partial-inline-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider: "anysearch" }));
+		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ provider: "anysearch", toolActivation: "eager" }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			const requests = [];

@@ -12,7 +12,7 @@ const indexUrl = new URL("../index.ts", import.meta.url).href;
 function runWebSearchThenRetrieve(config) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-web-access-response-id-"));
 	try {
-		writeFileSync(join(dir, "web-search.json"), JSON.stringify(config));
+		writeFileSync(join(dir, "web-search.json"), JSON.stringify({ toolActivation: "eager", ...config }));
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 			globalThis.fetch = async (url) => {

@@ -140,7 +140,7 @@ System dependency for curator browser launch on Linux:
 
 Without `xdg-utils`, the curator URL is printed to the tool output so you can copy it into a browser.
 
-Requires Pi v0.37.3+.
+Requires Pi >=1.1.0.
 
 ## Quick Start
 
@@ -260,7 +260,7 @@ The artifact preserves the `supported`, `contradicted`, `unclear`, or `missing-e
 
 ### In codemode scripts
 
-Scripts run by Pi's `codemode` tool (Pi 1.0 or later) get data instead of the text the model sees. `await tools.web_search(...)` resolves to `{ responseId, fetchId, queries }`, where each query has its `answer`, `error`, provider, and `results` (`title`, `url`, `snippet`). `await tools.fetch_content(...)` resolves to `{ responseId, urls }`, where each URL has its full `content`, not limited by `maxInlineContentChars`, and its `error`. Failed searches and fetches still resolve to this data, with the reason in `error`; invalid arguments reject. A script's `web_search` uses `workflow: "none"` unless it passes a workflow, so a configured curator does not open, and with `includeContent` it waits for the pages, readable through `fetchId`, instead of fetching them in the background. A script that passes `workflow: "summary-review"` gets the curator and the background fetch, as the model does.
+Scripts run by Pi's `codemode` tool get data instead of the text the model sees. `await tools.web_search(...)` resolves to `{ responseId, fetchId, queries }`, where each query has its `answer`, `error`, provider, and `results` (`title`, `url`, `snippet`). `await tools.fetch_content(...)` resolves to `{ responseId, urls }`, where each URL has its full `content`, not limited by `maxInlineContentChars`, and its `error`. Failed searches and fetches still resolve to this data, with the reason in `error`; invalid arguments reject. A script's `web_search` uses `workflow: "none"` unless it passes a workflow, so a configured curator does not open, and with `includeContent` it waits for the pages, readable through `fetchId`, instead of fetching them in the background. A script that passes `workflow: "summary-review"` gets the curator and the background fetch, as the model does.
 
 ## Use from other agents (MCP)
 
@@ -1054,7 +1054,7 @@ Enabling the tools mid-conversation can cost a prompt-cache miss. Some models ac
 - `"dynamic"` starts every new session with `web_enable`, even on models where enabling the tools can cause a cache miss.
 - `"eager"` never uses `web_enable` and keeps every enabled web tool available from the first request. It also suits models that rarely call `web_enable` on their own.
 
-Restart Pi after changing it. Dynamic activation needs Pi 0.86.0 or newer; older Pi logs a warning and keeps every enabled web tool available.
+Restart Pi after changing it. Dynamic activation uses the Pi >=1.1.0 tool activation APIs.
 
 ### Shortcuts
 

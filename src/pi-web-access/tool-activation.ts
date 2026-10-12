@@ -16,17 +16,6 @@ const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	"stored-content": "stored-result retrieval",
 };
 
-function supportsDynamicTools(pi: ExtensionAPI): boolean {
-	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return false;
-	// Pi 0.86.0 shipped transcript-backed tool changes in the same release that made pi.on() return
-	// an unsubscribe function. Probe the host API object: an imported VERSION can come from a stale
-	// Pi package installed beside this extension instead of the running host.
-	const unsubscribe: unknown = pi.on("session_start", () => {});
-	if (typeof unsubscribe !== "function") return false;
-	unsubscribe();
-	return true;
-}
-
 // Mirrors pi-ai's per-API transcript handling: without these flags, Pi resends the whole transcript
 // as a checkpoint when web_enable changes the tools and prompt, which can miss the prompt cache.
 function addsToolsWithoutCheckpoint(model: ExtensionContext["model"]): boolean {
@@ -62,10 +51,6 @@ function transcriptToolNames(messages: SessionContext["messages"]): Set<string> 
 
 export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray<WebActivationTool>, mode: "auto" | "dynamic"): void {
 	if (tools.length === 0) return;
-	if (!supportsDynamicTools(pi)) {
-		console.warn("[pi-web-access] Dynamic tool activation requires Pi 0.86.0 or newer; web tools remain eagerly available.");
-		return;
-	}
 	const names = tools.map(tool => tool.name);
 	const capabilities = tools.map(tool => CAPABILITY_LABELS[tool.capability]).join(", ");
 

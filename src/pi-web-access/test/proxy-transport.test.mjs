@@ -325,7 +325,7 @@ test("invalid configured proxy fails closed instead of direct fetching", async (
 test("invalid configured proxy reaches background fetch rejection handling", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-proxy-background-config-test-"));
 	const configPath = join(dir, "web-search.json");
-	await writeFile(configPath, JSON.stringify({ provider: "openai" }));
+	await writeFile(configPath, JSON.stringify({ provider: "openai", toolActivation: "eager" }));
 	t.after(async () => {
 		await rm(dir, { recursive: true, force: true });
 	});

@@ -99,14 +99,13 @@ test("native renderer resolution preserves independent overlays and still compac
   const originalLookup = Object.getOwnPropertyDescriptor(Core.InteractiveMode.prototype, "getRegisteredToolDefinition");
   const h = entry(t);
   const dir = temporaryDirectory(t, "metis-renderer-owner-");
-  let overlay = "stock", supported = false;
+  let overlay = "stock";
   const call = () => new Text("RESOLVER CALL", 0, 0);
   const result = () => new Text("RESOLVER RESULT", 0, 0);
   const loader = new Core.DefaultResourceLoader({ cwd: dir, agentDir: dir,
     settingsManager: Core.SettingsManager.inMemory({ packages: [], extensions: [] }),
     extensionFactories: [{ name: "renderer-owner-test", factory(pi) {
-      supported = typeof pi.registerToolRenderer === "function";
-      if (supported) pi.registerToolRenderer((_name, next) => {
+      pi.registerToolRenderer((_name, next) => {
         const base = next();
         if (overlay === "partial") return { renderCall: call, renderResult: result, renderShell: "self" };
         if (overlay === "spread") return { ...base, renderCall: call, renderResult: result };
@@ -136,7 +135,7 @@ test("native renderer resolution preserves independent overlays and still compac
   const stockDefinition = stock.toolDefinition;
   assert.match(plain(stock.render(80)), /Read owned\.ts/);
   assert.notEqual(stock.getCallRenderer(), stockDefinition.renderCall, "stock renderer is still compacted");
-  if (supported) for (const mode of ["partial", "spread", "mutate", "shell"]) {
+  for (const mode of ["partial", "spread", "mutate", "shell"]) {
     overlay = mode;
     const row = create(), definition = row.toolDefinition, children = [...row.children];
     const frame = plain(row.render(80));
@@ -147,7 +146,7 @@ test("native renderer resolution preserves independent overlays and still compac
     assert.deepEqual(row.children, children, mode);
   }
   // The real host tears down the lease, rebuilds history, then binds its next
-  // session. New bash definitions have new closure identities on both SDKs.
+  // session. New bash definitions have new closure identities.
   for (const reason of ["resume", "fork"]) {
     overlay = "stock";
     create(); // Observe this actual native owner before invalidation.
@@ -155,7 +154,7 @@ test("native renderer resolution preserves independent overlays and still compac
     definitions = new Map([["read", Core.createReadToolDefinition(dir)], ["bash", Core.createBashToolDefinition(dir)]]);
     const history = [create(), create("bash")];
     const foreign = [];
-    if (supported) for (const mode of ["partial", "spread", "mutate", "shell"]) {
+    for (const mode of ["partial", "spread", "mutate", "shell"]) {
       overlay = mode;
       foreign.push([mode, create()]);
     }

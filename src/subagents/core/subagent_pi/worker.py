@@ -286,8 +286,8 @@ def managed_command(argv, sdk_path=None):
         except (OSError,ValueError): raise AgentError('sdk_unavailable','The parent Pi SDK is unavailable') from None
         version=package.get('version','') if isinstance(package,dict) else None
         match=re.fullmatch(r'([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.-]+)?',version) if isinstance(version,str) else None
-        if not match or package.get('name')!='@earendil-works/pi-coding-agent' or tuple(map(int,match.groups()))<(1,0,0):
-            raise AgentError('unsupported_pi_version','Native Pi subagents require the host SDK >=1.0.0')
+        if not match or package.get('name')!='@earendil-works/pi-coding-agent' or tuple(map(int,match.groups()))<(1,1,0):
+            raise AgentError('unsupported_pi_version','Native Pi subagents require the host SDK >=1.1.0')
         if not sdk.is_file() or not Path(argv[0]).is_file() or not os.access(argv[0],os.X_OK):
             raise AgentError('sdk_unavailable','Parent SDK and Node executable must still exist')
         return [argv[0],str(Path(__file__).resolve().parent.parent/'runtime/pi-sdk.mjs'),str(sdk),*argv[2:]]
@@ -300,8 +300,8 @@ def managed_command(argv, sdk_path=None):
         if package.get('name') != '@earendil-works/pi-coding-agent': continue
         version = package.get('version')
         match = re.fullmatch(r'([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.-]+)?', version) if isinstance(version, str) else None
-        if not match or tuple(map(int, match.groups())) < (0, 99, 1):
-            raise AgentError('unsupported_pi_version', f'Pi >=0.99.1 is required; found SDK version {version!r}')
+        if not match or tuple(map(int, match.groups())) < (1, 1, 0):
+            raise AgentError('unsupported_pi_version', f'Pi >=1.1.0 is required; found SDK version {version!r}')
         sdk = directory/'dist/index.js'
         node = shutil.which('node')
         if not sdk.is_file() or not node:

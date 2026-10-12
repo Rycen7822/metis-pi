@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installAdapter, type AdapterHandle } from "./adapter.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "./codemode-view.ts";
 import { highlightBashScript } from "./bash-lexer.ts";
-import { installStartupWarningFilter } from "./startup-warning-filter.ts";
 import { installTranscriptDecorations, type DecorationHandle, type ThinkingPolicy, type TranscriptAdapterInput } from "./transcript-adapter.ts";
 import { TranscriptState, normalizeMessageBlocks, type TranscriptEvent } from "./transcript-state.ts";
 import { makeRenderers, type TextFactory, type Highlight, type DiffFactory, type ShellFactories, type WritePreviewInput } from "./renderers.ts";
@@ -97,7 +96,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   let installation = Promise.resolve();
   let enabled = false;
   let chromeEnabled = false;
-  let startupWarningFilter: ReturnType<typeof installStartupWarningFilter> | undefined;
   let handle: AdapterHandle | undefined;
   let decorations: DecorationHandle | undefined;
   let userTimestamps: ReturnType<typeof installUserTimestamps>;
@@ -274,8 +272,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (enabled && !userTimestamps && bindings.interactivePrototype) {
       userTimestamps = installUserTimestamps(bindings.interactivePrototype, () => enabled);
     }
-    startupWarningFilter?.dispose();
-    startupWarningFilter = chromeEnabled ? installStartupWarningFilter() : undefined;
     gitChanges.dispose();
     installation = Promise.resolve();
     if (chromeEnabled) {
@@ -616,8 +612,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("session_shutdown", () => {
     enabled = false;
     chromeEnabled = false;
-    startupWarningFilter?.dispose();
-    startupWarningFilter = undefined;
     chrome.invalidate();
     handle?.dispose();
     handle = undefined;

@@ -54,12 +54,6 @@ appearance 提供紧凑显示，保留工具参数、执行结果、模型正文
 
 ## 安装与诊断
 
-来源/形状守卫和恢复规则见 [兼容性](../compatibility.md)。交互 TUI 精确过滤 pi-web-access 的一条旧能力警告：
-
-```text
-Dynamic tool activation requires Pi 0.86.1 or newer; web tools remain eagerly available.
-```
-
-其他警告、错误和 notify 保留；仅覆盖当前 TUI 生命周期，不改变 Web 工具启用方式。
+来源/形状守卫和恢复规则见 [兼容性](../compatibility.md)。警告、错误和 notify 保持原样显示。
 
 输出布局位于 `src/renderers.ts`、`shell.ts`、`diff.ts`、`write-preview.ts`，快照由 `write-tracker.ts` 持有；思考交互由 `thinking-view.ts` 与 `transcript-state.ts` 持有。

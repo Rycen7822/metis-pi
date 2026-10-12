@@ -10123,9 +10123,9 @@ var package_default = {
     "pi-web-fetch-demo.mp4"
   ],
   devDependencies: {
-    "@earendil-works/pi-ai": "1.0.4",
-    "@earendil-works/pi-coding-agent": "1.0.4",
-    "@earendil-works/pi-tui": "1.0.4",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
     "@types/turndown": "^5.0.6",
     esbuild: "^0.28.1",
     typebox: "1.3.27",
@@ -10143,9 +10143,9 @@ var package_default = {
     unpdf: "^1.6.2"
   },
   peerDependencies: {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": ">=1.1.0",
+    "@earendil-works/pi-coding-agent": ">=1.1.0",
+    "@earendil-works/pi-tui": ">=1.1.0",
     typebox: "*"
   },
   peerDependenciesMeta: {

@@ -23,4 +23,4 @@
 - 不替换第三方 compaction 插件；不要同时启用第二套接管 `/compact` 的扩展。未知组合不在支持保证内。
 - checkpoint 是 provider 私有数据，并非通用 Markdown。不要在含 checkpoint 的会话中直接停用此扩展；先通过其他 provider 的 `/compact` 生成文本摘要，或继续保留回放扩展。
 
-开发验收使用真实 Pi AgentSession/SessionManager 与内置 OpenAI/Codex provider，并以本地 HTTP/SSE 替身验证协议。Pi 1.0.0 与 1.1.0 均覆盖手动压缩、重载回放、再次压缩、自动压缩、溢出恢复、普通文本标记、HTTP 重试、取消及状态变化保护。没有访问个人凭据、请求付费 API、实测远端耗时或声明任意账号权限可用。
+开发验收使用真实 Pi 1.1.0 AgentSession/SessionManager 与内置 OpenAI/Codex provider，并以本地 HTTP/SSE 替身验证协议，覆盖手动压缩、重载回放、再次压缩、自动压缩、溢出恢复、普通文本标记、HTTP 重试、取消及状态变化保护。没有访问个人凭据、请求付费 API、实测远端耗时或声明任意账号权限可用。
