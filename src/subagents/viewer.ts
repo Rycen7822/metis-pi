@@ -28,33 +28,54 @@ export interface AgentInspection {
   run?: { state: string; error?: string };
 }
 
+export interface ViewerAgent { id: string; name: string }
+interface AgentView {
+  content: ViewerContent;
+  snapshot?: AgentInspection;
+  file: string;
+  cursor: number;
+  truncated: boolean;
+  error: string;
+  offset: number;
+  maxOffset: number;
+  renderedOffset: number;
+  cachedWidth: number;
+  lines: string[];
+  layout: Array<{ component: Component; y: number; height: number }>;
+}
+interface HeaderTarget { x: number; y: number; width: number; activate: () => void }
+const MAX_CACHED_VIEWS = 8;
+
+function disposeView(view: AgentView) {
+  view.content.dispose(); view.lines = []; view.layout = []; view.snapshot = undefined;
+}
+
 /** Read-only, bounded conversation view. Opening it never consumes attention or ACKs a result. */
 export class SubagentViewer implements Component {
-  private snapshot?: AgentInspection;
-  private readonly content: ViewerContent;
-  private file = "";
-  private cursor = 0;
-  private truncated = false;
-  private error = "";
+  private readonly views = new Map<string, AgentView>();
+  private readonly agents = new Map<string, ViewerAgent>();
+  private agentId: string;
   private timer?: ReturnType<typeof setTimeout>;
+  private readAbort = new AbortController();
   private disposed = false;
-  private offset = Infinity;
-  private maxOffset = 0;
   private pageSize = 1;
-  private cachedWidth = -1;
-  private lines: string[] = [];
-  private layout: Array<{ component: Component; y: number; height: number }> = [];
-  private renderedOffset = 0;
   private bodyTop = 5;
+  private bodyPadding = 2;
   private innerWidth = 1;
+  private renderedHeight = 0;
+  private targets: HeaderTarget[] = [];
+  private tabStart = 0;
+  private tabWidth = -1;
+  private revealSelected = true;
   private readonly onAbort: () => void;
-  private readonly agentId: string;
   private readonly theme: Theme;
   private readonly tui: TUI;
   private readonly keys: KeybindingsManager;
   private readonly done: (value: undefined) => void;
   private readonly abort: AbortController;
-  private readonly inspect: (after: number) => Promise<AgentInspection>;
+  private readonly inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>;
+  private readonly thinking: AppearanceConfig["thinking"];
+  private readonly agentSource: () => ViewerAgent[];
 
   constructor(
     agentId: string,
@@ -63,158 +84,313 @@ export class SubagentViewer implements Component {
     keys: KeybindingsManager,
     done: (value: undefined) => void,
     abort: AbortController,
-    inspect: (after: number) => Promise<AgentInspection>,
+    inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>,
     thinking: AppearanceConfig["thinking"] = DEFAULT_CONFIG.thinking,
+    agentSource: () => ViewerAgent[] = () => [],
   ) {
     this.agentId = agentId; this.theme = theme; this.tui = tui; this.keys = keys;
     this.done = done; this.abort = abort; this.inspect = inspect;
-    this.content = new ViewerContent(theme, tui, thinking, () => { this.invalidate(); this.tui.requestRender(); });
-    this.onAbort = () => done(undefined);
+    this.thinking = thinking; this.agentSource = agentSource;
+    this.syncAgents();
+    if (!this.agents.has(agentId)) this.agents.set(agentId, { id: agentId, name: agentId });
+    this.cacheView(agentId);
+    this.onAbort = () => this.close();
     abort.signal.addEventListener("abort", this.onAbort, { once: true });
     if (abort.signal.aborted) this.onAbort();
-    else void this.refresh();
+    else void this.refresh(this.view, this.readAbort);
   }
 
-  private async refresh() {
+  private syncAgents() {
+    for (const agent of this.agentSource()) this.agents.set(agent.id, agent);
+  }
+
+  private get view(): AgentView {
+    return this.views.get(this.agentId)!;
+  }
+
+  private cacheView(id: string) {
+    let view = this.views.get(id);
+    if (view) this.views.delete(id);
+    else {
+      const state: AgentView = {
+        content: new ViewerContent(this.theme, this.tui, this.thinking, () => {
+          state.cachedWidth = -1;
+          if (!this.disposed && this.view === state) this.tui.requestRender();
+        }),
+        file: "", cursor: 0, truncated: false, error: "", offset: Infinity,
+        maxOffset: 0, renderedOffset: 0, cachedWidth: -1, lines: [], layout: [],
+      };
+      view = state;
+    }
+    this.views.set(id, view);
+    if (this.views.size > MAX_CACHED_VIEWS) {
+      const oldest = this.views.keys().next().value!;
+      disposeView(this.views.get(oldest)!);
+      this.views.delete(oldest);
+    }
+  }
+
+  private selectAgent(id: string) {
+    if (this.disposed || id === this.agentId || !this.agents.has(id)) return;
+    clearTimeout(this.timer);
+    this.readAbort.abort();
+    this.readAbort = new AbortController();
+    this.agentId = id;
+    this.cacheView(id);
+    this.revealSelected = true;
+    this.targets = []; this.renderedHeight = 0;
+    this.tui.requestRender();
+    void this.refresh(this.view, this.readAbort);
+  }
+
+  private cycleAgent(delta: number) {
+    this.syncAgents();
+    const ids = [...this.agents.keys()];
+    const index = ids.indexOf(this.agentId);
+    this.selectAgent(ids[(index + delta + ids.length) % ids.length]);
+  }
+
+  private async refresh(view: AgentView, controller: AbortController) {
+    const current = () => !this.disposed && !controller.signal.aborted && this.readAbort === controller;
     let more = false;
     try {
-      const snapshot = await this.inspect(this.cursor);
-      if (this.disposed || this.abort.signal.aborted) return;
-      if (snapshot.reset || (this.file && this.file !== snapshot.session_file)) {
-        this.content.dispose(); this.offset = Infinity; this.truncated = false;
-        this.cursor = 0; this.file = snapshot.session_file; this.invalidate(); more = true; return;
+      const snapshot = await this.inspect(this.agentId, view.cursor, controller.signal);
+      if (!current()) return;
+      if (snapshot.reset || (view.file && view.file !== snapshot.session_file)) {
+        view.content.dispose(); view.offset = Infinity; view.truncated = false;
+        view.cursor = 0; view.file = snapshot.session_file; view.cachedWidth = -1; more = true; return;
       }
-      this.file = snapshot.session_file;
-      this.snapshot = snapshot; this.cursor = snapshot.next_cursor; more = snapshot.has_more;
-      if (snapshot.history_pruned) this.truncated = true;
-      for (const entry of snapshot.messages) this.content.append(entry.message, snapshot.agent.cwd ?? "");
-      this.truncated ||= this.content.truncated;
-      this.error = ""; this.invalidate();
+      view.file = snapshot.session_file;
+      view.snapshot = snapshot; view.cursor = snapshot.next_cursor; more = snapshot.has_more;
+      if (snapshot.agent.name) this.agents.set(this.agentId, { id: this.agentId, name: snapshot.agent.name });
+      if (snapshot.history_pruned) view.truncated = true;
+      for (const entry of snapshot.messages) view.content.append(entry.message, snapshot.agent.cwd ?? "");
+      view.truncated ||= view.content.truncated;
+      view.error = ""; view.cachedWidth = -1;
     } catch (error) {
-      if (this.disposed || this.abort.signal.aborted) return;
-      this.error = clean(String(error));
+      if (!current()) return;
+      view.error = clean(String(error));
     } finally {
-      if (!this.disposed && !this.abort.signal.aborted) {
+      if (current()) {
         this.tui.requestRender();
-        this.timer = setTimeout(() => void this.refresh(), more ? 50 : 1000);
+        this.timer = setTimeout(() => void this.refresh(view, controller), more ? 50 : 1000);
       }
     }
   }
 
+  private close() {
+    if (this.disposed) return;
+    this.dispose();
+    this.done(undefined);
+  }
+
   private scroll(delta: number) {
-    const offset = Number.isFinite(this.offset) ? this.offset : this.maxOffset;
-    this.offset = Math.max(0, Math.min(this.maxOffset, offset + delta));
-    if (this.offset === this.maxOffset) this.offset = Infinity;
+    const view = this.view;
+    const offset = Number.isFinite(view.offset) ? view.offset : view.maxOffset;
+    view.offset = Math.max(0, Math.min(view.maxOffset, offset + delta));
+    if (view.offset === view.maxOffset) view.offset = Infinity;
     this.tui.requestRender();
   }
 
   handleInput(data: string) {
-    if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q")
-      this.done(undefined);
+    if (this.disposed) return;
+    if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q") this.close();
+    else if (matchesKey(data, "left") || matchesKey(data, "shift+tab")) this.cycleAgent(-1);
+    else if (matchesKey(data, "right") || matchesKey(data, "tab")) this.cycleAgent(1);
     else if (this.keys.matches(data, "tui.select.up")) this.scroll(-1);
     else if (this.keys.matches(data, "tui.select.down")) this.scroll(1);
     else if (matchesKey(data, "pageUp")) this.scroll(-this.pageSize);
     else if (matchesKey(data, "pageDown")) this.scroll(this.pageSize);
     else if (matchesKey(data, "home")) {
-      this.offset = 0;
+      this.view.offset = 0;
       this.tui.requestRender();
     } else if (matchesKey(data, "end")) {
-      this.offset = Infinity;
+      this.view.offset = Infinity;
       this.tui.requestRender();
     } else if (this.keys.matches(data, "app.tools.expand")) {
-      this.offset = this.renderedOffset;
-      this.content.toggleTools();
+      this.view.offset = this.view.renderedOffset;
+      this.view.content.toggleTools();
       this.invalidate();
       this.tui.requestRender();
     } else if (this.keys.matches(data, "app.thinking.toggle")) {
-      this.offset = this.renderedOffset;
-      this.content.toggleThinking();
+      this.view.offset = this.view.renderedOffset;
+      this.view.content.toggleThinking();
       this.invalidate();
       this.tui.requestRender();
     }
   }
 
   handleMouse(event: TuiMouseEvent) {
+    if (this.disposed || event.y < 0 || event.y >= this.renderedHeight) return;
+    const target = this.targets.find(target => event.y === target.y && event.x >= target.x && event.x < target.x + target.width);
+    if (target && event.button === "left") {
+      if (event.type === "click") {
+        target.activate();
+        return { handled: true, requestRender: true };
+      }
+      if (event.type === "press" || event.type === "release") return { handled: true };
+    }
+    const view = this.view;
     const bodyY = event.y - this.bodyTop;
-    const padding = this.bodyTop === 5 ? 2 : 0;
-    if (bodyY >= 0 && bodyY < this.pageSize && event.x >= padding && event.x < padding + this.innerWidth) {
-      const y = bodyY + this.renderedOffset;
-      const item = this.layout.find(item => y >= item.y && y < item.y + item.height);
-      const previous = this.offset;
-      if (event.type === "click") this.offset = this.renderedOffset;
-      const result = item?.component.handleMouse?.({ ...event, x: event.x - padding,
+    if (bodyY >= 0 && bodyY < this.pageSize && event.x >= this.bodyPadding && event.x < this.bodyPadding + this.innerWidth) {
+      const y = bodyY + view.renderedOffset;
+      const item = view.layout.find(item => y >= item.y && y < item.y + item.height);
+      const previous = view.offset;
+      if (event.type === "click") view.offset = view.renderedOffset;
+      const result = item?.component.handleMouse?.({ ...event, x: event.x - this.bodyPadding,
         y: y - item.y, width: this.innerWidth, height: item.height });
       if (result?.handled) { this.invalidate(); this.tui.requestRender(); return { handled: true, requestRender: true }; }
-      this.offset = previous;
+      view.offset = previous;
     }
     if (event.type === "wheel") { this.scroll(event.wheelDelta ?? 0); return { handled: true, requestRender: true }; }
   }
 
+  private renderTabs(width: number, x: number, y: number): string {
+    if (width !== this.tabWidth) { this.tabWidth = width; this.revealSelected = true; }
+    if (width <= 0) return "";
+    const agents = [...this.agents.values()];
+    const selected = agents.findIndex(agent => agent.id === this.agentId);
+    const labels = agents.map(agent => {
+      const name = clean(agent.name).replace(/\s+/g, " ").trim() || agent.id;
+      return agent.id === this.agentId ? `[${name}]` : name;
+    });
+    const layout = (start: number) => {
+      const entries: Array<{ id: string; label: string }> = [];
+      const prefix = start > 0 ? 4 : 0;
+      const remaining = labels.slice(start).reduce((sum, label, i) => sum + visibleWidth(label) + (i ? 2 : 0), 0);
+      const space = Math.max(1, width - prefix - (remaining > width - prefix ? 4 : 0));
+      let used = 0, end = start;
+      for (let i = start; i < agents.length; i++) {
+        const gap = i > start ? 2 : 0;
+        const label = i === start ? truncateToWidth(labels[i], space, "…") : labels[i];
+        if (used + gap + visibleWidth(label) > space) break;
+        entries.push({ id: agents[i].id, label });
+        used += gap + visibleWidth(label); end = i + 1;
+      }
+      return { entries, end };
+    };
+    // At very narrow widths prioritize the selected label; keyboard switching remains available.
+    if (width < 11) {
+      const label = truncateToWidth(labels[selected], width, "…");
+      return this.theme.fg("accent", label);
+    }
+    this.tabStart = Math.min(this.tabStart, agents.length - 1);
+    let page = layout(this.tabStart);
+    if (this.revealSelected && (selected < this.tabStart || selected >= page.end)) {
+      this.tabStart = selected;
+      page = layout(this.tabStart);
+    }
+    this.revealSelected = false;
+    let text = "", column = x;
+    const append = (label: string, activate?: () => void) => {
+      if (activate) this.targets.push({ x: column, y, width: visibleWidth(label), activate });
+      text += label; column += visibleWidth(label);
+    };
+    if (this.tabStart > 0) {
+      append(this.theme.fg("muted", "[<]"), () => {
+        // Variable-width labels make the preceding page a different size.
+        let previous = this.tabStart - 1;
+        while (previous > 0 && layout(previous - 1).end >= this.tabStart) previous--;
+        this.tabStart = previous;
+        this.tui.requestRender();
+      });
+      append(" ");
+    }
+    for (const [index, entry] of page.entries.entries()) {
+      if (index) append("  ");
+      append(this.theme.fg(entry.id === this.agentId ? "accent" : "muted", entry.label), () => this.selectAgent(entry.id));
+    }
+    if (page.end < agents.length) {
+      append(" ");
+      append(this.theme.fg("muted", "[>]"), () => { this.tabStart = page.end; this.tui.requestRender(); });
+    }
+    return text;
+  }
+
+  private renderHeader(width: number): string {
+    const bordered = width >= 5, y = bordered ? 1 : 0;
+    const border = (text: string) => this.theme.fg("border", text);
+    const area = bordered ? width - 5 : Math.max(0, width - 3);
+    const padding = area > 0 && bordered ? 1 : 0;
+    const tabsWidth = Math.max(0, area - padding - 1);
+    const tabs = this.renderTabs(tabsWidth, bordered ? 1 + padding : 0, y);
+    const close = width >= 3 ? this.theme.fg("accent", "[X]") : truncateToWidth("[X]", width, "");
+    if (width >= 3) this.targets.push({ x: width - (bordered ? 4 : 3), y, width: 3, activate: () => this.close() });
+    const title = `${" ".repeat(padding)}${tabs}${" ".repeat(Math.max(0, area - padding - visibleWidth(tabs)))}${close}`;
+    return bordered ? `${border("│")}${title}${border("│")}` : title;
+  }
+
   render(width: number): string[] {
-    if (width <= 0) return [];
+    this.targets = []; this.renderedHeight = 0;
+    if (width <= 0 || this.disposed) return [];
+    this.syncAgents();
+    const view = this.view;
     const inner = Math.max(1, width - 4);
-    this.innerWidth = inner; this.bodyTop = width < 5 ? 4 : 5;
+    this.innerWidth = inner; this.bodyTop = width < 5 ? 4 : 5; this.bodyPadding = width < 5 ? 0 : 2;
     const height = Math.max(1, Math.floor(this.tui.terminal.rows * 0.7));
     this.pageSize = Math.max(1, height - 7);
-    if (inner !== this.cachedWidth) {
-      this.lines = []; this.layout = [];
-      for (const entry of this.content.entries) {
+    if (inner !== view.cachedWidth) {
+      view.lines = []; view.layout = [];
+      for (const entry of view.content.entries) {
         const lines = entry.component.render(inner);
-        this.layout.push({ component: entry.component, y: this.lines.length, height: lines.length });
-        this.lines.push(...lines, "");
+        view.layout.push({ component: entry.component, y: view.lines.length, height: lines.length });
+        view.lines.push(...lines, "");
       }
-      if (!this.lines.length) this.lines.push("Waiting for completed messages…");
-      this.cachedWidth = inner;
+      if (!view.lines.length) view.lines.push("Waiting for completed messages…");
+      view.cachedWidth = inner;
     }
-    this.maxOffset = Math.max(0, this.lines.length - this.pageSize);
-    const offset = Math.min(this.offset, this.maxOffset);
-    this.renderedOffset = offset;
-    const agent = this.snapshot?.agent;
+    view.maxOffset = Math.max(0, view.lines.length - this.pageSize);
+    const offset = Math.min(view.offset, view.maxOffset);
+    view.renderedOffset = offset;
+    const agent = view.snapshot?.agent;
     const model = agent?.resolved_model;
     const toolsKey = this.keys.getKeys("app.tools.expand").join("/");
     const thoughtsKey = this.keys.getKeys("app.thinking.toggle").join("/");
-    const body = this.lines.slice(offset, offset + this.pageSize);
+    const body = view.lines.slice(offset, offset + this.pageSize);
     while (body.length < this.pageSize) body.push("");
     const content = [
-      this.theme.fg("accent", `Subagent: ${clean(agent?.name ?? this.agentId)}`),
       clean(
         `${agent?.state ?? "loading"}` +
           " · run " +
-          `${this.snapshot?.run?.state ?? "—"}` +
+          `${view.snapshot?.run?.state ?? "—"}` +
           `${agent?.active_tools?.length ? ` · tools: ${agent.active_tools.join(", ")}` : ""}`,
       ),
       this.theme.fg("muted", clean(`${model ? `${model.provider}/${model.id} · ` : ""}${agent?.cwd ?? ""}`)),
       this.theme.fg(
-        this.error || this.snapshot?.run?.error ? "error" : "dim",
-        this.error ||
-          clean(this.snapshot?.run?.error ?? "") ||
-          (this.truncated ? "Some history omitted" : "Click tools or thoughts to expand/collapse"),
+        view.error || view.snapshot?.run?.error ? "error" : "dim",
+        view.error || clean(view.snapshot?.run?.error ?? "") ||
+          (view.truncated ? "Some history omitted" : "Click tools or thoughts to expand/collapse"),
       ),
       ...body,
-      this.theme.fg("muted", `Click to fold · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · Esc close`),
+      this.theme.fg("muted", `Click to fold · ${toolsKey} tools · ${thoughtsKey} thoughts · ↑/↓ scroll · ←/→ tabs · Esc close`),
     ];
-    if (width < 5) return content.slice(0, height).map((line) => truncateToWidth(line.replace(/\n/g, " "), width, "…"));
+    const header = this.renderHeader(width);
     const border = (text: string) => this.theme.fg("border", text);
-    return [
-      border(`╭${"─".repeat(width - 2)}╮`),
-      ...content.map((line) => {
-        const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
-        return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${border("│")}`;
-      }),
-      border(`╰${"─".repeat(width - 2)}╯`),
-    ].slice(0, height);
+    const rows = width < 5
+      ? [header, ...content.map(line => truncateToWidth(line.replace(/\n/g, " "), width, "…"))].slice(0, height)
+      : [
+        border(`╭${"─".repeat(width - 2)}╮`), header,
+        ...content.map(line => {
+          const text = truncateToWidth(line.replace(/\n/g, " "), inner, "…");
+          return `${border("│")} ${text}${" ".repeat(Math.max(0, inner - visibleWidth(text)))} ${border("│")}`;
+        }),
+        border(`╰${"─".repeat(width - 2)}╯`),
+      ].slice(0, height);
+    this.renderedHeight = rows.length;
+    this.targets = this.targets.filter(target => target.y < rows.length);
+    return rows;
   }
 
   invalidate() {
-    this.cachedWidth = -1;
+    for (const view of this.views.values()) view.cachedWidth = -1;
   }
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
     clearTimeout(this.timer);
-    this.content.dispose();
-    this.layout = [];
-    this.lines = [];
+    this.readAbort.abort();
+    for (const view of this.views.values()) disposeView(view);
+    this.views.clear(); this.agents.clear(); this.targets = []; this.renderedHeight = 0;
     this.abort.signal.removeEventListener("abort", this.onAbort);
     this.abort.abort();
   }

@@ -13,7 +13,7 @@ import {
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { isDaemonIdle, RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
-import { SubagentViewer, type AgentInspection } from "./viewer.ts";
+import { SubagentViewer, type AgentInspection, type ViewerAgent } from "./viewer.ts";
 import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "./widget.ts";
 import { loadConfig } from "../config.ts";
 import { installSamplingMailbox } from "./sampling.ts";
@@ -185,6 +185,16 @@ export class SubagentSession {
     this.viewerAbort = abort;
     let viewer: SubagentViewer | undefined;
     try {
+      // Watch contains only active agents. Retained history keeps finished tabs available.
+      const agents: ViewerAgent[] = [];
+      let offset = 0;
+      while (!abort.signal.aborted && this.valid()) {
+        const page = await this.client.call("pi_list_agents", { limit: 50, sort: "created", offset }, abort.signal, { consume: false });
+        agents.push(...page.agents as ViewerAgent[]);
+        if (!page.has_more) break;
+        offset = page.next_offset as number;
+      }
+      if (abort.signal.aborted || !this.valid()) return;
       await this.ctx.ui.custom<undefined>(
         (tui, theme, keys, done) =>
           (viewer = new SubagentViewer(
@@ -194,11 +204,11 @@ export class SubagentSession {
             keys,
             done,
             abort,
-            async (after) =>
+            async (id, after, signal) =>
               (await this.client.call(
                 "pi_view",
-                { agent_id: agentId, after },
-                abort.signal,
+                { agent_id: id, after },
+                signal,
               )) as unknown as AgentInspection,
             loadConfig(this.agentDir, (path) => {
               try {
@@ -207,6 +217,7 @@ export class SubagentSession {
                 return undefined;
               }
             }).config.thinking,
+            () => [...agents, ...this.agents],
           )),
         { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" } },
       );
