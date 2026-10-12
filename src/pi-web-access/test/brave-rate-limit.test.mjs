@@ -10,7 +10,8 @@ const braveModuleUrl = new URL("../brave.ts", import.meta.url).href;
 
 function runChild(script, env = {}) {
 	const childEnv = { ...process.env };
-	for (const key of ["PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "BRAVE_API_KEY", "BRAVE_BASE_URL"]) delete childEnv[key];
+	for (const key of ["PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "BRAVE_API_KEY", "BRAVE_BASE_URL",
+		"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]) delete childEnv[key];
 	Object.assign(childEnv, env);
 	return spawnSync(process.execPath, ["--input-type=module"], {
 		input: script,
@@ -135,9 +136,17 @@ test("a queued operation respects its caller deadline", async () => {
 	let release;
 	const first = limiter.run(() => new Promise(resolve => { release = resolve; }));
 	let ran = false;
-	const second = limiter.run(async () => { ran = true; }, AbortSignal.timeout(10));
-	await assert.rejects(second, /Aborted/);
-	release();
+	const controller = new AbortController();
+	const second = limiter.run(async () => { ran = true; }, controller.signal);
+	// The blocked fixture has no I/O handle. Unlike AbortSignal.timeout's unref'ed
+	// timer, this caller-owned deadline keeps the test alive until it can assert.
+	const deadline = setTimeout(() => controller.abort(), 10);
+	try {
+		await assert.rejects(second, /Aborted/);
+	} finally {
+		clearTimeout(deadline);
+		release();
+	}
 	await first;
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(ran, false);
