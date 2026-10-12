@@ -153,12 +153,13 @@ test(
       JSON.stringify({ extensions: [join(root, "test/subagents/pi_mock_provider.ts")] }),
     );
     writeFileSync(join(state, "config.toml"), "[broken legacy file must be ignored");
+    // Keep the first child active beyond the viewer's one-second poll so its live conversation is observable.
     writeFileSync(
       join(dir, "metis-pi.toml"),
       '[subagents]\nmaxResidentAgents=4\n[subagents.profiles.reader.env]\nPI_OFFLINE="1"\nP' +
         'I_MOCK_STREAM_MS="250"\n[subagents.profiles.questioned.env]\nPI_OFFLINE="1"\nPI_MOC' +
         'K_ASK_PARENT="1"\n[subagents.profiles.failed.env]\nPI_OFFLINE="1"\nPI_MOCK_FAIL="1"' +
-        '\nPI_MOCK_STREAM_MS="250"\n',
+        '\nPI_MOCK_STREAM_MS="250"\n[subagents.profiles.viewer.env]\nPI_OFFLINE="1"\nPI_MOCK_STREAM_MS="1500"\n',
     );
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
     const modelRuntime = await ModelRuntime.create({
@@ -195,7 +196,7 @@ test(
             arguments: {
               code:
                 'const a=await tools.pi_spawn_agent({name:"nested-proof",task:"nested ' +
-                'proof",access:"read",model:"pi-mock-offline/mock"}); if(!a.request_id) throw ' +
+                'proof",access:"read",profile:"viewer",model:"pi-mock-offline/mock"}); if(!a.request_id) throw ' +
                 'new Error("missing operation identity"); text(await ' +
                 'tools.pi_wait_agent({agent_ids:["nested-proof"],timeout_seconds:15}));',
             },
@@ -441,7 +442,11 @@ test(
             {
               terminal: { rows: 30 },
               requestRender() {
-                if (popup) popupRows = popup.render(60);
+                if (!popup) return;
+                const current = popup, rows = current.render(60);
+                // Capture live frames; completion removes the view, not its test evidence.
+                if (rows.length) popupRows.push(...rows);
+                for (const width of [1, 4, 60]) assert.ok(current.render(width).every((row) => visibleWidth(row) <= width));
               },
             },
             { fg: (_color, text) => text },
@@ -613,9 +618,8 @@ test(
       popupRows.some((row) => row.includes("pi-mock-offline/mock")),
       "native model identity is readable",
     );
-    for (const width of [1, 4, 60]) assert.ok(popup.render(width).every((row) => visibleWidth(row) <= width));
-    popup.handleInput("\u001b");
-    assert.equal(popupsClosed, 1, "Escape closes only the viewer");
+    assert.equal(popup, undefined, "the viewer does not remain open for settled history");
+    assert.equal(popupsClosed, 1, "the viewer closes automatically when no active agents remain");
     await new Promise((resolve) => setTimeout(resolve, 0));
     openOnNextWidget = true;
     await loaded.session.prompt("Run shutdown viewer proof");
@@ -623,6 +627,9 @@ test(
     const reopenDeadline = Date.now() + 5000;
     while (!popup && Date.now() < reopenDeadline) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.ok(popup, "a completed child's new run reappears and opens its viewer before parent shutdown");
+    const header = popup.render(60)[1];
+    assert.match(header, /\[direct-proof\]/);
+    assert.doesNotMatch(header, /\[<\]|\[>\]|nested-proof/, "reopening shows the active child, not earlier completed agents or their extra pages");
   },
 );
 

@@ -10,10 +10,10 @@ import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 
 initTheme("dark", false);
 
-const defaultAgents = ["reader", "writer", "tester"].map(name => ({ id: name, name, state: "idle" }));
+const defaultAgents = ["reader", "writer", "tester"].map(name => ({ id: name, name, state: "running" }));
 const textMessage = text => ({ role: "assistant", content: [{ type: "text", text }] });
 const inspection = (agentId, messages = [], options = {}) => ({
-  agent: { name: agentId, state: "idle" },
+  agent: { name: agentId, state: "running" },
   messages: messages.map((message, id) => ({ id: String(id), message })),
   session_file: `${agentId}.jsonl`,
   next_cursor: 1,
@@ -29,7 +29,7 @@ function popup(t, options = {}) {
     const name = agents().find(agent => agent.id === agentId)?.name ?? agentId;
     return inspection(agentId, after === 0
       ? options.messages?.[agentId] ?? [textMessage(`CONTENT_${agentId}`)] : [], {
-      agent: { name, state: "idle" },
+      agent: { name, state: "running" },
     });
   });
   const viewer = new SubagentViewer(
@@ -102,7 +102,7 @@ test("conversation popup keeps native click folds through refresh and scrolling"
     async () => {
       refreshes++;
       const page = {
-        agent: { name: "reader", state: "idle" },
+        agent: { name: "reader", state: "running" },
         messages: sent ? [] : messages.map((message, id) => ({ id: String(id), message })),
         session_file: "saved.jsonl",
         next_cursor: 1,
@@ -111,6 +111,8 @@ test("conversation popup keeps native click folds through refresh and scrolling"
       sent = true;
       return page;
     },
+    undefined,
+    () => [{ id: "agent", name: "reader", state: "running" }],
   );
   t.after(() => viewer.dispose());
   await delay(0);
@@ -269,30 +271,80 @@ test("mouse and keyboard tab switches show the selected transcript and retain ea
   assert.deepEqual(rows(), writerView, "Shift+Tab switches back without resetting the view");
 });
 
-test("dynamic agent sources add tabs while finished, previously viewed agents remain reachable", async t => {
+test("only active agents become tabs; inactive history and a finished initial selection are excluded", async t => {
+  const agents = [
+    { id: "old-review", name: "old-review", state: "dormant" },
+    { id: "old-tests", name: "old-tests", state: "idle" },
+    defaultAgents[0],
+    { id: "starting", name: "starting", state: "starting" },
+    { id: "waiting", name: "waiting", state: "needs_input" },
+    { id: "stopping", name: "stopping", state: "stopping" },
+    { id: "closed", name: "closed", state: "closed" },
+  ];
+  const { rows, calls } = popup(t, { agentId: "old-review", agents: () => agents });
+  await nextTurn();
+  assert.match(rows()[1], /\[reader\].*starting.*waiting.*stopping/);
+  assert.ok(!rows().some(row => /old-review|old-tests|closed/.test(row)));
+  assert.ok(rows().some(row => row.includes("CONTENT_reader")));
+  assert.deepEqual(calls.map(call => call.agentId), ["reader"], "inactive history is never inspected");
+});
+
+test("finished tabs disappear, selection moves to an active agent, and an empty source closes polling", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   let agents = defaultAgents.slice(0, 2);
-  const { rows, clickText, calls } = popup(t, {
+  const lateReader = deferred();
+  const { viewer, rows, calls, closes } = popup(t, {
     agents: () => agents,
-    inspect: async (agentId, after) => inspection(agentId,
-      after === 0 ? [textMessage(`SAVED_${agentId}`)] : [], { agent: { name: agentId, state: "done" } }),
+    inspect: async (agentId, after) => agentId === "reader" && after > 0
+      ? lateReader.promise : inspection(agentId, after === 0 ? [textMessage(`ACTIVE_${agentId}`)] : []),
   });
   await nextTurn();
   assert.match(rows()[1], /\[reader\].*writer/);
-  agents = defaultAgents.slice(1);
-  assert.match(rows()[1], /\[reader\].*writer.*tester/, "dropping a finished active tab does not remove its history");
-  assert.deepEqual(calls.map(call => call.agentId), ["reader"], "adding inactive tabs does not inspect them");
-  clickText("tester", 90, { header: true });
+  t.mock.timers.tick(1_000);
   await nextTurn();
-  assert.ok(rows().some(row => row.includes("SAVED_tester")), "a newly discovered tab can be selected immediately");
+  const pending = calls.at(-1);
+  assert.equal(pending.agentId, "reader");
+  assert.equal(pending.signal.aborted, false);
+  agents = [{ ...defaultAgents[0], state: "idle" }, ...defaultAgents.slice(1)];
+  assert.match(rows()[1], /\[writer\].*tester/);
+  await nextTurn();
+  assert.equal(pending.signal.aborted, true, "finishing the selected agent cancels its pending read");
+  assert.ok(!rows().some(row => row.includes("reader")));
+  assert.ok(rows().some(row => row.includes("ACTIVE_writer")));
+  lateReader.resolve(inspection("reader", [textMessage("LATE_FINISHED_READER")], { has_more: true }));
+  await nextTurn();
+  assert.ok(!rows().some(row => row.includes("LATE_FINISHED_READER")));
+  agents = [defaultAgents[1]];
+  assert.match(rows()[1], /\[writer\]/);
+  assert.ok(!rows()[1].includes("tester"), "a non-selected finished tab is also removed");
+  viewer.handleInput("\t");
+  assert.equal(calls.filter(call => call.agentId === "writer").length, 1, "keyboard cycling never revives a removed agent");
   agents = [];
-  assert.match(rows()[1], /reader.*\[tester\]/);
-  clickText("reader", 90, { header: true });
+  t.mock.timers.tick(1_000);
   await nextTurn();
-  assert.ok(rows().some(row => row.includes("SAVED_reader")), "finished tabs are still readable after the source empties");
+  assert.deepEqual(closes, [undefined], "the final completion closes the viewer even without a render or input");
+  assert.deepEqual(rows(), []);
+  assert.ok(calls.every(call => call.signal.aborted));
+  const stoppedCalls = calls.length;
+  t.mock.timers.tick(2_000);
+  await nextTurn();
+  assert.equal(calls.length, stoppedCalls, "empty active lists cannot rearm polling");
+});
+
+test("an initially empty active list closes without inspecting retained history", async t => {
+  const { viewer, rows, calls, closes } = popup(t, {
+    agents: () => [{ id: "reader", name: "reader", state: "dormant" }],
+  });
+  await nextTurn();
+  assert.deepEqual(calls, []);
+  assert.deepEqual(closes, [undefined]);
+  assert.deepEqual(rows(), []);
+  viewer.handleInput("\t");
+  assert.deepEqual(closes, [undefined], "an empty viewer cannot be reopened by cycling");
 });
 
 test("overflow arrows navigate tabs and keyboard selection remains visible", async t => {
-  const agents = Array.from({ length: 10 }, (_, i) => ({ id: `worker${i}`, name: `worker${i}` }));
+  const agents = Array.from({ length: 10 }, (_, i) => ({ id: `worker${i}`, name: `worker${i}`, state: "running" }));
   const { viewer, rows, clickText } = popup(t, { agentId: "worker0", agents: () => agents });
   await nextTurn();
   const width = 44;
@@ -316,7 +368,7 @@ test("overflow arrows navigate tabs and keyboard selection remains visible", asy
 });
 
 test("backward overflow paging does not skip variable-width tab labels", async t => {
-  const agents = ["reader", "writer", "tester", "x"].map(name => ({ id: name, name }));
+  const agents = ["reader", "writer", "tester", "x"].map(name => ({ id: name, name, state: "running" }));
   const { rows, clickText } = popup(t, { agents: () => agents });
   await nextTurn();
   const width = 23;
@@ -333,7 +385,7 @@ test("backward overflow paging does not skip variable-width tab labels", async t
 
 test("Unicode tab labels truncate within terminal columns without corrupting text or the close button", async t => {
   const name = "读者👩‍👩‍👦e\u0301🚀".repeat(5);
-  const { rows } = popup(t, { agents: () => [{ id: "reader", name }, ...defaultAgents.slice(1)] });
+  const { rows } = popup(t, { agents: () => [{ id: "reader", name, state: "running" }, ...defaultAgents.slice(1)] });
   await nextTurn();
   assert.ok(rows(90)[1].includes(`[${name}]`), "the full Unicode label is actually rendered when it fits");
   for (const width of [1, 4, 5, 6, 9, 14, 22, 44, 90]) {
@@ -345,7 +397,7 @@ test("Unicode tab labels truncate within terminal columns without corrupting tex
 });
 
 test("recent tab state is retained but traversing nine agents evicts an old transcript", async t => {
-  const agents = Array.from({ length: 9 }, (_, i) => ({ id: `agent${i}`, name: `agent${i}` }));
+  const agents = Array.from({ length: 9 }, (_, i) => ({ id: `agent${i}`, name: `agent${i}`, state: "running" }));
   const messages = Object.fromEntries(agents.map(({ id }) => [id, [textMessage(
     Array.from({ length: 50 }, (_, i) => `${id}_LINE_${i + 1}`).join("\n\n"),
   )]]));

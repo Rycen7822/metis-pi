@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { DEFAULT_CONFIG, type AppearanceConfig } from "../config.ts";
 import { ViewerContent, cleanViewerText as clean, type ViewerMessage } from "./viewer-content.ts";
+import { activeAgents } from "./widget.ts";
 
 export interface AgentInspection {
   agent: {
@@ -28,7 +29,7 @@ export interface AgentInspection {
   run?: { state: string; error?: string };
 }
 
-export interface ViewerAgent { id: string; name: string }
+export interface ViewerAgent { id: string; name: string; state: string }
 interface AgentView {
   content: ViewerContent;
   snapshot?: AgentInspection;
@@ -53,7 +54,7 @@ function disposeView(view: AgentView) {
 /** Read-only, bounded conversation view. Opening it never consumes attention or ACKs a result. */
 export class SubagentViewer implements Component {
   private readonly views = new Map<string, AgentView>();
-  private readonly agents = new Map<string, ViewerAgent>();
+  private agents = new Map<string, ViewerAgent>();
   private agentId: string;
   private timer?: ReturnType<typeof setTimeout>;
   private readAbort = new AbortController();
@@ -86,13 +87,11 @@ export class SubagentViewer implements Component {
     abort: AbortController,
     inspect: (agentId: string, after: number, signal: AbortSignal) => Promise<AgentInspection>,
     thinking: AppearanceConfig["thinking"] = DEFAULT_CONFIG.thinking,
-    agentSource: () => ViewerAgent[] = () => [],
+    agentSource: () => ViewerAgent[],
   ) {
     this.agentId = agentId; this.theme = theme; this.tui = tui; this.keys = keys;
     this.done = done; this.abort = abort; this.inspect = inspect;
     this.thinking = thinking; this.agentSource = agentSource;
-    this.syncAgents();
-    if (!this.agents.has(agentId)) this.agents.set(agentId, { id: agentId, name: agentId });
     this.cacheView(agentId);
     this.onAbort = () => this.close();
     abort.signal.addEventListener("abort", this.onAbort, { once: true });
@@ -100,8 +99,21 @@ export class SubagentViewer implements Component {
     else void this.refresh(this.view, this.readAbort);
   }
 
-  private syncAgents() {
-    for (const agent of this.agentSource()) this.agents.set(agent.id, agent);
+  private syncAgents(): boolean {
+    if (this.disposed) return false;
+    const active = new Map(activeAgents(this.agentSource()).map(agent => [agent.id, agent]));
+    const changed = active.size !== this.agents.size || [...active.keys()].some(id => !this.agents.has(id));
+    this.agents = active;
+    for (const [id, view] of this.views) {
+      if (!active.has(id)) { disposeView(view); this.views.delete(id); }
+    }
+    if (!active.size) { this.close(); return false; }
+    if (changed) {
+      this.targets = []; this.renderedHeight = 0; this.revealSelected = true;
+      this.tui.requestRender();
+    }
+    if (!active.has(this.agentId)) this.selectAgent(active.keys().next().value!);
+    return true;
   }
 
   private get view(): AgentView {
@@ -144,7 +156,6 @@ export class SubagentViewer implements Component {
   }
 
   private cycleAgent(delta: number) {
-    this.syncAgents();
     const ids = [...this.agents.keys()];
     const index = ids.indexOf(this.agentId);
     this.selectAgent(ids[(index + delta + ids.length) % ids.length]);
@@ -152,17 +163,18 @@ export class SubagentViewer implements Component {
 
   private async refresh(view: AgentView, controller: AbortController) {
     const current = () => !this.disposed && !controller.signal.aborted && this.readAbort === controller;
+    if (!current() || !this.syncAgents() || !current()) return;
     let more = false;
     try {
       const snapshot = await this.inspect(this.agentId, view.cursor, controller.signal);
-      if (!current()) return;
+      if (!current() || !this.syncAgents() || !current()) return;
       if (snapshot.reset || (view.file && view.file !== snapshot.session_file)) {
         view.content.dispose(); view.offset = Infinity; view.truncated = false;
         view.cursor = 0; view.file = snapshot.session_file; view.cachedWidth = -1; more = true; return;
       }
       view.file = snapshot.session_file;
       view.snapshot = snapshot; view.cursor = snapshot.next_cursor; more = snapshot.has_more;
-      if (snapshot.agent.name) this.agents.set(this.agentId, { id: this.agentId, name: snapshot.agent.name });
+      if (snapshot.agent.name) this.agents.set(this.agentId, { ...this.agents.get(this.agentId)!, name: snapshot.agent.name });
       if (snapshot.history_pruned) view.truncated = true;
       for (const entry of snapshot.messages) view.content.append(entry.message, snapshot.agent.cwd ?? "");
       view.truncated ||= view.content.truncated;
@@ -193,7 +205,7 @@ export class SubagentViewer implements Component {
   }
 
   handleInput(data: string) {
-    if (this.disposed) return;
+    if (!this.syncAgents()) return;
     if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "ctrl+c") || data === "q") this.close();
     else if (matchesKey(data, "left") || matchesKey(data, "shift+tab")) this.cycleAgent(-1);
     else if (matchesKey(data, "right") || matchesKey(data, "tab")) this.cycleAgent(1);
@@ -221,7 +233,7 @@ export class SubagentViewer implements Component {
   }
 
   handleMouse(event: TuiMouseEvent) {
-    if (this.disposed || event.y < 0 || event.y >= this.renderedHeight) return;
+    if (!this.syncAgents() || event.y < 0 || event.y >= this.renderedHeight) return;
     const target = this.targets.find(target => event.y === target.y && event.x >= target.x && event.x < target.x + target.width);
     if (target && event.button === "left") {
       if (event.type === "click") {
@@ -322,8 +334,7 @@ export class SubagentViewer implements Component {
 
   render(width: number): string[] {
     this.targets = []; this.renderedHeight = 0;
-    if (width <= 0 || this.disposed) return [];
-    this.syncAgents();
+    if (width <= 0 || !this.syncAgents()) return [];
     const view = this.view;
     const inner = Math.max(1, width - 4);
     this.innerWidth = inner; this.bodyTop = width < 5 ? 4 : 5; this.bodyPadding = width < 5 ? 0 : 2;
