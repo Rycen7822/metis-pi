@@ -10,6 +10,11 @@ reference material and is neither tracked nor used for installation.
 
 Local compatibility changes:
 
+- The Metis entrypoint registers only `web_access`, with deferred exposure and
+  per-action parameter discovery. The registration callback retains enabled
+  operations internally; nested search tracking and stored-content guidance use
+  the grouped entrypoint. The standalone upstream entrypoint and MCP keep their
+  original registration and activation behavior.
 - Ordinary preferences are maintained in the existing global `metis-pi.toml`
   under `[webAccess]`. Credentials, authentication headers and authenticated
   proxies retain JSON/env/command sources; `web-search.json` shares the TOML

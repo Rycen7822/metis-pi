@@ -14,7 +14,7 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 | condense / OCC | `[contextPrune]` 及子表 | `/pruner settings`、相关命令写全局；手动编辑后 `/reload`；见 [condense](features/condense.md)。 |
 | 动态全局指令 | `[dynamicAgents]` / `[[dynamicAgents.groups]]` | 策略 Markdown 相对全局配置目录；下一正式 run 读取，见 [动态指令](features/dynamic-agents.md)。 |
 | 子代理 | `[subagents]` / `inheritance` / `profiles` | native 入口启用开关、后端容量/超时/profile；后端启动读取，须安全 drain/stop 后重新连接。 |
-| 会话回忆 | `[sessionRecall]` | `queryModel="default"` 跟随当前会话，或填已注册的 `provider/model-id`；每次 `session_query` 重读。 |
+| 会话回忆 | `[sessionRecall]` | `queryModel="default"` 跟随当前会话，或填已注册的 `provider/model-id`；每次 `session_recall` 的 `query` 操作重读。 |
 | 网页访问 | `[webAccess]` 及子表 | 搜索/抓取/摘要/工具普通选项；`/websearch`、`/curator` 写 TOML；凭据使用同目录 `web-search.json` 或环境变量。 |
 | goal / 结束摘要 | Pi session custom entries | 会话状态不是配置；摘要持久化由 `appearance.summary.persist` 控制。 |
 | 原文、图片、命令日志 | 会话旁 `<sessionId>-blobs/` | 恢复数据不搬入 TOML，复制或清理会话时一并处理。 |

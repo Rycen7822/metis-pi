@@ -11,6 +11,20 @@ Metis 内置维护两个上游扩展：
 入口注释和各目录的 `METIS.md` 记录上游地址、提交和本地修改；原 MIT
 许可证保留。`references` 仅用于临时参考，不参与构建或安装。
 
+Pi 只注册 `web_access` 和 `session_recall` 两个聚合入口，两者均为 `deferred`，沿用 execution 的暴露方式，通过原生 codemode 的 `searchTools` / `describeTool` 按需发现。业务参数不放进常驻声明；先查询所选操作的说明，再执行：
+
+```js
+const spec = await tools.web_access({ action: "describe", target: "fetch" });
+console.log(spec);
+// 下一次脚本按返回的参数执行所需操作。
+const page = await tools.web_access({ action: "fetch", params: { url: "https://example.com" } });
+console.log(page);
+```
+
+`web_access` 提供 `search`、`source_check`、`fetch`、`content` 操作，只列出 TOML 中启用的操作；`session_recall` 提供 `search`、`query` 操作。两者的 `describe` 均用 `target` 选择操作，业务参数放在 `params` 内，仍按原操作的完整 schema 校验。返回值保留结构化网页数据及会话回忆文本，快捷键、命令、缓存和查询模型配置继续生效。
+
+Metis 不再注册独立的 `web_search`、`source_check`、`fetch_content`、`get_search_content`、`web_enable`、`session_search`、`session_query` 工具。`webAccess.toolActivation` 和 `toolNames` 不再控制 Metis 聚合入口的暴露或名称；独立上游入口和 Web Access MCP 仍使用它们原有的接口。
+
 安装前从 Pi 的 `packages` 中移除或禁用原来的 `npm:pi-web-access` 和
 `npm:@ogulcancelik/pi-session-recall`，避免重复注册同名工具。Metis 不自动
 修改其他机器上的个人配置。旧 npm 安装目录可保留。
@@ -31,7 +45,7 @@ queryModel = "openai/gpt-6.1-sol"
 ```
 
 默认 `"default"` 跟随当前会话；模型不存在或选择值无效时也回退当前模型。
-每次 `session_query` 重读配置，`session_search` 不调用模型。模型定义与认证
+每次 `session_recall` 的 `query` 操作重读配置，`search` 操作不调用模型。模型定义与认证
 仍由 Pi 管理。新 TOML 不存在时 `/metis-config init` 导入旧
 `session-recall.json`；已有 TOML 直接修改 `[sessionRecall].queryModel`。
 旧 recall JSON 保留，TOML 存在后不再作为查询配置读取。

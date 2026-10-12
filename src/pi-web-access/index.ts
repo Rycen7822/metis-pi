@@ -3,9 +3,9 @@ import { saveWebAccessConfig, formatSeconds, resolveCuratorNetworkConfig, runWit
 // Source version: 0.38.0; commit: 7e6e2386dc9a31d5e2a448172060dd1339c604f7
 // Local changes retain OpenAI / OpenAI Codex provider compatibility. See METIS.md.
 
-import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Text, truncateToWidth, type KeyId } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { ExtractedContent } from "./extract.ts";
 import { normalizeFetchContentParams } from "./fetch-params.ts";
 import { answerFromPage } from "./page-query.ts";
@@ -713,10 +713,18 @@ function refreshUi(ctx: ExtensionContext): void {
 	}
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, options: {
+	registerTool?: <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => void;
+	toolName?: string;
+	formatStoredContentCall?: (args: string) => string;
+} = {}) {
 	const initConfig = loadConfigForExtensionInit();
+	const registerTool = <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => {
+		if (options.registerTool) options.registerTool(action, tool);
+		else pi.registerTool(tool);
+	};
 	const fetchModeConfig = resolveFetchModeConfig(initConfig);
-	const toolActivation = initConfig.toolActivation ?? "auto";
+	const toolActivation = options.registerTool ? "eager" : initConfig.toolActivation ?? "auto";
 	if (toolActivation !== "auto" && toolActivation !== "dynamic" && toolActivation !== "eager") {
 		throw new Error(`toolActivation in ${WEB_SEARCH_CONFIG_PATH} must be "auto", "dynamic", or "eager"`);
 	}
@@ -735,7 +743,10 @@ export default function (pi: ExtensionAPI) {
 	const fetchContentEnabled = isToolEnabled(initConfig, "fetchContent");
 	const getSearchContentEnabled = isToolEnabled(initConfig, "getSearchContent");
 	const coreSettings = {
-		toolNames,
+		toolNames: options.toolName ? {
+			webSearch: `${options.toolName} action=search`, sourceCheck: `${options.toolName} action=source_check`,
+			fetchContent: `${options.toolName} action=fetch`, getSearchContent: `${options.toolName} action=content`,
+		} : toolNames,
 		enabledTools: {
 			webSearch: webSearchEnabled,
 			sourceCheck: sourceCheckEnabled,
@@ -750,10 +761,10 @@ export default function (pi: ExtensionAPI) {
 	const registeredToolNames = registeredFetchToolNames(coreSettings);
 	const storedContentSources = storedContentSourceNames(coreSettings);
 	const searchQueryDescription = webSearchEnabled
-		? `Get content for this query (${toolNames.webSearch})`
+		? `Get content for this query (${coreSettings.toolNames.webSearch})`
 		: "Get content for a stored search query";
 	const fetchContentStorageNote = getSearchContentEnabled
-		? `Full original content is stored for retrieval with ${toolNames.getSearchContent}.`
+		? `Full original content is stored for retrieval with ${coreSettings.toolNames.getSearchContent}.`
 		: "Full original content is stored internally, but the retrieval tool is not registered.";
 	const fetchModeDescription = fetchModeConfig.allowedModes
 		.map(mode => `${mode}${mode === fetchModeConfig.defaultMode ? " (default)" : ""}: ${FETCH_MODE_DESCRIPTIONS[mode]}`)
@@ -861,6 +872,7 @@ export default function (pi: ExtensionAPI) {
 
 	const core = createWebToolCore({
 		settings: coreSettings,
+		formatStoredContentCall: options.formatStoredContentCall,
 		storeFetchedContent(id, data) {
 			publish(storeFetchedContentResult(id, data));
 		},
@@ -1382,7 +1394,9 @@ export default function (pi: ExtensionAPI) {
 	// Ids of calls a later handler blocked are dropped when the session changes.
 	const nestedSearchCallIds = new Set<string>();
 	if (webSearchEnabled) pi.on("tool_call", (event) => {
-		if (event.parentToolCallId && event.toolName === toolNames.webSearch) nestedSearchCallIds.add(event.toolCallId);
+		const isSearch = event.toolName === toolNames.webSearch ||
+			(event.toolName === options.toolName && "action" in event.input && event.input.action === "search");
+		if (event.parentToolCallId && isSearch) nestedSearchCallIds.add(event.toolCallId);
 	});
 
 	pi.on("session_start", async (_event, ctx) => { nestedSearchCallIds.clear(); startSession(ctx); });
@@ -1399,12 +1413,15 @@ export default function (pi: ExtensionAPI) {
 		widgetVisible = false;
 	});
 
-	if (webSearchEnabled) pi.registerTool({
+	if (webSearchEnabled) registerTool("search", {
 		name: toolNames.webSearch,
 		label: "Web Search",
 		prepareArguments: (args) => parseStringifiedArrays(args, ["provider", "queries", "domainFilter"]) as never,
 		description:
-			`Search the web and return source-linked results or provider answers.${getSearchContentEnabled ? ` Full results are stored for retrieval with ${toolNames.getSearchContent} using the returned responseId.` : ""} For research, prefer queries with 2-4 varied angles over a single query. Omit provider to use the configured default; set it only to override that.`,
+			`Search the web and return source-linked results or provider answers.${getSearchContentEnabled
+				? ` Full results are stored for retrieval with ${coreSettings.toolNames.getSearchContent} using the returned responseId.`
+				: ""} For research, prefer queries with 2-4 varied angles over a single query. ` +
+			"Omit provider to use the configured default; set it only to override that.",
 		promptSnippet:
 			"Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage. Omit provider unless explicitly overriding the configured default.",
 		parameters: Type.Object({
@@ -1944,7 +1961,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	if (sourceCheckEnabled) pi.registerTool({
+	if (sourceCheckEnabled) registerTool("source_check", {
 		name: toolNames.sourceCheck,
 		label: "Source Check",
 		description: "Gather web sources for a claim and return a bounded machine-readable research artifact with exact passage citations for manual review.",
@@ -1966,7 +1983,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	if (fetchContentEnabled) pi.registerTool({
+	if (fetchContentEnabled) registerTool("fetch", {
 		name: toolNames.fetchContent,
 		label: "Fetch Content",
 		description: `Fetch URL(s). Available modes: ${fetchModeDescription}. Direct image URLs return resized image content when supported by the selected mode. Supports YouTube transcripts, GitHub repositories, PDFs, and local videos when supported by the selected mode. ${fetchContentStorageNote}`,
@@ -2154,7 +2171,7 @@ export default function (pi: ExtensionAPI) {
 
 	if (getSearchContentEnabled) {
 		const maxInlineContentChars = getMaxInlineContentChars(initConfig);
-		pi.registerTool({
+		registerTool("content", {
 		name: toolNames.getSearchContent,
 		label: "Get Search Content",
 		description: `Retrieve bounded pages of full stored search results or fetched content, or find matching passages, from a previous ${storedContentSources} call.`,

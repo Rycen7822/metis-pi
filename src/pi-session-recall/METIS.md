@@ -22,7 +22,10 @@ selects a registered model. Each query rereads the setting. The shared Metis
 init command imports the upstream `session-recall.json` when TOML is absent
 and leaves the original intact. An existing TOML is authoritative.
 
-Keep `session_search`, `session_query` and existing session files intact when
-updating this module. Compare against the pinned upstream commit, preserve the
+The Metis entrypoint registers only deferred `session_recall`, with `search`,
+`query` and per-action `describe` operations. Preserve the original search/query
+implementations and existing session files when updating this module; the
+registration callback keeps these operations internal to the grouped tool.
+Compare against the pinned upstream commit, preserve the
 API-aware compatibility check and TOML integration, update the provenance
 comment, and verify tool registration, model selection and query transport.

@@ -28,7 +28,7 @@ import {
 	type Message,
 } from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	getAgentDir,
 	SessionManager,
@@ -38,7 +38,7 @@ import {
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -529,10 +529,19 @@ const MAX_SNIPPETS_PER_SESSION = 3;
 
 // ── Extension ────────────────────────────────────────────────────────────────
 
-export default function sessionRecallExtension(pi: ExtensionAPI) {
+export default function sessionRecallExtension(pi: ExtensionAPI, options: {
+	registerTool?: <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => void;
+	toolName?: string;
+} = {}) {
+	const registerTool = <T extends TSchema, D = unknown>(action: string, tool: ToolDefinition<T, D>) => {
+		if (options.registerTool) options.registerTool(action, tool);
+		else pi.registerTool(tool);
+	};
+	const searchName = options.toolName ? `${options.toolName} action=search` : "session_search";
+	const queryName = options.toolName ? `${options.toolName} action=query` : "session_query";
 	// ── session_search tool ────────────────────────────────────────────────
 
-	pi.registerTool({
+	registerTool("search", {
 		name: "session_search",
 		label: "Session Search",
 		description:
@@ -541,7 +550,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI) {
 			"Good examples: `libc++abi`, `Cannot find module '@sinclair/typebox'`, `Blender VAT bake`. " +
 			"Bad example: `build ci c lib dependency ghostty` because that searches for one exact phrase, not separate keywords. " +
 			"Do not combine independent keywords into one search string. If you need multiple unrelated terms, call session_search multiple times. " +
-			"After finding a likely session, use session_query for semantic questions.",
+			`After finding a likely session, use ${queryName} for semantic questions.`,
 		renderResult: (result, options, theme) => {
 			const container = new Container();
 			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
@@ -662,11 +671,11 @@ export default function sessionRecallExtension(pi: ExtensionAPI) {
 
 	// ── session_query tool ─────────────────────────────────────────────────
 
-	pi.registerTool({
+	registerTool("query", {
 		name: "session_query",
 		label: "Session Query",
 		description:
-			"Query a specific session file to get detailed information. Use after session_search to dig into a particular session, " +
+			`Query a specific session file to get detailed information. Use after ${searchName} to dig into a particular session, ` +
 			"or when you already have a session path (e.g., from a handoff). Sends the conversation and tool calls, without assistant thinking or tool output, to an LLM for analysis.",
 		renderResult: (result, options, theme) => {
 			const container = new Container();

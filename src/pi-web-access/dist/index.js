@@ -22668,6 +22668,7 @@ function createWebToolCore(host) {
   const fetchModeConfig = settings.fetchModes;
   const registeredToolNames = registeredFetchToolNames(settings);
   const storedContentSources = storedContentSourceNames(settings);
+  const storedContentCall = (args) => host.formatStoredContentCall?.(args) ?? `${toolNames.getSearchContent}({ ${args} })`;
   function fetchOptions(options, proxy) {
     const merged = host.extractOptions ? { ...options ?? {}, ...host.extractOptions } : options;
     return withRegisteredFetchOptions(merged, registeredToolNames, proxy);
@@ -22746,7 +22747,7 @@ function createWebToolCore(host) {
         value += `
 ---
 Full content for ${opts.inlineContent.length} sources is ready as responseId "${fetchId}". `;
-        value += getSearchContentEnabled ? `Use ${toolNames.getSearchContent}({ responseId: "${fetchId}", urlIndex: 0, offset: 0, limit: ${maxInlineContentChars} }) to retrieve the first bounded page.` : forTruncation ? `Enable ${toolNames.getSearchContent} to retrieve the full stored content.` : "";
+        value += getSearchContentEnabled ? `Use ${storedContentCall(`responseId: "${fetchId}", urlIndex: 0, offset: 0, limit: ${maxInlineContentChars}`)} to retrieve the first bounded page.` : forTruncation ? `Enable ${toolNames.getSearchContent} to retrieve the full stored content.` : "";
       } else if (isBackgroundFetch && fetchId) {
         value += `
 ---
@@ -22756,7 +22757,7 @@ Content fetching in background as responseId "${fetchId}". Will notify when read
         value += `
 ---
 Full search results are stored as responseId "${searchId}". `;
-        value += getSearchContentEnabled ? `Use ${toolNames.getSearchContent}({ responseId: "${searchId}", queryIndex: 0, offset: 0, limit: ${maxInlineContentChars} }) to retrieve the first bounded page${opts.results.length > 1 ? `; repeat with queryIndex 1 through ${opts.results.length - 1}` : ""}.` : `Enable ${toolNames.getSearchContent} to retrieve the full stored results.`;
+        value += getSearchContentEnabled ? `Use ${storedContentCall(`responseId: "${searchId}", queryIndex: 0, offset: 0, limit: ${maxInlineContentChars}`)} to retrieve the first bounded page${opts.results.length > 1 ? `; repeat with queryIndex 1 through ${opts.results.length - 1}` : ""}.` : `Enable ${toolNames.getSearchContent} to retrieve the full stored results.`;
       }
       return value;
     };
@@ -23073,7 +23074,7 @@ Full search results are stored as responseId "${searchId}". `;
 
 ---
 Showing ${slice.endOffset} of ${fullLength} chars, ${slice.shownBytes} of ${slice.totalBytes} bytes, and ${slice.shownLines} of ${slice.totalLines} lines. `;
-          output2 += storedContent ? getSearchContentEnabled ? `Use ${toolNames.getSearchContent}({ responseId: "${responseId}", urlIndex: 0, offset: ${slice.endOffset} }) for the next slice.` : "Content retrieval is not registered." : "Authenticated fetch cache is off; repeat the fetch to read more.";
+          output2 += storedContent ? getSearchContentEnabled ? `Use ${storedContentCall(`responseId: "${responseId}", urlIndex: 0, offset: ${slice.endOffset}`)} for the next slice.` : "Content retrieval is not registered." : "Authenticated fetch cache is off; repeat the fetch to read more.";
         }
         const content = [];
         if (result.frames?.length) {
@@ -23125,7 +23126,7 @@ Showing ${slice.endOffset} of ${fullLength} chars, ${slice.shownBytes} of ${slic
       }
       output += storedContent ? getSearchContentEnabled ? `
 ---
-Use ${toolNames.getSearchContent}({ responseId: "${responseId}", urlIndex: 0 }) to retrieve bounded content slices.` : "\n---\nContent retrieval is not registered." : "\n---\nAuthenticated fetch cache is off; repeat the fetch to read content.";
+Use ${storedContentCall(`responseId: "${responseId}", urlIndex: 0`)} to retrieve bounded content slices.` : "\n---\nContent retrieval is not registered." : "\n---\nAuthenticated fetch cache is off; repeat the fetch to read content.";
       return {
         ...successful === 0 ? { isError: true } : {},
         content: [{ type: "text", text: output }],
@@ -23898,10 +23899,14 @@ function refreshUi(ctx) {
     updateWidget(ctx);
   }
 }
-function index_default(pi) {
+function index_default(pi, options = {}) {
   const initConfig = loadConfigForExtensionInit();
+  const registerTool = (action, tool) => {
+    if (options.registerTool) options.registerTool(action, tool);
+    else pi.registerTool(tool);
+  };
   const fetchModeConfig = resolveFetchModeConfig(initConfig);
-  const toolActivation = initConfig.toolActivation ?? "auto";
+  const toolActivation = options.registerTool ? "eager" : initConfig.toolActivation ?? "auto";
   if (toolActivation !== "auto" && toolActivation !== "dynamic" && toolActivation !== "eager") {
     throw new Error(`toolActivation in ${WEB_SEARCH_CONFIG_PATH4} must be "auto", "dynamic", or "eager"`);
   }
@@ -23916,7 +23921,12 @@ function index_default(pi) {
   const fetchContentEnabled = isToolEnabled(initConfig, "fetchContent");
   const getSearchContentEnabled = isToolEnabled(initConfig, "getSearchContent");
   const coreSettings = {
-    toolNames,
+    toolNames: options.toolName ? {
+      webSearch: `${options.toolName} action=search`,
+      sourceCheck: `${options.toolName} action=source_check`,
+      fetchContent: `${options.toolName} action=fetch`,
+      getSearchContent: `${options.toolName} action=content`
+    } : toolNames,
     enabledTools: {
       webSearch: webSearchEnabled,
       sourceCheck: sourceCheckEnabled,
@@ -23928,8 +23938,8 @@ function index_default(pi) {
   };
   const registeredToolNames = registeredFetchToolNames(coreSettings);
   const storedContentSources = storedContentSourceNames(coreSettings);
-  const searchQueryDescription = webSearchEnabled ? `Get content for this query (${toolNames.webSearch})` : "Get content for a stored search query";
-  const fetchContentStorageNote = getSearchContentEnabled ? `Full original content is stored for retrieval with ${toolNames.getSearchContent}.` : "Full original content is stored internally, but the retrieval tool is not registered.";
+  const searchQueryDescription = webSearchEnabled ? `Get content for this query (${coreSettings.toolNames.webSearch})` : "Get content for a stored search query";
+  const fetchContentStorageNote = getSearchContentEnabled ? `Full original content is stored for retrieval with ${coreSettings.toolNames.getSearchContent}.` : "Full original content is stored internally, but the retrieval tool is not registered.";
   const fetchModeDescription = fetchModeConfig.allowedModes.map((mode) => `${mode}${mode === fetchModeConfig.defaultMode ? " (default)" : ""}: ${FETCH_MODE_DESCRIPTIONS[mode]}`).join("; ");
   const curateKey = initConfig.shortcuts?.curate || DEFAULT_SHORTCUTS.curate;
   const activityKey = initConfig.shortcuts?.activity || DEFAULT_SHORTCUTS.activity;
@@ -24015,6 +24025,7 @@ function index_default(pi) {
   }
   const core = createWebToolCore({
     settings: coreSettings,
+    formatStoredContentCall: options.formatStoredContentCall,
     storeFetchedContent(id, data) {
       publish(storeFetchedContentResult(id, data));
     },
@@ -24469,7 +24480,8 @@ Open manually: ${handle.url}` }],
   });
   const nestedSearchCallIds = /* @__PURE__ */ new Set();
   if (webSearchEnabled) pi.on("tool_call", (event) => {
-    if (event.parentToolCallId && event.toolName === toolNames.webSearch) nestedSearchCallIds.add(event.toolCallId);
+    const isSearch = event.toolName === toolNames.webSearch || event.toolName === options.toolName && "action" in event.input && event.input.action === "search";
+    if (event.parentToolCallId && isSearch) nestedSearchCallIds.add(event.toolCallId);
   });
   pi.on("session_start", async (_event, ctx) => {
     nestedSearchCallIds.clear();
@@ -24488,11 +24500,11 @@ Open manually: ${handle.url}` }],
     activityMonitor.clear();
     widgetVisible = false;
   });
-  if (webSearchEnabled) pi.registerTool({
+  if (webSearchEnabled) registerTool("search", {
     name: toolNames.webSearch,
     label: "Web Search",
     prepareArguments: (args) => parseStringifiedArrays(args, ["provider", "queries", "domainFilter"]),
-    description: `Search the web and return source-linked results or provider answers.${getSearchContentEnabled ? ` Full results are stored for retrieval with ${toolNames.getSearchContent} using the returned responseId.` : ""} For research, prefer queries with 2-4 varied angles over a single query. Omit provider to use the configured default; set it only to override that.`,
+    description: `Search the web and return source-linked results or provider answers.${getSearchContentEnabled ? ` Full results are stored for retrieval with ${coreSettings.toolNames.getSearchContent} using the returned responseId.` : ""} For research, prefer queries with 2-4 varied angles over a single query. Omit provider to use the configured default; set it only to override that.`,
     promptSnippet: "Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage. Omit provider unless explicitly overriding the configured default.",
     parameters: Type2.Object({
       query: Type2.Optional(Type2.String({ description: "Single search query. For research tasks, prefer 'queries' with multiple varied angles instead." })),
@@ -24946,7 +24958,7 @@ Open manually: ${handle.url}` }],
       return new Text(lines.join("\n"), 0, 0);
     }
   });
-  if (sourceCheckEnabled) pi.registerTool({
+  if (sourceCheckEnabled) registerTool("source_check", {
     name: toolNames.sourceCheck,
     label: "Source Check",
     description: "Gather web sources for a claim and return a bounded machine-readable research artifact with exact passage citations for manual review.",
@@ -24967,7 +24979,7 @@ Open manually: ${handle.url}` }],
       return markToolError(await core.sourceCheck(params, signal, { extensionContext: ctx }));
     }
   });
-  if (fetchContentEnabled) pi.registerTool({
+  if (fetchContentEnabled) registerTool("fetch", {
     name: toolNames.fetchContent,
     label: "Fetch Content",
     description: `Fetch URL(s). Available modes: ${fetchModeDescription}. Direct image URLs return resized image content when supported by the selected mode. Supports YouTube transcripts, GitHub repositories, PDFs, and local videos when supported by the selected mode. ${fetchContentStorageNote}`,
@@ -25018,8 +25030,8 @@ Open manually: ${handle.url}` }],
       } catch {
         return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(invalid parameters)"), 0, 0);
       }
-      const { urlList, options } = normalized;
-      const { prompt, timestamp, frames, model, mode, answerModel, auth } = options;
+      const { urlList, options: options2 } = normalized;
+      const { prompt, timestamp, frames, model, mode, answerModel, auth } = options2;
       if (urlList.length === 0) {
         return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("error", "(no URL)"), 0, 0);
       }
@@ -25124,7 +25136,7 @@ Open manually: ${handle.url}` }],
   });
   if (getSearchContentEnabled) {
     const maxInlineContentChars = getMaxInlineContentChars(initConfig);
-    pi.registerTool({
+    registerTool("content", {
       name: toolNames.getSearchContent,
       label: "Get Search Content",
       description: `Retrieve bounded pages of full stored search results or fetched content, or find matching passages, from a previous ${storedContentSources} call.`,
@@ -25527,7 +25539,7 @@ Open manually: ${handle.url}` }],
         ctx.ui.notify("No stored search results", "info");
         return;
       }
-      const options = results.map((r) => {
+      const options2 = results.map((r) => {
         const age = Math.floor((Date.now() - r.timestamp) / 6e4);
         const ageStr = age < 60 ? `${age}m ago` : `${Math.floor(age / 60)}h ago`;
         if (r.type === "search" && r.queries) {
@@ -25539,7 +25551,7 @@ Open manually: ${handle.url}` }],
         }
         return `[${r.id.slice(0, 6)}] ${r.type} - ${ageStr}`;
       });
-      const choice = await ctx.ui.select("Stored Search Results", options);
+      const choice = await ctx.ui.select("Stored Search Results", options2);
       if (!choice) return;
       const match = choice.match(/^\[([a-z0-9]+)\]/);
       if (!match) return;

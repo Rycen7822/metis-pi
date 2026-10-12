@@ -495,6 +495,7 @@ export interface PageAnswerRequest {
  * notifications, and page answers; the standalone host keeps results in memory only. */
 export interface WebToolCoreHost {
 	settings: WebToolCoreSettings;
+	formatStoredContentCall?(args: string): string;
 	/** Store fetched page content under id so the retrieval tool can page through it. */
 	storeFetchedContent(id: string, data: FetchedContentData): void;
 	/** Called after search or research results are stored in memory. */
@@ -574,6 +575,8 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 	const fetchModeConfig = settings.fetchModes;
 	const registeredToolNames = registeredFetchToolNames(settings);
 	const storedContentSources = storedContentSourceNames(settings);
+	const storedContentCall = (args: string) => host.formatStoredContentCall?.(args) ??
+		`${toolNames.getSearchContent}({ ${args} })`;
 
 	function fetchOptions(options: ExtractOptions | undefined, proxy?: string): ExtractOptions {
 		const merged = host.extractOptions ? { ...(options ?? {}), ...host.extractOptions } : options;
@@ -651,7 +654,8 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 			if (hasInlineReady && opts.inlineContent && fetchId) {
 				value += `\n---\nFull content for ${opts.inlineContent.length} sources is ready as responseId "${fetchId}". `;
 				value += getSearchContentEnabled
-					? `Use ${toolNames.getSearchContent}({ responseId: "${fetchId}", urlIndex: 0, offset: 0, limit: ${maxInlineContentChars} }) to retrieve the first bounded page.`
+					? `Use ${storedContentCall(`responseId: "${fetchId}", urlIndex: 0, offset: 0, limit: ${maxInlineContentChars}`)}` +
+						" to retrieve the first bounded page."
 					: forTruncation ? `Enable ${toolNames.getSearchContent} to retrieve the full stored content.` : "";
 			} else if (isBackgroundFetch && fetchId) {
 				value += `\n---\nContent fetching in background as responseId "${fetchId}". Will notify when ready.`;
@@ -659,7 +663,9 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 			if (getSearchContentEnabled || forTruncation) {
 				value += `\n---\nFull search results are stored as responseId "${searchId}". `;
 				value += getSearchContentEnabled
-					? `Use ${toolNames.getSearchContent}({ responseId: "${searchId}", queryIndex: 0, offset: 0, limit: ${maxInlineContentChars} }) to retrieve the first bounded page${opts.results.length > 1 ? `; repeat with queryIndex 1 through ${opts.results.length - 1}` : ""}.`
+					? `Use ${storedContentCall(`responseId: "${searchId}", queryIndex: 0, offset: 0, limit: ${maxInlineContentChars}`)}` +
+						` to retrieve the first bounded page${opts.results.length > 1
+							? `; repeat with queryIndex 1 through ${opts.results.length - 1}` : ""}.`
 					: `Enable ${toolNames.getSearchContent} to retrieve the full stored results.`;
 			}
 			return value;
@@ -1012,7 +1018,8 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 					output += `\n\n---\nShowing ${slice.endOffset} of ${fullLength} chars, ${slice.shownBytes} of ${slice.totalBytes} bytes, and ${slice.shownLines} of ${slice.totalLines} lines. `;
 					output += storedContent
 						? getSearchContentEnabled
-							? `Use ${toolNames.getSearchContent}({ responseId: "${responseId}", urlIndex: 0, offset: ${slice.endOffset} }) for the next slice.`
+							? `Use ${storedContentCall(`responseId: "${responseId}", urlIndex: 0, offset: ${slice.endOffset}`)}` +
+								" for the next slice."
 							: "Content retrieval is not registered."
 						: "Authenticated fetch cache is off; repeat the fetch to read more.";
 				}
@@ -1067,7 +1074,8 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 			}
 			output += storedContent
 				? getSearchContentEnabled
-					? `\n---\nUse ${toolNames.getSearchContent}({ responseId: "${responseId}", urlIndex: 0 }) to retrieve bounded content slices.`
+					? `\n---\nUse ${storedContentCall(`responseId: "${responseId}", urlIndex: 0`)}` +
+						" to retrieve bounded content slices."
 					: "\n---\nContent retrieval is not registered."
 				: "\n---\nAuthenticated fetch cache is off; repeat the fetch to read content.";
 
