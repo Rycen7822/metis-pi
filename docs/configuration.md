@@ -59,7 +59,7 @@ backgroundShellPrevShortcut = "alt+u"
 
 ## MCP
 
-需要 Pi >=1.1.0。Metis MCP 默认关闭；首次使用时显式切换：
+需要 Pi >=1.2.0。Metis MCP 默认关闭；首次使用时显式切换：
 
 1. 禁用或移除 `pi-mcp-adapter`，用 `pi config` 禁用内置 `mcp` 扩展；保留内置 `codemode`、`tool-search`。原生 `pi mcp` CLI 仍可用。
 2. 在全局 TOML 设置下列策略。
@@ -79,6 +79,8 @@ keepAliveServers = []
 支持 stdio、Streamable HTTP（含 SSE 通知流），不支持旧 HTTP+SSE、socket 或 rmcp-mux。项目 provider auth 沿用 Pi 限制；`!command`、环境变量取值沿用 Pi 语义。
 
 目录缓存位于 `<agentDir>/cache/metis-mcp/`。可信缓存在启动时只注册目录，调用再连接；无缓存时后台发现，启动最多等 3 秒。缓存绑定配置、工作目录、可信状态、环境与认证，连接会重查 schema。动态命令取值/provider auth 不持久缓存，以真实发现为准。冷发现后默认断开；keepAlive 连接保留。缓存不保存令牌明文，权限 0600。
+
+连接时只发现工具，资源与模板在资源工具调用时查询，慢资源不会阻塞工具目录。codemode/tool_search 等声明会访问工具目录的入口会等待相关发现完成，等待可取消。namespace 同时接受服务器原名和完整 `mcp__server` 名称；结果保留服务器返回的任意 JSON `structuredContent`。
 
 `/mcp` 查看状态，`/mcp reload` 重读配置，`/mcp refresh [server]` 更新目录。服务器增删及登录仍用 `pi mcp add/list/login/logout`；共用 `<agentDir>/mcp-auth.json` 及 Pi 刷新锁。登录只提示 CLI，不自动打开浏览器；CLI 登录/注销后下一 run 重查目录。
 

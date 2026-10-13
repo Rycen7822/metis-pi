@@ -37,13 +37,16 @@ test("real editor surface, IME glyphs and hardware cursor survive one terminal l
   assert.equal(editor.getText(), "");
   assert.match(editor.renderTopBorder(80, 3), /↑ 3 more/);
   assert.match(editor.renderBottomBorder(80, 2), /↓ 2 more/);
+  tui.setLayoutRoot(container(editor));
+  tui.setFocus(editor);
 
   for (const [text, offset, glyph] of [["", 0, " "], ["abc", 1, "b"], ["你a", 0, "你"], ["👩‍👩‍👦a", 0, "👩‍👩‍👦"], ["éa", 0, "é"]]) {
     editor.setText(text);
     editor.setCursorCol(offset);
     const row = editor.render(80)[1];
-    assert.ok(row.includes(`${CURSOR_MARKER}${glyph}\x1b[0m`), "literal grapheme remains at its IME marker");
-    assert.doesNotMatch(row, /\x1b\[7m/);
+    assert.ok(row.includes(`${CURSOR_MARKER}${Tui.renderFakeCursor(glyph)}`), "literal grapheme remains at its IME marker");
+    tui.doRender();
+    assert.doesNotMatch(tui.previousScreen.join("\n"), /\x1b\[7m/, "Pi resolves the focused fake cursor to the hardware cursor");
     assert.equal(visibleWidth(row), 80);
     assert.equal(editor.getText(), text);
   }
@@ -52,7 +55,7 @@ test("real editor surface, IME glyphs and hardware cursor survive one terminal l
   editor.handleInput("\x1b[D");
   assert.equal(editor.getCursor().col, 9);
   const row = editor.render(80)[1];
-  assert.ok(row.includes(`wor${CURSOR_MARKER}l\x1b[0m`));
+  assert.ok(row.includes(`wor${CURSOR_MARKER}${Tui.renderFakeCursor("l")}`));
   assert.match(Tui.stripTerminalSequences(row), /hello world/);
   assert.doesNotMatch(row, /Ask anything/);
   tui.setLayoutRoot(container(editor));
@@ -65,15 +68,20 @@ test("real editor surface, IME glyphs and hardware cursor survive one terminal l
   assert.equal(tui.getShowHardwareCursor(), false);
   assert.equal(terminal.writes.at(-1), "\x1b[0 q");
 
-  const legacy = nativeEditor({ hardwareCursor: () => () => true });
-  legacy.setText("你a");
-  legacy.setCursorCol(0);
-  assert.match(legacy.render(45).join("\n"), /─{10}/);
-  assert.ok(legacy.render(45)[1].includes(`${CURSOR_MARKER}你\x1b[0m`));
-  const fallback = nativeEditor({ surface });
+  const bordered = nativeEditor({ hardwareCursor: cursor.acquire }, tui);
+  bordered.setText("你a");
+  bordered.setCursorCol(0);
+  assert.match(bordered.render(45).join("\n"), /─{10}/);
+  assert.ok(bordered.render(45)[1].includes(`${CURSOR_MARKER}${Tui.renderFakeCursor("你")}`));
+  cursor.release();
+  const fallback = nativeEditor({ surface }, tui);
   fallback.setText("world");
   fallback.setCursorCol(3);
-  assert.ok(fallback.render(45)[1].includes(`${CURSOR_MARKER}\x1b[7ml\x1b[0m`));
+  assert.ok(fallback.render(45)[1].includes(`${CURSOR_MARKER}${Tui.renderFakeCursor("l")}`));
+  tui.setLayoutRoot(container(fallback));
+  tui.setFocus(fallback);
+  tui.doRender();
+  assert.match(tui.previousScreen.join("\n"), /\x1b\[7ml\x1b\[27m/, "Pi draws the fake cursor when hardware visibility is off");
 });
 
 function compactionHost(t, surfaceEnabled = true) {

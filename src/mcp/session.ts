@@ -133,7 +133,7 @@ export class McpServerSession {
   }
   private async open(): Promise<McpClient> {
     const config = this.entry.config;
-    const client = new McpClient({ name: "pi", version: "1.1.0", requestTimeoutMs: (config.timeout ?? 60) * 1000,
+    const client = new McpClient({ name: "pi", version: "1.2.0", requestTimeoutMs: (config.timeout ?? 60) * 1000,
       roots: [{ uri: pathToFileURL(this.cwd).href, name: basename(this.cwd) }] });
     this.connecting = client; this.state = "connecting";
     const abort = () => { void this.closeClient(client).catch(() => {}); };
@@ -155,7 +155,6 @@ export class McpServerSession {
       })();
     };
     client.onNotification("notifications/tools/list_changed", refresh);
-    client.onNotification("notifications/resources/list_changed", refresh);
     client.onClose(() => {
       if (this.client !== client) return;
       this.client = undefined;
@@ -236,21 +235,15 @@ export class McpServerSession {
     const before = await this.identity();
     const observedAt = Date.now();
     const options = { signal: this.lifetime.signal };
-    const hasResources = Boolean(client.serverCapabilities?.resources);
-    const [tools, resources, resourceTemplates] = await Promise.all([
-      client.serverCapabilities?.tools ? client.listTools(options) : [],
-      hasResources ? client.listResources(options) : [],
-      hasResources ? client.listResourceTemplates(options).catch(error => {
-        if (error instanceof McpError && error.code === -32601) return []; throw error;
-      }) : [],
-    ]);
+    const hasResources = client.serverCapabilities?.resources !== undefined;
+    const tools = client.serverCapabilities?.tools ? await client.listTools(options) : [];
     const identity = await this.identity();
     this.assertCurrent();
     if (this.client !== client) throw new Error("MCP connection changed while discovering tools");
     if (revision !== this.discovery) return;
     if (before.scope !== identity.scope)
       throw new Error("MCP authorization or environment changed during discovery; refresh the directory");
-    this.catalog = { tools, resources, resourceTemplates, hasResources, instructions: client.instructions };
+    this.catalog = { tools, resources: [], resourceTemplates: [], hasResources, instructions: client.instructions };
     this.catalogRevision = revision;
     this.scope = identity.scope;
     this.key = identity.key;
@@ -403,7 +396,8 @@ export class McpServerSession {
     this.state = "closed";
   }
 }
-async function waitFor<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+export async function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);

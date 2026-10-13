@@ -10,7 +10,7 @@ import { McpServerSession } from "../../src/mcp/session.ts";
 import { readMcpConfiguration } from "../../src/mcp/config.ts";
 import { CatalogCache } from "../../src/mcp/catalog.ts";
 import { McpCredentials, createAuth } from "../../src/mcp/auth.ts";
-import { convertResult } from "../../src/mcp/tools.ts";
+import { convertResult, syncTools } from "../../src/mcp/tools.ts";
 import { startHttp, image } from "../helpers/mcp-server.mjs";
 const run = promisify(execFile), cli = fileURLToPath(new URL("../../node_modules/.bin/pi", import.meta.url));
 
@@ -72,6 +72,101 @@ test("HTTP preserves result/images, filters Apps, retries only expired sessions 
   while (owner.catalog.tools[0].inputSchema.properties.value.type !== "string" && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(owner.catalog.tools[0].inputSchema.properties.value.type, "string");
+});
+
+test("tools register before failing resources, with resources and MIME filtering used only on demand", async t => {
+  const fixture = await startHttp(), dir = mkdtempSync(join(tmpdir(), "metis-mcp-resources-"));
+  fixture.state.failResources = true;
+  const owner = new McpServerSession(
+    { name: "fixture", scope: "global", source: "fixture", config: { url: fixture.url } }, dir, dir,
+    { enabled: true, idleTimeoutSeconds: 600, keepAliveServers: [] }, new CatalogCache(dir),
+    () => ({ cwd: dir, isIdle: () => true, isProjectTrusted: () => true }), () => {},
+  );
+  t.after(async () => { await owner.shutdown(); await fixture.close(); rmSync(dir, { recursive: true, force: true }); });
+  await owner.discover();
+  assert.equal(owner.state, "connected");
+  assert.equal(fixture.state.clientInfo.version, "1.2.0");
+  assert.deepEqual(owner.catalog.tools.map(tool => tool.name), ["echo"]);
+  assert.equal(owner.catalog.hasResources, true);
+  assert.deepEqual(owner.catalog.resources, []);
+  assert.deepEqual(owner.catalog.resourceTemplates, []);
+  assert.ok(!fixture.state.methods.some(method => method.startsWith("resources/")));
+  const registered = new Map(), owned = new Map();
+  syncTools({ getAllTools: () => [...registered.values()], getActiveTools: () => [], setActiveTools() {},
+    registerTool: tool => registered.set(tool.name, tool) }, [owner], owned);
+  const gateways = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"];
+  for (const name of gateways) assert.equal(registered.get(name).exposure, "deferred");
+  const call = (name, args) => registered.get(name).execute(`resource-${name}`, args);
+  await assert.rejects(call("list_mcp_resources", { server: "fixture" }));
+  await assert.rejects(call("list_mcp_resource_templates", { server: "fixture" }));
+  assert.equal(owner.state, "connected", "resource failure does not retire the tool connection");
+  fixture.state.failResources = false;
+  const listed = (await call("list_mcp_resources", { server: "fixture" })).structuredContent;
+  assert.deepEqual(listed.resources.map(resource => resource.uri), ["data://plain"]);
+  const templates = (await call("list_mcp_resource_templates", { server: "fixture" })).structuredContent;
+  assert.deepEqual(templates.resourceTemplates.map(resource => resource.uriTemplate), ["data://{name}"]);
+  const ui = await call("read_mcp_resource", { server: "fixture", uri: "data://panel" });
+  assert.deepEqual(ui.structuredContent.contents, [], "opaque App URI is filtered by the read result MIME");
+  assert.doesNotMatch(JSON.stringify(ui), /UI_SECRET/);
+  await assert.rejects(call("read_mcp_resource", { server: "fixture", uri: "ui://panel" }), /App UI/);
+  const preparedReader = registered.get("read_mcp_resource"), reads = fixture.state.methods.filter(method => method === "resources/read").length;
+  owner.entry.config.exposure = "hidden";
+  syncTools({ getAllTools: () => [...registered.values()], getActiveTools: () => [], setActiveTools() {},
+    registerTool: tool => registered.set(tool.name, tool) }, [owner], owned);
+  for (const name of gateways) assert.equal(registered.get(name).exposure, "hidden");
+  await assert.rejects(preparedReader.execute("hidden-read", { server: "fixture", uri: "data://plain" }), /not available/);
+  assert.equal(fixture.state.methods.filter(method => method === "resources/read").length, reads,
+    "a previously prepared resource gateway cannot dispatch after its server is hidden");
+});
+
+test("real MCP client and codemode result wrapper retain every JSON structured value", async t => {
+  const fixture = await startHttp(), dir = mkdtempSync(join(tmpdir(), "metis-mcp-json-"));
+  fixture.state.outputSchema = undefined;
+  fixture.state.omitContent = true;
+  const owner = new McpServerSession(
+    { name: "fixture", scope: "global", source: "fixture", config: { url: fixture.url } }, dir, dir,
+    { enabled: true, idleTimeoutSeconds: 600, keepAliveServers: [] }, new CatalogCache(dir),
+    () => ({ cwd: dir, isIdle: () => true, isProjectTrusted: () => true }), () => {},
+  );
+  t.after(async () => { await owner.shutdown(); await fixture.close(); rmSync(dir, { recursive: true, force: true }); });
+  await owner.discover();
+  const registered = new Map();
+  syncTools({ getAllTools: () => [...registered.values()], getActiveTools: () => [], setActiveTools() {},
+    registerTool: tool => registered.set(tool.name, tool) }, [owner], new Map());
+  const definition = registered.get("mcp__fixture__echo");
+  assert.deepEqual(definition.outputSchema.properties.structuredContent, {});
+  for (const value of [{ nested: { value: 1 } }, [1, null, "array"], null, false, 0, "primitive"]) {
+    fixture.state.structuredContent = value;
+    const result = await definition.execute("json-value", { value: 1 });
+    assert.deepEqual(result.structuredContent.structuredContent, value);
+    assert.deepEqual(result.structuredContent.content, []);
+    assert.deepEqual(JSON.parse(result.content[0].text), value);
+  }
+});
+
+test("nested MCP output schemas relocate local refs without changing literal data or named properties", async t => {
+  const fixture = await startHttp(), dir = mkdtempSync(join(tmpdir(), "metis-mcp-schema-"));
+  const literal = { $ref: "#/$defs/literal-data" };
+  fixture.state.outputSchema = { type: "object", $defs: { Value: { type: "string" } },
+    properties: { value: { $ref: "#/$defs/Value" }, self: { $ref: "#" }, remote: { $ref: "https://example.invalid/schema" },
+      $ref: { $ref: "#/$defs/Value" }, literal: { const: literal, default: literal, examples: [literal] } } };
+  const owner = new McpServerSession(
+    { name: "fixture", scope: "global", source: "fixture", config: { url: fixture.url } }, dir, dir,
+    { enabled: true, idleTimeoutSeconds: 600, keepAliveServers: [] }, new CatalogCache(dir),
+    () => ({ cwd: dir, isIdle: () => true, isProjectTrusted: () => true }), () => {},
+  );
+  t.after(async () => { await owner.shutdown(); await fixture.close(); rmSync(dir, { recursive: true, force: true }); });
+  await owner.discover();
+  const registered = new Map();
+  syncTools({ getAllTools: () => [...registered.values()], getActiveTools: () => [], setActiveTools() {},
+    registerTool: tool => registered.set(tool.name, tool) }, [owner], new Map());
+  const output = registered.get("mcp__fixture__echo").outputSchema.properties.structuredContent;
+  assert.equal(output.properties.value.$ref, "#/properties/structuredContent/$defs/Value");
+  assert.equal(output.properties.self.$ref, "#/properties/structuredContent");
+  assert.equal(output.properties.$ref.$ref, "#/properties/structuredContent/$defs/Value");
+  assert.equal(output.properties.remote.$ref, "https://example.invalid/schema");
+  assert.deepEqual(output.properties.literal, { const: literal, default: literal, examples: [literal] });
+  assert.deepEqual(owner.catalog.tools[0].outputSchema, fixture.state.outputSchema, "registration does not mutate the server catalog");
 });
 
 test(

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, watch } from "node:fs";
+import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -25,11 +26,15 @@ const tools = (type, annotations = { readOnlyHint: true }) => [
 const resources = [
   { uri: "data://plain", name: "plain", mimeType: "text/plain" },
   { uri: "ui://panel", name: "ui", mimeType: "text/html;profile=mcp-app" },
+  { uri: "data://panel", name: "opaque-ui", mimeType: "text/html;profile=mcp-app" },
 ];
 async function rpc(message, state) {
   const { method, params = {} } = message;
+  state.methods ??= [];
+  state.methods.push(method);
   if (method === "initialize") {
     state.starts++;
+    state.clientInfo = params.clientInfo;
     state.record?.("initialize");
     await delay(state.initializeDelay ?? 0);
     return {
@@ -39,7 +44,13 @@ async function rpc(message, state) {
     };
   }
   if (method === "tools/list") {
-    const result = tools(state.schema ? JSON.parse(readFileSync(state.schema, "utf8")).type : state.type, state.annotations);
+    const configured = state.schema ? JSON.parse(readFileSync(state.schema, "utf8")) : state;
+    const result = tools(configured.type, state.annotations);
+    if (Object.hasOwn(configured, "outputSchema")) {
+      if (configured.outputSchema === undefined) delete result[0].outputSchema;
+      else result[0].outputSchema = configured.outputSchema;
+    }
+    state.record?.("tools/list");
     await state.onList?.();
     return { tools: result };
   }
@@ -47,15 +58,23 @@ async function rpc(message, state) {
     state.calls++;
     state.record?.(`call:${JSON.stringify(params.arguments)}`);
     await delay(params.arguments.delayMs ?? 0);
+    const configured = state.schema ? JSON.parse(readFileSync(state.schema, "utf8")) : state;
     return {
-      content: [
+      ...(!configured.omitContent && { content: [
         { type: "text", text: String(params.arguments.value) },
         { type: "image", data: image, mimeType: "image/png" },
+        { type: "resource", resource: { uri: "data://plain", text: "embedded-body", mimeType: "text/plain", _meta: { source: "fixture" } } },
         { type: "resource", resource: { uri: "ui://panel", text: "UI_SECRET", mimeType: "text/html;profile=mcp-app" } },
-      ],
-      structuredContent: { value: params.arguments.value, calls: state.calls },
+      ] }),
+      structuredContent: configured.returnInputStructuredContent ? params.arguments.value
+        : Object.hasOwn(configured, "structuredContent") ? configured.structuredContent : { value: params.arguments.value, calls: state.calls },
       isError: params.arguments.domainError === true,
     };
+  }
+  if (method === "resources/list" || method === "resources/templates/list") {
+    state.record?.(method);
+    await state.onResources?.(method);
+    if (state.failResources) throw new Error("fixture resource listing failed");
   }
   if (method === "resources/list") return { resources };
   if (method === "resources/templates/list")
@@ -63,18 +82,21 @@ async function rpc(message, state) {
       resourceTemplates: [
         { uriTemplate: "data://{name}", name: "plain" },
         { uriTemplate: "ui://{name}", name: "ui" },
+        { uriTemplate: "data://panel/{name}", name: "opaque-ui", mimeType: "text/html;profile=mcp-app" },
       ],
     };
-  if (method === "resources/read")
+  if (method === "resources/read") {
+    state.record?.(method);
     return {
       contents: [
         {
           uri: params.uri,
-          text: params.uri.startsWith("ui://") ? "UI_SECRET" : "resource-body",
-          mimeType: "text/plain",
+          text: params.uri.startsWith("ui://") || params.uri === "data://panel" ? "UI_SECRET" : "resource-body",
+          mimeType: params.uri === "data://panel" ? "text/html;profile=mcp-app" : "text/plain",
         },
       ],
     };
+  }
   if (method === "ping") return {};
   throw new Error(`Unsupported fixture method: ${method}`);
 }
@@ -199,8 +221,19 @@ if (process.argv[2] === "stdio" && import.meta.url === pathToFileURL(process.arg
       calls: 0,
       schema: process.argv[4],
       initializeDelay: Number(process.argv[5] ?? 0),
+      failResources: process.env.MCP_FIXTURE_FAIL_RESOURCES === "1",
       record: (line) => appendFileSync(log, line + "\n"),
     };
+  const listGate = process.env.MCP_FIXTURE_LIST_GATE;
+  if (listGate) state.onList = () => {
+    if (existsSync(listGate)) return;
+    return new Promise(resolve => {
+      const watcher = watch(dirname(listGate), () => {
+        if (existsSync(listGate)) { watcher.close(); resolve(); }
+      });
+      if (existsSync(listGate)) { watcher.close(); resolve(); }
+    });
+  };
   state.record(`start:${process.pid}`);
   process.on("exit", () => state.record(`closed:${process.pid}`));
   const lines = createInterface({ input: process.stdin });

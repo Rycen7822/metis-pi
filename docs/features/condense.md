@@ -38,7 +38,7 @@ summarizerFallbackModels = ["provider/fallback-1", "provider/fallback-2", "provi
 
 `/pruner compaction-summary-limit 32768` 设置摘要输出上限，`/pruner compaction-summary-limit 0` 恢复 Pi 默认，省略数字查看当前值；`/pruner settings` 可选择预设。设置立即生效并保存，自动精简和 OCC 关闭时仍有效，适用于原生手动、阈值、溢出恢复及 OCC。不改变 `reserveTokens`、压缩触发线、普通 agent 回复或工具/链摘要预算。原生拆分压缩中的历史、当前轮摘要各自受限，Pi 的当前轮预算可能更小；这是单次生成上限，不保证合并后的总长度。摘要触及 token 上限导致 `length` 时拒绝发布，保留原历史。
 
-OCC 通过受支持的 `customInstructions` 请求约 **16,384 输出文本 tokens** 的软目标，保留必要事实、不确定性和完整语句；不降低 Pi/模型/provider 的硬上限，也不更改已有 32,768 等自定义上限。Pi 1.1.0 的普通原生压缩仍使用原始 `customInstructions`，且不经过普通请求的 payload 钩子，故该软目标**不自动注入普通原生手动/阈值/溢出路径**；这些路径保持 Pi 原行为，可用 Pi `/compact` 自定义指令显式请求软目标。不得将 16K 当作统一硬 cap 或可用容量保留值。
+OCC 通过受支持的 `customInstructions` 请求约 **16,384 输出文本 tokens** 的软目标，保留必要事实、不确定性和完整语句；不降低 Pi/模型/provider 的硬上限，也不更改已有 32,768 等自定义上限。Pi 1.2.0 的普通原生压缩仍使用原始 `customInstructions`，且不经过普通请求的 payload 钩子，故该软目标**不自动注入普通原生手动/阈值/溢出路径**；这些路径保持 Pi 原行为，可用 Pi `/compact` 自定义指令显式请求软目标。不得将 16K 当作统一硬 cap 或可用容量保留值。
 
 `off` 停自动精简，回读和既有图片上限仍可用；完全禁用需过滤入口。外部 pi-condense 改用内置入口时保留 settings、session 和 blobs；检测到已有 context_tree_query 会跳过本入口并警告。
 
@@ -150,3 +150,5 @@ prune 用量统计本次加载以来额外摘要，重复通知覆盖、切分�
 即使摘要候选被拒绝也记录用量；决策记录估计/实际大小和净变化。Footer Σ 使用标准 session 用量；Working 到 settled 后收尾，摘要中不预热，goal 提示以追加消息维持系统前缀。
 
 来源归属见 [NOTICE](../../NOTICE)，完整许可见 [LICENSE](../provenance/condense/LICENSE)。
+
+Pi 1.2.0 的原生文本摘要省略历史 thinking，保留可见回复、工具调用与结果；Metis 的加密 checkpoint 请求仍由 provider 编码并回放原生条目。

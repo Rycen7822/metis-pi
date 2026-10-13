@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   test:
-    name: Pi 1.1.0
+    name: Pi 1.2.0
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -19,7 +19,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify selected host packages
         env:
-          EXPECTED_PI_VERSION: '1.1.0'
+          EXPECTED_PI_VERSION: '1.2.0'
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';

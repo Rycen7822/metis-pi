@@ -6,7 +6,8 @@ const OWNER = Symbol.for("Rycen7822.metis-pi.selection-clipboard");
 
 export function needsWindowsClipboard(platform: string, env: NodeJS.ProcessEnv): boolean {
   return platform === "linux" && Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP)
-    && !env.WT_SESSION && !env.SSH_TTY && !env.SSH_CONNECTION && !env.SSH_CLIENT && !env.MOSH_CONNECTION;
+    && !env.WT_SESSION && !env.SSH_TTY && !env.SSH_CONNECTION && !env.SSH_CLIENT && !env.MOSH_CONNECTION
+    && env.PI_CLIPBOARD_OSC52 !== "1";
 }
 
 /** Keep the host's copy/flash/error path; only replace its slow WSL transport.

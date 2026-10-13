@@ -43,6 +43,19 @@ test("only local WSL without the host's fast Windows Terminal route needs a work
   for (const remote of ["WT_SESSION", "SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"]) {
     assert.equal(needsWindowsClipboard("linux", { WSL_DISTRO_NAME: "Ubuntu", [remote]: "present" }), false);
   }
+  assert.equal(needsWindowsClipboard("linux", { WSL_DISTRO_NAME: "Ubuntu", PI_CLIPBOARD_OSC52: "1" }), false);
+  assert.equal(needsWindowsClipboard("linux", { WSL_DISTRO_NAME: "Ubuntu", PI_CLIPBOARD_OSC52: "0" }), true);
+});
+
+test("forced OSC52 keeps the official clipboard callback through the live facade", async (t) => {
+  const f = fixture(t);
+  process.env.PI_CLIPBOARD_OSC52 = "1";
+  f.system.install(f.facade);
+  assert.equal(await f.facade.copyTextToClipboard("remote clipboard"), true);
+  assert.equal(f.created(), 0, "successful Windows copying must not bypass the official OSC52 callback");
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.current.nativeCopies, ["remote clipboard"]);
+  assert.deepEqual(f.current.flashes, ["Copied!"]);
 });
 
 test("one facade handles success, native fallback and pending cancellation without losing callbacks", async (t) => {

@@ -1,6 +1,5 @@
-// The stock editor draws an inverse-video character under the cursor even
-// when Pi has a hardware cursor marker. A terminal bar must use the *real*
-// cursor: substituting a bar glyph for the character hides that character.
+// Pi owns fake-cursor rendering; this lease enables the hardware cursor and
+// requests a steady bar for the installed editor.
 interface CursorTui {
   terminal: { write(data: string): void };
   getShowHardwareCursor(): boolean;
@@ -15,9 +14,7 @@ function isCursorTui(value: unknown): value is CursorTui {
     && typeof tui.terminal?.write === "function";
 }
 
-/** Owns the cursor shape and Pi's hardware-visibility flag for one editor.
- * The returned getter lets rendering fall back to the native cursor if the
- * host disables its hardware cursor while the editor is still installed. */
+/** Owns the cursor shape and Pi's hardware-visibility flag for one editor. */
 export function createHardwareCursor() {
   let lease: { tui: CursorTui; wasVisible: boolean } | undefined;
 
@@ -33,10 +30,10 @@ export function createHardwareCursor() {
     try { previous.tui.terminal.write("\x1b[0 q"); } catch { /* terminal may already be closed */ }
   };
 
-  const acquire = (value: unknown): (() => boolean) | undefined => {
+  const acquire = (value: unknown): void => {
     if (!isCursorTui(value)) {
       release();
-      return undefined;
+      return;
     }
     if (lease?.tui !== value) {
       release();
@@ -46,13 +43,9 @@ export function createHardwareCursor() {
         value.setShowHardwareCursor(true);
       } catch {
         release(); // partial acquisition must not leave a hidden cursor or bar
-        return undefined;
+        return;
       }
     }
-    return () => {
-      try { return lease?.tui === value && value.getShowHardwareCursor(); }
-      catch { return false; }
-    };
   };
 
   return { acquire, release };

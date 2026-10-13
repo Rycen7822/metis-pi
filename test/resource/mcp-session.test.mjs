@@ -168,7 +168,15 @@ test("real stdio catalog stays lazy, shares connection, survives idle, and rejec
   assert.equal(await first.restore(), false);
   await first.discover(true);
   await first.shutdown();
+  const key = cache.fingerprint(entry, dir, true, undefined);
+  const historical = { ...cache.read(key),
+    resources: [{ uri: "data://old", name: "old", mimeType: "text/plain" }],
+    resourceTemplates: [{ uriTemplate: "data://{name}", name: "old" }],
+  };
+  await cache.write(key, historical, Date.now(), () => true);
   assert.equal(await second.restore(), true);
+  assert.deepEqual(second.catalog.resources, historical.resources, "existing version-1 resource catalogs still restore");
+  assert.deepEqual(second.catalog.resourceTemplates, historical.resourceTemplates);
   const events = () => readFileSync(log, "utf8").trim().split("\n");
   const starts = () => events().filter((line) => line.startsWith("start:")).length;
   assert.equal(starts(), 1, "cache recovery starts no child process");

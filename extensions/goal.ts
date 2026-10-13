@@ -537,25 +537,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       return;
     }
 
-    if (lastAssistant?.stopReason === "aborted") {
-      if (!ctx.hasUI) {
-        state.transition("paused");
-        persist("status");
-        updateStatus(ctx);
-        return;
-      }
-      const pause = await ctx.ui.confirm(
-        "Pause active goal?",
-        "Operation aborted. Pause this goal instead of automatically continuing?",
-      );
-      if (pause) {
-        state.transition("paused");
-        persist("status");
-        showGoalMessage(`Goal paused\n\n${goalSummary(state.current)}`);
-        updateStatus(ctx);
-        return;
-      }
-    }
+    if (lastAssistant?.stopReason === "aborted" && await pauseAfterAbort(ctx)) return;
 
     const maintenance: OccStatusRequest = { deferGoal: false };
     pi.events.emit(METIS_EVENTS.occStatus, maintenance);
@@ -571,11 +553,28 @@ export default function goalExtension(pi: ExtensionAPI) {
     } else queueContinuation(ctx);
   });
 
+  async function pauseAfterAbort(ctx: ExtensionContext): Promise<boolean> {
+    if (ctx.hasUI && !await ctx.ui.confirm(
+      "Pause active goal?",
+      "Operation aborted. Pause this goal instead of automatically continuing?",
+    )) return false;
+    state.transition("paused");
+    persist("status");
+    if (ctx.hasUI) showGoalMessage(`Goal paused\n\n${goalSummary(state.current!)}`);
+    updateStatus(ctx);
+    return true;
+  }
+
   pi.on("agent_settled", async (event, ctx) => {
     const error = pendingError;
     pendingError = undefined;
     if (!error || state.current?.status !== "active") return;
-    if (event.aborted) return;
+    // Pi can represent startup cancellation as an error before the provider
+    // runs. Settlement's abort flag distinguishes it from exhausted recovery.
+    if (event.aborted) {
+      if (!await pauseAfterAbort(ctx)) queueContinuation(ctx);
+      return;
+    }
     const status = goalStopStatusForAssistantError(error);
     state.transition(status);
     persist("status");

@@ -140,7 +140,7 @@ System dependency for curator browser launch on Linux:
 
 Without `xdg-utils`, the curator URL is printed to the tool output so you can copy it into a browser.
 
-Requires Pi >=1.1.0.
+Requires Pi >=1.2.0.
 
 ## Quick Start
 
@@ -1054,7 +1054,7 @@ Enabling the tools mid-conversation can cost a prompt-cache miss. Some models ac
 - `"dynamic"` starts every new session with `web_enable`, even on models where enabling the tools can cause a cache miss.
 - `"eager"` never uses `web_enable` and keeps every enabled web tool available from the first request. It also suits models that rarely call `web_enable` on their own.
 
-Restart Pi after changing it. Dynamic activation uses the Pi >=1.1.0 tool activation APIs.
+Restart Pi after changing it. Dynamic activation uses the Pi >=1.2.0 tool activation APIs.
 
 ### Shortcuts
 

@@ -37,6 +37,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/pi-web-access/licenses/typebox.LICENSE",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
+  assert.ok([...files].every((path) => !path.split("/").includes("node_modules")));
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
   assert.ok(files.has("extensions/execution.ts"));
   assert.ok(files.has("src/condense/runtime.ts"));

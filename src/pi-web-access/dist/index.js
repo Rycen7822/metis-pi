@@ -21839,7 +21839,7 @@ function literalMatches(text4, query, caseInsensitive) {
   return matches;
 }
 function fuzzyMatches(text4, query) {
-  const queryTokens = normalize2(query).match(/[\p{L}\p{N}]+/gu) ?? [];
+  const queryTokens = [...normalize2(query).match(/[\p{L}\p{N}]+/gu) ?? []];
   if (queryTokens.length === 0) return [];
   const matches = [];
   const paragraphs = /[^\n]+(?:\n(?!\n)[^\n]+)*/g;

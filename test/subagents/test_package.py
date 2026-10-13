@@ -181,7 +181,7 @@ class SdkTransport(unittest.TestCase):
                 self.assertEqual('read' in snapshot['active'],read_allowed and '--no-builtin-tools' not in flags)
                 stages=[json.loads(line)['event'] for line in events.read_text().splitlines()]
                 self.assertIn('tools-list-received',stages,'deny must not be inferred from a failed connection')
-                self.assertIn('resources-list-received',stages)
+                self.assertNotIn('resources-list-received',stages)
                 self.assertNotIn('call-received',stages)
                 self.assertNotIn('resource-read-received',stages)
 
@@ -189,7 +189,7 @@ class SdkTransport(unittest.TestCase):
         from subagent_pi.worker import managed_command
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
-            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.1.0"}')
+            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.2.0"}')
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli')
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
@@ -206,7 +206,7 @@ class SdkTransport(unittest.TestCase):
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli')
             cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
-            for version in (None, 'unknown', '1.0.0', '1.0.4'):
+            for version in (None, 'unknown', '1.0.0', '1.0.4', '1.1.0', '1.1.9'):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 for sdk_path in (None, str(sdk)):
                     with self.subTest(version=version, sdk_path=sdk_path):

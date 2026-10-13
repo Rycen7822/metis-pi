@@ -7,7 +7,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { DEFAULT_CONFIG } from "../../src/condense/config.ts";
 import { FallbackController } from "../../src/condense/summarizer-fallback.ts";
-import { summarizeBatch, summarizeRange } from "../../src/condense/summarizer.ts";
+import { summarizeBatch, summarizeRange, summarizerInputBudget } from "../../src/condense/summarizer.ts";
 import { disableNetwork } from "../helpers/native-provider.mjs";
 
 test.beforeEach(disableNetwork);
@@ -22,9 +22,9 @@ async function fixture(t) {
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null,
     modelsStorePath: join(dir, "models.json"), refreshOnCreate: false });
   const calls = [], notices = [];
-  const add = (name, respond) => {
+  const add = (name, respond, { contextWindow = 100000, maxTokens = 1000 } = {}) => {
     const model = { id: name, name, provider: `native-summary-${name}`, api: "private-native-summary-api",
-      baseUrl: "http://invalid", reasoning: true, input: ["text"], contextWindow: 100000, maxTokens: 1000,
+      baseUrl: "http://invalid", reasoning: true, input: ["text"], contextWindow, maxTokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
     runtime.registerProvider(model.provider, { api: model.api, apiKey: "offline-fixture", baseUrl: model.baseUrl,
       models: [model], streamSimple(m, context, options) {
@@ -64,6 +64,18 @@ test("batch and range summaries use the configured private native provider", asy
   assert.deepEqual(reports, [usage, usage]);
   assert.equal(attempts.length, 2);
   assert.deepEqual(f.notices, []);
+});
+
+test("summary budgets consume refreshed native model limits", async t => {
+  const f = await fixture(t), model = f.add("primary"), ctx = f.ctx(model);
+  const selected = { ...config, summarizerModel: `${model.provider}/${model.id}` };
+  const originalBudget = summarizerInputBudget(selected, ctx);
+  f.add("primary", undefined, { contextWindow: 8000, maxTokens: 600 });
+  const smallerBudget = summarizerInputBudget(selected, ctx);
+  assert.ok(smallerBudget > 0 && smallerBudget < originalBudget);
+  assert.equal((await summarizeRange("Evidence", selected, ctx))?.summaryText, "Native summary");
+  assert.equal(f.calls[0].model.contextWindow, 8000);
+  assert.ok(f.calls[0].options.maxTokens > 0 && f.calls[0].options.maxTokens <= 600);
 });
 
 test("native provider failure advances the fallback and retains its session route", async t => {

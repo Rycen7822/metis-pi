@@ -11,6 +11,43 @@ import {
 import { shellTitle } from "./renderers.ts";
 import { stackComponents } from "./copy-stack.ts";
 
+interface CodemodeTimerState {
+  startedAt?: number;
+  endedAt?: number;
+  interval?: ReturnType<typeof setInterval>;
+}
+
+function timerState(context: ViewContext): CodemodeTimerState | undefined {
+  if (!context.state || typeof context.state !== "object") return;
+  const state = context.state as { codemodeTimer?: CodemodeTimerState };
+  return (state.codemodeTimer ??= {});
+}
+
+function formatToolDuration(ms: number): string {
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const totalSeconds = Math.floor(seconds);
+  const minutes = Math.floor(totalSeconds / 60), remainder = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainder}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+}
+
+function toolTimerText(context: ViewContext, isPartial: boolean): string | undefined {
+  const state = timerState(context);
+  if (state?.startedAt !== undefined && isPartial && !context.isError && !state.interval && context.invalidate) {
+    state.interval = setInterval(context.invalidate, 1000);
+    state.interval.unref();
+  }
+  if (state && (!isPartial || context.isError)) {
+    state.endedAt ??= Date.now();
+    clearInterval(state.interval);
+    state.interval = undefined;
+  }
+  if (!isPartial && context.durationMs !== undefined) return `Took ${formatToolDuration(context.durationMs)}`;
+  if (state?.startedAt === undefined) return;
+  return `${isPartial ? "Elapsed" : "Took"} ${formatToolDuration((state.endedAt ?? Date.now()) - state.startedAt)}`;
+}
+
 interface NestedView {
   name: string;
   args: unknown;
@@ -99,6 +136,8 @@ export function makeCodemodeRenderers(input: {
   const states = new WeakMap<object, Map<string, { state: object; call?: Component; result?: Component }>>();
   return {
     renderCall(args, theme, context) {
+      const timer = timerState(context);
+      if (timer && context.executionStarted && timer.startedAt === undefined) timer.startedAt = Date.now();
       const title = theme.fg("toolTitle", theme.bold("codemode"));
       const code = asRecord(args).code;
       if (typeof code !== "string") return input.makeText(`${title} ${theme.fg("error", "[invalid arg]")}`);
@@ -107,6 +146,7 @@ export function makeCodemodeRenderers(input: {
       return input.makeText(`${title}\n${input.highlight?.(script, "javascript") ?? script}`);
     },
     renderResult(result, options, theme, context) {
+      const timerText = toolTimerText(context, options.isPartial === true);
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
       const history = asRecord(value.nestedCalls);
@@ -188,6 +228,7 @@ export function makeCodemodeRenderers(input: {
           toolCallId: call.id,
           state: slot.state,
           executionStarted: true,
+          durationMs: typeof call.durationMs === "number" ? call.durationMs : undefined,
           argsComplete: true,
           isPartial: partial,
           isError,
@@ -240,6 +281,7 @@ export function makeCodemodeRenderers(input: {
         if (typeof details.fullOutputPath === "string")
           parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
+      if (timerText) parts.push(input.makeText(theme.fg("muted", timerText)));
       return stackComponents(parts, "codemode", "child-placements");
     },
   };

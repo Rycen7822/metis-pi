@@ -1,7 +1,6 @@
 // Codex-look composer FACTORY. Runs only inside index.ts's activation: the
-// host CustomEditor class and the surface painters are injected here so this
-// module stays dependency-free (project rule: src/ never imports
-// @earendil-works/* directly).
+// host CustomEditor class and the surface painters are injected here; the
+// cursor cell uses Pi 1.2's public fake-cursor helper.
 //
 // Surface mode (surface ops injected): the stock full-width accent borders
 // are replaced by surface-painted padding rows (scroll indicators `↑ N more`
@@ -12,9 +11,9 @@
 // re-assertion after inner resets (see src/surface.ts).
 // Intentionally no per-line '›' prefix beyond the first row (deliberate Codex deviation).
 
+import { renderFakeCursor } from "@earendil-works/pi-tui";
 import { CODEX_CYAN_RGB } from "../palette.ts";
 import { isSkillPrefixOnly } from "../skill-tokens.ts";
-import { CURSOR_MARKER } from "../surface.ts";
 import { cellWidth, clipLine } from "../segments.ts";
 import { formatDuration } from "../ui-metrics.ts";
 
@@ -64,13 +63,13 @@ export interface CodexSurfaceOps {
 
 export interface CodexEditorFactoryInput {
   host: CodexEditorHost;
-  /** Surface mode (gray background, no accent borders). Absent → legacy. */
+  /** Surface mode (gray background, no accent borders). Absent → native borders. */
   surface?: CodexSurfaceOps;
   /** `> ` prompt prefix on the first body row (default true in surface mode). */
   promptPrefix?: boolean;
   /** Placeholder shown on the empty first row (display only, never getText). */
   placeholder?: string;
-  /** Legacy-mode accent painter (fallback: inline truecolor cyan). */
+  /** Native-border accent painter (fallback: inline truecolor cyan). */
   accent?: (s: string) => string;
   paddingX?: number;
   embedWorkingStatus?: boolean;
@@ -81,26 +80,10 @@ export interface CodexEditorFactoryInput {
    * host refuses to auto-trigger (see forceSkillCompletion). */
   skillTrigger?: boolean;
   /** Acquire a real vertical cursor; undefined leaves the native block intact. */
-  hardwareCursor?: (tui: unknown) => (() => boolean) | undefined;
+  hardwareCursor?: (tui: unknown) => void;
 }
 
-const CURSOR_CELL = "\x1b[7m \x1b[0m";
-
-/** Remove only the stock reverse-video styling, not its character or marker.
- * The real hardware cursor draws the bar over that same terminal cell. */
-function revealCursorCharacter(row: string): string {
-  const markerAt = row.indexOf(CURSOR_MARKER);
-  if (markerAt < 0) return row;
-  const cursorAt = markerAt + CURSOR_MARKER.length;
-  const reverse = "\x1b[7m";
-  const reset = "\x1b[0m";
-  if (!row.startsWith(reverse, cursorAt)) return row;
-  const glyphAt = cursorAt + reverse.length;
-  const end = row.indexOf(reset, glyphAt);
-  if (end < 0) return row;
-  // Keep the host reset (the surface painter reasserts its bg after it).
-  return `${row.slice(0, cursorAt)}${row.slice(glyphAt)}`;
-}
+const CURSOR_CELL = renderFakeCursor(" ");
 
 /**
  * Force the completion query the host skips for the second skill trigger.
@@ -135,13 +118,12 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
   const placeholder = input.placeholder ?? "Ask anything...";
 
   class CodexSurfaceEditor extends input.host.CustomEditor {
-    private readonly hardwareCursorActive: () => boolean;
     private nativeStatus: CodexStatusIndicator | undefined;
     private compactionStartedAt: number | undefined;
 
     constructor(tui: unknown, theme: unknown, keybindings: unknown, options: { embedWorkingStatus?: boolean; paddingX?: number }) {
       super(tui, theme, keybindings, options);
-      this.hardwareCursorActive = input.hardwareCursor?.(tui) ?? (() => false);
+      input.hardwareCursor?.(tui);
     }
 
     // Public custom-editor integration, not a native prototype patch. Pi owns
@@ -213,8 +195,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
 
     override render(width: number): string[] {
       const rows = super.render(width);
-      const finish = (lines: string[]) => this.hardwareCursorActive?.() ? lines.map(revealCursorCharacter) : lines;
-      if (!surface || rows.length === 0) return finish(rows);
+      if (!surface || rows.length === 0) return rows;
       // Base Editor.render row structure (verified in pi-tui editor.js):
       // [topBorder, ...body rows..., bottomBorder, ...autocomplete rows...].
       // The first BODY row is therefore always index 1 — structural, not a
@@ -231,7 +212,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
           decorated = `${surface.paintGlyph(">", "accent")}${" ".repeat(livePaddingX - 1)}${body.slice(livePaddingX)}`;
         }
         // Placeholder: only for the EMPTY editor, where the host cursor is
-        // the exact end-of-text cell `\x1b[7m \x1b[0m`. Overwrite an equal
+        // the exact end-of-text cell wrapped by renderFakeCursor. Overwrite an equal
         // number of trailing padding cells (never grow the row), and never
         // touch getText().
         if (this.getText() === "" && decorated.includes(CURSOR_CELL)) {
@@ -243,7 +224,7 @@ export function makeCodexEditorFactory(input: CodexEditorFactoryInput) {
         }
         painted[1] = surface.paintRow(decorated, width);
       }
-      return finish(painted);
+      return painted;
     }
   }
 

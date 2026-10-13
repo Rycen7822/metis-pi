@@ -86,9 +86,34 @@ export async function convertResult(server: string, tool: string, result: CallTo
     ...(result.isError ? { isError: true } : {}),
   };
 }
+const SCHEMA_DATA_KEYWORDS = new Set(["const", "enum", "default", "examples"]);
+const SCHEMA_MAP_KEYWORDS = new Set(["properties", "patternProperties", "dependentSchemas", "dependencies", "$defs", "definitions"]);
+// An MCP output schema becomes one field of the result; keep its local refs rooted there.
+function relocateSchema(schema: unknown, pointer: string): unknown {
+  if (Array.isArray(schema)) return schema.map(item => relocateSchema(item, pointer));
+  if (!isRecord(schema)) return schema;
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => {
+    if (key === "$ref" && typeof value === "string" && (value === "#" || value.startsWith("#/")))
+      return [key, `${pointer}${value.slice(1)}`];
+    if (SCHEMA_DATA_KEYWORDS.has(key)) return [key, value];
+    if (SCHEMA_MAP_KEYWORDS.has(key) && isRecord(value))
+      return [key, Object.fromEntries(Object.entries(value).map(([name, child]) => [name, relocateSchema(child, pointer)]))];
+    return [key, relocateSchema(value, pointer)];
+  }));
+}
 const resultSchema = (schema?: Record<string, unknown>): TSchema => ({ type: "object", properties: {
-  content: { type: "array", items: { type: "object", additionalProperties: true } },
-  ...(schema ? { structuredContent: schema } : {}), isError: { type: "boolean" },
+  content: { type: "array", items: { type: "object", properties: {
+    type: { enum: ["text", "image", "audio", "resource_link", "resource"] },
+    text: { type: "string" }, data: { type: "string" }, mimeType: { type: "string" },
+    uri: { type: "string" }, name: { type: "string" }, title: { type: "string" }, description: { type: "string" },
+    _meta: { type: "object", additionalProperties: true },
+    resource: { type: "object", properties: {
+      uri: { type: "string" }, mimeType: { type: "string" }, text: { type: "string" }, blob: { type: "string" },
+      _meta: { type: "object", additionalProperties: true },
+    }, required: ["uri"], additionalProperties: true },
+  }, required: ["type"], additionalProperties: true } },
+  structuredContent: schema ? relocateSchema(schema, "#/properties/structuredContent") : {},
+  isError: { type: "boolean" },
 }, required: ["content"], additionalProperties: true } as TSchema);
 const shortenedName = (server: string, tool: string, conflict: boolean) => {
   const name = `mcp__${server}__${tool}`.replace(/[^A-Za-z0-9_]/g, "_");
@@ -128,6 +153,7 @@ export function syncTools(pi: ExtensionAPI, servers: Iterable<McpServerSession>,
       exposure: exposure === "codemode" ? "deferred" : exposure,
       namespace: {
         name: mcpNamespace(server.entry.name),
+        aliases: [server.entry.name],
         description: server.entry.config.description,
         instructions: server.catalog.instructions,
       },
@@ -145,7 +171,9 @@ export function syncTools(pi: ExtensionAPI, servers: Iterable<McpServerSession>,
       },
     });
   }
-  const readable = owners.filter((server) => server.catalog.hasResources && server.entry.config.exposure !== "hidden");
+  // Gateways must be callable before a late server reports its capabilities, so their own
+  // reachesTools hook can wait for it. Execution still filters servers by hasResources.
+  const readable = owners.filter((server) => server.entry.config.exposure !== "hidden");
   if (readable.length)
     for (const definition of resourceTools(
       () => owners,
@@ -193,6 +221,7 @@ function resourceTools(servers: () => McpServerSession[], exposure: "direct" | "
       additionalProperties: false,
     } as TSchema,
     outputSchema: { type: "object", additionalProperties: true } as TSchema,
+    reachesTools: input => typeof input.server === "string" ? [mcpNamespace(input.server)] : "all",
     async execute(_id, args, signal) {
       const input = args as { server?: string; cursor?: string; uri?: string };
       const eligible = servers().filter(

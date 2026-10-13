@@ -2,7 +2,7 @@
 
 ## 版本与平台
 
-最低支持 **Pi 1.1.0 / Node 22.19.0**；开发类型、锁文件与 CI 统一使用 **Pi 1.1.0**。随包原生 helper 仅有 **Linux x64**，其他平台需提供对应资产并实际验证。纯 TS 能加载不能证明 helper 可运行。
+最低支持 **Pi 1.2.0 / Node 22.19.0**；开发类型、锁文件与 CI 统一使用 **Pi 1.2.0**。随包原生 helper 仅有 **Linux x64**，其他平台需提供对应资产并实际验证。纯 TS 能加载不能证明 helper 可运行。
 
 本包不保证所有在线服务、模型、终端图片协议或插件组合兼容；离线测试不能代替实际环境验证。
 
@@ -25,20 +25,20 @@ editor 已被占用或宿主能力缺失时按组件规则退避。全屏历史�
 
 文字宽度、鼠标和复制受字体、终端及 fullscreen/regular 模式影响，见 [界面](features/interface.md)与[复制](features/selection-copy.md)。本包不实现 Codex 审批语义；主题颜色仍可能影响第三方输出。
 
-Pi 1.1.0 默认 fullscreen；需要终端原生 scrollback 时设置 Pi 的 `tuiMode: "regular"` 或使用 `--tui-mode regular`。`quietStartup: "header"` 也由 Pi 处理。
+Pi 1.2.0 默认 fullscreen；需要终端原生 scrollback 时设置 Pi 的 `tuiMode: "regular"` 或使用 `--tui-mode regular`。`quietStartup: "header"` 也由 Pi 处理。
 
-Pi 1.1 的独立 renderer 不会改变工具来源；适配器在解析前快照实际注册的函数身份，因此普通对象、spread、原地修改和仅覆盖 shell 都不会被误认成本包显示。此校验仍依赖受守卫的宿主 lookup，不能证明未来未知版本兼容。
+Pi 1.2 的独立 renderer 不会改变工具来源；适配器在解析前快照实际注册的函数身份，因此普通对象、spread、原地修改和仅覆盖 shell 都不会被误认成本包显示。此校验仍依赖受守卫的宿主 lookup，不能证明未来未知版本兼容。
 
 ## 托管工具授权
 
-Pi 1.1 的普通非空 `tools` 白名单若没有 `mcp__` selector，会保留 MCP 注册供 codemode/tool_search 使用。managed 子代理维持显式白名单的严格边界：排除未列出的 MCP 与资源工具，保留原 excludes；明确的 MCP 名称或 `mcp__` glob 通过宿主筛选。默认选择和纯 modifier 仍遵循 Pi；普通 wildcard 白名单因无法安全表达其 MCP 补集，在服务启动前拒绝而不是静默扩大权限，见[子代理 CLI](subagents/cli.md)。本包不改写主宿主自身的工具筛选政策。
+Pi 1.2 的普通非空 `tools` 白名单若没有 `mcp__` selector，会保留 MCP 注册供 codemode/tool_search 使用。managed 子代理维持显式白名单的严格边界：排除未列出的 MCP 与资源工具，保留原 excludes；明确的 MCP 名称或 `mcp__` glob 通过宿主筛选。默认选择和纯 modifier 仍遵循 Pi；普通 wildcard 白名单因无法安全表达其 MCP 补集，在服务启动前拒绝而不是静默扩大权限，见[子代理 CLI](subagents/cli.md)。本包不改写主宿主自身的工具筛选政策。
 
 ## 请求、恢复与旧会话
 
 Pi 持有 provider/OAuth、工具配对与原生 codemode。`openai` 和 `openai-codex` 使用 Codex API 时，手动/自动 compaction 使用 [Codex Remote V2](features/codex-compaction.md) 并持久化原生 checkpoint；官方 OpenAI Responses API 使用 `responses/compact` 远端压缩，其他 API 保留普通 compaction 路径。condense 在有效 `context_edit` 投影上工作，并在 `session_before_compact` 准备保护；嵌套证据未完成或归档失败时保留源历史。
 
-Pi 1.1.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in tools` 探测存在性。`image()` 校验 base64 与图片类型，metis 的有效图片结果遵循原生格式。
+Pi 1.2.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in tools` 探测存在性。`image()` 校验 base64 与图片类型，metis 的有效图片结果遵循原生格式。
 
 扩展不自动改写个人设置或旧会话。旧 V8 脚本应改用 Pi codemode 和当前工具；旧 conversion 配置不读取。特殊窗口或 opaque checkpoint 不再解释，需用升级前版本导出可读历史再创建普通 Pi 会话。普通归档、condense 原文与图片 sidecar 仍可读取，复制会话时保留 blobs。
 
-当前核对来源为 Pi v1.1.0（`abe508e1`）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。
+当前核对来源为 Pi v1.2.0（`06a466935`）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。

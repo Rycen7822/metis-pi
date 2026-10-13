@@ -50,7 +50,7 @@ function literalMatches(text: string, query: string, caseInsensitive: boolean): 
 }
 
 function fuzzyMatches(text: string, query: string): Match[] {
-	const queryTokens = normalize(query).match(/[\p{L}\p{N}]+/gu) ?? [];
+	const queryTokens = [...(normalize(query).match(/[\p{L}\p{N}]+/gu) ?? [])];
 	if (queryTokens.length === 0) return [];
 	const matches: Match[] = [];
 	const paragraphs = /[^\n]+(?:\n(?!\n)[^\n]+)*/g;

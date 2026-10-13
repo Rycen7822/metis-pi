@@ -12,7 +12,7 @@ import { installAdapter } from "../../src/adapter.ts";
 import { activate } from "../../src/extension.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "../../src/codemode-view.ts";
 import { makeRenderers } from "../../src/renderers.ts";
-import { bindings, sessionStub, toolInfo, deepFreeze } from "../helpers.mjs";
+import { bindings, sessionStub, toolInfo, deepFreeze, theme } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 
 initTheme("dark", false);
@@ -68,6 +68,55 @@ function setup(t, overrides = {}, lifecycle = false) {
   return { row, store, handle, capture, renderers, context, handlers, ctx };
 }
 
+test("native codemode shows elapsed time before any nested call and stops on completion", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
+  const { row } = setup(t);
+  const invalidations = t.mock.method(row, "invalidate");
+  row.updateResult({ content: [], details: { calls: [] } }, true);
+  assert.match(plain(row), /Elapsed 0\.0s/);
+  t.mock.timers.tick(5_000);
+  assert.match(plain(row), /Elapsed 5\.0s/);
+  assert.equal(invalidations.mock.callCount(), 5, "one row callback per second, even without nested calls");
+  row.updateResult({ content: [], details: { calls: [] }, durationMs: 2_222 }, false);
+  assert.match(plain(row), /Took 2\.2s/, "persisted duration wins over the renderer clock");
+  assert.doesNotMatch(plain(row), /Elapsed/);
+  const completed = invalidations.mock.callCount();
+  t.mock.timers.tick(10_000);
+  assert.equal(invalidations.mock.callCount(), completed, "completion clears the row interval");
+  assert.match(plain(row), /Took 2\.2s/);
+});
+
+for (const [outcome, isPartial] of [["failed", true], ["cancelled", false]]) {
+  test(`native codemode stops invalidating after a ${outcome} result`, (t) => {
+    t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
+    const { row } = setup(t);
+    const invalidations = t.mock.method(row, "invalidate");
+    row.updateResult({ content: [], details: { calls: [] } }, true);
+    assert.match(plain(row), /Elapsed 0\.0s/);
+    t.mock.timers.tick(1_000);
+    row.updateResult({ content: [{ type: "text", text: `Script ${outcome}` }], details: { calls: [] }, isError: true }, isPartial);
+    const ended = invalidations.mock.callCount();
+    const frozen = plain(row);
+    t.mock.timers.tick(5_000);
+    assert.equal(invalidations.mock.callCount(), ended);
+    assert.equal(plain(row), frozen, "an error cannot re-arm the interval or keep elapsed time advancing");
+  });
+}
+
+test("replayed codemode uses recorded minute and hour durations without starting a clock", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
+  const intervals = t.mock.method(globalThis, "setInterval");
+  const renderers = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+  const codemode = makeCodemodeRenderers({ ...bindings, store: new CodemodeViewStore(), shell: renderers.bash, resolve: () => undefined });
+  for (const [durationMs, expected] of [[90_500, "1m 30s"], [7_384_000, "2h 3m 4s"]]) {
+    const context = { state: {}, executionStarted: false, durationMs, invalidate() {} };
+    codemode.renderCall({ code: "text(1)" }, theme, context);
+    assert.equal(plain(codemode.renderResult({ content: [], details: { calls: [] } }, {}, theme, context)), `Took ${expected}`);
+  }
+  t.mock.timers.tick(5_000);
+  assert.equal(intervals.mock.callCount(), 0, "history rows must not create live intervals");
+});
+
 test("native codemode folding hides every script line and uses ordinary read/shell rendering", (t) => {
   const { row, capture } = setup(t);
   const output = Array.from({ length: 18 }, (_, i) => `output-${i}`).join("\n");
@@ -109,6 +158,44 @@ test("native codemode folding hides every script line and uses ordinary read/she
   row.setExpanded(false);
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FILE_BODY_ONLY/);
   assert.deepEqual(result.details.calls.map((c) => c.status), ["ok", "ok"]);
+});
+
+test("nested renderers receive their own recorded duration instead of the parent script total", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
+  const contexts = [];
+  const renderer = {
+    renderCall() { return bindings.makeText("lookup"); },
+    renderResult(_result, _options, _theme, context) {
+      contexts.push({ id: context.toolCallId, durationMs: context.durationMs, state: context.state });
+      return bindings.makeText("lookup result");
+    },
+  };
+  const { row, capture } = setup(t, { lookup: renderer });
+  const parentState = row.getRenderContext(undefined).state;
+  const invalidations = t.mock.method(row, "invalidate");
+  capture(1, "lookup", { key: "recorded" }, { content: [{ type: "text", text: "done" }] });
+  capture(2, "lookup", { key: "unrecorded" }, { content: [{ type: "text", text: "done" }] });
+  const details = { calls: [
+    { ...call(1, "lookup", { key: "recorded" }), durationMs: 245 },
+    call(2, "lookup", { key: "unrecorded" }),
+  ] };
+  row.updateResult({ content: [], details }, true);
+  t.mock.timers.tick(2_000);
+  assert.match(plain(row), /Elapsed 2\.0s/, "completed nested calls must not clear the parent clock");
+  assert.equal(invalidations.mock.callCount(), 2);
+  row.updateResult({ content: [], details, durationMs: 5_234 }, false);
+  assert.match(plain(row), /Took 5\.2s/);
+  const expected = new Map([[`${parent}/1`, 245], [`${parent}/2`, undefined]]);
+  const states = new Map();
+  for (const { id, durationMs, state } of contexts) {
+    assert.ok(expected.has(id));
+    assert.equal(durationMs, expected.get(id));
+    assert.notEqual(state, parentState, "nested renderers never own the parent timer state");
+    if (states.has(id)) assert.equal(state, states.get(id), "each call keeps its state through redraws");
+    states.set(id, state);
+  }
+  assert.deepEqual([...states.keys()], [...expected.keys()]);
+  assert.notEqual(states.get(`${parent}/1`), states.get(`${parent}/2`));
 });
 
 test("parallel running calls use real lifecycle ids and independent callback state", (t) => {

@@ -26,6 +26,6 @@
 - 不替换第三方 compaction 插件；不要同时启用第二套接管 `/compact` 的扩展。未知组合不在支持保证内。
 - checkpoint 是 provider 私有数据，并非通用 Markdown。不要在含 checkpoint 的会话中直接停用此扩展；先通过其他 provider 的 `/compact` 生成文本摘要，或继续保留回放扩展。
 
-合约测试使用真实 Pi 1.1.0 AgentSession/SessionManager 与内置 OpenAI/Codex provider，并以本地 HTTP/SSE 替身验证协议，覆盖手动压缩、重载回放、再次压缩、自动压缩、溢出恢复、普通文本标记、HTTP 重试、取消、两套旧登录来源及状态变化保护。
+合约测试使用真实 Pi 1.2.0 AgentSession/SessionManager 与内置 OpenAI/Codex provider，并以本地 HTTP/SSE 替身验证协议，覆盖手动压缩、重载回放、再次压缩、自动压缩、溢出恢复、普通文本标记、HTTP 重试、取消、两套旧登录来源及状态变化保护。
 
 2026-10-13 已用隔离的合成会话和当前账号实测 `gpt-6.1-sol` 的新路径开发、旧路径压缩、新路径继续、重载后回放：五次请求均返回 200，压缩请求命中 3,200 / 3,325 个输入 tokens 的缓存。此结果不保证其他账号、模型或任意长会话都可用。

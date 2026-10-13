@@ -13,6 +13,10 @@ export interface ViewContext {
   readonly argsComplete?: boolean;
   /** Host lifecycle: tool execution started (markExecutionStarted). */
   readonly executionStarted?: boolean;
+  /** Host callback that rebuilds and redraws this tool row. */
+  readonly invalidate?: () => void;
+  /** Persisted final tool duration; available after execution ends. */
+  readonly durationMs?: number;
   readonly isError?: boolean;
   /** Host lifecycle: a final result exists (call slot may collapse). */
   readonly hasResult?: boolean;

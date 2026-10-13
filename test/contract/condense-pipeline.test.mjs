@@ -26,8 +26,8 @@ const buildLog =
   Array.from({ length: 300 }, (_, i) => `building artifact ${i}: ` + "x".repeat(70)).join("\n") + "\nBUILD COMPLETE";
 
 async function waitForSummarizer(f) {
-  const deadline = Date.now() + 3000;
-  while (!f.calls.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  const deadline = performance.now() + 3000;
+  while (!f.calls.length && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.ok(f.calls.length, "offline provider must start before checking in-flight state");
 }
 
