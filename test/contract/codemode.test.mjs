@@ -18,7 +18,9 @@ import { isolatedToolHost } from "../helpers/native-tool.mjs";
 initTheme("dark", false);
 const parent = "native-test";
 const code = 'const JS_ONLY_MARKER = "script";\n'.repeat(14) + 'text(await tools.read({path:"note.md"}));';
-const plain = (component, width = 80) => stripVTControlCharacters(component.render(width).join("\n"));
+const render = (component, width = 80) => component.render(width).join("\n");
+const plain = (component, width = 80) => stripVTControlCharacters(render(component, width));
+const makeTestRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
 const call = (id, name, args, status = "ok") => ({ id: `${parent}/${id}`, name, args: JSON.stringify(args), status });
 function setup(t, overrides = {}, lifecycle = false) {
   const Host = isolatedToolHost(), store = new CodemodeViewStore();
@@ -32,7 +34,7 @@ function setup(t, overrides = {}, lifecycle = false) {
     getToolDefinition: (name) => definitions[name],
     extensionRunner: { resolveToolRenderers: (_name, next) => next() },
   } } } });
-  const renderers = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+  const renderers = makeTestRenderers();
   const getTools = () => ["codemode", "read", "bash", ...Object.keys(overrides)].map((name) => toolInfo(name, !Object.hasOwn(overrides, name)));
   const handlers = new Map();
   const ctx = { mode: "rpc", hasUI: true, cwd: process.cwd(), ui: { notify() {} } };
@@ -70,22 +72,20 @@ function setup(t, overrides = {}, lifecycle = false) {
 
 test("codemode start and timing labels use dark orange with terminal color fallbacks", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
-  const shell = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub).bash;
+  const shell = makeTestRenderers().bash;
+  const scriptOutput = { content: [{ type: "text", text: "KEEP SCRIPT OUTPUT" }] };
+  const body = render(shell.renderResult(scriptOutput, {}, theme, { args: {} }));
   for (const [kind, prefix] of [["truecolor", "\x1b[38;2;217;119;6m"], ["ansi256", "\x1b[38;5;172m"], ["none", ""]]) {
     const codemode = makeCodemodeRenderers({ ...bindings, store: new CodemodeViewStore(), shell,
       colorLevel: { kind }, resolve: () => undefined });
-    const context = { state: {}, executionStarted: true };
+    const context = { state: {}, executionStarted: true, durationMs: 100 };
     const colored = text => prefix ? `${prefix}${text}\x1b[39m` : text;
-    const render = component => component.render(80).join("\n");
     assert.equal(render(codemode.renderCall({ code: "text(1)" }, theme, context)), colored("codemode"), kind);
     const expanded = render(codemode.renderCall({ code: "text(1)" }, theme, { ...context, expanded: true }));
     assert.equal(expanded, `${colored("codemode")}\ntext(1)`, "script code keeps its own styling");
     assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)), colored("Elapsed 0.0s"), kind);
-    const completed = render(codemode.renderResult({ content: [{ type: "text", text: "KEEP SCRIPT OUTPUT" }] }, {}, theme,
-      { ...context, durationMs: 100 }));
-    assert.ok(completed.endsWith(colored("Took 0.1s")), kind);
-    assert.equal(completed.includes(`${prefix}KEEP SCRIPT OUTPUT`), !prefix, "script output is not recolored");
-    assert.match(stripVTControlCharacters(completed), /KEEP SCRIPT OUTPUT/);
+    assert.equal(render(codemode.renderResult(scriptOutput, {}, theme, context)),
+      `Script output\n${body}\n${colored("Took 0.1s")}`, "script output keeps ordinary shell styling");
   }
 });
 
@@ -127,7 +127,7 @@ for (const [outcome, isPartial] of [["failed", true], ["cancelled", false]]) {
 test("replayed codemode uses recorded minute and hour durations without starting a clock", (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
   const intervals = t.mock.method(globalThis, "setInterval");
-  const renderers = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+  const renderers = makeTestRenderers();
   const codemode = makeCodemodeRenderers({ ...bindings, store: new CodemodeViewStore(), shell: renderers.bash, resolve: () => undefined });
   for (const [durationMs, expected] of [[90_500, "1m 30s"], [7_384_000, "2h 3m 4s"]]) {
     const context = { state: {}, executionStarted: false, durationMs, invalidate() {} };
