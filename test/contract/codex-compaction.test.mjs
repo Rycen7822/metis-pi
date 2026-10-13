@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,7 +49,7 @@ function checkpointEvents(n = 1) {
 }
 async function host(t, {
   auto = false, condense = false, goal = false, execution = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
-  oauth = routeModel.api !== "openai-responses", codexAuth = "cli",
+  oauth = routeModel.api !== "openai-responses", codexAuth = "cli", credential,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -60,7 +61,9 @@ async function host(t, {
   const legacyCredential = { type: "oauth", access: FAKE_API_KEY, refresh: "offline-refresh", expires: Date.now() + 3_600_000 };
   const hybrid = oauth && routeModel.api === "openai-responses";
   writeFileSync(join(dir, "auth.json"), JSON.stringify({
-    [routeModel.provider]: oauth ? { ...legacyCredential, access: hybrid ? newOAuthKey : FAKE_API_KEY } : { type: "api_key", key: FAKE_API_KEY },
+    [routeModel.provider]: credential ?? (oauth ? { ...legacyCredential, access: hybrid ? newOAuthKey : FAKE_API_KEY,
+      ...(hybrid ? { clientId: "dynamic_agent_client" } : {}),
+    } : { type: "api_key", key: FAKE_API_KEY }),
     ...(hybrid && codexAuth === "pi" ? { "openai-codex": legacyCredential } : {}),
   }));
   if (hybrid && codexAuth === "cli") writeCodexLogin(codexDir);
@@ -154,6 +157,7 @@ async function host(t, {
   return { session, sm, dir, codexDir, bodies, headers, urls, notices, errors, runtime, eventBus };
 }
 const compactions = h => h.sm.getBranch().filter(e => e.type === "compaction");
+const history = h => h.sm.getBranch().filter(e => e.type !== "custom" || e.customType !== "metisCodexCompactionFailure");
 
 test("native collaboration ignores malformed facts and preserves synchronous queries and remote ownership", async t => {
   const h = await host(t, { condense: true, goal: true, execution: true });
@@ -296,6 +300,98 @@ test("hybrid checkpoints survive reload and recompact without replaying another 
   assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
 });
 
+test("existing token-bound checkpoints remain usable under the exact original credential", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  compactions(h).at(-1).details[key].binding = createHash("sha256").update(JSON.stringify([
+    responsesModel.provider, responsesModel.api, responsesModel.id, responsesModel.baseUrl, newOAuthKey, undefined,
+  ])).digest("hex");
+  await h.session.prompt("RESUME EXISTING CHECKPOINT");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  await h.session.compact();
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("native OAuth refresh preserves checkpoint identity through ciphertext rotation and reload", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  h.runtime.registerProvider("openai", { baseUrl: responsesModel.baseUrl });
+  await h.runtime.refresh({ allowNetwork: false });
+  const fetch = globalThis.fetch;
+  const access = "x." + Buffer.from(JSON.stringify({ client_id: "dynamic_agent_client", jti: "refreshed-token",
+    "https://api.openai.com/auth": { per_user_salt: "offline", encrypted_auth_metadata: "rotated-ciphertext" },
+  })).toString("base64url") + ".x";
+  let refreshed = 0;
+  t.mock.method(globalThis, "fetch", (url, options) => {
+    if (String(url).includes("/oauth/token")) {
+      refreshed++;
+      return Promise.resolve(Response.json({ access_token: access, refresh_token: "rotated-refresh",
+        expires_in: 3600, scope: "chatgpt.tokens.use.direct offline_access" }));
+    }
+    return fetch(url, options);
+  });
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  t.mock.method(Date, "now", () => auth.openai.expires + 1);
+  await h.session.prompt("AFTER REFRESH");
+  assert.equal(refreshed, 1);
+  assert.equal(h.headers.at(-1).get("authorization"), `Bearer ${access}`);
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  const saved = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8")).openai;
+  const next = await host(t, { routeModel: responsesModel, oauth: true, existing: h.sm.getSessionFile(), credential: saved });
+  await next.session.prompt("AFTER REFRESH AND RELOAD");
+  assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  await next.session.compact();
+  assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("an unproven OAuth replacement restores originals even for the same opaque user metadata", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  auth.openai = { type: "oauth", access: `${newOAuthKey}replacement`, refresh: "new-login", expires: Date.now() + 3_600_000 };
+  writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  await h.session.prompt("NEW LOGIN");
+  assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+  assert.match(JSON.stringify(h.bodies.at(-1).input), /ORIGINAL USER/);
+});
+
+test("oversized restored history is rejected before inference and before recompaction", async t => {
+  const smallModel = { ...responsesModel, contextWindow: 8000, maxTokens: 1024 };
+  const h = await host(t, { routeModel: smallModel, oauth: true });
+  h.sm.appendContextEdit(h.sm.getBranch().find(e => e.type === "message").id, { content: "RAW HISTORY ".repeat(8000) });
+  await h.session.compact();
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  auth.openai.access = `${newOAuthKey}another-login`;
+  writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  const calls = h.bodies.length;
+  await h.session.prompt("RESTORE TOO MUCH HISTORY");
+  assert.equal(h.bodies.length, calls, "no oversized ordinary request reaches fetch");
+  assert.match(h.notices.join("\n"), /restored history.*context window/i);
+  await assert.rejects(h.session.compact(), /cancel/i);
+  assert.equal(h.bodies.length, calls, "no oversized restored compaction request reaches fetch");
+  assert.equal(compactions(h).length, 1);
+  assert.ok(h.sm.getBranch().some(e => e.type === "context_edit" && e.replacement.content.startsWith("RAW HISTORY")));
+});
+
+test("compaction failures retain sanitized HTTP and stream diagnostics outside model context", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true,
+    response: () => Response.json({ error: { code: "context_length_exceeded",
+      message: `input too large; Bearer ${newOAuthKey}; request ID req-offline-400` } },
+    { status: 400, headers: { "x-request-id": "req-offline-400" } }),
+  });
+  await assert.rejects(h.session.compact(), /cancel/i);
+  const entry = h.sm.getBranch().findLast(e => e.type === "custom" && e.customType === "metisCodexCompactionFailure");
+  assert.ok(entry, "failed compactions leave inspectable diagnostics");
+  assert.equal(entry.data.status, 400);
+  assert.equal(entry.data.requestId, "req-offline-400");
+  assert.match(entry.data.message, /context_length_exceeded|input too large/);
+  assert.ok(!JSON.stringify(entry.data).includes(newOAuthKey));
+  assert.match(h.notices.join("\n"), /400|context_length_exceeded|input too large/);
+  assert.doesNotMatch(h.notices.join("\n"), /Check authentication\/permissions/);
+  await h.session.prompt("CONTINUE AFTER FAILURE");
+  assert.ok(!JSON.stringify(h.bodies.at(-1)).includes("req-offline-400"));
+});
+
 test("hybrid compaction cancels without legacy OAuth or when its producer changes before publication", async t => {
   for (const kind of ["missing", "api-key", "changed"]) await t.test(kind, async sub => {
     const h = await host(sub, { routeModel: responsesModel, oauth: true, codexAuth: kind === "changed" ? "cli" : "missing",
@@ -307,9 +403,9 @@ test("hybrid compaction cancels without legacy OAuth or when its producer change
     if (kind === "api-key") writeFileSync(join(h.codexDir, "auth.json"), JSON.stringify({
       auth_mode: "apikey", OPENAI_API_KEY: "sk-offline", tokens: { access_token: FAKE_API_KEY },
     }));
-    const source = JSON.stringify(h.sm.getBranch());
+    const source = JSON.stringify(history(h));
     await assert.rejects(h.session.compact(), /cancel/i);
-    assert.equal(JSON.stringify(h.sm.getBranch()), source);
+    assert.equal(JSON.stringify(history(h)), source);
     assert.equal(compactions(h).length, 0);
     assert.equal(h.bodies.length, kind === "changed" ? 1 : 0);
     assert.match(h.notices.join("\n"), kind === "changed" ? /Compaction source changed/ : /codex login/);
@@ -339,9 +435,9 @@ test("hybrid automatic recovery keeps Codex retries and preserves history on tra
   const h = await host(t, { routeModel: responsesModel, oauth: true,
     response: () => Response.json({ error: { message: "unauthorized" } }, { status: 401 }),
   });
-  const source = JSON.stringify(h.sm.getBranch());
+  const source = JSON.stringify(history(h));
   await assert.rejects(h.session.compact(), /cancel/i);
-  assert.equal(JSON.stringify(h.sm.getBranch()), source);
+  assert.equal(JSON.stringify(history(h)), source);
   assert.equal(h.bodies.length, 3);
 });
 
@@ -514,6 +610,10 @@ test("invalid or stale remote results explicitly cancel without default summariz
     assert.equal(compactions(h).length, 0);
     assert.equal(h.bodies.length, 1);
     assert.ok(h.sm.getBranch().some(e => e.type === "message" && e.message.content === "ORIGINAL USER"));
+    const failure = h.sm.getBranch().findLast(e => e.type === "custom" && e.customType === "metisCodexCompactionFailure").data;
+    assert.equal(failure.inputPrepared, true);
+    assert.equal(failure.checkpointCount, kind === "missing" ? 0 : kind === "duplicate" ? 2 : 1);
+    assert.equal(failure.failed, kind === "duplicate" || kind === "incomplete");
   });
 });
 

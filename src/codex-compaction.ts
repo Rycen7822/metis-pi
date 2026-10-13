@@ -2,7 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { cleanupSessionResources, getCurrentSystemMessage, normalizeContext, type Model, type Api, type ThinkingLevel } from "@earendil-works/pi-ai";
+import {
+  cleanupSessionResources, getCurrentSystemMessage, normalizeContext,
+  type Model, type Api, type OAuthAuth, type ThinkingLevel,
+} from "@earendil-works/pi-ai";
 import {
   buildSessionProjection, convertToLlm, estimateTokens,
   type ExtensionAPI, type ExtensionContext, type SessionEntry, type CompactionEntry,
@@ -13,6 +16,7 @@ const KEY = "metisCodexRemoteCompaction";
 const MARKER = "[Metis Codex remote checkpoint ";
 const TIMEOUT = 300_000;
 const MAX_BYTES = 8 * 1024 * 1024;
+const OAUTH_IDENTITY = "metisCodexCheckpointIdentity";
 type Item = Record<string, any>;
 interface Checkpoint { version: 1; marker: string; binding: string; history: Item[]; protocol?: "responses"; codexBinding?: string }
 type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
@@ -69,27 +73,32 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   const edited = branch.slice(branch.findIndex(e => e.id === entry.id) + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
   return { entry, data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
 }
-async function requestBinding(ctx: ExtensionContext, model: Model<Api>, resolvedAuth?: RequestAuth) {
+async function requestBinding(ctx: ExtensionContext, model: Model<Api>, accounts: Map<string, string>, resolvedAuth?: RequestAuth) {
   const provider = ctx.modelRegistry.getProvider(model.provider);
   const auth = resolvedAuth ?? await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error("Codex authentication unavailable");
-  let account: unknown = auth.apiKey;
-  try { account = JSON.parse(Buffer.from(auth.apiKey.split(".")[1], "base64url").toString())["https://api.openai.com/auth"]?.chatgpt_account_id ?? account; } catch { /* Non-JWT credentials remain account-bound by digest. */ }
+  let account: unknown;
+  try {
+    account = JSON.parse(Buffer.from(auth.apiKey.split(".")[1], "base64url").toString())["https://api.openai.com/auth"]?.chatgpt_account_id;
+  } catch { /* Non-JWT credentials remain account-bound by digest. */ }
   if (!provider) throw new Error("Unsupported Codex API");
   const accountHeader = Object.entries({ ...model.headers, ...auth.headers }).findLast(([name]) => name.toLowerCase() === "chatgpt-account-id")?.[1];
+  const route = [model.provider, model.api, model.id, auth.baseUrl ?? model.baseUrl];
   const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };
-  return { identity: hash([model.provider, model.api, model.id, auth.baseUrl ?? model.baseUrl, account, accountHeader]),
+  return { identity: hash([...route, account ?? accounts.get(hash(auth.apiKey)) ?? auth.apiKey, accountHeader]),
+    legacyIdentity: hash([...route, account ?? auth.apiKey, accountHeader]),
     provider, model: { ...model, headers: model.headers ? { ...model.headers } : undefined, baseUrl: auth.baseUrl ?? model.baseUrl }, auth: snapshot };
 }
-const binding = async (ctx: ExtensionContext, model: Model<Api>) => (await requestBinding(ctx, model)).identity;
+const matchesBinding = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>) =>
+  data.binding === request.identity || data.binding === request.legacyIdentity;
 
-async function codexRequest(ctx: ExtensionContext, model: Model<Api>) {
+async function codexRequest(ctx: ExtensionContext, model: Model<Api>, accounts: Map<string, string>) {
   const legacyModel: Model<Api> = ctx.modelRegistry.find("openai-codex", model.id) ?? {
     ...model, provider: "openai-codex", api: "openai-codex-responses",
     baseUrl: "https://chatgpt.com/backend-api", headers: undefined,
   };
   if (legacyModel.api !== "openai-codex-responses") throw new Error("Unsupported Codex API");
-  if (ctx.modelRegistry.isUsingOAuth(legacyModel)) return requestBinding(ctx, legacyModel);
+  if (ctx.modelRegistry.isUsingOAuth(legacyModel)) return requestBinding(ctx, legacyModel, accounts);
   let token: unknown;
   try {
     const data = record(JSON.parse(await readFile(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"), "utf8")));
@@ -98,7 +107,7 @@ async function codexRequest(ctx: ExtensionContext, model: Model<Api>) {
   if (typeof token !== "string" || !token) throw new Error("Legacy Codex OAuth unavailable; sign in with codex login");
   // CLI credentials belong to the official backend, not a configured proxy.
   return requestBinding(ctx,
-    { ...legacyModel, baseUrl: "https://chatgpt.com/backend-api", headers: undefined },
+    { ...legacyModel, baseUrl: "https://chatgpt.com/backend-api", headers: undefined }, accounts,
     { ok: true, apiKey: token });
 }
 
@@ -125,7 +134,7 @@ function replaceMarker(payload: unknown, data: Checkpoint): Item {
   return { ...body, input };
 }
 
-function responsesCompactionFetch(capture: (output: unknown) => void): typeof fetch {
+function responsesCompactionFetch(capture: (output: unknown) => void, fetcher: typeof fetch): typeof fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (!url.pathname.endsWith("/responses") || typeof init?.body !== "string")
@@ -135,7 +144,7 @@ function responsesCompactionFetch(capture: (output: unknown) => void): typeof fe
     const headers = new Headers(init.headers);
     headers.delete("content-length");
     headers.set("accept", "application/json");
-    const response = await globalThis.fetch(url, { ...init, headers, body: JSON.stringify({ model, input: history, instructions }) });
+    const response = await fetcher(url, { ...init, headers, body: JSON.stringify({ model, input: history, instructions }) });
     if (!response.ok) return response;
     const compacted = record(await response.json());
     capture(compacted.object === "response.compaction" && !compacted.error ? compacted.output : undefined);
@@ -190,6 +199,49 @@ function retainedUsers(input: Item[]): Item[] {
 }
 
 export function registerCodexCompaction(pi: ExtensionAPI) {
+  const accounts = new Map<string, string>();
+  const trackedOAuth = new Map<OAuthAuth, () => void>();
+  const trackOAuth = (ctx: ExtensionContext) => {
+    for (const id of ["openai", "openai-codex"]) {
+      const oauth = ctx.modelRegistry.getProvider(id)?.auth.oauth;
+      if (!oauth || trackedOAuth.has(oauth)) continue;
+      const refresh = oauth.refresh, toAuth = oauth.toAuth;
+      const identity = (credential: Record<string, unknown>) =>
+        typeof credential[OAUTH_IDENTITY] === "string" && /^[a-f0-9]{64}$/.test(credential[OAUTH_IDENTITY])
+          ? credential[OAUTH_IDENTITY] : hash(credential.access);
+      // Only a successful refresh proves continuity of an opaque workspace grant.
+      // Store its non-secret identity with Pi's credential so reloads retain it.
+      const trackedRefresh: typeof refresh = async (credential, signal) => {
+        const next = await refresh.call(oauth, credential, signal);
+        return { ...next, [OAUTH_IDENTITY]: identity(credential) };
+      };
+      const trackedToAuth: typeof toAuth = async credential => {
+        const resolved = await toAuth.call(oauth, credential);
+        if (resolved.apiKey) {
+          accounts.set(hash(resolved.apiKey), identity(credential));
+          if (accounts.size > 16) accounts.delete(accounts.keys().next().value!);
+        }
+        return resolved;
+      };
+      // Observe this runtime's OAuth object, shared by its configured overlays.
+      // Re-registering the provider would erase other extensions' configuration.
+      oauth.refresh = trackedRefresh; oauth.toAuth = trackedToAuth;
+      trackedOAuth.set(oauth, () => {
+        if (oauth.refresh === trackedRefresh) oauth.refresh = refresh;
+        if (oauth.toAuth === trackedToAuth) oauth.toAuth = toAuth;
+      });
+    }
+  };
+  const restorationError = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext) => {
+    const system = getCurrentSystemMessage(messages);
+    const overhead = system ? 0 : Math.ceil((ctx.getSystemPrompt().length
+      + JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name))).length) / 4);
+    const tokens = messages.reduce((n, m) => n + estimateTokens(m), overhead) + (ctx.model?.maxTokens ?? 0);
+    const window = ctx.model?.contextWindow;
+    return window && tokens > window
+      ? `Restored history needs approximately ${tokens} tokens including output reserve; context window is ${window}`
+      : undefined;
+  };
   let generation = 0;
   let pending: AbortController | undefined;
   let preparedModel: Model<Api> | undefined;
@@ -208,15 +260,20 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   };
   subscribeOwner();
   const invalidate = () => { generation++; pending?.abort(); };
-  pi.on("session_start", () => { invalidate(); subscribeOwner(); });
+  pi.on("session_start", (_event, ctx) => { invalidate(); subscribeOwner(); trackOAuth(ctx); });
   pi.on("session_tree", invalidate);
   pi.on("model_select", invalidate);
-  pi.on("session_shutdown", () => { invalidate(); unsubscribeOwner?.(); });
+  pi.on("session_shutdown", () => {
+    invalidate(); unsubscribeOwner?.();
+    for (const release of trackedOAuth.values()) release();
+    trackedOAuth.clear(); accounts.clear();
+  });
   pi.on("session_before_switch", invalidate);
   pi.on("session_before_tree", invalidate);
   pi.on("session_before_fork", invalidate);
 
-  const cancelRequest = (ctx: ExtensionContext): void => {
+  const cancelRequest = (ctx: ExtensionContext,
+    reason = "Request cancelled because its context or model changed. Retry to use the current context."): void => {
     // Payload-handler throws are swallowed by Pi. Its public abort cancels
     // the provider's signal synchronously. Cached Codex sockets skip the
     // pre-send abort check, so clear this request's session resources as well.
@@ -228,13 +285,14 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       cleanupSessionResources(preparedSession);
     pi.events.emit(METIS_EVENTS.checkpointRequestCancelled, {});
     try {
-      ctx.ui.notify("Request cancelled because its context or model changed. Retry to use the current context.", "warning");
+      ctx.ui.notify(reason, "warning");
     } catch { /* UI teardown cannot undo request cancellation. */ }
   };
 
   // A checkpoint is model/account bound, not a portable textual summary. Restore
   // the original canonical history for other routes, damaged metadata or edits.
   pi.on("context", async (_event, ctx) => {
+    trackOAuth(ctx);
     preparedModel = ctx.model ? { ...ctx.model } : undefined;
     preparedSession = ctx.sessionManager.getSessionId();
     preparedGeneration = generation;
@@ -247,13 +305,16 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     if (!current) return;
     if (current.data && current.entry.summary !== invalidatedMarker && isRemoteModel(ctx.model)) {
       try {
-        if (current.data.binding === await binding(ctx, ctx.model)) {
+        if (matchesBinding(current.data, await requestBinding(ctx, ctx.model, accounts))) {
           preparedMarker = current.entry.summary;
           return;
         }
       } catch { /* Restore instead of sending an opaque marker. */ }
     }
-    return { messages: buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages.filter(m => m.role !== "system") };
+    const messages = buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages;
+    const reason = restorationError(messages, ctx);
+    if (reason) { cancelRequest(ctx, `${reason}. Request cancelled; history was preserved.`); return { messages: [] }; }
+    return { messages: messages.filter(m => m.role !== "system") };
   });
   pi.on("before_provider_request", async (event, ctx) => {
     // Only an exact carrier prepared from a real checkpoint is ours. Ordinary
@@ -271,7 +332,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     const current = active(ctx);
     try {
       if (!current?.data || preparedSession !== ctx.sessionManager.getSessionId() || hash(requestModel) !== hash(ctx.model)
-        || current.data.binding !== await binding(ctx, requestModel)
+        || !matchesBinding(current.data, await requestBinding(ctx, requestModel, accounts))
         || source !== sourceHash(ctx.sessionManager.getBranch())) throw new Error("Checkpoint binding changed");
       return replaceMarker(event.payload, current.data);
     } catch {
@@ -281,7 +342,17 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
 
   pi.on("session_before_compact", async (event, ctx) => {
     const remote = isRemoteModel(ctx.model);
+    const diagnostic: Item = { reason: event.reason, provider: ctx.model?.provider, api: ctx.model?.api };
+    const secrets: string[] = [];
+    const sanitize = (value: unknown) => {
+      let text = typeof value === "string" ? value : value instanceof Error ? value.message : "provider request failed";
+      for (const secret of secrets) text = text.replaceAll(secret, "[redacted]");
+      return text.replace(/Bearer\s+[^\s";,]+/gi, "Bearer [redacted]")
+        .replace(/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\b/g, "[redacted]")
+        .replace(/\bsk-[A-Za-z0-9_-]+/g, "[redacted]").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 1500);
+    };
     try {
+      trackOAuth(ctx);
       const previous = active(ctx);
       if (!remote && !previous) return;
       const waits: Promise<void>[] = [];
@@ -293,17 +364,25 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const authorized = authority();
       const branch = ctx.sessionManager.getBranch();
       const session = ctx.sessionManager.getSessionId(), source = hash(branch);
-      const request = remote && model ? await requestBinding(ctx, model) : undefined;
+      const request = remote && model ? await requestBinding(ctx, model, accounts) : undefined;
+      if (request?.auth.apiKey) secrets.push(request.auth.apiKey);
       const identity = request?.identity;
       const hybrid = model?.provider === "openai" && model.api === "openai-responses"
         && ctx.modelRegistry.isUsingOAuth(model);
-      const compactor = hybrid ? await codexRequest(ctx, model) : request;
-      const reusable = previous?.data && previous.data.binding === identity
+      const compactor = hybrid ? await codexRequest(ctx, model, accounts) : request;
+      if (compactor?.auth.apiKey) secrets.push(compactor.auth.apiKey);
+      diagnostic.compactorProvider = compactor?.model.provider;
+      diagnostic.compactorApi = compactor?.model.api;
+      const reusable = previous?.data && request && matchesBinding(previous.data, request)
         && (!hybrid || previous.data.codexBinding === compactor?.identity);
       const projected = buildSessionProjection(reusable || !previous ? branch : rawBranch(branch));
       const cut = projected.entries.findIndex(e => e.sourceEntry.id === event.preparation.firstKeptEntryId);
       if (cut < 0) throw new Error("Compaction boundary is no longer visible");
       const prefix = projected.entries.slice(0, cut).flatMap(e => e.messages);
+      if (previous && !reusable) {
+        const reason = restorationError(prefix, ctx);
+        if (reason) throw new Error(reason);
+      }
       const files = record(previous?.entry.details);
       for (const path of Array.isArray(files.readFiles) ? files.readFiles : []) if (typeof path === "string") event.preparation.fileOps.read.add(path);
       for (const path of Array.isArray(files.modifiedFiles) ? files.modifiedFiles : []) if (typeof path === "string") event.preparation.fileOps.edited.add(path);
@@ -322,9 +401,16 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       if (!prefix.some(m => m.role !== "system")) throw new Error("No discarded history to compact");
       pending?.abort(); const controller = new AbortController(); pending = controller;
       const signal = AbortSignal.any([event.signal, controller.signal, AbortSignal.timeout(TIMEOUT)]);
-      let inputPrepared = false, completed = false, failed = false;
+      const progress = { inputPrepared: false, completed: false, failed: false, checkpointCount: 0 };
       const items: Item[] = [];
       let compactedWindow: unknown;
+      const fetcher: typeof fetch = async (input, init) => {
+        diagnostic.attempts = (diagnostic.attempts ?? 0) + 1;
+        const response = await globalThis.fetch(input, init);
+        diagnostic.status = response.status;
+        diagnostic.requestId = response.headers.get("x-request-id") ?? undefined;
+        return response;
+      };
       const messages = prefix.filter(m => m.role !== "system");
       const authored = projected.entries.slice(0, cut).flatMap(entry =>
         entry.sourceEntry.type === "message" && entry.sourceEntry.message.role === "user"
@@ -346,13 +432,14 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         signal, transport: "sse", cacheRetention: hybrid ? "short" : "none", maxRetries: 2,
         sessionId: session,
         headers: responses ? compactor.auth.headers : { ...compactor.auth.headers, "x-codex-beta-features": "remote_compaction_v2" },
-        fetch: responses ? responsesCompactionFetch(output => { compactedWindow = output; }) : undefined,
+        fetch: responses ? responsesCompactionFetch(output => { compactedWindow = output; }, fetcher) : fetcher,
         onPayload(payload) {
           const encoded = nativePayload ?? payload;
           const body = reusable && previous?.data ? replaceMarker(encoded, previous.data) : record(encoded);
           if (!Array.isArray(body.input)) throw new Error("Codex provider did not expose native input");
-          inputPrepared = true;
-          items.length = 0; completed = false; failed = false;
+          Object.assign(progress, { inputPrepared: true, completed: false, failed: false, checkpointCount: 0 });
+          items.length = 0;
+          delete diagnostic.message; delete diagnostic.code;
           const input = responses ? body.input : [...body.input];
           let instructions = body.instructions;
           if (hybrid) {
@@ -371,19 +458,29 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
             // Like OMP, only compaction items become durable replacement history.
             // Auxiliary reasoning/message outputs are not additional checkpoints.
             if (item.type === "compaction") {
+              progress.checkpointCount++;
               if (items.length === 0 && JSON.stringify(item).length <= MAX_BYTES) items.push(structuredClone(item));
-              else failed = true;
+              else progress.failed = true;
             }
           }
           if (data.type === "response.completed" || data.type === "response.done") {
-            completed = true;
-            if (data.response?.status && data.response.status !== "completed") failed = true;
+            progress.completed = true;
+            if (data.response?.status && data.response.status !== "completed") progress.failed = true;
           }
-          if (["response.failed", "response.incomplete", "error"].includes(data.type)) failed = true;
+          if (["response.failed", "response.incomplete", "error"].includes(data.type)) progress.failed = true;
+          const error = data.error ?? data.response?.error;
+          if (error?.message || data.type === "error") diagnostic.message = sanitize(error?.message ?? data.message);
+          if (error?.code) diagnostic.code = sanitize(error.code);
         },
       }).result();
+      Object.assign(diagnostic, progress, { stopReason: result.stopReason });
+      if (responses && Array.isArray(compactedWindow))
+        diagnostic.checkpointCount = compactedWindow.filter(item => record(item).type === "compaction").length;
+      if (result.errorMessage) diagnostic.message = sanitize(result.errorMessage);
+      if (signal.aborted) diagnostic.abortReason = sanitize(signal.reason);
       if (pending === controller) pending = undefined;
-      if (signal.aborted || result.stopReason === "error" || result.stopReason === "aborted" || failed || !completed || !inputPrepared)
+      if (signal.aborted || result.stopReason === "error" || result.stopReason === "aborted"
+        || progress.failed || !progress.completed || !progress.inputPrepared)
         throw new Error("Codex did not complete exactly one encrypted checkpoint");
       let history: Item[];
       if (responses) {
@@ -396,8 +493,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         history = [...retainedUsers(retainedInput), compactionItem];
       }
       if (JSON.stringify(history).length > MAX_BYTES) throw new Error("Codex checkpoint too large");
-      const finalBinding = await binding(ctx, model);
-      const finalCompactor = hybrid ? await codexRequest(ctx, model) : compactor;
+      const finalBinding = (await requestBinding(ctx, model, accounts)).identity;
+      const finalCompactor = hybrid ? await codexRequest(ctx, model, accounts) : compactor;
       if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== hash(ctx.sessionManager.getBranch())
         || modelHash !== hash(ctx.model) || authorized !== authority() || identity !== finalBinding
         || request.provider !== ctx.modelRegistry.getProvider(model.provider)
@@ -415,18 +512,17 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         } satisfies Checkpoint } } };
     } catch (error) {
       pending?.abort(); pending = undefined;
-      const safeReasons = [
-        "Codex authentication unavailable", "Compaction boundary is no longer visible", "Unsupported Codex API",
-        "No discarded history to compact", "Codex provider did not expose native input",
-        "Codex did not complete exactly one encrypted checkpoint", "Responses did not return a valid compacted window",
-        "Codex checkpoint too large", "Compaction source changed",
-        "Legacy Codex OAuth unavailable; sign in with codex login",
-      ];
-      const reason = error instanceof Error && safeReasons.includes(error.message) ? error.message : "provider request failed";
+      const reason = sanitize(error);
+      diagnostic.failure = reason;
+      diagnostic.message ??= reason;
+      diagnostic.requestId = typeof diagnostic.requestId === "string" ? sanitize(diagnostic.requestId) : undefined;
+      try { pi.appendEntry("metisCodexCompactionFailure", diagnostic); }
+      catch { /* A journal write failure must still cancel compaction. */ }
       const service = ctx.model?.api === "openai-responses" ? "OpenAI Responses" : "Codex";
       if (!event.signal.aborted) try {
-        ctx.ui.notify(`${service} remote compaction cancelled: ${reason}; history was preserved. ` +
-          "Check authentication/permissions and retry.", "warning");
+        const detail = [diagnostic.status && `HTTP ${diagnostic.status}`, diagnostic.requestId && `request ID ${diagnostic.requestId}`,
+          diagnostic.message !== reason && diagnostic.message].filter(Boolean).join("; ");
+        ctx.ui.notify(`${service} remote compaction cancelled: ${reason}${detail ? `; ${detail}` : ""}; history was preserved.`, "warning");
       } catch { /* UI teardown must not turn cancellation into native fallback. */ }
       // The runner swallows thrown handler errors; explicitly cancel so it never
       // falls through to a plaintext summary or aborts the entire agent turn.
