@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.20.0
+
 - 整理 LSP 协议与执行责任：发布诊断状态/定时器独立于 JSON-RPC 请求，统一文档清理和客户端命令/工作区来源，简化单文件适配器选择。正确区分 CodeAction 与旧式 Command，不解析/应用禁用动作或执行服务器命令，保留有效解析错误和取消/进程退出保证。
 
 - 内置维护 `@narumitw/pi-lsp` 0.49.9 源码及 MIT 许可，以 `extensions/lsp.ts` 直接加载；诊断/修复合并为一个 direct `lsp` 工具（`action: diagnostics/fix`），精简声明并保留扁平参数、默认预览、服务器路由和会话清理。`/lsp` 保留，不注册 `lsp_diagnostics` / `lsp_fix` 别名；激活前需停用独立 npm 包，参数级权限策略才能区分只读和写入。
