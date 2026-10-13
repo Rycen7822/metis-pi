@@ -621,8 +621,8 @@ test("goal continuation counters change only the appended message, preserving sy
   const ctx = { sessionManager: sm, hasUI: false, isIdle: () => true, hasPendingMessages: () => false };
   t.after(() => hooks.get("session_shutdown")({}, ctx));
   await tools
-    .get("create_goal")
-    .execute("c", { objective: "Finish local work", token_budget: 10000 }, undefined, undefined, ctx);
+    .get("goal")
+    .execute("c", { action: "create", objective: "Finish local work", token_budget: 10000 }, undefined, undefined, ctx);
   const before = await hooks.get("before_agent_start")({ systemPrompt: "FIXED" }, ctx);
   await hooks.get("agent_start")({}, ctx);
   await hooks.get("agent_end")(

@@ -180,7 +180,7 @@ test(`custom Goal creation and resume preserve goal and policy through tool step
   const h = await host(t, false, reverse, false, { goal: true });
   h.setReply(count => count % 3 === 1
     ? toolCall("read", { path: join(h.cwd, "AGENTS.md") }, `goal-read-${count}`)
-    : count % 3 === 2 ? toolCall("update_goal", { status: "complete" }, `goal-complete-${count}`) : undefined);
+    : count % 3 === 2 ? toolCall("goal", { action: "update", status: "complete" }, `goal-complete-${count}`) : undefined);
   await h.session.prompt("/goal GOAL_LIFECYCLE_SENTINEL");
   await h.session.waitForIdle();
   assert.equal(h.calls.length, 3);
@@ -276,7 +276,7 @@ test("internal checkpoint cancellation leaves Goal active for an explicit fresh 
   assert.equal(h.calls.length, 0);
   assert.equal(goalSnapshot(h).status, "active");
   assert.equal(h.sm.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "goal-continuation").length, 1);
-  h.setReply(count => count === 1 ? toolCall("update_goal", { status: "complete" }) : undefined);
+  h.setReply(count => count === 1 ? toolCall("goal", { action: "update", status: "complete" }) : undefined);
   await h.session.prompt("Explicit retry after internal cancellation.");
   assert.equal(h.calls.length, 2);
   assert.equal(goalSnapshot(h).status, "complete");
@@ -302,7 +302,7 @@ for (const userInput of [false, true])
     h.session.subscribe(event => {
       if (event.type === "agent_settled" && h.calls.length === (userInput ? 1 : 3)) finished.resolve();
     });
-    h.setReply(count => count === 2 ? toolCall("update_goal", { status: "complete" }) : undefined);
+    h.setReply(count => count === 2 ? toolCall("goal", { action: "update", status: "complete" }) : undefined);
     await h.session.prompt("/goal OCC_TICKET_SENTINEL");
     await entered.promise;
     if (userInput) assert.equal(await h.session.followUp("USER_INPUT_SENTINEL"), "queued");
@@ -520,5 +520,5 @@ test("whole package retains tools and applies dynamic policy", async t => {
   assert.match(body, /POLICY_A_SENTINEL/); assert.match(body, /PROJECT_SENTINEL/);
   assert.doesNotMatch(body, /NATIVE_GLOBAL_SENTINEL/);
   const names = h.session.getActiveToolNames();
-  for (const name of ["read", "write", "create_goal", "context_tree_query"]) assert.ok(names.includes(name), name);
+  for (const name of ["read", "write", "goal", "context_tree_query"]) assert.ok(names.includes(name), name);
 });

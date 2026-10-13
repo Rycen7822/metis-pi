@@ -11,11 +11,15 @@
 
 ## 模型工具
 
-| 工具 | 约束 |
+统一使用 `goal` 工具，必填 `action`：
+
+| action | 参数与约束 |
 | --- | --- |
-| `create_goal` | 仅明确要求时创建，仅明确要求预算时设 token_budget；已有未完成目标时失败。 |
-| `get_goal` | 读取状态、时间、用量和剩余预算。 |
-| `update_goal` | 只允许 complete / blocked；实际达成才完成，同一阻塞连续三轮且陷入僵局才 blocked。不能暂停、恢复或设置额度状态。 |
+| `get` | 读取状态、时间、用量和剩余预算，不修改目标。 |
+| `create` | 必填 `objective`，可选 `token_budget`。仅用户或 system/developer 明确要求时创建，仅明确要求预算时设置；已有未完成目标时失败，已完成目标可替换。 |
+| `update` | 必填 `status`，只允许 `complete` / `blocked`；实际达成且无剩余必需工作才完成，同一阻塞连续至少三轮且陷入僵局才 blocked。不能因停止工作或预算将尽而完成，也不能暂停、恢复或设置额度状态。 |
+
+例如 `goal({action: "get"})`、`goal({action: "create", objective: "完成指定任务"})`、`goal({action: "update", status: "complete"})`。必填字段按 action 校验；状态持久化和 `/goal` 命令保持不变。
 
 UI 与模型权限不同；禁用入口见 [配置](../configuration.md)。
 

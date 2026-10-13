@@ -1,6 +1,7 @@
-import test, { type TestContext } from "node:test";
-import assert from "node:assert/strict";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
+import assert from "node:assert/strict";
+import test, { type TestContext } from "node:test";
 import goalExtension from "../../extensions/goal.ts";
 
 test.beforeEach((t) => {
@@ -48,8 +49,9 @@ function makeHost(t: TestContext) {
     entries,
     sent,
     command: async (args: string) => await commands.get("goal")!.handler(args, ctx),
-    tool: async (name: string, params: Record<string, unknown>) =>
-      await tools.get(name)!.execute(`call-${name}`, params, undefined, undefined, ctx),
+    tools,
+    tool: async (action: string, params: Record<string, unknown> = {}) =>
+      await tools.get("goal")!.execute(`call-${action}`, { action, ...params }, undefined, undefined, ctx),
     fire: async (event: string, ...args: unknown[]) => await handlers.get(event)!(...args),
     lastStatus: () => statusCalls.at(-1)?.text,
   };
@@ -59,6 +61,57 @@ function makeHost(t: TestContext) {
 function tick(t: TestContext, seconds: number): void {
   for (let i = 0; i < seconds; i += 1) t.mock.timers.tick(1000);
 }
+
+test("goal validates action-specific fields without mutating state on invalid requests", async (t) => {
+  const h = makeHost(t);
+  assert.deepEqual([...h.tools.keys()], ["goal"]);
+  assert.equal((await h.tool("get")).details.goal, null);
+  for (const [action, params, error] of [
+    ["create", {}, /requires objective/],
+    ["create", { objective: " " }, /must not be empty/],
+    ["create", { objective: "invalid budget", token_budget: 0 }, /positive integers/],
+    ["update", {}, /requires status complete or blocked/],
+    ["update", { status: "paused" }, /requires status complete or blocked/],
+    ["pause", {}, /action must be/],
+  ] as const) {
+    await assert.rejects(() => h.tool(action, params), error);
+  }
+  const definition = h.tools.get("goal")!;
+  const invalidArguments: Record<string, string>[] = [{}, { action: "pause" }, { action: "update", status: "paused" }];
+  for (const arguments_ of invalidArguments) {
+    assert.throws(() => validateToolArguments(definition, { type: "toolCall", id: "invalid", name: "goal", arguments: arguments_ }), /Validation failed/);
+  }
+  assert.equal(h.entries.length, 0, "invalid requests and reads do not persist changes");
+  assert.equal((await h.tool("get")).details.goal, null);
+});
+
+test("goal keeps unfinished targets, permits completed replacement and guides continuations through update", async (t) => {
+  const h = makeHost(t);
+  const first = (await h.tool("create", { objective: "finish the whole objective", token_budget: 100 })).details;
+  assert.equal(first.goal.status, "active");
+  assert.equal(first.remainingTokens, 100);
+  const entries = h.entries.length;
+  assert.deepEqual((await h.tool("get")).details, first);
+  assert.equal(h.entries.length, entries, "get is read-only");
+  await assert.rejects(() => h.tool("create", { objective: "must not replace active" }), /unfinished goal/);
+  const prompt = (await h.fire("before_agent_start", { systemPrompt: "BASE" }, h.ctx)).systemPrompt;
+  assert.match(prompt, /call goal with action "update" and status "complete"/);
+  assert.match(prompt, /at least three consecutive goal turns/);
+  await h.fire("agent_start", {}, h.ctx);
+  await h.fire("agent_end", { messages: [] }, h.ctx);
+  const continuation = (h.sent.at(-1) as { content: string }).content;
+  assert.match(continuation, /call goal with action "update" and status "complete"/);
+  assert.match(continuation, /goal with action "update" and status "blocked"/);
+  await h.tool("update", { status: "blocked" });
+  assert.equal((await h.tool("get")).details.goal.status, "blocked");
+  await assert.rejects(() => h.tool("create", { objective: "must not replace blocked" }), /unfinished goal/);
+  await h.tool("update", { status: "complete" });
+  const next = (await h.tool("create", { objective: "the next objective" })).details;
+  assert.equal(next.goal.objective, "the next objective");
+  assert.equal(next.goal.status, "active");
+  assert.equal(next.goal.tokensUsed, 0);
+  assert.equal(next.goal.tokenBudget, null);
+});
 
 test("one goal accounts running time, restores paused edits and completes its final turn", async (t) => {
   const h = makeHost(t);
@@ -85,7 +138,7 @@ test("one goal accounts running time, restores paused edits and completes its fi
   const paused = h.statusCalls.length;
   tick(t, 5);
   assert.equal(h.statusCalls.length, paused, "paused goals do not refresh");
-  let goal = (await h.tool("get_goal", {})).details.goal;
+  let goal = (await h.tool("get")).details.goal;
   assert.equal(goal.status, "paused");
   assert.equal(goal.timeUsedSeconds, 5, "pause accounts the interrupted turn before branch restore");
   assert.equal(goal.objective, "edited while paused");
@@ -93,9 +146,9 @@ test("one goal accounts running time, restores paused edits and completes its fi
   await h.fire("agent_start", {}, h.ctx);
   tick(t, 1);
   assert.equal(h.lastStatus(), "Pursuing goal (6s)", "resume excludes the paused interval");
-  await h.tool("update_goal", { status: "complete" });
+  await h.tool("update", { status: "complete" });
   await h.fire("agent_end", { messages: [{ role: "assistant", usage: { totalTokens: 7 } }] }, h.ctx);
-  goal = (await h.tool("get_goal", {})).details.goal;
+  goal = (await h.tool("get")).details.goal;
   assert.equal(goal.status, "complete", "final accounting must not reopen a completed goal");
   assert.equal(goal.tokensUsed, 7);
   assert.equal(goal.timeUsedSeconds, 6);
@@ -129,19 +182,19 @@ test("shutdown stops the active refresh and reload only refreshes the new contex
 
 test("turn accounting stays with the goal that started the turn and stops at its budget", async (t) => {
   const h = makeHost(t);
-  await h.tool("create_goal", { objective: "old goal" });
+  await h.tool("create", { objective: "old goal" });
   await h.fire("agent_start", {}, h.ctx);
   tick(t, 2);
   await h.command("clear");
-  await h.tool("create_goal", { objective: "new goal", token_budget: 20 });
+  await h.tool("create", { objective: "new goal", token_budget: 20 });
   // Pi input is uncached input: 5 measured + 10 cached + 15 output.
   const messages = [{ role: "assistant", stopReason: "stop", usage: { input: 5, cacheRead: 10, output: 15 } }];
   await h.fire("agent_end", { messages }, h.ctx);
-  assert.equal((await h.tool("get_goal", {})).details.goal.tokensUsed, 0);
+  assert.equal((await h.tool("get")).details.goal.tokensUsed, 0);
   await h.fire("agent_start", {}, h.ctx);
   tick(t, 3);
   await h.fire("agent_end", { messages }, h.ctx);
-  const result = (await h.tool("get_goal", {})).details;
+  const result = (await h.tool("get")).details;
   assert.equal(result.goal.tokensUsed, 20);
   assert.equal(result.goal.timeUsedSeconds, 3);
   assert.equal(result.goal.status, "budgetLimited");
@@ -164,24 +217,24 @@ test("settled errors stop continuation and context keeps only the current goal's
   assert.deepEqual(filtered.messages, [user, last]);
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "rate limit" }] }, h.ctx);
-  assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+  assert.equal((await h.tool("get")).details.goal.status, "active");
   await h.fire("agent_settled", { aborted: false }, h.ctx);
-  assert.equal((await h.tool("get_goal", {})).details.goal.status, "usageLimited");
+  assert.equal((await h.tool("get")).details.goal.status, "usageLimited");
   assert.deepEqual((await h.fire("context", { messages: [first, user, last] })).messages, [user]);
 });
 
 test("completion reports settled final-turn usage instead of the provisional tool snapshot", async (t) => {
   const h = makeHost(t);
-  await h.tool("create_goal", { objective: "finish with accurate final usage", token_budget: 100 });
+  await h.tool("create", { objective: "finish with accurate final usage", token_budget: 100 });
   await h.fire("agent_start", {}, h.ctx);
   await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 80, output: 0 } }] }, h.ctx);
   await h.fire("agent_start", {}, h.ctx);
-  const receipt = (await h.tool("update_goal", { status: "complete" })).details;
+  const receipt = (await h.tool("update", { status: "complete" })).details;
   assert.equal(receipt.goal.tokensUsed, 80);
   assert.match(receipt.completionBudgetReport, /excludes the active turn/);
   assert.equal(h.sent.filter((message: any) => message.customType === "goal-ui").length, 0);
   await h.fire("agent_end", { messages: [{ role: "assistant", usage: { input: 25, output: 0 } }] }, h.ctx);
-  assert.equal((await h.tool("get_goal", {})).details.goal.tokensUsed, 105);
+  assert.equal((await h.tool("get")).details.goal.tokensUsed, 105);
   assert.match((h.sent.at(-1) as { content: string }).content, /Final usage: tokens used: 105 of 100/);
   const reports = h.sent.length;
   await h.fire("agent_end", { messages: [] }, h.ctx);
@@ -197,7 +250,7 @@ test("an internally invalidated checkpoint request leaves Goal active without a 
   h.events.emit("metis:checkpoint-request-cancelled", {});
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, h.ctx);
   await h.fire("agent_settled", { aborted: true }, h.ctx);
-  assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+  assert.equal((await h.tool("get")).details.goal.status, "active");
   assert.equal(h.sent.length, sent, "the user retry must rebuild one fresh request");
 });
 
@@ -211,11 +264,11 @@ test("a goal stays active through all five attempts and blocks only after final 
     await h.fire("agent_end", {
       messages: [{ role: "assistant", stopReason: "error", errorMessage: "Codex error: You can retry your request." }],
     }, h.ctx);
-    assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+    assert.equal((await h.tool("get")).details.goal.status, "active");
     assert.equal(h.sent.length, sent, "goal continuation must not compete with native retry");
   }
   await h.fire("agent_settled", { aborted: false }, h.ctx);
-  const goal = (await h.tool("get_goal", {})).details.goal;
+  const goal = (await h.tool("get")).details.goal;
   assert.equal(goal.status, "blocked");
   assert.equal(goal.timeUsedSeconds, 5);
   const statuses = h.entries.filter(entry => entry.data.action === "status");
@@ -237,7 +290,7 @@ test("a successful retry clears the failed attempt and resumes goal continuation
   await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
   assert.equal(h.sent.length, sent + 1);
   await h.fire("agent_settled", { aborted: false }, h.ctx);
-  assert.equal((await h.tool("get_goal", {})).details.goal.status, "active");
+  assert.equal((await h.tool("get")).details.goal.status, "active");
   assert.equal(h.entries.filter(entry => entry.data.action === "status").length, 0);
 });
 
@@ -260,6 +313,6 @@ for (const action of ["pause", "replace", "restore", "abort"] as const) {
       await h.fire("session_tree", {}, h.ctx);
     }
     await h.fire("agent_settled", { aborted: action === "abort" }, h.ctx);
-    assert.equal((await h.tool("get_goal", {})).details.goal.status, action === "pause" ? "paused" : "active");
+    assert.equal((await h.tool("get")).details.goal.status, action === "pause" ? "paused" : "active");
   });
 }

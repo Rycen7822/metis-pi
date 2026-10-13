@@ -13,8 +13,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
 import { METIS_EVENTS, isGoalSnapshotRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
+import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -29,22 +29,13 @@ interface PersistedGoalState {
   goal: Goal | null;
 }
 
-const CreateGoalParams = Type.Object({
-  objective: Type.String({
-    description:
-      "Required. The concrete objective to start pursuing. This starts a new active " +
-      "goal when no unfinished goal exists. If the previous goal is complete, it is " +
-      "replaced.",
-  }),
+const GoalParams = Type.Object({
+  action: StringEnum(["get", "create", "update"] as const),
+  objective: Type.Optional(Type.String({ description: "Required for action=create. The objective to pursue." })),
   token_budget: Type.Optional(
-    Type.Number({
-      description: "Optional positive integer token budget for the new goal. Omit unless explicitly requested.",
-    }),
+    Type.Number({ description: "Positive integer token budget for create; set only when explicitly requested." }),
   ),
-});
-
-const UpdateGoalParams = Type.Object({
-  status: StringEnum(["complete", "blocked"] as const),
+  status: Type.Optional(StringEnum(["complete", "blocked"] as const, { description: "Required for action=update." })),
 });
 
 function escapeXmlText(input: string): string {
@@ -234,13 +225,13 @@ ${
   "remains. If the evidence is incomplete, weak, indirect, merely consistent with " +
   "completion, or leaves any requirement missing, incomplete, or unverified, keep " +
   "working instead of marking the goal complete. If the objective is achieved, " +
-  'call update_goal with status "complete" so usage accounting is preserved. ' +
+  'call goal with action "update" and status "complete" so usage accounting is preserved. ' +
   "Report the final elapsed time, and if the achieved goal has a token budget, " +
-  "report the final consumed token budget to the user after update_goal succeeds."
+  "report the final consumed token budget to the user after the update succeeds."
 }
 
 Blocked audit:
-- Do not call update_goal with status "blocked" the first time a blocker appears.
+- Do not call goal with action "update" and status "blocked" the first time a blocker appears.
 ${
   '- Only use status "blocked" when the same blocking condition has repeated for ' +
   "at least three consecutive goal turns, counting the original/user-triggered " +
@@ -249,8 +240,8 @@ ${
 ${
   '- If the user resumes a goal that was previously marked "blocked", treat the ' +
   "resumed run as a fresh blocked audit. If the same blocking condition then " +
-  "repeats for at least three consecutive resumed goal turns, call update_goal " +
-  'with status "blocked" again.'
+  "repeats for at least three consecutive resumed goal turns, call goal " +
+  'with action "update" and status "blocked" again.'
 }
 ${
   '- Use status "blocked" only when you are truly at an impasse and cannot make ' +
@@ -258,13 +249,13 @@ ${
 }
 ${
   "- Once the blocked threshold is satisfied, do not keep reporting that you are " +
-  "still blocked while leaving the goal active; call update_goal with status " +
-  '"blocked".'
+  "still blocked while leaving the goal active; call goal with action " +
+  '"update" and status "blocked".'
 }
 - Never use status "blocked" merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
 
 ${
-  "Do not call update_goal unless the goal is complete or the strict blocked audit " +
+  'Do not call goal with action "update" unless the goal is complete or the strict blocked audit ' +
   "above is satisfied. Do not mark a goal complete merely because the budget is " +
   "nearly exhausted or because you are stopping work."
 }`;
@@ -281,10 +272,10 @@ ${escapeXmlText(goal.objective)}
 
 
 ${
-  "If the goal is achieved and no required work remains, call update_goal with " +
-  'status "complete". Do not mark it complete merely because you are stopping or ' +
+  "If the goal is achieved and no required work remains, call goal with " +
+  'action "update" and status "complete". Do not mark it complete merely because you are stopping or ' +
   "the budget is nearly exhausted. If the goal is genuinely blocked, use " +
-  'update_goal with status "blocked" only after the same blocking condition has ' +
+  'goal with action "update" and status "blocked" only after the same blocking condition has ' +
   "repeated for at least three consecutive goal turns and you cannot make " +
   "meaningful progress without user input or an external-state change."
 }`;
@@ -732,76 +723,56 @@ export default function goalExtension(pi: ExtensionAPI) {
   }
 
   pi.registerTool({
-    name: "get_goal",
-    label: "Get Goal",
+    name: "goal",
+    label: "Goal",
     description:
-      "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget.",
-    promptSnippet: "Get the current long-running thread goal and its usage/budget state",
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      return toolResult(ctx);
-    },
-  });
-
-  pi.registerTool({
-    name: "create_goal",
-    label: "Create Goal",
-    description:
-      "Create a goal only when explicitly requested by the user or system/developer " +
-      "instructions; do not infer goals from ordinary tasks. Set token_budget only " +
-      "when an explicit token budget is requested. Fails if an unfinished goal exists; " +
-      "if the previous goal is complete, it is replaced.",
-    promptSnippet: "Create a new active long-running thread goal when explicitly requested",
+      "Manage the current thread goal. get reads status, budgets, token/elapsed usage and remaining tokens. " +
+      "create requires an explicit user/system/developer request (never infer from ordinary tasks), " +
+      "fails if an unfinished goal exists, and replaces a complete one; set token_budget only if explicitly requested. " +
+      "update accepts only complete or blocked: complete requires actual achievement and no remaining required work, " +
+      "not stopping or a nearly exhausted budget; blocked requires the same blocker for at least three consecutive " +
+      "goal turns and an impasse. Never use update for pause/resume or budget/usage-limit changes.",
+    promptSnippet: "Read, explicitly create, or mark the current long-running thread goal complete or blocked",
     promptGuidelines: [
-      "Use create_goal only when the user explicitly asks to create a long-running goal; do not infer goals from ordinary tasks.",
-      "Use update_goal with status complete only when the active goal is actually achieved and no required work remains.",
-      "Use update_goal with status blocked only when the strict blocked audit is satisfied.",
+      "Use goal with action=create only when the user explicitly asks to create a long-running goal; do not infer goals from ordinary tasks.",
+      "Use goal with action=update and status=complete only when the active goal is actually achieved and no required work remains.",
+      "Use goal with action=update and status=blocked only when the strict blocked audit is satisfied.",
+      "Use goal with action=update only to mark the active goal complete or blocked after verifying the required conditions; " +
+        "never use it for pause, resume, budget-limit, or usage-limit changes.",
     ],
-    parameters: CreateGoalParams,
+    parameters: GoalParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (state.current && isUnfinishedGoal(state.current)) {
-        throw new Error(
-          "cannot create a new goal because this thread already has an unfinished goal; " +
-            "complete it with update_goal or ask the user to clear or replace it",
-        );
+      switch (params.action) {
+        case "get":
+          return toolResult(ctx);
+        case "create":
+          if (typeof params.objective !== "string") throw new Error("goal action=create requires objective");
+          if (state.current && isUnfinishedGoal(state.current)) {
+            throw new Error(
+              "cannot create a new goal because this thread already has an unfinished goal; " +
+                'complete it with goal action="update" status="complete" or ask the user to clear or replace it',
+            );
+          }
+          state.create(params.objective, params.token_budget);
+          persist("set");
+          break;
+        case "update":
+          if (params.status !== "complete" && params.status !== "blocked") {
+            throw new Error(
+              "goal action=update requires status complete or blocked; pause, resume, " +
+                "budget-limited, and usage-limited status changes are controlled by the user or system",
+            );
+          }
+          state.transition(params.status);
+          persist("status");
+          break;
+        default:
+          throw new Error("goal action must be get, create, or update");
       }
-      state.create(params.objective, params.token_budget);
-      persist("set");
+      const complete = params.action === "update" && params.status === "complete";
       updateStatus(ctx);
-      return toolResult(ctx);
-    },
-  });
-
-  pi.registerTool({
-    name: "update_goal",
-    label: "Update Goal",
-    description:
-      "Update the existing goal. Use this tool only to mark the goal achieved or " +
-      "genuinely blocked. Set status to complete only when the objective has actually " +
-      "been achieved and no required work remains. Set status to blocked only when the " +
-      "same blocking condition has repeated for at least three consecutive goal turns " +
-      "and the agent is at an impasse. Do not mark a goal complete merely because its " +
-      "budget is nearly exhausted or because you are stopping work.",
-    promptSnippet: "Mark the current goal complete or blocked after verifying the required conditions",
-    promptGuidelines: [
-      "Use update_goal only to mark the active goal complete or blocked after " +
-        "verifying the required conditions; never use it for pause, resume, " +
-        "budget-limit, or usage-limit changes.",
-    ],
-    parameters: UpdateGoalParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.status !== "complete" && params.status !== "blocked") {
-        throw new Error(
-          "update_goal can only mark the existing goal complete or blocked; pause, resume, " +
-            "budget-limited, and usage-limited status changes are controlled by the user or " +
-            "system",
-        );
-      }
-      state.transition(params.status);
-      persist("status");
-      updateStatus(ctx);
-      if (params.status === "complete" && inAgentTurn) completionReportGoalId = state.current!.id;
-      return toolResult(ctx, params.status === "complete");
+      if (complete && inAgentTurn) completionReportGoalId = state.current!.id;
+      return toolResult(ctx, complete);
     },
   });
 }

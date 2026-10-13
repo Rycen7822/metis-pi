@@ -1304,7 +1304,7 @@ for (const exhaustWait of [false, true])
     assert.equal(compactions, 1, "repeated idle boundaries do not repeat the summary attempt");
   });
 
-test("OCC work ignores recall, polling, failures and repeated identical observations", () => {
+test("OCC work ignores recall, polling, goal queries, failures and repeated identical observations", () => {
   const hooks = new Map(),
     states = [];
   registerOcc(
@@ -1324,14 +1324,14 @@ test("OCC work ignores recall, polling, failures and repeated identical observat
     {},
     { value: { ...DEFAULT_CONFIG, enabled: true, opportunisticCompaction: true } },
   );
-  const observe = (id, name, isError, text) =>
+  const observe = (id, name, isError, text, args = { path: "same.txt" }) =>
     hooks.get("turn_end")(
       {
         message: {
           role: "assistant",
           stopReason: "toolUse",
           timestamp: id,
-          content: [{ type: "toolCall", id: String(id), name, arguments: { path: "same.txt" } }],
+          content: [{ type: "toolCall", id: String(id), name, arguments: args }],
         },
         toolResults: [
           {
@@ -1349,9 +1349,14 @@ test("OCC work ignores recall, polling, failures and repeated identical observat
   for (let i = 0; i < 4; i++) observe(i, "context_tree_query", true, "missing");
   observe(10, "write_stdin", false, "still running");
   observe(11, "read", true, "missing");
+  observe(12, "goal", false, "no active goal", { action: "get" });
   assert.equal(states.length, 0);
   for (let i = 20; i < 24; i++) observe(i, "read", false, "unchanged evidence");
   assert.equal(states.at(-1).work, 1);
   observe(30, "read", false, "new evidence");
   assert.equal(states.at(-1).work, 2);
+  observe(31, "goal", false, "goal created", { action: "create", objective: "Inspect only; do not deploy" });
+  assert.equal(states.at(-1).work, 3, "creating a goal earns work");
+  observe(32, "goal", false, "goal complete", { action: "update", status: "complete" });
+  assert.equal(states.at(-1).work, 4, "updating a goal earns work");
 });

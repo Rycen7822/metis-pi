@@ -430,7 +430,8 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     const calls = captureBatch(event.message, event.toolResults, 0, 0).toolCalls.filter(
       (call) =>
         !call.isError &&
-        !["context_tree_query", "write_stdin", "get_goal"].includes(call.toolName) &&
+        !["context_tree_query", "write_stdin"].includes(call.toolName) &&
+        !(call.toolName === "goal" && call.args.action === "get") &&
         (call.toolName !== "exec_command" || call.exitCode === 0) &&
         event.toolResults.some((result) => result.toolCallId === call.toolCallId && result.isError === false),
     );

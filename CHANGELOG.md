@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 将三个 Goal 工具聚合为 `goal`（`action: get/create/update`），精简重复描述；保留显式创建/预算授权、完成与阻塞审计、计账和 session 恢复，`/goal` 命令不变。续跑提示与调用方同步迁移，OCC 不将 `goal get` 计为工作。
+
 - 移除 Metis `view_image`、原图/detail 请求覆盖、文本模型图片描述回退及图片专用 Rust helper；图片统一使用 Pi 原生 `read` 与 codemode `image()`。PTY、后台 shell 和通用图片显示保持不变；已有个人配置、会话和 blobs 不自动删除。
 
 - Hide codemode scripts until expansion and reuse ordinary rendering for nested tools; preserve script output and fall back to summaries when session-local results are unavailable.

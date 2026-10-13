@@ -17,7 +17,7 @@
 
 | 模型侧工具 | 契约 |
 | --- | --- |
-| `create_goal` / `get_goal` / `update_goal` | [目标授权、预算和完成规则](features/goal.md)。 |
+| `goal`（`action`: `get` / `create` / `update`） | [目标授权、预算和完成规则](features/goal.md)。 |
 | `context_tree_query` | [历史证据、参数及原文分页回读](features/condense.md)。 |
 | `exec_command` / `write_stdin` | [deferred PTY 进程工具](execution.md)。 |
 | Pi `read` / codemode `image()` | 普通图片使用 `image(await tools.read({path:'image.png'}))`，见 [执行工具](execution.md)。 |
