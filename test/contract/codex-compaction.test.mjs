@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,15 @@ import { FAKE_API_KEY, modelNamed } from "../helpers/native-provider.mjs";
 const root = new URL("../../", import.meta.url);
 const model = modelNamed("gpt-6-astra");
 const responsesModel = { ...model, provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
+const newOAuthKey = "x." + Buffer.from(JSON.stringify({ client_id: "dynamic_agent_client",
+  "https://api.openai.com/auth": { per_user_salt: "offline", encrypted_auth_metadata: "offline" },
+})).toString("base64url") + ".x";
+function writeCodexLogin(dir, accountId = "offline-test") {
+  const access_token = "x." + Buffer.from(JSON.stringify({
+    "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+  })).toString("base64url") + ".x";
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token, account_id: accountId } }));
+}
 const key = "metisCodexRemoteCompaction";
 const usage = (input = 100) => ({ input, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: input + 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 const assistant = (text, input = 100) => ({ role: "assistant", content: [{ type: "text", text }], api: model.api, provider: model.provider, model: model.id, usage: usage(input), stopReason: "stop", timestamp: Date.now() });
@@ -39,17 +48,25 @@ function checkpointEvents(n = 1) {
 }
 async function host(t, {
   auto = false, condense = false, goal = false, execution = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
+  oauth = routeModel.api !== "openai-responses", codexAuth = "cli",
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
+  const oldCodexHome = process.env.CODEX_HOME;
   process.env.PI_CODING_AGENT_DIR = dir;
+  const codexDir = join(dir, "codex");
+  mkdirSync(codexDir);
+  process.env.CODEX_HOME = codexDir;
+  const legacyCredential = { type: "oauth", access: FAKE_API_KEY, refresh: "offline-refresh", expires: Date.now() + 3_600_000 };
+  const hybrid = oauth && routeModel.api === "openai-responses";
   writeFileSync(join(dir, "auth.json"), JSON.stringify({
-    [routeModel.provider]: {
-      type: "oauth", access: FAKE_API_KEY, refresh: "offline-refresh", expires: Date.now() + 3_600_000,
-    },
+    [routeModel.provider]: oauth ? { ...legacyCredential, access: hybrid ? newOAuthKey : FAKE_API_KEY } : { type: "api_key", key: FAKE_API_KEY },
+    ...(hybrid && codexAuth === "pi" ? { "openai-codex": legacyCredential } : {}),
   }));
+  if (hybrid && codexAuth === "cli") writeCodexLogin(codexDir);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { enabled: true, opportunisticCompaction: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } } }));
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models.json"), refreshOnCreate: false });
+  await runtime.refresh({ allowNetwork: false });
   const sm = existing ? SessionManager.open(existing, dir) : SessionManager.create(dir);
   if (!existing) {
     sm.appendMessage(user("ORIGINAL USER"));
@@ -127,9 +144,14 @@ async function host(t, {
   } });
   t.after(async () => {
     try { await session.extensionRunner.emit({ type: "session_shutdown" }); assert.deepEqual(errors, []); }
-    finally { session.dispose(); if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(dir, { recursive: true, force: true }); }
+    finally {
+      session.dispose();
+      if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
-  return { session, sm, dir, bodies, headers, urls, notices, errors, runtime, eventBus };
+  return { session, sm, dir, codexDir, bodies, headers, urls, notices, errors, runtime, eventBus };
 }
 const compactions = h => h.sm.getBranch().filter(e => e.type === "compaction");
 
@@ -214,6 +236,113 @@ test("Codex transport under openai persists and replays its native encrypted che
   await h.session.prompt("CONTINUE");
   assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
   assert.equal(JSON.stringify(h.bodies.at(-1)).includes(result.summary), false);
+});
+
+test("new OpenAI OAuth compacts through legacy Codex while preserving its serialized prefix and replay route", async t => {
+  for (const codexAuth of ["cli", "pi"]) await t.test(codexAuth, async sub => {
+    const h = await host(sub, { routeModel: responsesModel, oauth: true, codexAuth, response: () => {
+      const events = checkpointEvents();
+      events.at(-1).response.usage.input_tokens_details = { cached_tokens: 70 };
+      return sse(events);
+    } });
+    assert.equal(h.runtime.isUsingOAuth("openai"), true);
+    await h.session.prompt("BEFORE COMPACTION");
+    const daily = h.bodies[0];
+    const result = await h.session.compact("Keep the verified behavior");
+    const index = h.urls.findIndex(url => url.startsWith("https://chatgpt.com/"));
+    const compact = h.bodies[index];
+    assert.equal(h.urls[index], "https://chatgpt.com/backend-api/codex/responses");
+    assert.equal(h.headers[index].get("authorization"), `Bearer ${FAKE_API_KEY}`);
+    assert.equal(h.headers[0].get("authorization"), `Bearer ${newOAuthKey}`);
+    assert.equal(h.headers[index].get("x-codex-beta-features"), "remote_compaction_v2");
+    for (const field of ["prompt_cache_key", "tools", "text", "parallel_tool_calls"]) {
+      assert.deepEqual(compact[field], daily[field], field);
+    }
+    assert.deepEqual(compact.input[0], daily.input[0]);
+    assert.equal(compact.instructions, "");
+    assert.equal(compact.input.at(-1).type, "compaction_trigger");
+    assert.match(JSON.stringify(compact.input.at(-2)), /Keep the verified behavior/);
+    assert.equal(result.usage.cacheRead, 70);
+    assert.ok(!h.urls.some(url => url.endsWith("/compact")));
+    assert.ok(compactions(h).at(-1).details[key].codexBinding);
+    await h.session.prompt("CONTINUE");
+    assert.equal(h.urls.at(-1), "https://api.openai.com/v1/responses");
+    assert.equal(h.headers.at(-1).get("authorization"), `Bearer ${newOAuthKey}`);
+    assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+    assert.ok(!JSON.stringify(compactions(h)).includes(newOAuthKey));
+    assert.ok(!JSON.stringify(compactions(h)).includes(FAKE_API_KEY));
+  });
+});
+
+test("hybrid checkpoints survive reload and recompact without replaying another Codex account's state", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  const next = await host(t, { routeModel: responsesModel, oauth: true, existing: h.sm.getSessionFile() });
+  await next.session.prompt("AFTER RELOAD");
+  assert.equal(next.urls[0], "https://api.openai.com/v1/responses");
+  assert.equal(next.bodies[0].input.filter(item => item.type === "compaction").length, 1);
+  await next.session.compact();
+  const repeated = next.bodies[next.urls.findIndex(url => url.startsWith("https://chatgpt.com/"))];
+  assert.equal(repeated.input.filter(item => item.type === "compaction").length, 1);
+  writeCodexLogin(next.codexDir, "different-codex-account");
+  await next.session.prompt("WORK AFTER PRODUCER CHANGE");
+  await next.session.compact();
+  const rebuilt = next.bodies.at(-1);
+  assert.equal(rebuilt.input.some(item => item.type === "compaction"), false);
+  assert.match(JSON.stringify(rebuilt.input), /ORIGINAL USER/);
+  rmSync(join(next.codexDir, "auth.json"));
+  await next.session.prompt("CONTINUE WITHOUT PRODUCER LOGIN");
+  assert.equal(next.urls.at(-1), "https://api.openai.com/v1/responses");
+  assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("hybrid compaction cancels without legacy OAuth or when its producer changes before publication", async t => {
+  for (const kind of ["missing", "api-key", "changed"]) await t.test(kind, async sub => {
+    const h = await host(sub, { routeModel: responsesModel, oauth: true, codexAuth: kind === "changed" ? "cli" : "missing",
+      response: ({ count }) => {
+        writeCodexLogin(h.codexDir, "changed-before-publication");
+        return sse(checkpointEvents(count));
+      },
+    });
+    if (kind === "api-key") writeFileSync(join(h.codexDir, "auth.json"), JSON.stringify({
+      auth_mode: "apikey", OPENAI_API_KEY: "sk-offline", tokens: { access_token: FAKE_API_KEY },
+    }));
+    const source = JSON.stringify(h.sm.getBranch());
+    await assert.rejects(h.session.compact(), /cancel/i);
+    assert.equal(JSON.stringify(h.sm.getBranch()), source);
+    assert.equal(compactions(h).length, 0);
+    assert.equal(h.bodies.length, kind === "changed" ? 1 : 0);
+    assert.match(h.notices.join("\n"), kind === "changed" ? /Compaction source changed/ : /codex login/);
+  });
+});
+
+test("hybrid automatic recovery keeps Codex retries and preserves history on transport failure", async t => {
+  for (const reason of ["automatic", "overflow"]) await t.test(reason, async sub => {
+    let ordinary = 0;
+    const h = await host(sub, { routeModel: responsesModel, oauth: true, condense: true, auto: reason === "automatic",
+      normalResponse() {
+        if (++ordinary === 1 && reason === "overflow") return Response.json({
+          error: { code: "context_length_exceeded", message: "Your input exceeds the context window of this model." },
+        }, { status: 400 });
+        return answer();
+      },
+      response: ({ count }) => count < 3
+      ? Response.json({ error: { message: "temporary overload" } }, { status: 429, headers: { "retry-after": "0" } })
+      : sse(checkpointEvents(count)),
+    });
+    await h.session.prompt("CONTINUE AFTER CAPACITY RECOVERY");
+    assert.equal(h.urls.filter(url => url === "https://chatgpt.com/backend-api/codex/responses").length, 3);
+    assert.equal(compactions(h).length, 1);
+    assert.equal(h.urls.at(-1), "https://api.openai.com/v1/responses");
+    assert.ok(h.bodies.at(-1).input.some(item => item.type === "compaction"));
+  });
+  const h = await host(t, { routeModel: responsesModel, oauth: true,
+    response: () => Response.json({ error: { message: "unauthorized" } }, { status: 401 }),
+  });
+  const source = JSON.stringify(h.sm.getBranch());
+  await assert.rejects(h.session.compact(), /cancel/i);
+  assert.equal(JSON.stringify(h.sm.getBranch()), source);
+  assert.equal(h.bodies.length, 3);
 });
 
 test("official Responses preserves the complete compacted window across reload and repeated compaction", async t => {

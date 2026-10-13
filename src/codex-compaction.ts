@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cleanupSessionResources, getCurrentSystemMessage, normalizeContext, type Model, type Api } from "@earendil-works/pi-ai";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { cleanupSessionResources, getCurrentSystemMessage, normalizeContext, type Model, type Api, type ThinkingLevel } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection, convertToLlm, estimateTokens,
   type ExtensionAPI, type ExtensionContext, type SessionEntry, type CompactionEntry,
@@ -11,7 +14,8 @@ const MARKER = "[Metis Codex remote checkpoint ";
 const TIMEOUT = 300_000;
 const MAX_BYTES = 8 * 1024 * 1024;
 type Item = Record<string, any>;
-interface Checkpoint { version: 1; marker: string; binding: string; history: Item[]; protocol?: "responses" }
+interface Checkpoint { version: 1; marker: string; binding: string; history: Item[]; protocol?: "responses"; codexBinding?: string }
+type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const sourceHash = (branch: SessionEntry[]) => hash(branch.filter(entry =>
   entry.type === "message" || entry.type === "context_edit" || entry.type === "compaction" || entry.type === "branch_summary"));
@@ -65,9 +69,9 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   const edited = branch.slice(branch.findIndex(e => e.id === entry.id) + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
   return { entry, data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
 }
-async function requestBinding(ctx: ExtensionContext, model: Model<Api>) {
+async function requestBinding(ctx: ExtensionContext, model: Model<Api>, resolvedAuth?: RequestAuth) {
   const provider = ctx.modelRegistry.getProvider(model.provider);
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  const auth = resolvedAuth ?? await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok || !auth.apiKey) throw new Error("Codex authentication unavailable");
   let account: unknown = auth.apiKey;
   try { account = JSON.parse(Buffer.from(auth.apiKey.split(".")[1], "base64url").toString())["https://api.openai.com/auth"]?.chatgpt_account_id ?? account; } catch { /* Non-JWT credentials remain account-bound by digest. */ }
@@ -78,6 +82,25 @@ async function requestBinding(ctx: ExtensionContext, model: Model<Api>) {
     provider, model: { ...model, headers: model.headers ? { ...model.headers } : undefined, baseUrl: auth.baseUrl ?? model.baseUrl }, auth: snapshot };
 }
 const binding = async (ctx: ExtensionContext, model: Model<Api>) => (await requestBinding(ctx, model)).identity;
+
+async function codexRequest(ctx: ExtensionContext, model: Model<Api>) {
+  const legacyModel: Model<Api> = ctx.modelRegistry.find("openai-codex", model.id) ?? {
+    ...model, provider: "openai-codex", api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api", headers: undefined,
+  };
+  if (legacyModel.api !== "openai-codex-responses") throw new Error("Unsupported Codex API");
+  if (ctx.modelRegistry.isUsingOAuth(legacyModel)) return requestBinding(ctx, legacyModel);
+  let token: unknown;
+  try {
+    const data = record(JSON.parse(await readFile(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"), "utf8")));
+    if (data.auth_mode === "chatgpt") token = record(data.tokens).access_token;
+  } catch { /* A missing or unreadable CLI login cannot authorize compression. */ }
+  if (typeof token !== "string" || !token) throw new Error("Legacy Codex OAuth unavailable; sign in with codex login");
+  // CLI credentials belong to the official backend, not a configured proxy.
+  return requestBinding(ctx,
+    { ...legacyModel, baseUrl: "https://chatgpt.com/backend-api", headers: undefined },
+    { ok: true, apiKey: token });
+}
 
 function summaryText(marker: string): string {
   const message = convertToLlm([{ role: "compactionSummary", summary: marker, tokensBefore: 0, timestamp: 0 }])[0];
@@ -125,22 +148,26 @@ function responsesCompactionFetch(capture: (output: unknown) => void): typeof fe
   };
 }
 
-async function authoredUserInput(request: Awaited<ReturnType<typeof requestBinding>>, messages: Parameters<typeof convertToLlm>[0], signal: AbortSignal): Promise<Item[]> {
-  if (!messages.length) return [];
-  let input: Item[] | undefined;
-  // Serialize real source-entry users using the public provider, stopping before
-  // transport. Generated custom/summary messages must not become user authority.
-  await request.provider.streamSimple(request.model, normalizeContext({ messages: convertToLlm(messages) }), {
+async function capturePayload(request: Awaited<ReturnType<typeof requestBinding>>, context: ReturnType<typeof normalizeContext>,
+  signal: AbortSignal, sessionId?: string, reasoning?: ThinkingLevel): Promise<Item> {
+  let captured: Item | undefined;
+  await request.provider.streamSimple(request.model, context, {
     apiKey: request.auth.apiKey, headers: request.auth.headers, env: request.auth.env,
-    signal, transport: "sse", maxRetries: 0,
+    signal, transport: "sse", maxRetries: 0, cacheRetention: "short", sessionId, reasoning,
     onPayload(payload) {
-      const body = record(payload);
-      if (Array.isArray(body.input)) input = structuredClone(body.input.filter((item: unknown) => record(item).role === "user"));
-      throw new Error("Offline authored-user capture complete");
+      captured = structuredClone(record(payload));
+      throw new Error("Offline native payload capture complete");
     },
   }).result();
-  if (!input) throw new Error("Codex provider did not expose native input");
-  return input;
+  if (!Array.isArray(captured?.input)) throw new Error("Codex provider did not expose native input");
+  return captured;
+}
+
+async function authoredUserInput(request: Awaited<ReturnType<typeof requestBinding>>,
+  messages: Parameters<typeof convertToLlm>[0], signal: AbortSignal): Promise<Item[]> {
+  if (!messages.length) return [];
+  const body = await capturePayload(request, normalizeContext({ messages: convertToLlm(messages) }), signal);
+  return body.input.filter((item: unknown) => record(item).role === "user");
 }
 
 // OMP/Codex retain the newest real user messages alongside the encrypted item.
@@ -268,7 +295,11 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const session = ctx.sessionManager.getSessionId(), source = hash(branch);
       const request = remote && model ? await requestBinding(ctx, model) : undefined;
       const identity = request?.identity;
-      const reusable = previous?.data && previous.data.binding === identity;
+      const hybrid = model?.provider === "openai" && model.api === "openai-responses"
+        && ctx.modelRegistry.isUsingOAuth(model);
+      const compactor = hybrid ? await codexRequest(ctx, model) : request;
+      const reusable = previous?.data && previous.data.binding === identity
+        && (!hybrid || previous.data.codexBinding === compactor?.identity);
       const projected = buildSessionProjection(reusable || !previous ? branch : rawBranch(branch));
       const cut = projected.entries.findIndex(e => e.sourceEntry.id === event.preparation.firstKeptEntryId);
       if (cut < 0) throw new Error("Compaction boundary is no longer visible");
@@ -286,8 +317,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         event.preparation.tokensBefore = projected.messages.reduce((n, m) => n + estimateTokens(m), 0);
         return;
       }
-      if (!isRemoteModel(model) || !request || !identity) throw new Error("Unsupported Codex API");
-      const responses = model.api === "openai-responses";
+      if (!isRemoteModel(model) || !request || !compactor || !identity) throw new Error("Unsupported Codex API");
+      const responses = model.api === "openai-responses" && !hybrid;
       if (!prefix.some(m => m.role !== "system")) throw new Error("No discarded history to compact");
       pending?.abort(); const controller = new AbortController(); pending = controller;
       const signal = AbortSignal.any([event.signal, controller.signal, AbortSignal.timeout(TIMEOUT)]);
@@ -303,26 +334,35 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         ...await authoredUserInput(request, authored, signal),
       ];
       const system = getCurrentSystemMessage(projected.messages);
-      const context = normalizeContext(system
+      const context = normalizeContext(hybrid ? { messages: convertToLlm(prefix) } : system
         ? { messages: convertToLlm([system, ...messages]) }
         : { systemPrompt: ctx.getSystemPrompt(), messages: convertToLlm(messages), tools: pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name)) });
+      const thinking = pi.getThinkingLevel();
+      const nativePayload = hybrid ? await capturePayload(request, context, signal, session, thinking === "off" ? undefined : thinking) : undefined;
       // Pin the resolved credential/route snapshot. A second broker resolution
       // could otherwise compact under account B but publish a binding for A.
-      const result = await request.provider.streamSimple(request.model, context, {
-        apiKey: request.auth.apiKey, env: request.auth.env,
-        signal, transport: "sse", cacheRetention: "none", maxRetries: 2,
+      const result = await compactor.provider.streamSimple(compactor.model, context, {
+        apiKey: compactor.auth.apiKey, env: compactor.auth.env,
+        signal, transport: "sse", cacheRetention: hybrid ? "short" : "none", maxRetries: 2,
         sessionId: session,
-        headers: responses ? request.auth.headers : { ...request.auth.headers, "x-codex-beta-features": "remote_compaction_v2" },
+        headers: responses ? compactor.auth.headers : { ...compactor.auth.headers, "x-codex-beta-features": "remote_compaction_v2" },
         fetch: responses ? responsesCompactionFetch(output => { compactedWindow = output; }) : undefined,
         onPayload(payload) {
-          const body = reusable && previous?.data ? replaceMarker(payload, previous.data) : record(payload);
+          const encoded = nativePayload ?? payload;
+          const body = reusable && previous?.data ? replaceMarker(encoded, previous.data) : record(encoded);
           if (!Array.isArray(body.input)) throw new Error("Codex provider did not expose native input");
           inputPrepared = true;
           items.length = 0; completed = false; failed = false;
-          const instructions = event.customInstructions
-            ? `${body.instructions ?? ""}\n\nCompaction focus: ${event.customInstructions}` : body.instructions;
-          return { ...body, instructions,
-            input: responses ? body.input : [...body.input, { type: "compaction_trigger" }], store: false, stream: true };
+          const input = responses ? body.input : [...body.input];
+          let instructions = body.instructions;
+          if (hybrid) {
+            instructions ??= "";
+            if (event.customInstructions) input.push({ role: "developer", content: `Compaction focus: ${event.customInstructions}` });
+          } else if (event.customInstructions) {
+            instructions = `${instructions ?? ""}\n\nCompaction focus: ${event.customInstructions}`;
+          }
+          if (!responses) input.push({ type: "compaction_trigger" });
+          return { ...body, instructions, input, store: false, stream: true };
         },
         onProviderStreamEvent(value) {
           const data = record(value);
@@ -357,9 +397,12 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       }
       if (JSON.stringify(history).length > MAX_BYTES) throw new Error("Codex checkpoint too large");
       const finalBinding = await binding(ctx, model);
+      const finalCompactor = hybrid ? await codexRequest(ctx, model) : compactor;
       if (version !== generation || session !== ctx.sessionManager.getSessionId() || source !== hash(ctx.sessionManager.getBranch())
         || modelHash !== hash(ctx.model) || authorized !== authority() || identity !== finalBinding
-        || request.provider !== ctx.modelRegistry.getProvider(model.provider) || signal.aborted)
+        || request.provider !== ctx.modelRegistry.getProvider(model.provider)
+        || compactor.identity !== finalCompactor.identity
+        || compactor.provider !== ctx.modelRegistry.getProvider(compactor.model.provider) || signal.aborted)
         throw new Error("Compaction source changed");
       const marker = `${MARKER}${randomUUID()}]`;
       const readFiles = [...event.preparation.fileOps.read];
@@ -368,6 +411,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         tokensBefore: event.preparation.tokensBefore, usage: result.usage,
         details: { readFiles, modifiedFiles, [KEY]: {
           version: 1, marker, binding: identity, history, ...(responses ? { protocol: "responses" as const } : {}),
+          ...(hybrid ? { codexBinding: compactor.identity } : {}),
         } satisfies Checkpoint } } };
     } catch (error) {
       pending?.abort(); pending = undefined;
@@ -376,6 +420,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         "No discarded history to compact", "Codex provider did not expose native input",
         "Codex did not complete exactly one encrypted checkpoint", "Responses did not return a valid compacted window",
         "Codex checkpoint too large", "Compaction source changed",
+        "Legacy Codex OAuth unavailable; sign in with codex login",
       ];
       const reason = error instanceof Error && safeReasons.includes(error.message) ? error.message : "provider request failed";
       const service = ctx.model?.api === "openai-responses" ? "OpenAI Responses" : "Codex";
