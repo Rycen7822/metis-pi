@@ -16,6 +16,7 @@ const suites = {
   all: () => true,
   core: (file) => file.startsWith("core/"),
   host: (file) => file.startsWith("contract/") || file === "package.test.mjs",
+  lsp: (file) => file.startsWith("lsp/"),
   protocol: (file) => file.startsWith("protocol/"),
   io: (file) => file.startsWith("io/"),
   resource: (file) => file.startsWith("resource/"),

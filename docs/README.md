@@ -18,7 +18,8 @@
 | 按模型切换全局指令 | [动态指令](features/dynamic-agents.md) |
 | 修改后执行命令 | [Action Fusion](features/action-fusion.md) |
 | Pi codemode 的进程与图片补充 | [执行工具](execution.md) |
-| 网页搜索、抓取、摘要与会话回忆 | [内置网页与会话扩展](features/managed-plugins.md) |
+| 网页搜索、抓取、摘要与会话回忆 | [内置维护扩展](features/managed-plugins.md) |
+| 定向 LSP 诊断与单文件 source fixes | [LSP 诊断与修复](features/lsp.md) |
 | MCP 切换、服务器、认证与连接策略 | [MCP 配置](configuration.md#mcp) |
 | 排查未生效、统计或复制问题 | [诊断](diagnostics.md) · [兼容性](compatibility.md) |
 

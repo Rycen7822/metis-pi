@@ -1,17 +1,25 @@
-# 网页访问与会话回忆
+# 网页、会话与 LSP 扩展
 
-Metis 内置维护两个上游扩展：
+Metis 内置维护三个上游扩展：
 
 | 模块 | 来源版本 | 入口 |
 | --- | --- | --- |
 | 网页访问 | `pi-web-access` 0.38.0 | `extensions/web-access.ts` |
 | 会话回忆 | `@ogulcancelik/pi-session-recall` 1.0.7 | `extensions/session-recall.ts` |
+| LSP 诊断与修复 | `@narumitw/pi-lsp` 0.49.9 | `extensions/lsp.ts` |
 
-源码位于 `src/pi-web-access` 和 `src/pi-session-recall`，随 Metis 更新。
+源码位于 `src/pi-web-access`、`src/pi-session-recall` 和 `src/pi-lsp`，随 Metis 更新。
 入口注释和各目录的 `METIS.md` 记录上游地址、提交和本地修改；原 MIT
-许可证保留。`references` 仅用于临时参考，不参与构建或安装。
+许可证保留。临时上游检出仅用于参考，不参与构建或安装。
 
-Pi 只注册 `web_access` 和 `session_recall` 两个聚合入口，两者均为 `deferred`，沿用 execution 的暴露方式，通过原生 codemode 的 `searchTools` / `describeTool` 按需发现。业务参数不放进常驻声明；先查询所选操作的说明，再执行：
+## 工具接口
+
+LSP 只注册一个 **direct** 工具 `lsp`（`action: diagnostics/fix`），使用扁平参数，
+无需 deferred 发现或 `describe`，保留 `/lsp` 命令。旧 `lsp_diagnostics` / `lsp_fix`
+不注册为别名；只按名字配置的只读 allowlist 不能区分诊断和写入，须检查 `action` /
+`write` 或排除 `lsp`。用法、配置与边界见 [LSP 指南](lsp.md)。
+
+网页和会话模块分别只注册 `web_access` 和 `session_recall` 两个聚合入口，两者均为 `deferred`，沿用 execution 的暴露方式，通过原生 codemode 的 `searchTools` / `describeTool` 按需发现。业务参数不放进常驻声明；先查询所选操作的说明，再执行：
 
 ```js
 const spec = await tools.web_access({ action: "describe", target: "fetch" });
@@ -25,9 +33,15 @@ console.log(page);
 
 Metis 不再注册独立的 `web_search`、`source_check`、`fetch_content`、`get_search_content`、`web_enable`、`session_search`、`session_query` 工具。`webAccess.toolActivation` 和 `toolNames` 不再控制 Metis 聚合入口的暴露或名称；独立上游入口和 Web Access MCP 仍使用它们原有的接口。
 
-安装前从 Pi 的 `packages` 中移除或禁用原来的 `npm:pi-web-access` 和
-`npm:@ogulcancelik/pi-session-recall`，避免重复注册同名工具。Metis 不自动
-修改其他机器上的个人配置。旧 npm 安装目录可保留。
+激活前从 Pi 的 `packages` 中移除或禁用原来的 `npm:pi-web-access`、
+`npm:@ogulcancelik/pi-session-recall` 和 `npm:@narumitw/pi-lsp`，避免重复工具或
+`/lsp` 命令。Metis 不自动修改包加载设置。旧 npm 安装目录可保留。
+
+## 配置
+
+LSP 只读取全局 `metis-pi.toml` 的 `[lsp]`，不读取全局或项目 LSP JSON。
+其他机器的旧配置值须手动复制，`/metis-config init` 不导入 LSP JSON；
+详见 [切换说明](lsp.md#从独立扩展切换)。
 
 网页搜索、抓取、摘要的普通选项统一放入现有 `metis-pi.toml` 的 `[webAccess]`；
 会话查询模型由同一文件的 `[sessionRecall]` 管理。Web Access 的 API key/token、
@@ -86,10 +100,12 @@ API key/token 等凭据仍从 JSON 或环境变量读取。
   "source": "git:github.com/Rycen7822/metis-pi",
   "extensions": [
     "-extensions/web-access.ts",
-    "-extensions/session-recall.ts"
+    "-extensions/session-recall.ts",
+    "-extensions/lsp.ts"
   ]
 }
 ```
 
 维护时从 Metis 根目录运行 `npm run build:plugins` 生成网页扩展和 MCP
-入口；`prepack` 自动执行构建。`npm run test:plugins` 运行该模块的上游测试。
+入口；`prepack` 自动执行构建。`npm run test:plugins` 运行网页模块的上游测试。
+会话回忆与 LSP 直接加载 TypeScript 源码，不需要独立生成 `dist`。

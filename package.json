@@ -23,6 +23,7 @@
     "test": "node scripts/test.mjs all",
     "test:fast": "node scripts/test.mjs core",
     "test:host": "node scripts/test.mjs host",
+    "test:lsp": "node scripts/test.mjs lsp",
     "test:protocol": "node scripts/test.mjs protocol",
     "test:io": "node scripts/test.mjs io",
     "test:resource": "node scripts/test.mjs resource",

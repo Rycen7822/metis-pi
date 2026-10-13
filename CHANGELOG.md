@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- 整理 LSP 协议与执行责任：发布诊断状态/定时器独立于 JSON-RPC 请求，统一文档清理和客户端命令/工作区来源，简化单文件适配器选择。正确区分 CodeAction 与旧式 Command，不解析/应用禁用动作或执行服务器命令，保留有效解析错误和取消/进程退出保证。
+
+- 内置维护 `@narumitw/pi-lsp` 0.49.9 源码及 MIT 许可，以 `extensions/lsp.ts` 直接加载；诊断/修复合并为一个 direct `lsp` 工具（`action: diagnostics/fix`），精简声明并保留扁平参数、默认预览、服务器路由和会话清理。`/lsp` 保留，不注册 `lsp_diagnostics` / `lsp_fix` 别名；激活前需停用独立 npm 包，参数级权限策略才能区分只读和写入。
+
+- LSP 配置归入唯一全局 TOML 的 `[lsp]`：默认 timeout 20000ms，省略 servers 使用内置 catalog，显式空 map 关闭路由，自定义 map 完整替换默认服务器。全局/项目 LSP JSON 不再读取，没有旧 JSON 兼容桥或专项初始化迁移；其他机器须手动复制原值，保留 argv/env/initialization/skip 与诊断等待选项。
+
 - 将三个 Goal 工具聚合为 `goal`（`action: get/create/update`），精简重复描述；保留显式创建/预算授权、完成与阻塞审计、计账和 session 恢复，`/goal` 命令不变。续跑提示与调用方同步迁移，OCC 不将 `goal get` 计为工作。
 
 - 移除 Metis `view_image`、原图/detail 请求覆盖、文本模型图片描述回退及图片专用 Rust helper；图片统一使用 Pi 原生 `read` 与 codemode `image()`。PTY、后台 shell 和通用图片显示保持不变；已有个人配置、会话和 blobs 不自动删除。

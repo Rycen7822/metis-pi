@@ -14,7 +14,7 @@ pi install .
 
 Restart Pi to load the changes, then select `metis-pi` in the theme picker. To install from Git, use `pi install git:git@github.com:Rycen7822/metis-pi.git`. This package provides independent execution tools; remove or disable the standalone `@howaboua/pi-codex-conversion` before installing to avoid duplicate tool registrations.
 
-Metis also maintains bundled `pi-web-access` and `pi-session-recall` sources. Remove or disable their standalone npm entries before loading Metis to avoid duplicate tools; existing settings and sessions are retained. See the [web and recall guide](docs/features/managed-plugins.md).
+Metis also maintains bundled `pi-web-access`, `pi-session-recall`, and `@narumitw/pi-lsp` sources. Remove or disable their standalone npm entries before activating Metis to avoid duplicate tools or `/lsp` commands; original files and sessions are retained. See the [managed extensions guide](docs/features/managed-plugins.md) and [LSP guide](docs/features/lsp.md).
 
 Individual features can be disabled through Pi's package entry filters, for example with `"extensions": ["-extensions/goal.ts"]` in the package configuration. See the [feature guide](docs/README.md) for details. The linked guides are currently in Chinese.
 
@@ -31,6 +31,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [Multiple skills](docs/features/skills.md) | Accepts multiple skills in one input, expands them into the host format, and groups them into a collapsed transcript entry. |
 | [ast-grep skill](docs/features/skills.md#随包-skills) | Bundled structural code-search guidance and rule reference, discovered by Pi and updated with Metis. Requires `ast-grep` on PATH; no automatic CLI installation or extra service. |
 | [MCP](docs/configuration.md#mcp) | Optional Pi-native MCP integration: cached directory, lazy connections and idle shutdown; shares native CLI/OAuth and tool permissions. Disabled by default. |
+| [LSP](docs/features/lsp.md) | One direct `lsp` tool with `action: diagnostics/fix`, flat parameters and preview-by-default fixes; `/lsp` checks configured command availability. Name-only read-only allowlists need an argument-level policy to distinguish writes. |
 | [Subagents](docs/subagents/cli.md) | Metis-owned durable Pi children, deferred native tools discovered/called through codemode, explicit questions and completion wakeups. Linux/WSL with Python 3.11+; choose one subagent provider in Pi config. |
 | [Execution tools](docs/execution.md) | Deferred PTY tools for Pi native codemode; ordinary images use Pi `read` + `image()`. Pi owns providers and login. |
 | [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from an external JSON file, applied at the next agent run. Replaces request context only; preserves project rules and source files. |
@@ -38,7 +39,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [OpenAI / Codex remote compaction](docs/features/codex-compaction.md) | ChatGPT OAuth keeps development on `openai` and uses legacy Codex OAuth for encrypted compaction; API keys use `/responses/compact`, and Codex sessions use Remote V2. |
 | [Condense](docs/features/condense.md) | Opt-in history condensation using contextPrune. Measures mechanical replacements independently; paid summaries need pressure and complete-message proxy budgets. Deferred evidence stays recoverable. Supports paginated retrieval and token-only summary usage. |
 
-All Metis-owned preferences use one global `~/.pi/agent/metis-pi.toml` (honoring `PI_CODING_AGENT_DIR`), with no project Metis overrides. When TOML is absent, run `/metis-config init` to import legacy global settings and install the adjacent [parameter guide](metis-pi-config.md); originals are retained. Edit existing TOML directly; omitted settings use package defaults. Subagent backend preferences also use `[subagents]`; safely drain/restart its daemon to apply them. The bundled [TOML template](metis-pi.toml) contains all defaults. Set `[appearance] enabled = false` to disable only display; Pi-owned model/theme/package/MCP credentials remain in their own files. See the [configuration reference](docs/configuration.md).
+All Metis-owned preferences use one global `~/.pi/agent/metis-pi.toml` (honoring `PI_CODING_AGENT_DIR`), with no project Metis overrides. When TOML is absent, run `/metis-config init` to import legacy global settings and install the adjacent [parameter guide](metis-pi-config.md); originals are retained. Edit existing TOML directly; omitted settings use package defaults. LSP reads only `[lsp]`; copy legacy LSP JSON values into it manually, as init does not import them. Subagent backend preferences also use `[subagents]`; safely drain/restart its daemon to apply them. The bundled [TOML template](metis-pi.toml) contains all defaults. Set `[appearance] enabled = false` to disable only display; Pi-owned model/theme/package/MCP credentials remain in their own files. See the [configuration reference](docs/configuration.md).
 
 ## Compatibility boundaries
 
@@ -61,4 +62,4 @@ Run `npm run test:pty` for visible interaction checks, or `npm run preview` for 
 
 ## Attribution and licenses
 
-Based on `pi-codex-style-tools`, retaining its MIT license. Goal-derived code comes from an Apache-2.0 upstream, and codex-conversion comes from an MIT upstream. See [NOTICE](NOTICE), [LICENSE](LICENSE), and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for attribution and modification notices. This project is not officially affiliated with OpenAI or the Pi upstream project.
+Based on `pi-codex-style-tools`, retaining its MIT license. Goal-derived code comes from an Apache-2.0 upstream; codex-conversion and the maintained LSP module come from MIT upstreams. See [NOTICE](NOTICE), [LICENSE](LICENSE), and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for attribution and modification notices. This project is not officially affiliated with OpenAI or the Pi upstream project.

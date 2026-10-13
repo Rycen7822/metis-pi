@@ -112,7 +112,7 @@ async function host(t, converted, reverse = false, wholePackage = false, lifecyc
     }
   });
   assert.deepEqual(extensionsResult.errors, []);
-  if (wholePackage) assert.equal(extensionsResult.extensions.length, 14);
+  if (wholePackage) assert.equal(extensionsResult.extensions.length, 15);
   await session.bindExtensions({ onError: (e) => errors.push(e),
     ...(lifecycle.ui ? { uiContext: { ...session.extensionRunner.getUIContext() } } : {}),
   });
@@ -520,5 +520,5 @@ test("whole package retains tools and applies dynamic policy", async t => {
   assert.match(body, /POLICY_A_SENTINEL/); assert.match(body, /PROJECT_SENTINEL/);
   assert.doesNotMatch(body, /NATIVE_GLOBAL_SENTINEL/);
   const names = h.session.getActiveToolNames();
-  for (const name of ["read", "write", "goal", "context_tree_query"]) assert.ok(names.includes(name), name);
+  for (const name of ["read", "write", "goal", "context_tree_query", "lsp"]) assert.ok(names.includes(name), name);
 });

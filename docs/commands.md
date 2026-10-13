@@ -11,6 +11,7 @@
 | `/goal [objective]` | 查看或创建目标；`pause`、`resume`、`edit`、`clear` 管理目标。 |
 | `/pruner` | 历史精简与恢复；常用 `status`、`settings`、`on`、`off`、`now`、`compact`。 |
 | `/dynamic-agents [reload]` | 查看指令状态，或标记下一次 run 刷新。 |
+| `/lsp` | 查看全局 `[lsp]` 的服务器命令和可用状态，不启动服务器；见 [LSP](features/lsp.md)。 |
 | `/skill:<name>` / `￥<name>` | 调用 skill，可在一次输入中组合多个。 |
 
 `/settings`、`/reload` 等宿主命令由 Pi 提供。
@@ -20,11 +21,14 @@
 | `goal`（`action`: `get` / `create` / `update`） | [目标授权、预算和完成规则](features/goal.md)。 |
 | `context_tree_query` | [历史证据、参数及原文分页回读](features/condense.md)。 |
 | `exec_command` / `write_stdin` | [deferred PTY 进程工具](execution.md)。 |
+| `lsp`（`action`: `diagnostics` / `fix`） | [direct LSP 工具](features/lsp.md)，扁平参数；fix 默认预览，`write: true` 才写入。 |
 | Pi `read` / codemode `image()` | 普通图片使用 `image(await tools.read({path:'image.png'}))`，见 [执行工具](execution.md)。 |
 | `change_reasoning` | 开启执行配置 `autoReasoning` 后，按当前模型能力提供。 |
 | `edit` / `write` 的 `then_run` | [修改成功后执行明确命令](features/action-fusion.md)。 |
 
-工具选择和原生 `codemode` 由 Pi 管理。显示适配只接管来源明确的工具；同名第三方 renderer 保留，重复工具注册仍需停用冲突扩展。
+工具选择和原生 `codemode` 由 Pi 管理。`lsp_diagnostics` / `lsp_fix` 不注册为别名；
+只读 allowlist 如加入 `lsp`，须另按 `action` / `write` 限制写入。
+显示适配只接管来源明确的工具；同名第三方 renderer 保留，重复工具注册仍需停用冲突扩展。
 
 ## 按键与鼠标
 

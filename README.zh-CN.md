@@ -14,7 +14,7 @@ pi install .
 
 重启 Pi 加载改动；在主题选择器中选择 `metis-pi`。Git 安装可使用 `pi install git:git@github.com:Rycen7822/metis-pi.git`。本包保留独立执行工具，安装前应移除或禁用独立的 `@howaboua/pi-codex-conversion`，避免同名工具重复注册。
 
-Metis 现在内置维护 `pi-web-access` 和 `pi-session-recall`。加载前应移除或禁用原来的两个独立 npm 包入口，避免重复注册；原有配置和历史会话继续使用。详见[网页与会话扩展说明](docs/features/managed-plugins.md)。
+Metis 内置维护 `pi-web-access`、`pi-session-recall` 和 `@narumitw/pi-lsp`。激活前应移除或禁用原来的独立 npm 包入口，避免重复工具或 `/lsp` 命令；原文件和历史会话保留。详见[内置维护扩展](docs/features/managed-plugins.md)和 [LSP 指南](docs/features/lsp.md)。
 
 可按 Pi 的包入口过滤禁用独立功能，例如在包配置中使用 `"extensions": ["-extensions/goal.ts"]`。详细用法见[功能手册](docs/README.md)。
 
@@ -31,6 +31,7 @@ Metis 现在内置维护 `pi-web-access` 和 `pi-session-recall`。加载前应�
 | [多 skill](docs/features/skills.md) | 一次输入多个 skill，展开为宿主格式并在转录中合并折叠。 |
 | [ast-grep skill](docs/features/skills.md#随包-skills) | 随 Metis 安装和更新的结构搜索指导及规则参考，由 Pi 原生发现；需要 PATH 中已有 `ast-grep`，不自动安装 CLI 或增加服务。 |
 | [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
+| [LSP](docs/features/lsp.md) | 一个 direct `lsp` 工具，以 `action: diagnostics/fix` 和扁平参数调用；修复默认预览，`/lsp` 查看命令可用性。只按名字的只读 allowlist 须另按参数限制写入。 |
 | [子代理](docs/subagents/cli.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
 | [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 工具；普通图片使用 Pi `read` + `image()`，provider 和登录由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
@@ -38,7 +39,7 @@ Metis 现在内置维护 `pi-web-access` 和 `pi-session-recall`。加载前应�
 | [Codex 远端压缩](docs/features/codex-compaction.md) | `openai-codex` 的 `/compact` 与自动压缩使用远端加密 checkpoint；持久化回放，其他 provider 保留原路径。 |
 | [condense](docs/features/condense.md) | 默认关闭，沿用 contextPrune；独立测量确定性替换，付费摘要须满足压力和完整消息 proxy 预算；不足时保留待处理证据，支持分页回读与 token 用量显示。 |
 
-metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不再使用项目 metis 覆盖。`/metis-config init` 导入旧全局设置并安装同目录[参数说明](metis-pi-config.md)，旧文件保留。已有 TOML 用 `/metis-config migrate` 先备份，再补齐旧执行/子代理配置并保留个性化值；子代理后端也使用 `[subagents]`，须先安全结束任务再重启 daemon 生效。[TOML 模板](metis-pi.toml)列出全部默认值。`[appearance] enabled = false` 只关闭显示层；Pi 自有模型/主题/packages/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
+metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CODING_AGENT_DIR`），不再使用项目 metis 覆盖。`/metis-config init` 导入旧全局设置并安装同目录[参数说明](metis-pi-config.md)，旧文件保留。LSP 只读 `[lsp]`，旧 LSP JSON 的配置值须手动复制，init 不导入。已有 TOML 用 `/metis-config migrate` 先备份，再补齐旧执行/子代理配置并保留个性化值；子代理后端也使用 `[subagents]`，须先安全结束任务再重启 daemon 生效。[TOML 模板](metis-pi.toml)列出全部默认值。`[appearance] enabled = false` 只关闭显示层；Pi 自有模型/主题/packages/MCP 凭据仍留原处。详见[配置参考](docs/configuration.md)。
 
 ## 兼容边界
 
@@ -61,4 +62,4 @@ npm run verify
 
 ## 来源与许可
 
-基于 `pi-codex-style-tools` 修改，保留 MIT 许可。goal 衍生代码使用 Apache-2.0 上游，codex-conversion 使用 MIT 上游；归属及修改说明见 [NOTICE](NOTICE)、[LICENSE](LICENSE)、[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0)。本项目与 OpenAI、Pi 上游无官方关联。
+基于 `pi-codex-style-tools` 修改，保留 MIT 许可。goal 衍生代码使用 Apache-2.0 上游，codex-conversion 和内置 LSP 使用 MIT 上游；归属及修改说明见 [NOTICE](NOTICE)、[LICENSE](LICENSE)、[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0)。本项目与 OpenAI、Pi 上游无官方关联。

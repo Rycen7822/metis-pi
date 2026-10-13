@@ -10,6 +10,7 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 | --- | --- | --- |
 | 显示配置 | `[appearance]` 及子表 | 启动读取，修改后重启；`enabled` 只控制显示层。 |
 | 执行配置 | `[execution.tools]` / `[execution.ui]` | `/execution` 写全局并保留其他字段；run 边界刷新，快捷键修改后重启；不支持 project 参数。 |
+| LSP | `[lsp]` / `[lsp.servers.<name>]` | 仅全局 TOML；每次工具或 `/lsp` 调用重读，默认 catalog 不下载服务器；见 [LSP](features/lsp.md)。 |
 | MCP 策略 | `[mcp]` | 默认关闭；`/mcp reload` 刷新。服务器和凭据仍由 Pi 管理。 |
 | condense / OCC | `[contextPrune]` 及子表 | `/pruner settings`、相关命令写全局；手动编辑后 `/reload`；见 [condense](features/condense.md)。 |
 | 动态全局指令 | `[dynamicAgents]` / `[[dynamicAgents.groups]]` | 策略 Markdown 相对全局配置目录；下一正式 run 读取，见 [动态指令](features/dynamic-agents.md)。 |
@@ -22,16 +23,16 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 尚无全局 TOML 时运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项及 `subagent-pi/config.toml`，生成完整配置和同目录说明。
 `session-recall.json` 的独立查询模型也迁为 `[sessionRecall].queryModel`。
 `web-search.json` 的普通字段迁为 `[webAccess]`，API key/token、认证请求头和带密码的代理保留 JSON，并归到 TOML 同目录；旧混合 JSON 拆分前备份，外部旧文件不删除。
-不覆盖已有 TOML/说明。新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧偏好，网页 JSON 仅提供凭据。不要直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
+不覆盖已有 TOML/说明。其他支持迁移桥的模块在新 TOML 不存在时保留只读兼容；一旦存在就不叠加旧偏好，网页 JSON 仅提供凭据。LSP 始终只读 TOML 与内置默认值，旧 LSP JSON 须手动复制，init 不导入。不要直接用默认模板覆盖个性设置。Pi 的模型、主题、reserve、packages 和 MCP 服务器定义/认证仍留在原文件。
 
 已有 TOML 直接编辑需要修改的字段，未填写的选项沿用包内默认值。
 `/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有文件。
 
 网页请求默认校验 DNS 并固定实际连接地址，每次重定向重新校验。非信任 HTTP 代理需要支持 CONNECT；仅支持普通转发的代理会明确失败。`[webAccess.ssrf].trustEnvProxy=true` 保留可信环境/已配置代理的远端 DNS 解析，此时目标解析安全由代理负责，`NO_PROXY` 绕过的目标仍走本地校验。这不覆盖远程提取服务内部的请求或 yt-dlp/ffmpeg 的网络连接。
 
-归属审计边界：Metis 自有显示、执行、MCP 策略、动态指令、condense/OCC、子代理、网页访问与会话回忆偏好都在 TOML。`pi-fff.json`/LSP/其他插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
+归属审计边界：Metis 自有显示、执行、LSP、MCP 策略、动态指令、condense/OCC、子代理、网页访问与会话回忆偏好都在 TOML。`pi-fff.json`/其他独立插件参数属于其他包；模型/主题/packages/trust/MCP 定义及认证属于 Pi；SQLite、WAL/SHM、daemon/命令日志、launch/bootstrap JSON、会话/缓存/归档属于状态；策略和 skill Markdown 属于内容；内部 FD、scope、managed-child 环境变量属于协议。它们不是遗漏的 Metis 偏好。
 
-TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。损坏 TOML 不回退旧 JSON，也不允许保存覆盖；显示层记录 problem 并回退，condense 使用默认关闭值，执行/MCP 按自身错误边界报错。初始化和命令保存按包内模板回填分区/参数注释，并保留未知字段；个人自定义注释不保留，可写在旁边说明中。原子 rename 避免半文件，多进程同时保存仍是最后写入者胜出。
+TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=false` 使用 API 默认。损坏 TOML 不回退旧 JSON，也不允许保存覆盖；显示层记录 problem 并回退，condense 使用默认关闭值，执行/LSP/MCP 按自身错误边界报错。初始化和命令保存按包内模板回填分区/参数注释，并保留未知字段；个人自定义注释不保留，可写在旁边说明中。原子 rename 避免半文件，多进程同时保存仍是最后写入者胜出。
 
 ## 显示字段
 
@@ -56,6 +57,26 @@ backgroundShellPrevShortcut = "alt+u"
 ```
 
 完整字段见 [参数说明](../metis-pi-config.md)。`/execution` 只写全局，项目配置不再参与解析。
+
+## LSP
+
+LSP 只使用全局 `[lsp]`，不读取任何全局或项目 `pi-lsp.json` / `lsp.json`。
+其他机器须手动把旧 JSON 的配置值复制到 TOML；没有专项 init 或兼容读取桥。
+
+```toml
+[lsp]
+timeout = 20000 # 毫秒
+
+[lsp.servers.ruff]
+command = ["ruff", "server"]
+extensions = [".py", ".pyi"]
+```
+
+上例完整替换内置服务器 catalog；省略 `servers` 使用 catalog，`servers = {}` 关闭全部路由。
+服务器命令由用户自行安装，`/lsp` 仅检查可用状态。
+激活前从 Pi `packages` 中停用独立 `npm:@narumitw/pi-lsp`，防止重复命令与旧工具。
+工具接口和权限边界见 [LSP 指南](features/lsp.md)，字段与单位见
+[参数说明](../metis-pi-config.md#lsp)。
 
 ## MCP
 
@@ -119,6 +140,7 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | skill 输入与显示 | 同时排除 `-extensions/skill-mux.ts`、`-extensions/skill-entry.ts`。 |
 | 全部 Action Fusion | `-extensions/action-fusion.ts` |
 | MCP | `-extensions/mcp.ts`；也可保持全局 `mcp.enabled=false`。 |
+| LSP 工具与 `/lsp` | `-extensions/lsp.ts` |
 | PTY 进程工具 | `-extensions/execution.ts` |
 
 删除排除项可恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示；`/pruner off` 只停自动精简，历史回读仍可用。

@@ -9,11 +9,11 @@
 已有 TOML 直接编辑需要修改的字段；未填写的选项沿用包内默认值。
 `/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有 TOML。
 
-读取本身不写文件。TOML 不存在时兼容读取旧全局配置；TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
+读取本身不写文件。提供兼容桥的模块在 TOML 不存在时兼容读取旧全局配置；LSP 除外，始终只读 TOML 与内置默认值。TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
 
-Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`subagent-pi/` 只保存账本、日志和会话。另行安装的 Codex 插件及 `@ff-labs/pi-fff`、LSP 等其他插件配置不归本包所有，不迁移；`.codex/config.toml` 是可选的外部继承来源，不是 Metis 参数文件。
+Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`subagent-pi/` 只保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。另行安装的 Codex 插件及 `@ff-labs/pi-fff` 等其他插件配置不归本包所有，不迁移；`.codex/config.toml` 是可选的外部继承来源，不是 Metis 参数文件。
 
-修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件，同一进程写操作串行；多个 Pi 进程同时保存仍是最后写入者胜出。
+修改显示、快捷键、入口开关后重启 Pi；condense 可用 `/reload` 重读；执行配置在 run 边界刷新，MCP 用 `/mcp reload`，LSP 在每次工具或 `/lsp` 调用时重读，动态指令用 `/dynamic-agents reload` 在下一正式 run 更新。`/execution`、`/pruner settings`、`/websearch`、`/curator` 写全局 TOML；`/execution project` 不再支持。模板按功能分区，将枚举、单位、特殊值和可选示例放在对应选项旁。初始化和命令保存也会回填包内分区/参数注释，保留未知字段/其他 section；个人自定义注释不保留，可放在本说明或独立笔记。临时文件 + 原子 rename 避免半文件，同一进程写操作串行；多个 Pi 进程同时保存仍是最后写入者胜出。
 
 TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapThresholdTokens` 用 `false` 关闭；`maxImagesPerRequest = false` 表示采用 API 默认。这是配置语法，不是字符串 `"false"`。其他字段用正确的 boolean/string/number/array/table；错误值按所属模块的校验回退或报错，不会修复你的文件。
 
@@ -64,6 +64,57 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `keepAliveServers` | `[]` | 需长期保留连接的服务器名数组，仍按需连接。 |
 
 这三个字段仅从全局 TOML 读取。服务器定义、exposure、认证仍沿用 Pi 的 mcp.json；详见包内 `docs/configuration.md` 的 MCP 部分。
+
+## `[lsp]`
+
+LSP 只读取全局 TOML，没有项目覆盖。没有 TOML 或没有 `[lsp]` 时取默认值；
+损坏 TOML 或非法 LSP 参数明确报错，不回退 JSON，读取不修改配置。
+
+| 字段（相对 lsp） | 默认值 | 含义 / 合法值 |
+| --- | --- | --- |
+| `timeout` | `20000` | 请求超时，毫秒；有限正数。 |
+| `servers` | 不填写 | 省略时使用内置服务器 catalog；显式 map 完整替换 catalog，不合并。`servers = {}` 关闭全部路由。 |
+
+每个 `[lsp.servers.<name>]` 支持以下字段：
+
+| 服务器字段 | 默认值 | 含义 / 合法值 |
+| --- | --- | --- |
+| `command` | 必填 | 非空 argv 字符串数组，第一个为可执行命令，后续为参数；不解析 shell 命令字符串。 |
+| `extensions` | 必填 | 文件扩展名字符串数组，如 `[".py", ".pyi"]`；省略前导点时自动补齐。 |
+| `env` | 不填写 | 字符串值的环境变量表；子进程继承 Pi 环境后覆写，`env.PATH` 也用于解析启动命令。 |
+| `initialization` | 不填写 | LSP 初始化选项和 workspace 配置表。 |
+| `skipDirectories` | `[]` | 递归发现额外跳过的目录名，不含路径分隔符；与内置排除项叠加，显式请求仍可检查。 |
+| `diagnosticsSettleMs` | `800` | 最新 push 诊断后等待无新发布的安静期，正数毫秒；内置 intelephense 为 `4000`，全局 timeout 仍为上界。 |
+| `pushDiagnosticsGraceMs` | 不填写 | push-only 服务器首次发布的等待期，正数毫秒；未填时无发布则等待 timeout，部分内置服务器使用较短值。 |
+| `pullDiagnosticsGraceMs` | 不填写 | 空 pull 结果后等待更新 push 发布的时间，正数毫秒；内置 rust-analyzer 为 `5000`。 |
+
+例如仅启用 Ruff，并添加子进程环境与额外排除目录：
+
+```toml
+[lsp]
+timeout = 20000
+
+[lsp.servers.ruff]
+command = ["ruff", "server"]
+extensions = [".py", ".pyi"]
+skipDirectories = ["generated"]
+
+[lsp.servers.ruff.env]
+LSP_LOG = "debug"
+```
+
+语言服务器由用户自行安装，Metis 不下载；使用内置 catalog 的诊断会报告并跳过缺失的
+默认命令，显式选择或自定义配置的缺失命令会报错。`/lsp` 查看配置与命令可用状态。
+
+旧全局和项目 `pi-lsp.json` / `lsp.json` 均被忽略，即使全局 TOML 不存在也不读取。
+其他机器须把旧 wrapper 的 `timeout` / `servers` 手动写到 `[lsp]` 下；
+裸服务器映射转为 `lsp.servers`，原 argv/env/初始化/排除/等待选项保持原值。
+`/metis-config init` 不导入 LSP JSON；不要覆盖已有个性化 TOML，原 JSON 可保留作回退。
+激活前停用独立 `npm:@narumitw/pi-lsp`，否则会重复 `/lsp` 命令并保留旧工具。
+
+模型侧只有一个 direct `lsp`（`action: diagnostics/fix`），fix 默认不写入。
+只按工具名的只读 allowlist 须排除它，或由权限策略检查 `action` / `write`；
+配置命令仍使用 Pi 的进程权限，预览不是沙箱。完整用法与边界见包内 `docs/features/lsp.md`。
 
 ## `[dynamicAgents]` 与 `[[dynamicAgents.groups]]`
 

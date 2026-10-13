@@ -15,7 +15,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const webTools = ["web_access"];
 const recallTools = ["session_recall"];
 
-async function loadManaged(t, disabled = [], webAccess, bindRuntime = false) {
+async function loadManaged(t, disabled = [], webAccess, bindRuntime = false, includeLsp = false) {
   const dir = mkdtempSync(join(tmpdir(), "metis-managed-plugins-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
@@ -31,7 +31,7 @@ async function loadManaged(t, disabled = [], webAccess, bindRuntime = false) {
     settingsManager: SettingsManager.inMemory({
       packages: [{
         source: root,
-        extensions: ["extensions/web-access.ts", "extensions/session-recall.ts", ...disabled],
+        extensions: ["extensions/web-access.ts", "extensions/session-recall.ts", ...(includeLsp ? ["extensions/lsp.ts"] : []), ...disabled],
       }],
     }),
     noSkills: true,
@@ -62,6 +62,18 @@ test("Metis package discovers its web and recall tools through owned entrypoints
   for (const extension of extensions) for (const tool of extension.tools.values()) {
     assert.equal(tool.definition.exposure, "deferred");
   }
+});
+
+test("Metis discovers its direct LSP entry alongside deferred web/recall and can filter it independently", async t => {
+  const extensions = await loadManaged(t, [], undefined, true, true);
+  const tools = extensions.flatMap(extension => [...extension.tools.values()].map(tool => tool.definition));
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ["lsp", ...webTools, ...recallTools].sort());
+  const lsp = tools.find(tool => tool.name === "lsp");
+  assert.ok(lsp.exposure === undefined || lsp.exposure === "direct");
+  assert.deepEqual(lsp.parameters.properties.action.enum, ["diagnostics", "fix"]);
+  assert.ok(extensions.find(extension => extension.tools.has("lsp")).commands.has("lsp"));
+  const filtered = await loadManaged(t, ["-extensions/lsp.ts"], undefined, false, true);
+  assert.deepEqual(filtered.flatMap(extension => [...extension.tools.keys()]).sort(), [...webTools, ...recallTools].sort());
 });
 
 test("Pi package filters disable web access while retaining session recall", async (t) => {

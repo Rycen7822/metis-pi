@@ -23,7 +23,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall"]) {
+  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of [
@@ -33,6 +33,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
     "src/pi-web-access/index.ts", "src/pi-web-access/dist/index.js", "src/pi-web-access/dist/mcp-cli.js",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
+    "src/pi-lsp/config.ts", "src/pi-lsp/pi-lsp.ts", "src/pi-lsp/code-actions.ts", "src/pi-lsp/published-diagnostics.ts", "src/pi-lsp/LICENSE", "src/pi-lsp/METIS.md", "docs/features/lsp.md",
     "src/pi-web-access/licenses/typebox.LICENSE",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
