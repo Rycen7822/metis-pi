@@ -309,6 +309,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         makeCodemodeRenderers({
           makeText: bindings.makeText,
           highlight: bindings.highlight,
+          colorLevel: session.colorLevel,
           store: codemodeViews,
           shell: renderers.bash,
           expandHint: bindings.expandHint,

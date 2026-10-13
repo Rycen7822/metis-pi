@@ -10,6 +10,7 @@ import {
 } from "./tool-names.ts";
 import { shellTitle } from "./renderers.ts";
 import { stackComponents } from "./copy-stack.ts";
+import { detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "./palette.ts";
 
 interface CodemodeTimerState {
   startedAt?: number;
@@ -128,17 +129,20 @@ export type NestedRendererLookup = (name: string, result: unknown) => Renderers 
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
   highlight?: Highlight;
+  colorLevel?: ColorLevel;
   store: CodemodeViewStore;
   shell: Renderers;
   expandHint(): string;
   resolve: NestedRendererLookup;
 }): Renderers {
   const states = new WeakMap<object, Map<string, { state: object; call?: Component; result?: Component }>>();
+  const labelColor = foregroundAnsi("#d97706", input.colorLevel ?? detectColorLevel());
+  const label = (text: string) => labelColor ? `${labelColor}${text}${FG_DEFAULT}` : text;
   return {
     renderCall(args, theme, context) {
       const timer = timerState(context);
       if (timer && context.executionStarted && timer.startedAt === undefined) timer.startedAt = Date.now();
-      const title = theme.fg("toolTitle", theme.bold("codemode"));
+      const title = label(theme.bold("codemode"));
       const code = asRecord(args).code;
       if (typeof code !== "string") return input.makeText(`${title} ${theme.fg("error", "[invalid arg]")}`);
       if (!context.expanded || !code) return input.makeText(title);
@@ -281,7 +285,7 @@ export function makeCodemodeRenderers(input: {
         if (typeof details.fullOutputPath === "string")
           parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
-      if (timerText) parts.push(input.makeText(theme.fg("muted", timerText)));
+      if (timerText) parts.push(input.makeText(label(timerText)));
       return stackComponents(parts, "codemode", "child-placements");
     },
   };

@@ -68,6 +68,27 @@ function setup(t, overrides = {}, lifecycle = false) {
   return { row, store, handle, capture, renderers, context, handlers, ctx };
 }
 
+test("codemode start and timing labels use dark orange with terminal color fallbacks", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+  const shell = makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub).bash;
+  for (const [kind, prefix] of [["truecolor", "\x1b[38;2;217;119;6m"], ["ansi256", "\x1b[38;5;172m"], ["none", ""]]) {
+    const codemode = makeCodemodeRenderers({ ...bindings, store: new CodemodeViewStore(), shell,
+      colorLevel: { kind }, resolve: () => undefined });
+    const context = { state: {}, executionStarted: true };
+    const colored = text => prefix ? `${prefix}${text}\x1b[39m` : text;
+    const render = component => component.render(80).join("\n");
+    assert.equal(render(codemode.renderCall({ code: "text(1)" }, theme, context)), colored("codemode"), kind);
+    const expanded = render(codemode.renderCall({ code: "text(1)" }, theme, { ...context, expanded: true }));
+    assert.equal(expanded, `${colored("codemode")}\ntext(1)`, "script code keeps its own styling");
+    assert.equal(render(codemode.renderResult({ content: [] }, { isPartial: true }, theme, context)), colored("Elapsed 0.0s"), kind);
+    const completed = render(codemode.renderResult({ content: [{ type: "text", text: "KEEP SCRIPT OUTPUT" }] }, {}, theme,
+      { ...context, durationMs: 100 }));
+    assert.ok(completed.endsWith(colored("Took 0.1s")), kind);
+    assert.equal(completed.includes(`${prefix}KEEP SCRIPT OUTPUT`), !prefix, "script output is not recolored");
+    assert.match(stripVTControlCharacters(completed), /KEEP SCRIPT OUTPUT/);
+  }
+});
+
 test("native codemode shows elapsed time before any nested call and stops on completion", (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
   const { row } = setup(t);
