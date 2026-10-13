@@ -175,11 +175,16 @@ else:
         rows=await self.settled_notifications(sid,1)
         self.assertEqual(rows[0]['state'],'unknown'); self.assertEqual(len(self.queued()),1)
 
-    async def restart_daemon(self):
+    async def restart_daemon(self,recovery_sql=None):
         await request(self.home,'shutdown',{'force':True})
         from subagent_pi.common import socket_path
         until=asyncio.get_running_loop().time()+5
         while socket_path(self.home).exists() and asyncio.get_running_loop().time()<until: await asyncio.sleep(.02)
+        self.assertFalse(socket_path(self.home).exists(),'Daemon did not stop before recovery setup')
+        if recovery_sql is not None:
+            # Restore crash state only after the old daemon releases its database.
+            import sqlite3
+            with sqlite3.connect(self.home/'registry.sqlite') as db: db.execute(recovery_sql)
         await request(self.home,'ping',{})
 
     async def test_pending_stop_survives_daemon_restart(self):
@@ -196,10 +201,7 @@ else:
         await self.settled_notifications(sid,1)
         # Reconstruct the on-disk state of a daemon killed after enqueue but
         # before receipt persistence. The external side effect already happened.
-        import sqlite3
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
-            db.execute("UPDATE parent_notifications SET state='sending',queued_id=NULL")
-        await self.restart_daemon()
+        await self.restart_daemon("UPDATE parent_notifications SET state='sending',queued_id=NULL")
         rows=await self.settled_notifications(sid,1)
         self.assertEqual(rows[0]['state'],'unknown'); self.assertEqual(len(self.queued()),1)
 
@@ -209,10 +211,7 @@ else:
         notice=(await self.settled_notifications(sid,1))[0]
         # A delivered wait had requested recall, then the daemon died before
         # recording the host response. Retrying this exact deletion is safe.
-        import sqlite3
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
-            db.execute("UPDATE parent_notifications SET state='recalling',handled=1")
-        await self.restart_daemon()
+        await self.restart_daemon("UPDATE parent_notifications SET state='recalling',handled=1")
         await self.wait_notice_state(sid,'recalled')
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
         result=await self.parent_tool('pi_agent_result',{'run_id':run['run_id']})
@@ -222,10 +221,7 @@ else:
         sid=await self.open_parent()
         await self.parent_tool('pi_spawn_agent',{'request_id':'done','task':'done','access':'read'})
         notice=(await self.settled_notifications(sid,1))[0]
-        import sqlite3
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
-            db.execute('UPDATE parent_notifications SET handled=1')
-        await self.restart_daemon()
+        await self.restart_daemon('UPDATE parent_notifications SET handled=1')
         await self.wait_notice_state(sid,'recalled')
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
         self.assertEqual(len(self.queued()),1)
@@ -234,10 +230,7 @@ else:
         sid=await self.open_parent()
         await self.parent_tool('pi_spawn_agent',{'request_id':'done','task':'done','access':'read'})
         notice=(await self.settled_notifications(sid,1))[0]
-        import sqlite3
-        with sqlite3.connect(self.home/'registry.sqlite') as db:
-            db.execute("UPDATE parent_notifications SET state='recalling',handled=0")
-        await self.restart_daemon()
+        await self.restart_daemon("UPDATE parent_notifications SET state='recalling',handled=0")
         rows=await self.wait_notice_state(sid,'queued')
         self.assertNotEqual(rows[0]['queued_id'],notice['queued_id'])
         self.assertEqual(self.recalls(),[{'threadId':self.parent,'queuedSubmissionId':notice['queued_id']}])
