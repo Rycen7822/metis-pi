@@ -94,8 +94,6 @@ include = []
 autoReasoning = false
 # 原生 helper 目录；空字符串使用包内默认路径。
 customRustBinariesDir = ""
-# 文本模型借助已认证的图片模型描述图片；默认不启用。
-viewImageFallback = false
 
 # 工具显示与后台 shell 面板；快捷键修改后重启。
 [execution.ui]

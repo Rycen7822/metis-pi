@@ -10,7 +10,6 @@ const target = "x86_64-unknown-linux-musl";
 const manifestPath = join(root, "assets/native-tools/linux-x64-manifest.json");
 const helpers = [
   { name: "exec_bridge", path: "assets/native-tools/exec/linux-x64/exec_bridge" },
-  { name: "view_image", path: "assets/native-tools/view-image/linux-x64/view_image" },
 ];
 const mode = process.argv[2] ?? "build";
 if (process.argv.length > 3 || !["build", "verify"].includes(mode)) throw new Error("Usage: node native/tools/build-linux-x64.mjs [build|verify]");
@@ -65,7 +64,7 @@ if (mode === "verify") {
   const inputs = sourceInputs();
   const targetDirectory = resolve(root, process.env.CARGO_TARGET_DIR ?? ".work/native-tools-build");
   const rustFlags = ["-C", "target-feature=+crt-static", "-C", "target-cpu=x86-64"];
-  const args = ["build", "--manifest-path", "native/tools/Cargo.toml", "--release", "--locked", "--offline", "--target", target, "--bin", "exec_bridge", "--bin", "view_image"];
+  const args = ["build", "--manifest-path", "native/tools/Cargo.toml", "--release", "--locked", "--offline", "--target", target, "--bin", "exec_bridge"];
   execFileSync("cargo", args, { cwd: root, stdio: "inherit", env: { ...process.env,
     CARGO_TARGET_DIR: targetDirectory, CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: "musl-gcc",
     CARGO_ENCODED_RUSTFLAGS: rustFlags.join("\x1f"),

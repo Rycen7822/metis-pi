@@ -1,8 +1,6 @@
 [workspace]
 members = [
   "exec",
-  "view-image",
-  "crates/codex-utils-image",
   "crates/codex-utils-pty",
 ]
 resolver = "2"
@@ -16,13 +14,10 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 base64 = "0.22.1"
-codex-utils-image = { path = "crates/codex-utils-image" }
 codex-utils-pty = { path = "crates/codex-utils-pty" }
-image = { version = "^0.25.9", default-features = false }
 lazy_static = "1"
 libc = "0.2"
 log = "0.4"
-mime_guess = "2.0.5"
 portable-pty = "0.9"
 pretty_assertions = "1"
 serde = { version = "1", features = ["derive"] }

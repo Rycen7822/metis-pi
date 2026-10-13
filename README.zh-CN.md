@@ -32,7 +32,7 @@ Metis 现在内置维护 `pi-web-access` 和 `pi-session-recall`。加载前应�
 | [ast-grep skill](docs/features/skills.md#随包-skills) | 随 Metis 安装和更新的结构搜索指导及规则参考，由 Pi 原生发现；需要 PATH 中已有 `ast-grep`，不自动安装 CLI 或增加服务。 |
 | [MCP](docs/configuration.md#mcp) | 默认关闭；缓存目录、按需连接、空闲回收，共用 Pi 原生 CLI/OAuth 与工具权限。 |
 | [子代理](docs/subagents/cli.md) | metis 原生维护持久 Pi 子代理；工具 deferred 按需发现，默认经原生 codemode 调用，支持明确问题和完成唤醒。Linux/WSL 需 Python 3.11+；通过 Pi 配置选择一个子代理提供者。 |
-| [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 与原图工具；provider 和登录由 Pi 提供。 |
+| [执行工具](docs/execution.md) | 为 Pi 原生 codemode 提供按需调用的 PTY 工具；普通图片使用 Pi `read` + `image()`，provider 和登录由 Pi 提供。 |
 | [Dynamic agents](docs/features/dynamic-agents.md) | 外置 JSON 按 provider/模型选择全局指令，在下一次 agent run 生效；仅替换请求上下文，保留项目规则和源文件。 |
 | [Action Fusion](docs/features/action-fusion.md) | 原生 edit/write 支持 `then_run`；修改成功后执行命令，分别保留状态、diff 和完整日志，支持 Pi 原生 codemode 调用；排除 `extensions/action-fusion.ts` 可统一关闭所有融合入口。 |
 | [Codex 远端压缩](docs/features/codex-compaction.md) | `openai-codex` 的 `/compact` 与自动压缩使用远端加密 checkpoint；持久化回放，其他 provider 保留原路径。 |
@@ -46,7 +46,7 @@ metis 自有偏好统一使用全局 `~/.pi/agent/metis-pi.toml`（跟随 `PI_CO
 - 精确复制依赖 fullscreen 应用选区；Markdown 表格、未知 token、图片等保留原生回退。终端原生选区不受此插件控制。
 - 5,000 行是保留窗口上限；单个超大组件仍可能完整排版一次，原生搜索仅覆盖已加载窗口。
 - 本包的主界面外观与其它替换 editor/footer/Working 的插件可能冲突。`pi-copy-soft-wrap` 的启发式复制由本包精确路径接管，建议只保留一套。
-- 随包原生工具仅包含 linux-x64 载荷，详见[执行工具](docs/execution.md)。
+- 随包原生 PTY helper 仅包含 linux-x64 载荷，详见[执行工具](docs/execution.md)。
 
 [兼容性说明](docs/compatibility.md)记录宿主契约与限制，不保证任意插件组合完全兼容。
 

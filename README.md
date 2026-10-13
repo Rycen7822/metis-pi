@@ -32,7 +32,7 @@ Individual features can be disabled through Pi's package entry filters, for exam
 | [ast-grep skill](docs/features/skills.md#随包-skills) | Bundled structural code-search guidance and rule reference, discovered by Pi and updated with Metis. Requires `ast-grep` on PATH; no automatic CLI installation or extra service. |
 | [MCP](docs/configuration.md#mcp) | Optional Pi-native MCP integration: cached directory, lazy connections and idle shutdown; shares native CLI/OAuth and tool permissions. Disabled by default. |
 | [Subagents](docs/subagents/cli.md) | Metis-owned durable Pi children, deferred native tools discovered/called through codemode, explicit questions and completion wakeups. Linux/WSL with Python 3.11+; choose one subagent provider in Pi config. |
-| [Execution tools](docs/execution.md) | Deferred PTY and original-image tools for Pi native codemode; Pi owns providers and login. |
+| [Execution tools](docs/execution.md) | Deferred PTY tools for Pi native codemode; ordinary images use Pi `read` + `image()`. Pi owns providers and login. |
 | [Dynamic agents](docs/features/dynamic-agents.md) | Select global instructions by provider/model from an external JSON file, applied at the next agent run. Replaces request context only; preserves project rules and source files. |
 | [Action Fusion](docs/features/action-fusion.md) | Native edit/write support `then_run`: run a command after a successful edit, preserving separate statuses, diffs, and full logs. Also supports Pi native codemode calls. Exclude `extensions/action-fusion.ts` to disable fusion across all entry points. |
 | [OpenAI / Codex remote compaction](docs/features/codex-compaction.md) | ChatGPT OAuth keeps development on `openai` and uses legacy Codex OAuth for encrypted compaction; API keys use `/responses/compact`, and Codex sessions use Remote V2. |
@@ -46,7 +46,7 @@ All Metis-owned preferences use one global `~/.pi/agent/metis-pi.toml` (honoring
 - Exact copying depends on application-managed selections in fullscreen mode. Markdown tables, unknown tokens, images, and similar content retain native fallbacks. Native terminal selections are outside this plugin's control.
 - The 5,000-line limit applies to the retained display window. A single oversized component may still be fully laid out once, and native search only covers the loaded window.
 - The main UI may conflict with other plugins that replace the editor, footer, or Working indicator. This package's exact copy path takes over the heuristic copying provided by `pi-copy-soft-wrap`; use only one implementation.
-- Bundled native tools include only linux-x64 binaries. See the [execution guide](docs/execution.md) for the retained tools.
+- The bundled native PTY helper is linux-x64 only. See the [execution guide](docs/execution.md) for the retained tools.
 
 The [compatibility guide](docs/compatibility.md) documents host contracts and limits; it does not guarantee compatibility with every plugin combination.
 

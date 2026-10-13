@@ -59,11 +59,11 @@ Copyright (c) 2025 championswimmer (original pi-context-prune).
 Copyright (c) 2026 Jacek Juraszek (pi-condense).
 MIT License (see docs/provenance/condense/LICENSE).
 
-Bundled PTY and image helpers and their retained native/tools utility sources are
+The bundled PTY helper and its retained native/tools utility sources are
 derived from OpenAI Codex, copyright OpenAI and its contributors, Apache-2.0
 (see LICENSE-APACHE-2.0). V8 host and apply-patch are no longer redistributed.
 
-The static Linux x64 helpers include musl libc, copyright (c) 2005-2020
+The static Linux x64 PTY helper includes musl libc, copyright (c) 2005-2020
 Rich Felker and contributors. Copyright and permission notices, including
 subsidiary licenses, are retained in docs/provenance/execution/musl-NOTICES.
 

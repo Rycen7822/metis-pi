@@ -19,7 +19,8 @@
 | --- | --- |
 | `create_goal` / `get_goal` / `update_goal` | [目标授权、预算和完成规则](features/goal.md)。 |
 | `context_tree_query` | [历史证据、参数及原文分页回读](features/condense.md)。 |
-| `exec_command` / `write_stdin` / `view_image` | [deferred 进程与图片工具](execution.md)。 |
+| `exec_command` / `write_stdin` | [deferred PTY 进程工具](execution.md)。 |
+| Pi `read` / codemode `image()` | 普通图片使用 `image(await tools.read({path:'image.png'}))`，见 [执行工具](execution.md)。 |
 | `change_reasoning` | 开启执行配置 `autoReasoning` 后，按当前模型能力提供。 |
 | `edit` / `write` 的 `then_run` | [修改成功后执行明确命令](features/action-fusion.md)。 |
 

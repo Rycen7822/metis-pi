@@ -12,7 +12,7 @@
 | `dynamic-agents.ts` | 每个 run 的全局指令快照、来源恢复与 Pi 原生请求投影。 |
 | `condense.ts` | 重复安装检测和摘要用量显示；`src/condense` 负责原文、精简、摘要、恢复和 OCC。 |
 | `action-fusion.ts` | Pi edit/write 的 then_run 增强；`src/execution/action-fusion.ts` 负责路径排队、快照、取消和回执。 |
-| `execution.ts` | deferred 进程/图片工具、执行设置、后台 shell 和资源清理。 |
+| `execution.ts` | deferred PTY 进程工具、执行设置、后台 shell 和资源清理。 |
 | `mcp.ts` | 默认关闭；`src/mcp` 持有目录缓存、连接租约和工具装配，协议/OAuth/CLI/codemode/权限由 Pi 提供。 |
 | `subagents.ts` | `src/subagents` 持有父会话租约、接收票据和轻量交互；`core` 原生持有子代理 Runtime、账本、任务队列和进程管理。 |
 | `web-access.ts` | `src/pi-web-access` 管理搜索、提取、内容存储和 Curator；聚合工具沿 Pi deferred/codemode 发现与调用。 |
@@ -44,13 +44,13 @@ chrome 通过结构类型和注入能力访问宿主。动画帧不扫描会话�
 flowchart LR
     Pi[Pi provider / OAuth / 工具与 compaction] --> UI[显示与独立功能]
     Pi --> Native[原生 codemode]
-    Native --> Tools[PTY / 图片 / edit-write Fusion]
+    Native --> Tools[PTY / edit-write Fusion]
     Tools --> Archive[输出与 nested 归档 / 完整性]
     Archive --> Condense[condense 投影 / OCC / 回读]
     Condense --> Pi
 ```
 
-Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 仅保留进程/图片补充及图片 detail 的窄请求适配，不维护第二套 provider 或 JS 引擎。图片描述使用 Pi ModelRegistry，original 保存到 session blobs。
+Pi 持有工具选择、权限、JS 编排和普通上下文管理。metis 的执行补充只提供 PTY 进程工具，不维护第二套 provider 或 JS 引擎。普通图片使用 Pi 1.2 原生 `read` 与 codemode `image()`。
 
 显式启用 MCP 后，每个服务器由一个 session owner 共享连接；每个工具独立注册，调用经过 Pi 原执行链。目录缓存不授权执行，实时 schema/身份变化会拒绝旧调用；空闲回收、取消和关闭属于该 owner。MCP 协议与 OAuth 复用 Pi 公共包；服务器配置、凭据及 CLI 保持原生格式。切换步骤见 [配置](configuration.md#mcp)。
 
@@ -71,4 +71,4 @@ Web 搜索的公共结果归 `search-types.ts`，provider 身份与标签归 `se
 - GoalState 读取不累计时间，用量归属于启动该回合的目标，持久化为 session custom entry v2。
 - 原文 blobs、Fusion 日志与显示缓冲寿命不同；显示淘汰不授权删除恢复证据。锁、取消和提交顺序由各功能 owner 持有。
 
-`native/tools` 保存 PTY/图片源码与锁文件，`assets/native-tools` 保存随包可执行资产；shell parser WASM 位于 `vendor/tree-sitter-bash`。安装不编译 Rust，发布包不携带 native 开发源码。来源见 [执行模块来源](provenance/execution/README.md)与 condense 自身目录；交付流程见 [开发说明](development.md)。
+`native/tools` 保存 PTY 源码与锁文件，`assets/native-tools` 保存随包可执行资产；shell parser WASM 位于 `vendor/tree-sitter-bash`。安装不编译 Rust，发布包不携带 native 开发源码。来源见 [执行模块来源](provenance/execution/README.md)与 condense 自身目录；交付流程见 [开发说明](development.md)。

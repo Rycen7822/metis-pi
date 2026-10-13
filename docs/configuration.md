@@ -17,7 +17,7 @@ metis-pi 自有偏好统一使用 **`<agentDir>/metis-pi.toml`**，只有全局�
 | 会话回忆 | `[sessionRecall]` | `queryModel="default"` 跟随当前会话，或填已注册的 `provider/model-id`；每次 `session_recall` 的 `query` 操作重读。 |
 | 网页访问 | `[webAccess]` 及子表 | 搜索/抓取/摘要/工具普通选项；`/websearch`、`/curator` 写 TOML；凭据使用同目录 `web-search.json` 或环境变量。 |
 | goal / 结束摘要 | Pi session custom entries | 会话状态不是配置；摘要持久化由 `appearance.summary.persist` 控制。 |
-| 原文、图片、命令日志 | 会话旁 `<sessionId>-blobs/` | 恢复数据不搬入 TOML，复制或清理会话时一并处理。 |
+| 原文、命令日志 | 会话旁 `<sessionId>-blobs/` | 恢复数据不搬入 TOML，复制或清理会话时一并处理。 |
 
 尚无全局 TOML 时运行 **`/metis-config init`**，导入旧全局 `metis-pi.json`、Pi `settings.json.contextPrune`、`dynamic-agents.json`、`pi-codex-conversion.json` 的 tools/ui、`subagents.json` 的可映射项及 `subagent-pi/config.toml`，生成完整配置和同目录说明。
 `session-recall.json` 的独立查询模型也迁为 `[sessionRecall].queryModel`。
@@ -119,6 +119,6 @@ MCP Apps 不渲染，`ui://` 和 App HTML 资源被过滤。图片字节、文�
 | skill 输入与显示 | 同时排除 `-extensions/skill-mux.ts`、`-extensions/skill-entry.ts`。 |
 | 全部 Action Fusion | `-extensions/action-fusion.ts` |
 | MCP | `-extensions/mcp.ts`；也可保持全局 `mcp.enabled=false`。 |
-| 进程与图片工具 | `-extensions/execution.ts` |
+| PTY 进程工具 | `-extensions/execution.ts` |
 
 删除排除项可恢复；`extensions: []` 关闭整个包。`appearance.enabled=false` 只关显示；`/pruner off` 只停自动精简，历史回读仍可用。

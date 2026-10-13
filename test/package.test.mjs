@@ -30,7 +30,6 @@ test("package exposes extensions, themes and portable skills with their referenc
     "CHANGELOG.md", "metis-pi.toml", "metis-pi-config.md", "vendor/tree-sitter-bash/tree-sitter-bash.wasm",
     "skills/ast-grep/SKILL.md", "skills/ast-grep/references/rule_reference.md",
     "assets/native-tools/exec/linux-x64/exec_bridge",
-    "assets/native-tools/view-image/linux-x64/view_image",
     "docs/provenance/execution/LICENSE", "docs/provenance/execution/README.md", "docs/provenance/condense/LICENSE",
     "src/pi-web-access/index.ts", "src/pi-web-access/dist/index.js", "src/pi-web-access/dist/mcp-cli.js",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",

@@ -2,7 +2,7 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import { defaultMetisConfig, isMetisConfigTable, metisConfigPath, readMetisConfig, updateMetisConfig } from "../metis-config.ts";
 
 export type ExecutionConfig = {
-  tools: { autoReasoning: boolean; customRustBinariesDir: string; viewImageFallback: boolean };
+  tools: { autoReasoning: boolean; customRustBinariesDir: string };
   ui: { toolRenaming: boolean; backgroundShellWidget: boolean; backgroundShellToggleShortcut: string;
     backgroundShellPrevShortcut: string; backgroundShellNextShortcut: string; backgroundShellCloseShortcut: string };
 };

@@ -48,7 +48,7 @@ CI 在 Pi 1.2.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿�
 
 运行和测试消费同一 TS 模块，导入显式写 `.ts`；condense 与执行模块使用可擦除语法。condense 由根项目统一维护与检查；来源归属见 [NOTICE](../NOTICE)，许可见 [condense LICENSE](provenance/condense/LICENSE) 与 [执行来源](provenance/execution/README.md)。
 
-发布包携带 TS、condense 入口、子代理 Python/JS 核心、shell WASM、Linux x64 helper、主题与许可/文档；Rust 来源和开发配置留在 Git。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。
+发布包携带 TS、condense 入口、子代理 Python/JS 核心、shell WASM、Linux x64 PTY helper、主题与许可/文档；Rust 来源和开发配置留在 Git。安装依赖宿主 TS 加载器，不执行编译或 Python 构建。发布端 `prepack` 从单一 Python schema 生成工具目录载荷；生成物不进入 Git。
 
 原生 helper 测试与 Linux x64 发布构建使用：
 
@@ -58,7 +58,7 @@ node native/tools/build-linux-x64.mjs build
 node native/tools/build-linux-x64.mjs verify
 ```
 
-构建需要 Linux x64、Rust 的 `x86_64-unknown-linux-musl` target、`musl-gcc`、`readelf` 和已缓存的锁文件依赖。脚本以 release/locked/offline 模式构建两个静态 helper，检查 ELF 没有动态解释器、共享库或 GLIBC 版本依赖后替换资产。`assets/native-tools/linux-x64-manifest.json` 记录源码输入、工具链和二进制 SHA256；`verify` 核对当前 checkout 源码、包内字节与静态 ABI。安装包不携带 Rust 源码，不能仅凭已安装 manifest 证明源码匹配。
+构建需要 Linux x64、Rust 的 `x86_64-unknown-linux-musl` target、`musl-gcc`、`readelf` 和已缓存的锁文件依赖。脚本以 release/locked/offline 模式构建静态 PTY helper `exec_bridge`，检查 ELF 没有动态解释器、共享库或 GLIBC 版本依赖后替换资产。`assets/native-tools/linux-x64-manifest.json` 记录源码输入、工具链和二进制 SHA256；`verify` 核对当前 checkout 源码、包内字节与静态 ABI。安装包不携带 Rust 源码，不能仅凭已安装 manifest 证明源码匹配。
 
 `test/package.test.mjs` 核对实际 pack 文件集合。交付范围改变时还要真实打包、解包检查入口、动态资源、二进制字节和执行权限；本地安装、Git 初装/更新分别在隔离 profile 验证，不链接共享 node_modules。
 

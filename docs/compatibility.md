@@ -2,7 +2,7 @@
 
 ## 版本与平台
 
-最低支持 **Pi 1.2.0 / Node 22.19.0**；开发类型、锁文件与 CI 统一使用 **Pi 1.2.0**。随包原生 helper 仅有 **Linux x64**，其他平台需提供对应资产并实际验证。纯 TS 能加载不能证明 helper 可运行。
+最低支持 **Pi 1.2.0 / Node 22.19.0**；开发类型、锁文件与 CI 统一使用 **Pi 1.2.0**。随包原生 PTY helper 仅有 **Linux x64**，其他平台需提供对应资产并实际验证。纯 TS 能加载不能证明 helper 可运行。
 
 本包不保证所有在线服务、模型、终端图片协议或插件组合兼容；离线测试不能代替实际环境验证。
 
@@ -37,8 +37,8 @@ Pi 1.2 的普通非空 `tools` 白名单若没有 `mcp__` selector，会保留 M
 
 Pi 持有 provider/OAuth、工具配对与原生 codemode。`openai` 和 `openai-codex` 使用 Codex API 时，手动/自动 compaction 使用 [Codex Remote V2](features/codex-compaction.md) 并持久化原生 checkpoint；官方 OpenAI Responses API 使用 `responses/compact` 远端压缩，其他 API 保留普通 compaction 路径。condense 在有效 `context_edit` 投影上工作，并在 `session_before_compact` 准备保护；嵌套证据未完成或归档失败时保留源历史。
 
-Pi 1.2.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in tools` 探测存在性。`image()` 校验 base64 与图片类型，metis 的有效图片结果遵循原生格式。
+Pi 1.2.0 的 codemode 读取未知工具成员会报错；脚本用 `"name" in tools` 探测存在性。普通图片使用原生 `image(await tools.read({path:'image.png'}))`；`image()` 校验 base64 与图片类型，图片读取和编码由 Pi 处理。
 
-扩展不自动改写个人设置或旧会话。旧 V8 脚本应改用 Pi codemode 和当前工具；旧 conversion 配置不读取。特殊窗口或 opaque checkpoint 不再解释，需用升级前版本导出可读历史再创建普通 Pi 会话。普通归档、condense 原文与图片 sidecar 仍可读取，复制会话时保留 blobs。
+扩展不自动改写个人设置或旧会话。旧 V8 脚本应改用 Pi codemode 和当前工具；旧 conversion 配置不读取。特殊窗口或 opaque checkpoint 不再解释，需用升级前版本导出可读历史再创建普通 Pi 会话。普通归档与 condense 原文仍可读取，复制会话时保留 blobs。
 
 当前核对来源为 Pi v1.2.0（`06a466935`）。执行模块的精确来源与许可见 [来源说明](provenance/execution/README.md)。

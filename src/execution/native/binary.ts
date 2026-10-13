@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 
 const TOOL_DIRS: Record<string, string> = {
 	exec_bridge: "exec",
-	view_image: "view-image",
 };
 
 export function getBundledToolBinaryPath(

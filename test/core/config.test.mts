@@ -152,14 +152,14 @@ test("global saves retain defaults, annotations, unknown fields and other owners
   const dir = mkdtempSync(join(process.cwd(), ".work/metis-config-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "metis-pi.toml"), initialConfig = defaultMetisConfig();
-  table(table(initialConfig.execution).tools).viewImageFallback = true;
+  table(table(initialConfig.execution).tools).autoReasoning = true;
   writeFileSync(path, renderMetisConfig(initialConfig) + '\n[futureDate]\nday=2026-10-08\nclock=12:30:00\n');
   updateMetisConfig(dir, { future: { opaque: [1, 2] }, execution: { ui: { toolRenaming: false } } });
   updateMetisConfig(dir, { contextPrune: { minBatchChars: 1234 } });
   const config = readMetisConfig(dir).config;
   assert.deepEqual(table(config.future).opaque, [1, 2]);
   assert.equal(table(table(config.execution).ui).toolRenaming, false);
-  assert.equal(table(table(config.execution).tools).viewImageFallback, true);
+  assert.equal(table(table(config.execution).tools).autoReasoning, true);
   assert.equal(table(config.contextPrune).minBatchChars, 1234);
   assert.match(readFileSync(path, "utf8"), /# 5a\. 高级摘要预算/);
   assert.match(readFileSync(path, "utf8"), /day = 2026-10-08\n/);

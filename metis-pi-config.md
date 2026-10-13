@@ -47,9 +47,8 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `tools.autoReasoning` | `false` | 可选 run 内推理等级调整。 |
-| `tools.customRustBinariesDir` | `""` | 自定义原生 helper 目录；空字符串使用包内路径。 |
-| `tools.viewImageFallback` | `false` | 文本模型借助已认证图片模型描述图片。 |
-| `ui.toolRenaming` | `true` | 执行/图片工具的自定义显示。 |
+| `tools.customRustBinariesDir` | `""` | 自定义 PTY helper 目录；空字符串使用包内路径。 |
+| `ui.toolRenaming` | `true` | 执行工具的自定义显示。 |
 | `ui.backgroundShellWidget` | `true` | 后台 shell 面板。 |
 | `ui.backgroundShellToggleShortcut` | `"alt+w"` | 展开面板。 |
 | `ui.backgroundShellPrevShortcut` | `"alt+q"` | 上一项；与宿主冲突时可改 `"alt+u"`。 |

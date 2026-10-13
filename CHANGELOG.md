@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 移除 Metis `view_image`、原图/detail 请求覆盖、文本模型图片描述回退及图片专用 Rust helper；图片统一使用 Pi 原生 `read` 与 codemode `image()`。PTY、后台 shell 和通用图片显示保持不变；已有个人配置、会话和 blobs 不自动删除。
+
 - Hide codemode scripts until expansion and reuse ordinary rendering for nested tools; preserve script output and fall back to summaries when session-local results are unavailable.
 - Deliver subagent attention at completed thinking/commentary stream boundaries on Pi 1.0/1.1 by claiming the existing receipt and yielding only the current provider request; show question arrivals immediately, preserve user cancellation/provider errors, and never preempt or replay already-emitted tools.
 - Park verified zero-work subagent daemons after a five-second grace and wake durable sessions on demand; keep passive watches quiet, preserve unread results and authenticated reconnect ownership, and pause failed automatic synchronization after one warning without hiding explicit errors.

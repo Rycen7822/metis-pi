@@ -3,39 +3,23 @@
   "target": "x86_64-unknown-linux-musl",
   "source": {
     "root": "native/tools",
-    "baseRevision": "70e463a2bc9f5896f6735ec1851236c16dc6d001",
-    "baseRef": "code-mode-host-rust-v0.145.0-metis.3-77-g70e463a",
+    "baseRevision": "95606f86a6d6b12bdb23a0730d3a5544b63958bd",
+    "baseRef": "code-mode-host-rust-v0.145.0-metis.3-84-g95606f8",
     "modified": true,
     "verification": "Requires a Git checkout containing native/tools; installed packages contain helper bytes only.",
-    "sha256": "8adb142792e19173ef62d9b1ae9d7c58b1b95799d505108bf55b22fa76338a5f",
+    "sha256": "27d6d720f31d4d2eb9d7acff76c55f857845ab4beda02e12b537ead2199a5b3e",
     "inputs": [
       {
         "path": "native/tools/Cargo.lock",
-        "sha256": "c12ecbb8ec62c87bab24239bb8c7de94354fdc5ce3710c1ff38a6de24621a71d"
+        "sha256": "3a27f905857119b9f63262a2fbe5474c778cbde2fd15e267020db4faaa107330"
       },
       {
         "path": "native/tools/Cargo.toml",
-        "sha256": "d9f8fe865d965cc79a5fd68d8a68e9d76c7b94ab4e9757ea89a3847b81284cd9"
+        "sha256": "b6b86644df540eaa59a6139cbe6a4b09f413e3e651482384e1343b359e8eb5d1"
       },
       {
         "path": "native/tools/build-linux-x64.mjs",
-        "sha256": "3f8c0a3a414aa0aabb13aaf1604c5c6e6a3ca91472f115b0e7ea7edc511309c5"
-      },
-      {
-        "path": "native/tools/crates/codex-utils-image/Cargo.toml",
-        "sha256": "302e4752d313b29e280414f01f900fb83c5336ccf3512f742c86df3b9d347a49"
-      },
-      {
-        "path": "native/tools/crates/codex-utils-image/error.rs",
-        "sha256": "c5dac9746d1ee1efd2a0d6433f384bd2554db29795b17cdf0f75883924d00a39"
-      },
-      {
-        "path": "native/tools/crates/codex-utils-image/image_tests.rs",
-        "sha256": "0002c454d2498a6ef631fc98d4858ddb68eda1e9d400fb1c9f39e7432e8a93fb"
-      },
-      {
-        "path": "native/tools/crates/codex-utils-image/lib.rs",
-        "sha256": "443a541a3949dab36fce25237f8a3ae1ace38bce47ef4a2adba173158a35f78c"
+        "sha256": "30037eda46a77f1c42338f9503b67732ca47b7693e102c0b50934adaa22045e8"
       },
       {
         "path": "native/tools/crates/codex-utils-pty/Cargo.toml",
@@ -120,14 +104,6 @@
       {
         "path": "native/tools/exec/protocol.rs",
         "sha256": "7dc0ebfea4496a6968ac6a69be843e3df1a6284e83176cc04e0e5711b2705a6a"
-      },
-      {
-        "path": "native/tools/view-image/Cargo.toml",
-        "sha256": "52f477e4119427dc9a5cf4948b25ef20f6ef359db0a6617d467408c6361cab5b"
-      },
-      {
-        "path": "native/tools/view-image/main.rs",
-        "sha256": "8f68d98255389d540c6794318d4871e5f580cb573898b4f2fe15d16670735b0e"
       }
     ]
   },
@@ -143,9 +119,7 @@
       "--target",
       "x86_64-unknown-linux-musl",
       "--bin",
-      "exec_bridge",
-      "--bin",
-      "view_image"
+      "exec_bridge"
     ],
     "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
     "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
@@ -163,17 +137,6 @@
       "path": "assets/native-tools/exec/linux-x64/exec_bridge",
       "sha256": "e2f7fa55ae9ba063ce3f0a5928bb341b39a9f835cfb70c44462b6ba8d97a9384",
       "bytes": 1262416,
-      "abi": {
-        "machine": "x86-64",
-        "interpreter": null,
-        "needed": [],
-        "glibcVersions": []
-      }
-    },
-    {
-      "path": "assets/native-tools/view-image/linux-x64/view_image",
-      "sha256": "5f3f3af012b7f23da49c7e892ca49d2e21c8464ac9242b6b2b8d4b0abcef4b91",
-      "bytes": 1507936,
       "abi": {
         "machine": "x86-64",
         "interpreter": null,

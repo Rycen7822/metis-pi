@@ -4,8 +4,6 @@ import { createExecSessionManager } from "../src/execution/exec/session-manager.
 import { getBundledToolBinaryPath } from "../src/execution/native/binary.ts";
 import { createExecCommandTool } from "../src/execution/exec/command-tool.ts";
 import { createWriteStdinTool } from "../src/execution/exec/write-stdin-tool.ts";
-import { createViewImageTool } from "../src/execution/view-image/tool.ts";
-import { registerImageHints } from "../src/execution/view-image/hints.ts";
 import { createAutoReasoning } from "../src/execution/auto-reasoning.ts";
 import { registerBackgroundShellUi } from "../src/execution/ui/background-shell.ts";
 import { METIS_EVENTS, isExecutionStatusRequest } from "../src/collaboration.ts";
@@ -27,16 +25,8 @@ export default function execution(pi: ExtensionAPI): void {
       }),
     );
     register(createWriteStdinTool(runtime.sessions, { showOutputWhenCollapsed: true }));
-    register(
-      createViewImageTool({
-        customRustBinariesDir: config.tools.customRustBinariesDir,
-        describeForTextModels: config.tools.viewImageFallback,
-        customRendering: config.ui.toolRenaming,
-      }),
-    );
   };
   registerCore();
-  registerImageHints(pi);
   const reasoning = createAutoReasoning(pi, () => runtime.config.tools.autoReasoning);
   pi.registerTool(reasoning.tool);
 
