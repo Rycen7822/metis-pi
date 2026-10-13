@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
+    "tsBuildInfoFile": ".work/tsc/condense.tsbuildinfo",
     "strict": true,
     "noEmitOnError": true,
     "types": [

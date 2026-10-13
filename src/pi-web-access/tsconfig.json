@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "tsBuildInfoFile": "../../.work/tsc/web-access.tsbuildinfo",
     "strictNullChecks": true
   },
   "include": [

@@ -3,7 +3,7 @@
 ## 环境与常用命令
 
 Node.js 最低版本见 [兼容性](compatibility.md)；开发类型与锁文件固定 Pi 1.2.0。使用完整 checkout 并保留锁文件和共享依赖布局，避免重复 TUI 实例影响组件身份。
-子代理开发与验证还需要 Python 3.11+；测试的独立 schema 校验依赖安装命令为 `python3 -m pip install -r test/subagents/requirements.txt`，运行核心只使用 Python 标准库。
+子代理开发与验证还需要 Python 3.11+；测试依赖（schema 校验、pytest 和 pytest-xdist）使用 `python3 -m pip install -r test/subagents/requirements.txt` 安装，运行核心只使用 Python 标准库。
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund
@@ -12,19 +12,21 @@ npm run prepare:subagents
 
 | 命令 | 范围 |
 | --- | --- |
-| `npm run check` | core、execution、condense、Web/Recall 及全部扩展入口类型检查，不生成文件。 |
+| `npm run check` | core、execution、condense、Web/Recall 及全部扩展入口类型检查，不生成 JS；各配置的增量缓存位于 `.work/tsc/`。 |
 | `npm run check:test` / `npm run check:condense` | 测试 TS / condense 类型。 |
 | `npm test` / `npm run test:fast` | 全部 Node 测试 / core 规则与渲染原语。 |
 | `npm run test:host` / `test:protocol` | 真实宿主接线及包内容 / 请求、回放、压缩和历史编辑。 |
 | `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
 | `npm run test:chrome` | 跨层界面、布局和复制测试。 |
-| `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为。 |
+| `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为；4 个进程按文件分配测试。 |
 | `npm run verify` | 项目与测试类型 + 全部测试 + pack dry-run。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
 | `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，均不进 Git。 |
 | `node scripts/copy-perf.mjs` | 测量渲染/提取成本，不测系统剪贴板延迟。 |
 
 先运行改动附近的已有测试；跨模块变更运行 verify，终端显示/交互变更再运行严格 PTY。文档变更核对事实、链接和实际包内容；验证结果随当次任务或提交报告，并明确未覆盖边界。
+
+子代理测试需要 pytest 9 的原生 `unittest.subTest` 支持。排查顺序相关问题时，用 `npm run test:subagents -- -n 0` 串行执行同一测试集合。
 
 ## 测试边界
 

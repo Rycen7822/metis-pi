@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "tsBuildInfoFile": "../../.work/tsc/session-recall.tsbuildinfo",
     "strictNullChecks": true
   },
   "include": [

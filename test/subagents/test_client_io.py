@@ -137,9 +137,9 @@ asyncio.run(daemon.serve(Path(sys.argv[1])))
                 self.assertFalse(partial.endswith(b'\n'))
                 try: await request(home,'shutdown',{'force':True},autostart=False)
                 except AgentError as exc:
-                    # A zero-work daemon may park after the unread reply has
-                    # closed. All deadline/partial-output assertions above stay.
-                    self.assertIn(exc.code,{'daemon_unavailable','daemon_idle'})
+                    # The idle daemon can exit before a shutdown reply;
+                    # its successful exit is checked below.
+                    self.assertIn(exc.code,{'daemon_unavailable','daemon_idle','connection_lost'})
                 await asyncio.wait_for(proc.wait(),3)
                 self.assertEqual(proc.returncode,0,(await proc.stderr.read()).decode())
             finally:

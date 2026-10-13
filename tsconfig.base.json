@@ -4,6 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,
+    "incremental": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true
   }

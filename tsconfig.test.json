@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.core.json",
   "compilerOptions": {
+    "tsBuildInfoFile": ".work/tsc/test.tsbuildinfo",
     "allowJs": true,
     "checkJs": false
   },

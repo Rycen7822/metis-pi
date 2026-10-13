@@ -40,7 +40,7 @@
     "prepare:subagents": "python3 scripts/prepare-subagents.py",
     "prepare": "npm run prepare:subagents",
     "prepack": "npm run build:plugins && npm run prepare:subagents",
-    "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/subagents -v",
+    "test:subagents": "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q test/subagents -n 4 --dist=loadfile",
     "build:plugins": "npm --prefix src/pi-web-access run build",
     "test:plugins": "npm --prefix src/pi-web-access test",
     "check:plugins": "tsc -p src/pi-web-access/tsconfig.json && tsc -p src/pi-session-recall/tsconfig.json"
