@@ -594,10 +594,14 @@ test(
         .filter((entry) => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length,
       1,
     );
+    const failureSettled = new Promise((resolve) => {
+      const off = loaded.session.subscribe((event) => {
+        if (event.type === "agent_settled" && turn >= 24) { off(); resolve(); }
+      });
+      t.after(off);
+    });
     await loaded.session.prompt("Run asynchronous failure proof");
-    await loaded.session.waitForIdle();
-    const failureDeadline = Date.now() + 15000;
-    while (turn < 24 && Date.now() < failureDeadline) await new Promise((resolve) => setTimeout(resolve, 25));
+    await failureSettled;
     await loaded.session.waitForIdle();
     assert.equal(turn, 24, "unobserved asynchronous failure still wakes the parent");
     const attention = loaded.session.sessionManager
