@@ -202,17 +202,17 @@ for raw in sys.stdin:
         event('initialize-received')
         if MODE == 'ignore_term_no_init':
             while True: time.sleep(1)
+        if MODE == 'close_stdin_after_init':
+            # Close before acknowledging: the client can resume on another CPU
+            # as soon as the reply is flushed, including during event logging.
+            os.close(0)
+            event('closing-stdin')
         reply(req, {"protocolVersion": "2025-06-18",
                     "capabilities": CAPABILITIES,
                     "serverInfo": {"name": "fake-stdio", "version": "1.0"}})
         if MODE == 'die_after_init':
             sys.exit(3)
         if MODE == 'close_stdin_after_init':
-            # The reply is flushed; the client's initialized-notification and
-            # tools/list writes happen AFTER our close(0) (the network round
-            # trip is slower than this synchronous close), so they hit EPIPE.
-            event('closing-stdin')
-            os.close(0)  # close OUR read end
             for _ in range(300):  # keep stdout open; exit when the host goes away
                 if os.getppid() == 1: break
                 time.sleep(0.1)
@@ -227,11 +227,10 @@ for raw in sys.stdin:
             while True: time.sleep(1)
         page = tools_page(req.get('params', {}).get('cursor'))
         if MODE == 'close_stdin_after_list':
-            # Deterministic EPIPE: the catalog answer goes out first, so the
-            # client's NEXT write (tools/call) is what hits the closed pipe.
-            reply(req, page)
+            # The next call must observe a closed pipe regardless of scheduling.
+            os.close(0)
             event('closing-stdin')
-            os.close(0)  # close OUR read end
+            reply(req, page)
             for _ in range(300):  # keep stdout open; exit when the host goes away
                 if os.getppid() == 1: break
                 time.sleep(0.1)

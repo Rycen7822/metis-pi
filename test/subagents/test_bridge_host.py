@@ -869,8 +869,8 @@ class StdioTransportFailureTests(BridgeHostCase):
         pass  # run_host raises on nonzero rc; strict mode turns stray rejections into failures
 
     def test_stdin_closed_after_init_is_a_lifecycle_error_not_a_crash(self):
-        # The notification+tools-list writes hit the closed pipe: the server
-        # closes its read end immediately after flushing the initialize reply.
+        # The server closes its read end before acknowledging initialization,
+        # so notification+tools-list writes hit the closed pipe on every CPU.
         srv = self.h.start_stdio(mode='close_stdin_after_init')
         cfg = stdio_cfg(server_env=srv['env'], approval_default='prompt')
         out = self.h.run_host([cfg], [
