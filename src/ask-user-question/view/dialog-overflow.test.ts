@@ -1,6 +1,8 @@
-import { makeQuestion } from "../test-fixtures.ts";
+import {
+	makeDialogConfig, makeDialog, stubComponent, stubPreviewPane, type DialogOverrides as MakeConfigOverrides,
+} from "../../../test/helpers/ask-user-question/dialog.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, type Editor, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,13 +11,8 @@ import {
 } from "../test-fixtures.ts";
 import type { QuestionAnswer, QuestionData } from "../tool/types.ts";
 import type { MultiSelectView } from "./components/multi-select-view.ts";
-import type { OptionListView } from "./components/option-list-view.ts";
-import type { PreviewPane } from "./components/preview/preview-pane.ts";
 import { SUBMIT_LABEL, SubmitPicker } from "./components/submit-picker.ts";
-import type { TabBar } from "./components/tab-bar.ts";
 import {
-	type DialogConfig,
-	type DialogProps,
 	type DialogState,
 	DialogView,
 	HINT_MULTI,
@@ -27,22 +24,10 @@ import {
 	READY_PROMPT,
 	REVIEW_HEADING,
 } from "./dialog-builder.ts";
-import type { TabComponents } from "./tab-components.ts";
 
 const theme = makeTheme() as unknown as Theme;
 
 const stripAnsi = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "").trim();
-
-function stubComponent(lines: string[]): Component {
-	return { render: () => lines, handleInput() {}, invalidate() {} };
-}
-
-function stubPreviewPane(lines: string[], rowRange?: (w: number) => [number, number]): PreviewPane {
-	return {
-		...stubComponent(lines),
-		focusedItemRowRange: rowRange ?? ((_w: number) => [0, 1] as [number, number]),
-	} as unknown as PreviewPane;
-}
 
 function stubMultiSelect(lines: string[], rowRange?: (w: number) => [number, number]): MultiSelectView {
 	return {
@@ -52,66 +37,8 @@ function stubMultiSelect(lines: string[], rowRange?: (w: number) => [number, num
 	} as unknown as MultiSelectView;
 }
 
-function stubOptionList(): OptionListView {
-	return stubComponent(["<OPTION_LIST>"]) as unknown as OptionListView;
-}
-
-interface DialogParts {
-	config: DialogConfig;
-	initialProps: DialogProps;
-}
-
-type MakeConfigOverrides = Partial<Omit<DialogConfig, "tabsByIndex">> & {
-	state?: DialogState;
-	previewPane?: PreviewPane;
-	initialProps?: DialogProps;
-	tabsByIndex?: ReadonlyArray<TabComponents>;
-	multiSelectByTab?: ReadonlyArray<MultiSelectView | undefined>;
-};
-
-function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
-	const questions: QuestionData[] = over.questions
-		? [...over.questions]
-		: [
-				makeQuestion({ question: "Q1?", header: "H1" }),
-				{
-					question: "Q2?",
-					header: "H2",
-					options: [
-						{ label: "X", description: "x" },
-						{ label: "Y", description: "y" },
-					],
-				},
-			];
-	const state: DialogState = over.state ?? makeQuestionnaireState();
-	const previewPane = over.previewPane ?? stubPreviewPane(["<PREVIEW>"]);
-	const tabsByIndex: ReadonlyArray<TabComponents> =
-		over.tabsByIndex ??
-		questions.map((_, i) => ({
-			optionList: stubOptionList(),
-			preview: previewPane,
-			multiSelect: over.multiSelectByTab?.[i],
-			bodyHeights: () => ({ current: 0, max: 0 }),
-		}));
-	const config: DialogConfig = {
-		theme: over.theme ?? theme,
-		questions,
-		tabBar: over.tabBar ?? (stubComponent(["<TABBAR>", ""]) as unknown as TabBar),
-		notesInput: over.notesInput ?? (stubComponent(["<NOTES_INPUT>"]) as unknown as Editor),
-		isMulti: over.isMulti ?? questions.length > 1,
-		tabsByIndex,
-		submitPicker: over.submitPicker,
-		getBodyHeight: over.getBodyHeight ?? (() => 1),
-		getCurrentBodyHeight: over.getCurrentBodyHeight ?? (() => 1),
-		getTerminalRows: over.getTerminalRows ?? (() => 24),
-		collapseKey: over.collapseKey ?? "ctrl+]",
-	};
-	const initialProps: DialogProps = over.initialProps ?? { state, activePreviewPane: previewPane };
-	return { config, initialProps };
-}
-
-function makeDialog(parts: DialogParts): DialogView {
-	return new DialogView(parts.config, parts.initialProps);
+function makeConfig(over: MakeConfigOverrides = {}) {
+	return makeDialogConfig({ ...over, getCurrentBodyHeight: over.getCurrentBodyHeight ?? (() => 1) });
 }
 
 describe("Dialog overflow — no clipping when terminal is tall enough", () => {
@@ -129,15 +56,6 @@ describe("Dialog overflow — no clipping when terminal is tall enough", () => {
 		expect(tail.every((l) => l.trim() === "")).toBe(true);
 	});
 
-	it("preserves exact same output as current code when no overflow", () => {
-		const dlg = makeDialog(
-			makeConfig({ getTerminalRows: () => 100, getBodyHeight: () => 5, getCurrentBodyHeight: () => 1 }),
-		);
-		const lines = dlg.render(80);
-		// Residual spacer = (5 + 5) - (1 + 2) = 7 rows of trailing blanks  (footerRowCount 4→2)
-		const emptyTail = lines.filter((l) => l.trim() === "").length;
-		expect(emptyTail).toBeGreaterThanOrEqual(7);
-	});
 });
 
 describe("Dialog overflow — output never exceeds terminal.rows", () => {

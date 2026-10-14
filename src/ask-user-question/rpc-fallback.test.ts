@@ -1,3 +1,4 @@
+import type { QuestionParams } from "./tool/types.ts";
 import { createMockCtx, createMockPi, mockStdout } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { BEL, registerAskUserQuestionTool } from "./ask-user-question.ts";
@@ -41,7 +42,7 @@ const SINGLE = {
 			],
 		},
 	],
-};
+} satisfies QuestionParams;
 
 const MULTI = {
 	questions: [
@@ -56,10 +57,10 @@ const MULTI = {
 			],
 		},
 	],
-};
+} satisfies QuestionParams;
 
 async function run(tool: ReturnType<typeof register>, params: unknown, ctx: unknown) {
-	return await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+	return await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 }
 
 describe("hasDialogUI", () => {

@@ -1,7 +1,7 @@
 import { createMockCtx, createMockPi, mockStdout } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { BEL, registerAskUserQuestionTool } from "./ask-user-question.ts";
-import { MAX_QUESTIONS, type QuestionnaireResult } from "./tool/types.ts";
+import { MAX_QUESTIONS, type QuestionParams, type QuestionnaireResult } from "./tool/types.ts";
 
 type CustomFn = (...args: unknown[]) => Promise<unknown>;
 
@@ -21,16 +21,16 @@ const BASE_PARAMS = {
 		{
 			question: "Which?",
 			header: "Pick",
-			options: [{ label: "A" }, { label: "B" }],
+			options: [{ label: "A", description: "" }, { label: "B", description: "" }],
 		},
 	],
-};
+} satisfies QuestionParams;
 
 describe("ask_user_question.execute — early returns", () => {
 	it("returns cancelled result + ERROR_NO_UI when !hasUI", async () => {
 		const tool = register();
 		const ctx = createMockCtx({ hasUI: false });
-		const r = await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "no_ui" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("UI not available") });
 	});
@@ -38,11 +38,10 @@ describe("ask_user_question.execute — early returns", () => {
 	it("returns cancelled result when any question has empty options", async () => {
 		const tool = register();
 		const ctx = ctxWithCustom(null);
-		const r = await tool.execute?.(
-			"tc",
+		const r = await tool.execute("tc",
 			{ questions: [{ question: "Q?", options: [] }] } as never,
-			undefined as never,
-			undefined as never,
+			undefined,
+			undefined,
 			ctx as never,
 		);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "empty_options" });
@@ -52,11 +51,10 @@ describe("ask_user_question.execute — early returns", () => {
 	it("returns ERROR_NO_QUESTIONS text when questions array is empty", async () => {
 		const tool = register();
 		const ctx = ctxWithCustom(null);
-		const r = await tool.execute?.(
-			"tc",
+		const r = await tool.execute("tc",
 			{ questions: [] } as never,
-			undefined as never,
-			undefined as never,
+			undefined,
+			undefined,
 			ctx as never,
 		);
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "no_questions" });
@@ -68,13 +66,12 @@ describe("ask_user_question.execute — early returns", () => {
 		const ctx = ctxWithCustom(null);
 		const tooMany = Array.from({ length: MAX_QUESTIONS + 1 }, (_, i) => ({
 			question: `Q${i}?`,
-			options: [{ label: "A" }],
+			options: [{ label: "A", description: "" }],
 		}));
-		const r = await tool.execute?.(
-			"tc",
+		const r = await tool.execute("tc",
 			{ questions: tooMany } as never,
-			undefined as never,
-			undefined as never,
+			undefined,
+			undefined,
 			ctx as never,
 		);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "too_many_questions" });
@@ -95,7 +92,7 @@ describe("ask_user_question.execute — terminal attention", () => {
 			const custom = vi.fn(async () => ({ answers: [], cancelled: true }));
 			const ctx = createMockCtx({ hasUI: true, ui: { custom } as never });
 
-			await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, ctx as never);
+			await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, ctx as never);
 
 			expect(stdout.stdoutWrite).toHaveBeenCalledTimes(1);
 			expect(stdout.stdoutWrite).toHaveBeenCalledWith(BEL);
@@ -113,14 +110,13 @@ describe("ask_user_question.execute — terminal attention", () => {
 		const ttyStdout = mockStdout(true);
 		try {
 			const noUi = createMockCtx({ hasUI: false });
-			await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, noUi as never);
+			await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, noUi as never);
 
 			const invalid = createMockCtx({ hasUI: true, ui: { custom: vi.fn() } as never });
-			await tool.execute?.(
-				"tc",
+			await tool.execute("tc",
 				{ questions: [] } as never,
-				undefined as never,
-				undefined as never,
+				undefined,
+				undefined,
 				invalid as never,
 			);
 
@@ -133,7 +129,7 @@ describe("ask_user_question.execute — terminal attention", () => {
 		try {
 			const custom = vi.fn(async () => ({ answers: [], cancelled: true }));
 			const nonTty = createMockCtx({ hasUI: true, ui: { custom } as never });
-			await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, nonTty as never);
+			await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, nonTty as never);
 
 			expect(nonTtyStdout.stdoutWrite).not.toHaveBeenCalled();
 		} finally {
@@ -159,11 +155,10 @@ describe("ask_user_question.execute — terminal attention", () => {
 			}));
 			const ctx = createMockCtx({ hasUI: true, ui: { custom } as never });
 
-			const result = await tool.execute?.(
-				"tc",
+			const result = await tool.execute("tc",
 				BASE_PARAMS as never,
-				undefined as never,
-				undefined as never,
+				undefined,
+				undefined,
 				ctx as never,
 			);
 
@@ -185,7 +180,7 @@ describe("ask_user_question.execute — terminal attention", () => {
 			const custom = vi.fn(async () => ({ answers: [], cancelled: true }));
 			const ctx = createMockCtx({ hasUI: true, ui: { custom } as never });
 
-			await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, ctx as never);
+			await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, ctx as never);
 
 			expect(custom).toHaveBeenCalledOnce();
 			expect(stdout.stdoutWrite).not.toHaveBeenCalled();
@@ -209,9 +204,9 @@ describe("ask_user_question.execute — undefined result from ctx.ui.custom (RPC
 			ui: { custom, select: undefined, input: undefined } as never,
 		});
 		const params = {
-			questions: [{ question: "Q?", header: "H", options: [{ label: "A" }, { label: "B" }] }],
+			questions: [{ question: "Q?", header: "H", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }],
 		};
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "no_custom_ui" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("cannot render the questionnaire") });
 		expect(r?.content[0]).toMatchObject({ text: expect.not.stringContaining("declined") });
@@ -222,8 +217,8 @@ describe("ask_user_question.execute — new runtime guards (CC parity)", () => {
 	it("widens empty_options check to < MIN_OPTIONS (single-option rejected)", async () => {
 		const tool = register();
 		const ctx = ctxWithCustom(null);
-		const params = { questions: [{ question: "Q?", header: "H", options: [{ label: "A" }] }] };
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const params = { questions: [{ question: "Q?", header: "H", options: [{ label: "A", description: "" }] }] };
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "empty_options" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("at least 2 options") });
 	});
@@ -233,11 +228,11 @@ describe("ask_user_question.execute — new runtime guards (CC parity)", () => {
 		const ctx = ctxWithCustom(null);
 		const params = {
 			questions: [
-				{ question: "Same?", header: "H1", options: [{ label: "A" }, { label: "B" }] },
-				{ question: "Same?", header: "H2", options: [{ label: "C" }, { label: "D" }] },
+				{ question: "Same?", header: "H1", options: [{ label: "A", description: "" }, { label: "B", description: "" }] },
+				{ question: "Same?", header: "H2", options: [{ label: "C", description: "" }, { label: "D", description: "" }] },
 			],
 		};
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "duplicate_question" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("Question text must be unique") });
 	});
@@ -250,11 +245,11 @@ describe("ask_user_question.execute — new runtime guards (CC parity)", () => {
 				{
 					question: "Pick?",
 					header: "Pick",
-					options: [{ label: "A" }, { label: "A" }],
+					options: [{ label: "A", description: "" }, { label: "A", description: "" }],
 				},
 			],
 		};
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "duplicate_option_label" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("Option labels must be unique") });
 	});
@@ -267,11 +262,11 @@ describe("ask_user_question.execute — new runtime guards (CC parity)", () => {
 				{
 					question: "Pick?",
 					header: "Pick",
-					options: [{ label: "Other" }, { label: "B" }],
+					options: [{ label: "Other", description: "" }, { label: "B", description: "" }],
 				},
 			],
 		};
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "reserved_label" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("reserved") });
 	});
@@ -285,11 +280,11 @@ describe("ask_user_question.execute — new runtime guards (CC parity)", () => {
 					question: "Pick?",
 					header: "Pick",
 					multiSelect: true,
-					options: [{ label: "Type something." }, { label: "B" }],
+					options: [{ label: "Type something.", description: "" }, { label: "B", description: "" }],
 				},
 			],
 		};
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "reserved_label" });
 	});
 });
@@ -325,7 +320,7 @@ describe("ask_user_question.execute — event emission", () => {
 		const tool = captured.tools.get("ask_user_question")!;
 		const { custom, ctx } = ctxWithCustomFn();
 
-		await tool.execute?.("tc", validParams() as never, undefined as never, undefined as never, ctx as never);
+		await tool.execute("tc", validParams() as never, undefined, undefined, ctx as never);
 
 		expect(mockEmit).toHaveBeenCalledWith("rpiv:ask-user:prompt", {
 			questions: [
@@ -358,11 +353,10 @@ describe("ask_user_question.execute — event emission", () => {
 		registerAskUserQuestionTool(pi);
 		const tool = captured.tools.get("ask_user_question")!;
 
-		const cancelled = await tool.execute?.(
-			"tc",
+		const cancelled = await tool.execute("tc",
 			validParams() as never,
-			undefined as never,
-			undefined as never,
+			undefined,
+			undefined,
 			ctxWithCustom({ answers: [], cancelled: true }) as never,
 		);
 		expect(cancelled?.details).toMatchObject({ cancelled: true });
@@ -376,7 +370,7 @@ describe("ask_user_question.execute — event emission", () => {
 			} as never,
 		});
 		await expect(
-			tool.execute?.("tc", validParams() as never, undefined as never, undefined as never, rejected as never),
+			tool.execute("tc", validParams() as never, undefined, undefined, rejected as never),
 		).rejects.toThrow("UI failed");
 
 		expect(mockEmit.mock.calls.filter(([name]) => name === "rpiv:ask-user:blocked")).toEqual([
@@ -394,7 +388,7 @@ describe("ask_user_question.execute — event emission", () => {
 
 		// Use valid params so only !hasUI causes the early return
 		const ctx = createMockCtx({ hasUI: false });
-		await tool.execute?.("tc", validParams() as never, undefined as never, undefined as never, ctx as never);
+		await tool.execute("tc", validParams() as never, undefined, undefined, ctx as never);
 
 		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(false);
 	});
@@ -405,7 +399,7 @@ describe("ask_user_question.execute — event emission", () => {
 		const tool = captured.tools.get("ask_user_question")!;
 
 		const ctx = createMockCtx({ hasUI: true, ui: { custom: vi.fn() } as never });
-		await tool.execute?.("tc", { questions: [] } as never, undefined as never, undefined as never, ctx as never);
+		await tool.execute("tc", { questions: [] } as never, undefined, undefined, ctx as never);
 
 		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(false);
 	});
@@ -437,7 +431,7 @@ describe("ask_user_question.execute — event emission", () => {
 			],
 		};
 
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 
 		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(true);
 		const payload = captured.eventsEmitted.get("rpiv:ask-user:prompt")![0] as Record<string, unknown>;

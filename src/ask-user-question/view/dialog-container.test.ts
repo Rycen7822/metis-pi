@@ -1,25 +1,23 @@
-import { makeQuestion } from "../test-fixtures.ts";
+import {
+	makeDialogConfig as makeConfig, makeDialog, stubComponent, stubPreviewPane, type DialogOverrides,
+} from "../../../test/helpers/ask-user-question/dialog.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, Editor } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
 import {
+	makeQuestion,
 	makeQuestionnaireState,
 	makeMultiSelectViewProps,
 	makeSubmitPickerPropsFromState as submitPickerPropsFromState,
 } from "../test-fixtures.ts";
 import type { QuestionAnswer, QuestionData } from "../tool/types.ts";
 import { MultiSelectView } from "./components/multi-select-view.ts";
-import type { OptionListView } from "./components/option-list-view.ts";
-import type { PreviewPane } from "./components/preview/preview-pane.ts";
 import { CANCEL_LABEL, SUBMIT_LABEL, SubmitPicker } from "./components/submit-picker.ts";
 import type { TabBar } from "./components/tab-bar.ts";
 import {
-	type DialogConfig,
-	type DialogProps,
 	type DialogState,
-	DialogView,
 	HINT_MULTI,
 	HINT_PART_CLEAR,
 	HINT_PART_COLLAPSE,
@@ -32,94 +30,8 @@ import {
 	READY_PROMPT,
 	REVIEW_HEADING,
 } from "./dialog-builder.ts";
-import type { TabComponents } from "./tab-components.ts";
 
 const theme = makeTheme() as unknown as Theme;
-
-function stubComponent(lines: string[]): Component {
-	return {
-		render: () => lines,
-		handleInput() {},
-		invalidate() {},
-	};
-}
-
-function stubPreviewPane(lines: string[]): PreviewPane {
-	return {
-		...stubComponent(lines),
-		focusedItemRowRange: (_w: number) => [0, 1] as [number, number],
-	} as unknown as PreviewPane;
-}
-
-function stubOptionList(): OptionListView {
-	return stubComponent(["<OPTION_LIST>"]) as unknown as OptionListView;
-}
-
-type MakeConfigOverrides = Partial<Omit<DialogConfig, "tabsByIndex">> & {
-	state?: DialogState;
-	previewPane?: PreviewPane;
-	initialProps?: DialogProps;
-	tabsByIndex?: ReadonlyArray<TabComponents>;
-	multiSelectByTab?: ReadonlyArray<MultiSelectView | undefined>;
-};
-
-interface DialogParts {
-	config: DialogConfig;
-	initialProps: DialogProps;
-}
-
-function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
-	const questions: QuestionData[] = over.questions
-		? [...over.questions]
-		: [
-				makeQuestion({ question: "Q1?", header: "H1" }),
-				{
-					question: "Q2?",
-					header: "H2",
-					options: [
-						{ label: "X", description: "x" },
-						{ label: "Y", description: "y" },
-					],
-				},
-			];
-	const state: DialogState = over.state ?? makeQuestionnaireState();
-	const previewPane = over.previewPane ?? stubPreviewPane(["<PREVIEW>"]);
-	const tabsByIndex: ReadonlyArray<TabComponents> =
-		over.tabsByIndex ??
-		questions.map((_, i) => ({
-			optionList: stubOptionList(),
-			preview: previewPane,
-			multiSelect: over.multiSelectByTab?.[i],
-			bodyHeights: () => ({ current: 0, max: 0 }),
-		}));
-	const config: DialogConfig = {
-		theme: over.theme ?? theme,
-		questions,
-		tabBar: over.tabBar ?? (stubComponent(["<TABBAR>", ""]) as unknown as TabBar),
-		notesInput: over.notesInput ?? (stubComponent(["<NOTES_INPUT>"]) as unknown as Editor),
-		isMulti: over.isMulti ?? questions.length > 1,
-		tabsByIndex,
-		submitPicker: over.submitPicker,
-		getBodyHeight: over.getBodyHeight ?? (() => 1),
-		getCurrentBodyHeight:
-			over.getCurrentBodyHeight ??
-			((w) => {
-				const idx = state.currentTab;
-				const q = questions[idx];
-				const mso = tabsByIndex[idx]?.multiSelect;
-				if (q?.multiSelect === true && mso) return (mso as unknown as Component).render(w).length;
-				return (previewPane as unknown as Component).render(w).length;
-			}),
-		getTerminalRows: over.getTerminalRows ?? (() => 24),
-		collapseKey: over.collapseKey ?? "ctrl+]",
-	};
-	const initialProps: DialogProps = over.initialProps ?? { state, activePreviewPane: previewPane };
-	return { config, initialProps };
-}
-
-function makeDialog(parts: DialogParts): DialogView {
-	return new DialogView(parts.config, parts.initialProps);
-}
 
 describe("makeDialog — single-question mode", () => {
 	it("omits the TabBar entirely", () => {
@@ -442,8 +354,8 @@ describe("makeDialog — Submit tab", () => {
 		expect(joined).not.toContain(HINT_MULTI);
 	});
 
-	it.each<[string, ReturnType<typeof makeConfig>["config"]["questions"]]>([
-		["both with headers", undefined as never],
+	it.each<[string, DialogOverrides["questions"]]>([
+		["both with headers", undefined],
 		[
 			"both with short single-char headers",
 			[

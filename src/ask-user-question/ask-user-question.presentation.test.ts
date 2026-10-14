@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
 import { HOST_ALLOCATED_ROWS, resolvePresentation } from "./presentation.ts";
 import type { QuestionnaireSessionComponent } from "./state/questionnaire-session.ts";
-import type { QuestionnaireResult } from "./tool/types.ts";
+import type { QuestionParams, QuestionnaireResult } from "./tool/types.ts";
 import { HINT_PART_CANCEL } from "./view/dialog-builder.ts";
 
 type Factory = (
@@ -25,10 +25,10 @@ const twoOptions = {
 		{
 			question: "Where should the dialog appear?",
 			header: "Layout",
-			options: [{ label: "Inline" }, { label: "Overlay" }],
+			options: [{ label: "Inline", description: "" }, { label: "Overlay", description: "" }],
 		},
 	],
-};
+} satisfies QuestionParams;
 // Renders 19 rows at width 100 — taller than the inline budget on a 24-row terminal.
 const fourDescribedOptions = {
 	questions: [
@@ -41,7 +41,7 @@ const fourDescribedOptions = {
 			})),
 		},
 	],
-};
+} satisfies QuestionParams;
 const theme = {
 	fg: (_color: string, text: string) => text,
 	bg: (_color: string, text: string) => text,
@@ -69,7 +69,7 @@ function setup(custom: (factory: Factory, options?: CustomOptions) => Promise<un
 	const onTerminalInput = vi.fn(() => removeListener);
 	const ctx = createMockCtx({ hasUI: true, ui: { custom: vi.fn(custom), onTerminalInput } as never });
 	const run = (params: object) =>
-		captured.tools.get("ask_user_question")!.execute!("tc", params as never, undefined, undefined, ctx as never);
+		captured.tools.get("ask_user_question")!.execute("tc", params as never, undefined, undefined, ctx as never);
 	return { run, ctx, onTerminalInput, removeListener };
 }
 

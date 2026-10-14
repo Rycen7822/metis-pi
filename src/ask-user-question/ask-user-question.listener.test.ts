@@ -1,3 +1,4 @@
+import type { QuestionParams } from "./tool/types.ts";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMockPi } from "@juicesharp/rpiv-test-utils";
@@ -32,10 +33,10 @@ const params = {
 		{
 			question: "Pick one",
 			header: "Choice",
-			options: [{ label: "Alpha" }, { label: "Beta" }],
+			options: [{ label: "Alpha", description: "" }, { label: "Beta", description: "" }],
 		},
 	],
-};
+} satisfies QuestionParams;
 
 interface FakeHandle {
 	hide(): void;
@@ -150,7 +151,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(notify).toHaveBeenCalledTimes(1);
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 		// execute's finally must tear the raw listener down once the tool resolves.
 		expect(removeListener).toHaveBeenCalledTimes(1);
 	});
@@ -173,7 +174,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(handle.isHidden()).toBe(false);
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 	});
 
 	it("ignores non-matching keys", async () => {
@@ -186,7 +187,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(notify).not.toHaveBeenCalled();
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 	});
 
 	it("leaves the key to another focused overlay (visible but unfocused questionnaire)", async () => {
@@ -199,7 +200,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(handle.isHidden()).toBe(false);
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 	});
 
 	it("host with an overlay handle but no raw input keeps the overlay visible on collapse (fallback row, no trap)", async () => {
@@ -241,7 +242,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			},
 		);
 		const ctx = { hasUI: true, ui: { custom } } as never;
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 	});
 
 	it("honours a configured collapseKey (alt+o toggles, ctrl+] does not)", async () => {
@@ -255,7 +256,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(handle.isHidden()).toBe(true);
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 	});
 
 	it("footer hint and collapsed row name the configured collapseKey (#176)", async () => {
@@ -274,7 +275,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(collapsed[0]).toContain("Alt+O to expand");
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 	});
 
 	it("does not register a listener when collapseKey is 'off'", async () => {
@@ -288,7 +289,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(rendered).toContain("Esc to cancel");
 			done({ answers: [], cancelled: true });
 		});
-		await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx);
+		await tool.execute("tc", params as never, undefined, undefined, ctx);
 		expect(onTerminalInput).not.toHaveBeenCalled();
 	});
 });

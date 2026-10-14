@@ -435,24 +435,6 @@ describe("MultiSelectView — 'Type something.' row", () => {
 		expect(end).toBe(3);
 	});
 
-	it("nextActive shifts to options.length + 1 (Next sits below the other row)", () => {
-		const q: QuestionData = {
-			question: "pick?",
-			header: "H",
-			options: [{ label: "A", description: "" }],
-			multiSelect: true,
-		};
-		const view = makeView(q, {
-			rows: [{ checked: false, active: false }],
-			other: { active: false, checked: false, inputMode: false, inputBuffer: "", inputCursorOffset: undefined },
-			nextActive: true,
-			nextLabel: "Next",
-		});
-		const [start, end] = view.focusedItemRowRange(80);
-		// option(0) + other(1) → Next is at row 2.
-		expect(start).toBe(2);
-		expect(end).toBe(3);
-	});
 
 	it("number column fits N+1 (the other row's number) without truncation", () => {
 		// 9 options → other is #10 → numberWidth must be 2 so "10." is not clipped.

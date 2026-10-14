@@ -40,7 +40,7 @@ describe("ask_user_question — bare CR in model-supplied text (#192)", () => {
 		}) as unknown as CustomFn;
 		const ctx = createMockCtx({ hasUI: true, ui: { custom } as never });
 
-		await tool.execute?.("tc", CR_PARAMS as never, undefined as never, undefined as never, ctx as never);
+		await tool.execute("tc", CR_PARAMS as never, undefined, undefined, ctx as never);
 
 		expect(custom).toHaveBeenCalledTimes(1);
 		expect(rendered).toContain("Which option is best?");
@@ -56,7 +56,7 @@ describe("ask_user_question — bare CR in model-supplied text (#192)", () => {
 		const custom = vi.fn(async () => ({ answers: [], cancelled: false })) as unknown as CustomFn;
 		const ctx = createMockCtx({ hasUI: true, ui: { custom } as never });
 
-		await tool.execute?.("tc", CR_PARAMS as never, undefined as never, undefined as never, ctx as never);
+		await tool.execute("tc", CR_PARAMS as never, undefined, undefined, ctx as never);
 
 		expect(captured.eventsEmitted.get("rpiv:ask-user:prompt")![0]).toEqual({
 			questions: [
@@ -82,7 +82,7 @@ describe("ask_user_question — bare CR in model-supplied text (#192)", () => {
 			ui: { select: select as never, input: vi.fn(async () => "") as never } as never,
 		});
 
-		const r = await tool.execute?.("tc", CR_PARAMS as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", CR_PARAMS as never, undefined, undefined, ctx as never);
 
 		const [title, options] = select.mock.calls[0]!;
 		expect(title).toContain("[Pick] Which option is best?");
@@ -116,7 +116,7 @@ describe("ask_user_question — bare CR in model-supplied text (#192)", () => {
 			],
 		};
 
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 
 		expect(r?.details).toMatchObject({ cancelled: true, error: "reserved_label" });
 		expect(custom).not.toHaveBeenCalled();
@@ -139,7 +139,7 @@ describe("ask_user_question — bare CR in model-supplied text (#192)", () => {
 			],
 		};
 
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
+		const r = await tool.execute("tc", params as never, undefined, undefined, ctx as never);
 
 		expect(r?.details).toMatchObject({ cancelled: true, error: "duplicate_option_label" });
 		expect(custom).not.toHaveBeenCalled();
