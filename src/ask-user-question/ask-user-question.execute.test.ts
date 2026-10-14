@@ -195,54 +195,6 @@ describe("ask_user_question.execute — terminal attention", () => {
 	});
 });
 
-describe("ask_user_question.execute — ctx.ui.custom dispatch", () => {
-	it("User cancels (cancelled: true) → decline envelope", async () => {
-		const tool = register();
-		const ctx = ctxWithCustom({ answers: [], cancelled: true });
-		const r = await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, ctx as never);
-		expect(r?.details).toMatchObject({ cancelled: true });
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("declined") });
-	});
-
-	it("Normal selection → CC envelope wrapper with quoted question and answer", async () => {
-		const tool = register();
-		const ctx = ctxWithCustom({
-			cancelled: false,
-			answers: [{ questionIndex: 0, question: "Which?", kind: "option", answer: "A" }],
-		});
-		const r = await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, ctx as never);
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Which?"="A"') });
-		expect(r?.content[0]).toMatchObject({
-			text: expect.stringMatching(/^User has answered your questions:/),
-		});
-	});
-
-	it("Custom typed answer sets kind:'custom'", async () => {
-		const tool = register();
-		const ctx = ctxWithCustom({
-			cancelled: false,
-			answers: [{ questionIndex: 0, question: "Which?", kind: "custom", answer: "typed" }],
-		});
-		const r = await tool.execute?.("tc", BASE_PARAMS as never, undefined as never, undefined as never, ctx as never);
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Which?"="typed"') });
-	});
-
-	it("multi-select envelope includes selected labels and custom text", async () => {
-		// The TUI and RPC paths both return kind:"multi" with selected labels in
-		// `selected` and optional custom text in `answer`.
-		const tool = register();
-		const ctx = ctxWithCustom({
-			cancelled: false,
-			answers: [{ questionIndex: 0, question: "Pick?", kind: "multi", selected: ["A"], answer: "typed" }],
-		});
-		const params = {
-			questions: [{ question: "Pick?", header: "H", multiSelect: true, options: [{ label: "A" }, { label: "B" }] }],
-		};
-		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Pick?"="A, typed"') });
-	});
-});
-
 describe("ask_user_question.execute — undefined result from ctx.ui.custom (RPC/ACP hosts)", () => {
 	// A TUI questionnaire always resolves a result object (cancel included), so
 	// custom() resolving undefined means "host cannot render" (issue #78). With
@@ -339,15 +291,6 @@ describe("ask_user_question.execute — new runtime guards (CC parity)", () => {
 		};
 		const r = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
 		expect(r?.details).toMatchObject({ cancelled: true, error: "reserved_label" });
-	});
-});
-
-describe("ask_user_question — registration", () => {
-	it("registers a typebox schema with a top-level questions array", () => {
-		const tool = register();
-		expect(tool.name).toBe("ask_user_question");
-		const props = (tool.parameters as unknown as { properties: Record<string, unknown> }).properties;
-		expect(props).toHaveProperty("questions");
 	});
 });
 

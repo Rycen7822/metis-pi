@@ -73,7 +73,7 @@ function makePane(q: QuestionData, terminalWidth: number, selectedIndex = 0) {
 		getGlobalLeftWidth: (paneWidth) => adaptiveLeftWidth(items, items.length, paneWidth),
 	});
 	pane.setProps({ notesVisible: false, hasNote: false, selectedIndex, focused: true, inputMode: false });
-	return { pane, previewBlock };
+	return { pane, previewBlock, optionListView };
 }
 
 describe("PreviewPane — narrow terminals with real Markdown", () => {
@@ -97,6 +97,22 @@ describe("PreviewPane — narrow terminals with real Markdown", () => {
 		expect(lines.length).toBe(pane.naturalHeight(width));
 		expect(pane.maxNaturalHeight(width)).toBe(lines.length);
 	});
+});
+
+it.each([80, 120])("keeps the preview maximum stable across unequal Markdown bodies at width %i", width => {
+	const q = question(3, 40);
+	q.options[0]!.preview = code(3, "short_");
+	delete q.options[2]!.preview;
+	const { pane, optionListView } = makePane(q, width);
+	const maximum = pane.maxNaturalHeight(width);
+	expect(maximum).toBeGreaterThan(pane.naturalHeight(width));
+	for (const selectedIndex of [0, 1, 2]) {
+		optionListView.setProps({ selectedIndex, focused: true, inputBuffer: "" });
+		pane.setProps({ notesVisible: false, hasNote: false, selectedIndex, focused: true, inputMode: false });
+		expect(pane.naturalHeight(width)).toBe(pane.render(width).length);
+		expect(pane.naturalHeight(width)).toBeLessThanOrEqual(maximum);
+		expect(pane.maxNaturalHeight(width)).toBe(maximum);
+	}
 });
 
 describe("PreviewBlockRenderer — fitting a row allowance", () => {

@@ -1,3 +1,4 @@
+import { makeQuestion } from "../test-fixtures.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Editor, visibleWidth } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
@@ -72,14 +73,7 @@ function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
 	const questions: QuestionData[] = over.questions
 		? [...over.questions]
 		: [
-				{
-					question: "Q1?",
-					header: "H1",
-					options: [
-						{ label: "A", description: "a" },
-						{ label: "B", description: "b" },
-					],
-				},
+				makeQuestion({ question: "Q1?", header: "H1" }),
 				{
 					question: "Q2?",
 					header: "H2",

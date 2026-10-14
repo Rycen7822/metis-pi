@@ -1,3 +1,4 @@
+import { makeQuestion } from "../test-fixtures.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Editor } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -71,14 +72,7 @@ function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
 	const questions: QuestionData[] = over.questions
 		? [...over.questions]
 		: [
-				{
-					question: "Q1?",
-					header: "H1",
-					options: [
-						{ label: "A", description: "a" },
-						{ label: "B", description: "b" },
-					],
-				},
+				makeQuestion({ question: "Q1?", header: "H1" }),
 				{
 					question: "Q2?",
 					header: "H2",
@@ -449,14 +443,7 @@ describe("makeDialog — Submit tab", () => {
 		[
 			"both with short single-char headers",
 			[
-				{
-					question: "Q1?",
-					header: "1",
-					options: [
-						{ label: "A", description: "a" },
-						{ label: "B", description: "b" },
-					],
-				},
+				makeQuestion({ question: "Q1?", header: "1" }),
 				{
 					question: "Q2?",
 					header: "2",
@@ -470,14 +457,7 @@ describe("makeDialog — Submit tab", () => {
 		[
 			"mixed: tab 0 short header, tab 1 longer header",
 			[
-				{
-					question: "Q1?",
-					header: "1",
-					options: [
-						{ label: "A", description: "a" },
-						{ label: "B", description: "b" },
-					],
-				},
+				makeQuestion({ question: "Q1?", header: "1" }),
 				{
 					question: "Q2?",
 					header: "H2",
@@ -583,14 +563,7 @@ describe("makeDialog — body residual padding", () => {
 				{ label: "Ops", description: "Ops" },
 			],
 		};
-		const singleQ: QuestionData = {
-			question: "Q1",
-			header: "H1",
-			options: [
-				{ label: "A", description: "a" },
-				{ label: "B", description: "b" },
-			],
-		};
+		const singleQ: QuestionData = makeQuestion({ question: "Q1", header: "H1" });
 		const questions: QuestionData[] = [singleQ, multiQ];
 		const stateTab0: DialogState = makeQuestionnaireState();
 		const stateTab1: DialogState = { ...stateTab0, currentTab: 1 };

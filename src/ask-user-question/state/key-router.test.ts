@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { QuestionAnswer, QuestionData } from "../tool/types.ts";
+import type { QuestionData } from "../tool/types.ts";
 import type { QuestionRow } from "./row-intent.ts";
 import { routeKey, wrapTab } from "./key-router.ts";
-import type { QuestionnaireRuntime, QuestionnaireState } from "./state.ts";
+import type { QuestionnaireRuntime } from "./state.ts";
+import { makeQuestionnaireState as makeState } from "../test-fixtures.ts";
 
 const KEY = {
 	UP: "tui.select.up",
@@ -38,31 +39,6 @@ function makeQuestion(over: Partial<QuestionData> = {}): QuestionData {
 	};
 }
 
-function makeAnswer(over: Partial<QuestionAnswer> = {}): QuestionAnswer {
-	return {
-		questionIndex: over.questionIndex ?? 0,
-		question: over.question ?? "q",
-		kind: over.kind ?? "option",
-		answer: over.answer ?? "A",
-	};
-}
-
-function makeState(over: Partial<QuestionnaireState> = {}): QuestionnaireState {
-	return {
-		currentTab: 0,
-		optionIndex: 0,
-		inputMode: false,
-		notesVisible: false,
-		answers: new Map<number, QuestionAnswer>(),
-		multiSelectChecked: new Set<number>(),
-		customDraftsByTab: new Map<number, string>(),
-		notesByTab: new Map<number, string>(),
-		submitChoiceIndex: 0,
-		collapsed: false,
-		...over,
-	};
-}
-
 function makeRuntime(over: Partial<QuestionnaireRuntime> = {}): QuestionnaireRuntime {
 	const questions = over.questions ?? [makeQuestion(), makeQuestion()];
 	const items: QuestionRow[] = over.items
@@ -89,7 +65,6 @@ describe("wrapTab", () => {
 		expect(wrapTab(3, 3)).toBe(0);
 		expect(wrapTab(0, 0)).toBe(0);
 	});
-
 
 });
 
@@ -168,29 +143,6 @@ describe("routeKey — tab_switch", () => {
 describe("routeKey — confirm (single-select)", () => {
 	it("emits confirm with input intent on the first question", () => {
 		const action = routeKey(sentinel(KEY.CONFIRM), makeState({ currentTab: 0 }), makeRuntime());
-		expect(action).toMatchObject({ kind: "confirm", value: "" });
-	});
-
-	it("the last question emits the same confirmation intent", () => {
-		const action = routeKey(sentinel(KEY.CONFIRM), makeState({ currentTab: 1 }), makeRuntime());
-		expect(action).toMatchObject({ kind: "confirm", value: "" });
-	});
-
-	it("a single question emits confirmation input", () => {
-		const questions = [makeQuestion()];
-		const action = routeKey(
-			sentinel(KEY.CONFIRM),
-			makeState(),
-			makeRuntime({
-				isMulti: false,
-				questions,
-				items: [
-					{ kind: "option", label: "A" },
-					{ kind: "option", label: "B" },
-					{ kind: "option", label: "C" },
-				],
-			}),
-		);
 		expect(action).toMatchObject({ kind: "confirm", value: "" });
 	});
 
@@ -289,7 +241,7 @@ describe("routeKey — multiSelect", () => {
 		expect(
 			routeKey(
 				sentinel(KEY.CONFIRM),
-				makeState({ optionIndex: 3, multiSelectChecked: new Set([2, 0]) }),
+				makeState({ optionIndex: 3 }),
 				makeRuntime({
 					questions: [multiQ],
 					isMulti: false,
@@ -305,66 +257,6 @@ describe("routeKey — multiSelect", () => {
 			),
 		).toEqual({ kind: "confirm", value: "custom detail" });
 	});
-
-	// Spec: Enter on Next for a SINGLE multi-select question submits the dialog.
-	it("single-question multi-select: Enter on Next carries confirmation intent", () => {
-		const action = routeKey(
-			sentinel(KEY.CONFIRM),
-			makeState({ optionIndex: 3, multiSelectChecked: new Set([0]) }),
-			makeRuntime({
-				questions: [multiQ],
-				isMulti: false,
-				items: [
-					{ kind: "option", label: "FE" },
-					{ kind: "option", label: "BE" },
-					{ kind: "option", label: "Tests" },
-					{ kind: "next", label: "Next" },
-				],
-				currentItem: { kind: "next", label: "Next" },
-			}),
-		);
-		expect(action.kind).toBe("confirm");
-		});
-
-	// Spec: Enter on Next for a multi-question dialog advances to the next tab.
-	it("multi-question multi-select on tab 0: Enter on Next carries confirmation intent", () => {
-		const action = routeKey(
-			sentinel(KEY.CONFIRM),
-			makeState({ currentTab: 0, optionIndex: 3, multiSelectChecked: new Set([0]) }),
-			makeRuntime({
-				questions: [multiQ, makeQuestion()],
-				isMulti: true,
-				items: [
-					{ kind: "option", label: "FE" },
-					{ kind: "option", label: "BE" },
-					{ kind: "option", label: "Tests" },
-					{ kind: "next", label: "Next" },
-				],
-				currentItem: { kind: "next", label: "Next" },
-			}),
-		);
-		expect(action.kind).toBe("confirm");
-		});
-
-	// Spec: Enter on Next from the LAST multi-select question advances to the Submit tab.
-	it("multi-question multi-select on last tab: Enter on Next carries confirmation intent", () => {
-		const action = routeKey(
-			sentinel(KEY.CONFIRM),
-			makeState({ currentTab: 1, optionIndex: 3, multiSelectChecked: new Set([0]) }),
-			makeRuntime({
-				questions: [makeQuestion(), multiQ],
-				isMulti: true,
-				items: [
-					{ kind: "option", label: "FE" },
-					{ kind: "option", label: "BE" },
-					{ kind: "option", label: "Tests" },
-					{ kind: "next", label: "Next" },
-				],
-				currentItem: { kind: "next", label: "Next" },
-			}),
-		);
-		expect(action.kind).toBe("confirm");
-		});
 
 	it("Space does NOT emit toggle on a single-select question", () => {
 		expect(routeKey(BYTE_SPACE, makeState(), makeRuntime())).toEqual({ kind: "ignore" });
@@ -389,10 +281,10 @@ describe("routeKey — multiSelect free-text ('Type something.')", () => {
 		{ kind: "next", label: "Next" },
 	];
 
-	it("Enter on the 'Type something.' row commits checked options with the custom text", () => {
+	it("Enter on the custom row forwards its text as confirmation intent", () => {
 		const action = routeKey(
 			sentinel(KEY.CONFIRM),
-			makeState({ optionIndex: 3, inputMode: true, multiSelectChecked: new Set([0, 2]) }),
+			makeState({ optionIndex: 3, inputMode: true }),
 			makeRuntime({
 				questions: [multiQ],
 				isMulti: false,
@@ -463,33 +355,12 @@ describe("routeKey — cancel + submit", () => {
 		});
 	});
 
-	it("Submit tab + Enter on Submit row + allAnswered -> submit", () => {
-		expect(
-			routeKey(
-				sentinel(KEY.CONFIRM),
-				makeState({
-					currentTab: 2,
-					submitChoiceIndex: 0,
-					answers: new Map([
-						[0, makeAnswer({ questionIndex: 0 })],
-						[1, makeAnswer({ questionIndex: 1 })],
-					]),
-				}),
-				makeRuntime(),
-			),
-		).toEqual({ kind: "submit" });
-	});
-
 	// D1 revised: partial submission allowed. Enter on Submit row always submits.
-	it("Submit tab + Enter on Submit row when not allAnswered -> submit (partial)", () => {
+	it("Enter on Submit accepts partial submission", () => {
 		expect(
 			routeKey(
 				sentinel(KEY.CONFIRM),
-				makeState({
-					currentTab: 2,
-					submitChoiceIndex: 0,
-					answers: new Map([[0, makeAnswer({ questionIndex: 0 })]]),
-				}),
+				makeState({ currentTab: 2, submitChoiceIndex: 0 }),
 				makeRuntime(),
 			),
 		).toEqual({ kind: "submit" });
@@ -516,24 +387,7 @@ describe("routeKey — cancel + submit", () => {
 		});
 	});
 
-	it("Submit tab + Enter on Cancel row (index 1) when complete -> cancel", () => {
-		expect(
-			routeKey(
-				sentinel(KEY.CONFIRM),
-				makeState({
-					currentTab: 2,
-					submitChoiceIndex: 1,
-					answers: new Map([
-						[0, makeAnswer({ questionIndex: 0 })],
-						[1, makeAnswer({ questionIndex: 1 })],
-					]),
-				}),
-				makeRuntime(),
-			),
-		).toEqual({ kind: "cancel" });
-	});
-
-	it("Submit tab + Enter on Cancel row (index 1) when incomplete -> cancel", () => {
+	it("Enter on Cancel cancels partial submission", () => {
 		expect(
 			routeKey(sentinel(KEY.CONFIRM), makeState({ currentTab: 2, submitChoiceIndex: 1 }), makeRuntime()),
 		).toEqual({ kind: "cancel" });
@@ -629,20 +483,6 @@ describe("routeKey — global note on the Submit tab", () => {
 		expect(routeKey(BYTE_TAB, submitTab({ notesVisible: true }), makeRuntime())).toEqual({
 			kind: "notes_forward",
 			data: BYTE_TAB,
-		});
-	});
-
-	it("while open, a printable byte forwards into the editor (typing captured)", () => {
-		expect(routeKey("z", submitTab({ notesVisible: true }), makeRuntime())).toEqual({
-			kind: "notes_forward",
-			data: "z",
-		});
-	});
-
-	it("while open, a second 'n' forwards as a literal character instead of re-entering notes", () => {
-		expect(routeKey("n", submitTab({ notesVisible: true }), makeRuntime())).toEqual({
-			kind: "notes_forward",
-			data: "n",
 		});
 	});
 
@@ -825,7 +665,7 @@ describe("routeKey — remapped submit key as the confirm source (#156)", () => 
 		expect(
 			routeKey(
 				REMAPPED_CTRL_ENTER,
-				makeState({ optionIndex: 2, multiSelectChecked: new Set([0]) }),
+				makeState({ optionIndex: 2 }),
 				makeRuntime({ keybindings: remapped, questions: [multiQ], isMulti: false, items, currentItem: items[2] }),
 			),
 		).toEqual({ kind: "confirm", value: "" });

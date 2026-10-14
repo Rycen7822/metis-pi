@@ -18,6 +18,15 @@ const identityTheme: OptionListTheme = {
 	scrollInfo: (t) => t,
 };
 
+it("hides the ordinary option pointer when the list loses focus", () => {
+	const view = new OptionListView({
+		items: [{ kind: "option", label: "Alpha" }, { kind: "option", label: "Beta" }],
+		theme: identityTheme,
+	});
+	view.setProps({ selectedIndex: 0, focused: false, inputBuffer: "" });
+	expect(view.render(40).every(line => !line.startsWith("❯"))).toBe(true);
+});
+
 // Numbering is preserved — rows render as "❯ N. label". number width follows the real item count.
 describe("OptionListView selectedIndex props", () => {
 	it("clamps negative to 0", () => {

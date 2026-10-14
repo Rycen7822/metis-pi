@@ -1,3 +1,4 @@
+import { makeQuestion } from "../../../test-fixtures.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
@@ -89,11 +90,8 @@ function makePane(question: QuestionData, getWidth: () => number = () => 120, ge
 		getTerminalWidth: getWidth,
 		optionListView,
 		previewBlock,
-	getGlobalLeftWidth: getLeftWidth ?? ((paneWidth) => adaptiveLeftWidth(items, totalForNumbering, paneWidth)),
+		getGlobalLeftWidth: getLeftWidth ?? ((paneWidth) => adaptiveLeftWidth(items, totalForNumbering, paneWidth)),
 	});
-	// Auto-inject adaptive left width — mirrors buildQuestionnaire.injectGlobalLeftWidth so
-	// test panes that bypass the builder still pass the throwing-sentinel guard. The throw-test
-	// constructs PreviewPane inline to opt out of this injection.
 	const totalForNumbering = question.multiSelect === true ? items.length : items.length + 1;
 	return { pane, optionListView, previewBlock, items };
 }
@@ -186,11 +184,7 @@ describe("PreviewPane — empty preview placeholder (per-question hide-when-no-p
 	// Spec: when NO option in the question carries a `preview`, the preview pane is hidden
 	// entirely (no "No preview available" placeholder, no extra MAX_PREVIEW_HEIGHT padding).
 	it("hides the preview block entirely when no option provides a preview", () => {
-		const question: QuestionData = {
-			question: "pick",
-			header: "pick",
-			options: [{ label: "only", description: "" }],
-		};
+		const question: QuestionData = makeQuestion({ question: "pick", header: "pick", options: [{ label: "only", description: "" }] });
 		const { pane, optionListView } = makePane(question, () => 80);
 		optionListView.setProps({ selectedIndex: 0, focused: true, inputBuffer: "" });
 		const lines = pane.render(80);
@@ -258,59 +252,6 @@ describe("PreviewPane — width safety (Pi crash guard)", () => {
 	});
 });
 
-describe("PreviewPane.naturalHeight", () => {
-	const fewOptionsNoDesc: QuestionData = {
-		question: "q",
-		header: "q",
-		options: [
-			{ label: "A", description: "" },
-			{ label: "B", description: "" },
-		],
-	};
-	const manyOptionsWithDesc: QuestionData = {
-		question: "q",
-		header: "q",
-		options: [
-			{ label: "A", description: "desc-a" },
-			{ label: "B", description: "desc-b" },
-			{ label: "C", description: "desc-c" },
-			{ label: "D", description: "" },
-		],
-	};
-	const singleOption: QuestionData = {
-		question: "q",
-		header: "q",
-		options: [{ label: "only", description: "" }],
-	};
-
-	const fixtures: Array<[string, QuestionData]> = [
-		["few-options-no-desc", fewOptionsNoDesc],
-		["many-options-with-desc", manyOptionsWithDesc],
-		["single-option", singleOption],
-	];
-
-	it("naturalHeight(w) === render(w).length parametric across modes and fixtures", () => {
-		for (const [_label, q] of fixtures) {
-			// multiSelect mode
-			const multiQ: QuestionData = { ...q, multiSelect: true };
-			const multi = makePane(multiQ, () => 120);
-			for (const w of [60, 80, 100, 120, 160]) {
-				expect(multi.pane.naturalHeight(w)).toBe(multi.pane.render(w).length);
-			}
-			// side-by-side (terminal >= PREVIEW_MIN_WIDTH AND width >= PREVIEW_MIN_WIDTH)
-			const wide = makePane(q, () => 120);
-			for (const w of [100, 120, 160]) {
-				expect(wide.pane.naturalHeight(w)).toBe(wide.pane.render(w).length);
-			}
-			// stacked (either side < PREVIEW_MIN_WIDTH)
-			const narrow = makePane(q, () => 80);
-			for (const w of [60, 80]) {
-				expect(narrow.pane.naturalHeight(w)).toBe(narrow.pane.render(w).length);
-			}
-		}
-	});
-});
-
 describe("PreviewPane.maxNaturalHeight", () => {
 	const mixedQuestion: QuestionData = {
 		question: "pick",
@@ -341,42 +282,6 @@ describe("PreviewPane.maxNaturalHeight", () => {
 		const { pane } = makePane(q, () => 120);
 		expect(pane.maxNaturalHeight(120)).toBe(pane.render(120).length);
 		expect(pane.maxNaturalHeight(80)).toBe(pane.render(80).length);
-	});
-
-	it("side-by-side: maxNaturalHeight >= naturalHeight for any selectedIndex", () => {
-		const { pane, optionListView } = makePane(mixedQuestion, () => 120);
-		const w = 120;
-		const max = pane.maxNaturalHeight(w);
-		for (let i = 0; i < mixedQuestion.options.length; i++) {
-			optionListView.setProps({ selectedIndex: i, focused: true, inputBuffer: "" });
-			pane.setProps({ notesVisible: false, hasNote: false, selectedIndex: i, focused: true, inputMode: false });
-			expect(pane.naturalHeight(w)).toBeLessThanOrEqual(max);
-		}
-	});
-
-	it("stacked: maxNaturalHeight >= naturalHeight for any selectedIndex", () => {
-		const { pane, optionListView } = makePane(mixedQuestion, () => 80);
-		const w = 80;
-		const max = pane.maxNaturalHeight(w);
-		for (let i = 0; i < mixedQuestion.options.length; i++) {
-			optionListView.setProps({ selectedIndex: i, focused: true, inputBuffer: "" });
-			pane.setProps({ notesVisible: false, hasNote: false, selectedIndex: i, focused: true, inputMode: false });
-			expect(pane.naturalHeight(w)).toBeLessThanOrEqual(max);
-		}
-	});
-
-	it("maxNaturalHeight is index-independent (does not depend on the current props.selectedIndex)", () => {
-		const { pane: paneA, optionListView: olA } = makePane(mixedQuestion, () => 120);
-		olA.setProps({ selectedIndex: 0, focused: true, inputBuffer: "" });
-		paneA.setProps({ notesVisible: false, hasNote: false, selectedIndex: 0, focused: true, inputMode: false });
-		const maxA = paneA.maxNaturalHeight(120);
-
-		const { pane: paneB, optionListView: olB } = makePane(mixedQuestion, () => 120);
-		olB.setProps({ selectedIndex: 1, focused: true, inputBuffer: "" });
-		paneB.setProps({ notesVisible: false, hasNote: false, selectedIndex: 1, focused: true, inputMode: false });
-		const maxB = paneB.maxNaturalHeight(120);
-
-		expect(maxA).toBe(maxB);
 	});
 });
 

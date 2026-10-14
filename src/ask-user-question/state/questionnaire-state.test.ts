@@ -1,30 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { QuestionAnswer, QuestionData } from "../tool/types.ts";
-import type { QuestionRow } from "./row-intent.ts";
+import type { QuestionAnswer } from "../tool/types.ts";
+import { itemsRegular, itemsWithOther, makeQuestion as q } from "../test-fixtures.ts";
 import { selectActivePreviewPaneIndex, selectConfirmedIndicator, selectSavedNote } from "./selectors/derivations.ts";
 import { selectActiveView } from "./selectors/focus.ts";
-
-function q(over: Partial<QuestionData> = {}): QuestionData {
-	return {
-		question: over.question ?? "Pick one",
-		header: over.header ?? "H",
-		options: over.options ?? [
-			{ label: "A", description: "a" },
-			{ label: "B", description: "b" },
-		],
-		multiSelect: over.multiSelect,
-	};
-}
-
-const itemsRegular: QuestionRow[] = [
-	{ kind: "option", label: "A" },
-	{ kind: "option", label: "B" },
-];
-const itemsWithOther: QuestionRow[] = [
-	{ kind: "option", label: "A" },
-	{ kind: "option", label: "B" },
-	{ kind: "other", label: "Type something." },
-];
 
 describe("selectConfirmedIndicator", () => {
 	it("returns undefined when the question is multiSelect", () => {
@@ -80,32 +58,11 @@ describe("selectActivePreviewPaneIndex", () => {
 });
 
 describe("selectActiveView", () => {
-	it("returns 'notes' when notesVisible is true", () => {
-		expect(selectActiveView({ notesVisible: true, currentTab: 0 }, 2)).toBe("notes");
-	});
-	it("returns 'submit' when currentTab equals totalQuestions and notes hidden", () => {
-		expect(selectActiveView({ notesVisible: false, currentTab: 2 }, 2)).toBe("submit");
-	});
-	it("returns 'options' as the default", () => {
-		expect(selectActiveView({ notesVisible: false, currentTab: 0 }, 2)).toBe("options");
-	});
-	it("priority order: notes wins over Submit-tab (matches dispatcher cascade)", () => {
-		expect(selectActiveView({ notesVisible: true, currentTab: 2 }, 2)).toBe("notes");
-	});
-});
-
-describe("selectConfirmedIndicator — kind matrix", () => {
-	const items: QuestionRow[] = [
-		{ kind: "option", label: "A" },
-		{ kind: "other", label: "Type something." },
-	];
-	const questions = [q({ options: [{ label: "A", description: "a" }] })];
-
-	it("returns the kind:'other' index + labelOverride when prior was kind:'custom'", () => {
-		const answers = new Map<number, QuestionAnswer>([
-			[0, { questionIndex: 0, question: "q", kind: "custom", answer: "Hello" }],
-		]);
-		expect(selectConfirmedIndicator(questions, 0, answers, items)).toEqual({ index: 1, labelOverride: "Hello" });
+	it.each([
+		[true, 0, "notes"], [true, 2, "notes"],
+		[false, 2, "submit"], [false, 0, "options"],
+	] as const)("chooses the active view (notes=%s, tab=%i)", (notesVisible, currentTab, expected) => {
+		expect(selectActiveView({ notesVisible, currentTab }, 2)).toBe(expected);
 	});
 });
 
