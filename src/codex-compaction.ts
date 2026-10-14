@@ -22,7 +22,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 const OAUTH_IDENTITY = "metisCodexCheckpointIdentity";
 const OAUTH_LEGACY = "metisCodexCheckpointLegacyBindings";
 type Item = Record<string, any>;
-interface BindingScope { route: string; account?: string }
+interface BindingScope { route: string; account?: string; credential?: "oauth" | "api_key" }
 interface LegacyBinding extends BindingScope { binding: string }
 interface Checkpoint {
   version: 1; marker: string; binding: string; history: Item[];
@@ -88,7 +88,8 @@ function checkpoint(entry: CompactionEntry): Checkpoint | undefined {
   const data = record(record(entry.details)[KEY]);
   if (data.version !== 1 || data.marker !== entry.summary || typeof data.binding !== "string" || !Array.isArray(data.history)) return;
   if (data.scope && (!digest(data.scope.route)
-    || data.scope.account !== undefined && !digest(data.scope.account))) return;
+    || data.scope.account !== undefined && !digest(data.scope.account)
+    || data.scope.credential !== undefined && !["oauth", "api_key"].includes(data.scope.credential))) return;
   if (JSON.stringify(data.history).length > MAX_BYTES) return;
   if (data.protocol === "responses") return responsesHistory(data.history) ? data as Checkpoint : undefined;
   if (data.protocol !== undefined) return;
@@ -116,7 +117,9 @@ function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManag
   const branch = ctx.sessionManager.getBranch();
   const covered = new Set(branch.slice(0, branch.findIndex(e => e.id === entry.firstKeptEntryId)).map(e => e.id));
   const edited = branch.slice(branch.findIndex(e => e.id === entry.id) + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
-  return { entry, data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
+  const origin = branch.slice(0, branch.findIndex(e => e.id === entry.id)).findLast(e => e.type === "model_change");
+  return { entry, origin: origin?.type === "model_change" ? origin : undefined,
+    data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
 }
 async function requestBinding(ctx: ExtensionContext, model: Model<Api>, accounts: Map<string, GrantIdentity>, resolvedAuth?: RequestAuth) {
   const provider = ctx.modelRegistry.getProvider(model.provider);
@@ -125,7 +128,8 @@ async function requestBinding(ctx: ExtensionContext, model: Model<Api>, accounts
   const account = tokenAccount(auth.apiKey), grant = accounts.get(hash(auth.apiKey));
   if (!provider) throw new Error("Unsupported Codex API");
   const header = accountHeader(model, auth), url = auth.baseUrl ?? model.baseUrl;
-  const scope = bindingScope(model, url, account, header);
+  const scope: BindingScope = { ...bindingScope(model, url, account, header),
+    credential: ctx.modelRegistry.isUsingOAuth(model) ? "oauth" : "api_key" };
   const snapshot = { ...auth, headers: auth.headers ? { ...auth.headers } : undefined, env: auth.env ? { ...auth.env } : undefined };
   return { identity: boundIdentity(model, url.replace(/\/+$/, ""), account ?? grant?.identity ?? auth.apiKey, header),
     legacyIdentity: boundIdentity(model, url, account ?? auth.apiKey, header),
@@ -138,14 +142,19 @@ async function requestBinding(ctx: ExtensionContext, model: Model<Api>, accounts
 }
 const sameProvider = (before: Awaited<ReturnType<typeof requestBinding>>, after: Awaited<ReturnType<typeof requestBinding>>) =>
   before.registration === after.registration && before.nativeOwner === after.nativeOwner
+  && before.scope.credential === after.scope.credential
   && hash([before.auth.headers, before.auth.env, before.model.baseUrl]) === hash([after.auth.headers, after.auth.env, after.model.baseUrl]);
 const matchesBinding = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>) =>
   data.binding === request.identity || data.binding === request.legacyIdentity || request.legacyBindings.includes(data.binding);
-const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>) => {
-  if (matchesBinding(data, request)) return "valid";
+const bindingState = (data: Checkpoint, request: Awaited<ReturnType<typeof requestBinding>>,
+  origin?: { provider: string; modelId: string }) => {
   const previous = data.scope, current = request.scope;
+  if (previous?.credential && previous.credential !== current.credential) return "incompatible";
+  if (matchesBinding(data, request)) return "valid";
+  if (origin && (origin.provider !== request.model.provider || origin.modelId !== request.model.id)) return "incompatible";
   if (previous && (previous.route !== current.route
     || previous.account && current.account && previous.account !== current.account)) return "incompatible";
+  if (previous?.credential === "api_key" && current.credential === "api_key") return "incompatible";
   return "unverified";
 };
 
@@ -265,7 +274,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       const registry = ctx.modelRegistry;
       const native = registry.getRegisteredNativeProvider(id)?.auth.oauth;
       const configured = registry.getRegisteredProviderConfig(id)?.oauth;
-      if (!native && !configured && !["OpenAI (ChatGPT subscription)", "OpenAI (ChatGPT Plus/Pro)"].includes(oauth.name)) continue;
+      if (!native && !configured && !oauth.isSubscription) continue;
       const owner = native ?? configured;
       if (owner && trackedOAuth.has(owner)) continue;
       const source = native ?? oauth;
@@ -275,24 +284,30 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         accounts.set(hash(key), credentialGrant(credential));
         if (accounts.size > 16) accounts.delete(accounts.keys().next().value!);
       };
-      const models = [ctx.model, ...registry.getAll()]
-        .filter((m): m is Model<Api> => Boolean(m && m.provider === id)).slice(0, 64);
       // These digests migrate token-bound checkpoints only after the broker
       // successfully exchanges that exact old credential under its store lock.
       const trackedRefresh: typeof refresh = async (credential, signal) => {
-        const resolved = await oauth.toAuth(credential);
-        const legacy = resolved.apiKey ? models.map(model => {
-          const url = resolved.baseUrl ?? model.baseUrl, account = tokenAccount(resolved.apiKey!), header = accountHeader(model, resolved);
-          return { ...bindingScope(model, url, account, header),
-            binding: boundIdentity(model, url, account ?? resolved.apiKey, header) };
-        }) : [];
+        let legacy: LegacyBinding[] = [];
+        try {
+          const resolved = await oauth.toAuth(credential);
+          const models = [ctx.model, ...registry.getAll()]
+            .filter((m): m is Model<Api> => Boolean(m && m.provider === id)).slice(0, 64);
+          legacy = resolved.apiKey ? models.map(model => {
+            const url = resolved.baseUrl ?? model.baseUrl, account = tokenAccount(resolved.apiKey!), header = accountHeader(model, resolved);
+            return { ...bindingScope(model, url, account, header),
+              binding: boundIdentity(model, url, account ?? resolved.apiKey, header) };
+          }) : [];
+        } catch { /* Observing an expired grant must never block the broker's refresh. */ }
         const next = configuredRefresh
           ? { ...await configuredRefresh.call(configured, credential, signal), type: "oauth" as const }
           : await refresh.call(source, credential, signal);
         const grant = credentialGrant(credential);
-        return { ...next, [OAUTH_IDENTITY]: grant.identity, [OAUTH_LEGACY]: [...new Map([
+        const bindings = [...new Map([
           ...grant.legacy, ...legacy,
-        ].map(entry => [`${entry.route}:${entry.account}:${entry.binding}`, entry])).values()].slice(0, 128) };
+        ].map(entry => [`${entry.route}:${entry.account}:${entry.binding}`, entry])).values()];
+        // Retain the original migration proof and recent token-bound checkpoints.
+        const retained = bindings.length > 128 ? [...bindings.slice(0, 64), ...bindings.slice(-64)] : bindings;
+        return { ...next, [OAUTH_IDENTITY]: grant.identity, [OAUTH_LEGACY]: retained };
       };
       const trackedToAuth: typeof toAuth = async credential => {
         const resolved = await toAuth.call(source, credential);
@@ -399,14 +414,21 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     // pre-send abort check, so clear this request's session resources as well.
     // A fresh request revalidates the checkpoint in the context phase; any
     // required restoration runs every domain/host projection before sending.
+    const alreadyCancelled = requestCancelled;
     requestCancelled = true;
     ctx.abort();
     if (preparedModel?.api === "openai-codex-responses" && preparedSession)
       cleanupSessionResources(preparedSession);
+    if (alreadyCancelled) return;
     pi.events.emit(METIS_EVENTS.checkpointRequestCancelled, {});
     try {
       ctx.ui.notify(reason, "warning");
     } catch { /* UI teardown cannot undo request cancellation. */ }
+  };
+  const emptyPayload = (payload: unknown) => {
+    const body = record(payload);
+    return { ...body, input: [], ...(Array.isArray(body.messages) ? { messages: [] } : {}),
+      ...(Array.isArray(body.contents) ? { contents: [] } : {}) };
   };
 
   // A checkpoint is model/account bound, not a portable textual summary. Restore
@@ -427,7 +449,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     if (!current) return;
     if (current.data && isRemoteModel(ctx.model)) {
       try {
-        const state = bindingState(current.data, await requestBinding(ctx, ctx.model, accounts));
+        const state = bindingState(current.data, await requestBinding(ctx, ctx.model, accounts), current.origin);
         if (state === "valid") {
           preparedMarker = current.entry.summary;
           return;
@@ -435,12 +457,12 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         if (state === "unverified") {
           cancelRequest(ctx, "Remote checkpoint identity could not be verified. Check authentication and retry, "
             + "or use /compact to rebuild it. Checkpoint and history were preserved.");
-          return;
+          return { messages: [] };
         }
       } catch (error) {
         cancelRequest(ctx, `Remote checkpoint verification unavailable: ${safeError(error)}. `
           + "Checkpoint and history were preserved; retry after authentication recovers.");
-        return;
+        return { messages: [] };
       }
     }
     const messages = buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages;
@@ -448,12 +470,15 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     return { messages: messages.filter(m => m.role !== "system") };
   });
   pi.on("context_with_system", (event, ctx) => {
-    if (!restored || requestCancelled) return;
-    const reason = restorationError(event.messages, ctx);
-    if (reason) cancelRequest(ctx, `${reason}. Request cancelled; history was preserved.`);
+    if (restored && !requestCancelled) {
+      const reason = restorationError(event.messages, ctx);
+      if (reason) cancelRequest(ctx, `${reason}. Request cancelled; history was preserved. `
+        + "Use /compact to rebuild, or /tree to resume before the oversized input.");
+    }
+    if (requestCancelled) return { messages: event.messages.filter(message => message.role === "system") };
   });
   pi.on("before_provider_request", async (event, ctx) => {
-    if (requestCancelled) return cancelRequest(ctx);
+    if (requestCancelled) { ctx.abort(); return emptyPayload(event.payload); }
     // Only an exact carrier prepared from a real checkpoint is ours. Ordinary
     // source code, user text and tool output can contain the same marker literal.
     if (!preparedMarker) return;
@@ -463,18 +488,20 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     const requestModel = preparedModel ?? ctx.model;
     if (!isRemoteModel(requestModel)
       || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation
-      || preparedSource !== sourceHash(ctx.sessionManager.getBranch()))
-      return cancelRequest(ctx);
+      || preparedSource !== sourceHash(ctx.sessionManager.getBranch())) {
+      cancelRequest(ctx); return emptyPayload(event.payload);
+    }
     const source = sourceHash(ctx.sessionManager.getBranch());
     const current = active(ctx);
     try {
       if (!current?.data || preparedSession !== ctx.sessionManager.getSessionId() || hash(requestModel) !== hash(ctx.model)
-        || !matchesBinding(current.data, await requestBinding(ctx, requestModel, accounts))
+        || bindingState(current.data, await requestBinding(ctx, requestModel, accounts), current.origin) !== "valid"
         || source !== sourceHash(ctx.sessionManager.getBranch())) throw new Error("Checkpoint binding changed");
       return replaceMarker(event.payload, current.data);
     } catch (error) {
-      return cancelRequest(ctx, `Request cancelled while verifying remote checkpoint: ${safeError(error)}. `
+      cancelRequest(ctx, `Request cancelled while verifying remote checkpoint: ${safeError(error)}. `
         + "Checkpoint and history were preserved. Retry with the current context.");
+      return emptyPayload(event.payload);
     }
   });
 
@@ -505,9 +532,9 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       if (compactor?.auth.apiKey) secrets.push(compactor.auth.apiKey);
       diagnostic.compactorProvider = compactor?.model.provider;
       diagnostic.compactorApi = compactor?.model.api;
-      const reusable = previous?.data && request && matchesBinding(previous.data, request)
+      const reusable = previous?.data && request && bindingState(previous.data, request, previous.origin) === "valid"
         && (!hybrid || previous.data.codexBinding === compactor?.identity);
-      if (previous?.data && request && bindingState(previous.data, request) === "unverified" && event.reason !== "manual")
+      if (previous?.data && request && bindingState(previous.data, request, previous.origin) === "unverified" && event.reason !== "manual")
         throw new Error("Remote checkpoint identity could not be verified; checkpoint was preserved. "
           + "Use /compact to rebuild it after checking authentication.");
       const projected = buildSessionProjection(reusable || !previous ? branch : rawBranch(branch));
@@ -523,7 +550,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         // Compaction has an input window, not ordinary generation's maxTokens
         // reserve. Its provider owns checkpoint output limits and validation.
         const reason = restorationError(prefix, ctx, remote ? 0 : undefined);
-        if (reason) throw new Error(reason);
+        if (reason) throw new Error(`${reason}. Use /model with a larger context window and retry /compact, `
+          + "or /tree to resume before the oversized input; the original branch remains available");
       }
       const files = record(previous?.entry.details);
       for (const path of Array.isArray(files.readFiles) ? files.readFiles : [])
