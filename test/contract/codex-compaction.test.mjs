@@ -50,6 +50,7 @@ function checkpointEvents(n = 1) {
 async function host(t, {
   auto = false, condense = false, goal = false, execution = false, contextJournal = false, providerOverride = false, existing, response, compactResponse, normalResponse, other = false, routeModel = model, transport = "sse",
   oauth = routeModel.api !== "openai-responses", codexAuth = "cli", credential,
+  beforeBind, modelsConfig,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metis-codex-compact-"));
   const old = process.env.PI_CODING_AGENT_DIR;
@@ -68,7 +69,10 @@ async function host(t, {
   }));
   if (hybrid && codexAuth === "cli") writeCodexLogin(codexDir);
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { enabled: true, opportunisticCompaction: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } } }));
-  const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models.json"), refreshOnCreate: false });
+  if (modelsConfig) writeFileSync(join(dir, "configured-models.json"), JSON.stringify(modelsConfig));
+  const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"),
+    modelsPath: modelsConfig ? join(dir, "configured-models.json") : null,
+    modelsStorePath: join(dir, "models.json"), refreshOnCreate: false });
   await runtime.refresh({ allowNetwork: false });
   const sm = existing ? SessionManager.open(existing, dir) : SessionManager.create(dir);
   if (!existing) {
@@ -140,6 +144,7 @@ async function host(t, {
     count++;
     return response ? await response({ body, sm, session, count }) : sse(checkpointEvents(count));
   });
+  await beforeBind?.(runtime);
   await session.bindExtensions({ onError: e => errors.push(e), uiContext: {
     notify: message => notices.push(message), setStatus() {}, setWidget() {},
     theme: { fg: (_key, text) => text },
@@ -344,25 +349,240 @@ test("native OAuth refresh preserves checkpoint identity through ciphertext rota
   assert.equal(next.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
 });
 
-test("an unproven OAuth replacement restores originals even for the same opaque user metadata", async t => {
+async function rotateOAuth(t, h, catalog = false) {
+  const fetch = globalThis.fetch;
+  const access = "x." + Buffer.from(JSON.stringify({ client_id: "dynamic_agent_client", jti: "rotation",
+    "https://api.openai.com/auth": { per_user_salt: "offline", encrypted_auth_metadata: "rotated-grant" },
+  })).toString("base64url") + ".x";
+  t.mock.method(globalThis, "fetch", (url, options) => {
+    if (String(url).includes("/oauth/token")) return Promise.resolve(Response.json({
+      access_token: access, refresh_token: "rotated-refresh", expires_in: 3600,
+      scope: "chatgpt.tokens.use.direct offline_access",
+    }));
+    if (!String(url).includes("/responses")) return Promise.resolve(new Response("offline catalog", { status: 404 }));
+    return fetch(url, options);
+  });
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  t.mock.method(Date, "now", () => auth.openai.expires + 1);
+  if (catalog) await h.runtime.refresh({ providers: ["openai"], allowNetwork: true });
+  else await h.session.prompt("AFTER TRACKED ROTATION");
+  return JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8")).openai;
+}
+
+test("catalog recomposition preserves OAuth checkpoint continuity and provider configuration", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true, async beforeBind(runtime) {
+    runtime.registerProvider("openai", { baseUrl: responsesModel.baseUrl, headers: { "x-checkpoint-tenant": "kept" } });
+    await runtime.refresh({ allowNetwork: false });
+  } });
+  await h.session.compact();
+  const saved = await rotateOAuth(t, h, true);
+  assert.ok(saved.metisCodexCheckpointIdentity, "the native catalog refresh persists grant continuity");
+  await h.session.prompt("AFTER CATALOG ROTATION");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.equal(h.headers.at(-1).get("x-checkpoint-tenant"), "kept");
+  await h.session.reload();
+  await h.session.prompt("AFTER RELOAD OF CATALOG ROTATION");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("catalog wrapper recomposition during compaction does not discard an unchanged provider result", async t => {
+  const h = await host(t, { response: async ({ session }) => {
+    await session.modelRuntime.refresh({ allowNetwork: false });
+    return sse(checkpointEvents());
+  } });
+  await h.session.compact();
+  assert.equal(compactions(h).length, 1);
+});
+
+test("durable OAuth registration preserves native login prompts and cancellation", async t => {
+  const promptSignal = new AbortController().signal;
+  const h = await host(t, { routeModel: responsesModel, oauth: true, beforeBind(runtime) {
+    t.mock.method(runtime.getProvider("openai").auth.oauth, "login", async interaction => {
+      interaction.notify({ type: "auth_url", url: "https://offline.invalid/login", instructions: "offline" });
+      assert.equal(await interaction.prompt({ type: "manual_code", message: "code", signal: promptSignal }), "offline-code");
+      return { type: "oauth", access: newOAuthKey, refresh: "offline-login", clientId: "dynamic_agent_client", expires: Date.now() + 3600000 };
+    });
+  } });
+  const notifications = [];
+  await h.runtime.login("openai", "oauth", {
+    signal: new AbortController().signal, notify: event => notifications.push(event),
+    prompt: async prompt => { assert.equal(prompt.type, "manual_code"); assert.equal(prompt.signal, promptSignal); return "offline-code"; },
+  });
+  assert.equal(notifications[0].type, "auth_url");
+});
+
+test("registered native OAuth keeps its source methods through configured overlays", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true,
+    modelsConfig: { providers: { openai: { headers: { "x-native-tenant": "retained" } } } },
+    async beforeBind(runtime) {
+      const { openaiProvider } = await import("@earendil-works/pi-ai/providers/openai");
+      runtime.registerNativeProvider(openaiProvider());
+      await runtime.refresh({ allowNetwork: false });
+    },
+  });
+  await h.session.compact();
+  await rotateOAuth(t, h, true);
+  await h.session.prompt("NATIVE SOURCE AFTER RECOMPOSITION");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.equal(h.headers.at(-1).get("x-native-tenant"), "retained");
+});
+
+test("legacy token-bound checkpoint survives its first observed refresh", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  const checkpoint = compactions(h).at(-1).details[key];
+  checkpoint.binding = createHash("sha256").update(JSON.stringify([
+    responsesModel.provider, responsesModel.api, responsesModel.id, responsesModel.baseUrl, newOAuthKey, undefined,
+  ])).digest("hex");
+  delete checkpoint.scope;
+  await rotateOAuth(t, h);
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  const before = h.bodies.length;
+  await h.session.setModel({ ...responsesModel, id: "gpt-6-sol" });
+  await h.session.prompt("DO NOT PORT A LEGACY CHECKPOINT TO ANOTHER MODEL");
+  assert.equal(h.bodies.length, before, "refresh aliases are scoped to their original model and route");
+});
+
+test("transient checkpoint authentication failure keeps compressed history and reports its cause", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
+  h.sm.appendContextEdit(source.id, { content: "BIG AUTH HISTORY ".repeat(8000) });
+  await h.session.compact();
+  await h.session.setModel({ ...responsesModel, contextWindow: 8000, maxTokens: 1024 });
+  const getAuth = h.runtime.getAuth.bind(h.runtime);
+  let unavailable = true;
+  t.mock.method(h.runtime, "getAuth", async (...args) => {
+    if (unavailable) throw new Error("OFFLINE temporary OAuth refresh failure; Bearer secret-value");
+    return getAuth(...args);
+  });
+  const before = h.bodies.length, checkpoint = compactions(h).at(-1);
+  await h.session.prompt("AUTH TEMPORARILY UNAVAILABLE");
+  assert.equal(h.bodies.length, before, "no inference or restored-history request is sent");
+  assert.equal(compactions(h).at(-1), checkpoint);
+  assert.match(h.notices.join("\n"), /temporary OAuth refresh failure/);
+  assert.doesNotMatch(h.notices.join("\n"), /secret-value|Restored history needs/);
+  unavailable = false;
+  await h.session.prompt("RETRY AFTER AUTH RECOVERS");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("an unknown grant stops ordinary replay and manual compact safely rebuilds its input", async t => {
+  const small = { ...responsesModel, contextWindow: 20000, maxTokens: 16000 };
+  const h = await host(t, { routeModel: small, oauth: true });
+  const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
+  h.sm.appendContextEdit(source.id, { content: "REBUILD SOURCE ".repeat(4000) });
+  await h.session.compact();
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  auth.openai.access = `${newOAuthKey}untracked-rotation`;
+  delete auth.openai.metisCodexCheckpointIdentity;
+  writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  const before = h.bodies.length;
+  await h.session.prompt("UNVERIFIED GRANT");
+  assert.equal(h.bodies.length, before);
+  assert.match(h.notices.join("\n"), /verif|identity/i);
+  assert.doesNotMatch(h.notices.join("\n"), /Restored history needs/);
+  await h.session.compact();
+  assert.equal(compactions(h).length, 2);
+  const rebuilt = h.bodies.at(-1);
+  assert.equal(rebuilt.input.some(item => item.type === "compaction"), false, "old opaque checkpoint is never rebound");
+  assert.match(JSON.stringify(rebuilt), /REBUILD SOURCE/);
+  await h.session.prompt("USE NEW CHECKPOINT");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("large history does not expand on retry after an unrelated tail race", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
+  h.sm.appendContextEdit(source.id, { content: "OLD TAIL RACE HISTORY ".repeat(8000) });
+  await h.session.compact();
+  await h.session.setModel({ ...responsesModel, contextWindow: 8000, maxTokens: 1024 });
+  const getAuth = h.runtime.getAuth.bind(h.runtime);
+  let appended = false;
+  t.mock.method(h.runtime, "getAuth", async (m, options) => {
+    const result = await getAuth(m, options);
+    if (options?.signal && !appended) { appended = true; h.sm.appendMessage(user("TAIL ARRIVED AFTER PREPARATION")); }
+    return result;
+  });
+  const before = h.bodies.length;
+  await h.session.prompt("RACE THIS REQUEST");
+  assert.equal(h.bodies.length, before);
+  await h.session.prompt("RETRY WITHOUT EXPANDING OLD HISTORY");
+  assert.equal(h.bodies.length, before + 1);
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /TAIL ARRIVED AFTER PREPARATION/);
+  assert.doesNotMatch(h.notices.join("\n"), /Restored history needs/);
+});
+
+function appendRecoverableResult(h) {
+  const text = "RECOVERABLE_TOOL_OUTPUT_".repeat(5000);
+  const call = { id: "recovery-call", name: "read", arguments: { path: "/tmp/archived-source" } };
+  h.sm.appendMessage({ ...assistant(""), timestamp: 1, content: [{ type: "toolCall", ...call }] });
+  h.sm.appendMessage({ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text }], isError: false, timestamp: 3 });
+  h.sm.appendMessage(assistant("Recovered work is archived."));
+  h.sm.appendMessage(user("KEPT RECOVERY TAIL"));
+  return { text, call };
+}
+async function publishRecoverySummary(h, source) {
+  h.sm.appendCustomEntry("context-prune-index", { toolCalls: [{ toolCallId: source.call.id, toolName: source.call.name,
+    args: source.call.arguments, resultText: source.text, isError: false, timestamp: 3, resultTimestamp: 3, turnIndex: 1 }] });
+  h.sm.appendCustomMessageEntry("context-prune-summary", "DURABLE RECOVERY SUMMARY", false,
+    { toolCallIds: [source.call.id], toolCallRefs: [{ toolCallId: source.call.id, resultTimestamp: 3 }] });
+  await h.session.reload();
+}
+
+test("restoration capacity is checked after real Condense projection", async t => {
+  const h = await host(t, { condense: true });
+  const source = appendRecoverableResult(h);
+  await h.session.compact();
+  await publishRecoverySummary(h, source);
+  await h.session.setModel({ ...modelNamed("gpt-6-sol"), contextWindow: 12000, maxTokens: 1024 });
+  const before = h.bodies.length;
+  await h.session.prompt("RECOVER THROUGH CONDENSE");
+  assert.equal(h.bodies.length, before + 1);
+  const body = JSON.stringify(h.bodies.at(-1));
+  assert.doesNotMatch(body, /RECOVERABLE_TOOL_OUTPUT_/);
+  assert.match(body, /DURABLE RECOVERY SUMMARY/);
+  assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+  assert.doesNotMatch(h.notices.join("\n"), /Restored history needs/);
+});
+
+test("manual checkpoint rebuild includes durable summaries beyond the kept boundary", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true, condense: true });
+  const source = appendRecoverableResult(h);
+  await h.session.compact();
+  await publishRecoverySummary(h, source);
+  await h.session.setModel({ ...responsesModel, contextWindow: 12000, maxTokens: 1024 });
+  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
+  auth.openai.access = `${newOAuthKey}untracked-rebuild`;
+  writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  const before = h.bodies.length;
+  await h.session.compact();
+  assert.equal(h.bodies.length, before + 1);
+  const body = h.bodies.at(-1);
+  assert.match(JSON.stringify(body), /DURABLE RECOVERY SUMMARY/);
+  assert.doesNotMatch(JSON.stringify(body), /RECOVERABLE_TOOL_OUTPUT_/);
+  assert.equal(body.input.some(item => item.type === "compaction"), false);
+  assert.equal(compactions(h).length, 2);
+});
+
+test("an unproven OAuth replacement preserves the checkpoint and stops replay despite matching opaque user metadata", async t => {
   const h = await host(t, { routeModel: responsesModel, oauth: true });
   await h.session.compact();
   const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
   auth.openai = { type: "oauth", access: `${newOAuthKey}replacement`, refresh: "new-login", expires: Date.now() + 3_600_000 };
   writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  const before = h.bodies.length;
   await h.session.prompt("NEW LOGIN");
-  assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
-  assert.match(JSON.stringify(h.bodies.at(-1).input), /ORIGINAL USER/);
+  assert.equal(h.bodies.length, before, "neither another grant's checkpoint nor expanded originals are sent");
+  assert.equal(compactions(h).length, 1);
+  assert.match(h.notices.join("\n"), /identity.*verif/i);
 });
 
 test("oversized restored history is rejected before inference and before recompaction", async t => {
-  const smallModel = { ...responsesModel, contextWindow: 8000, maxTokens: 1024 };
-  const h = await host(t, { routeModel: smallModel, oauth: true });
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
   h.sm.appendContextEdit(h.sm.getBranch().find(e => e.type === "message").id, { content: "RAW HISTORY ".repeat(8000) });
   await h.session.compact();
-  const auth = JSON.parse(readFileSync(join(h.dir, "auth.json"), "utf8"));
-  auth.openai.access = `${newOAuthKey}another-login`;
-  writeFileSync(join(h.dir, "auth.json"), JSON.stringify(auth));
+  await h.session.setModel({ ...responsesModel, id: "gpt-6-sol", contextWindow: 8000, maxTokens: 1024 });
   const calls = h.bodies.length;
   await h.session.prompt("RESTORE TOO MUCH HISTORY");
   assert.equal(h.bodies.length, calls, "no oversized ordinary request reaches fetch");

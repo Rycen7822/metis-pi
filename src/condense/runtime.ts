@@ -2006,6 +2006,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (isCondenseMaintenanceRequest(data)) data.pending = maintenanceTask;
   });
 
+  const withDurableSummaries = (messages: any[], ctx: ExtensionContext, api?: string) => {
+    const durable = projectContext(ctx.sessionManager.buildSessionProjection().messages, api, ctx, undefined, true).messages
+      .filter((message: any) => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY);
+    const identities = new Set(messages.map(message => projectionFingerprint([message])));
+    const missing = durable.filter((message: any) => !identities.has(projectionFingerprint([message])));
+    return missing.length ? [...messages, ...missing] : messages;
+  };
+
   let activeSessionId: string | undefined;
   let projectionContext: ExtensionContext | undefined;
   const unsubscribeProjection = pi.events.on(METIS_EVENTS.condenseProject, (data) => {
@@ -2014,7 +2022,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (request.sessionId !== activeSessionId) return;
     if (isFlushing || (occ.isRunning() && !request.maintenance)) { request.busy = true; return; }
     if (projectionContext) indexer.syncSummaryEntries(projectionContext);
-    request.messages = projectContext(request.messages, request.api, projectionContext).messages;
+    const messages = request.includeSummaries && projectionContext
+      ? withDurableSummaries(request.messages, projectionContext, request.api) : request.messages;
+    request.messages = projectContext(messages, request.api, projectionContext).messages;
   });
   pi.on("context", async (event, ctx) => {
     // A below-pressure final kept its batches pending. Retry only when a real
@@ -2027,12 +2037,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     indexer.syncSummaryEntries(ctx);
     // Session delivery can append evidence after Pi took this request snapshot.
     // Carry only currently effective summaries; never resurrect a dropped chain.
-    const durable = projectContext(ctx.sessionManager.buildSessionProjection().messages, ctx.model?.api, ctx, undefined, true).messages
-      .filter((message: any) => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY);
-    const identities = new Set(event.messages.map(message => projectionFingerprint([message])));
-    const missing = durable.filter((message: any) => !identities.has(projectionFingerprint([message])));
-    const result = projectContext(missing.length ? [...event.messages, ...missing] : event.messages, ctx.model?.api, ctx);
-    if (missing.length) result.changed = true;
+    const messages = withDurableSummaries(event.messages, ctx, ctx.model?.api);
+    const result = projectContext(messages, ctx.model?.api, ctx);
+    if (messages !== event.messages) result.changed = true;
     occ.observeRequest(result.messages);
     if (result.beforeChars !== undefined) statsAccum.setLiveReclaim(result.beforeChars, result.afterChars!);
     updatePruneStatus(ctx);

@@ -26,6 +26,7 @@ export interface CondenseProjectRequest {
   readonly sessionId: string | undefined;
   readonly api?: string;
   readonly maintenance?: boolean;
+  readonly includeSummaries?: boolean;
   messages: unknown[];
   busy?: boolean;
 }
@@ -63,14 +64,16 @@ export function isBeforeRemoteCompactRequest(value: unknown): value is BeforeRem
 export function isCondenseProjectRequest(value: unknown): value is CondenseProjectRequest {
   return record(value) && (value["sessionId"] === undefined || typeof value["sessionId"] === "string")
     && (value["api"] === undefined || typeof value["api"] === "string") && Array.isArray(value["messages"])
-    && optionalBoolean(value["maintenance"]) && optionalBoolean(value["busy"]);
+    && optionalBoolean(value["maintenance"]) && optionalBoolean(value["includeSummaries"])
+    && optionalBoolean(value["busy"]);
 }
 export function isCondenseMaintenanceRequest(value: unknown): value is CondenseMaintenanceRequest {
   return record(value) && (value["pending"] === undefined || value["pending"] instanceof Promise);
 }
 export function isCodexCompactionOwnerRequest(value: unknown): value is CodexCompactionOwnerRequest {
   return record(value) && typeof value["owns"] === "boolean"
-    && (value["model"] === undefined || (record(value["model"]) && typeof value["model"]["api"] === "string" && typeof value["model"]["provider"] === "string"))
+    && (value["model"] === undefined || (record(value["model"]) && typeof value["model"]["api"] === "string"
+      && typeof value["model"]["provider"] === "string"))
     && record(value["sessionManager"]) && typeof value["sessionManager"]["buildSessionProjection"] === "function"
     && typeof value["sessionManager"]["getBranch"] === "function";
 }
