@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { QuestionData } from "../tool/types.ts";
 import type { QuestionRow } from "./row-intent.ts";
 import { routeKey, wrapTab } from "./key-router.ts";
-import type { QuestionnaireRuntime } from "./state.ts";
+import type { QuestionnaireRuntime, QuestionnaireState } from "./state.ts";
 import { makeQuestionnaireState as makeState } from "../test-fixtures.ts";
 
 const KEY = {

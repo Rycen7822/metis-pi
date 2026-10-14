@@ -16,7 +16,7 @@ const STATIC_IMPORT = /^(?:import|export)\s+([^;]*?)\sfrom\s+["'](\.[^"']+)["']/
 function productionModules(dir: string): string[] {
 	const out: string[] = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+		if (entry.name === "node_modules" || entry.name === "test-fixtures.ts" || entry.name.startsWith(".")) continue;
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) out.push(...productionModules(path));
 		else if (path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith(".d.ts")) out.push(path);

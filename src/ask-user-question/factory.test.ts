@@ -1,8 +1,10 @@
 import { CURSOR_MARKER, getKeybindings } from "@earendil-works/pi-tui";
 import { createMockPi } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
+import { Value } from "typebox/value";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
 import type { QuestionAnswer, QuestionnaireResult, QuestionParams } from "./tool/types.ts";
+import { QuestionParamsSchema } from "./tool/types.ts";
 
 /** Narrowed tool-result shape for test assertions. */
 interface ToolResult {
@@ -27,6 +29,9 @@ async function run(
 	params: QuestionParams,
 	script: (component: RenderableComponent, done: (value: unknown) => void) => void,
 ): Promise<ToolResult> {
+	const errors = [...Value.Errors(QuestionParamsSchema, params)]
+		.map(({ instancePath, message }) => ({ instancePath, message }));
+	expect(errors, "positive UI fixtures must satisfy the public tool schema").toEqual([]);
 	const { pi, captured } = createMockPi();
 	registerAskUserQuestionTool(pi);
 	const custom = (factory: unknown) => new Promise(resolve => {
@@ -60,19 +65,22 @@ const threeOptionParams = {
 		{
 			question: "Pick one",
 			header: "Choice",
-			options: [{ label: "Alpha" }, { label: "Beta" }, { label: "Gamma" }],
+			options: [{ label: "Alpha", description: "" }, { label: "Beta", description: "" }, { label: "Gamma", description: "" }],
 		},
 	],
 };
 
 const mixedParams = {
 	questions: [
-		{ question: "Q1", header: "H1", options: [{ label: "A" }, { label: "B" }] },
+		{ question: "Q1", header: "H1", options: [{ label: "A", description: "" }, { label: "B", description: "" }] },
 		{
 			question: "Q2",
 			header: "H2",
 			multiSelect: true,
-			options: [{ label: "FE" }, { label: "BE" }, { label: "DB" }, { label: "QA" }, { label: "Ops" }],
+			options: [
+				{ label: "FE", description: "" }, { label: "BE", description: "" },
+				{ label: "DB", description: "" }, { label: "QA", description: "" },
+			],
 		},
 	],
 };
@@ -83,17 +91,15 @@ describe("ask_user_question — factory driver (real pi-tui keybindings)", () =>
 		const r = await run(threeOptionParams, (c) => {
 			c.handleInput(KEY.ESC);
 		});
-		expect(r?.details).toMatchObject({ cancelled: true });
+		expect(r.details).toMatchObject({ cancelled: true });
 	});
 
 	it("Enter on first item → single-question auto-submits", async () => {
-		const r = (await run(threeOptionParams, (c) => {
+		const r = await run(threeOptionParams, (c) => {
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details).toMatchObject({ cancelled: false });
-		expect(r?.details.answers[0]).toMatchObject({ answer: "Alpha", kind: "option" });
+		});
+		expect(r.details).toMatchObject({ cancelled: false });
+		expect(r.details.answers[0]).toMatchObject({ answer: "Alpha", kind: "option" });
 	});
 
 	it("Ctrl+] collapses the questionnaire to a one-line footer; Ctrl+] again expands to the full render", async () => {
@@ -128,40 +134,34 @@ describe("ask_user_question — factory driver (real pi-tui keybindings)", () =>
 
 	it("Esc while collapsed cancels (the only key honoured behind the one-line footer)", async () => {
 		const CTRL_RBRACKET = "\x1d";
-		const r = (await run(threeOptionParams, (c) => {
+		const r = await run(threeOptionParams, (c) => {
 			c.handleInput(CTRL_RBRACKET);
 			c.handleInput(KEY.ESC);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details).toMatchObject({ cancelled: true });
+		});
+		expect(r.details).toMatchObject({ cancelled: true });
 	});
 });
 
 describe("ask_user_question — single-question navigation", () => {
 	it("DOWN to Beta, Enter → selects Beta (kind:'option')", async () => {
-		const r = (await run(threeOptionParams, (c) => {
+		const r = await run(threeOptionParams, (c) => {
 			c.handleInput(KEY.DOWN); // 0 → 1 (Beta)
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0]).toMatchObject({ questionIndex: 0, answer: "Beta", kind: "option" });
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0]).toMatchObject({ questionIndex: 0, answer: "Beta", kind: "option" });
 	});
 
 	it("UP from Alpha wraps to Type-something, then UP to Gamma", async () => {
-		const r = (await run(threeOptionParams, (c) => {
+		const r = await run(threeOptionParams, (c) => {
 			// Items = [Alpha, Beta, Gamma, "Type something."] (no chat row). UP at index 0
 			// wraps to the last item (Type something, inputMode); UP from there → Gamma.
 			c.handleInput(KEY.UP); // Alpha (0) → wrap to Type something (3, inputMode)
 			c.handleInput(KEY.UP); // Type something (3) → Gamma (2)
 			c.handleInput(KEY.ENTER); // confirm Gamma
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].answer).toBe("Gamma");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].answer).toBe("Gamma");
 	});
 });
 
@@ -180,7 +180,7 @@ describe("ask_user_question — 'Type something.' free-text flow", () => {
 	};
 
 	it("navigate to Other sentinel, type text, Enter → kind:'custom' with typed text", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			// Items: [Default, Second, "Type something."] — DOWN×2 to Type something
 			c.handleInput(KEY.DOWN); // → Second
 			c.handleInput(KEY.DOWN); // → Type something (inputMode=true)
@@ -190,25 +190,21 @@ describe("ask_user_question — 'Type something.' free-text flow", () => {
 			c.handleInput("l");
 			c.handleInput("o");
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].kind).toBe("custom");
-		expect(r?.details.answers[0].answer).toBe("hello");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].kind).toBe("custom");
+		expect(r.details.answers[0].answer).toBe("hello");
 	});
 
 	it("Type something with no input → kind:'custom', answer=null", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN); // → Second
 			c.handleInput(KEY.DOWN); // → Type something
 			c.handleInput(KEY.ENTER); // confirm with empty buffer
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].kind).toBe("custom");
-		expect(r?.details.answers[0].answer).toBeNull();
-		expect(r?.content[0].text).toContain("(no input)");
+		});
+		expect(r.details.answers[0].kind).toBe("custom");
+		expect(r.details.answers[0].answer).toBeNull();
+		expect(r.content[0].text).toContain("(no input)");
 	});
 });
 
@@ -233,13 +229,13 @@ describe("ask_user_question — multi-select flow (single question)", () => {
 				question: "Pick areas",
 				header: "Areas",
 				multiSelect: true,
-				options: [{ label: "Frontend" }, { label: "Backend" }, { label: "DevOps" }],
+				options: [{ label: "Frontend", description: "" }, { label: "Backend", description: "" }, { label: "DevOps", description: "" }],
 			},
 		],
 	};
 
 	it("commits checked options and custom text together through Next", async () => {
-		const r = (await run(multiParams, (c) => {
+		const r = await run(multiParams, (c) => {
 			c.handleInput(KEY.SPACE); // toggle Frontend ON
 			c.handleInput(KEY.DOWN); // → Backend
 			c.handleInput(KEY.SPACE); // toggle Backend ON
@@ -248,18 +244,16 @@ describe("ask_user_question — multi-select flow (single question)", () => {
 			for (const char of "GraphQL") c.handleInput(char);
 			c.handleInput(KEY.DOWN); // → Next sentinel
 			c.handleInput(KEY.ENTER); // commit + advance (single question → submit)
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].answer).toBe("GraphQL");
-		expect(r?.details.answers[0].selected).toEqual(["Frontend", "Backend"]);
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].answer).toBe("GraphQL");
+		expect(r.details.answers[0].selected).toEqual(["Frontend", "Backend"]);
 	});
 
 	// Spec: Enter on a regular row toggles (matches Space) — does NOT submit. Asserted indirectly:
 	// the user toggles via Enter, lands on Next, and Enter on Next commits.
 	it("Enter on a regular row toggles (no submit); commit happens on Next", async () => {
-		const r = (await run(multiParams, (c) => {
+		const r = await run(multiParams, (c) => {
 			c.handleInput(KEY.ENTER); // toggle Frontend ON via Enter
 			c.handleInput(KEY.DOWN); // → Backend
 			c.handleInput(KEY.ENTER); // toggle Backend ON via Enter
@@ -268,24 +262,20 @@ describe("ask_user_question — multi-select flow (single question)", () => {
 			c.handleInput(KEY.DOWN); // → "Type something." row
 			c.handleInput(KEY.DOWN); // → Next
 			c.handleInput(KEY.ENTER); // commit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].selected).toEqual(["Frontend"]);
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].selected).toEqual(["Frontend"]);
 	});
 
 	it("Enter on Next with nothing toggled → selected=[]", async () => {
-		const r = (await run(multiParams, (c) => {
+		const r = await run(multiParams, (c) => {
 			c.handleInput(KEY.DOWN); // → Backend
 			c.handleInput(KEY.DOWN); // → DevOps
 			c.handleInput(KEY.DOWN); // → "Type something." row
 			c.handleInput(KEY.DOWN); // → Next
 			c.handleInput(KEY.ENTER); // commit with no toggles
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].selected).toEqual([]);
+		});
+		expect(r.details.answers[0].selected).toEqual([]);
 	});
 });
 
@@ -296,9 +286,9 @@ describe("ask_user_question — multi-select toggle persistence (regression)", (
 				question: "Q1",
 				header: "H1",
 				multiSelect: true,
-				options: [{ label: "FE" }, { label: "BE" }, { label: "DB" }],
+				options: [{ label: "FE", description: "" }, { label: "BE", description: "" }, { label: "DB", description: "" }],
 			},
-			{ question: "Q2", header: "H2", options: [{ label: "A" }, { label: "B" }] },
+			{ question: "Q2", header: "H2", options: [{ label: "A", description: "" }, { label: "B", description: "" }] },
 		],
 	};
 
@@ -306,18 +296,16 @@ describe("ask_user_question — multi-select toggle persistence (regression)", (
 	// on Next) lost the toggle state — answers never received the in-progress selection. The
 	// final result and the Submit-tab summary both showed the question as un-answered.
 	it("Tab away from a multi-select tab preserves toggles in the final answers", async () => {
-		const r = (await run(persistParams, (c) => {
+		const r = await run(persistParams, (c) => {
 			c.handleInput(KEY.SPACE); // toggle FE ON
 			c.handleInput(KEY.DOWN); // → BE
 			c.handleInput(KEY.SPACE); // toggle BE ON
 			c.handleInput(KEY.TAB); // → Q2 WITHOUT pressing Enter on Next
 			c.handleInput(KEY.ENTER); // Q2: pick A → Submit tab
 			c.handleInput(KEY.ENTER); // Submit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		const q1 = r?.details.answers.find((a) => a.questionIndex === 0);
+		});
+		expect(r.details.cancelled).toBe(false);
+		const q1 = r.details.answers.find((a) => a.questionIndex === 0);
 		expect(q1).toBeDefined();
 		expect(q1?.selected).toEqual(["FE", "BE"]);
 	});
@@ -325,7 +313,7 @@ describe("ask_user_question — multi-select toggle persistence (regression)", (
 	// Bug: returning to a multi-select tab after toggling + tab-switching away showed empty
 	// checkboxes. After the fix, syncMultiSelectFromAnswers reads the persisted state.
 	it("Tab back to a multi-select tab restores the previous toggle state", async () => {
-		const r = (await run(persistParams, (c) => {
+		const r = await run(persistParams, (c) => {
 			c.handleInput(KEY.SPACE); // toggle FE ON
 			c.handleInput(KEY.TAB); // → Q2
 			c.handleInput(KEY.SHIFT_TAB); // ← Q1 (toggles must still be lit)
@@ -337,11 +325,9 @@ describe("ask_user_question — multi-select toggle persistence (regression)", (
 			c.handleInput(KEY.ENTER); // commit (auto-advance to Q2)
 			c.handleInput(KEY.ENTER); // Q2: A → Submit
 			c.handleInput(KEY.ENTER); // Submit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		const q1 = r?.details.answers.find((a) => a.questionIndex === 0);
+		});
+		expect(r.details.cancelled).toBe(false);
+		const q1 = r.details.answers.find((a) => a.questionIndex === 0);
 		expect(q1?.selected).toEqual(["FE", "BE"]);
 	});
 });
@@ -349,8 +335,8 @@ describe("ask_user_question — multi-select toggle persistence (regression)", (
 describe("ask_user_question — multi-question tab cycling flow", () => {
 	const twoParams = {
 		questions: [
-			{ question: "Q1?", header: "First", options: [{ label: "A" }, { label: "B" }] },
-			{ question: "Q2?", header: "Second", options: [{ label: "X" }, { label: "Y" }] },
+			{ question: "Q1?", header: "First", options: [{ label: "A", description: "" }, { label: "B", description: "" }] },
+			{ question: "Q2?", header: "Second", options: [{ label: "X", description: "" }, { label: "Y", description: "" }] },
 		],
 	};
 
@@ -372,31 +358,27 @@ describe("ask_user_question — multi-question tab cycling flow", () => {
 	});
 
 	it("cancel mid-flow preserves partial answers in details", async () => {
-		const r = (await run(twoParams, (c) => {
+		const r = await run(twoParams, (c) => {
 			c.handleInput(KEY.ENTER); // Q1: select A → auto-advance to Q2
 			c.handleInput(KEY.ESC); // cancel on Q2
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(true);
-		expect(r?.content[0].text).toContain("declined");
-		expect(r?.details.answers).toHaveLength(1);
-		expect(r?.details.answers[0].answer).toBe("A");
+		});
+		expect(r.details.cancelled).toBe(true);
+		expect(r.content[0].text).toContain("declined");
+		expect(r.details.answers).toHaveLength(1);
+		expect(r.details.answers[0].answer).toBe("A");
 	});
 
 	// D1 revised: Submit always submits (warning header is informational only).
 	// Enter on Submit row with submitChoiceIndex === 0 submits with whatever answers exist.
 	it("Submit tab with Enter on Submit row submits with partial answers (D1 revised)", async () => {
-		const r = (await run(twoParams, (c) => {
+		const r = await run(twoParams, (c) => {
 			c.handleInput(KEY.ENTER); // Q1: select A → auto-advance to Q2
 			c.handleInput(KEY.TAB); // → Submit (Q2 unanswered)
 			c.handleInput(KEY.ENTER); // Submit row (default index 0) → partial submit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers).toHaveLength(1);
-		expect(r?.details.answers[0].question).toBe("Q1?");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers).toHaveLength(1);
+		expect(r.details.answers[0].question).toBe("Q1?");
 	});
 
 	// Global note on the Submit tab: TAB to Submit, `n` opens the shared editor, the
@@ -404,7 +386,7 @@ describe("ask_user_question — multi-question tab cycling flow", () => {
 	// `global note:` segment — a note alone turns a zero-answer submit into an answered
 	// result rather than the decline.
 	it("TAB → Submit, n + note + Enter commits, Enter submits → details.globalNote set + 'global note:' in envelope", async () => {
-		const r = (await run(twoParams, (c) => {
+		const r = await run(twoParams, (c) => {
 			c.handleInput(KEY.TAB); // Q1 → Q2
 			c.handleInput(KEY.TAB); // Q2 → Submit
 			c.handleInput("n"); // Submit tab: open the global-note editor
@@ -414,27 +396,23 @@ describe("ask_user_question — multi-question tab cycling flow", () => {
 			c.handleInput("p"); // type "ship"
 			c.handleInput(KEY.ENTER); // commit the note (notes_exit → notesByTab[questions.length])
 			c.handleInput(KEY.ENTER); // Submit row (default index 0) → submit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.globalNote).toBe("ship");
-		expect(r?.content[0].text).toContain("global note:");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.globalNote).toBe("ship");
+		expect(r.content[0].text).toContain("global note:");
 	});
 
 	it("answer all → Submit tab → DOWN → Enter on Cancel returns cancelled=true with all answers preserved", async () => {
-		const r = (await run(twoParams, (c) => {
+		const r = await run(twoParams, (c) => {
 			c.handleInput(KEY.ENTER); // Q1: select A → auto-advance to Q2
 			c.handleInput(KEY.ENTER); // Q2: select X → auto-advance to Submit
 			c.handleInput(KEY.DOWN); // submit_nav → submitChoiceIndex=1 (Cancel row)
 			c.handleInput(KEY.ENTER); // Enter on Cancel
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(true);
-		expect(r?.details.answers).toHaveLength(2);
-		expect(r?.details.answers[0].answer).toBe("A");
-		expect(r?.details.answers[1].answer).toBe("X");
+		});
+		expect(r.details.cancelled).toBe(true);
+		expect(r.details.answers).toHaveLength(2);
+		expect(r.details.answers[0].answer).toBe("A");
+		expect(r.details.answers[1].answer).toBe("X");
 	});
 
 	// Confirmed-row indicator: tab back to a previously-answered single-select tab and the
@@ -492,9 +470,9 @@ describe("ask_user_question — multi-question tab cycling flow", () => {
 					question: "Q1?",
 					header: "H1",
 					multiSelect: true,
-					options: [{ label: "FE" }, { label: "BE" }, { label: "DB" }],
+					options: [{ label: "FE", description: "" }, { label: "BE", description: "" }, { label: "DB", description: "" }],
 				},
-				{ question: "Q2?", header: "H2", options: [{ label: "A" }, { label: "B" }] },
+				{ question: "Q2?", header: "H2", options: [{ label: "A", description: "" }, { label: "B", description: "" }] },
 			],
 		};
 		const renderedAfterBack: string[][] = [];
@@ -551,48 +529,43 @@ describe("ask_user_question — MAX_QUESTIONS (4 questions) complete flow", () =
 	};
 
 	it("answer all 4 questions with auto-advance, then submit", async () => {
-		const r = (await run(fourParams, (c) => {
+		const r = await run(fourParams, (c) => {
 			c.handleInput(KEY.ENTER); // Q1 → Q2
 			c.handleInput(KEY.ENTER); // Q2 → Q3
 			c.handleInput(KEY.ENTER); // Q3 → Q4
 			c.handleInput(KEY.ENTER); // Q4 → Submit tab
 			c.handleInput(KEY.ENTER); // Submit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers).toHaveLength(4);
-		const labels = r?.details.answers.map((a: QuestionAnswer) => a.answer);
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers).toHaveLength(4);
+		const labels = r.details.answers.map((a: QuestionAnswer) => a.answer);
 		expect(labels).toEqual(["A", "B", "C", "D"]);
 		// Envelope: single CC-style sentence chain.
-		expect(r?.content[0].text).toContain('"Q1?"="A".');
-		expect(r?.content[0].text).toContain('"Q4?"="D".');
-		expect(r?.content[0].text).toMatch(/^User has answered your questions:/);
-		expect(r?.content[0].text).toMatch(/You can now continue with the user's answers in mind\.$/);
+		expect(r.content[0].text).toContain('"Q1?"="A".');
+		expect(r.content[0].text).toContain('"Q4?"="D".');
+		expect(r.content[0].text).toMatch(/^User has answered your questions:/);
+		expect(r.content[0].text).toMatch(/You can now continue with the user's answers in mind\.$/);
 	});
 });
 
 describe("ask_user_question — mixed single+multi question flow", () => {
 	it("answer single-select Q1, toggle multi-select Q2, submit", async () => {
-		const r = (await run(mixedParams, (c) => {
+		const r = await run(mixedParams, (c) => {
 			c.handleInput(KEY.ENTER); // Q1 (single): select A → auto-advance to Q2
-			c.handleInput(KEY.SPACE); // Q2 (multi, 5 options): toggle FE (idx 0) ON
+			c.handleInput(KEY.SPACE); // Q2 (multi, 4 options): toggle FE (idx 0) ON
 			c.handleInput(KEY.DOWN); // → BE (1)
 			c.handleInput(KEY.DOWN); // → DB (2)
 			c.handleInput(KEY.SPACE); // toggle DB ON
 			c.handleInput(KEY.DOWN); // → QA (3)
-			c.handleInput(KEY.DOWN); // → Ops (4)
-			c.handleInput(KEY.DOWN); // → "Type something." row (5)
-			c.handleInput(KEY.DOWN); // → Next sentinel (6)
+			c.handleInput(KEY.DOWN); // → "Type something." row (4)
+			c.handleInput(KEY.DOWN); // → Next sentinel (5)
 			c.handleInput(KEY.ENTER); // commit multi-select → Submit tab
 			c.handleInput(KEY.ENTER); // Submit (all answered)
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers).toHaveLength(2);
-		expect(r?.details.answers[0]).toMatchObject({ answer: "A", kind: "option" });
-		expect(r?.details.answers[1]).toMatchObject({ answer: null, selected: ["FE", "DB"] });
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers).toHaveLength(2);
+		expect(r.details.answers[0]).toMatchObject({ answer: "A", kind: "option" });
+		expect(r.details.answers[1]).toMatchObject({ answer: null, selected: ["FE", "DB"] });
 	});
 });
 
@@ -624,9 +597,9 @@ describe("ask_user_question — notes pre-answer (Slice 5 notes UX)", () => {
 			c.handleInput(KEY.ESC); // exit notes (commits to notesByTab)
 			c.handleInput(KEY.ENTER); // confirm Centered → notesByTab merges into answer
 		});
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0]).toMatchObject({ answer: "Centered", kind: "option" });
-		expect(r?.details.answers[0].notes).toBe("hello");
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0]).toMatchObject({ answer: "Centered", kind: "option" });
+		expect(r.details.answers[0].notes).toBe("hello");
 	});
 
 	it("'n' opens the notes editor on a no-preview option and lands the note on the answer (universal `n` gate)", async () => {
@@ -642,9 +615,9 @@ describe("ask_user_question — notes pre-answer (Slice 5 notes UX)", () => {
 			c.handleInput(KEY.ESC); // exit notes (commits to notesByTab)
 			c.handleInput(KEY.ENTER); // confirm Left → notesByTab merges into answer
 		});
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].answer).toBe("Left");
-		expect(r?.details.answers[0].notes).toBe("hello");
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].answer).toBe("Left");
+		expect(r.details.answers[0].notes).toBe("hello");
 	});
 });
 
@@ -663,86 +636,74 @@ describe("ask_user_question — bracketed paste + Kitty CSI-u (dictation parity)
 	};
 
 	it("bracketed paste on the inline-Other row commits the pasted text as kind:'custom'", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN); // → Second
 			c.handleInput(KEY.DOWN); // → Type something. (inputMode=true)
 			// Wispr Flow / FluidVoice ReliablePaste deliver bracketed paste:
 			c.handleInput("\x1b[200~Hello world\x1b[201~");
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].kind).toBe("custom");
-		expect(r?.details.answers[0].answer).toBe("Hello world");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].kind).toBe("custom");
+		expect(r.details.answers[0].answer).toBe("Hello world");
 	});
 
 	it("bracketed paste split across two handleInput calls is reassembled correctly", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN); // inputMode
 			// Stdin chunks the paste — pi-tui's Editor paste accumulator handles split chunks.
 			c.handleInput("\x1b[200~Hel");
 			c.handleInput("lo\x1b[201~");
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].answer).toBe("Hello");
+		});
+		expect(r.details.answers[0].answer).toBe("Hello");
 	});
 
 	it("bracketed paste preserves line breaks and expands tabs", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN);
 			c.handleInput("\x1b[200~Hello\nworld\twith\rmix\x1b[201~");
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].answer).toBe("Hello\nworld    with\nmix");
+		});
+		expect(r.details.answers[0].answer).toBe("Hello\nworld    with\nmix");
 	});
 
 	it("Kitty CSI-u printables (\\x1b[97u …) are decoded and committed", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN);
 			c.handleInput("\x1b[97u"); // 'a'
 			c.handleInput("\x1b[98u"); // 'b'
 			c.handleInput("\x1b[99u"); // 'c'
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].kind).toBe("custom");
-		expect(r?.details.answers[0].answer).toBe("abc");
+		});
+		expect(r.details.answers[0].kind).toBe("custom");
+		expect(r.details.answers[0].answer).toBe("abc");
 	});
 
 	it("bracketed paste followed by typed chars + backspace produces the expected merged value", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN);
 			c.handleInput("\x1b[200~Hi\x1b[201~"); // paste "Hi" → "Hi"
 			c.handleInput("!"); // append "!" → "Hi!"
 			c.handleInput("\x7f"); // backspace → "Hi"
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].answer).toBe("Hi");
+		});
+		expect(r.details.answers[0].answer).toBe("Hi");
 	});
 
 	it("raw multi-character chunk (no bracketed paste markers) appends as-is", async () => {
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN); // inputMode
 			c.handleInput("Hello world"); // raw, unframed multi-char chunk
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].kind).toBe("custom");
-		expect(r?.details.answers[0].answer).toBe("Hello world");
+		});
+		expect(r.details.answers[0].kind).toBe("custom");
+		expect(r.details.answers[0].answer).toBe("Hello world");
 	});
 
 	it("large bracketed paste (>10 lines) commits the expanded content, not the compact marker", async () => {
@@ -750,32 +711,28 @@ describe("ask_user_question — bracketed paste + Kitty CSI-u (dictation parity)
 		// inserts a "[paste #N +L lines]" marker. Submitting must expand the marker back
 		// to the stored body — pi core submits main-prompt input the same way.
 		const bigPaste = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN); // inputMode on "Type something."
 			c.handleInput(`\x1b[200~${bigPaste}\x1b[201~`);
 			c.handleInput(KEY.ENTER);
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0].kind).toBe("custom");
-		expect(r?.details.answers[0].answer).toBe(bigPaste);
-		expect(r?.details.answers[0].answer).not.toContain("[paste #");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0].kind).toBe("custom");
+		expect(r.details.answers[0].answer).toBe(bigPaste);
+		expect(r.details.answers[0].answer).not.toContain("[paste #");
 	});
 
 	it("large bracketed paste into notes lands the expanded text in answer.notes", async () => {
 		const bigNotes = Array.from({ length: 12 }, (_, i) => `note ${i + 1}`).join("\n");
-		const r = (await run(freeTextParams, (c) => {
+		const r = await run(freeTextParams, (c) => {
 			c.handleInput("n"); // universal notes gate (focus starts on Default)
 			c.handleInput(`\x1b[200~${bigNotes}\x1b[201~`);
 			c.handleInput(KEY.ESC); // exit notes → commits to notesByTab
 			c.handleInput(KEY.ENTER); // confirm Default with the note
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.answers[0].answer).toBe("Default");
-		expect(r?.details.answers[0].notes).toBe(bigNotes);
+		});
+		expect(r.details.answers[0].answer).toBe("Default");
+		expect(r.details.answers[0].notes).toBe(bigNotes);
 	});
 
 	it("large paste survives a tab-switch draft round-trip (restores go through setText)", async () => {
@@ -783,12 +740,12 @@ describe("ask_user_question — bracketed paste + Kitty CSI-u (dictation parity)
 		// so the draft must already be expanded when captured.
 		const twoQuestionParams = {
 			questions: [
-				{ question: "Q1?", header: "First", options: [{ label: "A" }, { label: "B" }] },
-				{ question: "Q2?", header: "Second", options: [{ label: "X" }, { label: "Y" }] },
+				{ question: "Q1?", header: "First", options: [{ label: "A", description: "" }, { label: "B", description: "" }] },
+				{ question: "Q2?", header: "Second", options: [{ label: "X", description: "" }, { label: "Y", description: "" }] },
 			],
 		};
 		const bigPaste = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
-		const r = (await run(twoQuestionParams, (c) => {
+		const r = await run(twoQuestionParams, (c) => {
 			c.handleInput(KEY.DOWN);
 			c.handleInput(KEY.DOWN); // Q1 "Type something." row → inputMode
 			c.handleInput(`\x1b[200~${bigPaste}\x1b[201~`);
@@ -800,11 +757,9 @@ describe("ask_user_question — bracketed paste + Kitty CSI-u (dictation parity)
 			c.handleInput(KEY.ENTER); // commit custom → auto-advance to Q2
 			c.handleInput(KEY.TAB); // → Submit
 			c.handleInput(KEY.ENTER); // submit
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		const q1 = r?.details.answers.find((a) => a.questionIndex === 0);
+		});
+		expect(r.details.cancelled).toBe(false);
+		const q1 = r.details.answers.find((a) => a.questionIndex === 0);
 		expect(q1?.kind).toBe("custom");
 		expect(q1?.answer).toBe(bigPaste);
 		expect(q1?.answer).not.toContain("[paste #");
@@ -817,14 +772,14 @@ const multiNotesParams = {
 			question: "Pick areas",
 			header: "Areas",
 			multiSelect: true,
-			options: [{ label: "FE" }, { label: "BE" }],
+			options: [{ label: "FE", description: "" }, { label: "BE", description: "" }],
 		},
 	],
 };
 
 describe("ask_user_question — multi-select notes end-to-end", () => {
 	it("n → type → Esc → Space → Next+Enter lands a multi answer carrying the typed note", async () => {
-		const r = (await run(multiNotesParams, (c) => {
+		const r = await run(multiNotesParams, (c) => {
 			// Items: [FE (0), BE (1), "Type something." (2), Next (3)]. Startup focuses FE.
 			// Universal `n` gate (Phase 1) opens notes on this multi-select tab.
 			c.handleInput("n"); // enter notes
@@ -836,12 +791,10 @@ describe("ask_user_question — multi-select notes end-to-end", () => {
 			c.handleInput(KEY.DOWN); // → "Type something." (inputMode on, then off via DOWN)
 			c.handleInput(KEY.DOWN); // → Next sentinel
 			c.handleInput(KEY.ENTER); // multi_confirm + done (single question → submit)
-		})) as
-			| ToolResult
-			| undefined;
-		expect(r?.details.cancelled).toBe(false);
-		expect(r?.details.answers[0]).toMatchObject({ kind: "multi" });
-		expect(r?.details.answers[0].selected).toContain("FE");
-		expect(r?.details.answers[0].notes).toBe("hi");
+		});
+		expect(r.details.cancelled).toBe(false);
+		expect(r.details.answers[0]).toMatchObject({ kind: "multi" });
+		expect(r.details.answers[0].selected).toContain("FE");
+		expect(r.details.answers[0].notes).toBe("hi");
 	});
 });

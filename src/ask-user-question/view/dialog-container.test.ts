@@ -6,7 +6,7 @@ import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
 import {
 	makeQuestionnaireState,
-	makeMultiSelectPropsFromState as msoPropsFromState,
+	makeMultiSelectViewProps,
 	makeSubmitPickerPropsFromState as submitPickerPropsFromState,
 } from "../test-fixtures.ts";
 import type { QuestionAnswer, QuestionData } from "../tool/types.ts";
@@ -195,7 +195,9 @@ describe("makeDialog — multi-question (question tab)", () => {
 		};
 		const initialState: DialogState = makeQuestionnaireState();
 		const mso = new MultiSelectView(theme, multiQ);
-		mso.setProps(msoPropsFromState(multiQ, initialState));
+		mso.setProps(makeMultiSelectViewProps(multiQ, {
+			optionIndex: initialState.optionIndex, checkedIndices: initialState.multiSelectChecked,
+		}));
 		const dlg = makeDialog(
 			makeConfig({
 				questions: [
@@ -286,7 +288,9 @@ describe("makeDialog — multi-question (question tab)", () => {
 		};
 		const state: DialogState = makeQuestionnaireState({ optionIndex: 1, multiSelectChecked: new Set([0]) });
 		const mso = new MultiSelectView(theme, multiQ);
-		mso.setProps(msoPropsFromState(multiQ, state));
+		mso.setProps(makeMultiSelectViewProps(multiQ, {
+			optionIndex: state.optionIndex, checkedIndices: state.multiSelectChecked,
+		}));
 		const dlg = makeDialog(
 			makeConfig({
 				questions: [
@@ -568,7 +572,9 @@ describe("makeDialog — body residual padding", () => {
 		const stateTab0: DialogState = makeQuestionnaireState();
 		const stateTab1: DialogState = { ...stateTab0, currentTab: 1 };
 		const mso = new MultiSelectView(theme, multiQ);
-		mso.setProps(msoPropsFromState(multiQ, stateTab0));
+		mso.setProps(makeMultiSelectViewProps(multiQ, {
+			optionIndex: stateTab0.optionIndex, checkedIndices: stateTab0.multiSelectChecked,
+		}));
 		const multiSelectByTab: ReadonlyArray<MultiSelectView | undefined> = [undefined, mso];
 		const getBodyHeight = (w: number) => Math.max(1, (mso as unknown as Component).render(w).length);
 

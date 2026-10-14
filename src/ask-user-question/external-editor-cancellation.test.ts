@@ -1,23 +1,20 @@
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
 import { ASK_USER_BLOCKED_EVENT } from "./events.ts";
 import { resolvePresentation } from "./presentation.ts";
 import type { QuestionnaireSessionComponent } from "./state/questionnaire-session.ts";
 
-const editor = vi.hoisted(() => {
-	let releaseImport!: () => void;
-	let startImport!: () => void;
-	const importing = new Promise<void>(resolve => { startImport = resolve; });
-	const gate = new Promise<void>(resolve => { releaseImport = resolve; });
-	return { importing, gate, startImport, releaseImport, edit: vi.fn() };
+const edit = vi.fn();
+const editorModule = "./state/external-editor.ts";
+beforeEach(() => {
+	edit.mockReset();
+	vi.doMock(editorModule, () => ({ editWithExternalEditor: edit }));
 });
-vi.mock("./state/external-editor.ts", async () => {
-	editor.startImport();
-	await editor.gate;
-	return { editWithExternalEditor: editor.edit };
+afterEach(() => {
+	vi.doUnmock(editorModule);
 });
 
 const args = { questions: [{ question: "Approach?", header: "Approach", options: [
@@ -39,7 +36,7 @@ function startQuestionnaire() {
 	const ready = new Promise<void>(resolve => { mounted = resolve; });
 	// pi-tui supplies editor keys; the Pi host adds this application binding.
 	const keys = getKeybindings();
-	const keybindings = { matches: (data: string, action: string) =>
+	const keybindings = { matches: (data: string, action: Parameters<typeof keys.matches>[1] | "app.editor.external") =>
 		action === "app.editor.external" ? data === "\x07" : keys.matches(data, action) };
 	const ctx = createMockCtx({ hasUI: true, ui: {
 		custom: vi.fn((factory) => new Promise(resolve => {
@@ -64,19 +61,28 @@ function startQuestionnaire() {
 
 describe("external editor invocation ownership", () => {
 	it("does not launch an editor when cancellation arrives during its lazy import", async () => {
+		let releaseImport!: () => void;
+		let startImport!: () => void;
+		const importing = new Promise<void>(resolve => { startImport = resolve; });
+		const gate = new Promise<void>(resolve => { releaseImport = resolve; });
+		vi.doMock(editorModule, async () => {
+			startImport();
+			await gate;
+			return { editWithExternalEditor: edit };
+		});
 		const call = startQuestionnaire();
 		const outcome = call.pending.catch(error => error);
 		try {
 			await call.ready;
 			call.edit();
-			await editor.importing;
+			await importing;
 			call.controller.abort();
 		} finally {
 			call.controller.abort();
-			editor.releaseImport();
+			releaseImport();
 		}
 		expect(await outcome).toBeInstanceOf(Error);
-		expect(editor.edit).not.toHaveBeenCalled();
+		expect(edit).not.toHaveBeenCalled();
 		expect(call.ctx.ui.notify).not.toHaveBeenCalled();
 		expect(call.captured.eventsEmitted.get(ASK_USER_BLOCKED_EVENT)?.at(-1)).toEqual({ active: false });
 	});
@@ -86,7 +92,7 @@ describe("external editor invocation ownership", () => {
 		let started!: () => void;
 		let signal!: AbortSignal;
 		const ready = new Promise<void>(resolve => { started = resolve; });
-		editor.edit.mockImplementation((_tui, _command, _value, abortSignal) => {
+		edit.mockImplementation((_tui, _command, _value, abortSignal) => {
 			signal = abortSignal;
 			started();
 			return new Promise<string>(resolve => { close = () => resolve("late edit"); });

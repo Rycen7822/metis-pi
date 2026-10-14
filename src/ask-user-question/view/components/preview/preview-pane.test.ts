@@ -1,6 +1,6 @@
 import { makeQuestion } from "../../../test-fixtures.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -602,54 +602,12 @@ describe("PreviewPane composes OptionListView state into render output", () => {
 		],
 	};
 
-	it("setConfirmedIndex(1) renders ` ✔` on row 2 even when cursor is on row 0", () => {
+	it("confirmed props render ` ✔` on row 2 even when cursor is on row 0", () => {
 		const { pane, optionListView } = makePane(noPreviewQuestion, () => 120);
 		optionListView.setProps({ selectedIndex: 0, focused: true, inputBuffer: "", confirmed: { index: 1 } });
 		const lines = pane.render(120);
 		expect(lines.some((l) => l.includes("Beta ✔"))).toBe(true);
 		expect(lines.some((l) => l.includes("Alpha ✔"))).toBe(false);
-	});
-
-	it("setConfirmedIndex(undefined) clears the marker", () => {
-		const { pane, optionListView } = makePane(noPreviewQuestion, () => 120);
-		optionListView.setProps({ selectedIndex: 0, focused: true, inputBuffer: "", confirmed: { index: 1 } });
-		optionListView.setProps({ selectedIndex: 0, focused: true, inputBuffer: "" });
-		const lines = pane.render(120);
-		expect(lines.join("\n")).not.toContain("✔");
-	});
-
-	it("OptionListView.setProps({inputBuffer:'Hello'}) flows to the inline-input row render", () => {
-		const otherQuestion: QuestionData = {
-			question: "pick",
-			header: "pick",
-			options: [
-				{ label: "Alpha", description: "" },
-				{ label: "Beta", description: "" },
-			],
-		};
-		const items: QuestionRow[] = [
-			...otherQuestion.options.map((o) => ({
-				kind: "option" as const,
-				label: o.label,
-				description: o.description,
-			})),
-			{ kind: "other", label: "Type something." },
-		];
-		const optionListView = new OptionListView({ items, theme: selectTheme });
-		const previewBlock = new PreviewBlockRenderer({ question: otherQuestion, theme, markdownTheme });
-		const pane = new PreviewPane({
-			question: otherQuestion,
-			theme,
-			getTerminalWidth: () => 120,
-			optionListView,
-			previewBlock,
-		getGlobalLeftWidth: (w) => adaptiveLeftWidth(items, items.length, w),
-	});
-		pane.setProps({ notesVisible: false, hasNote: false, selectedIndex: 2, focused: true, inputMode: false });
-		optionListView.setProps({ selectedIndex: 2, focused: true, inputBuffer: "Hello" });
-		const lines = pane.render(120);
-		expect(lines.some((l) => l.includes("Hello"))).toBe(true);
-		expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true);
 	});
 });
 

@@ -8,7 +8,6 @@ import {
 	MIN_OPTIONS,
 	type QuestionAnswer,
 	type QuestionData,
-	type QuestionnaireResult,
 	QuestionParamsSchema,
 	QuestionsSchema,
 	RESERVED_LABELS,

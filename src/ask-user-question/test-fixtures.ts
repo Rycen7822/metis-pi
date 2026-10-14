@@ -71,10 +71,7 @@ export function makeStatefulView<P>(): StatefulView<P> {
  * a real PreviewPane (which would require a real OptionListView + PreviewBlockRenderer).
  */
 export function makeFakePreviewPane(): PreviewPane {
-	return {
-		...makeStatefulView<PreviewPaneProps>(),
-		setGlobalLeftWidth: vi.fn(),
-	} as unknown as PreviewPane;
+	return makeStatefulView<PreviewPaneProps>() as unknown as PreviewPane;
 }
 
 /**
@@ -135,29 +132,6 @@ export function makeMultiSelectViewProps(
 		},
 		nextActive,
 		nextLabel,
-	};
-}
-
-export function makeMultiSelectPropsFromState(
-	question: QuestionData,
-	state: QuestionnaireState,
-	focused = true,
-): MultiSelectViewProps {
-	const rows = question.options.map((_, i) => ({
-		checked: state.multiSelectChecked.has(i),
-		active: focused && i === state.optionIndex,
-	}));
-	return {
-		rows,
-		other: {
-			active: focused && state.optionIndex === question.options.length,
-			checked: false,
-			inputMode: state.inputMode,
-			inputBuffer: "",
-			inputCursorOffset: undefined,
-		},
-		nextActive: focused && state.optionIndex === question.options.length + 1,
-		nextLabel: "Next",
 	};
 }
 
