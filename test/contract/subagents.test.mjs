@@ -566,12 +566,21 @@ test(
     await loaded.session.waitForIdle();
     assert.equal(turn, 15);
     assert.deepEqual(errors, []);
-    assert.equal(
-      loaded.session.sessionManager
-        .getBranch()
-        .filter((entry) => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length,
-      1,
-      "overlapping waits preserve one event receipt",
+    const deliveryBranch = loaded.session.sessionManager.getBranch();
+    const automaticNotices = deliveryBranch.filter(
+      (entry) => entry.type === "custom_message" && entry.customType === "metis-subagent-attention",
+    );
+    const automaticEvents = automaticNotices.flatMap(
+      (entry) => JSON.parse(entry.content.slice(entry.content.indexOf("\n") + 1)).events,
+    );
+    const automaticIds = automaticEvents.map((event) => event.notification_id);
+    assert.equal(new Set(automaticIds).size, automaticIds.length, JSON.stringify(automaticEvents));
+    const waitedIds = new Set(deliveryBranch
+      .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
+      .flatMap((entry) => entry.message.details?.metisSubagentReceipt?.events ?? []));
+    assert.ok(
+      automaticIds.every((id) => !waitedIds.has(id)),
+      `waits and automatic delivery must not repeat an event: ${JSON.stringify(automaticEvents)}`,
     );
     for (const [label, expectedTurn] of [
       ["direct", 17],
@@ -592,7 +601,8 @@ test(
       loaded.session.sessionManager
         .getBranch()
         .filter((entry) => entry.type === "custom_message" && entry.customType === "metis-subagent-attention").length,
-      1,
+      automaticNotices.length,
+      "synchronous failures do not create background notifications",
     );
     const failureSettled = new Promise((resolve) => {
       const off = loaded.session.subscribe((event) => {
@@ -626,7 +636,7 @@ test(
     assert.equal(
       loaded.session.sessionManager.getBranch().filter((entry) => entry.customType === "metis-subagent-attention")
         .length,
-      2,
+      automaticNotices.length + 1,
       "preflight errors do not create background failure notifications",
     );
     const viewDeadline = Date.now() + 5000;

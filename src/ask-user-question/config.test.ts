@@ -115,6 +115,23 @@ describe("loadConfig", () => {
 		expect(loadConfig().collapseKey).toBe(DEFAULT_COLLAPSE_KEY);
 		expect(loadConfig().guidance?.promptSnippet).toBeUndefined();
 	});
+	it("uses bundled defaults despite malformed or unreadable legacy Metis files", () => {
+		const agentDir = process.env.PI_CODING_AGENT_DIR!;
+		const settings = join(agentDir, "settings.json");
+		const backendDir = join(agentDir, "subagent-pi");
+		try {
+			writeFileSync(settings, "{broken");
+			mkdirSync(backendDir, { recursive: true });
+			writeFileSync(join(backendDir, "config.toml"), "[broken");
+			expect(loadConfig()).toMatchObject({ enabled: true, collapseKey: DEFAULT_COLLAPSE_KEY });
+			rmSync(settings);
+			mkdirSync(settings);
+			expect(loadConfig()).toMatchObject({ enabled: true, collapseKey: DEFAULT_COLLAPSE_KEY });
+		} finally {
+			rmSync(settings, { recursive: true, force: true });
+			rmSync(backendDir, { recursive: true, force: true });
+		}
+	});
 	it("reports malformed TOML and invalid enable flags rather than falling back", () => {
 		writeFileSync(configPath, "[broken");
 		expect(() => loadConfig()).toThrow(MetisConfigError);

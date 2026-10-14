@@ -147,7 +147,7 @@ async function askSingleSelect(
 			"",
 		);
 		if (typed == null) continue;
-		return { questionIndex, question: q.question, kind: "custom", answer: typed };
+		return { questionIndex, question: q.question, kind: "custom", answer: typed || null };
 	}
 }
 

@@ -165,6 +165,16 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 		expect(r?.details).toMatchObject({ cancelled: false });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Which?"="typed it"') });
 	});
+	it.each(["", " "])("preserves an explicitly confirmed custom input %j like the TUI", async typed => {
+		const tool = register();
+		const select = vi.fn(async (_t: string, options: string[]) => options.at(-1));
+		const input = vi.fn(async () => typed);
+		const result = await run(tool, SINGLE, ctxRpc({ select, input }));
+		expect(result.details).toMatchObject({
+			cancelled: false,
+			answers: [{ questionIndex: 0, question: "Which?", kind: "custom", answer: typed.length ? typed : null }],
+		});
+	});
 
 	it("folds option previews into the select title and echoes the selected preview", async () => {
 		const tool = register();
