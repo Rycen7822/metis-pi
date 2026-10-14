@@ -11,7 +11,6 @@ const edit = vi.fn();
 const editorModule = "./state/external-editor.ts";
 beforeEach(() => {
 	edit.mockReset();
-	vi.doMock(editorModule, () => ({ editWithExternalEditor: edit }));
 });
 afterEach(() => {
 	vi.doUnmock(editorModule);
@@ -88,6 +87,7 @@ describe("external editor invocation ownership", () => {
 	});
 
 	it("keeps the inline slot and blocked event until editor cleanup finishes", async () => {
+		vi.doMock(editorModule, () => ({ editWithExternalEditor: edit }));
 		let close!: () => void;
 		let started!: () => void;
 		let signal!: AbortSignal;
