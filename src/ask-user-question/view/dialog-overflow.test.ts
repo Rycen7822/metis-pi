@@ -206,6 +206,18 @@ describe("Dialog overflow — submit tab", () => {
 		// With top-anchored scroll on submit, the REVIEW heading should be visible.
 		expect(joined).toContain(REVIEW_HEADING);
 	});
+
+	it("shows more-below affordance when the submit review has only one visible row", () => {
+		const state = submitState();
+		const picker = new SubmitPicker(theme);
+		picker.setProps(submitPickerPropsFromState(state, true));
+		const dlg = makeDialog(makeConfig({
+			state, submitPicker: picker, getTerminalRows: () => 11, getBodyHeight: () => 20,
+		}));
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(11);
+		expect(lines.map(stripAnsi)).toContain("↓");
+	});
 });
 
 describe("Dialog overflow — indicator content", () => {

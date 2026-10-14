@@ -31,7 +31,7 @@ describe("editWithExternalEditor", () => {
 		void pending.catch(() => {});
 		let pid: number | undefined;
 		try {
-			await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
+			await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 2500 });
 			const child = JSON.parse(readFileSync(ready, "utf8")) as { pid: number; file: string };
 			pid = child.pid;
 			controller.abort(new Error("editor cancelled"));
@@ -41,6 +41,7 @@ describe("editWithExternalEditor", () => {
 			expect(existsSync(child.file)).toBe(false);
 			expect(tui.requestRender).toHaveBeenCalledWith(true);
 		} finally {
+			controller.abort();
 			if (pid !== undefined) { try { process.kill(pid, "SIGKILL"); } catch {} }
 			await pending.catch(() => {});
 		}

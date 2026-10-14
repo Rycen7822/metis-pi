@@ -48,7 +48,7 @@ export function decorateOverflow(
 		scrollableMiddle[0] = theme.fg("dim", OVERFLOW_UP);
 	}
 	const last = scrollableMiddle.length - 1;
-	if (hasDown && last > 0 && drawable(last)) {
+	if (hasDown && last >= 0 && drawable(last)) {
 		scrollableMiddle[last] = theme.fg("dim", OVERFLOW_DOWN);
 	}
 }

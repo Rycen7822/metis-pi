@@ -41,11 +41,17 @@ afterEach(() => {
 });
 
 describe("ask_user_question.execute — lazy session-graph load guards (#107)", () => {
-	it("returns error: session_load_failed (not a throw) when the lazy import rejects", async () => {
-		vi.doMock(SESSION_SPECIFIER, () => {
+	it("absorbs a failed pre-warm and reports session_load_failed when the tool executes", async () => {
+		vi.useFakeTimers();
+		const factory = vi.fn(() => {
 			throw new Error("Cannot find module '/replaced/store/pi-coding-agent/dist/index.js'");
 		});
+		vi.doMock(SESSION_SPECIFIER, factory);
+		const { PREWARM_DELAY_MS } = await import("./ask-user-question.ts");
 		const tool = await registerFresh();
+		expect(factory).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(PREWARM_DELAY_MS);
+		expect(factory).toHaveBeenCalledOnce();
 		const ctx = ctxWithCustom(null);
 		const stdout = mockStdout(true);
 		try {
@@ -108,15 +114,4 @@ describe("ask_user_question — registration pre-warm (#107)", () => {
 		expect(factory).toHaveBeenCalled();
 	});
 
-	it("swallows a pre-warm failure so registration-time churn never crashes the extension", async () => {
-		vi.useFakeTimers();
-		vi.doMock(SESSION_SPECIFIER, () => {
-			throw new Error("Cannot find module '/replaced/store/pi-coding-agent/dist/index.js'");
-		});
-		const { registerAskUserQuestionTool, PREWARM_DELAY_MS } = await import("./ask-user-question.ts");
-		const { pi } = createMockPi();
-		registerAskUserQuestionTool(pi);
-		// Would reject unhandled (failing the test run) if the pre-warm didn't swallow.
-		await vi.advanceTimersByTimeAsync(PREWARM_DELAY_MS);
-	});
 });

@@ -1,4 +1,4 @@
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { isKeyRelease, isKeyRepeat, Key, matchesKey } from "@earendil-works/pi-tui";
 import type { QuestionnaireAction, QuestionnaireRuntime, QuestionnaireState } from "./state.ts";
 
 const KEYBIND_UP = "tui.select.up";
@@ -182,7 +182,7 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 		runtime.collapseKey !== "off" &&
 		matchesKey(data, runtime.collapseKey as Parameters<typeof matchesKey>[1])
 	) {
-		return { kind: "toggle_collapsed" };
+		return { kind: isKeyRelease(data) || isKeyRepeat(data) ? "ignore" : "toggle_collapsed" };
 	}
 
 	if (state.collapsed) return routeCollapsed(kb, data);

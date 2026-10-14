@@ -266,14 +266,22 @@ describe("inline presentation", () => {
 });
 
 describe("overlay fallback", () => {
-	it("opens a focused overlay with the raw collapse listener while another questionnaire holds the slot", async () => {
-		const { run, ctx, onTerminalInput, removeListener } = setup(async () => ({ answers: [], cancelled: true }));
+	it.each([false, true])("safely collapses a fallback overlay with an existing overlay=%s", async existingOverlay => {
+		const { run, ctx, onTerminalInput, removeListener } = setup(factory => new Promise(resolve => {
+			const component = factory({
+				requestRender() {}, terminal: { columns: 100, rows: 24 }, hasOverlay: () => existingOverlay,
+			}, theme, getKeybindings(), resolve);
+			component.handleInput(COLLAPSE);
+			expect(component.render(100)).toHaveLength(1);
+			component.handleInput(COLLAPSE);
+			component.handleInput(ENTER);
+		}));
 		await withInlineSlotHeld(() => run(twoOptions).then(() => {}));
 		expect(vi.mocked(ctx.ui.custom).mock.calls[0]?.[1]).toMatchObject({
 			overlay: true,
 			overlayOptions: { anchor: "bottom-center", maxHeight: "100%" },
 		});
-		expect(onTerminalInput).toHaveBeenCalledOnce();
-		expect(removeListener).toHaveBeenCalledOnce();
+		expect(onTerminalInput).toHaveBeenCalledTimes(existingOverlay ? 0 : 1);
+		expect(removeListener).toHaveBeenCalledTimes(existingOverlay ? 0 : 1);
 	});
 });

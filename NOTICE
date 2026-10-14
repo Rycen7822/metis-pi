@@ -24,7 +24,7 @@ publicly inspected selector contract; it is not a copy of the complete Pi host.
 The owned questionnaire in src/ask-user-question derives from
 @juicesharp/rpiv-ask-user-question 2.13.8 (juicesharp/rpiv-mono tag v2.13.8,
 commit afc21bc25f7d07cae9fb3103dc309240a16b9f49). Guidance validation and
-test helpers derive from that release\'s rpiv-config/test-utils. MIT license
+test helpers derive from that release's rpiv-config/test-utils. MIT license
 and local changes are recorded in src/ask-user-question/LICENSE and METIS.md.
 
 This project is not an OpenAI or Earendil product.

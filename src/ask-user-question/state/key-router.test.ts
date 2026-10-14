@@ -679,6 +679,12 @@ describe("routeKey — collapse/expand (Ctrl+] toggle + collapsed-mode lockout)"
 	// apply because the questionnaire runs in-process.
 	const BYTE_CTRL_RBRACKET = "\x1d";
 
+	it.each([[1, "toggle_collapsed"], [2, "ignore"], [3, "ignore"]] as const)(
+		"routes Kitty Ctrl+] event %i as %s", (event, kind) => {
+			expect(routeKey(`\x1b[93;5:${event}u`, makeState(), makeRuntime())).toEqual({ kind });
+		},
+	);
+
 	it("Ctrl+] emits toggle_collapsed from the default question state", () => {
 		expect(routeKey(BYTE_CTRL_RBRACKET, makeState(), makeRuntime())).toEqual({ kind: "toggle_collapsed" });
 	});

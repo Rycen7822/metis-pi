@@ -57,7 +57,15 @@ function emitAskUserPromptEvent(pi: ExtensionAPI, params: QuestionParams): void 
 	pi.events.emit(ASK_USER_PROMPT_EVENT, payload);
 }
 
+const activeQuestionnaires = new WeakMap<ExtensionAPI, number>();
 function emitAskUserBlockedEvent(pi: ExtensionAPI, active: boolean): void {
+	const count = (activeQuestionnaires.get(pi) ?? 0) + (active ? 1 : -1);
+	if (count > 0) {
+		activeQuestionnaires.set(pi, count);
+		if (!active) return;
+	} else {
+		activeQuestionnaires.delete(pi);
+	}
 	const payload: AskUserBlockedEventPayload = { active };
 	pi.events.emit(ASK_USER_BLOCKED_EVENT, payload);
 }
@@ -277,17 +285,10 @@ async function mountQuestionnaire(config: {
 	const { ctx, collapseKey, presentation } = config;
 	const sessionRef: SessionRef = { current: null };
 	const overlayHandleRef: OverlayHandleRef = { current: undefined };
-	const removeOverlayInputListener = presentation.hideOnCollapse
-		? registerCollapseKeyListener(ctx, collapseKey, sessionRef, overlayHandleRef)
-		: undefined;
-	// Hiding the overlay is only reversible through the raw listener above, so the session
-	// may emit `setHidden` only when it was actually registered; otherwise collapse falls
-	// back to the visible one-line row.
-	const canReopenWhileHidden = removeOverlayInputListener !== undefined;
+	let removeOverlayInputListener: (() => void) | undefined;
 	let removeAbortListener: (() => void) | undefined;
 	try {
 		config.signal?.throwIfAborted();
-		const factory = makeSessionFactory({ ...config, canReopenWhileHidden, sessionRef });
 		const result = await ctx.ui.custom<QuestionnaireResult>(
 			(tui, theme, keys, done) => {
 				let settled = false;
@@ -303,6 +304,15 @@ async function mountQuestionnaire(config: {
 				config.signal?.addEventListener("abort", abort, { once: true });
 				removeAbortListener = () => config.signal?.removeEventListener("abort", abort);
 				if (config.signal?.aborted) { abort(); return INERT_COMPONENT; }
+				const mountedPresentation = presentation.overlay && mustYieldInlineSlot(tui)
+					? STACKED_OVERLAY_PRESENTATION : presentation;
+				if (mountedPresentation.hideOnCollapse) {
+					removeOverlayInputListener = registerCollapseKeyListener(ctx, collapseKey, sessionRef, overlayHandleRef);
+				}
+				const factory = makeSessionFactory({
+					...config, presentation: mountedPresentation, sessionRef,
+					canReopenWhileHidden: removeOverlayInputListener !== undefined,
+				});
 				return factory(tui, theme, keys, finish);
 			},
 			presentation.overlay
