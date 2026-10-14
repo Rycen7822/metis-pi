@@ -150,18 +150,24 @@ test("successful exploration content folds by default, errors and full expansion
   }
 });
 
-test("native bash searches use exploration titles and retain commands, output and failures", () => {
-  for (const [command, verb] of [
+test("native bash exploration retains commands, output and failures", () => {
+  for (const [command, verb, target = "needle"] of [
     ["rg needle src/", "Search"], ["ast-grep run -p needle -l ts src/", "Search"], ["fd needle src/", "Find"],
+    ["bat --paging=never --color=never --style=plain --line-range 10:20 src/needle.ts", "Read", "src/needle.ts"],
+    ["batcat --line-range=10:20 src/needle.ts", "Read", "src/needle.ts"],
+    ["cat src/needle.ts", "Read", "src/needle.ts"], ["head -n 3 src/needle.ts", "Read", "src/needle.ts"],
   ]) {
     const args = { command };
-    assert.match(stripVTControlCharacters(call("bash", args, { isPartial: false })), new RegExp("Explored[\\s\\S]*" + verb + " needle"));
+    const frame = stripVTControlCharacters(call("bash", args, { isPartial: false }));
+    assert.match(frame, /Explored/);
+    assert.ok(frame.includes(verb + " " + target), command);
     assert.match(call("bash", args, { isPartial: true }), /Exploring/);
     assert.match(call("bash", args, { isPartial: false, isError: true }), /Exploration failed/);
     assert.ok(call("bash", args, { isPartial: false, expanded: true }).includes(command));
     assert.match(formatResult("bash", result("SEARCH OUTPUT"), {}, theme, { args }), /SEARCH OUTPUT/);
   }
-  for (const command of ["fd -x rm {}", "ast-grep scan --update-all", "rg needle src/ && npm test", "rg needle > saved"])
+  for (const command of ["fd -x rm {}", "ast-grep scan --update-all", "rg needle src/ && npm test", "rg needle > saved",
+    "bat src/needle.ts && npm test", "bat src/needle.ts | tee saved", "bat src/needle.ts > saved", "bat --list-themes"])
     assert.match(call("bash", { command }, { isPartial: false }), /Ran/);
 });
 

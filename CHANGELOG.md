@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-- 将 npm FFF 的 `ffgrep` / `fffind` 接入 read 的探索显示（Search/Find），覆盖直接与 codemode 嵌套调用，保留展开、错误和独立 renderer overlay；统一探索名称分类。原生 bash 和 exec_command 的只读 ast-grep/rg/fd 同步显示 Search/Find，改写、fd exec、重定向和混合执行保留 Ran。
+- 将 npm FFF 的 `ffgrep` / `fffind` 接入 read 的探索显示（Search/Find），覆盖直接与 codemode 嵌套调用，保留展开、错误和独立 renderer overlay；统一探索名称分类。原生 bash 和 exec_command 的只读 ast-grep/rg 显示 Search、fd 显示 Find、bat/batcat 等已识别文件读取显示 Read；改写、fd exec、重定向和混合执行保留 Ran，保留 shell 输出预览与展开的原命令。
 
 ## 0.20.0
 

@@ -420,12 +420,14 @@ export function makeRenderers(
           if (SHELL.has(name)) {
             const command = string(asRecord(args).command);
             const summary = name === "bash" ? summarizeShellCommand(command) : undefined;
-            if (summary && summary.actions.length && summary.actions.every(action => action.kind === "search" || action.kind === "find")) {
-              const rows: ExplorationRow[] = summary.actions.map(action => ({
-                verb: action.kind === "find" ? "Find" : "Search",
-                target: action.query || action.command,
-                inPath: action.query ? action.path : undefined,
-              }));
+            if (summary && summary.actions.length && summary.actions.every(action => action.kind === "read" || action.kind === "search" || action.kind === "find")) {
+              const rows: ExplorationRow[] = summary.actions.map(action => action.kind === "read"
+                ? { verb: "Read", target: path({ path: action.path }, merged) }
+                : {
+                  verb: action.kind === "find" ? "Find" : "Search",
+                  target: action.query || action.command,
+                  inPath: action.query ? action.path : undefined,
+                });
               const title = renderExplorationLines({ running: merged.isPartial !== false, isError: merged.isError === true, rows }, colorFor(merged), theme).join("\n");
               return component(merged.expanded ? `${title}\n${highlight(safeText(command), "bash", theme, paint)}` : title, ctx);
             }

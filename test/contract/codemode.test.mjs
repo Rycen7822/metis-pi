@@ -204,6 +204,23 @@ test("native codemode folding hides every script line and uses ordinary read/she
   assert.deepEqual(result.details.calls.map((c) => c.status), ["ok", "ok"]);
 });
 
+test("nested bat calls use Read exploration while mixed execution retains Ran", (t) => {
+  const { row, capture } = setup(t);
+  const args = { command: "bat --paging=never --style=plain --line-range 10:20 src/needle.ts" };
+  const result = deepFreeze({ content: [{ type: "text", text: "BAT FILE BODY" }], details: {} });
+  capture(1, "bash", args, result);
+  row.updateResult({ content: [], details: { calls: [call(1, "bash", args)] } }, false);
+  assert.match(plain(row), /Explored[\s\S]*Read src\/needle\.ts/);
+  assert.match(plain(row), /BAT FILE BODY/);
+  row.setExpanded(true);
+  assert.ok(plain(row).includes(args.command));
+  const mixed = { command: "bat src/needle.ts && npm test" };
+  capture(2, "bash", mixed, result);
+  row.updateResult({ content: [], details: { calls: [call(1, "bash", args), call(2, "bash", mixed)] } }, false);
+  assert.match(plain(row), /• Ran bat src\/needle\.ts && npm test/);
+  assert.match(plain(row), /Read src\/needle\.ts/, "the earlier read call remains in this script's display");
+});
+
 test("nested renderers receive their own recorded duration instead of the parent script total", (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_000 });
   const contexts = [];
