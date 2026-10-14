@@ -23,7 +23,7 @@ test("package exposes extensions, themes and portable skills with their referenc
     cwd: new URL("..", import.meta.url), encoding: "utf8",
   })))[0];
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp"]) {
+  for (const name of ["config", "appearance", "goal", "condense", "dynamic-agents", "web-access", "session-recall", "lsp", "ask-user-question"]) {
     assert.ok(files.has(`extensions/${name}.ts`), name);
   }
   for (const path of [
@@ -34,9 +34,14 @@ test("package exposes extensions, themes and portable skills with their referenc
     "src/pi-web-access/index.ts", "src/pi-web-access/dist/index.js", "src/pi-web-access/dist/mcp-cli.js",
     "src/pi-web-access/LICENSE", "src/pi-session-recall/session-recall.ts", "src/pi-session-recall/LICENSE",
     "src/pi-lsp/config.ts", "src/pi-lsp/pi-lsp.ts", "src/pi-lsp/code-actions.ts", "src/pi-lsp/published-diagnostics.ts", "src/pi-lsp/LICENSE", "src/pi-lsp/METIS.md", "docs/features/lsp.md",
+    "src/ask-user-question/index.ts", "src/ask-user-question/ask-user-question.ts", "src/ask-user-question/LICENSE", "src/ask-user-question/METIS.md",
+    "src/ask-user-question/locales/en.json", "docs/features/ask-user-question.md",
     "src/pi-web-access/licenses/typebox.LICENSE",
   ]) assert.ok(files.has(path), path);
   assert.ok([...files].every((path) => !path.startsWith("references/")));
+  assert.ok([...files].every((path) => !path.startsWith("src/ask-user-question/") || (!path.endsWith(".test.ts") && !path.endsWith("test-fixtures.ts"))));
+  assert.ok(!Object.hasOwn(pkg.dependencies, "@juicesharp/rpiv-ask-user-question"));
+  assert.ok(!Object.hasOwn(pkg.dependencies, "@juicesharp/rpiv-config"));
   assert.ok([...files].every((path) => !path.split("/").includes("node_modules")));
   for (const path of ["LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "themes/metis-pi.json"]) assert.ok(files.has(path), path);
   assert.ok(files.has("extensions/execution.ts"));

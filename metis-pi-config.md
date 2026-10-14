@@ -9,7 +9,7 @@
 已有 TOML 直接编辑需要修改的字段；未填写的选项沿用包内默认值。
 `/metis-config` 显示配置和说明路径，`/metis-config init` 保留已有 TOML。
 
-读取本身不写文件。提供兼容桥的模块在 TOML 不存在时兼容读取旧全局配置；LSP 除外，始终只读 TOML 与内置默认值。TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
+读取本身不写文件。提供兼容桥的模块在 TOML 不存在时兼容读取旧全局配置；LSP 与结构化提问除外，始终只读 TOML 与内置默认值。TOML 一旦存在，旧 JSON 的普通偏好不再叠加，未填字段只取默认值；网页凭据仍从同目录 JSON 或环境变量读取。新命令只写 TOML；首次保存也会导入其他旧全局 section。损坏或无权限的文件不会被保存覆盖。后端仅在全局 TOML 不存在时兼容旧 state-home `config.toml`；一旦存在即只取 `[subagents]` 与包内默认值，不再叠加旧文件。迁移桥仅用于旧配置升级，不支持新旧配置双向同步；确认新版工作正常后可手动移除旧的 metis 配置，**不要删除 Pi 的整个 settings.json**。
 
 Pi 的模型、主题、compaction reserve、包/扩展加载、MCP 服务器定义与凭据仍由 Pi 管理，留在 `settings.json`、`mcp.json`、`mcp-auth.json` 等原位置。MCP 服务器的可信项目覆盖仍由 Pi 契约决定；这不是 metis 的项目配置覆盖。会话 goal、摘要、归档、缓存和策略 Markdown 属于状态/数据，不塞进配置文件。本包子代理后端的偏好也属于 Metis，统一在 `[subagents]`；`subagent-pi/` 只保存账本、日志和会话。内置 LSP 的偏好也属于 Metis，统一在 `[lsp]`；全局/项目 LSP JSON 不再读取，旧值须手动复制。另行安装的 Codex 插件及 `@ff-labs/pi-fff` 等其他插件配置不归本包所有，不迁移；`.codex/config.toml` 是可选的外部继承来源，不是 Metis 参数文件。
 
@@ -64,6 +64,16 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `keepAliveServers` | `[]` | 需长期保留连接的服务器名数组，仍按需连接。 |
 
 这三个字段仅从全局 TOML 读取。服务器定义、exposure、认证仍沿用 Pi 的 mcp.json；详见包内 `docs/configuration.md` 的 MCP 部分。
+
+## `[askUserQuestion]`
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `enabled` | `true` | 有 UI 时提供 deferred 问卷工具；关闭或无 UI 时隐藏。 |
+| `collapseKey` | `"ctrl+]"` | 折叠／展开问卷的 Pi 键位；`"off"` 禁用，非法键位回退默认值。 |
+| `guidance.description` / `promptSnippet` / `promptGuidelines` | 内置说明 | 非空字段完整替换，guidelines 为非空字符串数组。 |
+
+只读取全局 TOML，不读取项目或旧 rpiv JSON；已有快捷键/说明须手动复制。工具所有权与发现行为见 [结构化提问](docs/features/ask-user-question.md)。
 
 ## `[lsp]`
 

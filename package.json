@@ -24,6 +24,7 @@
     "test:fast": "node scripts/test.mjs core",
     "test:host": "node scripts/test.mjs host",
     "test:lsp": "node scripts/test.mjs lsp",
+    "test:ask-user-question": "node scripts/test.mjs ask",
     "test:protocol": "node scripts/test.mjs protocol",
     "test:io": "node scripts/test.mjs io",
     "test:resource": "node scripts/test.mjs resource",
@@ -72,13 +73,16 @@
     "@types/proper-lockfile": "4.1.4",
     "typebox": "1.3.27",
     "typescript": "5.9.3",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "vitest": "4.1.10"
   },
   "files": [
     "metis-pi.toml",
     "metis-pi-config.md",
     "extensions",
     "src",
+    "!src/ask-user-question/**/*.test.ts",
+    "!src/ask-user-question/test-fixtures.ts",
     "skills",
     "themes",
     "README.md",
