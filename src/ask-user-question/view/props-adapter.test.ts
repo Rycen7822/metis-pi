@@ -140,6 +140,30 @@ describe("QuestionnairePropsAdapter.apply", () => {
 		expect(arg.rows[0]).toMatchObject({ active: true, checked: false });
 	});
 
+	it.each([undefined, "unfinished draft", ""])("keeps an inactive multi-tab's own draft %j", draft => {
+		const { adapter, tabsByIndex, inlineInput } = makeFixture([
+			makeQuestion({ multiSelect: true }),
+			makeQuestion({ question: "Another choice?", header: "Other", multiSelect: true }),
+		]);
+		const live = "current tab ".repeat(30);
+		inlineInput.setText(live);
+		const state = makeState({
+			inputMode: true, optionIndex: 2, multiSelectChecked: new Set([0]),
+			answers: new Map([[1, { questionIndex: 1, question: "Another choice?", kind: "multi", answer: "saved", selected: ["B"] }]]),
+			customDraftsByTab: draft === undefined ? new Map() : new Map([[1, draft]]),
+		});
+		adapter.apply(state);
+		expect(tabsByIndex[0]!.multiSelect!.setProps).toHaveBeenLastCalledWith(expect.objectContaining({
+			other: expect.objectContaining({ inputBuffer: live, inputMode: true }),
+		}));
+		expect(tabsByIndex[1]!.multiSelect!.setProps).toHaveBeenLastCalledWith(expect.objectContaining({
+			rows: [{ active: false, checked: false }, { active: false, checked: true }],
+			other: { active: false, checked: (draft ?? "saved").length > 0, inputMode: false,
+				inputBuffer: draft ?? "saved", inputCursorOffset: undefined },
+			nextActive: false,
+		}));
+	});
+
 	it("multi-select on the LAST question receives nextLabel='Submit'", () => {
 		const questions = [makeQuestion(), makeQuestion({ multiSelect: true })];
 		const { adapter, tabsByIndex } = makeFixture(questions);

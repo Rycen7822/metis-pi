@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeLineTerminators, normalizeQuestionParams, prepareQuestionArguments } from "./normalize-params.ts";
-import { type QuestionParams, QuestionParamsSchema } from "./types.ts";
+import { MAX_HEADER_LENGTH, MAX_LABEL_LENGTH, type QuestionParams, QuestionParamsSchema } from "./types.ts";
 
 describe("normalizeLineTerminators", () => {
 	it("deletes a lone CR without introducing a phantom space (#192 sample 1)", () => {
@@ -93,6 +93,22 @@ describe("prepareQuestionArguments — double-encoded tool arguments (#244)", ()
 		expect(Value.Check(QuestionParamsSchema, prepareQuestionArguments(wellFormed))).toBe(true);
 	});
 
+	it.each([false, true])("cleans text before schema length validation (encoded=%s)", encoded => {
+		const bounded = { questions: [{
+			question: "Which\r\nformat?", header: "H".repeat(MAX_HEADER_LENGTH) + "\r",
+			options: [{ label: "L".repeat(MAX_LABEL_LENGTH) + "\r", description: "line\r\nnext", preview: "code\r" },
+				question.options[1]!],
+		}] };
+		const raw = encoded ? { questions: JSON.stringify(bounded.questions) } : bounded;
+		expect(Value.Check(QuestionParamsSchema, raw)).toBe(false);
+		const prepared = prepareQuestionArguments(raw);
+		expect(prepared).toEqual({ questions: [{
+			question: "Which\nformat?", header: "H".repeat(MAX_HEADER_LENGTH),
+			options: [{ label: "L".repeat(MAX_LABEL_LENGTH), description: "line\nnext", preview: "code" }, question.options[1]!],
+		}] });
+		expect(Value.Check(QuestionParamsSchema, prepared)).toBe(true);
+	});
+
 	it.each([
 		["questions as a JSON string", { questions: JSON.stringify([question]) }],
 		["each question as a JSON string (questions.0: must be object)", { questions: [JSON.stringify(question)] }],
@@ -116,6 +132,7 @@ describe("prepareQuestionArguments — double-encoded tool arguments (#244)", ()
 		["malformed JSON", { questions: "[{not json" }],
 		["a JSON string of the wrong shape", { questions: JSON.stringify({ question: "not an array" }) }],
 		["a plain-text element", { questions: ["just some text"] }],
+		["malformed option values", { questions: [{ ...question, options: [null, 7] }] }],
 		["a non-object argument", "questions"],
 	])("leaves %s untouched so validation still reports the real problem", (_name, raw) => {
 		expect(prepareQuestionArguments(raw)).toEqual(raw);

@@ -1,5 +1,7 @@
 import type { Editor } from "@earendil-works/pi-tui";
-import { selectActivePreviewPaneIndex, selectConfirmedIndicator, selectSavedNote } from "../state/selectors/derivations.ts";
+import {
+	selectActivePreviewPaneIndex, selectConfirmedIndicator, selectCustomDraftValue, selectSavedNote,
+} from "../state/selectors/derivations.ts";
 import { selectActiveView } from "../state/selectors/focus.ts";
 import type { QuestionnaireState } from "../state/state.ts";
 import type { QuestionRow } from "../state/row-intent.ts";
@@ -74,17 +76,21 @@ export function createPropsAdapter(config: PropsAdapterConfig) {
 			// All multi views participate in the cross-tab height measurement.
 			for (let i = 0; i < tabsByIndex.length; i++) {
 				const q = questions[i]!;
+				const isCurrent = i === state.currentTab;
+				const tabFocused = focused && isCurrent;
+				const draft = isCurrent ? inputBuffer : selectCustomDraftValue(state, i);
+				const selected = state.answers.get(i)?.selected ?? [];
 				tabsByIndex[i]!.multiSelect?.setProps({
-					rows: q.options.map((_, index) => ({
-						checked: state.multiSelectChecked.has(index),
-						active: focused && index === state.optionIndex,
+					rows: q.options.map((option, index) => ({
+						checked: isCurrent ? state.multiSelectChecked.has(index) : selected.includes(option.label),
+						active: tabFocused && index === state.optionIndex,
 					})),
 					other: {
-						active: focused && state.optionIndex === q.options.length,
-						checked: inputBuffer.trim().length > 0,
-						inputMode: state.inputMode, inputBuffer, inputCursorOffset: cursor,
+						active: tabFocused && state.optionIndex === q.options.length,
+						checked: draft.trim().length > 0,
+						inputMode: isCurrent && state.inputMode, inputBuffer: draft, inputCursorOffset: isCurrent ? cursor : undefined,
 					},
-					nextActive: focused && state.optionIndex === q.options.length + 1,
+					nextActive: tabFocused && state.optionIndex === q.options.length + 1,
 					nextLabel: i === questions.length - 1 ? MULTI_SUBMIT_LABEL : displayLabel("next"),
 				});
 			}

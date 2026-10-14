@@ -431,9 +431,7 @@ export function registerAskUserQuestionTool(
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			signal?.throwIfAborted();
-			// Line-terminator normalization runs once here, ahead of validation, so
-			// every downstream consumer — validator, TUI, RPC walker, envelope, prompt
-			// event — sees the same clean text (#192).
+			// Direct execute calls can bypass the SDK's prepareArguments hook.
 			const typed = normalizeQuestionParams(params as unknown as QuestionParams);
 			if (!ctx.hasUI) return rejectWithoutUi();
 

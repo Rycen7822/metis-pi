@@ -1,5 +1,14 @@
 import type { QuestionAnswer, QuestionData } from "../../tool/types.ts";
 import type { QuestionRow } from "../row-intent.ts";
+import type { QuestionnaireState } from "../state.ts";
+
+export function selectCustomDraftValue(state: QuestionnaireState, tab: number): string {
+	const draft = state.customDraftsByTab.get(tab);
+	if (draft !== undefined) return draft;
+	const answer = state.answers.get(tab);
+	if (answer?.kind !== "custom" && answer?.kind !== "multi") return "";
+	return typeof answer.answer === "string" ? answer.answer : "";
+}
 
 /**
  * Which row in the active tab should be marked as "previously confirmed"? Drives the
@@ -21,7 +30,7 @@ export function selectConfirmedIndicator(
 	if (prior.kind === "custom") {
 		const otherIndex = items.findIndex((it) => it.kind === "other");
 		if (otherIndex < 0) return undefined;
-		return { index: otherIndex, labelOverride: prior.answer ?? "" };
+		return prior.answer === null ? { index: otherIndex } : { index: otherIndex, labelOverride: prior.answer };
 	}
 	if (prior.kind !== "option" || typeof prior.answer !== "string") return undefined;
 	const index = items.findIndex((it) => it.kind === "option" && it.label === prior.answer);

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { createAgentSession, createCodemodeExtension, createToolSearchExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { MAX_HEADER_LENGTH, MAX_LABEL_LENGTH } from "../../src/ask-user-question/tool/types.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = (result: any) => result.content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
@@ -92,6 +93,15 @@ for (const hasUI of [true, false]) test(`real SDK deferred question discovery an
     assert.equal(direct.isError, false);
     assert.equal(direct.result.details.answers[0].answer, "First");
     assert.equal(direct.result.details.cancelled, false);
+    const boundaryArgs = structuredClone(args);
+    boundaryArgs.questions[0]!.header = "H".repeat(MAX_HEADER_LENGTH) + "\r";
+    boundaryArgs.questions[0]!.options[0]!.label = "L".repeat(MAX_LABEL_LENGTH) + "\r";
+    const boundary = await f.ctx.executeTool("ask_user_question", boundaryArgs);
+    assert.equal(boundary.isError, false,
+      `prepareArguments cleans text before SDK length validation: ${output(boundary.result)}`);
+    assert.equal(boundary.result.details.answers[0].answer, "L".repeat(MAX_LABEL_LENGTH));
+    const nestedBoundary = await f.runCode(`text(await tools.ask_user_question(${JSON.stringify(boundaryArgs)}));`);
+    assert.match(output(nestedBoundary), new RegExp("L".repeat(MAX_LABEL_LENGTH)));
   } else {
     // No-UI still has a callable codemode gateway; the questionnaire itself is withdrawn.
     f.session.setActiveToolsByName([...f.session.getActiveToolNames(), "codemode"]);

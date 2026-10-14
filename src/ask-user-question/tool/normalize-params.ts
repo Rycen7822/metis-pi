@@ -38,21 +38,15 @@ function normalizeStringFields<T extends object>(obj: T, keys: readonly (keyof T
 /**
  * Return a copy of the tool params with every user-facing string field
  * (`question`, `header`, `options[].label`, `options[].description`,
- * `options[].preview`) line-terminator-normalized. Runs once at tool entry,
- * BEFORE `validateQuestionnaire`, so the reserved-label and duplicate-label
+ * `options[].preview`) line-terminator-normalized. Shares the SDK's pre-schema
+ * preparation path, also covering direct execute calls, so reserved-label and duplicate-label
  * guards compare the text the user will actually see (`"Other\r"` must not
  * slip past `reserved_label`), and so the TUI, the RPC dialog walker, the
  * envelope echo, and the `rpiv:ask-user:prompt` payload all carry the same
  * clean text. Pure: the input object is never mutated.
  */
 export function normalizeQuestionParams(params: QuestionParams): QuestionParams {
-	return {
-		...params,
-		questions: params.questions.map((q) => ({
-			...normalizeStringFields(q, ["question", "header"]),
-			options: q.options.map((o) => normalizeStringFields(o, ["label", "description", "preview"])),
-		})),
-	};
+	return prepareQuestionArguments(params);
 }
 
 /**
@@ -62,7 +56,8 @@ export function normalizeQuestionParams(params: QuestionParams): QuestionParams 
  * or its elements (`questions.0: must be object`). Only a string at an array/object
  * position is decoded, and only when it parses to the expected shape; anything else is
  * passed through untouched so validation still reports the real problem. The same
- * applies one level down to `options`. Well-formed arguments are returned as-is.
+ * applies one level down to `options`. Text is normalized before the SDK applies
+ * schema length limits; invalid field types are left for that validation.
  */
 export function prepareQuestionArguments(args: unknown): QuestionParams {
 	if (!isRecord(args)) return args as QuestionParams;
@@ -72,7 +67,12 @@ export function prepareQuestionArguments(args: unknown): QuestionParams {
 		const question = decodeObject(q);
 		if (!isRecord(question)) return question;
 		const options = decodeArray(question.options);
-		return Array.isArray(options) ? { ...question, options: options.map(decodeObject) } : question;
+		const normalized = normalizeStringFields(question, ["question", "header"]);
+		if (!Array.isArray(options)) return normalized;
+		return { ...normalized, options: options.map(raw => {
+			const option = decodeObject(raw);
+			return isRecord(option) ? normalizeStringFields(option, ["label", "description", "preview"]) : option;
+		}) };
 	});
 	return { ...args, questions: decoded } as unknown as QuestionParams;
 }

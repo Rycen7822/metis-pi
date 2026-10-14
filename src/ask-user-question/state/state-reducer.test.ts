@@ -153,17 +153,18 @@ describe("reduce — confirm", () => {
 		expect(r.state.answers.get(0)?.answer).toBe("latest");
 	});
 
-	it("regular option matching a preview-bearing option augments answer.preview", () => {
+	it.each(["A", ""])("preserves a selected option's preview with label %j", label => {
 		const questions = [
 			makeQuestion({
 				options: [
-					{ label: "A", description: "a", preview: "code" },
+					{ label, description: "a", preview: "code" },
 					{ label: "B", description: "b" },
 				],
 			}),
 		];
 		const action: QuestionnaireAction = { kind: "confirm", value: "" };
-		const r = reduce(makeState(), action, makeCtx({ questions }));
+		const itemsByTab = [questions[0]!.options.map(option => ({ kind: "option" as const, label: option.label }))];
+		const r = reduce(makeState(), action, makeCtx({ questions, itemsByTab }));
 		expect(r.state.answers.get(0)?.preview).toBe("code");
 	});
 

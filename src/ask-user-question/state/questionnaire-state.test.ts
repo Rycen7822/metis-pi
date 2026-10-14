@@ -16,11 +16,13 @@ describe("selectConfirmedIndicator", () => {
 		expect(selectConfirmedIndicator([q()], 0, new Map(), itemsRegular)).toBeUndefined();
 	});
 
-	it("returns the kind:'other' index + labelOverride when the prior answer was kind:'custom'", () => {
+	it.each(["Hello", null])("keeps the confirmed custom row identifiable with answer %j", answer => {
 		const answers = new Map<number, QuestionAnswer>([
-			[0, { questionIndex: 0, question: "q", kind: "custom", answer: "Hello" }],
+			[0, { questionIndex: 0, question: "q", kind: "custom", answer }],
 		]);
-		expect(selectConfirmedIndicator([q()], 0, answers, itemsWithOther)).toEqual({ index: 2, labelOverride: "Hello" });
+		expect(selectConfirmedIndicator([q()], 0, answers, itemsWithOther)).toEqual(
+			answer === null ? { index: 2 } : { index: 2, labelOverride: answer },
+		);
 	});
 
 	it("returns undefined when kind:'custom' but the items array has no kind:'other' row", () => {

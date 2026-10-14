@@ -1,6 +1,7 @@
 import type { QuestionAnswer, QuestionData, QuestionnaireResult } from "../tool/types.ts";
 import type { QuestionRow } from "./row-intent.ts";
 import type { QuestionnaireAction, QuestionnaireState } from "./state.ts";
+import { selectCustomDraftValue } from "./selectors/derivations.ts";
 
 /** Session-lifetime constants. No live-component reads — peripheral values live on canonical state. */
 export interface ApplyContext {
@@ -85,7 +86,7 @@ function multiAnswer(state: QuestionnaireState, question: QuestionData, value: s
 function persistMultiSelectAnswer(state: QuestionnaireState, ctx: ApplyContext): ReadonlyMap<number, QuestionAnswer> {
 	const q = ctx.questions[state.currentTab];
 	if (!q?.multiSelect) return state.answers;
-	const answer = multiAnswer(state, q, customDraftValueFor(state, state.currentTab));
+	const answer = multiAnswer(state, q, selectCustomDraftValue(state, state.currentTab));
 	const out = new Map(state.answers);
 	if (answer.selected?.length || answer.answer !== null) out.set(state.currentTab, answer);
 	else out.delete(state.currentTab);
@@ -99,14 +100,6 @@ function persistMultiSelectAnswer(state: QuestionnaireState, ctx: ApplyContext):
  */
 function notesValueFor(state: QuestionnaireState, tab: number): string {
 	return state.notesByTab.get(tab) ?? state.answers.get(tab)?.notes ?? "";
-}
-
-function customDraftValueFor(state: QuestionnaireState, tab: number): string {
-	const draft = state.customDraftsByTab.get(tab);
-	if (draft !== undefined) return draft;
-	const answer = state.answers.get(tab);
-	if (answer?.kind !== "custom" && answer?.kind !== "multi") return "";
-	return typeof answer.answer === "string" ? answer.answer : "";
 }
 
 function setCustomDraft(state: QuestionnaireState, tab: number, value: string): ReadonlyMap<number, string> {
@@ -138,7 +131,7 @@ function switchTabResult(state: QuestionnaireState, nextTab: number, ctx: ApplyC
 		effects: [
 			{ kind: "set_notes_focused", focused: false },
 			{ kind: "set_notes_value", value: notesValue },
-			{ kind: "set_input_buffer", value: customDraftValueFor(state, nextTab) },
+			{ kind: "set_input_buffer", value: selectCustomDraftValue(state, nextTab) },
 		],
 	};
 }
@@ -174,7 +167,7 @@ function confirmResult(state: QuestionnaireState, value: string, ctx: ApplyConte
 		if (!option) return { state, effects: [] };
 		answer = {
 			questionIndex: state.currentTab, question: q.question, kind: "option", answer: option.label,
-			...(option.label && option.preview ? { preview: option.preview } : {}),
+			...(option.preview ? { preview: option.preview } : {}),
 		};
 	}
 	const notes = state.notesByTab.get(state.currentTab);
@@ -218,7 +211,7 @@ export function reduce(state: QuestionnaireState, action: QuestionnaireAction, c
 			if (state.inputMode && !inputMode && ctx.questions[state.currentTab]?.multiSelect) {
 				next = { ...next, answers: persistMultiSelectAnswer(next, ctx) };
 			}
-			return { state: next, effects: inputMode ? [{ kind: "set_input_buffer", value: customDraftValueFor(next, state.currentTab) }] : [] };
+			return { state: next, effects: inputMode ? [{ kind: "set_input_buffer", value: selectCustomDraftValue(next, state.currentTab) }] : [] };
 		}
 		case "input_clear":
 			return {
