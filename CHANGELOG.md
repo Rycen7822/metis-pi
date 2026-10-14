@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- codemode 支持按真实子调用独立展开：工具/命令区域、JS 源码、Script output 与较早调用列表分别切换，点击正文不再展开整组；流式更新保留局部选择及已打开的旧调用。保留全局展开快捷键、普通工具 renderer、选择复制、滚轮/链接与第三方鼠标处理，不改变执行或模型上下文。
+
 - 修复远端检查点验证与恢复：认证暂时失败或身份连续性无法确认时保留检查点并取消当前请求，显示验证原因；目录重建保持 OAuth 刷新追踪，按原模型/路由/账号迁移旧绑定，历史竞态后的重试不再强制展开原文。恢复容量在 Condense 投影后检查，手动重建补齐有效摘要并按压缩输入窗口限制；目录仅重建 provider 包装对象时保留已返回的有效压缩结果。
 
 - 将 npm FFF 的 `ffgrep` / `fffind` 接入 read 的探索显示（Search/Find），覆盖直接与 codemode 嵌套调用，保留展开、错误和独立 renderer overlay；统一探索名称分类。原生 bash 和 exec_command 的只读 ast-grep/rg 显示 Search、fd 显示 Find、bat/batcat 等已识别文件读取显示 Read；改写、fd exec、重定向和混合执行保留 Ran，保留 shell 输出预览与展开的原命令。

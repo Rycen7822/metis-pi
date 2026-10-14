@@ -8,6 +8,7 @@ import {
   type TextFactory,
   type ViewContext,
 } from "./tool-names.ts";
+import { MouseRegion } from "@earendil-works/pi-tui";
 import { shellTitle } from "./renderers.ts";
 import { stackComponents } from "./copy-stack.ts";
 import { detectColorLevel, foregroundAnsi, FG_DEFAULT, type ColorLevel } from "./palette.ts";
@@ -125,6 +126,33 @@ export class CodemodeViewStore {
 
 export type NestedRendererLookup = (name: string, result: unknown) => Renderers | undefined;
 
+interface NestedSlot {
+  state: object;
+  call?: Component;
+  result?: Component;
+  expanded?: boolean;
+}
+interface ExpansionState {
+  expanded: boolean;
+  script?: boolean;
+  output?: boolean;
+  allCalls?: boolean;
+  slots: Map<string, NestedSlot>;
+}
+
+/** Own only codemode clicks; output selection, links and wheel input stay native. */
+function clickRegion(component: Component, context: ViewContext, toggle?: () => void, headingOnly = false): Component {
+  return new MouseRegion(component, event => {
+    if (event.type !== "click" || event.button !== "left") return;
+    if (toggle && !event.shift && !event.alt && !event.ctrl && (!headingOnly || event.y === 0)) {
+      toggle();
+      context.invalidate?.();
+    }
+    // Never fall through to the host region that toggles the entire tool row.
+    return { handled: true };
+  });
+}
+
 /** Folded code has no preview; nested rows share direct-call renderers and budgets. */
 export function makeCodemodeRenderers(input: {
   makeText: TextFactory;
@@ -135,7 +163,21 @@ export function makeCodemodeRenderers(input: {
   expandHint(): string;
   resolve: NestedRendererLookup;
 }): Renderers {
-  const states = new WeakMap<object, Map<string, { state: object; call?: Component; result?: Component }>>();
+  const states = new WeakMap<object, ExpansionState>();
+  const expansion = (context: ViewContext, expanded = context.expanded === true): ExpansionState => {
+    const owner = context.state && typeof context.state === "object" ? context.state : context;
+    let view = states.get(owner);
+    if (!view) {
+      view = { expanded, slots: new Map() };
+      states.set(owner, view);
+    } else if (view.expanded !== expanded) {
+      // The host/global shortcut is authoritative; clicks never change its flag.
+      view.expanded = expanded;
+      view.script = view.output = view.allCalls = undefined;
+      for (const slot of view.slots.values()) slot.expanded = undefined;
+    }
+    return view;
+  };
   const labelColor = foregroundAnsi("#d97706", input.colorLevel ?? detectColorLevel());
   const label = (text: string) => labelColor ? `${labelColor}${text}${FG_DEFAULT}` : text;
   return {
@@ -144,12 +186,14 @@ export function makeCodemodeRenderers(input: {
       if (timer && context.executionStarted && timer.startedAt === undefined) timer.startedAt = Date.now();
       const title = label(theme.bold("codemode"));
       const code = asRecord(args).code;
-      if (typeof code !== "string") return input.makeText(`${title} ${theme.fg("error", "[invalid arg]")}`);
-      if (!context.expanded || !code) return input.makeText(title);
-      const script = safeText(code);
-      return input.makeText(`${title}\n${input.highlight?.(script, "javascript") ?? script}`);
+      if (typeof code !== "string") return clickRegion(input.makeText(`${title} ${theme.fg("error", "[invalid arg]")}`), context);
+      const view = expansion(context), expanded = view.script ?? view.expanded;
+      const script = expanded && code ? safeText(code) : "";
+      const component = input.makeText(script ? `${title}\n${input.highlight?.(script, "javascript") ?? script}` : title);
+      return clickRegion(component, context, () => { view.script = !expanded; }, true);
     },
     renderResult(result, options, theme, context) {
+      const view = expansion(context, options.expanded === true);
       const timerText = toolTimerText(context, options.isPartial === true);
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
@@ -173,21 +217,27 @@ export function makeCodemodeRenderers(input: {
         }
         calls.push(call);
       }
-      const shown = options.expanded ? calls : calls.slice(-8);
+      const allCalls = view.allCalls ?? view.expanded;
+      // Keep explicitly opened older calls visible while new calls stream in.
+      const shown = allCalls ? calls : calls.filter((call, index) => index >= calls.length - 8
+        || typeof call.id === "string" && view.slots.get(call.id)?.expanded === true);
       const parts: Component[] = [];
-      if (shown.length < calls.length)
-        parts.push(
-          input.makeText(theme.fg("dim", `… ${calls.length - shown.length} earlier calls (${input.expandHint()})`)),
-        );
-      let missingResults = false;
-      const owner = context.state && typeof context.state === "object" ? context.state : {};
-      let slots = states.get(owner);
-      if (!slots) {
-        slots = new Map();
-        states.set(owner, slots);
+      if (shown.length < calls.length || allCalls && calls.length > 8) {
+        const notice = allCalls ? "Show fewer calls" : `… ${calls.length - shown.length} earlier calls (${input.expandHint()})`;
+        parts.push(clickRegion(input.makeText(theme.fg("dim", notice)), context, () => { view.allCalls = !allCalls; }));
       }
+      let missingResults = false;
       for (const call of shown) {
         if (typeof call.id !== "string" || typeof call.name !== "string") continue;
+        // Preview /? ids are not identities and must never share click state.
+        const preview = call.id.endsWith("/?");
+        let slot = preview ? undefined : view.slots.get(call.id);
+        if (!slot) {
+          slot = { state: {} };
+          if (!preview) view.slots.set(call.id, slot);
+        }
+        const expanded = slot.expanded ?? view.expanded;
+        const nestedOptions = { ...options, expanded };
         const captured = input.store.get(context.toolCallId ?? "", call.id);
         if (call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined)
           missingResults = true;
@@ -205,59 +255,56 @@ export function makeCodemodeRenderers(input: {
         // Native callbacks receive content/details only; final event isError is authoritative.
         const viewResult =
           captured?.result === undefined ? undefined : { content: rawResult.content, details: rawResult.details };
-        const renderers =
-          call.name !== "codemode" && !call.id.endsWith("/?") ? input.resolve(call.name, viewResult) : undefined;
+        const renderers = call.name !== "codemode" && !preview ? input.resolve(call.name, viewResult) : undefined;
         const partial = captured?.isPartial ?? call.status === "running";
         const isError = captured?.isError ?? ["error", "cancelled"].includes(String(call.status));
+        let callComponent: Component, resultComponent: Component | undefined;
         if (!renderers || args === undefined) {
           if (renderers === input.shell) {
             // The builtin owner/status is known, but a truncated command isn't.
             const { bullet, title } = shellTitle({ isPartial: partial, isError }, theme);
-            parts.push(
-              input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`),
-            );
-            if (options.expanded && call.error)
-              parts.push(input.makeText(theme.fg("error", safeText(String(call.error)))));
-          } else parts.push(input.makeText(summary(call, theme, options.expanded === true)));
-          continue;
+            callComponent = input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`);
+            if (expanded && call.error)
+              resultComponent = input.makeText(theme.fg("error", safeText(String(call.error))));
+          } else callComponent = input.makeText(summary(call, theme, expanded));
+        } else {
+          const nestedContext: ViewContext = {
+            ...context,
+            args,
+            toolCallId: call.id,
+            state: slot.state,
+            expanded,
+            executionStarted: true,
+            durationMs: typeof call.durationMs === "number" ? call.durationMs : undefined,
+            argsComplete: true,
+            isPartial: partial,
+            isError,
+            hasResult: !partial,
+            lastComponent: slot.call,
+          };
+          try {
+            slot.call = renderers.renderCall(args, theme, nestedContext);
+            if (viewResult !== undefined) {
+              slot.result = renderers.renderResult(viewResult, { ...nestedOptions, isPartial: partial }, theme, {
+                ...nestedContext,
+                lastComponent: slot.result,
+              });
+            } else if (call.error) {
+              slot.result = input.shell.renderResult(
+                { content: [{ type: "text", text: String(call.error) }] },
+                nestedOptions,
+                theme,
+                { ...nestedContext, lastComponent: undefined },
+              );
+            } else slot.result = undefined;
+            callComponent = slot.call;
+            resultComponent = slot.result;
+          } catch {
+            callComponent = input.makeText(summary(call, theme, expanded));
+          }
         }
-        let slot = slots.get(call.id);
-        if (!slot) {
-          slot = { state: {} };
-          slots.set(call.id, slot);
-        }
-        const nestedContext: ViewContext = {
-          ...context,
-          args,
-          toolCallId: call.id,
-          state: slot.state,
-          executionStarted: true,
-          durationMs: typeof call.durationMs === "number" ? call.durationMs : undefined,
-          argsComplete: true,
-          isPartial: partial,
-          isError,
-          hasResult: !partial,
-          lastComponent: slot.call,
-        };
-        try {
-          slot.call = renderers.renderCall(args, theme, nestedContext);
-          if (viewResult !== undefined) {
-            slot.result = renderers.renderResult(viewResult, { ...options, isPartial: partial }, theme, {
-              ...nestedContext,
-              lastComponent: slot.result,
-            });
-          } else if (call.error) {
-            slot.result = input.shell.renderResult(
-              { content: [{ type: "text", text: String(call.error) }] },
-              options,
-              theme,
-              { ...nestedContext, lastComponent: undefined },
-            );
-          } else slot.result = undefined;
-          parts.push(slot.call, ...(slot.result ? [slot.result] : []));
-        } catch {
-          parts.push(input.makeText(summary(call, theme, options.expanded === true)));
-        }
+        parts.push(clickRegion(callComponent, context, preview ? undefined : () => { slot.expanded = !expanded; }));
+        if (resultComponent) parts.push(resultComponent);
       }
       if (missingResults)
         parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
@@ -273,10 +320,12 @@ export function makeCodemodeRenderers(input: {
             ),
         );
         if (content.some((block) => asRecord(block).type === "text" && asRecord(block).text)) {
+          const expanded = view.output ?? view.expanded;
           parts.push(
-            input.makeText(theme.fg("dim", "Script output")),
-            input.shell.renderResult({ ...value, content }, options, theme, {
+            clickRegion(input.makeText(theme.fg("dim", "Script output")), context, () => { view.output = !expanded; }),
+            input.shell.renderResult({ ...value, content }, { ...options, expanded }, theme, {
               ...context,
+              expanded,
               args: {},
               lastComponent: undefined,
             }),
@@ -286,7 +335,7 @@ export function makeCodemodeRenderers(input: {
           parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
       if (timerText) parts.push(input.makeText(label(timerText)));
-      return stackComponents(parts, "codemode", "child-placements");
+      return clickRegion(stackComponents(parts, "codemode", "child-placements"), context);
     },
   };
 }

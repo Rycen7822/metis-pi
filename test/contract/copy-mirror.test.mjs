@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import * as Tui from "@earendil-works/pi-tui";
 import { createSelectionCopySystem, detectExternalSerializerPatch } from "../../src/selection-copy/index.ts";
+import { stackComponents } from "../../src/copy-stack.ts";
 import { altScreen, copyFrame, installCopyPrototypes, markdownTheme, screenLines, select } from "../helpers/ui-fixtures.mjs";
 
 const theme = {
@@ -41,6 +42,26 @@ test("real Markdown copies prose, formatted blocks and hard breaks without mirro
   changing.invalidate();
   assert.equal(select(copyFrame(changing, 40)).text, "bravo", "copy follows native transform invalidation");
   assert.equal(select(committed).text, "alpha", "previously committed selection keeps its own frame");
+});
+
+test("stack copy uses the displayed render pass without rerendering dynamic children", (t) => {
+  installCopyPrototypes(t, ["Text", "Markdown", "Container", "Box", "MouseRegion"]);
+  for (const composition of ["flat-rows", "child-placements"]) {
+    let renders = 0;
+    const changing = {
+      render: width => new Tui.Text(`frame ${++renders}`, 0, 0).render(width),
+      invalidate() {},
+    };
+    const stack = stackComponents([changing, new Tui.Text("following block", 0, 0)], "dynamic-stack", composition);
+    const first = copyFrame(stack, 40);
+    assert.equal(select(first).text, "frame 1\nfollowing block", `${composition}: copy matches the displayed frame`);
+    assert.equal(renders, 1, "copy alignment consumes published rows from the existing render pass");
+    stack.invalidate();
+    const next = copyFrame(stack, 40);
+    assert.equal(select(next).text, "frame 2\nfollowing block");
+    assert.equal(renders, 2);
+    assert.equal(select(first).text, "frame 1\nfollowing block", "a committed earlier frame retains its own provenance");
+  }
 });
 
 test("exact card copy omits background and bypasses a foreign serializer wrapper", (t) => {

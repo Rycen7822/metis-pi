@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
+import * as Tui from "@earendil-works/pi-tui";
+import { altScreen, container, screenLines, drag, installCopyPrototypes, copyFrame, select } from "../helpers/ui-fixtures.mjs";
+import { createFullscreenLayout } from "../../src/chrome/fullscreen-layout.ts";
 import {
   initTheme,
   InteractiveMode,
@@ -12,7 +15,7 @@ import { installAdapter } from "../../src/adapter.ts";
 import { activate } from "../../src/extension.ts";
 import { CodemodeViewStore, makeCodemodeRenderers } from "../../src/codemode-view.ts";
 import { makeRenderers } from "../../src/renderers.ts";
-import { bindings, sessionStub, toolInfo, deepFreeze, theme } from "../helpers.mjs";
+import { bindings, sessionStub, toolInfo, deepFreeze, theme, sgr } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
 
 initTheme("dark", false);
@@ -20,10 +23,11 @@ const parent = "native-test";
 const code = 'const JS_ONLY_MARKER = "script";\n'.repeat(14) + 'text(await tools.read({path:"note.md"}));';
 const render = (component, width = 80) => component.render(width).join("\n");
 const plain = (component, width = 80) => stripVTControlCharacters(render(component, width));
-const makeTestRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
+const makeTestRenderers = (textBindings = bindings) => makeRenderers(textBindings.makeText, textBindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
 const call = (id, name, args, status = "ok") => ({ id: `${parent}/${id}`, name, args: JSON.stringify(args), status });
-function setup(t, overrides = {}, lifecycle = false, sources = {}) {
-  const Host = isolatedToolHost(), store = new CodemodeViewStore();
+function setup(t, overrides = {}, lifecycle = false, sources = {}, options = {}) {
+  const textBindings = { ...bindings, ...options.bindings };
+  const Host = isolatedToolHost(options.ui), store = new CodemodeViewStore();
   let codemode;
   createCodemodeExtension()({ registerTool: (tool) => { codemode = tool; } });
   const definitions = { codemode, read: createReadToolDefinition(process.cwd()), bash: createBashToolDefinition(process.cwd()), ...overrides };
@@ -34,7 +38,7 @@ function setup(t, overrides = {}, lifecycle = false, sources = {}) {
     getToolDefinition: (name) => definitions[name],
     extensionRunner: { resolveToolRenderers: (_name, next) => next() },
   } } } });
-  const renderers = makeTestRenderers();
+  const renderers = makeTestRenderers(textBindings);
   const getTools = () => ["codemode", "read", "bash", ...Object.keys(overrides)].map((name) =>
     sources[name] ? { name, sourceInfo: sources[name] } : toolInfo(name, !Object.hasOwn(overrides, name)));
   const handlers = new Map();
@@ -42,13 +46,13 @@ function setup(t, overrides = {}, lifecycle = false, sources = {}) {
   let handle;
   if (lifecycle) {
     activate({ on: (name, fn) => handlers.set(name, fn), getAllTools: getTools },
-      { ...bindings, prototype: Host.prototype, interactivePrototype: prototype, readFile: () => undefined });
+      { ...textBindings, prototype: Host.prototype, interactivePrototype: prototype, readFile: () => undefined });
     handlers.get("session_start")({}, ctx);
     handle = { dispose: () => handlers.get("session_shutdown")() };
   } else {
     handle = installAdapter(Host.prototype, {
       getTools, enabled: () => true, definitionPrototype: prototype, renderers,
-      makeCodemode: (resolve) => makeCodemodeRenderers({ ...bindings, store, shell: renderers.bash, resolve }),
+      makeCodemode: (resolve) => makeCodemodeRenderers({ ...textBindings, store, shell: renderers.bash, resolve }),
     });
     assert.equal(handle.installed, true);
   }
@@ -204,6 +208,124 @@ test("native codemode folding hides every script line and uses ordinary read/she
   assert.deepEqual(result.details.calls.map((c) => c.status), ["ok", "ok"]);
 });
 
+function clickRow(row, target, occurrence = 0, width = 80) {
+  const lines = row.render(width).map(stripVTControlCharacters);
+  const y = lines.map((line, index) => line.includes(target) ? index : -1).filter(index => index >= 0)[occurrence];
+  assert.notEqual(y, undefined, `click target visible: ${target}`);
+  const event = { type: "click", button: "left", x: 0, y, screenX: 0, screenY: y,
+    width, height: lines.length, shift: false, alt: false, ctrl: false };
+  assert.equal(row.handleMouse(event)?.handled, true, "click consumed by this block");
+}
+
+test("clicks independently expand duplicate nested calls, source and script output", (t) => {
+  const { row, capture } = setup(t);
+  const args = { path: "same.md" };
+  for (const [id, text] of [[1, "FIRST BODY"], [2, "SECOND BODY"]])
+    capture(id, "read", args, deepFreeze({ content: [{ type: "text", text }], details: {} }));
+  const result = deepFreeze({ content: [{ type: "text", text: Array.from({ length: 18 }, (_, i) => `SCRIPT_OUTPUT_${i}`).join("\n") }],
+    details: { calls: [call(1, "read", args), call(2, "read", args)] } });
+  row.updateResult(result, false);
+  clickRow(row, "Read same.md");
+  assert.match(plain(row), /FIRST BODY/);
+  assert.doesNotMatch(plain(row), /SECOND BODY|JS_ONLY_MARKER|SCRIPT_OUTPUT_8/);
+  clickRow(row, "Read same.md", 1);
+  assert.match(plain(row), /FIRST BODY[\s\S]*SECOND BODY/);
+  clickRow(row, "Read same.md");
+  assert.doesNotMatch(plain(row), /FIRST BODY/);
+  assert.match(plain(row), /SECOND BODY/);
+  clickRow(row, "codemode");
+  assert.match(plain(row), /JS_ONLY_MARKER/);
+  assert.doesNotMatch(plain(row), /FIRST BODY|SCRIPT_OUTPUT_8/);
+  clickRow(row, "Script output");
+  assert.match(plain(row), /SCRIPT_OUTPUT_8/);
+  clickRow(row, "SECOND BODY");
+  assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*SECOND BODY/);
+  assert.doesNotMatch(plain(row), /FIRST BODY/, "output-body clicks do not expand the outer tool");
+  clickRow(row, "codemode");
+  assert.doesNotMatch(plain(row), /JS_ONLY_MARKER/);
+  assert.match(plain(row), /SCRIPT_OUTPUT_8/);
+  assert.deepEqual(result.details.calls.map(c => c.status), ["ok", "ok"]);
+});
+
+test("streaming updates retain per-ID choices and earlier-call visibility remains independent", (t) => {
+  const { row, capture } = setup(t);
+  const calls = [];
+  for (let id = 0; id < 10; id++) {
+    const args = { path: `file-${id}.md` };
+    capture(id, "read", args, { content: [{ type: "text", text: `BODY_${id}_ONLY` }], details: {} });
+    calls.push(call(id, "read", args));
+  }
+  row.updateResult({ content: [], details: { calls } }, true);
+  assert.doesNotMatch(plain(row), /Read file-0/);
+  clickRow(row, "earlier calls");
+  assert.match(plain(row), /Read file-0/);
+  assert.doesNotMatch(plain(row), /BODY_\d+_ONLY|JS_ONLY_MARKER/);
+  clickRow(row, "Read file-9.md");
+  assert.match(plain(row), /BODY_9_ONLY/);
+  const next = { path: "file-10.md" };
+  capture(10, "read", next);
+  row.updateResult({ content: [], details: { calls: [...calls, call(10, "read", next, "running")] } }, true);
+  assert.match(plain(row), /BODY_9_ONLY/);
+  assert.doesNotMatch(plain(row), /BODY_0_ONLY|JS_ONLY_MARKER/);
+  capture(10, "read", next, { content: [{ type: "text", text: "BODY_10_ONLY" }], details: {} });
+  row.updateResult({ content: [], details: { calls: [...calls, call(10, "read", next)] } }, false);
+  assert.match(plain(row), /BODY_9_ONLY/);
+  assert.doesNotMatch(plain(row), /BODY_10_ONLY/);
+  clickRow(row, "Show fewer calls");
+  const later = [...calls, call(10, "read", next)];
+  for (let id = 11; id < 19; id++) {
+    const args = { path: `file-${id}.md` };
+    capture(id, "read", args, { content: [{ type: "text", text: `BODY_${id}_ONLY` }], details: {} });
+    later.push(call(id, "read", args));
+  }
+  row.updateResult({ content: [], details: { calls: later } }, false);
+  assert.match(plain(row), /BODY_9_ONLY/, "an opened block stays visible beyond the latest eight calls");
+  assert.doesNotMatch(plain(row), /Read file-0/);
+  row.setExpanded(true);
+  assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*BODY_0_ONLY[\s\S]*BODY_10_ONLY/);
+  row.setExpanded(false);
+  assert.doesNotMatch(plain(row), /BODY_\d+_ONLY|JS_ONLY_MARKER|Read file-0|Read file-9/);
+});
+
+test("fullscreen clicks and copied text follow child geometry across wrapping and resize", (t) => {
+  const { tui, terminal } = altScreen(64, 30);
+  installCopyPrototypes(t);
+  const margin = createFullscreenLayout(Tui, { margin: 2, minWidth: 40 });
+  t.after(() => margin.dispose());
+  margin.installOnTui(tui);
+  const { row, capture } = setup(t, {}, false, {}, { ui: tui, bindings: { makeText: text => new Tui.Text(text, 0, 0) } });
+  const first = { path: "long/漢字-" + "wide-".repeat(12) + "first.md" }, second = { path: "second.md" };
+  capture(1, "read", first, { content: [{ type: "text", text: "FIRST WRAPPED BODY" }], details: {} });
+  capture(2, "read", second, { content: [{ type: "text", text: "SECOND CLICK BODY" }], details: {} });
+  row.updateResult({ content: [], details: { calls: [call(1, "read", first), call(2, "read", second)] } }, false);
+  tui.setLayoutRoot(container(row));
+  const click = target => {
+    tui.doRender();
+    const y = screenLines(tui).findIndex(line => line.includes(target));
+    assert.ok(y >= 0, `fullscreen target visible: ${target}`);
+    tui.handleTerminalInput(sgr(0, 4, y + 1));
+    tui.handleTerminalInput(sgr(0, 4, y + 1, true));
+    tui.doRender();
+  };
+  click("Read second.md");
+  assert.match(plain(row), /SECOND CLICK BODY/);
+  assert.doesNotMatch(plain(row), /FIRST WRAPPED BODY|JS_ONLY_MARKER/);
+  terminal.columns = 36;
+  click("Read long/");
+  assert.match(plain(row, 36), /FIRST WRAPPED BODY[\s\S]*SECOND CLICK BODY/);
+  const frame = copyFrame(row, 36), copied = select(frame).text;
+  assert.match(copied, /Read long\/漢字-wide-/);
+  assert.match(copied, /FIRST WRAPPED BODY[\s\S]*SECOND CLICK BODY/);
+  assert.doesNotMatch(copied, /JS_ONLY_MARKER/);
+  tui.doRender();
+  const y = screenLines(tui).findIndex(line => line.includes("SECOND CLICK BODY"));
+  drag(tui, 4, y + 1, 12, y + 1);
+  tui.doRender();
+  assert.match(plain(row, 36), /FIRST WRAPPED BODY[\s\S]*SECOND CLICK BODY/);
+  click("SECOND CLICK BODY");
+  assert.doesNotMatch(plain(row, 36), /JS_ONLY_MARKER/);
+});
+
 test("nested bat calls use Read exploration while mixed execution retains Ran", (t) => {
   const { row, capture } = setup(t);
   const args = { command: "bat --paging=never --style=plain --line-range 10:20 src/needle.ts" };
@@ -212,8 +334,9 @@ test("nested bat calls use Read exploration while mixed execution retains Ran", 
   row.updateResult({ content: [], details: { calls: [call(1, "bash", args)] } }, false);
   assert.match(plain(row), /Explored[\s\S]*Read src\/needle\.ts/);
   assert.match(plain(row), /BAT FILE BODY/);
-  row.setExpanded(true);
+  clickRow(row, "Read src/needle.ts");
   assert.ok(plain(row).includes(args.command));
+  assert.doesNotMatch(plain(row), /JS_ONLY_MARKER/);
   const mixed = { command: "bat src/needle.ts && npm test" };
   capture(2, "bash", mixed, result);
   row.updateResult({ content: [], details: { calls: [call(1, "bash", args), call(2, "bash", mixed)] } }, false);
@@ -346,7 +469,10 @@ test("foreign codemode and nested renderer resolvers retain their own presentati
   assert.equal(first.row.getCallRenderer(), foreign.renderCall);
   assert.match(plain(first.row), /FOREIGN CODEMODE/);
   first.handle.dispose();
-  const foreignRead = { renderCall: () => bindings.makeText("FOREIGN READ"), renderResult: () => bindings.makeText("foreign result") };
+  let foreignClicks = 0;
+  const foreignRead = { renderCall: () => new Tui.MouseRegion(bindings.makeText("FOREIGN READ"), event => {
+    if (event.type === "click" && event.button === "left") { foreignClicks++; return { handled: true }; }
+  }), renderResult: () => bindings.makeText("foreign result") };
   const second = setup(t, {});
   second.context.runtimeHost.session.extensionRunner.resolveToolRenderers = (name, next) => name === "read"
     ? { ...next(), ...foreignRead } : next();
@@ -355,6 +481,9 @@ test("foreign codemode and nested renderer resolvers retain their own presentati
   assert.match(plain(second.row), /FOREIGN READ/);
   assert.match(plain(second.row), /foreign result/);
   assert.doesNotMatch(plain(second.row), /Explored/);
+  clickRow(second.row, "FOREIGN READ");
+  assert.equal(foreignClicks, 1, "the foreign child handles the click before codemode's fallback");
+  assert.doesNotMatch(plain(second.row), /JS_ONLY_MARKER/);
 });
 
 test("appearance lifecycle supplies finalized nested results and clears them on session replacement", (t) => {

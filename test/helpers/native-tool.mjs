@@ -1,11 +1,11 @@
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 
 // Inherit the real host; copy only intercepted descriptors to give each test its own lease.
-export function isolatedToolHost() {
+export function isolatedToolHost(ui = { requestRender() {} }) {
   class Host extends ToolExecutionComponent {
     constructor(name, definition = {}, args = {}) {
       super(name, "native-test", args, { showImages: false }, definition,
-        { requestRender() {} }, process.cwd());
+        ui, process.cwd());
       this.markExecutionStarted();
     }
   }

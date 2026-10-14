@@ -36,7 +36,11 @@ export interface ViewContext {
   readonly explorationPlan?: unknown;
 }
 export interface ViewOptions { readonly expanded?: boolean; readonly isPartial?: boolean }
-export interface Component { render(width: number): string[]; invalidate(): void }
+export interface Component {
+  render(width: number): string[];
+  invalidate(): void;
+  handleMouse?: import("@earendil-works/pi-tui").Component["handleMouse"];
+}
 export interface TextComponent extends Component { setText(text: string): void }
 export type TextFactory = (text: string) => TextComponent;
 export type Highlight = (text: string, language: string) => string;

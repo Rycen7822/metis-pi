@@ -1,14 +1,25 @@
+import { Container, MouseRegion } from "@earendil-works/pi-tui";
 import type { Component } from "./tool-names.ts";
 import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow, type ChildPlacement } from "./selection-copy/model.ts";
 
-/** Shared vertical geometry; copy provenance remains an explicit caller policy. */
+/** Native stacking owns mouse geometry; copy provenance remains an explicit caller policy. */
 export function stackComponents(components: Component[], componentId: string, composition: "flat-rows" | "child-placements"): Component {
+  const container = new Container(), snapshots: string[][] = [];
+  for (const [index, component] of components.entries()) {
+    const region = new MouseRegion(component, () => undefined);
+    region.render = width => {
+      const rows = (snapshots[index] = component.render(width));
+      // This instance override bypasses the prototype's copy publication hook.
+      publishRows(region, rows);
+      return rows;
+    };
+    container.addChild(region);
+  }
   return {
     render(width) {
-      const lines: string[] = [], rows: CopyRow[] = [], children: (ChildPlacement | undefined)[] = [];
-      for (const component of components) {
-        const rendered = component.render(width), product = productFor(rendered);
-        lines.push(...rendered);
+      const lines = container.render(width), rows: CopyRow[] = [], children: (ChildPlacement | undefined)[] = [];
+      for (const rendered of snapshots) {
+        const product = productFor(rendered);
         if (composition === "flat-rows") {
           // Fusion takes rows only, never follows a child's placement chain.
           rows.push(
@@ -28,6 +39,7 @@ export function stackComponents(components: Component[], componentId: string, co
       publishRows(this, lines);
       return lines;
     },
-    invalidate() { for (const component of components) component.invalidate(); releaseCopyCache(this); },
+    handleMouse(event) { return container.handleMouse(event); },
+    invalidate() { container.invalidate(); releaseCopyCache(this); },
   };
 }
