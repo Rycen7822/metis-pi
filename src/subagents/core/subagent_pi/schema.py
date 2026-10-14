@@ -293,7 +293,7 @@ TOOLS = [
             "model": S,
             "thinking": {
                 **LABEL,
-                "description": "Pi reasoning level; omit to inherit settings. Unsupported levels are rejected.",
+                "description": "Pi reasoning level; check the selected model's supported levels before launch. Omit to inherit settings. Unsupported levels are rejected.",
             },
             "access": {
                 "type": "string",
