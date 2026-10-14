@@ -9,6 +9,7 @@ export type ParsedShellCommand =
 			query?: string | undefined;
 			path?: string | undefined;
 	  }
+	| { kind: "find"; command: string; query?: string | undefined; path?: string | undefined }
 	| { kind: "unknown"; command: string };
 
 export function unknownCommand(mainCommand: string[]): ParsedShellCommand {
@@ -32,7 +33,7 @@ export function pathlessListCommand(mainCommand: string[]): ParsedShellCommand {
 
 export function searchCommand(
 	mainCommand: string[],
-	query: string,
+	query: string | undefined,
 	path: string | undefined,
 ): ParsedShellCommand {
 	return {

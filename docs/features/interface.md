@@ -10,6 +10,12 @@ appearance 使用宿主 CustomEditor，提供灰色输入面与首行 `> `；正
 
 composer 为 `￥` 和第二个及之后的 `/` 补发 skill 查询，见 [skills](skills.md)。
 
+## 探索工具显示
+
+`read` 与 npm `@ff-labs/pi-fff` 的 `ffgrep` / `fffind` 统一使用 `Exploring / Explored`：分别显示 `Read`、`Search`、`Find`，直接调用和 codemode 嵌套调用均支持。成功的 FFF 结果默认折叠，展开可查看全文，错误保持可见；直接连续调用可与 read 共用探索标题。仅接管这两个 FFF 名称，其他来源的同名工具、FFF 对原生 grep/find 的覆盖以及独立 renderer overlay 保留原样。
+
+原生 bash 和 Metis exec_command 中的只读 `ast-grep run/scan`、`rg` 内容检索显示 `Search`，`fd` 显示 `Find`。ast-grep 改写/交互更新、fd `--exec` / `--exec-batch`、输出重定向或混合执行仍显示 `Ran`；展开保留原命令。bash 输出沿用现有 shell 预览，不修改调用、参数或模型结果。
+
 ## Working、Header 与摘要
 
 Header 显示实际 Pi/metis 版本。Working 从 `agent_start` 到 `agent_settled`，包含最终回复后的 condense 维护，显示 Working / Writing / Waiting for input。安装 widget 成功后才隐藏宿主 loader；失败时回退 `setWorkingIndicator`。

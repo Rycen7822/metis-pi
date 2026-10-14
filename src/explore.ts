@@ -3,6 +3,7 @@
 // with a four-space gutter. Display-only.
 
 import { CODEX_CYAN, foregroundAnsi, type ColorLevel } from "./palette.ts";
+import { EXPLORATION_VERBS, isExplorationTool } from "./tool-names.ts";
 
 const EXPLORATION_CYAN = CODEX_CYAN; // Codex paints member verbs with ANSI cyan ("Read".cyan())
 const DIM_GRAY = "#6c7086"; // Mocha overlay0 for the " in " hint
@@ -22,10 +23,8 @@ export interface ExplorationRender {
   readonly rows: readonly ExplorationRow[];
 }
 
-const VERBS = { read: "Read", grep: "Search", find: "Find", ls: "List" } as const;
-
 export function explorationVerb(name: string): ExplorationVerb {
-  return VERBS[name as keyof typeof VERBS] ?? "Read";
+  return isExplorationTool(name) ? EXPLORATION_VERBS[name] : "Read";
 }
 
 /** "• Explored|Exploring" group title line. Bullet tone = run state (dim while
@@ -66,8 +65,8 @@ export function renderExplorationLines(
   theme: { bold(text: string): string; fg(key: string, text: string): string },
 ): string[] {
   const lines = [renderExplorationHeader(render, colorLevel, theme)];
-  for (const row of render.rows) {
-    lines.push(renderExplorationMember(row, { first: true }, colorLevel));
+  for (const [index, row] of render.rows.entries()) {
+    lines.push(renderExplorationMember(row, { first: index === 0 }, colorLevel));
   }
   return lines;
 }

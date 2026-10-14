@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- 将 npm FFF 的 `ffgrep` / `fffind` 接入 read 的探索显示（Search/Find），覆盖直接与 codemode 嵌套调用，保留展开、错误和独立 renderer overlay；统一探索名称分类。原生 bash 和 exec_command 的只读 ast-grep/rg/fd 同步显示 Search/Find，改写、fd exec、重定向和混合执行保留 Ran。
+
 ## 0.20.0
 
 - 整理 LSP 协议与执行责任：发布诊断状态/定时器独立于 JSON-RPC 请求，统一文档清理和客户端命令/工作区来源，简化单文件适配器选择。正确区分 CodeAction 与旧式 Command，不解析/应用禁用动作或执行服务器命令，保留有效解析错误和取消/进程退出保证。

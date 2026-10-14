@@ -20,6 +20,21 @@ test("commands with side effects keep the full run display while pure formatting
   assert.match(renderExecCommandCall("find . -name '*.ts'", "done", exploration), /Explored/);
 });
 
+test("structural/content search and fd share exploration labels without hiding execution", () => {
+  for (const [command, verb] of [
+    ["rg needle src/", "Search"],
+    ["ast-grep run --pattern 'foo($$$ARGS)' --lang ts src/", "Search"],
+    ["ast-grep scan --inline-rules 'id: needle' src/", "Search"],
+    ["ast-grep --pattern=needle --lang ts --json src/", "Search"],
+    ["fd needle src/", "Find"], ["fd", "Find"],
+  ]) assert.match(renderExecCommandCall(command, "done", theme), new RegExp("Explored[\\s\\S]*" + verb + " "), command);
+  for (const command of [
+    "ast-grep run -p foo -r bar src/", "ast-grep scan --update-all", "ast-grep scan -i",
+    "fd -x rm {}", "fd --exec-batch=rm", "fd needle src/ && npm test", "rg needle src/ > saved", "fd needle &> saved", "fg",
+  ]) assert.match(renderExecCommandCall(command, "done", theme), /Ran/, command);
+  assert.match(renderExecCommandCall("ast-grep scan --inline-rules 'id: needle' src/", "done", theme), /Search src/);
+});
+
 test("the command color hook adds distinct token colors without changing visible text", () => {
   const command = "node --version && printf '%s' hello";
   const rendered = renderExecCommandCall(command, "done", colored, true);

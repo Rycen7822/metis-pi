@@ -22,7 +22,7 @@ const render = (component, width = 80) => component.render(width).join("\n");
 const plain = (component, width = 80) => stripVTControlCharacters(render(component, width));
 const makeTestRenderers = () => makeRenderers(bindings.makeText, bindings.expandHint, undefined, undefined, undefined, undefined, sessionStub);
 const call = (id, name, args, status = "ok") => ({ id: `${parent}/${id}`, name, args: JSON.stringify(args), status });
-function setup(t, overrides = {}, lifecycle = false) {
+function setup(t, overrides = {}, lifecycle = false, sources = {}) {
   const Host = isolatedToolHost(), store = new CodemodeViewStore();
   let codemode;
   createCodemodeExtension()({ registerTool: (tool) => { codemode = tool; } });
@@ -35,7 +35,8 @@ function setup(t, overrides = {}, lifecycle = false) {
     extensionRunner: { resolveToolRenderers: (_name, next) => next() },
   } } } });
   const renderers = makeTestRenderers();
-  const getTools = () => ["codemode", "read", "bash", ...Object.keys(overrides)].map((name) => toolInfo(name, !Object.hasOwn(overrides, name)));
+  const getTools = () => ["codemode", "read", "bash", ...Object.keys(overrides)].map((name) =>
+    sources[name] ? { name, sourceInfo: sources[name] } : toolInfo(name, !Object.hasOwn(overrides, name)));
   const handlers = new Map();
   const ctx = { mode: "rpc", hasUI: true, cwd: process.cwd(), ui: { notify() {} } };
   let handle;
@@ -136,6 +137,28 @@ test("replayed codemode uses recorded minute and hour durations without starting
   }
   t.mock.timers.tick(5_000);
   assert.equal(intervals.mock.callCount(), 0, "history rows must not create live intervals");
+});
+
+test("nested FFF uses exploration rows, keeps errors/expansion and respects renderer overlays", (t) => {
+  const names = ["ffgrep", "fffind"];
+  const foreign = { renderCall: () => bindings.makeText("FFF ORIGINAL CALL"), renderResult: () => bindings.makeText("FFF ORIGINAL RESULT") };
+  const sources = Object.fromEntries(names.map(name => [name, { source: "npm:@ff-labs/pi-fff@0.11.0", path: "/npm/pi-fff/src/index.ts" }]));
+  const { row, capture, context } = setup(t, Object.fromEntries(names.map(name => [name, foreign])), true, sources);
+  const args = { pattern: "needle", path: "src/" };
+  capture(1, "ffgrep", args, deepFreeze({ content: [{ type: "text", text: "FFF MATCH BODY" }], details: {} }));
+  capture(2, "fffind", args, deepFreeze({ content: [{ type: "text", text: "FFF ERROR BODY" }], details: {} }), true);
+  row.updateResult({ content: [], details: { calls: [call(1, "ffgrep", args), call(2, "fffind", args, "error")] } }, false);
+  const folded = plain(row);
+  assert.match(folded, /Explored[\s\S]*Search "needle" in src\//);
+  assert.match(folded, /Exploration failed[\s\S]*Find "needle" in src\//);
+  assert.match(folded, /FFF ERROR BODY/);
+  assert.doesNotMatch(folded, /FFF ORIGINAL|FFF MATCH BODY/);
+  row.setExpanded(true);
+  assert.match(plain(row), /FFF MATCH BODY/);
+  context.runtimeHost.session.extensionRunner.resolveToolRenderers = (name, next) => name === "ffgrep"
+    ? { ...next(), renderCall: () => bindings.makeText("FFF OVERLAY CALL"), renderResult: () => bindings.makeText("FFF OVERLAY RESULT") } : next();
+  row.setExpanded(false); // The native row rebuilds its result slots on expansion changes.
+  assert.match(plain(row), /FFF OVERLAY CALL[\s\S]*FFF OVERLAY RESULT/);
 });
 
 test("native codemode folding hides every script line and uses ordinary read/shell rendering", (t) => {

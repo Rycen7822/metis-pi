@@ -143,11 +143,26 @@ test("successful exploration content folds by default, errors and full expansion
     "• Explored",
     "\x1B[38;2;108;112;134m  └ \x1B[39m\x1B[38;2;58;150;221mRead\x1B[39m README.md",
   ], "the completed read owns the two-line color format");
-  for (const name of ["read", "grep", "find", "ls"]) {
+  for (const name of ["read", "grep", "find", "ls", "ffgrep", "fffind"]) {
     assert.equal(formatResult(name, result("evidence"), { isPartial: false }, theme, {}), "");
     assert.match(formatResult(name, result("evidence"), { expanded: true }, theme, {}), /evidence/);
     assert.match(formatResult(name, result("error details"), {}, theme, { isError: true }), /error details/);
   }
+});
+
+test("native bash searches use exploration titles and retain commands, output and failures", () => {
+  for (const [command, verb] of [
+    ["rg needle src/", "Search"], ["ast-grep run -p needle -l ts src/", "Search"], ["fd needle src/", "Find"],
+  ]) {
+    const args = { command };
+    assert.match(stripVTControlCharacters(call("bash", args, { isPartial: false })), new RegExp("Explored[\\s\\S]*" + verb + " needle"));
+    assert.match(call("bash", args, { isPartial: true }), /Exploring/);
+    assert.match(call("bash", args, { isPartial: false, isError: true }), /Exploration failed/);
+    assert.ok(call("bash", args, { isPartial: false, expanded: true }).includes(command));
+    assert.match(formatResult("bash", result("SEARCH OUTPUT"), {}, theme, { args }), /SEARCH OUTPUT/);
+  }
+  for (const command of ["fd -x rm {}", "ast-grep scan --update-all", "rg needle src/ && npm test", "rg needle > saved"])
+    assert.match(call("bash", { command }, { isPartial: false }), /Ran/);
 });
 
 test("written content is previewed without claiming an unknown old-file deletion count", () => {

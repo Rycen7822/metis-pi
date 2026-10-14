@@ -18,9 +18,9 @@ function parsedToAction(command: ParsedShellCommand): ShellAction {
 	if (command.kind === "list") {
 		return command.path ? { kind: "list", command: command.command, path: command.path } : { kind: "list", command: command.command };
 	}
-	if (command.kind === "search") {
+	if (command.kind === "search" || command.kind === "find") {
 		return {
-			kind: "search",
+			kind: command.kind,
 			command: command.command,
 			...(command.query ? { query: command.query } : {}),
 			...(command.path ? { path: command.path } : {}),

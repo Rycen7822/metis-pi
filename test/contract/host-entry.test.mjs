@@ -63,6 +63,32 @@ function entry(t) {
   return { handlers, commands, definitions, nativeCall, row, fire, ctx };
 }
 
+test("npm FFF direct calls join read exploration and retain native execution", (t) => {
+  const h = entry(t), rows = [];
+  const execute = () => assert.fail("display must not execute a search");
+  for (const [index, name] of ["ffgrep", "read", "fffind"].entries()) {
+    const id = "fff-" + index, args = name === "read" ? { path: "note.md" } : { pattern: "needle", path: "src/" };
+    if (name !== "read") h.definitions.push({ name, sourceInfo: { source: "npm:@ff-labs/pi-fff", path: "/npm/pi-fff/src/index.ts" } });
+    const definition = Object.freeze({ name, execute, renderCall: () => new Text("FFF ORIGINAL", 0, 0),
+      renderResult: () => new Text("FFF RESULT ORIGINAL", 0, 0) });
+    h.fire({ type: "tool_execution_start", toolCallId: id, toolName: name, args });
+    const row = h.row(name, id, args, definition);
+    const result = { content: [{ type: "text", text: "SEARCH CONTENT" }], details: {} };
+    h.fire({ type: "tool_execution_end", toolCallId: id, toolName: name, result });
+    row.updateResult(result);
+    rows.push(row);
+    assert.equal(definition.execute, execute);
+  }
+  const frame = rows.map(row => plain(row.render(100))).join("\n");
+  assert.equal(frame.match(/Explored/g)?.length, 1);
+  assert.match(frame, /Search "needle" in src\//);
+  assert.match(frame, /Read note\.md/);
+  assert.match(frame, /Find "needle" in src\//);
+  assert.doesNotMatch(frame, /FFF ORIGINAL|SEARCH CONTENT/);
+  rows[0].setExpanded(true);
+  assert.match(plain(rows[0].render(100)), /SEARCH CONTENT/);
+});
+
 test("thought summaries follow the live host theme across native rebuilds", (t) => {
   const h = entry(t);
   let color = "FIRST", calls = 0;

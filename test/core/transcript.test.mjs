@@ -111,13 +111,15 @@ test("serial read appends update group membership and only the last image notice
 
 test("read groups stop at tools, failures and visible thinking", () => {
   const state = new TranscriptState();
-  const read = (id, isError = false) => {
-    state.apply({ type: "tool_execution_start", toolCallId: id, toolName: "read" });
-    state.apply({ type: "tool_execution_end", toolCallId: id, toolName: "read", isError });
+  const read = (id, isError = false, toolName = "read") => {
+    state.apply({ type: "tool_execution_start", toolCallId: id, toolName });
+    state.apply({ type: "tool_execution_end", toolCallId: id, toolName, isError });
     return state.groupMemberIds(state.explorationPlan(id).groupId);
   };
   read("first");
   assert.deepEqual(read("second"), ["first", "second"]);
+  assert.deepEqual(read("search", false, "ffgrep"), ["first", "second", "search"]);
+  assert.deepEqual(read("find", false, "fffind"), ["first", "second", "search", "find"]);
   for (const toolName of ["bash", "unrecognized_tool"]) {
     state.apply({ type: "tool_execution_start", toolCallId: toolName, toolName });
     assert.deepEqual(read(`after-${toolName}`), [`after-${toolName}`]);

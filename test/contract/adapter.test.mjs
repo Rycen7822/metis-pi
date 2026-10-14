@@ -72,7 +72,7 @@ test("one native row survives install, duplicate install, disable and disposal w
 
 for (const [owner, names, builtin] of [
   ["FFF overrides", ["grep", "find"], false],
-  ["other extensions", ["read", "write", "edit", "bash", "ls"], false],
+  ["other extensions", ["read", "write", "edit", "bash", "ls", "fffind", "ffgrep"], false],
   [
     "outside takeover list",
     [
@@ -82,8 +82,6 @@ for (const [owner, names, builtin] of [
       "mcp",
       "mcp_search",
       "session_search",
-      "fffind",
-      "ffgrep",
       "exec_command",
       "subagent",
       "lsp",

@@ -182,12 +182,7 @@ function parseShellLcCommands(
 				}
 				return { ...command, command: joinCommandTokens(scriptTokens) };
 			}
-			if (command.kind === "list") {
-				return hadConnectors
-					? command
-					: { ...command, command: joinCommandTokens(scriptTokens) };
-			}
-			if (command.kind === "search") {
+			if (command.kind === "list" || command.kind === "search" || command.kind === "find") {
 				return hadConnectors
 					? command
 					: { ...command, command: joinCommandTokens(scriptTokens) };

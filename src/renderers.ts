@@ -12,11 +12,13 @@ import {
   type ExplorationRow,
 } from "./explore.ts";
 import type { ExplorationPlan, TranscriptState } from "./transcript-state.ts";
+import { summarizeShellCommand } from "./execution/shell/summary.ts";
 import {
   asRecord,
   safeText,
   languageForPath,
   TOOL_NAMES,
+  isExplorationTool,
   type ToolName,
   type Palette,
   type ViewContext,
@@ -44,7 +46,6 @@ export type { DiffRow, DiffRowKind, DiffStats } from "./diff.ts";
 const PREVIEW_LINES = 5;
 const COMMAND_LINES = 2;
 const MAX_PREVIEW_LINE_CHARS = 1200;
-const EXPLORATION = new Set<ToolName>(["read", "grep", "find", "ls"]);
 const SHELL = new Set<ToolName>(["bash", "powershell"]);
 
 function string(value: unknown): string { return typeof value === "string" ? value : ""; }
@@ -235,7 +236,7 @@ export function formatResult(
   const expanded = options.expanded === true;
   const error = ctx.isError === true || result.isError === true;
   const sections: string[] = [];
-  const foldedExploration = EXPLORATION.has(name) && !expanded && !error && !options.isPartial;
+  const foldedExploration = isExplorationTool(name) && !expanded && !error && !options.isPartial;
   if (lines.length && !foldedExploration) {
     sections.push(
       gutter(
@@ -251,7 +252,7 @@ export function formatResult(
     sections.push(gutter(["(no output)"], theme, "dim"));
   const images = blocks.filter((block) => block.type === "image").length;
   // Grouped members don't repeat the image notice; the group aggregates it once (call region).
-  const groupedMember = EXPLORATION.has(name) && ctx.explorationPlan !== undefined;
+  const groupedMember = isExplorationTool(name) && ctx.explorationPlan !== undefined;
   if (images && !groupedMember)
     sections.push(
       gutter(
@@ -417,6 +418,17 @@ export function makeRenderers(
           // Pi passes the same args in both slots; merge so title builders can read args from either source.
           const merged: ViewContext = ctx.args === undefined ? { ...ctx, args } : ctx;
           if (SHELL.has(name)) {
+            const command = string(asRecord(args).command);
+            const summary = name === "bash" ? summarizeShellCommand(command) : undefined;
+            if (summary && summary.actions.length && summary.actions.every(action => action.kind === "search" || action.kind === "find")) {
+              const rows: ExplorationRow[] = summary.actions.map(action => ({
+                verb: action.kind === "find" ? "Find" : "Search",
+                target: action.query || action.command,
+                inPath: action.query ? action.path : undefined,
+              }));
+              const title = renderExplorationLines({ running: merged.isPartial !== false, isError: merged.isError === true, rows }, colorFor(merged), theme).join("\n");
+              return component(merged.expanded ? `${title}\n${highlight(safeText(command), "bash", theme, paint)}` : title, ctx);
+            }
             const { bullet, title } = shellTitle(merged, theme);
             if (makeShell?.makeShellCall) {
               return makeShell.makeShellCall({
@@ -479,7 +491,7 @@ export function makeRenderers(
             }
             return component(writeTitle(merged, theme, writeChangeFor(merged)), ctx);
           }
-          if (EXPLORATION.has(name)) {
+          if (isExplorationTool(name)) {
             const plan =
               merged.explorationPlan ??
               session?.transcript?.explorationPlan?.(typeof merged.toolCallId === "string" ? merged.toolCallId : "");

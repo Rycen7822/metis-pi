@@ -115,14 +115,12 @@ function formatActionLine(action: ShellAction): { title: string; body: string } 
 	if (action.kind === "list") {
 		return { title: "List", body: action.path ?? action.command };
 	}
-	if (action.kind === "search") {
+	if (action.kind === "search" || action.kind === "find") {
+		const title = action.kind === "find" ? "Find" : "Search";
 		if (action.query && action.path) {
-			return { title: "Search", body: `${action.query} in ${action.path}` };
+			return { title, body: `${action.query} in ${action.path}` };
 		}
-		if (action.query) {
-			return { title: "Search", body: action.query };
-		}
-		return { title: "Search", body: action.command };
+		return { title, body: action.query ?? action.path ?? action.command };
 	}
 	return { title: "Run", body: action.command };
 }

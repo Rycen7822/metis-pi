@@ -182,7 +182,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
       if (!base || base.name !== name || base.call !== definition.renderCall || base.result !== definition.renderResult
           || base.shell !== (definition.renderShell ?? "default")) return;
     }
-    // Respect FFF/LSP/etc. even when they override the SAME builtin name.
+    // Respect third-party overrides of builtin names; only named FFF searches opt in.
     // Unknown origin is not interpreted as permission to take over a renderer.
     const info = asRecord(options.getTools().find((tool) => asRecord(tool).name === name));
     const source = asRecord(info.sourceInfo);
@@ -233,9 +233,12 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
           ),
       };
     if (!TOOL_NAMES.includes(name as ToolName)) return;
-    if (source.source !== "builtin" || source.path !== `builtin:${name}`) return;
-    // An EXACT builtin self-shell (edit renders its own rows) takes the same
-    // renderer as every other text tool; third-party self-shells back off above.
+    const builtin = source.source === "builtin" && source.path === `builtin:${name}`;
+    const fff = (name === "ffgrep" || name === "fffind") && typeof source.path === "string" && typeof source.source === "string"
+      && (source.source === "npm:@ff-labs/pi-fff" || source.source.startsWith("npm:@ff-labs/pi-fff@"));
+    if (!builtin && !fff) return;
+    // Approved self-shell tools use the same compact renderer as text tools;
+    // other provider origins and independent overlays have backed off above.
     return options.renderers[name as ToolName];
   }
   const codemode = options.makeCodemode?.((name, result) => {

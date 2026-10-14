@@ -66,6 +66,24 @@ export function summarizeDiscoveryCommand(
 			]),
 		);
 	}
+	// Output redirection is not a pure search, even when the executable is.
+	if (["rg", "rga", "ripgrep-all", "fd", "ast-grep"].includes(head) && tail.some(token => /^(?:\d*|&)>/.test(token)))
+		return unknownCommand(mainCommand);
+	if (head === "ast-grep") {
+		const mode = tail[0];
+		const explicitMode = mode === "run" || mode === "scan";
+		const args = explicitMode ? tail.slice(1) : tail;
+		const patternIndex = args.findIndex(token => token === "-p" || token === "--pattern");
+		const inlinePattern = args.find(token => token.startsWith("--pattern="));
+		const defaultRun = mode?.startsWith("-") && (patternIndex >= 0 || inlinePattern !== undefined);
+		if ((!explicitMode && !defaultRun) || args.some(token =>
+			/^--(?:rewrite|update-all|interactive)(?:=|$)/.test(token) || /^-[^-]*[rUi]/.test(token)))
+			return unknownCommand(mainCommand);
+		const query = patternIndex >= 0 ? args[patternIndex + 1] : inlinePattern?.slice(10);
+		const path = firstNonFlagOperand(args, ["-p", "--pattern", "-l", "--lang", "--selector", "--strictness",
+			"-c", "--config", "--rule", "--inline-rules", "--filter", "--threads", "--color"]);
+		return searchCommand(mainCommand, query, path);
+	}
 	if (head === "rg" || head === "rga" || head === "ripgrep-all") {
 		const args = trimAtConnector(tail);
 		const hasFilesFlag = args.includes("--files");
@@ -105,10 +123,10 @@ export function summarizeDiscoveryCommand(
 		return unknownCommand(mainCommand);
 	}
 	if (head === "fd") {
+		if (tail.some(token => /^--exec(?:-batch)?(?:=|$)/.test(token) || /^-[^-]*[xX]/.test(token)))
+			return unknownCommand(mainCommand);
 		const [query, path] = parseFdQueryAndPath(tail);
-		return query
-			? { kind: "search", command: joinCommandTokens(mainCommand), query, path }
-			: { kind: "list", command: joinCommandTokens(mainCommand), path };
+		return { kind: "find", command: joinCommandTokens(mainCommand), query, path };
 	}
 	if (head === "find") {
 		if (tail.some(token => ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(token)))

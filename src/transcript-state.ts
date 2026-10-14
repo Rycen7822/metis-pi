@@ -7,6 +7,8 @@
 // membership or boundaries: repaints, invalidate() storms and history
 // rebuilds all get the same answer for the same logical message.
 
+import { isExplorationTool } from "./tool-names.ts";
+
 export type PresentationKind = "exploration" | "other-tool" | "assistant-text" | "transparent" | "barrier";
 
 /** Cycle-free: thinking-view.ts has no imports at all. */
@@ -244,8 +246,6 @@ function responseIdentity(message: NonNullable<TranscriptEvent["message"]>): str
 }
 const MAX_OBSERVED_RESPONSES = 256;
 
-const EXPLORATION_TOOLS = new Set(["read", "grep", "find", "ls"]);
-
 export class TranscriptState {
   private generation = 0;
   private nextGroupId = 1;
@@ -360,7 +360,7 @@ export class TranscriptState {
       }
       case "tool_execution_start": {
         if (!event.toolCallId || !event.toolName) break;
-        if (EXPLORATION_TOOLS.has(event.toolName)) {
+        if (isExplorationTool(event.toolName)) {
           this.joinOrCreateGroup(event.toolCallId, event.toolName);
           this.lastNode = "exploration";
         } else {
