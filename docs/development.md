@@ -19,7 +19,7 @@ npm run prepare:subagents
 | `npm run test:io` / `test:resource` | 文件/Git/归档 / 进程、计时器、锁、缓存和传输。 |
 | `npm run test:chrome` | 跨层界面、布局和复制测试。 |
 | `npm run test:subagents` | 包内 Python 子代理 Runtime、IPC、账本和继承行为；4 个进程按文件分配测试。 |
-| `npm run verify` | 项目与测试类型 + 全部测试 + pack dry-run。 |
+| `npm run verify` | 项目与测试类型 + 全部测试，包含实际 pack 文件清单校验。 |
 | `npm run test:pty:strict` | 真实 Pi/tmux 的 E1–E4、E6；`test:pty` 同样要求完整执行。 |
 | `npm run preview` | 生产渲染器生成本地 `docs/preview.html`、`transcript.ansi`、`transcript.txt`，均不进 Git。 |
 | `node scripts/copy-perf.mjs` | 测量渲染/提取成本，不测系统剪贴板延迟。 |
@@ -37,6 +37,10 @@ core 使用独立预期验证规则；contract 使用真实 Pi 类/API 验证接
 严格 PTY 需要 Pi、tmux，E1 还需 Git；各 journey 使用独立 Pi、目录、tmux socket、离线 provider 和剪贴板 sink。
 
 CI 在 Pi 1.3.0 锁文件基线执行 verify 与严格 PTY，并断言四个宿主包及运行时 `pi-mcp` 的版本一致。手工运行时可用 `PI_BIN="$PWD/node_modules/.bin/pi"` 显式选择同一宿主。
+
+PR、main/tag push 和手动运行保留完整验证；功能分支只有在查到同仓库、同分支、同 SHA 的开放且可合并 PR 时才省去重复 push 全测，状态未知或查询失败仍全跑。同一 PR 的新提交取消旧运行，主干、tag 和手动运行使用独立并发组。
+
+CI 的 verify 在单个 job 内使用 Node 编译缓存，测试的进程和配置隔离保持不变。包内容由始终执行的 `test/package.test.mjs` 实际调用 `npm pack --dry-run --json --ignore-scripts` 核对，verify 末尾不再重复打包。
 
 | Journey | 验证 |
 | --- | --- |

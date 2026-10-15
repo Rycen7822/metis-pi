@@ -88,8 +88,9 @@ test("default public execution tool definitions retain their compatibility hashe
 });
 
 test("search tools constrain numResults to integer values from 1 through 20", () => {
+	const tools = registered({}).tools;
 	for (const name of ["web_search", "source_check"]) {
-		const schema = registeredTool({}, name).parameters.properties.numResults;
+		const schema = tools.find(tool => tool.name === name).parameters.properties.numResults;
 		assert.equal(schema.type, "integer");
 		assert.equal(schema.minimum, 1);
 		assert.equal(schema.maximum, 20);
@@ -127,11 +128,12 @@ test("fetch_content schema exposes auth profile opt-in", () => {
 });
 
 test("registered tools do not advertise disabled get_search_content", () => {
-	const fetchTool = registeredTool({ tools: { getSearchContent: { enabled: false } } }, "fetch_content");
+	const tools = registered({ tools: { getSearchContent: { enabled: false } } }).tools;
+	const fetchTool = tools.find(tool => tool.name === "fetch_content");
 	assert.ok(fetchTool);
 	assert.doesNotMatch(fetchTool.description, /get_search_content/);
 	assert.match(fetchTool.description, /retrieval tool is not registered/);
-	assert.doesNotMatch(registeredTool({ tools: { getSearchContent: { enabled: false } } }, "web_search").description, /get_search_content/);
+	assert.doesNotMatch(tools.find(tool => tool.name === "web_search").description, /get_search_content/);
 	assert.match(registeredTool({ toolNames: { getSearchContent: "open_content" } }, "web_search").description, /retrieval with open_content /);
 });
 

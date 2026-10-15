@@ -2,9 +2,68 @@ name: appearance-checks
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  admission:
+    name: Check duplicate feature push
+    if: github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.pr.outputs.run }}
+    steps:
+      - id: pr
+        name: Keep full validation unless a matching PR can run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const repo = process.env.GITHUB_REPOSITORY;
+          const branch = process.env.GITHUB_REF_NAME;
+          const sha = process.env.GITHUB_SHA;
+          const matches = pr => pr.state === 'open' && pr.head?.repo?.full_name === repo
+            && pr.head?.ref === branch && pr.head?.sha === sha;
+          async function request(path, query = {}) {
+            const url = new URL(`${process.env.GITHUB_API_URL}/repos/${repo}/${path}`);
+            url.search = new URLSearchParams(query).toString();
+            const response = await fetch(url, {
+              headers: {
+                authorization: `Bearer ${process.env.GH_TOKEN}`,
+                accept: 'application/vnd.github+json',
+                'x-github-api-version': '2022-11-28',
+              },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
+            return response.json();
+          }
+          let duplicate = false;
+          try {
+            const pulls = await request('pulls', { state: 'open', head: `${repo.split('/')[0]}:${branch}`, per_page: '100' });
+            const candidate = pulls.find(matches);
+            if (candidate) {
+              let pr = await request(`pulls/${candidate.number}`);
+              if (matches(pr) && pr.mergeable === null) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                pr = await request(`pulls/${candidate.number}`);
+              }
+              duplicate = matches(pr) && pr.mergeable === true;
+            }
+          } catch {
+            console.log('::warning::PR lookup unavailable; keeping full push validation.');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `run=${!duplicate}\n`);
+          console.log(duplicate ? 'Matching mergeable PR covers this push; skipping duplicate tests.' : 'Full push validation required.');
+          NODE
   test:
     name: Pi 1.3.0
+    needs: admission
+    if: ${{ always() && !cancelled() && needs.admission.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -37,8 +96,15 @@ jobs:
           }
           NODE
       - run: npm run verify
-      - run: sudo apt-get update -qq
-      - run: sudo apt-get install -y -qq tmux
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/metis-pi-node-compile-cache
+      - name: Ensure tmux is available
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq tmux
+          fi
+          tmux -V
       - run: npm run test:pty:strict
         env:
           PI_BIN: ${{ github.workspace }}/node_modules/.bin/pi
