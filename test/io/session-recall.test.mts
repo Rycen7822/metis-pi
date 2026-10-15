@@ -18,8 +18,8 @@ function executable(name: string): string | undefined {
 const binaries = { rg: executable("rg"), grep: executable("grep") };
 const shellQuote = (text: string) => "'" + text.replaceAll("'", "'\\''") + "'";
 
-function sessionFile(dir: string, name: string, contents: string[]): string {
-  const manager = SessionManager.inMemory(dir);
+function sessionFile(dir: string, name: string, contents: string[], cwd = dir): string {
+  const manager = SessionManager.inMemory(cwd);
   for (const content of contents) manager.appendMessage({ role: "user", content, timestamp: 0 });
   return saveSession(dir, name, manager);
 }
@@ -38,8 +38,11 @@ for (const backend of ["rg", "grep", "node"] as const) {
     const reached = join(root, "backend-exits");
     if (backend !== "node") writeFileSync(join(bin, backend),
       `#!/bin/sh\n${shellQuote(binaries[backend]!)} "$@"\nstatus=$?\nprintf '%s\\n' "$status" >> ${shellQuote(reached)}\nexit "$status"\n`, { mode: 0o755 });
-    const one = sessionFile(dir, "one", ["Needle Needle -v two  spaces"]);
-    const two = sessionFile(dir, "two", ["needle", "NEEDLE"]);
+    // The searchable header must not inherit a random storage path containing
+    // "-v" (including "-V"), which would add legitimate header matches.
+    const cwd = "/recall-search-fixture";
+    const one = sessionFile(dir, "one", ["Needle Needle -v two  spaces"], cwd);
+    const two = sessionFile(dir, "two", ["needle", "NEEDLE"], cwd);
     writeFileSync(join(dir, "excluded.txt"), "needle\nneedle\nneedle\n");
     const previous = process.env.PATH;
     process.env.PATH = bin;
