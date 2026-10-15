@@ -182,9 +182,9 @@ async function askMultiSelect(
 		// Deliberate empty commit — same as pressing "Next" with nothing toggled.
 		return { questionIndex, question: q.question, kind: "multi", answer: null, selected: [] };
 	}
-	const [selectionPart = "", ...customParts] = trimmed.split(";");
+	const [selectionPart = "", ...customParts] = value.split(";");
 	const selection = selectionPart.trim();
-	const custom = customParts.join(";").trim();
+	const custom = customParts.join(";");
 	const tokens = selection.split(/[,\s]+/).filter((tok) => tok.length > 0);
 	const indices = tokens.map((tok) => (/^\d+\.?$/.test(tok) ? parseIndex(tok, q.options.length) : null));
 	if (selection.length === 0 || indices.every((i): i is number => i != null)) {
@@ -198,7 +198,7 @@ async function askMultiSelect(
 			questionIndex,
 			question: q.question,
 			kind: "multi",
-			answer: custom.length > 0 ? custom : null,
+			answer: custom.trim().length > 0 ? custom : null,
 			selected,
 		};
 	}

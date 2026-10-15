@@ -15,6 +15,7 @@ import type { TabBarProps } from "./components/tab-bar.ts";
 import type { QuestionRow } from "../state/row-intent.ts";
 import type { DialogProps } from "./dialog-builder.ts";
 import { createPropsAdapter } from "./props-adapter.ts";
+import * as i18n from "../state/i18n-bridge.ts";
 import type { TabComponents } from "./tab-components.ts";
 
 function makeFixture(overQuestions?: QuestionData[]) {
@@ -164,13 +165,20 @@ describe("QuestionnairePropsAdapter.apply", () => {
 		}));
 	});
 
-	it("multi-select on the LAST question receives nextLabel='Submit'", () => {
+	it("resolves the final multi-select Submit label on each apply", () => {
 		const questions = [makeQuestion(), makeQuestion({ multiSelect: true })];
 		const { adapter, tabsByIndex } = makeFixture(questions);
 		adapter.apply(makeState({ currentTab: 1 }));
 		const mso = tabsByIndex[1]!.multiSelect!;
 		const arg = (mso.setProps as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
 		expect(arg.nextLabel).toBe("Submit");
+		const translate = vi.spyOn(i18n, "t").mockImplementation((key, fallback) => key === "submit.label" ? "提交答案" : fallback);
+		try {
+			adapter.apply(makeState({ currentTab: 1 }));
+			expect(mso.setProps).toHaveBeenLastCalledWith(expect.objectContaining({ nextLabel: "提交答案" }));
+		} finally {
+			translate.mockRestore();
+		}
 	});
 
 	it("multi-select on a non-last question receives nextLabel='Next'", () => {

@@ -6,7 +6,7 @@ import { selectActiveView } from "../state/selectors/focus.ts";
 import type { QuestionnaireState } from "../state/state.ts";
 import type { QuestionRow } from "../state/row-intent.ts";
 import type { QuestionData } from "../tool/types.ts";
-import { displayLabel } from "../state/i18n-bridge.ts";
+import { displayLabel, t } from "../state/i18n-bridge.ts";
 import { MULTI_SUBMIT_LABEL } from "./components/multi-select-view.ts";
 import type { SubmitPickerProps } from "./components/submit-picker.ts";
 import type { TabBarProps } from "./components/tab-bar.ts";
@@ -91,7 +91,7 @@ export function createPropsAdapter(config: PropsAdapterConfig) {
 						inputMode: isCurrent && state.inputMode, inputBuffer: draft, inputCursorOffset: isCurrent ? cursor : undefined,
 					},
 					nextActive: tabFocused && state.optionIndex === q.options.length + 1,
-					nextLabel: i === questions.length - 1 ? MULTI_SUBMIT_LABEL : displayLabel("next"),
+					nextLabel: i === questions.length - 1 ? t("submit.label", MULTI_SUBMIT_LABEL) : displayLabel("next"),
 				});
 			}
 			tui.requestRender();

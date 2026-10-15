@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import type { QuestionData } from "../tool/types.ts";
 import type { QuestionRow } from "./row-intent.ts";
 import { routeKey, wrapTab } from "./key-router.ts";
@@ -199,12 +200,17 @@ describe("routeKey — multiSelect", () => {
 
 	// Spec: Enter on a REGULAR option row toggles that row's checkbox (matches Space). Committing
 	// + advancing requires explicit focus on the Next sentinel — see the confirmation tests below.
-	it("Enter on a regular row emits toggle for the current optionIndex", () => {
+	it.each([
+		[sentinel(KEY.CONFIRM), true], ["\r", true], ["\x1b[13;1:1u", true],
+		["\x1b[13;1:2u", false], ["\x1b[13;1:3u", false],
+	] as const)("Enter %j toggles the current option only on a press (%s)", (data, pressed) => {
 		expect(
 			routeKey(
-				sentinel(KEY.CONFIRM),
+				data,
 				makeState({ optionIndex: 1 }),
 				makeRuntime({
+					keybindings: { matches: (key, name) => keybindings.matches(key, name)
+						|| (name === KEY.CONFIRM && matchesKey(key, Key.enter)) },
 					questions: [multiQ],
 					isMulti: false,
 					items: [
@@ -216,7 +222,7 @@ describe("routeKey — multiSelect", () => {
 					currentItem: { kind: "option", label: "BE" },
 				}),
 			),
-		).toEqual({ kind: "toggle", index: 1 });
+		).toEqual(pressed ? { kind: "toggle", index: 1 } : { kind: "ignore" });
 	});
 
 	// Spec: Space on the Next sentinel is ignored — Next is not a real option.

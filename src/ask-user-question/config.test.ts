@@ -56,9 +56,9 @@ describe("resolveCollapseKey", () => {
 	});
 
 	it("falls back to the default for malformed specs", () => {
-		// Leading/trailing +, double ++, or empty
-		expect(resolveCollapseKey({ collapseKey: "+ctrl+]" })).toBe(DEFAULT_COLLAPSE_KEY);
-		expect(resolveCollapseKey({ collapseKey: "ctrl++" })).toBe(DEFAULT_COLLAPSE_KEY);
+		for (const collapseKey of ["+ctrl+]", "ctrl+", "++", "ctrl+++", "ctrl++a"]) {
+			expect(resolveCollapseKey({ collapseKey })).toBe(DEFAULT_COLLAPSE_KEY);
+		}
 		// The default itself is valid
 		expect(resolveCollapseKey({ collapseKey: "ctrl+]" })).toBe("ctrl+]");
 		// Multi-modifier specs are valid
@@ -66,9 +66,6 @@ describe("resolveCollapseKey", () => {
 	});
 
 	it("falls back to the default for typo'd modifiers and unknown key names", () => {
-		// `ctr+]` is the dangerous one: pi-tui's parseKeyId takes the LAST `+`-part as
-		// the key and ignores unknown parts, so an unvalidated `ctr+]` would match every
-		// bare `]` keypress and the raw terminal listener would consume them globally.
 		expect(resolveCollapseKey({ collapseKey: "ctr+]" })).toBe(DEFAULT_COLLAPSE_KEY);
 		expect(resolveCollapseKey({ collapseKey: "control+]" })).toBe(DEFAULT_COLLAPSE_KEY);
 		expect(resolveCollapseKey({ collapseKey: "ctrl+nosuchkey" })).toBe(DEFAULT_COLLAPSE_KEY);
@@ -82,6 +79,9 @@ describe("resolveCollapseKey", () => {
 		expect(resolveCollapseKey({ collapseKey: "Ctrl+PageUp" })).toBe("ctrl+pageup");
 		expect(resolveCollapseKey({ collapseKey: "f5" })).toBe("f5");
 		expect(resolveCollapseKey({ collapseKey: "alt+escape" })).toBe("alt+escape");
+		for (const collapseKey of ["+", "ctrl++", "alt+shift++"]) {
+			expect(resolveCollapseKey({ collapseKey })).toBe(collapseKey);
+		}
 	});
 });
 

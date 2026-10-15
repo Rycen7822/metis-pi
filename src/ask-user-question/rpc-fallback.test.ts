@@ -209,15 +209,18 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Pick colors?"="red, blue"') });
 	});
 
-	it("multi-select preserves numeric selections and custom text separated by a semicolon", async () => {
+	it.each([
+		[" another color", " another color"], ["keep padding  ", "keep padding  "],
+		["  more; detail  ", "  more; detail  "], ["   ", null],
+	] as const)("multi-select preserves selected labels and custom suffix %j", async (custom, answer) => {
 		const tool = register();
-		const input = vi.fn(async () => "1,3; another color");
+		const input = vi.fn(async () => `1,3;${custom}`);
 		const r = await run(tool, MULTI, ctxRpc({ input }));
 		expect(r?.details).toMatchObject({
-			answers: [{ kind: "multi", selected: ["red", "blue"], answer: "another color" }],
+			answers: [{ kind: "multi", selected: ["red", "blue"], answer }],
 		});
 		expect(r?.content[0]).toMatchObject({
-			text: expect.stringContaining('"Pick colors?"="red, blue, another color"'),
+			text: expect.stringContaining(`"Pick colors?"="red, blue${answer === null ? "" : `, ${answer}`}"`),
 		});
 	});
 

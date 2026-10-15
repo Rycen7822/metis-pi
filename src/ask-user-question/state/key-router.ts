@@ -154,6 +154,7 @@ function routeMultiSelectTab(
 			: { kind: "ignore" };
 	}
 	if (isConfirm(kb, data)) {
+		if (isKeyRelease(data) || isKeyRepeat(data)) return { kind: "ignore" };
 		if (kind === "other") return { kind: "ignore" };
 		if (kind === "next") return { kind: "confirm", value: runtime.inputBuffer };
 		return { kind: "toggle", index: state.optionIndex };
