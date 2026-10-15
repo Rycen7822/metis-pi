@@ -46,8 +46,8 @@ async function createFixture(mode) {
 
 	const fakeNpm = join(bin, "fake-npm.mjs");
 	await writeFile(fakeNpm, `#!/usr/bin/env node
-import { access, readFile, watch, writeFile } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const root = process.cwd();
 const signalFile = join(root, "terminated");
@@ -62,20 +62,18 @@ const pkg = JSON.parse(await readFile(manifestPath, "utf8"));
 pkg.pi.extensions = ["./dist"];
 await writeFile(manifestPath, JSON.stringify(pkg, null, 2) + "\\n");
 await writeFile(join(root, "args"), JSON.stringify(process.argv.slice(2)));
+// Arm the synchronous watcher before publishing readiness to the parent.
+const continued = new Promise((resolve, reject) => {
+  const watcher = watch(root, (_event, filename) => {
+    if (filename === "continue") {
+      watcher.close();
+      resolve();
+    }
+  });
+  watcher.once("error", reject);
+});
 console.log(process.pid);
-const continuePath = join(root, "continue");
-const watcher = watch(root);
-try {
-  try {
-    await access(continuePath);
-  } catch {
-	for await (const event of watcher) {
-	  if (event.filename === "continue") break;
-	}
-  }
-} finally {
-  await watcher.return();
-}
+await continued;
 process.exit(Number(process.env.FAKE_NPM_EXIT));
 `);
 	await chmod(fakeNpm, 0o755);
@@ -112,10 +110,12 @@ async function runScenario({ exitCode, signal }) {
 		assert.deepEqual(during.pi.extensions, ["./dist"]);
 		assert.deepEqual(JSON.parse(await readFile(join(fixture.root, "args"), "utf8")), ["publish", "--tag", "next"]);
 
+		// A fast child may close before writeFile resolves; subscribe first.
+		const closed = waitForClose(child);
 		if (signal) child.kill(signal);
 		else await writeFile(join(fixture.root, "continue"), "go");
 
-		const result = await waitForClose(child);
+		const result = await closed;
 		assert.equal(result.code, signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : exitCode);
 		const after = JSON.parse(await readFile(join(fixture.root, "package.json"), "utf8"));
 		assert.deepEqual(after.pi.extensions, ["./index.ts"]);

@@ -113,7 +113,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   const hostData = new HostData();
   const ledger = new UsageLedger();
   const outcome = new InteractionOutcomeTracker();
-  const outputSpeed = new OutputSpeedTracker({ now: () => performance.now() });
+  const outputSpeed = new OutputSpeedTracker();
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
 
   // Chrome install state + lifecycle (src/chrome/install.ts). `chrome.state`
@@ -263,6 +263,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     chrome.restore();
     hostData.bind(full);
     ledger.rebuild(hostData.getSessionEntries());
+    outputSpeed.reset();
     outcome.reset();
     replyEndedAt = undefined;
     // One capability snapshot per session, from the same live ctx.ui that
@@ -409,6 +410,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("agent_start", () => {
     hostData.bump();
     if (!chromeEnabled) return;
+    outputSpeed.reset();
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
     if (serializerHost) fullscreenLayout?.installOnTui(serializerHost);
     if (!metrics.active) {
@@ -423,6 +425,11 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     }
     metrics.agentStart();
     chrome.setWidgetVisible(true);
+  });
+  pi.on("turn_start", () => {
+    if (!chromeEnabled) return;
+    outputSpeed.requestStart();
+    requestRender();
   });
   pi.on("agent_end", () => {
     hostData.bump();
@@ -441,15 +448,25 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     hostData.bump();
     requestRender();
   };
-  pi.on("model_select", refreshHost);
-  pi.on("thinking_level_select", refreshHost);
+  const resetSpeed = () => {
+    outputSpeed.reset();
+    refreshHost();
+  };
+  pi.on("model_select", resetSpeed);
+  pi.on("thinking_level_select", resetSpeed);
   pi.on("session_compact_failed", refreshHost);
   const rebuildUsage = () => {
     ledger.rebuild(hostData.getSessionEntries());
     refreshHost();
   };
-  pi.on("session_tree", rebuildUsage);
-  pi.on("session_compact", rebuildUsage);
+  pi.on("session_tree", () => {
+    outputSpeed.reset();
+    rebuildUsage();
+  });
+  pi.on("session_compact", () => {
+    outputSpeed.clearSample();
+    rebuildUsage();
+  });
   pi.on("ui_prompt_start", () => {
     if (!chromeEnabled) return;
     metrics.uiPromptStart();
@@ -508,7 +525,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     if (isUserMessage(message)) metrics.uiPromptEnd();
     const role = (message as Record<string, unknown> | undefined)?.role;
     if (typeof role === "string") outcome.messageStart(role);
-    if (role === "assistant") outputSpeed.requestStart();
   });
   pi.on("message_update", (event) => {
     hostData.bump();
@@ -531,9 +547,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     ).assistantMessageEvent;
     const eventType = typeof streamEvent?.type === "string" ? streamEvent.type : undefined;
     if (stateMessage && stateMessage.role === "assistant" && eventType) {
-      // Output speed measures real token arrival: only *_delta events open and
-      // extend the window (structural start/end events carry no content).
-      if (eventType.endsWith("_delta")) outputSpeed.delta();
       const content = streamEvent?.partial?.content ?? [];
       const at = (idx: number | undefined) => (typeof idx === "number" ? content[idx] : undefined);
       switch (eventType) {
@@ -573,9 +586,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       if (usage && typeof usage === "object") {
         const tokens = sanitizeUsage(usage);
         metrics.previewUsage(outcome.attemptCount, tokens);
-        // Live rate only when the provider publishes cumulative output tokens
-        // mid-stream; otherwise the value lands once at message_end.
-        if (outputSpeed.preview(tokens.output ?? 0)) requestRender();
       }
     }
   });
@@ -592,9 +602,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       replyTimes.set(message, replyEndedAt);
     }
     if (stateMessage?.stopReason) outcome.terminalStop(stateMessage.stopReason);
-    // Usage totals (read-only): same key for the interaction metrics and the
-    // session ledger — replays/duplicate completions never double-count.
-    if (message && typeof message === "object") {
+    // Main assistant usage only, matching session reconstruction. Tool results
+    // may report nested model work; it is not this model's I/O or cache sample.
+    if (message && stateMessage?.role === "assistant") {
       const record = message as Record<string, unknown>;
       const usage = record.usage as RawUsage | undefined;
       if (usage && typeof usage === "object") {
@@ -602,13 +612,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         const key = identified?.key ?? `u-${Math.random().toString(36).slice(2)}`;
         metrics.recordUsage(key, sanitizeUsage(usage), identified ? identified.identified : false);
         ledger.confirm(key, usage);
-        metrics.clearPreviewUsage(outcome.attemptCount);
       }
-      // Close the speed window on the confirmed output count (a response with
-      // no usage records nothing — the previous sample stays displayed).
-      if (stateMessage?.role === "assistant") {
-        outputSpeed.finish(usage ? (sanitizeUsage(usage).output ?? 0) : 0);
-      }
+      metrics.clearPreviewUsage(outcome.attemptCount);
+      // Use the SDK's already measured producer duration, not these callback
+      // times. Missing or incomplete timing has no fallback.
+      outputSpeed.finish(usage?.output, record.durationMs, stateMessage.stopReason);
+      requestRender();
     }
   });
 

@@ -4,14 +4,14 @@
 // Data contract: a single FooterSnapshot (host-data bridge + usage ledger +
 // output-speed tracker + git-changes tracker). Scopes stay
 // explicit: Σ = session cumulative, cache = latest confirmed request,
-// speed = current/last assistant response, changes = work tree vs HEAD.
+// speed = completed response average, changes = work tree vs HEAD.
 //
 // Narrow widths wrap whole fields in order; painters apply after layout.
 
 import type { UsageRecord } from "../usage-ledger.ts";
 import type { GitChangeStat } from "../git-changes.ts";
 import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
-import { formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
+import { formatSpeedValue, SPEED_LABEL, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
 import {
   cellWidth,
   formatCount,
@@ -32,8 +32,8 @@ export interface FooterSnapshot {
   session: UsageRecord | undefined;
   /** cache(last) hit rate %, null when unknown. */
   cacheLastPct: number | null;
-  /** Observed output rate of the in-flight (live) or last completed assistant
-   * response; undefined = not measurable yet (segment omitted). */
+  /** Last completed response average, including waiting/TTFT and reasoning;
+   * undefined while generating or without trustworthy producer timing. */
   speed: OutputSpeedSample | undefined;
   /** Working-tree change counts vs HEAD; undefined = not a repo / unreadable. */
   changes: GitChangeStat | undefined;
@@ -49,7 +49,7 @@ export interface FooterShow {
   showCache: boolean;
   /** Working-tree +A −D counts (diff colours). */
   showChanges: boolean;
-  /** Observed model output speed (tok/s). */
+  /** Completed response average output rate (tok/s). */
   showSpeed: boolean;
 }
 
@@ -145,7 +145,7 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
   }
   if (show.showSpeed) {
     const value = formatSpeedValue(snapshot.speed?.tokensPerSecond);
-    if (value) fields.push([{ text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" }]);
+    if (value) fields.push([{ text: `${SPEED_LABEL} `, tone: "dim" }, { text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" }]);
   }
 
   return wrapFields(fields, width);

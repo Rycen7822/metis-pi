@@ -10,6 +10,8 @@ import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, Use
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { CodexThinkingRailComponent } from "../../src/chrome/transcript-components.ts";
 import { stringify } from "smol-toml";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 const appearanceFile = config => path => path.endsWith("metis-pi.toml") ? stringify({ appearance: config }) : undefined;
 
 initTheme("dark", false);
@@ -376,7 +378,7 @@ test("static configuration gates Git polling before a footer can start it", asyn
   }
 });
 
-test("one interaction wires live/final usage, Working and the persisted summary", async (t) => {
+test("one interaction wires usage previews, completed response averages, Working and the persisted summary", async (t) => {
   let now = 1_000;
   t.mock.method(performance, "now", () => now);
   t.mock.method(Date, "now", () => 1_700_000_000_000 + now - 1_000);
@@ -393,14 +395,14 @@ test("one interaction wires live/final usage, Working and the persisted summary"
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
   const speed = (text) => Number(text.match(/([\d.]+) tok\/s/)?.[1]);
-  const message = (id, usage) => ({
+  const message = (id, usage, durationMs) => ({
     role: "assistant",
     content: [],
     stopReason: "stop",
     responseId: id,
     provider: "test-provider",
     timestamp: 1,
-    usage,
+    usage, durationMs,
   });
   const update = (id, usage, delta) => handlers.get("message_update")({
     message: message(id, usage),
@@ -412,32 +414,39 @@ test("one interaction wires live/final usage, Working and the persisted summary"
   const working = widgetByKey(slots, "metis-pi:working");
   assert.ok(working, "Working widget registered for the interaction");
   assert.deepEqual(working.options, { placement: "aboveEditor" });
+  handlers.get("turn_start")({});
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
-  assert.doesNotMatch(frame(), /tok\/s/, "no rate before a measurable response");
-  handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
-  const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
-  assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
-  handlers.get("tool_execution_end")({ toolCallId: "t1", toolName: "bash", result: {}, isError: true });
-
+  assert.doesNotMatch(frame(), /tok\/s/, "no rate before a completed response");
+  now += 3000; // hidden reasoning belongs to the complete producer duration
   update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, "first delta");
   now += 400;
   update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, "second delta");
-  assert.equal(speed(frame()), 100, "live cumulative output reaches the footer");
-  const confirmed = message("first", { input: 100, output: 80, cacheRead: 900, cacheWrite: 0 });
+  assert.doesNotMatch(frame(), /tok\/s/, "partial cumulative usage is not a live speed measurement");
+  const confirmed = { ...message("first", { input: 100, output: 80, cacheRead: 900, cacheWrite: 0, reasoning: 60 }, 3400),
+    stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }] };
   handlers.get("message_end")({ message: confirmed });
   handlers.get("message_end")({ message: confirmed });
   const final = frame();
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
-  assert.equal(speed(final), 200, "80 confirmed tokens over 400ms replaces the live sample");
+  assert.equal(speed(final), 23.5, "80 output tokens use the whole 3400ms response, not the visible 400ms tail");
+  assert.match(final, /avg 23\.5 tok\/s/, "the field identifies a response average");
   assert.ok(final.indexOf("tok/s") > final.indexOf("↑"), "rate follows input/output");
+  handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
+  const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
+  assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
+  handlers.get("tool_execution_end")({ toolCallId: "t1", toolName: "bash", result: {}, isError: true });
+  const toolResult = { role: "toolResult", toolCallId: "t1", toolName: "bash", content: [], isError: true, timestamp: Date.now() };
+  handlers.get("message_start")({ message: toolResult }); handlers.get("message_end")({ message: toolResult });
 
+  handlers.get("turn_start")({});
+  assert.doesNotMatch(frame(), /tok\/s/, "waiting for a response does not show the previous rate");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
   now += 400;
   update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.equal(speed(frame()), 100, "message_start resets the measured window");
-  handlers.get("message_end")({ message: message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }) });
+  assert.doesNotMatch(frame(), /tok\/s/, "cumulative previews still do not publish a rate");
+  handlers.get("message_end")({ message: message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400) });
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
   handlers.get("agent_settled")({}, {});
@@ -448,15 +457,136 @@ test("one interaction wires live/final usage, Working and the persisted summary"
   assert.equal(data.schemaVersion, 2);
   assert.equal(data.evidence, "assistant-stop");
   assert.equal(data.startedAt, 1_700_000_000_000);
-  assert.equal(data.replyEndedAt, 1_700_000_000_800);
-  assert.equal(data.settledAt, 1_700_000_002_800);
-  assert.equal(data.elapsedMs, 2800);
-  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /Worked for 2s/);
-  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /\n2023-11-15 06:13:20$/);
+  assert.equal(data.replyEndedAt, 1_700_000_003_800);
+  assert.equal(data.settledAt, 1_700_000_005_800);
+  assert.equal(data.elapsedMs, 5800);
+  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /Worked for 5s/);
+  assert.match(registered[0].renderer({ customType: appended[0].type, data }).render(140).join("\n"), /\n2023-11-15 06:13:23$/);
   assert.equal(data.outcome, "completed");
   assert.equal(appended[0].data.toolErrorsObserved, 1, "tool errors stay diagnostic");
   assert.equal(slots.widgetCalls.at(-1).content, undefined);
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persisted summary stays in CustomEntry");
+});
+
+test("queued SDK deltas and pre-request compaction cannot distort or discard the response average", async t => {
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const { handlers, footer: makeFooter, ctx } = await session(t, { readFile: appearanceFile({ summary: { enabled: false } }) });
+  const footer = makeFooter();
+  const frame = () => plain(footer.render(140).join("\n"));
+  const model = { id: "offline", name: "offline", provider: "openai", api: "openai-responses", baseUrl: "https://invalid.invalid",
+    input: ["text"], reasoning: true, contextWindow: 100000, maxTokens: 10000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  let stream, output;
+  const agent = new Agent({ initialState: { model, tools: [] }, streamFn() {
+    stream = new AssistantMessageEventStream();
+    output = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      content: [], stopReason: "pending", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    stream.push({ type: "start", partial: output });
+    return stream;
+  } });
+  // SDK virtual routing can compact inside prepareRequest, AFTER turn_start.
+  agent.prepareRequest = () => {
+    handlers.get("session_compact")({ type: "session_compact", fromExtension: false, compactionEntry: {
+      type: "compaction", id: "compact", parentId: null, timestamp: new Date().toISOString(),
+      firstKeptEntryId: "compact", summary: "prepared context", tokensBefore: 100000,
+    } }, ctx);
+  };
+  const receivedCounts = [];
+  // The producer can complete while an earlier async consumer holds start delivery.
+  agent.subscribe(async event => {
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      now = 11000;
+      output.content.push({ type: "thinking", thinking: "", thinkingSignature: "opaque" }, { type: "text", text: "first" });
+      stream.push({ type: "text_delta", contentIndex: 1, delta: "first", partial: output });
+      now = 11500;
+      output.content[1].text += "last";
+      stream.push({ type: "text_delta", contentIndex: 1, delta: "last", partial: output });
+      output.usage = { ...output.usage, output: 1050, reasoning: 1000, totalTokens: 1050 };
+      output.stopReason = "stop";
+      stream.push({ type: "done", reason: "stop", message: output }); stream.end();
+      now = 18000;
+    } else if (event.type === "message_update") now += 800;
+    else if (event.type === "message_end" && event.message.role === "assistant") now += 5000;
+  });
+  agent.subscribe(event => {
+    handlers.get(event.type)?.(event, ctx);
+    if (event.type === "message_update") {
+      receivedCounts.push(event.message.usage.output);
+      assert.doesNotMatch(frame(), /tok\/s/, "shared future usage does not become a live rate");
+    }
+  });
+  await agent.prompt("offline timing fixture");
+  handlers.get("agent_settled")({}, ctx);
+  assert.deepEqual(receivedCounts, [1050, 1050], "fixture reaches the shared-partial queue hazard");
+  assert.equal(output.durationMs, 10500, "native producer clock excludes the later consumer delays");
+  assert.match(frame(), /avg 100 tok\/s/, "both hidden reasoning and its time are included, despite delayed callbacks");
+});
+
+test("tool-model usage cannot alter main-model totals, cache or persisted summaries before or after reconstruction", async t => {
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const entries = [], appended = [];
+  const { handlers, footer: makeFooter, ctx } = await session(t, { api: {
+    appendEntry: (type, data) => appended.push({ type, data }), registerEntryRenderer() {}, registerCommand() {},
+  } }, { sessionManager: { getEntries: () => entries } });
+  const footer = makeFooter();
+  const frame = () => plain(footer.render(140).join("\n"));
+  const usage = (input, output, cacheRead) => ({ input, output, cacheRead, cacheWrite: 0 });
+  const first = { role: "assistant", provider: "p", responseId: "a", timestamp: 1000, stopReason: "toolUse", durationMs: 1000,
+    content: [{ type: "toolCall", id: "tool", name: "codemode", arguments: {} }], usage: usage(100, 100, 900) };
+  handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
+  handlers.get("message_start")({ message: first }, ctx);
+  now = 2000; handlers.get("message_end")({ message: first }, ctx);
+  const beforeTool = frame();
+  assert.match(beforeTool, /↑100 ↓100.*cache 90%.*avg 100 tok\/s/);
+  handlers.get("tool_execution_start")({ toolCallId: "tool", toolName: "codemode", args: {} }, ctx);
+  now = 4000;
+  const tool = { role: "toolResult", toolCallId: "tool", toolName: "codemode", timestamp: 4000, isError: false,
+    content: [{ type: "text", text: "tool stdout ".repeat(1000) }], usage: usage(50000, 50000, 0) };
+  handlers.get("tool_execution_end")({ toolCallId: "tool", toolName: "codemode", result: { content: tool.content, usage: tool.usage }, isError: false }, ctx);
+  handlers.get("message_start")({ message: tool }, ctx); handlers.get("message_end")({ message: tool }, ctx);
+  assert.equal(frame(), beforeTool, "reported tool-model usage changes neither cache, I/O nor speed");
+  const last = { role: "assistant", provider: "p", responseId: "b", timestamp: 4000, stopReason: "stop", durationMs: 1000,
+    content: [{ type: "text", text: "complete" }], usage: usage(0, 20, 0) };
+  handlers.get("turn_start")({}, ctx); handlers.get("message_start")({ message: last }, ctx);
+  now = 5000; handlers.get("message_end")({ message: last }, ctx);
+  handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
+  assert.match(frame(), /↑100 ↓120/);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].data.usage.output, 120, "interaction summary excludes nested tool-model usage too");
+  entries.push(...[first, tool, last].map((message, i) => ({ type: "message", id: `e${i}`, message })));
+  handlers.get("session_tree")({}, ctx);
+  assert.match(frame(), /↑100 ↓120/, "same persisted history has the same totals after idle tree navigation");
+  assert.doesNotMatch(frame(), /tok\/s/, "a new context does not keep a former response's rate");
+});
+
+test("selection changes clear averages and a response already awaiting headers cannot restore the old rate", async t => {
+  const commands = new Map();
+  const { handlers, footer: makeFooter, ctx } = await session(t, { api: {
+    registerCommand: (name, options) => commands.set(name, options),
+  } });
+  const footer = makeFooter();
+  const frame = () => plain(footer.render(140).join("\n"));
+  const message = { role: "assistant", provider: "p", timestamp: 1, content: [], stopReason: "stop", durationMs: 25, usage: { output: 1 } };
+  for (const event of ["model_select", "thinking_level_select"]) {
+    handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
+    handlers.get("message_start")({ message }, ctx); handlers.get("message_end")({ message }, ctx);
+    handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
+    assert.match(frame(), /avg 40 tok\/s/);
+    let report;
+    commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
+    assert.match(report, /avg 40 tok\/s \(output=1 tokens, duration=25ms, scope=final\)/, "short valid responses do not appear as a zero-second diagnostic window");
+    assert.match(report, /SDK durationMs; response average includes waiting\/TTFT and reasoning/);
+    handlers.get(event)({}, ctx);
+    assert.doesNotMatch(frame(), /tok\/s/);
+    handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
+    handlers.get(event)({}, ctx); // change selection while response headers are pending
+    handlers.get("message_start")({ message }, ctx); handlers.get("message_end")({ message }, ctx);
+    assert.doesNotMatch(frame(), /tok\/s/, "late old-selection headers must not reopen the invalidated response slot");
+    handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
+  }
 });
 
 for (const [name, config, context] of [
