@@ -26,7 +26,7 @@ import type { TabComponents } from "./tab-components.ts";
 
 const NOTES_HEADER = "Notes:";
 const GLOBAL_NOTES_HEADER = "Global note:";
-const REVIEW_GLOBAL_HINT = "n to add a note";
+const REVIEW_GLOBAL_HINT = "n note";
 const REVIEW_NOTE_LABEL = "Note";
 /** Label for a question's saved note — the question tab's resting row and the review entry (#197). */
 const SAVED_NOTE_LABEL = "Note for this answer:";
@@ -330,7 +330,10 @@ export function buildHintText(
  */
 export function buildSubmitHintText(state: DialogState): string {
 	const parts: string[] = [t("hint.enter", HINT_PART_ENTER), t("hint.navigate", HINT_PART_NAV)];
-	if (!state.notesVisible) parts.push(t("review.global_hint", REVIEW_GLOBAL_HINT));
+	if (!state.notesVisible) {
+		parts.unshift(t("review.scroll", "PgUp/PgDn scroll"));
+		parts.push(t("review.global_hint", REVIEW_GLOBAL_HINT));
+	}
 	parts.push(t("hint.cancel", HINT_PART_CANCEL));
 	if (state.notesVisible) parts.push(t("hint.newline", HINT_PART_NEW_LINE));
 	return parts.join(" · ");

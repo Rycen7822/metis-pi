@@ -1,5 +1,5 @@
 import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Container, type Editor, Spacer } from "@earendil-works/pi-tui";
+import { type Component, Container, CURSOR_MARKER, type Editor, Spacer } from "@earendil-works/pi-tui";
 import type { QuestionnaireState } from "../state/state.ts";
 import type { QuestionData } from "../tool/types.ts";
 import type { PreviewPane } from "./components/preview/preview-pane.ts";
@@ -98,6 +98,10 @@ export class DialogView implements StatefulView<DialogProps> {
 	private readonly questionStrategy: TabContentStrategy;
 	private readonly submitStrategy: TabContentStrategy | undefined;
 	private readonly maxFooterRowCount: number;
+	// Viewport position and bounds belong to the last rendered geometry, not answer state.
+	private reviewStart = 0;
+	private reviewMaxStart = 0;
+	private reviewPageRows = 1;
 
 	constructor(config: DialogConfig, initialProps: DialogProps) {
 		this.config = config;
@@ -124,12 +128,19 @@ export class DialogView implements StatefulView<DialogProps> {
 	}
 
 	setProps(props: DialogProps): void {
+		if (props.state.currentTab !== this.liveProps.state.currentTab) this.reviewStart = 0;
 		this.liveProps = props;
+	}
+
+	scrollReview(direction: -1 | 1): void {
+		const state = this.liveProps.state;
+		if (state.currentTab !== this.config.questions.length || state.notesVisible) return;
+		this.reviewStart = Math.max(0, Math.min(this.reviewMaxStart, this.reviewStart + direction * this.reviewPageRows));
 	}
 
 	handleInput(_data: string): void {}
 
-	// The view composition invalidates children; this container has no cached layout.
+	// The composition invalidates children; viewport bounds are refreshed on render.
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -174,6 +185,7 @@ export class DialogView implements StatefulView<DialogProps> {
 		// padding overflows, clamp it rather than entering the scroll partition, which assumes
 		// the middle region itself is longer than the window (#260).
 		if (natural.length <= termRows) {
+			this.reviewStart = this.reviewMaxStart = 0;
 			return renderFitsTerminal(natural, Math.min(spacerRows, termRows - natural.length));
 		}
 
@@ -193,8 +205,17 @@ export class DialogView implements StatefulView<DialogProps> {
 		// below — that would draw the bottom border and hint twice (#260).
 		const windowRows = Math.min(availableMiddle, middleRows);
 		const rowsBeforeBody = pinHeading ? 0 : headingHeight;
-		const focusedRange = strategy.focusedItemRowRange(width, state);
-		const scrollStart = computeScrollStart(focusedRange, rowsBeforeBody, windowRows, middleRows);
+		const cursorRow = state.notesVisible ? natural.findIndex(line => line.includes(CURSOR_MARKER)) : -1;
+		const focusedRange: [number, number] | undefined = cursorRow >= top && cursorRow < natural.length - bottomFixed
+			? [cursorRow - top - rowsBeforeBody, cursorRow - top - rowsBeforeBody + 1]
+			: strategy.focusedItemRowRange(width, state);
+		const reviewing = onSubmit && !state.notesVisible;
+		if (reviewing) {
+			this.reviewMaxStart = Math.max(0, middleRows - windowRows);
+			this.reviewPageRows = Math.max(1, windowRows - 2);
+			this.reviewStart = Math.min(this.reviewStart, this.reviewMaxStart);
+		}
+		const scrollStart = reviewing ? this.reviewStart : computeScrollStart(focusedRange, rowsBeforeBody, windowRows, middleRows);
 		const scrollableMiddle = natural.slice(top + scrollStart, top + scrollStart + windowRows);
 		const focusedInWindow: [number, number] | undefined = focusedRange && [
 			rowsBeforeBody + focusedRange[0] - scrollStart,
@@ -205,7 +226,7 @@ export class DialogView implements StatefulView<DialogProps> {
 			scrollStart > 0,
 			scrollStart + windowRows < middleRows,
 			this.config.theme,
-			focusedInWindow,
+			reviewing && windowRows <= 2 ? [0, windowRows] : focusedInWindow,
 		);
 
 		const result = [...natural.slice(0, top), ...scrollableMiddle, ...natural.slice(natural.length - bottomFixed)];

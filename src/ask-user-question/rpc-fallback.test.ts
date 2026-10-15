@@ -204,13 +204,17 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 		} else expect(r.content[0]).toMatchObject({ text: expect.not.stringContaining("selected preview:") });
 	});
 
-	it("multi-select uses ctx.ui.input and parses comma-separated indices into labels", async () => {
+	it.each([
+		["1,3", ["red", "green", "blue"], ["red", "blue"]],
+		["3,1,3", ["red", "green", "blue"], ["red", "blue"]],
+	] as const)("RPC selection %j follows authored option order", async (value, labels, selected) => {
 		const tool = register();
-		const input = vi.fn(async () => "1,3"); // red, blue
-		const r = await run(tool, MULTI, ctxRpc({ input }));
+		const input = vi.fn(async () => value);
+		const params = { questions: [{ ...MULTI.questions[0], options: labels.map(label => ({ label, description: label })) }] };
+		const r = await run(tool, params, ctxRpc({ input }));
 		expect(input).toHaveBeenCalledOnce();
-		expect(r?.details).toMatchObject({ cancelled: false });
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining('"Pick colors?"="red, blue"') });
+		expect(r?.details).toMatchObject({ cancelled: false, answers: [{ selected }] });
+		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining(`"Pick colors?"="${selected.join(", ")}"`) });
 	});
 
 	it.each([

@@ -97,6 +97,7 @@ export function buildQuestionnaire(config: QuestionnaireBuildConfig) {
 			adapter.apply(next);
 		},
 		render: (width: number) => dialog.render(width),
+		scrollReview: (direction: -1 | 1) => dialog.scrollReview(direction),
 		invalidate: adapter.invalidate,
 	};
 }

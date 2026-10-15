@@ -135,6 +135,47 @@ it.each([false, true])("does not apply held Enter to the next question or Submit
 	}));
 });
 
+it.each([18, 11])("reaches every review row and the global note within %i terminal rows", rows => {
+	const { session, done } = makeSession({
+		rows,
+		params: { questions: [params.questions[0], { ...params.questions[0], question: "Second?", header: "Second" }] },
+	});
+	const markers = Array.from({ length: 20 }, (_, i) => `ROW_${String(i).padStart(2, "0")}`);
+	focusCustomAnswer(session);
+	session.dispatch(markers.join("\n"));
+	session.dispatch(ENTER);
+	session.dispatch(ENTER);
+	session.component.render(42);
+	session.dispatch("n");
+	session.dispatch("END_OF_NOTE");
+	const editing = session.component.render(42);
+	const notesCaretVisible = editing.some(line => line.includes(CURSOR_MARKER));
+	session.dispatch(ENTER);
+	const first = session.component.render(42).join("\n");
+	const seen = new Set<string>();
+	for (let page = 0; page < 40; page++) {
+		const lines = session.component.render(42);
+		expect(lines.length).toBeLessThanOrEqual(rows);
+		for (const marker of [...markers, "END_OF_NOTE"]) {
+			if (lines.some(line => line.includes(marker))) seen.add(marker);
+		}
+		session.dispatch(page === 0 ? "\x1b[6~" : "\x1b[6;1:2~");
+	}
+	expect([...markers, "END_OF_NOTE"].every(marker => seen.has(marker))).toBe(true);
+	expect(notesCaretVisible).toBe(true);
+	const bottom = session.component.render(42).join("\n");
+	session.dispatch("\x1b[5~");
+	expect(session.component.render(42).join("\n")).not.toBe(bottom);
+	session.dispatch("\x1b[Z");
+	session.dispatch("\t");
+	expect(session.component.render(42).join("\n")).toBe(first);
+	expect(done).not.toHaveBeenCalled();
+	session.dispatch(ENTER);
+	expect(done).toHaveBeenCalledWith(expect.objectContaining({
+		answers: [expect.objectContaining({ answer: markers.join("\n") }), expect.objectContaining({ answer: "A" })],
+	}));
+});
+
 describe("QuestionnaireSession — custom-answer drafts", () => {
 	it.each([false, true])("keeps the long custom answer's caret visible within the viewport (multi=%s)", (multiSelect) => {
 		const value = { questions: [{ ...params.questions[0], multiSelect }] };

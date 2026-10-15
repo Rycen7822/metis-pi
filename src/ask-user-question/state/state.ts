@@ -15,6 +15,7 @@ export type QuestionnaireAction =
 	| { kind: "notes_exit"; value: string }
 	| { kind: "submit" }
 	| { kind: "submit_nav"; nextIndex: 0 | 1 }
+	| { kind: "review_scroll"; direction: -1 | 1 }
 	| { kind: "notes_forward"; data: string }
 	| { kind: "toggle_collapsed" }
 	| { kind: "ignore" };

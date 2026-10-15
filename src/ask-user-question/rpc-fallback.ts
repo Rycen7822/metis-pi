@@ -188,12 +188,7 @@ async function askMultiSelect(
 	const tokens = selection.split(/[,\s]+/).filter((tok) => tok.length > 0);
 	const indices = tokens.map((tok) => (/^\d+\.?$/.test(tok) ? parseIndex(tok, q.options.length) : null));
 	if (selection.length === 0 || indices.every((i): i is number => i != null)) {
-		const selected: string[] = [];
-		for (const i of indices) {
-			if (i == null) continue;
-			const label = q.options[i].label;
-			if (!selected.includes(label)) selected.push(label);
-		}
+		const selected = q.options.filter((_option, index) => indices.includes(index)).map(option => option.label);
 		return {
 			questionIndex,
 			question: q.question,

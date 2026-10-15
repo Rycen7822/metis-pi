@@ -187,6 +187,9 @@ export class QuestionnaireSession {
 			case "forward_notes_keystroke":
 				this.notesInput.handleInput(effect.data);
 				return;
+			case "scroll_review":
+				this.view.scrollReview(effect.direction);
+				return;
 			case "set_overlay_hidden":
 				// No-op until `setOverlayHandle` has been called (the handle arrives via
 				// `ctx.ui.custom`'s `onHandle` right after the overlay is shown), and

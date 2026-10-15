@@ -132,6 +132,14 @@ describe("TabBar.render", () => {
 		}
 	});
 
+	it("flattens line breaks in a header without adding terminal rows", () => {
+		const tb = makeBar(buildProps({ questions: [{ header: "First\nchoice", question: "" }] }));
+		const lines = tb.render(80);
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("First choice");
+		expect(lines[0]).not.toMatch(/[\r\n]/);
+	});
+
 	it("setProps replaces props between renders", () => {
 		const tb = makeBar(buildProps({ activeTabIndex: 0 }));
 		const before = tb.render(80)[0];

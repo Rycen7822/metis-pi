@@ -117,6 +117,8 @@ function routeSubmitTab(
 	if (kb.matches(data, KEYBIND_CANCEL)) return { kind: "cancel" };
 	const tab = tabSwitchAction(data, state, runtime);
 	if (tab) return tab;
+	if (matchesKey(data, Key.pageUp)) return { kind: "review_scroll", direction: -1 };
+	if (matchesKey(data, Key.pageDown)) return { kind: "review_scroll", direction: 1 };
 	if (kb.matches(data, KEYBIND_UP) || kb.matches(data, KEYBIND_DOWN)) {
 		const delta = kb.matches(data, KEYBIND_DOWN) ? 1 : -1;
 		const next = wrapTab(state.submitChoiceIndex + delta, 2);
@@ -176,7 +178,7 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 	// Only navigation and editor input may repeat.
 	if (
 		isKeyRepeat(data) &&
-		action.kind !== "nav" && action.kind !== "submit_nav" &&
+		action.kind !== "nav" && action.kind !== "submit_nav" && action.kind !== "review_scroll" &&
 		action.kind !== "input_forward" && action.kind !== "notes_forward"
 	) return { kind: "ignore" };
 	return action;

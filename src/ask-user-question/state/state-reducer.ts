@@ -23,6 +23,7 @@ export type Effect =
 	| { kind: "set_notes_focused"; focused: boolean }
 	| { kind: "forward_notes_keystroke"; data: string }
 	| { kind: "forward_input_keystroke"; data: string }
+	| { kind: "scroll_review"; direction: -1 | 1 }
 	/**
 	 * Tell the session to hide or show its underlying overlay. Emitted by the
 	 * `toggle_collapsed` action so the runtime can call `OverlayHandle.setHidden(...)`,
@@ -252,6 +253,8 @@ export function reduce(state: QuestionnaireState, action: QuestionnaireAction, c
 			return doneFor(state, ctx, action.kind === "cancel");
 		case "submit_nav":
 			return { state: { ...state, submitChoiceIndex: action.nextIndex }, effects: [] };
+		case "review_scroll":
+			return { state, effects: [{ kind: "scroll_review", direction: action.direction }] };
 		case "toggle_collapsed":
 			return { state: { ...state, collapsed: !state.collapsed }, effects: [{ kind: "set_overlay_hidden", hidden: !state.collapsed }] };
 		case "ignore":

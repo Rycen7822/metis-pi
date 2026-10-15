@@ -207,7 +207,7 @@ describe("Dialog overflow — submit tab", () => {
 		expect(joined).toContain(REVIEW_HEADING);
 	});
 
-	it("shows more-below affordance when the submit review has only one visible row", () => {
+	it("keeps review content readable and scrollable with one visible row", () => {
 		const state = submitState();
 		const picker = new SubmitPicker(theme);
 		picker.setProps(submitPickerPropsFromState(state, true));
@@ -216,7 +216,10 @@ describe("Dialog overflow — submit tab", () => {
 		}));
 		const lines = dlg.render(80);
 		expect(lines.length).toBeLessThanOrEqual(11);
-		expect(lines.map(stripAnsi)).toContain("↓");
+		expect(lines.join("\n")).toContain(REVIEW_HEADING);
+		expect(lines.map(stripAnsi)).not.toContain("↓");
+		dlg.scrollReview(1);
+		expect(dlg.render(80)).not.toEqual(lines);
 	});
 });
 
@@ -452,8 +455,8 @@ describe("Dialog overflow — notes open on the Submit tab (NFR-2)", () => {
 		expect(closedLines.join("\n")).not.toContain("<NOTES_INPUT>");
 		// The bottom hint row is always present: the note part shows while closed and
 		// gives way to the Shift+Enter newline hint while the editor is open.
-		expect(closedLines.join("\n")).toContain("n to add a note");
-		expect(openLines.join("\n")).not.toContain("n to add a note");
+		expect(closedLines.join("\n")).toContain("n note");
+		expect(openLines.join("\n")).not.toContain("n note");
 		expect(openLines.join("\n")).toContain(HINT_PART_NEW_LINE);
 		// NFR-2: growing midRows never desyncs the residual-spacer math — the trailing
 		// blank tail is identical with the editor closed vs open (footer stays 5 rows).
@@ -484,9 +487,9 @@ describe("Dialog overflow — notes open on the Submit tab (NFR-2)", () => {
 		const lengths = new Set(widths.map((w) => makeSubmitDialog(submitState()).render(w).length));
 		expect(lengths.size).toBe(1);
 		// Ultra-narrow: exactly one hint row survives, clipped (never wrapped to two).
-		// The bottom hint opens with HINT_PART_ENTER, so its prefix is the row's signature.
+		// The scroll hint stays identifiable even when the key names are clipped.
 		const narrow = makeSubmitDialog(submitState()).render(10);
-		const hintRows = narrow.filter((l) => stripAnsi(l).startsWith("Enter to"));
+		const hintRows = narrow.filter((l) => stripAnsi(l).startsWith("PgUp"));
 		expect(hintRows.length).toBe(1);
 		expect(visibleWidth(hintRows[0]!)).toBeLessThanOrEqual(10);
 	});
@@ -498,7 +501,7 @@ describe("Dialog overflow — notes open on the Submit tab (NFR-2)", () => {
 		const lines = makeSubmitDialog(submitState()).render(80).map(stripAnsi);
 		const promptRow = lines.findIndex((l) => l.includes(READY_PROMPT));
 		const submitRow = lines.findIndex((l) => l.includes(SUBMIT_LABEL));
-		const hintRow = lines.findIndex((l) => l.includes("n to add a note"));
+		const hintRow = lines.findIndex((l) => l.includes("n note"));
 		expect(promptRow).toBeGreaterThanOrEqual(0);
 		expect(submitRow).toBe(promptRow + 1);
 		expect(hintRow).toBeGreaterThan(submitRow);
