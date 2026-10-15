@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { setImmediate } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
@@ -9,6 +10,7 @@ import { prepareBatch, splitPackingRuns } from "./packing.ts";
 import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summarizer.ts";
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
+import { createSourceSnapshotter } from "./source-snapshot.ts";
 import { pruneMessages, toolResultStub } from "./pruner.ts";
 import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { registerNestedCapture } from "./nested-capture.ts";
@@ -125,8 +127,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   // Session-scoped diagnostic sink — tracks recovery-path anomaly counters
   // (dedup'd across the session's lifetime, not per-render).
   const diagnostics = new DiagnosticSink((type, data) => pi.appendEntry(type, data));
-  const updatePruneStatus = (ctx: ExtensionContext, value?: string) =>
-    setPruneStatusWidget(ctx, currentConfig.value, value ?? statsAccum.getLiveReclaim(), diagnostics.counts(), statsAccum.getSessionTokens());
+  // Display-only, branch-scoped disclosure: never persist it or replace the
+  // reclaim/usage metric with transient queue or summarizer progress text.
+  let latestPruneDetail = () => "No pending turns";
+  const updatePruneStatus = (ctx: ExtensionContext, detail?: string | (() => string)) => {
+    // Queue instructions follow config changes; progress/error text stays fixed.
+    if (detail !== undefined) latestPruneDetail = typeof detail === "function" ? detail : () => detail;
+    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts(), statsAccum.getSessionTokens(), latestPruneDetail());
+  };
+  const queuedDetail = (count: number, prefix = "") => () =>
+    `${prefix}${count} turn${count === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${
+      currentConfig.value.pruneOn === "agent-message" ? "agent's next final text response" : "/pruner now"
+    }`;
 
   // Newest-protected-read-wins state (spec 2026-09-07). In-memory only: on
   // session_start / session_tree the cold floor re-activates everything.
@@ -222,6 +234,20 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     } catch (err) {
       if (!isStaleContextError(err)) throw err;
     }
+  };
+
+  const notifyPruneActions = (ctx: ExtensionContext, actions: {
+    batches?: number; argumentGroups?: number; dedupedCalls?: number; chains?: number; spilledCalls?: number;
+  }) => {
+    if (ctx.mode !== "tui") return;
+    const parts = [
+      actions.batches ? `pruned ${actions.batches} tool batch${actions.batches === 1 ? "" : "es"}` : "",
+      actions.argumentGroups ? `pruned ${actions.argumentGroups} argument group${actions.argumentGroups === 1 ? "" : "s"}` : "",
+      actions.dedupedCalls ? `deduplicated ${actions.dedupedCalls} tool call${actions.dedupedCalls === 1 ? "" : "s"}` : "",
+      actions.chains ? `compacted ${actions.chains} chain${actions.chains === 1 ? "" : "s"}` : "",
+      actions.spilledCalls ? `pruned ${actions.spilledCalls} tool output${actions.spilledCalls === 1 ? "" : "s"} to recovery stubs` : "",
+    ].filter(Boolean);
+    if (parts.length) safeNotify(ctx, `pruner: ${parts.join("; ")}`, "info");
   };
 
   const assistantMessageHasToolCalls = (message: any) =>
@@ -386,7 +412,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   };
 
   const compressChains = async (ctx: any, rollingWindow: number,
-    appendEntry: (type: string, data: unknown) => void, closingMessage?: any, signal?: AbortSignal, automatic = false, zeroCall = false) => {
+    appendEntry: (type: string, data: unknown) => void, closingMessage?: any, signal?: AbortSignal, automatic = false, zeroCall = false,
+    onPublished?: () => void) => {
     const version = lifecycle;
     const beforeRewrite = occ.measure(ctx);
     const messages = withClosingMessage(ctx.sessionManager.buildSessionProjection().messages, closingMessage);
@@ -400,7 +427,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       assertCurrent(version); signal?.throwIfAborted(); appendEntry(type, data);
       if (!ctx.sessionManager.getBranch().some((item: any) => item.type === "custom" && item.customType === type
         && JSON.stringify(item.data) === JSON.stringify(data))) throw new Error("Chain evidence was not persisted on the current branch");
-      if (type === CUSTOM_TYPE_CHAIN) lowerFloor(supersede, (data as SingleChainCompressionEntry).startUserTimestamp);
+      if (type === CUSTOM_TYPE_CHAIN) {
+        lowerFloor(supersede, (data as SingleChainCompressionEntry).startUserTimestamp);
+        onPublished?.();
+      }
     };
     const backfill = { ...archiveOptions(ctx.sessionManager), assertValid: () => { assertCurrent(version); signal?.throwIfAborted(); } };
     for (const chain of selectEligible(chains, rollingWindow,
@@ -575,6 +605,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const version = lifecycle;
     const abort = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
+    const yieldToUi = ctx.mode === "tui";
+    let sliceStartedAt = performance.now();
     const beforeRewrite = occ.measure(ctx);
 
     // Clear on every non-concurrent invocation, regardless of outcome — the
@@ -603,6 +635,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     let failureReason: string | undefined, failureMessage: string | undefined;
     const deferredReasons: Partial<Record<DeferredReason, number>> = {};
     let appendEntry: ((customType: string, data?: unknown) => void) | undefined;
+    // Presentation receipts only: archives, paid usage and frontier bookkeeping
+    // do not count. Emit once even if later work fails after a partial commit.
+    const actions = { batches: 0, argumentGroups: 0, dedupedCalls: 0, chains: 0, spilledCalls: 0 };
 
     // Non-fatal by construction: observability must never affect the flush outcome.
     const emitFlushMetricsOnce = () => {
@@ -698,6 +733,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             for (const { group } of candidates) {
               appendEntry!(ARGUMENT_HISTORY, group);
               argumentHistory.push(group);
+              actions.argumentGroups++;
             }
             const keys = new Set(candidates.flatMap((candidate) => candidate.group.keys));
             batches = batches
@@ -722,6 +758,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       if (batches.length === 0) {
         outcome = "empty";
+        updatePruneStatus(ctx, argumentCharsSaved > 0 ? "Pruned tool arguments; no pending turns" : "No pending turns");
         return { ok: false, reason: "empty" };
       }
 
@@ -729,6 +766,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       if (options.signal?.aborted) {
         outcome = "aborted";
         failureReason = "aborted";
+        updatePruneStatus(ctx, "Pruning cancelled — raw evidence retained");
         return { ok: false, reason: "aborted" };
       }
 
@@ -759,6 +797,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           appendEntry: appendEntry!,
         });
         publishedAliasesOrArchives ||= handled.size > 0;
+        actions.spilledCalls += handled.size;
       }
       batches = batches
         .map((batch) => ({
@@ -770,6 +809,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         .filter((batch) => batch.toolCalls.length > 0);
       if (batches.length === 0) {
         outcome = "empty";
+        updatePruneStatus(ctx, "No pending turns");
         return { ok: false, reason: "empty" };
       }
 
@@ -879,6 +919,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       for (const [key, originalId, occurrence] of pendingAliases) {
         indexer.registerDuplicate(key, originalId, appendEntry!, occurrence);
         publishedAliasesOrArchives = true;
+        actions.dedupedCalls++;
       }
 
       // Process results in order; stop at first null (individual call failure).
@@ -930,14 +971,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // source for supersession: dedup aliases regardless of batch outcome,
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
-      let expectedSource = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+      const snapshotSource = createSourceSnapshotter();
+      let expectedSource = snapshotSource(ctx.sessionManager.buildSessionProjection().messages);
       let nextRequest = 0, failedRequest = Infinity;
       const controller = fallbackController;
       const config = currentConfig.value;
       const checkSource = () => {
         assertCurrent(version);
         if (signal.aborted) throw new Error("summarize: aborted");
-        if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== expectedSource) {
+        if (snapshotSource(ctx.sessionManager.buildSessionProjection().messages) !== expectedSource) {
           throw new CondenseContextChangedError("summary source changed");
         }
       };
@@ -984,9 +1026,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       };
 
       for (const [i, record] of records.entries()) {
+        // Resolved promises only yield microtasks; let TUI timers/input run too.
+        if (yieldToUi && performance.now() - sliceStartedAt >= 16) {
+          await setImmediate(undefined, { signal });
+          sliceStartedAt = performance.now();
+        }
         checkSource();
         await schedule(i);
-        if (record.job) updatePruneStatus(ctx, `prune: summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
+        if (record.job) updatePruneStatus(ctx, `Summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
         await record.job;
         checkSource();
         if (record.error) throw record.error;
@@ -1110,6 +1157,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
               firstFailureIndex = i;
               break;
             }
+            actions.batches++;
             publishedCharsSaved += charsSaved;
             firstChangedMessage = firstChangedMessage === undefined ? firstChanged : Math.min(firstChangedMessage, firstChanged);
             stubCount += archivedBatch.toolCalls.length + dedupCount;
@@ -1127,7 +1175,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
 
         completeRecord(record);
-        expectedSource = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+        expectedSource = snapshotSource(ctx.sessionManager.buildSessionProjection().messages);
       }
 
       lowerFloor(supersede, earliestResultTimestamp(floorSources));
@@ -1138,6 +1186,41 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         ? "deferred-budget"
         : "deferred";
 
+      // Classify only no-op explanations as disclosure. Real rewrites have
+      // separate confirmed-action reporting; warnings and errors stay visible.
+      // Build these before the all-deferred return so its retained evidence is
+      // explained too, not left showing an obsolete "Summarizing" detail.
+      const skipMessages = Object.entries(deferredReasons).map(([reason, count]) =>
+        `pruner: ${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}; frontier did not advance over them`,
+      );
+      for (const record of trivialBatches) {
+        const batch = record.batch;
+        skipMessages.push(
+          "pruner: skipped pruning turn " +
+            `${batch.turnIndex}` +
+            " (" +
+            `${batch.toolCalls.length}` +
+            " tool call" +
+            `${batch.toolCalls.length === 1 ? "" : "s"}` +
+            ") — summary candidate " +
+            `${record.prepared.candidateChars}` +
+            " chars (< minBatchChars=" +
+            `${minChars}` +
+            "); " +
+            `${record.rawChars}` +
+            " raw chars retained; no LLM call made; " +
+            `${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`,
+        );
+      }
+      const completionDetail = () => {
+        const state = deliveryPending ? "Summary queued — raw results retained until delivery"
+          : firstFailureIndex >= 0 || pendingBatches.length > 0
+            ? `${processedCount}/${records.length} complete; remaining pending${failureMessage ? ` — ${failureMessage}` : ""}`
+            : "No pending turns";
+        return [state, ...(!currentConfig.value.quietOversizedSkips
+          ? skipMessages.map(message => message.replace(/^pruner: /, "")) : [])].join("\n");
+      };
+
       if (processedBatches.length === 0) {
         if (modelAttempted) {
           try {
@@ -1146,7 +1229,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             if (delivery === "runtime") throw error;
           }
         }
-        updatePruneStatus(ctx);
+        updatePruneStatus(ctx, completionDetail());
         outcome = deliveryPending ? "delivery-pending" : deferredBatches.length ? deferredOutcome : "error";
         failureReason = deliveryPending
           ? "delivery-pending"
@@ -1183,6 +1266,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             options.closingMessage,
             signal,
             trigger !== "manual",
+            false,
+            () => { actions.chains++; },
           );
           publishedAliasesOrArchives ||= result.compressedEntries.length > 0;
         } catch (err) {
@@ -1196,35 +1281,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         if (delivery === "runtime") throw err;
       }
 
-      updatePruneStatus(ctx);
+      updatePruneStatus(ctx, completionDetail());
 
-      // Non-error skips, including budget deferral, share the quiet toggle.
-      if (!currentConfig.value.quietOversizedSkips) {
+      // Preserve non-TUI notices. In TUI, skips are disclosure, automatic
+      // actions are aggregated in finally, and manual commands reply themselves.
+      if (!currentConfig.value.quietOversizedSkips && ctx.mode !== "tui") {
         const notify = (message: string) => safeNotify(ctx, message, "info");
-        for (const [reason, count] of Object.entries(deferredReasons)) {
-          notify(
-            `pruner: ${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}; frontier did not advance over them`,
-          );
-        }
-        for (const record of trivialBatches) {
-          const batch = record.batch;
-          notify(
-            "pruner: skipped pruning turn " +
-              `${batch.turnIndex}` +
-              " (" +
-              `${batch.toolCalls.length}` +
-              " tool call" +
-              `${batch.toolCalls.length === 1 ? "" : "s"}` +
-              ") — summary candidate " +
-              `${record.prepared.candidateChars}` +
-              " chars (< minBatchChars=" +
-              `${minChars}` +
-              "); " +
-              `${record.rawChars}` +
-              " raw chars retained; no LLM call made; " +
-              `${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`,
-          );
-        }
+        for (const message of skipMessages) notify(message);
         for (const record of dedupedBatches) {
           const batch = record.batch;
           const n = record.deduped.length;
@@ -1264,7 +1327,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       outcome = firstFailureIndex >= 0 || deferredBatches.length ? "partial" : flushOutcome;
       if (firstFailureIndex >= 0 || deferredBatches.length) {
         failureReason = deliveryPending ? "delivery-pending" : failureReason ?? (deferredBatches.length ? deferredOutcome : "summarizer-failed");
-        updatePruneStatus(ctx, `prune: ${processedCount}/${records.length} complete; remaining pending`);
       }
 
       return {
@@ -1291,12 +1353,16 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // When the abort signal fired, summarizeBatch rethrows rather than
       // swallowing the error.  Don't show a UI error — the user intended this.
       if (signal.aborted) {
-        updatePruneStatus(ctx);
+        updatePruneStatus(ctx, "Pruning cancelled — raw evidence retained");
         return { ok: false, reason: "aborted", batchCount: processedCount };
       }
       if (isStaleContextError(err)) {
+        const count = pendingBatches.length;
+        const detail = "Source changed — raw evidence retained";
+        updatePruneStatus(ctx, count ? queuedDetail(count, `${detail}; `) : detail);
         return { ok: false, reason: "stale-context", error: errorMessage(err), batchCount: processedCount };
       }
+      updatePruneStatus(ctx, `Summarization failed — ${errorMessage(err)}; raw evidence retained`);
       safeNotify(ctx, `pruner: summarization failed: ${errorMessage(err)}`, "error");
       return { ok: false, reason: "failed", error: errorMessage(err), batchCount: processedCount };
     } finally {
@@ -1305,6 +1371,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       isFlushing = false;
       if (version === lifecycle && (stubCount > 0 || publishedAliasesOrArchives || modelAttempted)) occ.rewrite(ctx, beforeRewrite);
       emitFlushMetricsOnce();
+      if (version === lifecycle && trigger !== "manual") notifyPruneActions(ctx, actions);
     }
   };
 
@@ -1327,10 +1394,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     pendingBatches.length = 0;
     previousFraction = null;
     rearmedPending = false;
+    latestPruneDetail = () => "No pending turns";
     if (currentConfig.value.enabled) {
       try {
-        rearmedPending = capturePendingBatches(ctx, { rethrow: true }).length > 0;
+        const count = capturePendingBatches(ctx, { rethrow: true }).length;
+        rearmedPending = count > 0;
+        if (rearmedPending) latestPruneDetail = queuedDetail(count, `${count} pending batch(es) recovered from current branch — `);
       } catch (err) {
+        latestPruneDetail = () => "Pending-turn inspection unavailable";
         console.error("pi-condense: reload rearm probe failed", err);
       }
     }
@@ -1497,7 +1568,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             appendEntry: appendArchive,
           });
           assertCurrent(version);
-          if (handled.size) occ.rewrite(ctx, beforeRewrite);
+          if (handled.size) {
+            occ.rewrite(ctx, beforeRewrite);
+            notifyPruneActions(ctx, { spilledCalls: handled.size });
+          }
         } catch {
           // best-effort; never block the turn
         } finally {
@@ -1510,17 +1584,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         pushedBatch = true;
         pendingBatches.push(batch);
 
-        const n = pendingBatches.length;
-        const trigger = currentConfig.value.pruneOn === "agent-message"
-          ? "agent's next final text response"
-          : "/pruner now";
-        if (currentConfig.value.showPruneStatusLine) {
-          updatePruneStatus(ctx, `prune: ${n} pending`);
-          safeNotify(
-            ctx,
-            `pruner: ${n} turn${n === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${trigger}`,
-            "info"
-          );
+        const detail = queuedDetail(pendingBatches.length);
+        updatePruneStatus(ctx, detail);
+        if (currentConfig.value.showPruneStatusLine && ctx.mode !== "tui") {
+          safeNotify(ctx, `pruner: ${detail()}`, "info");
         }
       }
     }
@@ -1555,17 +1622,13 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const n = pendingBatches.length;
     if ((n > 0 || rearmedPending) && !isFlushing && (budgetHit || deltaHit || gapHit)) {
       const reason = budgetHit ? "context budget reached" : deltaHit ? "context jumped this turn" : "un-pruned tail exceeded frontier gap threshold";
-      // Always surface this flush (even when the routine status line is off): it's a
-      // significant, infrequent event — context crossed a threshold, jumped sharply
-      // this turn, or the un-pruned tail grew past the gap threshold — and it
-      // self-throttles because pendingBatches is drained right after.
-      safeNotify(
-        ctx,
-        n > 0
-          ? `pruner: ${reason} — compacting ${n} pending turn${n === 1 ? "" : "s"}`
-          : `pruner: ${reason} — compacting work recovered after reload`,
-        "info",
-      );
+      // This is an evaluation hint, not a receipt for an actual rewrite.
+      // Non-TUI keeps the existing notice even when its status line is off.
+      const detail = n > 0
+        ? `${reason} — compacting ${n} pending turn${n === 1 ? "" : "s"}`
+        : `${reason} — compacting work recovered after reload`;
+      updatePruneStatus(ctx, detail);
+      if (ctx.mode !== "tui") safeNotify(ctx, `pruner: ${detail}`, "info");
       await flushPending(ctx, {
         delivery: "session",
         trigger: n === 0 ? "rearmed" : budgetHit ? "budget" : deltaHit ? "delta" : "frontier-gap",
@@ -1591,7 +1654,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   pi.on("agent_end", async (_event, ctx) => {
     if (!currentConfig.value.enabled) return;
     if (pendingBatches.length === 0 && !rearmedPending) return;
-    updatePruneStatus(ctx, pendingBatches.length > 0 ? `prune: ${pendingBatches.length} pending` : "prune: recovered pending (reload)");
+    updatePruneStatus(ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -1634,7 +1697,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
       const filtered = messages.filter(
         (message) =>
-          editedSummaries.has(summaryIdentity(message)) || !summaryToolIds(message).some((id) => editedToolIds.has(id)),
+          (editedSummaries.size > 0 && editedSummaries.has(summaryIdentity(message)))
+          || !summaryToolIds(message).some((id) => editedToolIds.has(id)),
       );
       if (filtered.length !== messages.length) {
         messages = filtered;
@@ -1715,6 +1779,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const original: any = source.type === "message" ? source.message : summary ? source : undefined;
       if (!original || (!summary && original.role !== "toolResult" && original.role !== "assistant")) continue;
       const effective = messages[0];
+      // Unedited native projections share evidence; avoid serializing its payloads.
+      if (messages.length === 1 && effective && "content" in effective && effective.content === original.content
+        && ("details" in effective ? effective.details : undefined) === original.details
+        && (!summary || effective.role === "custom")) continue;
       const sameEvidence = messages.length === 1 && JSON.stringify([(effective as any).content, (effective as any).details])
         === JSON.stringify([original.content, original.details]);
       // Prompt protection ignores ordinary execution metadata; source freshness does not.
@@ -1759,6 +1827,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   function currentChainViews(messages: any[], ctx?: ExtensionContext): SingleChainCompressionEntry[] {
     const entries = indexer.getChainEntries();
+    if (entries.length === 0) return [];
     const raw = ctx?.sessionManager.buildSessionProjection().messages ?? messages;
     const chains = detectChains(raw, protectionPredicate);
     const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
@@ -1814,6 +1883,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const signal = controller.signal;
     const manager = ctx.sessionManager;
     const config = policyFingerprint(currentConfig.value);
+    let publishedChains = 0;
     const assertValid = () => {
       assertCurrent(version);
       signal.throwIfAborted();
@@ -1889,6 +1959,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
             )
         )
           throw new Error("Chain archive was not persisted on the current branch");
+        if (type === CUSTOM_TYPE_CHAIN) publishedChains += chainMembers(data as SingleChainCompressionEntry | SharedChainCompressionEntry).length;
       };
       if (eligible.length === 1) {
         const stage = stagedChains.get(eligible[0]!.startUserTimestamp);
@@ -1996,6 +2067,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       maintenanceTask = undefined;
       const next = maintenanceNext; maintenanceNext = undefined;
       if (next?.version === lifecycle) void maintainChains(next.ctx);
+      if (version === lifecycle) notifyPruneActions(ctx, { chains: publishedChains });
     });
     return maintenanceTask;
   };
@@ -2009,7 +2081,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const withDurableSummaries = (messages: any[], ctx: ExtensionContext, api?: string, prefixOnly = false) => {
     const durable = projectContext(ctx.sessionManager.buildSessionProjection().messages, api, ctx, undefined, true).messages
       .filter((message: any) => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY);
-    const identities = new Set(messages.map(message => projectionFingerprint([message])));
+    if (durable.length === 0) return messages;
+    const identities = new Set(messages
+      .filter(message => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY)
+      .map(message => projectionFingerprint([message])));
     const missing = durable.filter((message: any) => !identities.has(projectionFingerprint([message])));
     if (!missing.length) return messages;
     if (!prefixOnly) return [...messages, ...missing];
@@ -2111,6 +2186,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     saveConfig,
     (ctx) => occ.refreshStatus(ctx),
     () => statsAccum.getSessionTokens(),
+    () => latestPruneDetail(),
   );
   return {
     start, tree,
@@ -2124,6 +2200,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       activeSessionId = undefined;
       projectionContext = undefined;
       pendingBatches.length = 0;
+      latestPruneDetail = () => "No pending turns";
       queuedSummaryKeys.clear();
       unsubscribeProjection();
       unsubscribeMaintenance();

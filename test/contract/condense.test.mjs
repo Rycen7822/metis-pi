@@ -116,10 +116,10 @@ test("real host loads one built-in tool, preserves settings, and uses one token-
   assert.match(h.notices.at(-1), /Unknown subcommand: "tree"/);
   await h.session.prompt("/pruner recovery-grace");
   assert.ok(h.notices.some((text) => text.includes("Current recovery grace: 3 user-turn-group")), "the command must dispatch through AgentSession");
-  assert.equal(h.statuses.get("context-prune"), "│ prune: ON · usage: 0 tokens");
+  assert.deepEqual(h.statuses.get("context-prune").split("\n"), ["│ prune: ON · usage: 0 tokens", "No pending turns"]);
   h.eventBus.emit("cost:external", { source: "pi-condense", totalCost: 0.02, inputTokens: 200, outputTokens: 10 });
   assert.equal(h.statuses.get("metis-condense-cost"), undefined);
-  assert.equal(h.statuses.get("context-prune"), "│ prune: ON · usage: 0 tokens");
+  assert.deepEqual(h.statuses.get("context-prune").split("\n"), ["│ prune: ON · usage: 0 tokens", "No pending turns"]);
   await runner.emit({ type: "session_start" });
   assert.equal(h.statuses.get("metis-condense-cost"), undefined);
   assert.equal(runner.getAllRegisteredTools().filter((x) => x.definition.name === "context_tree_query").length, 1);

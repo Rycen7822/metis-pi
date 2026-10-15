@@ -41,6 +41,8 @@ TOML 没有 null：可选触发器使用 `false` 关闭，`maxImagesPerRequest=f
 peekLines = 10
 [appearance.footer]
 showChanges = false
+locationExpanded = false
+pruneExpanded = false
 [appearance.fullscreen]
 marginX = 0
 ```

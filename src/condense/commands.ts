@@ -52,6 +52,7 @@ export function setPruneStatusWidget(
   value?: LiveReclaim | string,
   diagnostics?: Record<DiagnosticKind, number>,
   usageTokens = 0,
+  detail?: string,
 ): void {
   if (!config.showPruneStatusLine) {
     ctx.ui.setStatus(STATUS_WIDGET_ID, undefined);
@@ -62,7 +63,9 @@ export function setPruneStatusWidget(
   // single space, so a trailing divider collides with the next segment's leading
   // one and renders doubled. One leading bar yields single dividers between
   // sections, load-order independent.
-  ctx.ui.setStatus(STATUS_WIDGET_ID, `\u2502 ${text} \u00b7 usage: ${usageTokens} tokens`);
+  // The first line is the compact metric; the custom footer may disclose the
+  // remaining lines. Native footers can still sanitize the whole value inline.
+  ctx.ui.setStatus(STATUS_WIDGET_ID, `\u2502 ${text} \u00b7 usage: ${usageTokens} tokens${detail ? `\n${detail}` : ""}`);
 }
 
 const SUBCOMMANDS = [
@@ -333,7 +336,11 @@ export function registerCommands(
   save: (config: ContextPruneConfig) => Promise<void> = saveConfig,
   refreshOccStatus?: (ctx: ExtensionCommandContext) => void,
   getUsageTokens: () => number = () => 0,
+  getPruneDetail: () => string | undefined = () => undefined,
 ): void {
+  const refreshPruneStatus = (ctx: ExtensionCommandContext, config = currentConfig.value) =>
+    setPruneStatusWidget(ctx, config, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens(), getPruneDetail());
+
   pi.registerCommand("pruner", {
     description: "Context-prune settings and commands",
     getArgumentCompletions(prefix: string) {
@@ -361,7 +368,7 @@ export function registerCommands(
         case "settings": {
           await openPrunerSettings(ctx, currentConfig, applyConfig, save, (config) => {
             refreshOccStatus?.(ctx);
-            setPruneStatusWidget(ctx, config, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
+            refreshPruneStatus(ctx, config);
           });
           break;
         }
@@ -371,7 +378,7 @@ export function registerCommands(
           const enabled = subcommand === "on";
           setScalar("enabled", enabled);
           ctx.ui.notify(`Context pruning ${enabled ? "enabled" : "disabled"}.`);
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
+          refreshPruneStatus(ctx);
           break;
         }
 
@@ -514,7 +521,7 @@ export function registerCommands(
             return;
           }
           setScalar(row.id, raw);
-          if (trigger) setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
+          if (trigger) refreshPruneStatus(ctx);
           else ctx.ui.notify(thinking
             ? `Summarizer thinking set to: ${currentConfig.value.summarizerThinking}`
             : `Batching mode set to: ${optionLabel(row.id, currentConfig.value.batchingMode)}`);
@@ -595,7 +602,7 @@ export function registerCommands(
           });
 
           clearWidget();
-          setPruneStatusWidget(ctx, currentConfig.value, getLiveReclaim(), getDiagnosticCounts?.(), getUsageTokens());
+          refreshPruneStatus(ctx);
 
           if (!result.ok) {
             if (result.reason === "delivery-pending") {

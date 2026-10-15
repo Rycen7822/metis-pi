@@ -10,7 +10,8 @@ export interface AppearanceConfig {
   /** Working widget segments + animation. `elapsed:false` removes ONLY the
    * duration — thought/tool keep updating. */
   working: { elapsed: boolean; thought: boolean; tool: boolean; tokens: boolean; animation: boolean; animationIntervalMs: number };
-  footer: { enabled: boolean; details: boolean; showCache: boolean; showChanges: boolean; showSpeed: boolean };
+  footer: { enabled: boolean; details: boolean; showCache: boolean; showChanges: boolean; showSpeed: boolean;
+    locationExpanded: boolean; pruneExpanded: boolean };
   summary: { enabled: boolean; persist: boolean };
   /** Selection copy (fullscreen TUI). Ctrl+C copies the selection instead of
    * clearing the editor; no selection keeps stock behavior. */

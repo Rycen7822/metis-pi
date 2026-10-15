@@ -3,7 +3,7 @@ import test from "node:test";
 import { SettingsList } from "@earendil-works/pi-tui";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { openPrunerSettings } from "../../src/condense/settings.ts";
-import { registerCommands } from "../../src/condense/commands.ts";
+import { registerCommands, setPruneStatusWidget } from "../../src/condense/commands.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../../src/condense/config.ts";
 import { displayValue, parseScalar, scalarRow, writeScalar } from "../../src/condense/setting-fields.ts";
 import { parseMetisConfig } from "../../src/metis-config.ts";
@@ -80,6 +80,24 @@ test("partial chain settings keep defaults, accept zero window and reject invali
     else process.env.PI_CODING_AGENT_DIR = previous;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("prune status keeps its token-only summary before optional multiline disclosure", () => {
+  const statuses = new Map();
+  const ctx = { ui: { setStatus: (id, text) => statuses.set(id, text) } };
+  const config = { ...DEFAULT_CONFIG, enabled: true, showPruneStatusLine: true };
+  const reclaim = { beforeChars: 40000, afterChars: 20000 };
+  const summary = "│ prune: ON · 10.0k->5.0k (-50%) · usage: 37 tokens";
+  setPruneStatusWidget(ctx, config, reclaim, undefined, 37);
+  assert.equal(statuses.get("context-prune"), summary, "existing callers need no disclosure argument");
+  const detail = "2 turns queued\nRaw evidence retained pending summary budget";
+  setPruneStatusWidget(ctx, config, reclaim, undefined, 37, detail);
+  assert.equal(statuses.get("context-prune"), `${summary}\n${detail}`);
+  setPruneStatusWidget(ctx, config, "prune: caller-supplied", undefined, 37, detail);
+  assert.equal(statuses.get("context-prune"), `│ prune: caller-supplied · usage: 37 tokens\n${detail}`,
+    "the public string overload remains supported");
+  setPruneStatusWidget(ctx, { ...config, showPruneStatusLine: false }, reclaim, undefined, 37, detail);
+  assert.equal(statuses.get("context-prune"), undefined, "hiding status also hides disclosure");
 });
 
 test("scalar enum legality comes from config rather than presentation options", () => {

@@ -82,6 +82,9 @@ details = true
 showCache = true
 showChanges = true
 showSpeed = true
+# 目录/分支和 prune 详情的默认展开状态；点击三角仅改变当前界面。
+locationExpanded = false
+pruneExpanded = false
 
 # 每次任务结束的统计摘要；persist 控制是否随会话保存。
 [appearance.summary]

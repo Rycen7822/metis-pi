@@ -59,6 +59,17 @@ test("missing file yields defaults", () => {
   assert.equal(problems.length, 0);
 });
 
+test("footer disclosure TOML booleans default to folded and reject non-booleans", () => {
+  const defaults = loadConfig(undefined).config.footer;
+  assert.equal(defaults.locationExpanded, false);
+  assert.equal(defaults.pruneExpanded, false);
+  const loaded = loadConfig("/agent", path => path.endsWith("metis-pi.toml")
+    ? '[appearance.footer]\nlocationExpanded=true\npruneExpanded="yes"\n' : undefined);
+  assert.equal(loaded.config.footer.locationExpanded, true);
+  assert.equal(loaded.config.footer.pruneExpanded, false);
+  assert.deepEqual(loaded.problems, ["footer.pruneExpanded: expected boolean, got string — using false"]);
+});
+
 test("partial settings merge over defaults while obsolete quota fields are ignored", () => {
   const source = JSON.stringify({
     thinking: { rail: false }, footer: { showCodexQuota: true },
