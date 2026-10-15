@@ -1140,9 +1140,7 @@ test("parallel summaries commit in order within a three-record window and reject
       }
       f.release(0);
       let done = false;
-      pending.finally(() => {
-        done = true;
-      });
+      pending.then(() => { done = true; }, () => { done = true; });
       for (let i = 0; i < 600 && !done; i++) {
         await new Promise((resolve) => setTimeout(resolve, 5));
         f.releaseAll();
@@ -1167,7 +1165,7 @@ test("parallel summaries commit in order within a three-record window and reject
         assert.equal(f.statuses.get("context-prune"), status, "agent_end preserves the stopped-work explanation");
         const retry = f.commands.get("pruner").handler("now", f.ctx);
         let retried = false;
-        retry.finally(() => { retried = true; });
+        retry.then(() => { retried = true; }, () => { retried = true; });
         for (let i = 0; i < 600 && !retried; i++) {
           await new Promise(resolve => setTimeout(resolve, 5));
           f.releaseAll();
