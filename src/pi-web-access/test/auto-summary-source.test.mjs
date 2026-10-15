@@ -30,10 +30,14 @@ test("README documents auto-summary", () => {
 });
 
 test("auto-summary defaults retain fallback and report a reached ambiguity", () => {
-	for (const ambiguous of [false, true]) {
+	for (const { ambiguous, summaryModel } of [
+		{ ambiguous: false }, { ambiguous: true },
+		{ ambiguous: false, summaryModel: "invalid-selector" },
+	]) {
 		const dir = mkdtempSync(join(tmpdir(), "metis-auto-summary-"));
 		try {
-			writeFileSync(join(dir, "metis-pi.toml"), '[webAccess]\nprovider = "brave"\nworkflow = "auto-summary"\n');
+			writeFileSync(join(dir, "metis-pi.toml"), '[webAccess]\nprovider = "brave"\nworkflow = "auto-summary"\n'
+				+ (summaryModel ? `summaryModel = ${JSON.stringify(summaryModel)}\n` : ""));
 			const child = spawnSync(process.execPath, ["--input-type=module"], {
 				input: `
 					globalThis.fetch = async url => {

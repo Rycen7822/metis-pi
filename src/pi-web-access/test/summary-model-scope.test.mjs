@@ -1,3 +1,4 @@
+import "./isolate-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -304,6 +305,9 @@ test("ambiguous summary routes make no model call; explicit selection bypasses a
 	const generated = await generateSummaryDraft(summaryResults, context, undefined, "requesty/anthropic/claude-haiku-4-5");
 	assert.equal(generated.summary, "Explicit summary");
 	assert.deepEqual(calls, ["requesty"]);
+	const invalid = await generateSummaryDraft(summaryResults, context, undefined, "invalid-selector");
+	assert.match(invalid.meta.fallbackReason, /summary-model-settings-error: Invalid summary model/);
+	assert.deepEqual(calls, ["requesty"]);
 });
 
 test("summary generation has a hard deadline and preserves caller cancellation", () => {
@@ -458,9 +462,13 @@ test("summary choices retain routed thinking selectors and current-only options 
 	const none = await isolatedSummaryChoices({ models: [], current });
 	assert.equal(none.defaultSummaryModel, null);
 	assert.deepEqual(none.summaryModels.map(option => option.value), ["private/current-only"]);
-	const excluded = await isolatedSummaryChoices({ models: [routed], current, scopedModels: [{ model: routed }], configured: "invalid-selector" });
+	const excluded = await isolatedSummaryChoices({
+		models: [routed], current, scopedModels: [{ model: routed }], configured: "invalid-selector", generate: true,
+	});
 	assert.equal(excluded.defaultSummaryModel, "openrouter/anthropic/claude-haiku-4-5");
 	assert.deepEqual(excluded.summaryModels.map(option => option.value), ["openrouter/anthropic/claude-haiku-4-5"]);
+	assert.deepEqual(excluded.calls, ["openrouter"]);
+	assert.equal(excluded.generated.summary, "TOML summary");
 });
 
 test("TOML summaryModel resolves ambiguity for both choices and execution", async () => {

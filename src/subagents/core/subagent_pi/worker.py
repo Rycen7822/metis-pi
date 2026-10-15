@@ -295,6 +295,7 @@ def check_surface(report):
 def managed_command(argv, sdk_path=None):
     """Locate the SDK beside the chosen Pi executable; never edit that install.
 
+    Admit stable SDK releases only, matching the npm peer range.
     Explicit non-Pi commands are protocol implementations (principally the offline
     fake in tests). Boot verifies the plugin protocol before accepting either.
     """

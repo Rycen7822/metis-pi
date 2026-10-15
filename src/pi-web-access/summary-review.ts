@@ -234,8 +234,14 @@ function resolveSummaryModelCandidates(
 ): { candidates: Iterable<{ model: Model<Api>; thinkingLevel?: SummaryThinkingLevel }>; errors: string[] } {
 	const selector = modelOverride ?? loadWebAccessConfig().summaryModel;
 	const normalizedOverride = typeof selector === "string" ? selector.trim() : "";
-	const specs: readonly { provider: string; id: string; thinkingLevel?: SummaryThinkingLevel }[] =
-		normalizedOverride ? [parseModelSelector(normalizedOverride)] : PREFERRED_SUMMARY_MODELS;
+	let selected: ReturnType<typeof parseModelSelector> | undefined;
+	try {
+		if (normalizedOverride) selected = parseModelSelector(normalizedOverride);
+	} catch (error) {
+		// Malformed TOML defaults use the same preferred candidates as the model choices.
+		if (modelOverride != null) throw error;
+	}
+	const specs: readonly ReturnType<typeof parseModelSelector>[] = selected ? [selected] : PREFERRED_SUMMARY_MODELS;
 
 	const errors: string[] = [];
 	function* candidates() {
