@@ -239,9 +239,7 @@ describe("inline presentation", () => {
 		const result = await run(twoOptions);
 		expect(calls.map((o) => o?.overlay)).toEqual([false, true]);
 		expect(calls[1]).toMatchObject({ overlayOptions: { anchor: "bottom-center" } });
-		// Stacked over another overlay, collapse must not hide (Pi pops the TOPMOST overlay on
-		// close), so no raw reopen listener is registered and collapse keeps a visible row.
-		expect(onTerminalInput).not.toHaveBeenCalled();
+		expect(onTerminalInput).toHaveBeenCalledTimes(1);
 		expect(result.details).toMatchObject({ cancelled: false, answers: [{ kind: "option", answer: "Inline" }] });
 
 		// The inline slot was handed back: with nothing on screen the next question goes inline.
@@ -281,7 +279,7 @@ describe("overlay fallback", () => {
 			overlay: true,
 			overlayOptions: { anchor: "bottom-center", maxHeight: "100%" },
 		});
-		expect(onTerminalInput).toHaveBeenCalledTimes(existingOverlay ? 0 : 1);
-		expect(removeListener).toHaveBeenCalledTimes(existingOverlay ? 0 : 1);
+		expect(onTerminalInput).toHaveBeenCalledTimes(1);
+		expect(removeListener).toHaveBeenCalledTimes(1);
 	});
 });

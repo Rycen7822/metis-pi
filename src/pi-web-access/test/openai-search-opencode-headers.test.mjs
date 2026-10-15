@@ -8,12 +8,12 @@ import { test } from "node:test";
 const moduleUrl = new URL("../openai-search.ts", import.meta.url).href;
 
 const openCodeGoModels = [
-	{ provider: "opencode-go", id: "deepseek-v4-pro", api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1" },
-	{ provider: "opencode-go", id: "gpt-5.6-luna", api: "openai-responses", baseUrl: "https://opencode.ai/zen/go/v1" },
-	{ provider: "opencode-go", id: "gpt-6-luna", api: "openai-responses", baseUrl: "https://opencode.ai/zen/go/v1" },
-	{ provider: "opencode-go", id: "gpt-oss-120b", api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1" },
-	{ provider: "opencode-go", id: "gpt-realtime-2.1", api: "openai-responses", baseUrl: "https://opencode.ai/zen/go/v1" },
-	{ provider: "opencode-go", id: "space-bunny-free", api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1" },
+	{ provider: "opencode-go", id: "deepseek-v4-pro", api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/v1" },
+	{ provider: "opencode-go", id: "gpt-5.6-luna", api: "openai-responses", baseUrl: "https://opencode.ai/inference/go/v1" },
+	{ provider: "opencode-go", id: "gpt-6-luna", api: "openai-responses", baseUrl: "https://opencode.ai/inference/go/v1" },
+	{ provider: "opencode-go", id: "gpt-oss-120b", api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/v1" },
+	{ provider: "opencode-go", id: "gpt-realtime-2.1", api: "openai-responses", baseUrl: "https://opencode.ai/inference/go/v1" },
+	{ provider: "opencode-go", id: "space-bunny-free", api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/v1" },
 ];
 
 async function runSearch(t, { config, models, sessionId = "session-1", resolvedBaseUrl, resolvedHeaders = { "x-existing": "kept" }, withContext = true, redirectUrl, redirectStatus = 307 }) {
@@ -62,7 +62,7 @@ const openCodeGoConfig = {
 	openaiSearchModel: "gpt-6-luna",
 };
 
-const openCodeUrl = "https://opencode.ai/zen/v1/responses";
+const openCodeUrl = "https://opencode.ai/inference/v1/responses";
 const openaiModel = { provider: "openai", id: "gpt-5.6-terra", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
 const { openaiSearchModel: _unused, ...autoModelConfig } = openCodeGoConfig;
 
@@ -70,7 +70,7 @@ test("OpenAI search through opencode-go keeps provider headers and picks the new
 	const out = await runSearch(t, { config: autoModelConfig, models: openCodeGoModels });
 	assert.equal(out.result.answer, "Search answer");
 	const [request] = out.requests;
-	assert.equal(request.url, "https://opencode.ai/zen/go/v1/responses");
+	assert.equal(request.url, "https://opencode.ai/inference/go/v1/responses");
 	assert.equal(request.body.model, "gpt-6-luna");
 	assert.equal(request.headers["x-existing"], "kept");
 	assert.equal(request.headers["x-opencode-session"], "session-1");
@@ -92,7 +92,7 @@ for (const [name, options, url] of [
 }
 
 for (const [name, options, url] of [
-	["without a session id", { config: openCodeGoConfig, models: openCodeGoModels, sessionId: null }, "https://opencode.ai/zen/go/v1/responses"],
+	["without a session id", { config: openCodeGoConfig, models: openCodeGoModels, sessionId: null }, "https://opencode.ai/inference/go/v1/responses"],
 	["without an extension context", { config: { openaiApiKey: "standalone-key", openaiResponsesUrl: openCodeUrl }, models: [], withContext: false }, openCodeUrl],
 	["when resolved auth overrides the provider base URL", { config: openCodeGoConfig, models: openCodeGoModels, resolvedBaseUrl: "https://resolved-gateway.example/v1" }, "https://resolved-gateway.example/v1/responses"],
 	["to another explicit gateway, even when the registry supplies OpenCode headers", {

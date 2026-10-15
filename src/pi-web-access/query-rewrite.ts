@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SummaryGenerationContext } from "./summary-review.ts";
-import { findModelWithProviderRouting, isModelInScope } from "./summary-model-scope.ts";
+import { AmbiguousModelError, findModelWithProviderRouting, isModelInScope } from "./summary-model-scope.ts";
 
 function resolveFirstAvailableModel(
 	ctx: SummaryGenerationContext,
@@ -8,9 +8,13 @@ function resolveFirstAvailableModel(
 ): Model<Api> {
 	const available = ctx.modelRegistry.getAvailable();
 	for (const { provider, id } of candidates) {
-		const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id);
-		if (!model || !isModelInScope(model, ctx.scopedModels)) continue;
-		if (available.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return model;
+		try {
+			const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id, ctx.scopedModels);
+			if (!model || !isModelInScope(model, ctx.scopedModels)) continue;
+			if (available.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return model;
+		} catch (error) {
+			if (!(error instanceof AmbiguousModelError)) throw error;
+		}
 	}
 	throw new Error(`No enabled model available: ${candidates.map(candidate => `${candidate.provider}/${candidate.id}`).join(", ")}`);
 }

@@ -12,6 +12,19 @@ const result = (text) => ({ content: [{ type: "text", text }] });
 const renderers = makeRenderers(text => new FakeText(text), () => "expand");
 const call = (name, args, ctx) => renderers[name].renderCall(args, theme, ctx).render(80).join("\n");
 
+test("read titles use native numeric-string and default-offset ranges", () => {
+  for (const [args, suffix] of [
+    [{ offset: "10", limit: "5" }, ":10-14"],
+    [{ offset: null, limit: 5 }, ":1-5"],
+    [{ offset: 10, limit: "5" }, ":10-14"],
+    [{ offset: 10 }, ":10"],
+    [{ offset: "invalid", limit: 5 }, ""],
+  ]) {
+    const title = stripVTControlCharacters(call("read", { path: "file.ts", ...args }, { isPartial: false }));
+    assert.ok(title.endsWith(`file.ts${suffix}`), title);
+  }
+});
+
 test("fusion display retains successful write diff while the following command fails", () => {
   const invalidated = [];
   const renderers = makeRenderers(text => {

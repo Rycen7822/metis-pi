@@ -140,7 +140,7 @@ System dependency for curator browser launch on Linux:
 
 Without `xdg-utils`, the curator URL is printed to the tool output so you can copy it into a browser.
 
-Requires Pi >=1.2.0.
+Requires Pi >=1.3.0.
 
 ## Quick Start
 
@@ -611,6 +611,8 @@ Config defaults to `~/.pi/agent/web-search.json` when neither `PI_CODING_AGENT_D
 
 `webSearch.allowedProviders` is an optional, non-empty search-provider allowlist with no duplicate entries. When omitted, every current search provider remains permitted. When present, explicit scalar and array requests for providers outside the list fail before any provider request, while `auto`, `all`, configured routing, `source_check`, and Curator use only listed providers. The allowlist does not make explicit-only or paid providers eligible for automatic fallback or `all`; they must still be named explicitly or included in `searchRouting.providers`. A configured `provider`/`searchProvider` or `searchRouting.providers` entry outside the allowlist is rejected as invalid configuration. This setting affects search only: it does not restrict `fetchRouting`, fetch answer models, or summary models.
 
+When multiple authenticated routes offer the same summary model, Metis reports ambiguity with full candidate selectors instead of choosing the first route. Set `[webAccess].summaryModel` in the global `metis-pi.toml`, for example `summaryModel = "openrouter/anthropic/claude-haiku-4-5"`, or explicitly choose a model in the curator. The curator remains available while its default is ambiguous; auto-summary reports the configuration error without making a summary model request. An explicit selector is used without falling through to other preferred models.
+
 `summaryModel` accepts an optional thinking-level suffix, such as `anthropic/claude-haiku-4-5:low`. Supported suffixes are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
 `summaryInstructions` appends custom text to the Requirements section of the summary prompt used by the curator UI and `auto-summary` mode (e.g. `"- Preserve concrete figures verbatim: prices, limits, versions, dates.\n- Name the product version each claim applies to."`). The text is passed verbatim to the summary model, so use one `- ` bullet per requirement. It is additive: the built-in guardrails (no invented sources, explicit weak/conflicting-evidence notes, the Sources section) always stay in place, and curator regeneration feedback is still appended afterwards. Missing, non-string, or blank values leave the default prompt unchanged.
@@ -1054,7 +1056,7 @@ Enabling the tools mid-conversation can cost a prompt-cache miss. Some models ac
 - `"dynamic"` starts every new session with `web_enable`, even on models where enabling the tools can cause a cache miss.
 - `"eager"` never uses `web_enable` and keeps every enabled web tool available from the first request. It also suits models that rarely call `web_enable` on their own.
 
-Restart Pi after changing it. Dynamic activation uses the Pi >=1.2.0 tool activation APIs.
+Restart Pi after changing it. Dynamic activation uses the Pi >=1.3.0 tool activation APIs.
 
 ### Shortcuts
 

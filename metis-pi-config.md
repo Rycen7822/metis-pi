@@ -268,7 +268,7 @@ exclude = []
 | `searchRouting.providers` / `useCurrentModel` / `fallbackOn` | 显式 provider 顺序；当前模型搜索开关；允许回退的错误分类。 |
 | `webSearch.enabled` / `allowedProviders` | 搜索总开关、允许的 provider 名称列表。 |
 | `workflow` | `"none"` / `"summary-review"` / `"auto-summary"`；默认 none。 |
-| `summaryModel` / `summaryInstructions` | 摘要模型选择与额外指令；未指定模型采用原模型选择逻辑。 |
+| `summaryModel` / `summaryInstructions` | 摘要模型完整 `provider/model-id` 选择器与额外指令；未指定时使用首个可用的首选模型。若同一模型有多个可用路由则提示歧义并要求明确选择，不按注册顺序默选；例如 `summaryModel = "openrouter/anthropic/claude-haiku-4-5"`。支持 `:low` 等 thinking 后缀，仍受 Pi 的模型范围及认证约束。 |
 | `summaryGenerationDeadlineMs` | 摘要期限，毫秒；默认 30000，最大 600000。 |
 | `curatorTimeoutSeconds` / `autoOpenBrowser` / `curatorRemote` | 等待秒数、是否自动打开浏览器、远程绑定开关或 `{ host, bind }`。 |
 | `toolActivation` | `"auto"` / `"dynamic"` / `"eager"`；默认 auto。 |

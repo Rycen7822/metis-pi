@@ -2,6 +2,7 @@
 // call region = title/command; result region = output/diff body.
 // Never modifies tool data.
 
+import { formatReadLineRange } from "@earendil-works/pi-coding-agent";
 import { renderCodexDiffComponent } from "./diff-component.ts";
 import {
   renderExplorationHeader,
@@ -106,11 +107,7 @@ export function explorationTitle(
   const verb = explorationVerb(name);
   const target = typeof args.pattern === "string" ? JSON.stringify(args.pattern) : path(args, ctx);
   const inPath = typeof args.pattern === "string" ? path(args, ctx) : undefined;
-  let suffix = "";
-  if (name === "read" && typeof args.offset === "number" && Number.isFinite(args.offset)) {
-    const end = typeof args.limit === "number" && Number.isFinite(args.limit) ? `–${args.offset + args.limit - 1}` : " onward";
-    suffix = ` (lines ${args.offset}${end})`;
-  }
+  const suffix = name === "read" ? formatReadLineRange(args.offset, args.limit) : "";
   const rows: ExplorationRow[] = [{ verb, target: `${target}${suffix}`, inPath }];
   const level = ctx.colorLevel ?? colorLevel;
   const plan: ExplorationPlan | undefined = ctx.explorationPlan as ExplorationPlan | undefined;

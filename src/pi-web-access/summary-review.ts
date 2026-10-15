@@ -1,7 +1,7 @@
 import type { Api, Message, Model, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { findModelWithProviderRouting, isModelInScope, splitThinkingSuffix, type SummaryThinkingLevel } from "./summary-model-scope.ts";
+import { AmbiguousModelError, findModelWithProviderRouting, isModelInScope, splitThinkingSuffix, type SummaryThinkingLevel } from "./summary-model-scope.ts";
 import type { QueryResultData } from "./search-types.ts";
 import { loadWebAccessConfig } from "./utils.ts";
 
@@ -217,40 +217,59 @@ async function resolveThinkingLevel(model: Model<Api>, requested?: SummaryThinki
 	return clampThinkingLevel(model, requested as ModelThinkingLevel);
 }
 
+function findSummaryModel(ctx: SummaryGenerationContext, spec: { provider: string; id: string }) {
+	try {
+		return findModelWithProviderRouting(ctx.modelRegistry, spec.provider, spec.id, ctx.scopedModels);
+	} catch (error) {
+		if (error instanceof AmbiguousModelError) {
+			throw new AmbiguousModelError(`${error.message} Set [webAccess].summaryModel in metis-pi.toml to one of these selectors.`);
+		}
+		throw error;
+	}
+}
+
 function resolveSummaryModelCandidates(
 	ctx: SummaryGenerationContext,
 	modelOverride?: string,
-): { candidates: Array<{ model: Model<Api>; thinkingLevel?: SummaryThinkingLevel }>; errors: string[] } {
-	const specs: Array<{ provider: string; id: string; thinkingLevel?: SummaryThinkingLevel }> = [];
-	const normalizedOverride = typeof modelOverride === "string" ? modelOverride.trim() : "";
-	if (normalizedOverride.length > 0) specs.push(parseModelSelector(normalizedOverride));
-	specs.push(...PREFERRED_SUMMARY_MODELS);
-
-	const candidates: Array<{ model: Model<Api>; thinkingLevel?: SummaryThinkingLevel }> = [];
-	const errors: string[] = [];
-	const seen = new Set<string>();
-	for (const spec of specs) {
-		const value = `${spec.provider}/${spec.id}`;
-		if (seen.has(value)) continue;
-		seen.add(value);
-		const model = findModelWithProviderRouting(ctx.modelRegistry, spec.provider, spec.id);
-		if (!model) {
-			errors.push(`Summary model not found: ${value}`);
-			continue;
-		}
-		if (!isModelInScope(model, ctx.scopedModels)) {
-			errors.push(`Summary model is not enabled: ${value}`);
-			continue;
-		}
-		candidates.push({ model, thinkingLevel: spec.thinkingLevel });
+): { candidates: Iterable<{ model: Model<Api>; thinkingLevel?: SummaryThinkingLevel }>; errors: string[] } {
+	const selector = modelOverride ?? loadWebAccessConfig().summaryModel;
+	const normalizedOverride = typeof selector === "string" ? selector.trim() : "";
+	let selected: ReturnType<typeof parseModelSelector> | undefined;
+	try {
+		if (normalizedOverride) selected = parseModelSelector(normalizedOverride);
+	} catch (error) {
+		// Malformed TOML defaults use the same preferred candidates as the model choices.
+		if (modelOverride != null) throw error;
 	}
-	return { candidates, errors };
+	const specs: readonly ReturnType<typeof parseModelSelector>[] = selected ? [selected] : PREFERRED_SUMMARY_MODELS;
+
+	const errors: string[] = [];
+	function* candidates() {
+		for (const spec of specs) {
+			const value = `${spec.provider}/${spec.id}`;
+			const model = findSummaryModel(ctx, spec);
+			if (!model) {
+				errors.push(`Summary model not found: ${value}`);
+				continue;
+			}
+			if (!isModelInScope(model, ctx.scopedModels)) {
+				errors.push(`Summary model is not enabled: ${value}`);
+				continue;
+			}
+			yield { model, thinkingLevel: spec.thinkingLevel };
+		}
+	}
+	return { candidates: candidates(), errors };
 }
 
 /** UI choices and execution defaults share the summary domain's model policy. */
 export async function loadSummaryModelChoices(
 	ctx: SummaryGenerationContext,
-): Promise<{ summaryModels: Array<{ value: string; label: string }>; defaultSummaryModel: string | null }> {
+): Promise<{
+	summaryModels: Array<{ value: string; label: string }>;
+	defaultSummaryModel: string | null;
+	summaryModelError?: string;
+}> {
 	const summaryModels: Array<{ value: string; label: string }> = [];
 	const seen = new Set<string>();
 	const availableValues = new Set<string>();
@@ -270,25 +289,34 @@ export async function loadSummaryModelChoices(
 	const configured = loadWebAccessConfig().summaryModel;
 	const selector = typeof configured === "string" ? configured.trim() : "";
 	let defaultSummaryModel: string | null = availableValues.has(selector) ? selector : null;
-	if (!defaultSummaryModel && selector) {
-		let spec: ReturnType<typeof parseModelSelector> | undefined;
-		try { spec = parseModelSelector(selector); } catch { /* Malformed UI defaults use the preferred available model. */ }
-		if (spec) {
-			const model = findModelWithProviderRouting(ctx.modelRegistry, spec.provider, spec.id);
-			if (model && availableValues.has(`${model.provider}/${model.id}`)) {
+	try {
+		if (!defaultSummaryModel && selector) {
+			let spec: ReturnType<typeof parseModelSelector> | undefined;
+			try { spec = parseModelSelector(selector); } catch { /* Malformed UI defaults use the preferred available model. */ }
+			if (spec) {
+				const model = findSummaryModel(ctx, spec);
+				if (!model || !availableValues.has(`${model.provider}/${model.id}`)) {
+					return {
+						summaryModels, defaultSummaryModel: null,
+						summaryModelError: `Summary model is not available or enabled: ${selector}. Check [webAccess].summaryModel in metis-pi.toml.`,
+					};
+				}
 				add(selector);
 				defaultSummaryModel = selector;
 			}
 		}
-	}
-	if (!defaultSummaryModel) {
-		for (const preferred of PREFERRED_SUMMARY_MODELS) {
-			const model = findModelWithProviderRouting(ctx.modelRegistry, preferred.provider, preferred.id);
-			if (model && availableValues.has(`${model.provider}/${model.id}`)) {
-				defaultSummaryModel = `${model.provider}/${model.id}`;
-				break;
+		if (!defaultSummaryModel) {
+			for (const preferred of PREFERRED_SUMMARY_MODELS) {
+				const model = findSummaryModel(ctx, preferred);
+				if (model && availableValues.has(`${model.provider}/${model.id}`)) {
+					defaultSummaryModel = `${model.provider}/${model.id}`;
+					break;
+				}
 			}
 		}
+	} catch (error) {
+		if (!(error instanceof AmbiguousModelError)) throw error;
+		return { summaryModels, defaultSummaryModel: null, summaryModelError: error.message };
 	}
 	return { summaryModels, defaultSummaryModel };
 }
@@ -374,85 +402,86 @@ export async function generateSummaryDraft(
 	try {
 		if (signal?.aborted) throw new Error("Aborted");
 		const prompt = buildSummaryPrompt(results, feedback, instructions);
-		let resolved: ReturnType<typeof resolveSummaryModelCandidates>;
+		let lastError: string | undefined;
+		let lastFailure: "empty" | "error" | undefined;
 		try {
 			checkSummaryDeadline();
-			resolved = resolveSummaryModelCandidates(ctx, modelOverride);
+			const resolved = resolveSummaryModelCandidates(ctx, modelOverride);
+			for (const { model, thinkingLevel } of resolved.candidates) {
+				const startedAt = Date.now();
+				try {
+					// sessionId lets pi-ai's OpenCode providers add x-opencode-session. cacheRetention "none" keeps this
+					// one-off call out of the session's prompt cache and Codex continuation, as Pi does for compaction.
+					const sessionId = ctx.sessionManager?.getSessionId?.();
+					const userMessage: Message = {
+						role: "user",
+						content: [{ type: "text", text: prompt }],
+						timestamp: Date.now(),
+					};
+					const requestedThinkingLevel = await raceSummaryOperation(resolveThinkingLevel(model, thinkingLevel));
+					const enabledThinkingLevel = requestedThinkingLevel && requestedThinkingLevel !== "off"
+						? requestedThinkingLevel as ThinkingLevel
+						: undefined;
+					const completionOptions = {
+						sessionId,
+						cacheRetention: "none" as const,
+						signal: completionSignal,
+						...(requestedThinkingLevel ? { reasoning: requestedThinkingLevel } : {}),
+						...(enabledThinkingLevel ? { reasoningEffort: enabledThinkingLevel } : {}),
+					};
+					let authOptions: { apiKey?: string; headers?: ProviderHeaders } = {};
+					// Only the explicitly injected low-level seam needs auth options. Production
+					// requests authenticate once, at the native ModelRegistry completion boundary.
+					if (customCompleteFn) {
+						const auth = await raceSummaryOperation(registry.getApiKeyAndHeaders(model));
+						if (!auth.ok) throw new Error(`No API key available for summary model ${model.provider}/${model.id}`);
+						authOptions = { apiKey: auth.apiKey, headers: auth.headers };
+					}
+					checkSummaryDeadline();
+					const completion = customCompleteFn
+						? completeFn!(model, { messages: [userMessage] }, { ...completionOptions, ...authOptions })
+						: registry.complete(model, { messages: [userMessage] }, completionOptions);
+
+					const response = await raceSummaryOperation(Promise.resolve(completion));
+					if (response.stopReason === "aborted") throw new DOMException("Aborted", "AbortError");
+					if (response.stopReason === "error") throw new Error(response.errorMessage || "Summary model failed");
+
+					const summary = response.content
+						.filter(part => part.type === "text")
+						.map(part => part.text)
+						.filter(text => text.trim().length > 0)
+						.join("\n")
+						.trim();
+					if (summary.length === 0) {
+						lastFailure = "empty";
+						continue;
+					}
+
+					return {
+						summary,
+						meta: {
+							model: `${model.provider}/${model.id}`,
+							durationMs: Math.max(0, Date.now() - startedAt),
+							tokenEstimate: estimateTokens(summary),
+							fallbackUsed: false,
+							phase: "summary-model",
+							edited: false,
+						},
+					};
+				} catch (err) {
+					checkSummaryDeadline();
+					if (err instanceof Error && err.name === "AbortError") throw err;
+					lastError = err instanceof Error ? err.message : String(err);
+					lastFailure = "error";
+				}
+			}
+
+			lastError ??= resolved.errors.at(-1);
 		} catch (err) {
 			checkSummaryDeadline();
+			if (err instanceof AmbiguousModelError || (err instanceof Error && err.name === "AbortError")) throw err;
 			const message = err instanceof Error ? err.message : String(err);
 			return buildFallbackSummary(results, `summary-model-settings-error: ${message}`, Date.now() - generationStartedAt);
-		}
-
-		let lastError = resolved.errors.at(-1);
-		let lastFailure: "empty" | "error" | undefined;
-		for (const { model, thinkingLevel } of resolved.candidates) {
-			const startedAt = Date.now();
-			try {
-				// sessionId lets pi-ai's OpenCode providers add x-opencode-session. cacheRetention "none" keeps this
-				// one-off call out of the session's prompt cache and Codex continuation, as Pi does for compaction.
-				const sessionId = ctx.sessionManager?.getSessionId?.();
-				const userMessage: Message = {
-					role: "user",
-					content: [{ type: "text", text: prompt }],
-					timestamp: Date.now(),
-				};
-				const requestedThinkingLevel = await raceSummaryOperation(resolveThinkingLevel(model, thinkingLevel));
-				const enabledThinkingLevel = requestedThinkingLevel && requestedThinkingLevel !== "off"
-					? requestedThinkingLevel as ThinkingLevel
-					: undefined;
-				const completionOptions = {
-					sessionId,
-					cacheRetention: "none" as const,
-					signal: completionSignal,
-					...(requestedThinkingLevel ? { reasoning: requestedThinkingLevel } : {}),
-					...(enabledThinkingLevel ? { reasoningEffort: enabledThinkingLevel } : {}),
-				};
-				let authOptions: { apiKey?: string; headers?: ProviderHeaders } = {};
-				// Only the explicitly injected low-level seam needs auth options. Production
-				// requests authenticate once, at the native ModelRegistry completion boundary.
-				if (customCompleteFn) {
-					const auth = await raceSummaryOperation(registry.getApiKeyAndHeaders(model));
-					if (!auth.ok) throw new Error(`No API key available for summary model ${model.provider}/${model.id}`);
-					authOptions = { apiKey: auth.apiKey, headers: auth.headers };
-				}
-				checkSummaryDeadline();
-				const completion = customCompleteFn
-					? completeFn!(model, { messages: [userMessage] }, { ...completionOptions, ...authOptions })
-					: registry.complete(model, { messages: [userMessage] }, completionOptions);
-
-				const response = await raceSummaryOperation(Promise.resolve(completion));
-				if (response.stopReason === "aborted") throw new DOMException("Aborted", "AbortError");
-				if (response.stopReason === "error") throw new Error(response.errorMessage || "Summary model failed");
-
-				const summary = response.content
-					.filter(part => part.type === "text")
-					.map(part => part.text)
-					.filter(text => text.trim().length > 0)
-					.join("\n")
-					.trim();
-				if (summary.length === 0) {
-					lastFailure = "empty";
-					continue;
-				}
-
-				return {
-					summary,
-					meta: {
-						model: `${model.provider}/${model.id}`,
-						durationMs: Math.max(0, Date.now() - startedAt),
-						tokenEstimate: estimateTokens(summary),
-						fallbackUsed: false,
-						phase: "summary-model",
-						edited: false,
-					},
-				};
-			} catch (err) {
-				checkSummaryDeadline();
-				if (err instanceof Error && err.name === "AbortError") throw err;
-				lastError = err instanceof Error ? err.message : String(err);
-				lastFailure = "error";
-			}
 		}
 
 		return buildFallbackSummary(

@@ -355,6 +355,8 @@ queryModel = "default"
 # provider = "auto"
 # workflow = "summary-review"         # none / summary-review / auto-summary
 # summaryModel = "openai/gpt-6.1-sol"
+# 多个路由提供同一模型时会提示歧义；明确选择实际 provider，例如：
+# summaryModel = "openrouter/anthropic/claude-haiku-4-5"
 # autoOpenBrowser = false
 # proxy = "http://127.0.0.1:7890"      # 含用户名或密码的代理放入同目录 web-search.json
 # cacheRoot = "/path/to/cache"         # 缓存另建 web-search-cache 子目录

@@ -722,7 +722,7 @@ class TransportTests(McpHarness, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["result"]["isError"])
         error = self.unpack(response)["error"]
         self.assertEqual(error["code"], "unsupported_pi_version")
-        self.assertIn("1.2.0", error["message"])
+        self.assertIn("1.3.0", error["message"])
         self.assertIn("1.1.0", error["message"])
         self.assertFalse(marker.exists())
 
@@ -906,7 +906,7 @@ class LivePiLifecycleTests(McpHarness, unittest.IsolatedAsyncioTestCase):
     made; Pi, its agent dir and HOME are all isolated under the test root.
     SUBAGENT_PI_LIVE_PI_BIN selects an isolated Pi install (default: PATH).
 
-    Uses the plugin-owned SDK child against an unmodified Pi >=1.2.0 installation.
+    Uses the plugin-owned SDK child against an unmodified Pi >=1.3.0 installation.
     """
     BIN=os.environ.get('SUBAGENT_PI_LIVE_PI_BIN','pi')
     BEFORE_SETTLE='PI_MOCK_BEFORE_SETTLE'

@@ -82,6 +82,7 @@ function driveWithListener(
 	handle: FakeHandle,
 	script: (done: (v: unknown) => void) => void,
 	keybindings: QuestionnaireSessionConfig["keybindings"] = { matches: () => false },
+	tui = { requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } },
 ) {
 	const notify = vi.fn();
 	const removeListener = vi.fn();
@@ -103,7 +104,7 @@ function driveWithListener(
 		) => {
 			return new Promise((resolve) => {
 				componentRef.current = factory(
-					{ requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } },
+					tui,
 					identityTheme,
 					keybindings,
 					resolve,
@@ -138,6 +139,49 @@ afterEach(() => {
 });
 
 describe("ask_user_question — raw terminal collapse listener", () => {
+	it("reopens the upper hidden questionnaire before a focused lower one can consume its key", async () => {
+		const tui = { requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } };
+		let upperMounted = false;
+		const upperHandle = makeHandle({ isFocused: () => upperMounted && !upperHandle.isHidden() });
+		const lowerHandle = makeHandle({ isFocused: () => !lowerHandle.isHidden() && (!upperMounted || upperHandle.isHidden()) });
+		let finishLower: (value: unknown) => void = () => {};
+		let finishUpper: (value: unknown) => void = () => {};
+		const lower = driveWithListener(lowerHandle, done => { finishLower = done; }, undefined, tui);
+		const upper = driveWithListener(upperHandle, done => { finishUpper = done; upperMounted = true; }, undefined, tui);
+		const tool = register();
+		const lowerRun = tool.execute("lower", params as never, undefined, undefined, lower.ctx);
+		await vi.waitFor(() => expect(lower.listenerRef.current).toBeDefined());
+		const upperRun = tool.execute("upper", params as never, undefined, undefined, upper.ctx);
+		try {
+			await vi.waitFor(() => expect(upper.listenerRef.current).toBeDefined());
+			const press = () => {
+				for (const dialog of [lower, upper]) {
+					if (dialog.removeListener.mock.calls.length > 0) continue;
+					if (dialog.listenerRef.current?.(CTRL_RBRACKET)?.consume) break;
+				}
+			};
+			press();
+			expect(upperHandle.isHidden()).toBe(true);
+			expect(lowerHandle.isHidden()).toBe(false);
+			press();
+			expect(upperHandle.isHidden()).toBe(false);
+			expect(lowerHandle.isHidden()).toBe(false);
+			finishUpper({ answers: [], cancelled: true });
+			await upperRun;
+			upperMounted = false;
+			press();
+			expect(lowerHandle.isHidden()).toBe(true);
+			press();
+			expect(lowerHandle.isHidden()).toBe(false);
+		} finally {
+			finishLower({ answers: [], cancelled: true });
+			finishUpper({ answers: [], cancelled: true });
+			await Promise.all([lowerRun, upperRun]);
+		}
+		expect(lower.removeListener).toHaveBeenCalledTimes(1);
+		expect(upper.removeListener).toHaveBeenCalledTimes(1);
+	});
+
 	it.each([
 		["escape", "\x1b", "tui.select.cancel"], ["ctrl+]", CTRL_RBRACKET, "tui.select.cancel"],
 		["enter", "\r", "tui.select.confirm"], ["return", "\r", "tui.input.submit"],

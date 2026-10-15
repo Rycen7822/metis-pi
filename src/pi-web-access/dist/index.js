@@ -10287,13 +10287,20 @@ init_utils();
 
 // summary-model-scope.ts
 var THINKING_LEVELS = /* @__PURE__ */ new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-function findModelWithProviderRouting(registry, provider, id) {
-  const available = registry.getAvailable();
+var AmbiguousModelError = class extends Error {
+  name = "AmbiguousModelError";
+};
+function findModelWithProviderRouting(registry, provider, id, scopedModels = []) {
+  const available = registry.getAvailable().filter((model) => isModelInScope(model, scopedModels));
   const direct = available.find((model) => model.provider === provider && model.id === id);
   if (direct) return direct;
   const routedId = `${provider}/${id}`;
-  const routed = available.find((model) => model.id === routedId);
-  return routed ?? registry.find(provider, id);
+  const routed = available.filter((model) => model.id === routedId);
+  if (routed.length > 1) {
+    const choices = routed.map((model) => `${model.provider}/${model.id}`).sort();
+    throw new AmbiguousModelError(`Ambiguous model ${routedId}. Specify an explicit provider/model: ${choices.join(", ")}.`);
+  }
+  return routed[0] ?? registry.find(provider, id);
 }
 function isModelInScope(model, scopedModels) {
   return scopedModels.length === 0 || scopedModels.some((scoped) => scoped.model.provider === model.provider && scoped.model.id === model.id);
@@ -10341,7 +10348,7 @@ function parseModelSelector(value) {
 }
 function resolveModel(ctx, override, configured) {
   const selector = override ? parseModelSelector(override) : configured;
-  const model = selector ? findModelWithProviderRouting(ctx.modelRegistry, selector.provider, selector.id) : ctx.model;
+  const model = selector ? findModelWithProviderRouting(ctx.modelRegistry, selector.provider, selector.id, ctx.scopedModels) : ctx.model;
   if (!model) {
     if (override) throw new Error(`Answer model not found: ${override}`);
     if (configured) {
@@ -10401,9 +10408,13 @@ Note: The source page was truncated to ${pageText.length} of ${input.pageText.le
 function resolveFirstAvailableModel(ctx, candidates) {
   const available = ctx.modelRegistry.getAvailable();
   for (const { provider, id } of candidates) {
-    const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id);
-    if (!model || !isModelInScope(model, ctx.scopedModels)) continue;
-    if (available.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) return model;
+    try {
+      const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id, ctx.scopedModels);
+      if (!model || !isModelInScope(model, ctx.scopedModels)) continue;
+      if (available.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) return model;
+    } catch (error) {
+      if (!(error instanceof AmbiguousModelError)) throw error;
+    }
   }
   throw new Error(`No enabled model available: ${candidates.map((candidate) => `${candidate.provider}/${candidate.id}`).join(", ")}`);
 }
@@ -16763,9 +16774,9 @@ function buildProviderButtons(available, selected, hasInitialQueries) {
     return `<button type="button" class="${classes}" data-provider="${provider}" data-state="${state}"${disabled}>${providerLabel(provider)}</button>`;
   }).join("");
 }
-function generateCuratorPage(queries, sessionToken, timeout, availableProviders, defaultProvider, searchProvider, summaryModels, defaultSummaryModel) {
+function generateCuratorPage(queries, sessionToken, timeout, availableProviders, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, summaryModelError) {
   const providerButtonsHtml = buildProviderButtons(availableProviders, defaultProvider, queries.length > 0);
-  const inlineData = safeInlineJSON({ queries, sessionToken, timeout, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, availableProviders, providers: SEARCH_PROVIDERS, providerLabels: SEARCH_PROVIDER_LABELS });
+  const inlineData = safeInlineJSON({ queries, sessionToken, timeout, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, summaryModelError, availableProviders, providers: SEARCH_PROVIDERS, providerLabels: SEARCH_PROVIDER_LABELS });
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -18175,6 +18186,7 @@ var SCRIPT = `(function() {
   var initialSearchProvider = typeof DATA.searchProvider === "string" ? DATA.searchProvider.toLowerCase() : initialDefaultProvider;
   if (initialSearchProvider !== "auto" && providers.indexOf(initialSearchProvider) === -1) initialSearchProvider = initialDefaultProvider;
 
+  var summaryModelError = typeof DATA.summaryModelError === "string" ? DATA.summaryModelError : "";
   var summaryModels = Array.isArray(DATA.summaryModels)
     ? DATA.summaryModels.filter(function(model) {
       return model && typeof model === "object" && typeof model.value === "string";
@@ -18264,6 +18276,8 @@ var SCRIPT = `(function() {
   var summaryProviders = [];
   var currentSummaryProvider = "";
   var currentSummaryModel = "";
+  var explicitSummaryModel = false;
+  var previewModelExplicit = false;
   var summaryPendingModel = "";
   var summaryGeneratingStartedAt = 0;
   var summaryGeneratingPhase = -1;
@@ -18349,7 +18363,9 @@ var SCRIPT = `(function() {
         }
 
         if (!res.ok) {
-          throw new Error(extractServerError(data) || ("HTTP " + res.status));
+          var failure = new Error(extractServerError(data) || ("HTTP " + res.status));
+          failure.code = data && data.code;
+          throw failure;
         }
 
         return data;
@@ -18460,7 +18476,7 @@ var SCRIPT = `(function() {
 
     var autoOption = document.createElement("option");
     autoOption.value = "";
-    autoOption.textContent = "Auto";
+    autoOption.textContent = summaryModelError ? "Select a model" : "Auto";
     summaryModelSelect.appendChild(autoOption);
 
     var models = summaryModelsByProvider[provider] || [];
@@ -18486,7 +18502,7 @@ var SCRIPT = `(function() {
 
     if (hasPreferred) {
       summaryModelSelect.value = preferredModel;
-    } else if (models.length > 0) {
+    } else if (models.length > 0 && !summaryModelError) {
       summaryModelSelect.value = models[0].value;
     } else {
       summaryModelSelect.value = "";
@@ -18530,6 +18546,7 @@ var SCRIPT = `(function() {
     }
 
     setSummaryProvider(summaryProviders[0], "");
+    if (summaryModelError) setError(summaryModelError);
   }
 
   function getSelectedSummaryModel() {
@@ -19704,14 +19721,6 @@ var SCRIPT = `(function() {
     };
   }
 
-  function isSummaryModelSelectionError(message) {
-    if (typeof message !== "string") return false;
-    return message.indexOf("Invalid summary model") !== -1
-      || message.indexOf("Summary model not found") !== -1
-      || message.indexOf("No API key available for summary model") !== -1
-      || message.indexOf("Invalid provider") !== -1;
-  }
-
   function resetSummaryGeneratingState() {
     summaryPendingModel = "";
     summaryGeneratingStartedAt = 0;
@@ -19766,7 +19775,13 @@ var SCRIPT = `(function() {
     clearError();
     var previousStage = stage;
     var wasRegenerating = isRegenerating;
-    var selectedSummaryModel = getSelectedSummaryModel();
+    var selectedSummaryModel = explicitSummaryModel ? getSelectedSummaryModel() : "";
+    if (summaryModelError && !selectedSummaryModel) {
+      setError(summaryModelError);
+      stage = "summary-review";
+      updateStageUI();
+      return;
+    }
     summaryPendingModel = selectedSummaryModel;
     summaryGeneratingStartedAt = Date.now();
     summaryGeneratingPhase = -1;
@@ -19787,34 +19802,11 @@ var SCRIPT = `(function() {
       .then(function(data) {
         if (requestId !== summaryRequestSeq) return data;
         if (!data || data.ok === false) {
-          throw new Error(extractServerError(data) || "summary request rejected");
+          var failure = new Error(extractServerError(data) || "summary request rejected");
+          failure.code = data && data.code;
+          throw failure;
         }
         return data;
-      })
-      .catch(function(err) {
-        if (requestId !== summaryRequestSeq) throw err;
-
-        var firstMessage = err instanceof Error ? err.message : String(err);
-        if (selectedSummaryModel.length === 0 || !isSummaryModelSelectionError(firstMessage)) {
-          throw err;
-        }
-
-        summaryPendingModel = "";
-        updateStageUI();
-
-        var retryPayload = { selected: indices };
-        if (feedbackText.length > 0) {
-          retryPayload.feedback = feedbackText;
-        }
-        return postJson("/summarize", retryPayload).then(function(retryData) {
-          if (!retryData || retryData.ok === false) {
-            throw new Error(extractServerError(retryData) || "summary request rejected");
-          }
-          return retryData;
-        }).catch(function(retryErr) {
-          var retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          throw new Error(firstMessage + " (auto retry failed: " + (retryMessage || "unknown error") + ")");
-        });
       })
       .then(function(data) {
         if (requestId !== summaryRequestSeq) return;
@@ -19843,7 +19835,13 @@ var SCRIPT = `(function() {
         setError("Failed to generate summary \u2014 " + (message || "unknown error"));
         resetSummaryGeneratingState();
         isRegenerating = false;
-        if (wasRegenerating && getSummaryDraftText().length > 0) {
+        if (err && err.code === "ambiguous_model") {
+          summaryModelError = message;
+          explicitSummaryModel = false;
+          currentSummaryModel = "";
+          if (summaryModelSelect) summaryModelSelect.value = "";
+          stage = "summary-review";
+        } else if (wasRegenerating && getSummaryDraftText().length > 0) {
           stage = "summary-review";
         } else {
           stage = previousStage === "summary-review" ? "summary-review" : "results";
@@ -19977,6 +19975,7 @@ var SCRIPT = `(function() {
   }
 
   function openPreviewModal() {
+    previewModelExplicit = explicitSummaryModel;
     var draft = getSummaryDraftText();
     if (!draft || !previewModal || !previewModalBody) return;
     var rendered = typeof marked !== "undefined" && marked.parse
@@ -20050,8 +20049,14 @@ var SCRIPT = `(function() {
         summaryModelSelect.value = selectedModel;
         currentSummaryModel = selectedModel;
       }
+      explicitSummaryModel = previewModelExplicit;
       requestSummary(getSelectedIndices(), getFeedbackText());
       resetTimer();
+    });
+  }
+  if (previewModalModel) {
+    previewModalModel.addEventListener("change", function() {
+      previewModelExplicit = previewModalModel.value.trim().length > 0;
     });
   }
   if (previewModalApprove) {
@@ -20094,6 +20099,7 @@ var SCRIPT = `(function() {
         summaryModelSelect.value = selectedModel;
         currentSummaryModel = selectedModel;
       }
+      explicitSummaryModel = previewModelExplicit;
       requestSummary(getSelectedIndices(), feedback);
       resetTimer();
     });
@@ -20163,6 +20169,7 @@ var SCRIPT = `(function() {
       var provider = typeof summaryProviderSelect.value === "string" ? summaryProviderSelect.value : "";
       if (!provider || provider === currentSummaryProvider) return;
       setSummaryProvider(provider, "");
+      explicitSummaryModel = true;
       clearError();
       updateStageUI();
       resetTimer();
@@ -20174,6 +20181,7 @@ var SCRIPT = `(function() {
       currentSummaryModel = typeof summaryModelSelect.value === "string"
         ? summaryModelSelect.value.trim()
         : "";
+      explicitSummaryModel = currentSummaryModel.length > 0;
       clearError();
       resetTimer();
     });
@@ -20414,7 +20422,8 @@ function startCuratorServer(options, callbacks) {
     defaultProvider,
     searchProvider,
     summaryModels,
-    defaultSummaryModel
+    defaultSummaryModel,
+    summaryModelError
   } = options;
   let browserConnected = false;
   let lastHeartbeatAt = Date.now();
@@ -20520,7 +20529,8 @@ data: ${JSON.stringify(data)}
     defaultProvider,
     searchProvider,
     summaryModels,
-    defaultSummaryModel
+    defaultSummaryModel,
+    summaryModelError
   );
   const server = http.createServer(async (req, res) => {
     try {
@@ -20725,7 +20735,11 @@ data: ${JSON.stringify(data)}
         } catch (err) {
           const message = err instanceof Error ? err.message : "Summary generation failed";
           const status = controller.signal.aborted ? 409 : 500;
-          sendJson(res, status, { ok: false, error: message });
+          sendJson(res, status, {
+            ok: false,
+            error: message,
+            ...err instanceof AmbiguousModelError ? { code: "ambiguous_model" } : {}
+          });
         } finally {
           if (summarizeAbortController === controller) {
             summarizeAbortController = null;
@@ -21091,30 +21105,43 @@ async function resolveThinkingLevel(model, requested) {
   const { clampThinkingLevel } = await import("@earendil-works/pi-ai");
   return clampThinkingLevel(model, requested);
 }
-function resolveSummaryModelCandidates(ctx, modelOverride) {
-  const specs = [];
-  const normalizedOverride = typeof modelOverride === "string" ? modelOverride.trim() : "";
-  if (normalizedOverride.length > 0) specs.push(parseModelSelector2(normalizedOverride));
-  specs.push(...PREFERRED_SUMMARY_MODELS);
-  const candidates = [];
-  const errors = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const spec of specs) {
-    const value = `${spec.provider}/${spec.id}`;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    const model = findModelWithProviderRouting(ctx.modelRegistry, spec.provider, spec.id);
-    if (!model) {
-      errors.push(`Summary model not found: ${value}`);
-      continue;
+function findSummaryModel(ctx, spec) {
+  try {
+    return findModelWithProviderRouting(ctx.modelRegistry, spec.provider, spec.id, ctx.scopedModels);
+  } catch (error) {
+    if (error instanceof AmbiguousModelError) {
+      throw new AmbiguousModelError(`${error.message} Set [webAccess].summaryModel in metis-pi.toml to one of these selectors.`);
     }
-    if (!isModelInScope(model, ctx.scopedModels)) {
-      errors.push(`Summary model is not enabled: ${value}`);
-      continue;
-    }
-    candidates.push({ model, thinkingLevel: spec.thinkingLevel });
+    throw error;
   }
-  return { candidates, errors };
+}
+function resolveSummaryModelCandidates(ctx, modelOverride) {
+  const selector = modelOverride ?? loadWebAccessConfig().summaryModel;
+  const normalizedOverride = typeof selector === "string" ? selector.trim() : "";
+  let selected;
+  try {
+    if (normalizedOverride) selected = parseModelSelector2(normalizedOverride);
+  } catch (error) {
+    if (modelOverride != null) throw error;
+  }
+  const specs = selected ? [selected] : PREFERRED_SUMMARY_MODELS;
+  const errors = [];
+  function* candidates() {
+    for (const spec of specs) {
+      const value = `${spec.provider}/${spec.id}`;
+      const model = findSummaryModel(ctx, spec);
+      if (!model) {
+        errors.push(`Summary model not found: ${value}`);
+        continue;
+      }
+      if (!isModelInScope(model, ctx.scopedModels)) {
+        errors.push(`Summary model is not enabled: ${value}`);
+        continue;
+      }
+      yield { model, thinkingLevel: spec.thinkingLevel };
+    }
+  }
+  return { candidates: candidates(), errors };
 }
 async function loadSummaryModelChoices(ctx) {
   const summaryModels = [];
@@ -21135,28 +21162,38 @@ async function loadSummaryModelChoices(ctx) {
   const configured = loadWebAccessConfig().summaryModel;
   const selector = typeof configured === "string" ? configured.trim() : "";
   let defaultSummaryModel = availableValues.has(selector) ? selector : null;
-  if (!defaultSummaryModel && selector) {
-    let spec;
-    try {
-      spec = parseModelSelector2(selector);
-    } catch {
-    }
-    if (spec) {
-      const model = findModelWithProviderRouting(ctx.modelRegistry, spec.provider, spec.id);
-      if (model && availableValues.has(`${model.provider}/${model.id}`)) {
+  try {
+    if (!defaultSummaryModel && selector) {
+      let spec;
+      try {
+        spec = parseModelSelector2(selector);
+      } catch {
+      }
+      if (spec) {
+        const model = findSummaryModel(ctx, spec);
+        if (!model || !availableValues.has(`${model.provider}/${model.id}`)) {
+          return {
+            summaryModels,
+            defaultSummaryModel: null,
+            summaryModelError: `Summary model is not available or enabled: ${selector}. Check [webAccess].summaryModel in metis-pi.toml.`
+          };
+        }
         add(selector);
         defaultSummaryModel = selector;
       }
     }
-  }
-  if (!defaultSummaryModel) {
-    for (const preferred of PREFERRED_SUMMARY_MODELS) {
-      const model = findModelWithProviderRouting(ctx.modelRegistry, preferred.provider, preferred.id);
-      if (model && availableValues.has(`${model.provider}/${model.id}`)) {
-        defaultSummaryModel = `${model.provider}/${model.id}`;
-        break;
+    if (!defaultSummaryModel) {
+      for (const preferred of PREFERRED_SUMMARY_MODELS) {
+        const model = findSummaryModel(ctx, preferred);
+        if (model && availableValues.has(`${model.provider}/${model.id}`)) {
+          defaultSummaryModel = `${model.provider}/${model.id}`;
+          break;
+        }
       }
     }
+  } catch (error) {
+    if (!(error instanceof AmbiguousModelError)) throw error;
+    return { summaryModels, defaultSummaryModel: null, summaryModelError: error.message };
   }
   return { summaryModels, defaultSummaryModel };
 }
@@ -21214,68 +21251,69 @@ async function generateSummaryDraft(results, ctx, signal, modelOverride, feedbac
   try {
     if (signal?.aborted) throw new Error("Aborted");
     const prompt = buildSummaryPrompt(results, feedback, instructions);
-    let resolved;
+    let lastError;
+    let lastFailure;
     try {
       checkSummaryDeadline();
-      resolved = resolveSummaryModelCandidates(ctx, modelOverride);
+      const resolved = resolveSummaryModelCandidates(ctx, modelOverride);
+      for (const { model, thinkingLevel } of resolved.candidates) {
+        const startedAt = Date.now();
+        try {
+          const sessionId = ctx.sessionManager?.getSessionId?.();
+          const userMessage = {
+            role: "user",
+            content: [{ type: "text", text: prompt }],
+            timestamp: Date.now()
+          };
+          const requestedThinkingLevel = await raceSummaryOperation(resolveThinkingLevel(model, thinkingLevel));
+          const enabledThinkingLevel = requestedThinkingLevel && requestedThinkingLevel !== "off" ? requestedThinkingLevel : void 0;
+          const completionOptions = {
+            sessionId,
+            cacheRetention: "none",
+            signal: completionSignal,
+            ...requestedThinkingLevel ? { reasoning: requestedThinkingLevel } : {},
+            ...enabledThinkingLevel ? { reasoningEffort: enabledThinkingLevel } : {}
+          };
+          let authOptions = {};
+          if (customCompleteFn) {
+            const auth = await raceSummaryOperation(registry.getApiKeyAndHeaders(model));
+            if (!auth.ok) throw new Error(`No API key available for summary model ${model.provider}/${model.id}`);
+            authOptions = { apiKey: auth.apiKey, headers: auth.headers };
+          }
+          checkSummaryDeadline();
+          const completion = customCompleteFn ? completeFn(model, { messages: [userMessage] }, { ...completionOptions, ...authOptions }) : registry.complete(model, { messages: [userMessage] }, completionOptions);
+          const response = await raceSummaryOperation(Promise.resolve(completion));
+          if (response.stopReason === "aborted") throw new DOMException("Aborted", "AbortError");
+          if (response.stopReason === "error") throw new Error(response.errorMessage || "Summary model failed");
+          const summary = response.content.filter((part) => part.type === "text").map((part) => part.text).filter((text4) => text4.trim().length > 0).join("\n").trim();
+          if (summary.length === 0) {
+            lastFailure = "empty";
+            continue;
+          }
+          return {
+            summary,
+            meta: {
+              model: `${model.provider}/${model.id}`,
+              durationMs: Math.max(0, Date.now() - startedAt),
+              tokenEstimate: estimateTokens(summary),
+              fallbackUsed: false,
+              phase: "summary-model",
+              edited: false
+            }
+          };
+        } catch (err) {
+          checkSummaryDeadline();
+          if (err instanceof Error && err.name === "AbortError") throw err;
+          lastError = err instanceof Error ? err.message : String(err);
+          lastFailure = "error";
+        }
+      }
+      lastError ??= resolved.errors.at(-1);
     } catch (err) {
       checkSummaryDeadline();
+      if (err instanceof AmbiguousModelError || err instanceof Error && err.name === "AbortError") throw err;
       const message = err instanceof Error ? err.message : String(err);
       return buildFallbackSummary(results, `summary-model-settings-error: ${message}`, Date.now() - generationStartedAt);
-    }
-    let lastError = resolved.errors.at(-1);
-    let lastFailure;
-    for (const { model, thinkingLevel } of resolved.candidates) {
-      const startedAt = Date.now();
-      try {
-        const sessionId = ctx.sessionManager?.getSessionId?.();
-        const userMessage = {
-          role: "user",
-          content: [{ type: "text", text: prompt }],
-          timestamp: Date.now()
-        };
-        const requestedThinkingLevel = await raceSummaryOperation(resolveThinkingLevel(model, thinkingLevel));
-        const enabledThinkingLevel = requestedThinkingLevel && requestedThinkingLevel !== "off" ? requestedThinkingLevel : void 0;
-        const completionOptions = {
-          sessionId,
-          cacheRetention: "none",
-          signal: completionSignal,
-          ...requestedThinkingLevel ? { reasoning: requestedThinkingLevel } : {},
-          ...enabledThinkingLevel ? { reasoningEffort: enabledThinkingLevel } : {}
-        };
-        let authOptions = {};
-        if (customCompleteFn) {
-          const auth = await raceSummaryOperation(registry.getApiKeyAndHeaders(model));
-          if (!auth.ok) throw new Error(`No API key available for summary model ${model.provider}/${model.id}`);
-          authOptions = { apiKey: auth.apiKey, headers: auth.headers };
-        }
-        checkSummaryDeadline();
-        const completion = customCompleteFn ? completeFn(model, { messages: [userMessage] }, { ...completionOptions, ...authOptions }) : registry.complete(model, { messages: [userMessage] }, completionOptions);
-        const response = await raceSummaryOperation(Promise.resolve(completion));
-        if (response.stopReason === "aborted") throw new DOMException("Aborted", "AbortError");
-        if (response.stopReason === "error") throw new Error(response.errorMessage || "Summary model failed");
-        const summary = response.content.filter((part) => part.type === "text").map((part) => part.text).filter((text4) => text4.trim().length > 0).join("\n").trim();
-        if (summary.length === 0) {
-          lastFailure = "empty";
-          continue;
-        }
-        return {
-          summary,
-          meta: {
-            model: `${model.provider}/${model.id}`,
-            durationMs: Math.max(0, Date.now() - startedAt),
-            tokenEstimate: estimateTokens(summary),
-            fallbackUsed: false,
-            phase: "summary-model",
-            edited: false
-          }
-        };
-      } catch (err) {
-        checkSummaryDeadline();
-        if (err instanceof Error && err.name === "AbortError") throw err;
-        lastError = err instanceof Error ? err.message : String(err);
-        lastFailure = "error";
-      }
     }
     return buildFallbackSummary(
       results,
@@ -23345,7 +23383,8 @@ function registerWebSearchCommand(pi, buildSearchReturn) {
             defaultProvider: initialProvider,
             searchProvider: toCuratorProvider(currentSearchProvider) ?? "auto",
             summaryModels: summaryModelChoices.summaryModels,
-            defaultSummaryModel: summaryModelChoices.defaultSummaryModel
+            defaultSummaryModel: summaryModelChoices.defaultSummaryModel,
+            summaryModelError: summaryModelChoices.summaryModelError
           },
           {
             async onSummarize(selectedQueryIndices, summarizeSignal, model, feedback) {
@@ -24061,7 +24100,8 @@ Open manually: ${handle.url}` }],
           defaultProvider: pc.defaultProvider,
           searchProvider: toCuratorProvider(pc.searchProvider) ?? "auto",
           summaryModels: pc.summaryModels,
-          defaultSummaryModel: pc.defaultSummaryModel
+          defaultSummaryModel: pc.defaultSummaryModel,
+          summaryModelError: pc.summaryModelError
         },
         {
           async onSummarize(selectedQueryIndices, summarizeSignal, model, feedback) {
@@ -24373,6 +24413,7 @@ Open manually: ${handle.url}` }],
             searchProvider,
             summaryModels: summaryModelChoices.summaryModels,
             defaultSummaryModel: summaryModelChoices.defaultSummaryModel,
+            summaryModelError: summaryModelChoices.summaryModelError,
             timeoutSeconds: curatorTimeoutSeconds,
             proxy: typeof params.proxy === "string" ? params.proxy : void 0,
             onUpdate,
@@ -24527,11 +24568,18 @@ Open manually: ${handle.url}` }],
               scopedModels: ctx.scopedModels
             };
             const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
+            if (summaryModelChoices.summaryModelError) {
+              return {
+                content: [{ type: "text", text: `Error: ${summaryModelChoices.summaryModelError}` }],
+                details: { error: summaryModelChoices.summaryModelError },
+                isError: true
+              };
+            }
             const generated = await generateSummaryDraft(
               searchResults,
               summaryContext,
               signal,
-              summaryModelChoices.defaultSummaryModel ?? void 0,
+              void 0,
               void 0,
               void 0,
               getSummaryGenerationDeadlineMs(),

@@ -1,3 +1,4 @@
+import "./isolate-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { findModelWithProviderRouting } from "../summary-model-scope.ts";
+import { AmbiguousModelError, findModelWithProviderRouting } from "../summary-model-scope.ts";
 import { generateSummaryDraft, loadSummaryModelChoices, SUMMARY_GENERATION_DEADLINE_MS } from "../summary-review.ts";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
@@ -262,7 +263,7 @@ test("model resolution preserves the direct registry fallback", () => {
 	);
 });
 
-test("routed model resolution follows available-model ordering", () => {
+test("multiple routes require an explicit selector regardless of catalogue order", () => {
 	const firstRoute = { provider: "openrouter", id: "anthropic/claude-haiku-4-5" };
 	const secondRoute = { provider: "requesty", id: "anthropic/claude-haiku-4-5" };
 	const registry = {
@@ -270,10 +271,43 @@ test("routed model resolution follows available-model ordering", () => {
 		getAvailable: () => [firstRoute, secondRoute],
 	};
 
-	assert.equal(
-		findModelWithProviderRouting(registry, "anthropic", "claude-haiku-4-5"),
-		firstRoute,
-	);
+	for (const routes of [[firstRoute, secondRoute], [secondRoute, firstRoute]]) {
+		registry.getAvailable = () => routes;
+		assert.throws(() => findModelWithProviderRouting(registry, "anthropic", "claude-haiku-4-5"), error => {
+			assert.ok(error instanceof AmbiguousModelError);
+			for (const route of routes) assert.ok(error.message.includes(`${route.provider}/${route.id}`));
+			return true;
+		});
+		assert.equal(findModelWithProviderRouting(registry, "requesty", secondRoute.id), secondRoute);
+		assert.equal(findModelWithProviderRouting(registry, "anthropic", "claude-haiku-4-5", [{ model: secondRoute }]), secondRoute);
+	}
+	const native = { provider: "anthropic", id: "claude-haiku-4-5" };
+	registry.getAvailable = () => [firstRoute, native, secondRoute];
+	assert.equal(findModelWithProviderRouting(registry, native.provider, native.id), native);
+});
+
+test("ambiguous summary routes make no model call; explicit selection bypasses ambiguous defaults", async () => {
+	const routes = ["openrouter", "requesty"].map(provider => ({ provider, id: "anthropic/claude-haiku-4-5" }));
+	const calls = [];
+	const context = {
+		scopedModels: [],
+		modelRegistry: {
+			getAvailable: () => routes,
+			find: (provider, id) => routes.find(model => model.provider === provider && model.id === id),
+			complete: async model => {
+				calls.push(model.provider);
+				return { stopReason: "stop", content: [{ type: "text", text: "Explicit summary" }] };
+			},
+		},
+	};
+	await assert.rejects(generateSummaryDraft(summaryResults, context), /Ambiguous.*metis-pi\.toml/);
+	assert.deepEqual(calls, []);
+	const generated = await generateSummaryDraft(summaryResults, context, undefined, "requesty/anthropic/claude-haiku-4-5");
+	assert.equal(generated.summary, "Explicit summary");
+	assert.deepEqual(calls, ["requesty"]);
+	const invalid = await generateSummaryDraft(summaryResults, context, undefined, "invalid-selector");
+	assert.match(invalid.meta.fallbackReason, /summary-model-settings-error: Invalid summary model/);
+	assert.deepEqual(calls, ["requesty"]);
 });
 
 test("summary generation has a hard deadline and preserves caller cancellation", () => {
@@ -281,6 +315,28 @@ test("summary generation has a hard deadline and preserves caller cancellation",
 	assert.match(summarySrc, /Promise\.race\(contenders\)/);
 	assert.match(summarySrc, /deadlineController\.abort\(\)/);
 	assert.match(summarySrc, /void operation\.then\(\(\) => undefined, \(\) => undefined\)/);
+});
+
+test("unused ambiguous fallback cannot block the first default; reached ambiguity still fails", async () => {
+	const native = { provider: "anthropic", id: "claude-haiku-4-5" };
+	const models = [native, ...["openrouter", "requesty"].map(provider => ({ provider, id: "google/gemini-3.6-flash" }))];
+	const calls = [];
+	let fail = false;
+	const ctx = { scopedModels: [], modelRegistry: {
+		getAvailable: () => models,
+		find: (provider, id) => models.find(model => model.provider === provider && model.id === id),
+		complete: async model => {
+			calls.push(`${model.provider}/${model.id}`);
+			return fail ? { stopReason: "error", errorMessage: "unavailable", content: [] }
+				: { stopReason: "stop", content: [{ type: "text", text: "First default summary" }] };
+		},
+	} };
+	assert.equal((await loadSummaryModelChoices(ctx)).defaultSummaryModel, "anthropic/claude-haiku-4-5");
+	assert.equal((await generateSummaryDraft(summaryResults, ctx)).summary, "First default summary");
+	assert.deepEqual(calls, ["anthropic/claude-haiku-4-5"]);
+	fail = true;
+	await assert.rejects(generateSummaryDraft(summaryResults, ctx), /Ambiguous.*google\/gemini/);
+	assert.deepEqual(calls, ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5"]);
 });
 
 async function summaryGenerationDeadline(config) {
@@ -368,20 +424,28 @@ test("native error wording containing abort remains failure, distinct from abort
 });
 
 
-async function isolatedSummaryChoices({ models, current, scopedModels = [], configured }) {
+async function isolatedSummaryChoices({ models, current, scopedModels = [], configured, generate = false }) {
 	const configDir = await mkdtemp(join(tmpdir(), "summary-choices-"));
 	try {
-		await writeFile(join(configDir, "web-search.json"), JSON.stringify({ summaryModel: configured }));
+		await writeFile(join(configDir, "metis-pi.toml"), `[webAccess]\n${configured === undefined ? "" : `summaryModel = ${JSON.stringify(configured)}\n`}`);
 		const summaryUrl = new URL("../summary-review.ts", import.meta.url).href;
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
-				const { loadSummaryModelChoices } = await import(${JSON.stringify(summaryUrl)});
+				const { loadSummaryModelChoices, generateSummaryDraft } = await import(${JSON.stringify(summaryUrl)});
 				const models = ${JSON.stringify(models)};
+				const calls = [];
 				const ctx = { model: ${JSON.stringify(current)}, scopedModels: ${JSON.stringify(scopedModels)}, modelRegistry: {
 					getAvailable: () => models,
 					find: (provider, id) => models.find(model => model.provider === provider && model.id === id),
+					complete: async model => { calls.push(model.provider); return { stopReason: "stop", content: [{ type: "text", text: "TOML summary" }] }; },
 				} };
-				console.log(JSON.stringify(await loadSummaryModelChoices(ctx)));
+				const result = await loadSummaryModelChoices(ctx);
+				if (${generate}) {
+					try { result.generated = await generateSummaryDraft(${JSON.stringify(summaryResults)}, ctx); }
+					catch (error) { result.error = error.message; }
+					result.calls = calls;
+				}
+				console.log(JSON.stringify(result));
 			`, encoding: "utf8", env: { ...process.env, PI_CODING_AGENT_DIR: configDir },
 		});
 		assert.equal(child.status, 0, child.stderr);
@@ -398,7 +462,33 @@ test("summary choices retain routed thinking selectors and current-only options 
 	const none = await isolatedSummaryChoices({ models: [], current });
 	assert.equal(none.defaultSummaryModel, null);
 	assert.deepEqual(none.summaryModels.map(option => option.value), ["private/current-only"]);
-	const excluded = await isolatedSummaryChoices({ models: [routed], current, scopedModels: [{ model: routed }], configured: "invalid-selector" });
+	const excluded = await isolatedSummaryChoices({
+		models: [routed], current, scopedModels: [{ model: routed }], configured: "invalid-selector", generate: true,
+	});
 	assert.equal(excluded.defaultSummaryModel, "openrouter/anthropic/claude-haiku-4-5");
 	assert.deepEqual(excluded.summaryModels.map(option => option.value), ["openrouter/anthropic/claude-haiku-4-5"]);
+	assert.deepEqual(excluded.calls, ["openrouter"]);
+	assert.equal(excluded.generated.summary, "TOML summary");
+});
+
+test("TOML summaryModel resolves ambiguity for both choices and execution", async () => {
+	const models = ["openrouter", "requesty"].map(provider => ({ provider, id: "anthropic/claude-haiku-4-5" }));
+	const ambiguous = await isolatedSummaryChoices({ models, configured: "anthropic/claude-haiku-4-5", generate: true });
+	assert.equal(ambiguous.defaultSummaryModel, null);
+	assert.match(ambiguous.summaryModelError, /Ambiguous.*\[webAccess\]\.summaryModel/);
+	assert.match(ambiguous.error, /Ambiguous/);
+	assert.deepEqual(ambiguous.calls, []);
+	assert.equal(ambiguous.summaryModels.length, 2);
+	const explicit = await isolatedSummaryChoices({ models, configured: "requesty/anthropic/claude-haiku-4-5", generate: true });
+	assert.equal(explicit.defaultSummaryModel, "requesty/anthropic/claude-haiku-4-5");
+	assert.equal(explicit.summaryModelError, undefined);
+	assert.deepEqual(explicit.calls, ["requesty"]);
+	assert.equal(explicit.generated.summary, "TOML summary");
+	const excluded = await isolatedSummaryChoices({
+		models, configured: "requesty/anthropic/claude-haiku-4-5",
+		scopedModels: [{ model: models[0] }], generate: true,
+	});
+	assert.equal(excluded.defaultSummaryModel, null);
+	assert.match(excluded.summaryModelError, /not available or enabled/);
+	assert.deepEqual(excluded.calls, []);
 });

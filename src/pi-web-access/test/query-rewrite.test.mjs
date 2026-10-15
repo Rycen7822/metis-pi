@@ -77,6 +77,26 @@ test("rewriteSearchQuery skips models outside the host's resolved scope", async 
 	assert.deepEqual(used, ["google/gemini-3.6-flash"]);
 });
 
+test("rewriteSearchQuery skips ambiguous candidates without choosing an arbitrary route", async () => {
+	const flash = { provider: "google", id: "gemini-3.6-flash" };
+	let models = [...["openrouter", "requesty"].map(provider => ({ provider, id: "anthropic/claude-haiku-4-5" })), flash];
+	const used = [];
+	const ctx = { scopedModels: [], modelRegistry: {
+		getAvailable: () => models,
+		find: (provider, id) => models.find(model => model.provider === provider && model.id === id),
+		complete: async model => {
+			used.push(model.provider);
+			return { stopReason: "stop", content: [{ type: "text", text: "rewritten" }] };
+		},
+	} };
+	const signal = new AbortController().signal;
+	assert.equal(await rewriteSearchQuery("q", ctx, signal), "rewritten");
+	assert.deepEqual(used, ["google"]);
+	models = models.filter(model => model !== flash);
+	await assert.rejects(rewriteSearchQuery("q", ctx, signal), /No enabled model available/);
+	assert.deepEqual(used, ["google"]);
+});
+
 test("rewriteSearchQuery uses a model whose provider authenticates without an API key", async () => {
 	const haiku = { api: "custom-rewrite-api", provider: "anthropic", id: "claude-haiku-4-5", input: ["text"] };
 	const used = [];
