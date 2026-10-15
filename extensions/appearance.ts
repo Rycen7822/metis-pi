@@ -124,6 +124,13 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     editorHost: { CustomEditor: Pi.CustomEditor as unknown },
     fullscreenHost: {
       HStack: typeof Tui.HStack === "function" ? Tui.HStack : undefined,
+      VStack: typeof Tui.VStack === "function" ? Tui.VStack : undefined,
+      UserMessageComponent: Pi.UserMessageComponent,
+      SkillInvocationMessageComponent: Pi.SkillInvocationMessageComponent,
+      promptRow: (summary, width) => {
+        const row = Tui.truncateToWidth(`↑ ${summary}`, width);
+        return row + " ".repeat(Math.max(0, width - Tui.visibleWidth(row)));
+      },
       Spacer: typeof Tui.Spacer === "function" ? Tui.Spacer : undefined,
       Container: Tui.Container, ScrollView: Tui.ScrollView, matchesKey: Tui.matchesKey,
     },

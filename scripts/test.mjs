@@ -24,7 +24,7 @@ const suites = {
   chrome: (file) => [
     "core/chrome", "core/working", "core/hardware-cursor",
     "contract/appearance", "contract/editor", "contract/copy-mirror", "contract/copy-text",
-    "contract/fullscreen", "contract/history-window", "contract/clipboard-facade",
+    "contract/fullscreen", "contract/history-window", "contract/sticky-prompt", "contract/clipboard-facade",
     "resource/copy-cache", "resource/copy-heap", "resource/windows-clipboard",
   ].some((owner) => file.startsWith(`${owner}.test.`)),
 };

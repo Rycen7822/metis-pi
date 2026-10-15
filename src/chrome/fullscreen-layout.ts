@@ -1,5 +1,5 @@
-// One layout-root interception owns gutters and the bounded history window.
-// Geometry and history caching remain independent; neither installs another hook.
+// One layout-root interception owns gutters, history and prompt navigation.
+// The ScrollView adapter and bounded caches share this installation lifecycle.
 import { createHistoryWindowSystem, type HistoryWindowHost, type HistoryWindowTui } from "./history-window.ts";
 
 export const FULLSCREEN_MARGIN_OWNER = Symbol.for("Rycen7822.metis-pi.fullscreen-margin");
@@ -97,7 +97,7 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
         lease = { proto, descriptor, wrapper, tui: target };
       }
       // Retry capture/mount without stacking another hook, even if a later
-      // extension has wrapped ours. Existing roots also receive both features.
+      // extension has wrapped ours. Existing roots also receive the layout features.
       if (marginReady && target.layoutRoot && !innerRoot(target.layoutRoot)) target.setLayoutRoot?.(target.layoutRoot);
       else history.mount(target, innerRoot(target.layoutRoot) ?? target.layoutRoot);
       reason = "installed";

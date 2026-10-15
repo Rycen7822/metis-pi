@@ -4,8 +4,9 @@ import { activate } from "../../src/extension.ts";
 import { GIT_CHANGES_INTERVAL_MS } from "../../src/git-changes.ts";
 import { theme, toolInfo } from "../helpers.mjs";
 import { isolatedToolHost } from "../helpers/native-tool.mjs";
-import { altScreen } from "../helpers/ui-fixtures.mjs";
-import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
+import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
+import * as Tui from "@earendil-works/pi-tui";
+import { AssistantMessageComponent, CustomEditor, initTheme, SessionManager, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, Spacer, Text, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { CodexThinkingRailComponent } from "../../src/chrome/transcript-components.ts";
 import { stringify } from "smol-toml";
@@ -90,6 +91,33 @@ async function session(t, bindings = {}, overrides = {}) {
   await h.whenReady();
   return { ...h, ctx };
 }
+
+test("captured fullscreen chrome paints sticky prompts with the current public UI theme", async t => {
+  const promptColors = [];
+  const currentTheme = {
+    fg(key, row) { promptColors.push(key); return row; },
+    bg(key, row) { promptColors.push(key); return row; },
+  };
+  const { slots, ctx } = await session(t, {
+    fullscreenHost: { ...Tui, UserMessageComponent,
+      promptRow: (summary, width) => Tui.truncateToWidth(`↑ ${summary}`, width) },
+  }, { ui: { theme: currentTheme } });
+  const { tui } = altScreen(60);
+  const source = container(new UserMessageComponent("CAPTURED_PROMPT"),
+    new Text(Array.from({ length: 100 }, (_, i) => `REPLY_${i}`).join("\n"), 0, 0));
+  tui.setLayoutRoot(new Tui.ScrollView(source, { primary: true, follow: "end" }));
+  slots.footerFactories.at(-1)(tui, theme, {
+    getGitBranch: () => undefined, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
+  });
+  tui.doRender();
+  assert.match(screenLines(tui)[0], /↑ CAPTURED_PROMPT/);
+  assert.ok(promptColors.includes("userMessageText"));
+  assert.ok(promptColors.includes("userMessageBg"));
+  let changed = false;
+  ctx.ui.theme = { ...currentTheme, bg: (_key, row) => { changed = true; return row; } };
+  tui.doRender();
+  assert.equal(changed, true, "theme access is live, not a startup snapshot");
+});
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const widgetByKey = (slots, key) =>

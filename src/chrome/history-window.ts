@@ -1,4 +1,5 @@
 import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyProduct, type ChildPlacement } from "../selection-copy/model.ts";
+import { safeText } from "../tool-names.ts";
 
 export const HISTORY_ROW_BUDGET = 5000;
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
@@ -29,9 +30,18 @@ export interface HistoryWindowTui {
   addInputListener?(listener: (data: string) => void): () => void;
   requestRender?(): void;
 }
-export interface HistoryWindowHost { Container?: unknown; ScrollView?: unknown; matchesKey?: (data: string, key: "enter") => boolean; }
+export interface HistoryWindowHost {
+  Container?: unknown;
+  ScrollView?: unknown;
+  VStack?: unknown;
+  matchesKey?: (data: string, key: "enter") => boolean;
+  UserMessageComponent?: unknown;
+  SkillInvocationMessageComponent?: unknown;
+  promptRow?: (summary: string, width: number) => string;
+  promptTheme?: () => { fg(key: string, text: string): string; bg(key: string, text: string): string } | undefined;
+}
 type Cursor = { component: Component; row: number };
-type RowOrigin = Cursor & { height: number };
+type RowOrigin = Cursor & { height: number; index: number };
 type CachedBlock = { rows?: string[]; unwatch: () => void };
 type WindowPiece = { component: Component; rows: string[]; index: number; start: number; end: number };
 
@@ -104,6 +114,12 @@ export class HistoryWindow {
   #width = -1;
   #rows: string[] = [];
   #origins: (RowOrigin | undefined)[] = [];
+  #prompts: { component: Component; index: number }[] = [];
+  #promptRows: string[] = [""];
+  #promptWidth = 1;
+  #pinned: Component | undefined;
+  #pressedPrompt: { component: Component; dragged: boolean; x: number; y: number } | undefined;
+  #promptPreview: { component: Component; width: number; summary: string } | undefined;
   #cursor: Cursor | undefined;
   #scrollTarget: number | undefined;
   #direction: "backward" | "forward" = "backward";
@@ -115,9 +131,20 @@ export class HistoryWindow {
   readonly scroll: Scroll;
   readonly container: unknown;
   readonly holdSelection: () => boolean;
-  constructor(source: Component, scroll: Scroll, container: unknown, holdSelection: () => boolean = () => false) {
+  readonly promptHost: HistoryWindowHost | undefined;
+  readonly promptHeader: Component = {
+    render: width => {
+      this.#promptWidth = width;
+      this.#promptRows = [this.#pinned && this.#promptPreview ? this.#paintPrompt(this.#promptPreview.summary) : ""];
+      return this.#promptRows;
+    },
+    invalidate: () => { this.#promptPreview = undefined; },
+    handleMouse: event => this.#handlePromptMouse(event),
+  };
+  constructor(source: Component, scroll: Scroll, container: unknown, holdSelection: () => boolean = () => false, promptHost?: HistoryWindowHost) {
     this.source = source; this.scroll = scroll; this.container = container;
     this.holdSelection = holdSelection;
+    this.promptHost = promptHost?.promptRow && typeof promptHost.UserMessageComponent === "function" ? promptHost : undefined;
     releaseBlock(source);
   }
 
@@ -131,8 +158,12 @@ export class HistoryWindow {
     this.#structureRestores = [];
     this.#structureChecks = [];
     this.#items = [];
+    this.#prompts = [];
+    const promptTypes = [this.promptHost?.UserMessageComponent, this.promptHost?.SkillInvocationMessageComponent]
+      .filter(Type => typeof Type === "function");
     const walk = (node: Component) => {
       if (node.constructor !== this.container) {
+        if (promptTypes.some(Type => node instanceof Type)) this.#prompts.push({ component: node, index: this.#items.length });
         this.#items.push(node);
         return;
       }
@@ -168,8 +199,9 @@ export class HistoryWindow {
     this.#structureDirty = false;
     const present = new Set(this.#items);
     if (this.#cursor && !present.has(this.#cursor.component)) {
-      this.#cursor = undefined; this.#direction = "backward";
+      this.#cursor = undefined; this.#direction = "backward"; this.#scrollTarget = undefined;
     }
+    if (this.#promptPreview && !present.has(this.#promptPreview.component)) this.#promptPreview = undefined;
     for (const component of this.#blocks.keys()) if (!present.has(component)) this.#evict(component);
   }
 
@@ -197,6 +229,7 @@ export class HistoryWindow {
     const restores = descendants(component).map((node) => observe(node,
       ["invalidate", "updateContent", "updateDisplay", "setText", "addChild", "removeChild", "clear"], () => {
         block.rows = undefined; this.#dirty = true;
+        if (this.#promptPreview?.component === component) this.#promptPreview = undefined;
       }));
     block.unwatch = () => restores.forEach((restore) => restore());
     this.#blocks.set(component, block);
@@ -254,7 +287,7 @@ export class HistoryWindow {
       const product = sourceProduct && (whole ? sourceProduct : sliceProduct(sourceProduct, piece.start, piece.end));
       for (let row = piece.start; row < piece.end; row++) {
         rows.push(piece.rows[row]!);
-        this.#origins.push({ component: piece.component, row, height: piece.rows.length });
+        this.#origins.push({ component: piece.component, row, height: piece.rows.length, index: piece.index });
         placements.push(product ? { product, rowIndex: row - piece.start, colShift: 0 } : undefined);
       }
     }
@@ -265,7 +298,7 @@ export class HistoryWindow {
       if (!retained.has(component)) {
         // Detach observers before leaf invalidation, then watch visible slices.
         this.#evict(component);
-        if (visible.has(component)) this.#watch(component);
+        if (visible.has(component) || component === this.#pinned) this.#watch(component);
       }
     }
     this.#rows = rows; this.#dirty = false;
@@ -279,13 +312,103 @@ export class HistoryWindow {
   }
 
   commitScroll(): void {
-    if (this.#dirty || this.#scrollTarget === undefined) return;
-    const target = this.#scrollTarget;
-    this.#scrollTarget = undefined;
-    // Native layout has measured this window and the viewport, but has not
-    // positioned its child yet. Earlier scrollTo calls clamp against the OLD
-    // page height (e.g. 22 rows instead of 5000) and lose the reading position.
-    this.scroll.scrollTo(target, { disableFollow: true });
+    if (this.#dirty) return;
+    if (this.#scrollTarget !== undefined) {
+      const target = this.#scrollTarget;
+      this.#scrollTarget = undefined;
+      // Native layout has measured this window and the viewport, but has not
+      // positioned its child yet. Clamp against NEW sizes, not the old page.
+      this.scroll.scrollTo(target, { disableFollow: true });
+    }
+    this.#commitPrompt();
+  }
+
+  #commitPrompt(): void {
+    if (!this.promptHost || this.holdSelection()) return;
+    this.#promptRows[0] = "";
+    const top = this.scroll.scrollTop;
+    const origin = this.#origins.slice(top, top + this.scroll.viewportHeight).find(item => item !== undefined);
+    // The last prompt at/before the first visible block owns this viewport.
+    const index = origin?.index ?? -1;
+    let low = 0, high = this.#prompts.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (this.#prompts[mid]!.index <= index) low = mid + 1;
+      else high = mid;
+    }
+    const candidate = this.#prompts[low - 1]?.component;
+    const target = candidate !== origin?.component ? candidate : undefined;
+    if (this.#promptPreview?.component !== target) this.#promptPreview = undefined;
+    if (this.#pinned && this.#pinned !== target && !this.#blocks.get(this.#pinned)?.rows) this.#evict(this.#pinned);
+    this.#pinned = target;
+    if (!target) return; // Original is still (partly) visible.
+    if (!this.#promptPreview || this.#promptPreview.width !== this.#width) {
+      // Reuse the native visible rendering, including Markdown transformers.
+      // An off-window prompt may render once; never retain its full row cache.
+      const cached = this.#blocks.get(target)?.rows;
+      let summary = "";
+      try {
+        for (const row of cached ?? target.render(this.#width)) {
+          const text = safeText(row).trim();
+          if (text) summary += `${summary ? " " : ""}${text}`;
+          if (summary.length > this.#width * 3) break;
+        }
+      } catch { /* An optional preview must not break an otherwise usable transcript. */ }
+      finally {
+        if (!cached) {
+          if (this.#blocks.has(target)) this.#evict(target);
+          else releaseBlock(target);
+        }
+      }
+      this.#promptPreview = { component: target, width: this.#width, summary: summary || "[User input]" };
+    }
+    // Retain invalidation observers, never full rows, for an evicted pinned prompt.
+    if (!this.#blocks.has(target)) this.#watch(target);
+    // The fixed sibling has rendered but the native frame has not painted yet.
+    // Update only THIS frame's row array, never scroll content or an old frame.
+    this.#promptRows[0] = this.#paintPrompt(this.#promptPreview.summary);
+  }
+
+  #paintPrompt(summary: string): string {
+    const row = this.promptHost!.promptRow!(summary, this.#promptWidth);
+    try {
+      const theme = this.promptHost!.promptTheme?.();
+      return theme ? theme.bg("userMessageBg", theme.fg("userMessageText", row)) : row;
+    } catch { return row; }
+  }
+
+  #handlePromptMouse(event: Record<string, any>): unknown {
+    if (!["press", "release", "drag", "click"].includes(event.type)) return;
+    const plainLeft = event.button === "left" && !event.shift && !event.alt && !event.ctrl;
+    if (event.type === "press") {
+      this.#pressedPrompt = plainLeft && this.#pinned
+        ? { component: this.#pinned, dragged: false, x: event.screenX, y: event.screenY } : undefined;
+      return this.#pressedPrompt ? { handled: true } : undefined;
+    }
+    const pressed = this.#pressedPrompt;
+    if (!pressed) return;
+    if (event.type === "drag") pressed.dragged = true;
+    if (event.type === "click") {
+      this.#pressedPrompt = undefined;
+      if (plainLeft && !pressed.dragged) {
+        this.#jumpToPrompt(pressed.component);
+        return { handled: true, render: true };
+      }
+    }
+    if (event.type === "release" && (pressed.dragged || event.screenX !== pressed.x || event.screenY !== pressed.y))
+      this.#pressedPrompt = undefined;
+    return { handled: true };
+  }
+
+  #jumpToPrompt(component: Component): void {
+    this.#refreshItems();
+    const index = this.#items.indexOf(component);
+    if (index < 0) return;
+    this.#cursor = { component, row: 0 };
+    this.#direction = "forward";
+    this.#scrollTarget = index > 0 ? 1 : 0; // Skip the Earlier history notice.
+    this.#dirty = true;
+    this.scroll.scrollTo(this.scroll.scrollTop, { disableFollow: true });
   }
 
   page(direction: "older" | "newer"): boolean {
@@ -311,6 +434,7 @@ export class HistoryWindow {
     this.#dirty = true;
   }
   invalidate(): void {
+    this.#promptPreview = undefined;
     for (const component of this.#blocks.keys()) this.#evict(component);
     // Host invalidation also rebuilds theme-dependent tool component inputs.
     // Forward it to the source tree even though it is not the layout child.
@@ -340,6 +464,11 @@ export class HistoryWindow {
     this.#rows = [];
     this.#origins = [];
     this.#items = [];
+    this.#prompts = [];
+    this.#promptRows = [""];
+    this.#pinned = undefined;
+    this.#pressedPrompt = undefined;
+    this.#promptPreview = undefined;
     this.#structureChecks = [];
     releaseCopyCache(this);
   }
@@ -400,7 +529,34 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       return;
     }
     const selected = () => (tui.getSelectionBounds ? !!tui.getSelectionBounds() : tui.hasActiveSelection?.() === true);
-    const window = new HistoryWindow(source, scroll, host.Container, selected);
+    const nativeNode = Reflect.get(scroll, LAYOUT_NODE);
+    const promptDescriptor = Object.getOwnPropertyDescriptor(scroll, LAYOUT_NODE);
+    const promptHost = typeof host.VStack === "function" && typeof nativeNode === "function"
+      && Object.isExtensible(scroll) && promptDescriptor?.configurable !== false ? host : undefined;
+    const window = new HistoryWindow(source, scroll, host.Container, selected, promptHost);
+    let restorePrompt = () => {};
+    if (window.promptHost) {
+      // Keep the one-row chrome OUTSIDE scrollContentLines and copy provenance.
+      // Its fixed slot avoids a visibility/viewport-height feedback loop.
+      const descriptor = promptDescriptor;
+      let active = true;
+      const body = { render: (width: number) => scroll.render(width), invalidate: () => scroll.invalidate?.(),
+        [LAYOUT_NODE]: () => nativeNode.call(scroll) };
+      const Stack = host.VStack as new (children: unknown[]) => { [LAYOUT_NODE](): unknown };
+      const stack = new Stack([
+        { component: window.promptHeader, basis: 1, shrink: 0 },
+        { component: body, basis: 0, grow: 1, shrink: 1, minSize: 0 },
+      ]);
+      const node = () => active ? stack[LAYOUT_NODE]() : nativeNode.call(scroll);
+      Object.defineProperty(scroll, LAYOUT_NODE, { value: node, writable: true, configurable: true });
+      restorePrompt = () => {
+        active = false;
+        if (Reflect.get(scroll, LAYOUT_NODE) === node) {
+          if (descriptor) Object.defineProperty(scroll, LAYOUT_NODE, descriptor);
+          else Reflect.deleteProperty(scroll, LAYOUT_NODE);
+        }
+      };
+    }
     const restoreStart = observe(scroll, ["scrollToStart"], () => {
       window.jump("older");
       tui.requestRender?.();
@@ -431,7 +587,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     };
     scroll.child = window as unknown as Component; scroll.children = [scroll.child]; scroll.scrollBy = wrapper;
     installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => {
-      restoreStart(); restoreEnd();
+      restorePrompt(); restoreStart(); restoreEnd();
       if (scroll.updateLayout === commitLayout) {
         if (layoutDescriptor) Object.defineProperty(scroll, "updateLayout", layoutDescriptor);
         else Reflect.deleteProperty(scroll, "updateLayout");

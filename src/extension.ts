@@ -145,9 +145,12 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
       process.stderr.write(`metis-pi: selection-copy prototypes unavailable (${wrap.details})\n`);
     }
   }
-  // One owner retries both layout features when capture moves to fullscreen.
+  // One owner retries fullscreen layout features when capture moves to fullscreen.
   const fullscreenLayout = bindings.fullscreenHost && config.enabled
-    ? createFullscreenLayout(bindings.fullscreenHost, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
+    ? createFullscreenLayout({
+      ...bindings.fullscreenHost,
+      promptTheme: () => (hostData.ui as { theme?: ReturnType<NonNullable<FullscreenLayoutHost["promptTheme"]>> } | undefined)?.theme,
+    }, { margin: config.fullscreen.marginX, minWidth: config.fullscreen.minWidth })
     : undefined;
   // Glyph presentation: the last mile of the frame (terminal writes only), so
   // emoji-presentation marks like ✔/✖ are drawn by the monospace font instead
