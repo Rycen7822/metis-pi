@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Key, matchesKey, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { buildQuestionnaireResponse } from "../tool/response-envelope.ts";
@@ -99,6 +99,41 @@ function focusCustomAnswer(session: QuestionnaireSession): void {
 	session.dispatch(DOWN);
 	session.dispatch(DOWN);
 }
+
+it.each([false, true])("does not apply held Enter to the next question or Submit (custom=%s)", custom => {
+	const { session, done } = makeSession({
+		params: { questions: [params.questions[0], { ...params.questions[0], question: "Second?", header: "Second" }] },
+		keybindings: { matches: (data, name) => keybindings.matches(data, name)
+			|| (name === "tui.select.confirm" && matchesKey(data, Key.enter)) },
+	});
+	if (custom) {
+		focusCustomAnswer(session);
+		session.dispatch("draft");
+	}
+	const press = "\x1b[13;1:1u";
+	const repeatAndRelease = () => {
+		session.dispatch("\x1b[13;1:2u");
+		session.dispatch("\x1b[13;1:3u");
+	};
+	session.dispatch(press);
+	repeatAndRelease();
+	expect(done).not.toHaveBeenCalled();
+	session.dispatch(DOWN);
+	session.dispatch(press);
+	session.dispatch("n");
+	session.dispatch("global note");
+	session.dispatch(press);
+	repeatAndRelease();
+	expect(done).not.toHaveBeenCalled();
+	session.dispatch(press);
+	expect(done).toHaveBeenCalledWith(expect.objectContaining({
+		cancelled: false,
+		answers: [
+			expect.objectContaining({ kind: custom ? "custom" : "option", answer: custom ? "draft" : "A" }),
+			expect.objectContaining({ kind: "option", answer: "B" }),
+		],
+	}));
+});
 
 describe("QuestionnaireSession — custom-answer drafts", () => {
 	it.each([false, true])("keeps the long custom answer's caret visible within the viewport (multi=%s)", (multiSelect) => {
@@ -457,17 +492,21 @@ describe("QuestionnaireSession — a saved note stays visible (#197)", () => {
 	});
 });
 
-describe("QuestionnaireSession — collapsed row with collapseKey 'off'", () => {
-	it("renders the cancel-only line, never a literal 'Off to expand' (#176)", () => {
-		// The router and raw listener never collapse when off, but
-		// toggleCollapsedExternal() is a public ungated entry — the collapsed row
-		// must not advertise a disabled shortcut if a caller forces it.
-		const { session } = makeSession();
+describe("QuestionnaireSession — collapsed row", () => {
+	it.each(["off", "ctrl+shift+super+backspace"])("keeps the %s hint in one terminal row", collapseKey => {
+		const { session } = makeSession({ collapseKey });
 		session.toggleCollapsedExternal();
 		const collapsed = session.component.render(120);
 		expect(collapsed).toHaveLength(1);
-		expect(collapsed[0]).toContain("Esc to cancel");
-		expect(collapsed[0]).not.toContain("to expand");
-		expect(collapsed[0]).not.toContain("Off");
+		if (collapseKey === "off") {
+			expect(collapsed[0]).toContain("Esc to cancel");
+			expect(collapsed[0]).not.toContain("to expand");
+			expect(collapsed[0]).not.toContain("Off");
+		} else expect(collapsed[0]).toContain("Ctrl+Shift+Super+Backspace");
+		for (const width of [15, 1, 0]) {
+			const lines = session.component.render(width);
+			expect(lines).toHaveLength(1);
+			expect(visibleWidth(lines[0])).toBeLessThanOrEqual(width);
+		}
 	});
 });

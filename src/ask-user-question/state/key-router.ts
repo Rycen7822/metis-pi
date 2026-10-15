@@ -136,7 +136,7 @@ function routeSubmitTab(
 	// under default bindings, and a user who deliberately binds one of those actions to
 	// `n` keeps that mapping because the earlier branch still wins (Enter still submits).
 	if (matchesKey(data, NOTES_ACTIVATE_KEY)) {
-		return { kind: isKeyRelease(data) || isKeyRepeat(data) ? "ignore" : "notes_enter" };
+		return { kind: "notes_enter" };
 	}
 	return { kind: "ignore" };
 }
@@ -148,13 +148,8 @@ function routeMultiSelectTab(
 	runtime: QuestionnaireRuntime,
 ): QuestionnaireAction {
 	const kind = runtime.currentItem?.kind;
-	if (matchesKey(data, Key.space)) {
-		return kind === "option" && !isKeyRelease(data) && !isKeyRepeat(data)
-			? { kind: "toggle", index: state.optionIndex }
-			: { kind: "ignore" };
-	}
+	if (matchesKey(data, Key.space)) return kind === "option" ? { kind: "toggle", index: state.optionIndex } : { kind: "ignore" };
 	if (isConfirm(kb, data)) {
-		if (isKeyRelease(data) || isKeyRepeat(data)) return { kind: "ignore" };
 		if (kind === "other") return { kind: "ignore" };
 		if (kind === "next") return { kind: "confirm", value: runtime.inputBuffer };
 		return { kind: "toggle", index: state.optionIndex };
@@ -176,6 +171,18 @@ function routeSingleSelectTab(
 }
 
 export function routeKey(data: string, state: QuestionnaireState, runtime: QuestionnaireRuntime): QuestionnaireAction {
+	if (isKeyRelease(data)) return { kind: "ignore" };
+	const action = routeKeyAction(data, state, runtime);
+	// Only navigation and editor input may repeat.
+	if (
+		isKeyRepeat(data) &&
+		action.kind !== "nav" && action.kind !== "submit_nav" &&
+		action.kind !== "input_forward" && action.kind !== "notes_forward"
+	) return { kind: "ignore" };
+	return action;
+}
+
+function routeKeyAction(data: string, state: QuestionnaireState, runtime: QuestionnaireRuntime): QuestionnaireAction {
 	const kb = runtime.keybindings;
 
 	// Collapse has priority in every mode. A raw terminal listener handles reopening
@@ -186,7 +193,7 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 		runtime.collapseKey !== "off" &&
 		matchesKey(data, runtime.collapseKey as Parameters<typeof matchesKey>[1])
 	) {
-		return { kind: isKeyRelease(data) || isKeyRepeat(data) ? "ignore" : "toggle_collapsed" };
+		return { kind: "toggle_collapsed" };
 	}
 
 	if (state.collapsed) return routeCollapsed(kb, data);
@@ -213,7 +220,7 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 	// toggle block and the Next sentinel never activates inputMode, so `n` is
 	// neither swallowed earlier nor blocked by the focused row.
 	if (matchesKey(data, NOTES_ACTIVATE_KEY)) {
-		return { kind: isKeyRelease(data) || isKeyRepeat(data) ? "ignore" : "notes_enter" };
+		return { kind: "notes_enter" };
 	}
 
 	if (kb.matches(data, KEYBIND_UP)) {

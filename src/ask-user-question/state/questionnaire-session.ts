@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Editor, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import { type Editor, type OverlayHandle, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, formatKeySpecForDisplay } from "../config.ts";
 import type { QuestionData, QuestionnaireResult, QuestionParams } from "../tool/types.ts";
 import type { QuestionRow } from "./row-intent.ts";
@@ -146,7 +146,7 @@ export class QuestionnaireSession {
 			this.collapseKey === COLLAPSE_KEY_OFF
 				? t("hint.cancel", HINT_PART_CANCEL)
 				: t("hint.expand_line", COLLAPSED_HINT_TEMPLATE).replace(KEY_PLACEHOLDER, collapseKeyDisplay);
-		return (_width: number): string[] => [theme.fg("dim", ` ${collapsedHintLine()} `)];
+		return (width: number): string[] => [truncateToWidth(theme.fg("dim", ` ${collapsedHintLine()} `), width, "")];
 	}
 
 	dispatch(data: string): void {

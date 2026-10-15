@@ -176,7 +176,7 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 		});
 	});
 
-	it("folds option previews into the select title and echoes the selected preview", async () => {
+	it.each([[undefined, false], ["", false], ["PREVIEW-A", true]] as const)("omits empty RPC previews (%j)", async (preview, hasPreview) => {
 		const tool = register();
 		const withPreview = {
 			questions: [
@@ -184,7 +184,7 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 					question: "Which?",
 					header: "Pick",
 					options: [
-						{ label: "A", description: "a", preview: "PREVIEW-A" },
+						{ label: "A", description: "a", ...(preview === undefined ? {} : { preview }) },
 						{ label: "B", description: "b" },
 					],
 				},
@@ -196,8 +196,12 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 			return options[0];
 		});
 		const r = await run(tool, withPreview, ctxRpc({ select }));
-		expect(title).toContain("PREVIEW-A");
-		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("selected preview: PREVIEW-A") });
+		const answers = (r.details as { answers: object[] }).answers;
+		expect(Object.hasOwn(answers[0], "preview")).toBe(hasPreview);
+		if (hasPreview) {
+			expect(title).toContain("PREVIEW-A");
+			expect(r.content[0]).toMatchObject({ text: expect.stringContaining("selected preview: PREVIEW-A") });
+		} else expect(r.content[0]).toMatchObject({ text: expect.not.stringContaining("selected preview:") });
 	});
 
 	it("multi-select uses ctx.ui.input and parses comma-separated indices into labels", async () => {

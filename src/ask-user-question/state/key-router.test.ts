@@ -106,32 +106,17 @@ describe("routeKey — nav", () => {
 });
 
 describe("routeKey — tab_switch", () => {
-	it("Tab cycles forward through total tabs (questions + Submit)", () => {
-		expect(routeKey(BYTE_TAB, makeState(), makeRuntime())).toEqual({
-			kind: "tab_switch",
-			nextTab: 1,
-		});
-	});
-
-	it("Right is an alias for Tab", () => {
-		expect(routeKey(BYTE_RIGHT, makeState(), makeRuntime())).toEqual({
-			kind: "tab_switch",
-			nextTab: 1,
-		});
-	});
-
-	it("Shift+Tab wraps backward from tab 0 to the Submit tab", () => {
-		expect(routeKey(BYTE_SHIFT_TAB, makeState({ currentTab: 0 }), makeRuntime())).toEqual({
-			kind: "tab_switch",
-			nextTab: 2,
-		});
-	});
-
-	it("Left is an alias for Shift+Tab", () => {
-		expect(routeKey(BYTE_LEFT, makeState({ currentTab: 1 }), makeRuntime())).toEqual({
-			kind: "tab_switch",
-			nextTab: 0,
-		});
+	it.each([
+		[BYTE_TAB, "9;1", "u", 0, 1], [BYTE_RIGHT, "1;1", "C", 0, 1],
+		[BYTE_SHIFT_TAB, "9;2", "u", 0, 2], [BYTE_LEFT, "1;1", "D", 1, 0],
+	] as const)("switches tabs once for legacy/Kitty %j", (legacy, code, suffix, currentTab, nextTab) => {
+		const state = makeState({ currentTab });
+		for (const data of [legacy, `\x1b[${code}:1${suffix}`]) {
+			expect(routeKey(data, state, makeRuntime())).toEqual({ kind: "tab_switch", nextTab });
+		}
+		for (const event of [2, 3]) {
+			expect(routeKey(`\x1b[${code}:${event}${suffix}`, state, makeRuntime())).toEqual({ kind: "ignore" });
+		}
 	});
 
 	it("Tab is a no-op (returns ignore) in single-question mode", () => {
@@ -139,6 +124,18 @@ describe("routeKey — tab_switch", () => {
 			kind: "ignore",
 		});
 	});
+});
+
+it("keeps navigation and editor repeats while ignoring their releases", () => {
+	const runtime = makeRuntime({ keybindings: {
+		matches: (data, name) => keybindings.matches(data, name) || (name === KEY.UP && matchesKey(data, Key.up)),
+	} });
+	expect(routeKey("\x1b[1;1:2A", makeState({ optionIndex: 1 }), runtime)).toMatchObject({ kind: "nav", nextIndex: 0 });
+	expect(routeKey("\x1b[1;1:2A", makeState({ currentTab: 2 }), runtime)).toEqual({ kind: "submit_nav", nextIndex: 1 });
+	expect(routeKey("\x1b[1;1:3A", makeState({ optionIndex: 1 }), runtime)).toEqual({ kind: "ignore" });
+	const data = "\x1b[120;1:2u";
+	expect(routeKey(data, makeState({ inputMode: true }), runtime)).toEqual({ kind: "input_forward", data });
+	expect(routeKey(data, makeState({ notesVisible: true }), runtime)).toEqual({ kind: "notes_forward", data });
 });
 
 describe("routeKey — confirm (single-select)", () => {

@@ -137,7 +137,7 @@ async function askSingleSelect(
 				question: q.question,
 				kind: "option",
 				answer: o.label,
-				preview: o.preview && o.preview.length > 0 ? o.preview : undefined,
+				...(o.preview ? { preview: o.preview } : {}),
 			};
 		}
 		// "Type something." sentinel → free-text follow-up; cancelling it goes back to the options.
