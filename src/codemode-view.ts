@@ -141,10 +141,10 @@ interface ExpansionState {
 }
 
 /** Own only codemode clicks; output selection, links and wheel input stay native. */
-function clickRegion(component: Component, context: ViewContext, toggle?: () => void, headingOnly = false): Component {
+function clickRegion(component: Component, context: ViewContext, toggle?: () => void): Component {
   return new MouseRegion(component, event => {
     if (event.type !== "click" || event.button !== "left") return;
-    if (toggle && !event.shift && !event.alt && !event.ctrl && (!headingOnly || event.y === 0)) {
+    if (toggle && !event.shift && !event.alt && !event.ctrl) {
       toggle();
       context.invalidate?.();
     }
@@ -190,7 +190,7 @@ export function makeCodemodeRenderers(input: {
       const view = expansion(context), expanded = view.script ?? view.expanded;
       const script = expanded && code ? safeText(code) : "";
       const component = input.makeText(script ? `${title}\n${input.highlight?.(script, "javascript") ?? script}` : title);
-      return clickRegion(component, context, () => { view.script = !expanded; }, true);
+      return clickRegion(component, context, () => { view.script = !expanded; });
     },
     renderResult(result, options, theme, context) {
       const view = expansion(context, options.expanded === true);
@@ -303,8 +303,9 @@ export function makeCodemodeRenderers(input: {
             callComponent = input.makeText(summary(call, theme, expanded));
           }
         }
-        parts.push(clickRegion(callComponent, context, preview ? undefined : () => { slot.expanded = !expanded; }));
-        if (resultComponent) parts.push(resultComponent);
+        const toggle = preview ? undefined : () => { slot.expanded = !expanded; };
+        parts.push(clickRegion(callComponent, context, toggle));
+        if (resultComponent) parts.push(clickRegion(resultComponent, context, toggle));
       }
       if (missingResults)
         parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
@@ -321,14 +322,15 @@ export function makeCodemodeRenderers(input: {
         );
         if (content.some((block) => asRecord(block).type === "text" && asRecord(block).text)) {
           const expanded = view.output ?? view.expanded;
+          const toggle = () => { view.output = !expanded; };
           parts.push(
-            clickRegion(input.makeText(theme.fg("dim", "Script output")), context, () => { view.output = !expanded; }),
-            input.shell.renderResult({ ...value, content }, { ...options, expanded }, theme, {
+            clickRegion(input.makeText(theme.fg("dim", "Script output")), context, toggle),
+            clickRegion(input.shell.renderResult({ ...value, content }, { ...options, expanded }, theme, {
               ...context,
               expanded,
               args: {},
               lastComponent: undefined,
-            }),
+            }), context, toggle),
           );
         }
         if (typeof details.fullOutputPath === "string")

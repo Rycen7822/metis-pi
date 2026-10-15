@@ -203,6 +203,11 @@ test("native codemode folding hides every script line and uses ordinary read/she
   assert.equal((expanded.match(/JS_ONLY_MARKER/g) ?? []).length, 14);
   assert.match(expanded, /FILE_BODY_ONLY/);
   assert.match(expanded, /output-8\n/);
+  clickRow(row, "output-17");
+  assert.doesNotMatch(plain(row), /output-8\n/, "clicking shell output collapses its call");
+  assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*FILE_BODY_ONLY/, "other globally expanded blocks stay open");
+  clickRow(row, "Ran printf hello");
+  assert.match(plain(row), /output-8\n/);
   row.setExpanded(false);
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FILE_BODY_ONLY/);
   assert.deepEqual(result.details.calls.map((c) => c.status), ["ok", "ok"]);
@@ -239,11 +244,14 @@ test("clicks independently expand duplicate nested calls, source and script outp
   clickRow(row, "Script output");
   assert.match(plain(row), /SCRIPT_OUTPUT_8/);
   clickRow(row, "SECOND BODY");
-  assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*SECOND BODY/);
-  assert.doesNotMatch(plain(row), /FIRST BODY/, "output-body clicks do not expand the outer tool");
-  clickRow(row, "codemode");
+  assert.doesNotMatch(plain(row), /FIRST BODY|SECOND BODY/, "a body click closes only its own child call");
+  assert.match(plain(row), /JS_ONLY_MARKER[\s\S]*SCRIPT_OUTPUT_8/, "script and output stay open");
+  clickRow(row, "JS_ONLY_MARKER");
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER/);
   assert.match(plain(row), /SCRIPT_OUTPUT_8/);
+  clickRow(row, "SCRIPT_OUTPUT_17");
+  assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FIRST BODY|SECOND BODY|SCRIPT_OUTPUT_8/);
+  assert.match(plain(row), /SCRIPT_OUTPUT_0/, "folding keeps the ordinary output preview");
   assert.deepEqual(result.details.calls.map(c => c.status), ["ok", "ok"]);
 });
 
@@ -323,7 +331,11 @@ test("fullscreen clicks and copied text follow child geometry across wrapping an
   tui.doRender();
   assert.match(plain(row, 36), /FIRST WRAPPED BODY[\s\S]*SECOND CLICK BODY/);
   click("SECOND CLICK BODY");
-  assert.doesNotMatch(plain(row, 36), /JS_ONLY_MARKER/);
+  assert.doesNotMatch(plain(row, 36), /JS_ONLY_MARKER|SECOND CLICK BODY/);
+  assert.match(plain(row, 36), /FIRST WRAPPED BODY/);
+  const foldedCopy = select(copyFrame(row, 36)).text;
+  assert.doesNotMatch(foldedCopy, /SECOND CLICK BODY|JS_ONLY_MARKER/, "copy uses the newly collapsed frame");
+  assert.match(foldedCopy, /FIRST WRAPPED BODY/);
 });
 
 test("nested bat calls use Read exploration while mixed execution retains Ran", (t) => {
@@ -470,9 +482,10 @@ test("foreign codemode and nested renderer resolvers retain their own presentati
   assert.match(plain(first.row), /FOREIGN CODEMODE/);
   first.handle.dispose();
   let foreignClicks = 0;
-  const foreignRead = { renderCall: () => new Tui.MouseRegion(bindings.makeText("FOREIGN READ"), event => {
+  const foreignRegion = text => new Tui.MouseRegion(bindings.makeText(text), event => {
     if (event.type === "click" && event.button === "left") { foreignClicks++; return { handled: true }; }
-  }), renderResult: () => bindings.makeText("foreign result") };
+  });
+  const foreignRead = { renderCall: () => foreignRegion("FOREIGN READ"), renderResult: () => foreignRegion("foreign result") };
   const second = setup(t, {});
   second.context.runtimeHost.session.extensionRunner.resolveToolRenderers = (name, next) => name === "read"
     ? { ...next(), ...foreignRead } : next();
@@ -483,6 +496,8 @@ test("foreign codemode and nested renderer resolvers retain their own presentati
   assert.doesNotMatch(plain(second.row), /Explored/);
   clickRow(second.row, "FOREIGN READ");
   assert.equal(foreignClicks, 1, "the foreign child handles the click before codemode's fallback");
+  clickRow(second.row, "foreign result");
+  assert.equal(foreignClicks, 2, "the result's own mouse handler also retains priority");
   assert.doesNotMatch(plain(second.row), /JS_ONLY_MARKER/);
 });
 
