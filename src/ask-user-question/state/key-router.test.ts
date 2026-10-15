@@ -699,11 +699,13 @@ describe("routeKey — collapse/expand (Ctrl+] toggle + collapsed-mode lockout)"
 	it("Ctrl+] emits toggle_collapsed from the default question state", () => {
 		expect(routeKey(BYTE_CTRL_RBRACKET, makeState(), makeRuntime())).toEqual({ kind: "toggle_collapsed" });
 	});
-	it.each([false, true])("cancellation wins over the collapse key (notes=%s)", notesVisible => {
-		const runtime = makeRuntime({ keybindings: { matches: (data, name) => name === KEY.CANCEL && data === BYTE_CTRL_RBRACKET } });
-		expect(routeKey(BYTE_CTRL_RBRACKET, makeState({ notesVisible }), runtime)).toEqual(
-			notesVisible ? { kind: "notes_exit", value: "" } : { kind: "cancel" },
-		);
+	it.each([KEY.CANCEL, KEY.CONFIRM, KEY.SUBMIT])("%s wins over a conflicting collapse key", action => {
+		const runtime = makeRuntime({ keybindings: { matches: (data, name) => name === action && data === BYTE_CTRL_RBRACKET } });
+		for (const notesVisible of [false, true]) {
+			const expected = notesVisible ? { kind: "notes_exit", value: "" }
+				: action === KEY.CANCEL ? { kind: "cancel" } : { kind: "confirm", value: "" };
+			expect(routeKey(BYTE_CTRL_RBRACKET, makeState({ notesVisible }), runtime)).toEqual(expected);
+		}
 	});
 
 	it("Ctrl+] emits toggle_collapsed even while notesVisible (the notes branch never sees the key)", () => {

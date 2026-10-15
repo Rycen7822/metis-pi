@@ -182,7 +182,10 @@ function registerCollapseKeyListener(
 		// top (e.g. `/btw`), leave the keystroke to that overlay instead of
 		// toggling the questionnaire from underneath it.
 		if (!handle.isHidden() && !handle.isFocused()) return undefined;
-		if (keybindings.matches(data, "tui.select.cancel")) return undefined;
+		if (
+			keybindings.matches(data, "tui.select.cancel") || keybindings.matches(data, "tui.select.confirm") ||
+			keybindings.matches(data, "tui.input.submit")
+		) return undefined;
 		if (!matchesKey(data, collapseKey as Parameters<typeof matchesKey>[1])) return undefined;
 		// Kitty-protocol terminals report press, repeat, and release separately.
 		// Toggle only on the initial press so a tap does not immediately reopen

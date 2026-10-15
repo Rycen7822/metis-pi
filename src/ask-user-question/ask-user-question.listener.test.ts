@@ -138,7 +138,10 @@ afterEach(() => {
 });
 
 describe("ask_user_question — raw terminal collapse listener", () => {
-	it.each([["escape", "\x1b"], ["ctrl+]", CTRL_RBRACKET]])("leaves cancellation reachable when collapse is %s", async (collapseKey, data) => {
+	it.each([
+		["escape", "\x1b", "tui.select.cancel"], ["ctrl+]", CTRL_RBRACKET, "tui.select.cancel"],
+		["enter", "\r", "tui.select.confirm"], ["return", "\r", "tui.input.submit"],
+	])("preserves %s's primary action instead of collapsing", async (collapseKey, data, action) => {
 		writeCollapseKeyConfig(collapseKey);
 		const handle = makeHandle();
 		const tool = register();
@@ -146,9 +149,10 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 			expect(listenerRef.current?.(data)).toBeUndefined();
 			expect(handle.isHidden()).toBe(false);
 			componentRef.current?.handleInput(data);
-		}, { matches: (key, action) => action === "tui.select.cancel" && key === data });
+		}, { matches: (key, name) => name === action && key === data });
 		const result = await tool.execute("tc", params as never, undefined, undefined, ctx);
-		expect(result.details).toMatchObject({ cancelled: true });
+		expect(result.details).toMatchObject(action === "tui.select.cancel"
+			? { cancelled: true } : { cancelled: false, answers: [{ answer: "Alpha" }] });
 	});
 
 	it("hides via OverlayHandle.setHidden, notifies once, and unhides on the second press", async () => {

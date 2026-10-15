@@ -35,7 +35,7 @@ collapseKey = "ctrl+]" # 或 "off"
 # promptGuidelines = ["Batch related questions."]
 ```
 
-旧 `~/.config/rpiv-ask-user-question/config.json` 不再读取；需要的快捷键/说明须复制到上述 TOML。读取不会修改文件；损坏 TOML 明确提示并隐藏工具。说明在注册时读取，修改后 `/reload`；快捷键在调用时读取。折叠键与 Pi 当前取消键冲突时，优先保留取消操作（备注编辑中为退出备注）。
+旧 `~/.config/rpiv-ask-user-question/config.json` 不再读取；需要的快捷键/说明须复制到上述 TOML。读取不会修改文件；损坏 TOML 明确提示并隐藏工具。说明在注册时读取，修改后 `/reload`；快捷键在调用时读取。折叠键与 Pi 当前取消、确认或提交键冲突时，优先保留这些操作各自的模式行为（如在备注编辑中退出备注）。
 
 安装本包时先移除旧 `npm:@juicesharp/rpiv-ask-user-question`，避免重复工具所有权。旧插件仍加载时 Metis 提示并让出工具，不覆盖它。源码接管不等于卸载或安装；个人配置迁移应保留备份。
 
