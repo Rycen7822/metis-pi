@@ -265,12 +265,14 @@ test("one footer keeps ordered host metadata fresh across frames, events and ses
   });
   assert.equal(widgetByKey(slots, "metis-pi:composer-meta"), undefined, "metadata belongs below the editor");
   const footer = makeFooter({ getGitBranch: () => "main",
-    getExtensionStatuses: () => new Map([["codex-adapter", "Codex adapter V: low · weekly: 20% left"]]) });
+    getExtensionStatuses: () => new Map([["codex-adapter", "Codex adapter V: low · weekly: 20% left"],
+      ["context-prune", "│ prune: ON · usage: 0 tokens\n7 turns queued"]]) });
   const frame = () => plain(footer.render(140).join("\n"));
   const initial = frame();
-  const fields = ["test-model", "high", "openai-codex", "/tmp/workspace (main)", "ctx 172k/1.0M · 17.2%", "↑4.0k ↓200", "cache 20%"];
+  const fields = ["test-model", "high", "openai-codex", "ctx 172k/1.0M · 17.2%", "↑4.0k ↓200", "cache 20%"];
   for (const field of fields) assert.ok(initial.includes(field), `${field} reaches the installed footer`);
-  assert.match(initial, /Codex adapter V: low · weekly: 20% left/, "vendor status remains");
+  assert.doesNotMatch(initial, /\/tmp\/workspace|turns queued/, "secondary details start folded");
+  assert.match(frame(), /Codex adapter V: low · weekly: 20% left/, "vendor status remains");
   for (let i = 0; i < 64; i += 1) frame();
   assert.equal(reads, 1, "animation frames share one context projection");
 
@@ -305,6 +307,23 @@ test("one footer keeps ordered host metadata fresh across frames, events and ses
   usage = { tokens: 40, contextWindow: 100, percent: 40 };
   handlers.get("session_start")({ reason: "resume" }, ctx);
   assert.match(frame(), /ctx 40\/100 · 40%/, "session replacement clears the cache");
+});
+
+test("TOML independently controls initial location and prune disclosure through activation", async t => {
+  for (const [locationExpanded, pruneExpanded] of [[true, false], [false, true], [true, true]]) {
+    await t.test(`${locationExpanded}/${pruneExpanded}`, async t => {
+      const { footer } = await session(t, {
+        getAgentDir: () => "/unused",
+        readFile: appearanceFile({ footer: { locationExpanded, pruneExpanded } }),
+      });
+      const component = footer({ getGitBranch: () => "main",
+        getExtensionStatuses: () => new Map([["context-prune", "│ prune: ON · usage: 0 tokens\n7 turns queued"]]) });
+      t.after(() => component.dispose());
+      const frame = plain(component.render(140).join("\n"));
+      assert.equal(frame.includes("/tmp/workspace (main)"), locationExpanded);
+      assert.equal(frame.includes("7 turns queued"), pruneExpanded);
+    });
+  }
 });
 
 test("hidden footer metadata never requests a context projection", async (t) => {
@@ -430,7 +449,7 @@ test("one interaction wires usage previews, completed response averages, Working
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
   assert.equal(speed(final), 23.5, "80 output tokens use the whole 3400ms response, not the visible 400ms tail");
-  assert.match(final, /avg 23\.5 tok\/s/, "the field identifies a response average");
+  assert.match(final, /23\.5 tok\/s/, "compact display retains the completed response average");
   assert.ok(final.indexOf("tok/s") > final.indexOf("↑"), "rate follows input/output");
   handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
   const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
@@ -521,7 +540,7 @@ test("queued SDK deltas and pre-request compaction cannot distort or discard the
   handlers.get("agent_settled")({}, ctx);
   assert.deepEqual(receivedCounts, [1050, 1050], "fixture reaches the shared-partial queue hazard");
   assert.equal(output.durationMs, 10500, "native producer clock excludes the later consumer delays");
-  assert.match(frame(), /avg 100 tok\/s/, "both hidden reasoning and its time are included, despite delayed callbacks");
+  assert.match(frame(), /100 tok\/s/, "both hidden reasoning and its time are included, despite delayed callbacks");
 });
 
 test("tool-model usage cannot alter main-model totals, cache or persisted summaries before or after reconstruction", async t => {
@@ -540,7 +559,7 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   handlers.get("message_start")({ message: first }, ctx);
   now = 2000; handlers.get("message_end")({ message: first }, ctx);
   const beforeTool = frame();
-  assert.match(beforeTool, /↑100 ↓100.*cache 90%.*avg 100 tok\/s/);
+  assert.match(beforeTool, /↑100 ↓100.*cache 90%.*100 tok\/s/);
   handlers.get("tool_execution_start")({ toolCallId: "tool", toolName: "codemode", args: {} }, ctx);
   now = 4000;
   const tool = { role: "toolResult", toolCallId: "tool", toolName: "codemode", timestamp: 4000, isError: false,
@@ -574,7 +593,7 @@ test("selection changes clear averages and a response already awaiting headers c
     handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
     handlers.get("message_start")({ message }, ctx); handlers.get("message_end")({ message }, ctx);
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
-    assert.match(frame(), /avg 40 tok\/s/);
+    assert.match(frame(), /40 tok\/s/);
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
     assert.match(report, /avg 40 tok\/s \(output=1 tokens, duration=25ms, scope=final\)/, "short valid responses do not appear as a zero-second diagnostic window");

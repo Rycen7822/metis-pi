@@ -13,6 +13,9 @@ import { toolResultStub } from "../../src/condense/pruner.ts";
 import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
 import { loadConfig } from "../../src/condense/config.ts";
+import { disableNetwork } from "../helpers/native-provider.mjs";
+
+test.beforeEach(disableNetwork);
 
 const usage = {
   input: 12,
@@ -78,6 +81,7 @@ async function fixture(
     capacity = false,
     pruneOn = "agent-message",
     showPruneStatusLine = false,
+    mode = "print",
     chainCompression = { enabled: false },
     ...configOverrides
   } = {},
@@ -160,7 +164,8 @@ async function fixture(
     sessionManager: sm,
     model,
     cwd: dir,
-    hasUI: false,
+    mode,
+    hasUI: mode === "tui" || mode === "rpc",
     isIdle: () => true,
     hasPendingMessages: () => false,
     getContextUsage: () => ({ tokens: capacity ? 96000 : 90000, contextWindow: 100000 }),
@@ -235,6 +240,37 @@ async function fixture(
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
 
+test("queued TUI details retain reclaim metrics without notices; RPC keeps notifications", async t => {
+  for (const mode of ["tui", "rpc"]) await t.test(mode, async t => {
+    const f = await fixture(t, { mode, showPruneStatusLine: true });
+    assert.match(f.statuses.get("context-prune"), /\nNo pending turns$/);
+    f.add("semantic source ".repeat(2000), "unknown-command", "already-pruned");
+    await f.finish();
+    assert.equal(f.notices.length, mode === "tui" ? 1 : 0, "only TUI gains a confirmed automatic action notice");
+    if (mode === "tui") assert.match(f.notices[0][0], /pruner: pruned 1 tool batch/);
+    const messages = f.sm.buildSessionProjection().messages;
+    await f.emit("context", { messages });
+    const summary = f.statuses.get("context-prune").split("\n")[0];
+    assert.match(summary, /^│ prune: ON · [\d.kM]+->[\d.kM]+ \(-\d+%\) · usage: 20 tokens$/);
+    f.notices.length = 0;
+    for (let i = 0; i < 7; i++) {
+      const call = f.add(`pending evidence ${i}`, "unknown-command", `pending-${i}`);
+      await f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: i });
+    }
+    const status = f.statuses.get("context-prune");
+    assert.equal(status.split("\n")[0], summary, "queue updates must not replace reclaim or usage");
+    assert.match(status, /\n7 turns queued — will evaluate packing and summary budget on agent's next final text response$/);
+    assert.equal(f.notices.some(([message]) => /turns? queued/.test(message)), mode !== "tui");
+    await f.emit("agent_end");
+    assert.equal(f.statuses.get("context-prune"), status, "agent_end must not discard the latest detail");
+    await f.commands.get("pruner").handler("status", f.ctx);
+    await f.commands.get("pruner").handler("thinking invalid", f.ctx);
+    assert.ok(f.notices.some(([message]) => /^pruner status:/.test(message)), "explicit command replies remain visible");
+    assert.ok(f.notices.some(([message, type]) => /Invalid summarizer thinking/.test(message) && type === "warning"));
+    assert.equal(f.calls.length, 1, "disclosure never initiates model work");
+  });
+});
+
 test("persistence failures with embedded stale wording stay write failures and can retry", async t => {
   const f = await fixture(t, { pruneOn: "on-demand" });
   const source = f.add("semantic evidence ".repeat(2000), "unknown-command", "write-failure");
@@ -305,7 +341,7 @@ test("packing precedes the 5000-char gate and keeps settled history stable with 
 test("automatic chain compression follows its switch and retains three recent tasks with exact recovery", async (t) => {
   for (const enabled of [false, true])
     await t.test(`enabled=${enabled}`, async (t) => {
-      const f = await fixture(t, { chainCompression: { enabled, rollingWindow: 3, fuseRangeSummary: false } });
+      const f = await fixture(t, { mode: "tui", chainCompression: { enabled, rollingWindow: 3, fuseRangeSummary: false } });
       const body = "first task evidence\n".repeat(1400);
       for (let i = 0; i < 4; i++) {
         if (i) f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: f.nextTimestamp() });
@@ -332,6 +368,8 @@ test("automatic chain compression follows its switch and retains three recent ta
       }
       const chains = () => f.sm.getBranch().filter((e) => e.customType === "context-prune-chain");
       assert.equal(chains().length, enabled ? 1 : 0, "the fourth closing message counts before Pi persists it");
+      assert.equal(f.notices.filter(([message]) => /compacted 1 chain/.test(message)).length, enabled ? 1 : 0,
+        "automatic maintenance announces only newly published chains");
       const original = f.sm.buildSessionProjection().messages;
       const projected = (await f.emit("context", { messages: original })).messages;
       const text = JSON.stringify(projected);
@@ -347,9 +385,11 @@ test("automatic chain compression follows its switch and retains three recent ta
         .get("context_tree_query")
         .execute("q", { toolCallIds: ["chain-0"] }, undefined, undefined, f.ctx);
       assert.equal(recalled.details.results[0].text, body);
+      const noticeCount = f.notices.length;
       await f.emit("session_start");
       assert.deepEqual((await f.emit("context", { messages: original })).messages, projected);
       await f.finish();
+      assert.equal(f.notices.length, noticeCount, "reload/revalidation cannot announce already committed actions again");
       assert.equal(chains().length, enabled ? 1 : 0);
       assert.equal(
         f.calls.length,
@@ -473,7 +513,7 @@ for (const boundary of ["settled", "session_tree", "session_start", "session_shu
   });
 
 test("session restore drops the previous queue while a tree switch keeps its own records and never reloads config", async (t) => {
-  const f = await fixture(t);
+  const f = await fixture(t, { mode: "tui" });
   // A body that reaches the summarizer (buildLog packs into an archive instead).
   const body = "important detail\n".repeat(1500);
   // agent-message queues this batch and returns before the budget gate.
@@ -491,15 +531,14 @@ test("session restore drops the previous queue while a tree switch keeps its own
   await f.emit("session_start");
   assert.deepEqual(f.widgets.filter(([id]) => id === "pruner-boot").map(([, value]) => value.length), [1]);
   assert.match(f.statuses.get("context-prune"), /prune: ON/);
+  assert.match(f.statuses.get("context-prune"), /\n.*recovered.*current branch/i);
 
   // The reload re-armed this branch's unindexed work: the gate flushes the
   // recaptured batch, never a stale queue entry.
   await f.emit("turn_end", {});
   assert.equal(f.calls.length, 1);
-  assert.match(
-    f.notices.map(([message]) => message).find((message) => message.includes("compacting")) ?? "",
-    /compacting work recovered after reload/,
-  );
+  assert.ok(!f.notices.some(([message]) => /compacting work recovered after reload/.test(message)),
+    "a pre-flush pressure hint belongs in TUI details, not ordinary chat");
   const summary = f.sm
     .getBranch()
     .find((entry) => entry.type === "custom_message" && entry.details?.representation === "summary");
@@ -519,10 +558,14 @@ test("session restore drops the previous queue while a tree switch keeps its own
   const afterBody = "later detail\n".repeat(1800);
   f.add(afterBody, "inspect-after-tree");
   await f.emit("session_tree");
+  assert.match(f.statuses.get("context-prune"), /\n.*recovered.*current branch/i);
   await f.emit("turn_end", {});
   assert.equal(f.calls.length, 2, "the tree probe re-arms only this branch's unindexed work");
   assert.equal(f.widgets.filter(([id]) => id === "pruner-boot").length, 1);
   assert.match(f.statuses.get("context-prune"), /prune: ON/, "session_tree keeps the loaded config");
+  await f.emit("session_tree");
+  assert.match(f.statuses.get("context-prune"), /\nNo pending turns$/,
+    "branch restore derives current work rather than restoring an old completion or queue detail");
 });
 
 test("nested results retain prepared arguments, structured output and denied evidence across reload", async t => {
@@ -557,7 +600,7 @@ test("nested results retain prepared arguments, structured output and denied evi
 
 for (const eager of [true, false])
   test(`fused evidence preserves mutation, packs only successful logs and reloads exact output; turn_end=${eager}`, async (t) => {
-    const f = await fixture(t);
+    const f = await fixture(t, { mode: "tui" });
     const path = join(f.dir, "fused-command.log");
     writeFileSync(path, buildLog);
     const prefix = `Updated file.ts\n+saved\nCommand succeeded; log ${path}`;
@@ -587,6 +630,8 @@ for (const eager of [true, false])
     if (eager) await f.emit("turn_end", { message: call.assistant, toolResults: [call.result], turnIndex: 0 });
     await f.finish();
     assert.equal(f.calls.length, 0);
+    assert.equal(f.notices.length, 1, "eager and flush-time recovery stubs each announce only their committed rewrite");
+    assert.match(f.notices[0][0], /pruned 1 tool output.*recovery stubs/);
     const query = () =>
       f.tools
         .get("context_tree_query")
@@ -603,6 +648,7 @@ for (const eager of [true, false])
     assert.match(visible, /lines omitted/);
     assert.match(visible, /BUILD COMPLETE/);
     assert.match(visible, /fused-command.log/);
+    assert.equal(f.notices.length, 1, "reload does not reannounce historical recovery stubs");
   });
 
 test("goal continuation counters change only the appended message, preserving system instructions", async (t) => {
@@ -638,13 +684,15 @@ test("goal continuation counters change only the appended message, preserving sy
 
 test("manual paid fusion budgets the full chain wrapper and retains concatenation on rejection", async t => {
   for (const rejected of [false, true]) await t.test(rejected ? "budget rejected" : "accepted", async t => {
-    const f = await fixture(t, { reply: n => n <= 2 ? "界".repeat(2500) : rejected ? "界".repeat(3500) : "Fused evidence.",
+    const f = await fixture(t, { mode: "tui", reply: n => n <= 2 ? "界".repeat(2500) : rejected ? "界".repeat(3500) : "Fused evidence.",
       chainCompression: { enabled: true, rollingWindow: 100, fuseRangeSummary: true } });
     for (let i = 0; i < 26; i++) f.add(`evidence-${i}\n` + "界 ".repeat(3000), `cat evidence-${i}.txt`);
     await f.finish();
     assert.equal(f.calls.length, 2);
     assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-chain"));
     await f.commands.get("pruner").handler("compact", f.ctx);
+    assert.ok(f.notices.some(([message, type]) => /pruner: compacted 1 chain/.test(message) && type === "info"),
+      "actual chain compaction still reports its action in the TUI");
     assert.equal(f.calls.length, 3);
     const chain = f.sm.getBranch().find(e => e.customType === "context-prune-chain").data;
     assert.equal(chain.rangeSummaryText, rejected ? undefined : "Fused evidence.");
@@ -690,6 +738,8 @@ test("complete-message budgets include refs, reject without hiding and charge re
   let badReply;
   const f = await fixture(t, {
     showPruneStatusLine: true,
+    mode: "tui",
+    quietOversizedSkips: false,
     reply: (n) => (n === 1 ? badReply : "Inspection complete."),
   });
   const call = f.add("界".repeat(6000), "unknown-command", "full-budget");
@@ -698,7 +748,9 @@ test("complete-message budgets include refs, reject without hiding and charge re
   badReply = "界".repeat(budget.limit); // Body alone fits; the real refs/wrapper do not.
   await f.finish();
   assert.equal(f.calls.length, 1);
-  assert.match(f.statuses.get("context-prune"), /usage: 20 tokens/);
+  assert.equal(f.statuses.get("context-prune").split("\n")[0], "│ prune: ON · usage: 20 tokens");
+  assert.match(f.statuses.get("context-prune"), /\n.*retained pending.*budget/i);
+  assert.deepEqual(f.notices, [], "paid usage alone is not a confirmed prune action");
   assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier" || e.customType === "context-prune-summary"));
   assert.equal(f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data.reason, "deferred-budget");
   assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === call.id).content[0].text, call.result.content[0].text);
@@ -713,6 +765,8 @@ test("complete-message budgets include refs, reject without hiding and charge re
   const size = await encoder.measure([summary], []);
   assert.ok(size.before <= budget.limit && size.before <= 6144);
   assert.match(f.statuses.get("context-prune"), /usage: 40 tokens/);
+  assert.equal(f.notices.length, 1);
+  assert.match(f.notices[0][0], /pruner: pruned 1 tool batch/);
 });
 
 test("global TOML policy governs actual paid summary admission and full-message rejection", async (t) => {
@@ -801,12 +855,15 @@ test("minBatchChars is only a character guard; paid summaries must also earn the
 });
 
 for (const stopReason of ["error", "length"]) test(`summary ${stopReason} records its cause, retains raw output and can retry`, async t => {
-  const f = await fixture(t, { stopReason });
+  const f = await fixture(t, { mode: "tui", stopReason });
   const body = "important detail\n".repeat(1800), call = f.add(body, "inspect-unknown-tool");
   await f.finish();
   const metric = f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data;
   assert.equal(metric.outcome, "error"); assert.equal(metric.reason, "summarizer-failed");
   assert.match(metric.error, stopReason === "error" ? /Offline summary provider failed/ : /length-truncated/);
+  if (stopReason === "error") assert.ok(f.notices.some(([message, type]) => /summarization failed/.test(message) && type === "error"),
+    "existing operational errors remain visible in the TUI");
+  assert.ok(!f.notices.some(([message]) => /pruner: pruned /.test(message)));
   const request = { sessionId: f.sm.getSessionId(), messages: projectBranchMessages(f.sm.getBranch()) };
   f.events.emit("metis:condense-project", request);
   assert.ok(request.messages.some(message => message.toolCallId === call.id && message.content[0].text === body));
@@ -1157,7 +1214,7 @@ test(
 );
 
 test("closed large write arguments become stable historical records with exact recall and edit recovery", async (t) => {
-  const f = await fixture(t);
+  const f = await fixture(t, { mode: "tui" });
   const args = { path: "large.ts", content: "ORIGINAL_CODE\n".repeat(3000) };
   const assistant = {
     role: "assistant",
@@ -1187,6 +1244,8 @@ test("closed large write arguments become stable historical records with exact r
     ),
   );
   assert.match(JSON.stringify(projected), /component=arguments/);
+  assert.equal(f.notices.length, 1, "argument-only work gets one confirmed action notice, not a trivial-skip notice");
+  assert.match(f.notices[0][0], /pruned 1 argument group/);
   const tool = f.tools.get("context_tree_query");
   let page = (
     await tool.execute("q", { toolCallIds: ["large-write@3"], component: "arguments" }, undefined, undefined, f.ctx)
@@ -1440,7 +1499,7 @@ test("display changes do not cancel in-flight chain maintenance", async t => {
 });
 
 test("manual progress uses the same packed/semantic runs as execution", async t => {
-  const f = await fixture(t, { defer: true, pruneOn: "on-demand" });
+  const f = await fixture(t, { mode: "tui", showPruneStatusLine: true, defer: true, pruneOn: "on-demand" });
   f.add(buildLog, "npm run build", "packed-run");
   f.add("unpackable semantic evidence ".repeat(1000), "unknown-command", "semantic-run");
   const flushing = f.commands.get("pruner").handler("now", f.ctx);
@@ -1460,30 +1519,44 @@ test("manual progress uses the same packed/semantic runs as execution", async t 
   f.releaseAll();
   await flushing;
   assert.ok(widget.render(120).every(row => row.startsWith("✓")));
-  assert.ok(f.notices.some(([message]) => /from 2 batches/.test(message)));
+  assert.ok(f.notices.some(([message, type]) => /pruner: pruned .*from 2 batches/.test(message) && type === "info"),
+    "the explicit prune action reply remains visible in TUI mode");
   assert.ok(!f.notices.some(([message]) => /[3-9]\/2|2\/1/.test(message)));
 });
 
-test("measurement deferral has its own result, notification and nonfailure metrics", async t => {
-  const f = await fixture(t, { quietOversizedSkips: false, batchingMode: "agent-turn" });
-  const source = f.add("semantic source ".repeat(2000), "unknown-command", "measurement-gap");
-  f.add("small", "unknown-command", "later-trivial");
-  t.mock.method(TokenEstimator.prototype, "measure", async () => null);
-  await f.finish();
-  const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
-  assert.equal(metrics.outcome, "partial");
-  assert.equal(metrics.reason, "deferred");
-  assert.deepEqual(metrics.deferredReasons, { measurement: 1 });
-  assert.equal(metrics.error, undefined);
-  assert.ok(f.notices.some(([message]) => /token measurement unavailable/.test(message)));
-  assert.ok(!f.notices.some(([message]) => /pressure\/budget|summarization failed/.test(message)));
-  assert.equal(f.calls.length, 0);
-  assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier"));
-  assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === source.id).content[0].text, source.result.content[0].text);
+test("measurement deferral respects TUI disclosure and quiet while retaining raw evidence", async t => {
+  for (const mode of ["tui", "rpc"]) for (const quietOversizedSkips of [false, true])
+    await t.test(`${mode}, quiet=${quietOversizedSkips}`, async t => {
+      const f = await fixture(t, { mode, showPruneStatusLine: true, quietOversizedSkips, batchingMode: "agent-turn" });
+      const source = f.add("semantic source ".repeat(2000), "unknown-command", "measurement-gap");
+      const trivial = f.add("small", "unknown-command", "later-trivial");
+      t.mock.method(TokenEstimator.prototype, "measure", async () => null);
+      await f.finish();
+      const metrics = f.sm.getBranch().findLast(e => e.customType === "context-prune-flush-metrics").data;
+      assert.equal(metrics.outcome, "partial");
+      assert.equal(metrics.reason, "deferred");
+      assert.deepEqual(metrics.deferredReasons, { measurement: 1 });
+      assert.equal(metrics.error, undefined);
+      const status = f.statuses.get("context-prune");
+      assert.equal(status.split("\n")[0], "│ prune: ON · usage: 0 tokens");
+      assert.equal(/\n.*retained pending — token measurement unavailable/.test(status), !quietOversizedSkips);
+      assert.equal(/\n.*skipped pruning turn .*5 raw chars retained/.test(status), !quietOversizedSkips,
+        "verbose disclosure keeps both no-op explanations unless explicitly quieted");
+      assert.equal(f.notices.some(([message]) => /retained pending/.test(message)), mode !== "tui" && !quietOversizedSkips);
+      assert.equal(f.notices.some(([message]) => /skipped pruning turn/.test(message)), mode !== "tui" && !quietOversizedSkips);
+      assert.ok(!f.notices.some(([message]) => /pressure\/budget|summarization failed/.test(message)));
+      if (mode === "tui") assert.deepEqual(f.notices, [], "trivial bookkeeping behind a pending gap is not a rewrite");
+      await f.emit("agent_end");
+      assert.equal(f.statuses.get("context-prune"), status, "pending work cannot replace the detailed skip reasons");
+      assert.equal(f.calls.length, 0);
+      assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier"));
+      assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === source.id).content[0].text, source.result.content[0].text);
+      assert.equal(f.sm.buildSessionProjection().messages.find(m => m.toolCallId === trivial.id).content[0].text, "small");
+    });
 });
 
 test("automatic-disabled deferral is distinct from pressure and keeps packing below the gap", async t => {
-  const f = await fixture(t, { autoBudgetThreshold: null });
+  const f = await fixture(t, { mode: "tui", showPruneStatusLine: true, quietOversizedSkips: false, autoBudgetThreshold: null });
   f.add("semantic source ".repeat(2000), "unknown-command", "automatic-gap");
   f.add(buildLog, "npm run build", "later-packed");
   await f.finish();
@@ -1495,6 +1568,9 @@ test("automatic-disabled deferral is distinct from pressure and keeps packing be
   assert.equal(f.calls.length, 0);
   assert.ok(f.sm.getBranch().some(e => e.details?.representation === "packed"));
   assert.ok(!f.sm.getBranch().some(e => e.customType === "context-prune-frontier"));
+  assert.equal(f.notices.length, 1, "a partial flush announces only committed packing, not its deferred gap");
+  assert.match(f.notices[0][0], /pruner: pruned 1 tool batch/);
+  assert.match(f.statuses.get("context-prune"), /\n.*retained pending — automatic summarization disabled/);
 });
 
 test("an unavailable post-summary measurement retains evidence without calling it inadequate budget", async t => {
@@ -1514,7 +1590,7 @@ test("an unavailable post-summary measurement retains evidence without calling i
 });
 
 test("manual capture errors report retained pending work and the unchanged work can retry", async t => {
-  const f = await fixture(t, { pruneOn: "on-demand" });
+  const f = await fixture(t, { mode: "tui", pruneOn: "on-demand" });
   f.add("semantic source ".repeat(2000), "unknown-command", "scan-pending");
   const getBranch = f.sm.getBranch.bind(f.sm);
   const mock = t.mock.method(f.sm, "getBranch", () => { throw new Error("offline branch read failed"); });
@@ -1530,17 +1606,25 @@ test("manual capture errors report retained pending work and the unchanged work 
 });
 
 test("trivial aggregate sizes are retention totals, not a comparison against one batch gate", async t => {
-  const f = await fixture(t, { pruneOn: "on-demand", batchingMode: "agent-turn" });
+  const f = await fixture(t, { mode: "tui", showPruneStatusLine: true, quietOversizedSkips: false, pruneOn: "on-demand", batchingMode: "agent-turn" });
   f.add("x".repeat(3200), "unknown-command", "small-one");
   f.add("y".repeat(3300), "unknown-command", "small-two");
   await f.commands.get("pruner").handler("now", f.ctx);
   assert.equal(f.calls.length, 0);
   assert.ok(f.notices.some(([message]) => /6500 total raw chars retained; summary candidates below minBatchChars=5000/.test(message)));
   assert.ok(!f.notices.some(([message]) => /6500 raw chars below/.test(message)));
+  assert.ok(!f.notices.some(([message]) => /skipped pruning turn/.test(message)), "routine skips stay out of TUI chat");
+  const status = f.statuses.get("context-prune");
+  assert.match(status, /\n.*3200 raw chars retained/);
+  assert.match(status, /\n.*3300 raw chars retained/, "manual command refresh preserves every skip detail");
+  await changeSetting(f, "showPruneStatusLine");
+  assert.equal(f.statuses.get("context-prune"), undefined);
+  await changeSetting(f, "showPruneStatusLine");
+  assert.equal(f.statuses.get("context-prune"), status, "hiding status does not destroy runtime detail");
 });
 
 test("dedup totals exclude unrelated trivial results", async t => {
-  const f = await fixture(t, { pruneOn: "on-demand", batchingMode: "agent-turn" });
+  const f = await fixture(t, { mode: "tui", quietOversizedSkips: false, pruneOn: "on-demand", batchingMode: "agent-turn" });
   const body = "semantic evidence ".repeat(1500);
   f.add(body, "unknown-command", "original-dedup");
   await f.commands.get("pruner").handler("now", f.ctx);
@@ -1551,14 +1635,38 @@ test("dedup totals exclude unrelated trivial results", async t => {
   const notice = f.notices.findLast(([message]) => /deduplicated 1 tool call/.test(message))[0];
   assert.ok(notice.includes(`(${body.length} raw chars)`));
   assert.ok(!notice.includes(`(${body.length + 5} raw chars)`));
+  assert.equal(f.notices.length, 1, "the explicit manual reply does not gain a duplicate action notice");
+  f.notices.length = 0;
+  const duplicate = f.add(body, "unknown-command", "copy-again");
+  await f.emit("turn_end", { message: duplicate.assistant, toolResults: [duplicate.result], turnIndex: 3 });
+  assert.equal(f.notices.length, 1, "automatic dedup has one confirmed-action notice, not a pre-flush hint plus success");
+  assert.match(f.notices[0][0], /pruner: deduplicated 1 tool call/);
+  assert.equal(f.notices[0][1], "info");
+  const raw = f.sm.buildSessionProjection().messages;
+  const projected = (await f.emit("context", { messages: raw })).messages;
+  assert.notEqual(projected.find(m => m.toolCallId === duplicate.id).content[0].text, body);
   assert.equal(f.calls.length, 1);
+  f.notices.length = 0;
+  f.add(body, "unknown-command", "mixed-duplicate");
+  f.add(buildLog, "npm run build", "mixed-packed");
+  const semantic = f.add("distinct new semantic source ".repeat(2000), "unknown-command", "mixed-semantic");
+  await f.emit("turn_end", { message: semantic.assistant, toolResults: [semantic.result], turnIndex: 6 });
+  assert.equal(f.notices.length, 1, "multiple committed action kinds are combined in one automatic-flush notice");
+  assert.match(f.notices[0][0], /pruned 2 tool batches.*deduplicated 1 tool call/);
+  assert.equal(f.calls.length, 2);
 });
 
 test("stats distinguish completed usage from an in-flight summarizer request", async t => {
-  const f = await fixture(t, { defer: true });
+  const f = await fixture(t, { mode: "tui", showPruneStatusLine: true, defer: true });
   f.add("semantic source ".repeat(2000), "unknown-command", "usage-in-flight");
+  const summary = f.statuses.get("context-prune").split("\n")[0];
   const finishing = f.finish(false);
   await waitForSummarizer(f);
+  const status = f.statuses.get("context-prune");
+  assert.equal(status.split("\n")[0], summary, "active progress belongs in detail, not the token metric");
+  assert.match(status, /\nSummarizing 1\/1/);
+  await changeSetting(f, "quietOversizedSkips");
+  assert.equal(f.statuses.get("context-prune"), status, "settings redraws preserve active progress too");
   f.notices.length = 0;
   await f.commands.get("pruner").handler("stats", f.ctx);
   assert.ok(f.notices.some(([message]) => /no completed summarizer usage yet/.test(message)));

@@ -37,7 +37,17 @@ codemode 工具行运行时显示 `Elapsed`，结束后显示 `Took`，没有嵌
 
 ## 统计口径
 
-Footer 依次显示模型、推理等级、provider、cwd/分支/改动、上下文、累计 I/O、cache 与速度；窄终端按完整字段换行。元数据不依赖 composer 安装，不读取 auth 或查询额度。
+Footer 默认显示模型、推理等级、provider、上下文、累计 I/O、cache、速度与 Git `+A -D`；窄终端按完整字段换行。目录和分支默认折叠，点击主状态行末尾的 `▶` 展开到下方，点击 `▼` 收起。`+A -D` 不随目录隐藏。元数据不依赖 composer 安装，不读取 auth 或查询额度。
+
+prune 行常驻开关、上下文变化与累计额外用量，普通排队/延期消息默认折叠；点击该行的三角独立展开最新详情，不影响目录/分支。展开状态在同一 Footer 内保留，新会话按 TOML 默认值初始化。普通队列和无操作提示不追加到 TUI 正文；实际 prune 操作、警告和错误仍显示。
+
+默认展开状态由全局 `metis-pi.toml` 控制，修改后 `/reload` 或重启生效；点击三角只改变当前界面，不写回配置。regular 模式鼠标由终端管理时也可通过 TOML 选择默认展开：
+
+```toml
+[appearance.footer]
+locationExpanded = false # 目录/分支
+pruneExpanded = false    # prune 详情
+```
 
 | 字段 | 来源 |
 | --- | --- |
@@ -45,7 +55,7 @@ Footer 依次显示模型、推理等级、provider、cwd/分支/改动、上下
 | `Σ` I/O | 当前 session 文件的标准 assistant、compaction、branch summary 用量（包含其他分支已产生的用量）；工具自报的模型用量、condense 和摘要 custom entry 不混入。 |
 | cache | 最近已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；诊断另报 session 加权值。 |
 | input | 不把 cacheRead 重复算为新输入。 |
-| `avg … tok/s` | 最近已完成响应的完整 `usage.output / (durationMs / 1000)`；使用 SDK 在提供端流上测得的耗时，包含等待/TTFT、推理与传输处理，不是后端纯解码速度。生成中不显示实时估值或借用上一条速度。 |
+| `… tok/s` | 最近已完成响应的完整 `usage.output / (durationMs / 1000)`；使用 SDK 在提供端流上测得的耗时，包含等待/TTFT、推理与传输处理，不是后端纯解码速度。生成中不显示实时估值或借用上一条速度。 |
 
 速度的输出 token 包含隐藏推理及模型生成的工具参数，但不包含工具执行结果；不从可见字符数、delta 到达间隔或扩展回调时钟猜测用量/耗时，也不因 300 ms 阈值切换口径。缺少有效正数耗时/完整输出、失败、取消或尚未完成的 deferred 响应不显示速度；完整计数的 token 上限截断响应仍可显示。开始新轮次、切换模型/推理等级或上下文后清除旧速度。SDK 耗时可能包含网络及进程处理开销，不能据此拆出服务端生成时间。
 

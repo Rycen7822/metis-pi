@@ -191,7 +191,8 @@ export function createChromeLifecycle(deps: ChromeDeps): ChromeLifecycle {
         ui.setFooter?.((tui: unknown, theme: { fg?: (k: string, t: string) => string }, footerData: unknown) => {
           deps.captureTui(tui);
           return mods.createFooterComponent(
-            { getSnapshot: snapshots.getFooterSnapshot, requestRender: deps.requestRender, show: snapshots.footerShow() },
+            { getSnapshot: snapshots.getFooterSnapshot, requestRender: deps.requestRender, show: snapshots.footerShow(),
+              initiallyExpanded: { location: config.footer.locationExpanded, prune: config.footer.pruneExpanded } },
             footerData as never,
             makeTonePainter(theme, deps.colorLevel),
           );
