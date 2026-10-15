@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
@@ -112,7 +112,11 @@ async function host(t, converted, reverse = false, wholePackage = false, lifecyc
     }
   });
   assert.deepEqual(extensionsResult.errors, []);
-  if (wholePackage) assert.equal(extensionsResult.extensions.length, 15);
+  if (wholePackage) assert.deepEqual(
+    extensionsResult.extensions.map(extension => extension.path).sort(),
+    readdirSync(join(root, "extensions")).filter(name => name.endsWith(".ts"))
+      .map(name => join(root, "extensions", name)).sort(),
+  );
   await session.bindExtensions({ onError: (e) => errors.push(e),
     ...(lifecycle.ui ? { uiContext: { ...session.extensionRunner.getUIContext() } } : {}),
   });

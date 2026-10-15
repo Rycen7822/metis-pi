@@ -3,7 +3,11 @@
   "compilerOptions": {
     "tsBuildInfoFile": ".work/tsc/test.tsbuildinfo",
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    "paths": {
+      "@juicesharp/rpiv-test-utils": ["./test/helpers/ask-user-question/index.ts"]
+    }
   },
-  "include": ["test/**/*.mts"]
+  "include": ["test/**/*.mts", "src/ask-user-question/**/*.test.ts", "src/ask-user-question/test-fixtures.ts"],
+  "exclude": []
 }

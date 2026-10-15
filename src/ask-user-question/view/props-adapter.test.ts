@@ -1,0 +1,211 @@
+import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "vitest";
+import {
+	makeFakeMultiSelectView,
+	makeFakePreviewPane,
+	makeQuestion,
+	makeQuestionnaireState as makeState,
+	makeStatefulView,
+	makeTabComponents,
+} from "../test-fixtures.ts";
+import type { QuestionAnswer, QuestionData } from "../tool/types.ts";
+import type { OptionListViewProps } from "./components/option-list-view.ts";
+import type { SubmitPickerProps } from "./components/submit-picker.ts";
+import type { TabBarProps } from "./components/tab-bar.ts";
+import type { QuestionRow } from "../state/row-intent.ts";
+import type { DialogProps } from "./dialog-builder.ts";
+import { createPropsAdapter } from "./props-adapter.ts";
+import * as i18n from "../state/i18n-bridge.ts";
+import type { TabComponents } from "./tab-components.ts";
+
+function makeFixture(overQuestions?: QuestionData[]) {
+	const questions = overQuestions ?? [makeQuestion(), makeQuestion()];
+	const itemsByTab: QuestionRow[][] = questions.map(() => [
+		{ kind: "option", label: "A" },
+		{ kind: "option", label: "B" },
+	]);
+
+	const tabsByIndex: TabComponents[] = questions.map((q) =>
+		makeTabComponents({
+			optionList: makeStatefulView<OptionListViewProps>(),
+			preview: makeFakePreviewPane(),
+			multiSelect: q.multiSelect ? makeFakeMultiSelectView() : undefined,
+		}),
+	);
+
+	const submitPicker = makeStatefulView<SubmitPickerProps>();
+	const tabBar = makeStatefulView<TabBarProps>();
+	const dialog = makeStatefulView<DialogProps>();
+	const tui = { terminal: { columns: 120, rows: 40 }, requestRender: vi.fn() };
+	const editorTheme = { borderColor: (text: string) => text, selectList: {} } as unknown as EditorTheme;
+	const inlineInput = new Editor(tui as unknown as TUI, editorTheme);
+
+	const notesInput = new Editor(tui as unknown as TUI, editorTheme);
+	const adapter = createPropsAdapter({
+		tui, questions, itemsByTab, tabsByIndex, inlineInput, notesInput, dialog, submitPicker, tabBar,
+	});
+	return {
+		adapter,
+		tui,
+		dialog,
+		tabsByIndex,
+		submitPicker,
+		tabBar,
+		questions,
+		inlineInput,
+	};
+}
+
+describe("QuestionnairePropsAdapter.apply", () => {
+	it("calls dialog.setProps exactly once with state + activePreviewPane", () => {
+		const { adapter, dialog, tabsByIndex } = makeFixture();
+		const state = makeState();
+		adapter.apply(state);
+		const calls = (dialog.setProps as ReturnType<typeof vi.fn>).mock.calls;
+		expect(calls.length).toBe(1);
+		expect(calls[0]![0]).toEqual({ state, activePreviewPane: tabsByIndex[0]!.preview });
+	});
+
+	it("drives the active OptionListView via setProps and the active PreviewPane via setProps", () => {
+		const { adapter, tabsByIndex } = makeFixture();
+		const answers = new Map<number, QuestionAnswer>([
+			[0, { questionIndex: 0, question: "Pick one", kind: "option", answer: "B" }],
+		]);
+		adapter.apply(makeState({ optionIndex: 1, answers }));
+		expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith({
+			selectedIndex: 1,
+			focused: true,
+			inputBuffer: "",
+			inputCursorOffset: 0,
+			confirmed: { index: 1 },
+		});
+		expect(tabsByIndex[0]!.preview.setProps).toHaveBeenLastCalledWith({
+			notesVisible: false,
+			hasNote: false,
+			selectedIndex: 1,
+			focused: true,
+			inputMode: false,
+		});
+	});
+
+	it("suppresses option focus when notes is visible", () => {
+		const { adapter, tabsByIndex } = makeFixture();
+		adapter.apply(makeState({ notesVisible: true }));
+		expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(expect.objectContaining({ focused: false }));
+	});
+
+	it("focuses the submitPicker only when on the Submit tab", () => {
+		const { adapter, submitPicker, questions } = makeFixture();
+		adapter.apply(makeState({ currentTab: 0 }));
+		expect(submitPicker.setProps).toHaveBeenLastCalledWith({
+			rows: [{ active: false }, { active: false }],
+		});
+		adapter.apply(makeState({ currentTab: questions.length, submitChoiceIndex: 0 }));
+		expect(submitPicker.setProps).toHaveBeenLastCalledWith({
+			rows: [{ active: true }, { active: false }],
+		});
+		adapter.apply(makeState({ currentTab: questions.length, submitChoiceIndex: 1 }));
+		expect(submitPicker.setProps).toHaveBeenLastCalledWith({
+			rows: [{ active: false }, { active: true }],
+		});
+	});
+
+	it("forwards tab status to tabBar.setProps", () => {
+		const { adapter, tabBar } = makeFixture();
+		const answers = new Map<number, QuestionAnswer>([
+			[0, { questionIndex: 0, question: "q", kind: "option", answer: "A" }],
+		]);
+		adapter.apply(makeState({ answers }));
+		const arg = (tabBar.setProps as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+		expect(arg.tabs).toHaveLength(2);
+		expect(arg.tabs[0]).toEqual({ label: "H", answered: true, active: true });
+		expect(arg.tabs[1]).toEqual({ label: "H", answered: false, active: false });
+		expect(arg.submit).toEqual({ active: false, allAnswered: false });
+	});
+
+	it("calls tui.requestRender exactly once", () => {
+		const { adapter, tui } = makeFixture();
+		adapter.apply(makeState());
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("multi-select panes get setProps on every apply", () => {
+		const questions = [makeQuestion({ multiSelect: true }), makeQuestion()];
+		const { adapter, tabsByIndex } = makeFixture(questions);
+		const state = makeState();
+		adapter.apply(state);
+		const mso = tabsByIndex[0]!.multiSelect!;
+		expect(mso.setProps).toHaveBeenCalledTimes(1);
+		const arg = (mso.setProps as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+		expect(arg).toMatchObject({ rows: expect.any(Array), nextActive: false, nextLabel: "Next" });
+		expect(arg.rows[0]).toMatchObject({ active: true, checked: false });
+	});
+
+	it.each([undefined, "unfinished draft", ""])("keeps an inactive multi-tab's own draft %j", draft => {
+		const { adapter, tabsByIndex, inlineInput } = makeFixture([
+			makeQuestion({ multiSelect: true }),
+			makeQuestion({ question: "Another choice?", header: "Other", multiSelect: true }),
+		]);
+		const live = "current tab ".repeat(30);
+		inlineInput.setText(live);
+		const state = makeState({
+			inputMode: true, optionIndex: 2, multiSelectChecked: new Set([0]),
+			answers: new Map([[1, { questionIndex: 1, question: "Another choice?", kind: "multi", answer: "saved", selected: ["B"] }]]),
+			customDraftsByTab: draft === undefined ? new Map() : new Map([[1, draft]]),
+		});
+		adapter.apply(state);
+		expect(tabsByIndex[0]!.multiSelect!.setProps).toHaveBeenLastCalledWith(expect.objectContaining({
+			other: expect.objectContaining({ inputBuffer: live, inputMode: true }),
+		}));
+		expect(tabsByIndex[1]!.multiSelect!.setProps).toHaveBeenLastCalledWith(expect.objectContaining({
+			rows: [{ active: false, checked: false }, { active: false, checked: true }],
+			other: { active: false, checked: (draft ?? "saved").length > 0, inputMode: false,
+				inputBuffer: draft ?? "saved", inputCursorOffset: undefined },
+			nextActive: false,
+		}));
+	});
+
+	it("resolves the final multi-select Submit label on each apply", () => {
+		const questions = [makeQuestion(), makeQuestion({ multiSelect: true })];
+		const { adapter, tabsByIndex } = makeFixture(questions);
+		adapter.apply(makeState({ currentTab: 1 }));
+		const mso = tabsByIndex[1]!.multiSelect!;
+		const arg = (mso.setProps as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
+		expect(arg.nextLabel).toBe("Submit");
+		const translate = vi.spyOn(i18n, "t").mockImplementation((key, fallback) => key === "submit.label" ? "提交答案" : fallback);
+		try {
+			adapter.apply(makeState({ currentTab: 1 }));
+			expect(mso.setProps).toHaveBeenLastCalledWith(expect.objectContaining({ nextLabel: "提交答案" }));
+		} finally {
+			translate.mockRestore();
+		}
+	});
+
+	it("multi-select on a non-last question receives nextLabel='Next'", () => {
+		const questions = [makeQuestion({ multiSelect: true }), makeQuestion()];
+		const { adapter, tabsByIndex } = makeFixture(questions);
+		adapter.apply(makeState({ currentTab: 0 }));
+		const mso = tabsByIndex[0]!.multiSelect!;
+		const arg = (mso.setProps as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
+		expect(arg.nextLabel).toBe("Next");
+	});
+
+	it("projects multiline editor text and its public cursor position", () => {
+		const { adapter, tabsByIndex, inlineInput } = makeFixture();
+		inlineInput.setText("first\nsecond");
+		adapter.apply(makeState());
+		expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(
+			expect.objectContaining({ inputBuffer: "first\nsecond", inputCursorOffset: 12 }),
+		);
+	});
+});
+
+describe("QuestionnairePropsAdapter.apply — preview pane resolution", () => {
+	it("forwards the resolved pane to dialog.setProps via activePreviewPane", () => {
+		const { adapter, dialog, tabsByIndex } = makeFixture();
+		adapter.apply(makeState({ currentTab: 1 }));
+		expect((dialog.setProps as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
+			activePreviewPane: tabsByIndex[1]!.preview,
+		});
+	});
+});

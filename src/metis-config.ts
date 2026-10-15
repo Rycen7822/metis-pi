@@ -192,6 +192,7 @@ function readLegacyMetisConfig(agentDir: string, read: ReadConfigFile) {
 export function readMetisConfig(
   agentDir: string,
   read: ReadConfigFile = optionalRead,
+  options: { legacy?: boolean } = {},
 ): { config: MetisConfig; present: boolean; legacy: boolean; notes: string[] } {
   const path = metisConfigPath(agentDir),
     text = readText(path, read);
@@ -202,6 +203,7 @@ export function readMetisConfig(
       legacy: false,
       notes: [],
     };
+  if (options.legacy === false) return { config: defaultMetisConfig(), present: false, legacy: false, notes: [] };
   const legacy = readLegacyMetisConfig(agentDir, read);
   return {
     config: mergeMetisConfig(defaultMetisConfig(), legacy.imported),

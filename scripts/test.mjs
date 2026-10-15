@@ -17,6 +17,7 @@ const suites = {
   core: (file) => file.startsWith("core/"),
   host: (file) => file.startsWith("contract/") || file === "package.test.mjs",
   lsp: (file) => file.startsWith("lsp/"),
+  ask: (file) => file === "contract/ask-user-question.test.mts",
   protocol: (file) => file.startsWith("protocol/"),
   io: (file) => file.startsWith("io/"),
   resource: (file) => file.startsWith("resource/"),
@@ -45,3 +46,10 @@ const child = spawnSync(
 );
 if (child.error) console.error(child.error);
 process.exitCode = child.status ?? 1;
+if (process.exitCode === 0 && (suite === "ask" || suite === "all")) {
+  const ask = spawnSync(process.execPath,
+    ["node_modules/vitest/vitest.mjs", "run", "--config", "vitest.ask.config.ts"],
+    { cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "inherit" });
+  if (ask.error) console.error(ask.error);
+  process.exitCode = ask.status ?? 1;
+}

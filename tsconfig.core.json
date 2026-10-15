@@ -21,6 +21,8 @@
     "src/execution/**",
     "src/condense/**",
     "src/pi-web-access/**",
-    "src/pi-session-recall/**"
+    "src/pi-session-recall/**",
+    "src/ask-user-question/**/*.test.ts",
+    "src/ask-user-question/test-fixtures.ts"
   ]
 }

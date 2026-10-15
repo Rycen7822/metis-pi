@@ -1,0 +1,151 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { makeTheme } from "@juicesharp/rpiv-test-utils";
+import { describe, expect, it, vi } from "vitest";
+import { TabBar, type TabBarProps } from "./tab-bar.ts";
+import * as i18n from "../../state/i18n-bridge.ts";
+
+const theme = makeTheme() as unknown as Theme;
+
+interface PropsOver {
+	questions?: ReadonlyArray<{ header?: string; question: string }>;
+	answeredIndices?: ReadonlyArray<number>;
+	activeTabIndex?: number;
+	totalTabs?: number;
+}
+
+function makeBar(initial: TabBarProps): TabBar {
+	const bar = new TabBar(theme);
+	bar.setProps(initial);
+	return bar;
+}
+
+function buildProps(over: PropsOver = {}): TabBarProps {
+	const questions = over.questions ?? [
+		{ header: "Scope", question: "Which scope?" },
+		{ header: "Priority", question: "How urgent?" },
+		{ header: "Tests", question: "Include tests?" },
+	];
+	const answeredSet = new Set(over.answeredIndices ?? []);
+	const totalTabs = over.totalTabs ?? questions.length + 1;
+	const activeTabIndex = over.activeTabIndex ?? 0;
+	const submitIndex = totalTabs - 1;
+	const tabs = questions.map((q, i) => ({
+		label: q.header && q.header.length > 0 ? q.header : `Q${i + 1}`,
+		answered: answeredSet.has(i),
+		active: i === activeTabIndex,
+	}));
+	return {
+		tabs,
+		submit: {
+			active: activeTabIndex === submitIndex,
+			allAnswered: answeredSet.size === questions.length && questions.length > 0,
+		},
+	};
+}
+
+describe("TabBar.render", () => {
+	it("emits exactly 2 lines (tab bar + blank spacer)", () => {
+		const tb = makeBar(buildProps());
+		const lines = tb.render(80);
+		expect(lines.length).toBe(2);
+		expect(lines[1]).toBe("");
+	});
+
+	it("renders one indicator per question + a Submit tab", () => {
+		const tb = makeBar(buildProps());
+		const line = tb.render(80)[0];
+		const empties = (line.match(/□/g) ?? []).length;
+		expect(empties).toBe(3);
+		expect(line).toContain("Submit");
+		expect(line).toContain("←");
+		expect(line).toContain("→");
+	});
+
+	it("resolves the Submit translation on each render", () => {
+		const tb = makeBar(buildProps({ activeTabIndex: 3 }));
+		const translate = vi.spyOn(i18n, "t").mockImplementation((key, fallback) => key === "submit.label" ? "提交答案" : fallback);
+		try {
+			const line = tb.render(40)[0];
+			expect(line).toContain("✓ 提交答案");
+			expect(line).not.toContain("Submit");
+		} finally {
+			translate.mockRestore();
+		}
+		expect(tb.render(40)[0]).toContain("✓ Submit");
+	});
+
+	it("flips □ → ■ for answered questions", () => {
+		const tb = makeBar(buildProps({ answeredIndices: [1] }));
+		const line = tb.render(80)[0];
+		expect(line.match(/■/g)?.length).toBe(1);
+		expect(line.match(/□/g)?.length).toBe(2);
+	});
+
+	it("applies selectedBg styling to the active tab via theme.bg", () => {
+		const spy = vi.spyOn(theme, "bg");
+		const tb = makeBar(buildProps({ activeTabIndex: 1 }));
+		tb.render(80);
+		expect(spy).toHaveBeenCalledWith("selectedBg", expect.stringContaining("Priority"));
+		spy.mockRestore();
+	});
+
+	it("Submit shows success color when all answered, dim otherwise", () => {
+		const spy = vi.spyOn(theme, "fg");
+		const tbAll = makeBar(buildProps({ answeredIndices: [0, 1, 2], activeTabIndex: 0 }));
+		tbAll.render(80);
+		expect(spy).toHaveBeenCalledWith("success", expect.stringContaining("Submit"));
+
+		spy.mockClear();
+		const tbPartial = makeBar(buildProps({ answeredIndices: [], activeTabIndex: 0 }));
+		tbPartial.render(80);
+		expect(spy).toHaveBeenCalledWith("dim", expect.stringContaining("Submit"));
+		spy.mockRestore();
+	});
+
+	it("falls back to Q{n+1} when header is absent", () => {
+		const tb = makeBar(
+			buildProps({
+				questions: [{ question: "first" }, { question: "second" }],
+				totalTabs: 3,
+			}),
+		);
+		const line = tb.render(80)[0];
+		expect(line).toContain("Q1");
+		expect(line).toContain("Q2");
+	});
+
+	it.each([0, 1, 2, 3, 4])("keeps active tab %i visible when long headers exceed width", (activeTabIndex) => {
+		const headers = ["VeryLongHeader01", "宽字符页签显示测试", "VeryLongHeader03", "VeryLongHeader04"];
+		const tb = makeBar(buildProps({
+			questions: headers.map(header => ({ header, question: "" })),
+			activeTabIndex,
+		}));
+		for (const width of [30, 40, 60, 80, 120]) {
+			const line = tb.render(width)[0];
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(line).toContain(activeTabIndex === 4 ? "✓ Submit" : `□ ${headers[activeTabIndex]}`);
+			if (width === 120) {
+				for (const header of headers) expect(line).toContain(header);
+				expect(line).toContain("Submit");
+			}
+		}
+	});
+
+	it("flattens line breaks in a header without adding terminal rows", () => {
+		const tb = makeBar(buildProps({ questions: [{ header: "First\nchoice", question: "" }] }));
+		const lines = tb.render(80);
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("First choice");
+		expect(lines[0]).not.toMatch(/[\r\n]/);
+	});
+
+	it("setProps replaces props between renders", () => {
+		const tb = makeBar(buildProps({ activeTabIndex: 0 }));
+		const before = tb.render(80)[0];
+		tb.setProps(buildProps({ activeTabIndex: 1, answeredIndices: [0] }));
+		const after = tb.render(80)[0];
+		expect(before).not.toBe(after);
+		expect(after.match(/■/g)?.length).toBe(1);
+	});
+});
