@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { setImmediate } from "node:timers/promises";
 import { registerOcc } from "./occ.ts";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.ts";
 import { chainMembers, isSharedChain } from "./chain-model.ts";
@@ -9,6 +10,7 @@ import { prepareBatch, splitPackingRuns } from "./packing.ts";
 import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summarizer.ts";
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
+import { createSourceSnapshotter } from "./source-snapshot.ts";
 import { pruneMessages, toolResultStub } from "./pruner.ts";
 import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { registerNestedCapture } from "./nested-capture.ts";
@@ -575,6 +577,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const version = lifecycle;
     const abort = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal;
+    const yieldToUi = ctx.mode === "tui";
+    let sliceStartedAt = performance.now();
     const beforeRewrite = occ.measure(ctx);
 
     // Clear on every non-concurrent invocation, regardless of outcome — the
@@ -930,14 +934,15 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // source for supersession: dedup aliases regardless of batch outcome,
       // plus the batch's own calls when the batch was actually indexed.
       const floorSources = records.flatMap((record) => record.deduped);
-      let expectedSource = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+      const snapshotSource = createSourceSnapshotter();
+      let expectedSource = snapshotSource(ctx.sessionManager.buildSessionProjection().messages);
       let nextRequest = 0, failedRequest = Infinity;
       const controller = fallbackController;
       const config = currentConfig.value;
       const checkSource = () => {
         assertCurrent(version);
         if (signal.aborted) throw new Error("summarize: aborted");
-        if (JSON.stringify(ctx.sessionManager.buildSessionProjection().messages) !== expectedSource) {
+        if (snapshotSource(ctx.sessionManager.buildSessionProjection().messages) !== expectedSource) {
           throw new CondenseContextChangedError("summary source changed");
         }
       };
@@ -984,6 +989,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       };
 
       for (const [i, record] of records.entries()) {
+        // Resolved promises only yield microtasks; let TUI timers/input run too.
+        if (yieldToUi && performance.now() - sliceStartedAt >= 16) {
+          await setImmediate(undefined, { signal });
+          sliceStartedAt = performance.now();
+        }
         checkSource();
         await schedule(i);
         if (record.job) updatePruneStatus(ctx, `prune: summarizing ${i + 1}/${records.length} (up to 3 concurrent)`);
@@ -1127,7 +1137,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         }
 
         completeRecord(record);
-        expectedSource = JSON.stringify(ctx.sessionManager.buildSessionProjection().messages);
+        expectedSource = snapshotSource(ctx.sessionManager.buildSessionProjection().messages);
       }
 
       lowerFloor(supersede, earliestResultTimestamp(floorSources));
@@ -1634,7 +1644,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       }
       const filtered = messages.filter(
         (message) =>
-          editedSummaries.has(summaryIdentity(message)) || !summaryToolIds(message).some((id) => editedToolIds.has(id)),
+          (editedSummaries.size > 0 && editedSummaries.has(summaryIdentity(message)))
+          || !summaryToolIds(message).some((id) => editedToolIds.has(id)),
       );
       if (filtered.length !== messages.length) {
         messages = filtered;
@@ -1715,6 +1726,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const original: any = source.type === "message" ? source.message : summary ? source : undefined;
       if (!original || (!summary && original.role !== "toolResult" && original.role !== "assistant")) continue;
       const effective = messages[0];
+      // Unedited native projections share evidence; avoid serializing its payloads.
+      if (messages.length === 1 && effective && "content" in effective && effective.content === original.content
+        && ("details" in effective ? effective.details : undefined) === original.details
+        && (!summary || effective.role === "custom")) continue;
       const sameEvidence = messages.length === 1 && JSON.stringify([(effective as any).content, (effective as any).details])
         === JSON.stringify([original.content, original.details]);
       // Prompt protection ignores ordinary execution metadata; source freshness does not.
@@ -1759,6 +1774,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
   function currentChainViews(messages: any[], ctx?: ExtensionContext): SingleChainCompressionEntry[] {
     const entries = indexer.getChainEntries();
+    if (entries.length === 0) return [];
     const raw = ctx?.sessionManager.buildSessionProjection().messages ?? messages;
     const chains = detectChains(raw, protectionPredicate);
     const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
@@ -2009,7 +2025,10 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const withDurableSummaries = (messages: any[], ctx: ExtensionContext, api?: string, prefixOnly = false) => {
     const durable = projectContext(ctx.sessionManager.buildSessionProjection().messages, api, ctx, undefined, true).messages
       .filter((message: any) => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY);
-    const identities = new Set(messages.map(message => projectionFingerprint([message])));
+    if (durable.length === 0) return messages;
+    const identities = new Set(messages
+      .filter(message => message.role === "custom" && message.customType === CUSTOM_TYPE_SUMMARY)
+      .map(message => projectionFingerprint([message])));
     const missing = durable.filter((message: any) => !identities.has(projectionFingerprint([message])));
     if (!missing.length) return messages;
     if (!prefixOnly) return [...messages, ...missing];

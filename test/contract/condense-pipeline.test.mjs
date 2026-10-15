@@ -1037,8 +1037,9 @@ test("summary requests reserve output space and local budget failures never requ
 });
 
 test("parallel summaries commit in order within a three-record window and reject changed sources", async (t) => {
-  for (const changed of [false, true])
-    await t.test(changed ? "source changed" : "out of order", async (t) => {
+  for (const change of ["none", "append", "content", "details"])
+    await t.test(change === "none" ? "out of order" : `source changed (${change})`, async (t) => {
+      const changed = change !== "none";
       const f = await fixture(t, { defer: true });
       for (let i = 0; i < 5; i++) {
         f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: 100 + i });
@@ -1052,7 +1053,14 @@ test("parallel summaries commit in order within a three-record window and reject
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(f.calls.length, 3, "completed later requests do not create an unbounded backlog");
       assert.equal(f.sm.getBranch().filter((e) => e.customType === "context-prune-summary").length, 0);
-      if (changed) f.sm.appendMessage({ role: "user", content: "New source", timestamp: 300 });
+      if (change === "append") f.sm.appendMessage({ role: "user", content: "New source", timestamp: 300 });
+      else if (changed) {
+        const leaf = f.sm.getLeafId();
+        const source = f.sm.getBranch().find(entry => entry.type === "message" && entry.message.role === "toolResult").message;
+        if (change === "content") source.content[0].text = "Evidence corrected while the summary was pending";
+        else source.details = { corrected: true };
+        assert.equal(f.sm.getLeafId(), leaf, "in-place changes do not bump the session leaf");
+      }
       f.release(0);
       let done = false;
       pending.finally(() => {
@@ -1077,6 +1085,28 @@ test("parallel summaries commit in order within a three-record window and reject
         );
       } else assert.equal(f.calls.length, 5);
     });
+});
+
+test("TUI flush yields to queued input and rechecks source freshness before publishing", async t => {
+  const f = await fixture(t);
+  f.ctx.mode = "tui";
+  for (let i = 0; i < 5; i++) f.add("Short evidence", "inspect", `yield-${i}`);
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock += 20);
+  let inputHandled = false;
+  const input = new Promise(resolve => setImmediate(() => {
+    inputHandled = true;
+    f.sm.appendMessage({ role: "user", content: "Queued input", timestamp: f.nextTimestamp() });
+    resolve();
+  }));
+  await f.finish(false);
+  const handledDuringFlush = inputHandled;
+  await input;
+  assert.equal(handledDuringFlush, true, "a flush slice lets the event loop handle queued input");
+  assert.equal(f.calls.length, 0);
+  assert.ok(!f.sm.getBranch().some(entry => entry.customType === "context-prune-frontier"));
+  assert.equal(f.sm.getBranch().findLast(entry => entry.customType === "context-prune-flush-metrics").data.reason,
+    "stale-context", "yielding must not authorize work from the old source");
 });
 
 test(

@@ -32,7 +32,8 @@ export function argumentCandidates(entries: Array<{ sourceEntry: any; messages: 
     const span = rows.slice(i, end);
     const results = span.slice(1).map(row => row.message);
     if (results.length !== calls.length || new Set(calls.map(call => call.id)).size !== calls.length
-      || span.some(row => row.entry.type !== "message" || JSON.stringify(row.message) !== JSON.stringify(row.entry.message))
+      || span.some(row => row.entry.type !== "message"
+        || (row.message !== row.entry.message && JSON.stringify(row.message) !== JSON.stringify(row.entry.message)))
       || results.some(result => result.isError !== false || typeof result.timestamp !== "number")
       || calls.some(call => results.filter(result => result.toolCallId === call.id).length !== 1)) continue;
     const batch = captureBatch(start.message, results, -1, start.message.timestamp);
@@ -69,6 +70,7 @@ export function argumentCandidates(entries: Array<{ sourceEntry: any; messages: 
 
 /** Stable projection: source mutation or newly protected paths restore original messages. */
 export function projectArguments(messages: any[], groups: ArgumentHistory[], protection: ProtectionConfig): any[] {
+  if (groups.length === 0) return messages;
   const byFirst = new Map(groups.map(group => [group.fingerprints[0], group]));
   const output: any[] = [];
   let changed = false;
