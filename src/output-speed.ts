@@ -33,7 +33,7 @@ export function formatSpeed(tps: number | undefined): string {
 }
 
 /** A turn owns at most one completed sample. Settings changes cancel an open
- * slot; a late message_start must not resurrect it under the new selection. */
+ * slot; a late response under the old selection must not reopen it. */
 export class OutputSpeedTracker {
   #pending = false;
   #sample: OutputSpeedSample | undefined;
