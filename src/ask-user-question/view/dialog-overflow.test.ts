@@ -341,6 +341,18 @@ describe("Dialog overflow — notes open on a multi-select tab (NFR-2)", () => {
 		],
 	};
 
+	it.each(["inputMode", "notesVisible"] as const)("hides list shortcuts captured by %s", mode => {
+		const config = { questions: [multiQ, multiQ], multiSelectByTab: [stubMultiSelect(["<MULTI>"])] };
+		const resting = makeDialog(makeConfig(config)).render(240).join("\n");
+		const editing = makeDialog(makeConfig({ ...config, state: makeQuestionnaireState({ [mode]: true }) }))
+			.render(240).join("\n");
+		for (const hint of ["Tab to switch questions", "Space to toggle"]) {
+			expect(resting).toContain(hint);
+			expect(editing).not.toContain(hint);
+		}
+		expect(editing).toContain("Shift+Enter");
+	});
+
 	it("flipping notesVisible false→true grows render length by exactly 3; trailing residual-spacer tail unchanged", () => {
 		const ms = stubMultiSelect(["<MULTI>"]);
 		const common = {

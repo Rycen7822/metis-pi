@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { t } from "../../state/i18n-bridge.ts";
 import type { StatefulView } from "../stateful-view.ts";
 
 /**
@@ -42,7 +43,7 @@ export class TabBar implements StatefulView<TabBarProps> {
 			pieces.push(styled);
 		}
 
-		const submitText = " ✓ Submit ";
+		const submitText = ` ✓ ${t("submit.label", "Submit")} `;
 		const submitStyled = this.props.submit.active
 			? this.theme.bg("selectedBg", this.theme.fg("text", submitText))
 			: this.theme.fg(this.props.submit.allAnswered ? "success" : "dim", submitText);

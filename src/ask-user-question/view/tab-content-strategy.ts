@@ -307,16 +307,17 @@ export function buildHintText(
 	collapseKey: string,
 ): string {
 	const parts: string[] = [t("hint.enter", HINT_PART_ENTER), t("hint.navigate", HINT_PART_NAV)];
-	if (question?.multiSelect === true) parts.push(t("hint.toggle", HINT_PART_TOGGLE));
-	if (question && !state.notesVisible && !state.inputMode) parts.push(t("hint.notes", HINT_PART_NOTES));
-	if (isMulti) parts.push(t("hint.tab", HINT_PART_TAB));
+	const editing = state.notesVisible || state.inputMode;
+	if (question?.multiSelect === true && !editing) parts.push(t("hint.toggle", HINT_PART_TOGGLE));
+	if (question && !editing) parts.push(t("hint.notes", HINT_PART_NOTES));
+	if (isMulti && !editing) parts.push(t("hint.tab", HINT_PART_TAB));
 	parts.push(t("hint.cancel", HINT_PART_CANCEL));
 	if (collapseKey !== COLLAPSE_KEY_OFF) {
 		parts.push(
 			t("hint.collapse", HINT_PART_COLLAPSE_TEMPLATE).replace(KEY_PLACEHOLDER, formatKeySpecForDisplay(collapseKey)),
 		);
 	}
-	if (state.notesVisible || state.inputMode) parts.push(t("hint.newline", HINT_PART_NEW_LINE));
+	if (editing) parts.push(t("hint.newline", HINT_PART_NEW_LINE));
 	if (state.inputMode) parts.push(t("hint.clear", HINT_PART_CLEAR));
 	return parts.join(" · ");
 }

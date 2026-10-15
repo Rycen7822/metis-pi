@@ -3,6 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { TabBar, type TabBarProps } from "./tab-bar.ts";
+import * as i18n from "../../state/i18n-bridge.ts";
 
 const theme = makeTheme() as unknown as Theme;
 
@@ -59,6 +60,19 @@ describe("TabBar.render", () => {
 		expect(line).toContain("Submit");
 		expect(line).toContain("←");
 		expect(line).toContain("→");
+	});
+
+	it("resolves the Submit translation on each render", () => {
+		const tb = makeBar(buildProps({ activeTabIndex: 3 }));
+		const translate = vi.spyOn(i18n, "t").mockImplementation((key, fallback) => key === "submit.label" ? "提交答案" : fallback);
+		try {
+			const line = tb.render(40)[0];
+			expect(line).toContain("✓ 提交答案");
+			expect(line).not.toContain("Submit");
+		} finally {
+			translate.mockRestore();
+		}
+		expect(tb.render(40)[0]).toContain("✓ Submit");
 	});
 
 	it("flips □ → ■ for answered questions", () => {

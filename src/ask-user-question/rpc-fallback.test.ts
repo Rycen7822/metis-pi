@@ -221,16 +221,16 @@ describe("ask_user_question.execute — RPC dialog walker (ctx.mode === 'rpc')",
 		});
 	});
 
-	it("multi-select treats non-index input as a typed custom answer, not a silent drop", async () => {
+	it.each(["red, something else entirely", "  red please  "])("multi-select preserves custom input %j verbatim", async answer => {
 		const tool = register();
-		const input = vi.fn(async () => "red, something else entirely");
+		const input = vi.fn(async () => answer);
 		const r = await run(tool, MULTI, ctxRpc({ input }));
 		expect(r?.details).toMatchObject({ cancelled: false });
 		expect(r?.details).toMatchObject({
-			answers: [{ kind: "multi", selected: [], answer: "red, something else entirely" }],
+			answers: [{ kind: "multi", selected: [], answer }],
 		});
 		expect(r?.content[0]).toMatchObject({
-			text: expect.stringContaining('"Pick colors?"="red, something else entirely"'),
+			text: expect.stringContaining(`"Pick colors?"="${answer}"`),
 		});
 	});
 
@@ -272,6 +272,9 @@ describe("ask_user_question.execute — RPC single-select replies", () => {
 		["a bare index", "2", { kind: "option", answer: "B" }],
 		["an exact option label", "B", { kind: "option", answer: "B" }],
 		["free text (#299)", "B but change the title", { kind: "custom", answer: "B but change the title" }],
+		["padded free text", "  use foo  ", { kind: "custom", answer: "  use foo  " }],
+		["whitespace-only free text", "   ", { kind: "custom", answer: "   " }],
+		["an explicitly empty reply", "", { kind: "custom", answer: null }],
 		[
 			"free text starting with a digit (#299)",
 			"2 but change the title",
@@ -281,12 +284,6 @@ describe("ask_user_question.execute — RPC single-select replies", () => {
 		const tool = register();
 		const r = await run(tool, SINGLE, ctxRpc({ select: vi.fn(async () => reply) }));
 		expect(answersOf(r)).toMatchObject({ cancelled: false, answers: [expected] });
-	});
-
-	it("an empty reply is still a dismissal", async () => {
-		const tool = register();
-		const r = await run(tool, SINGLE, ctxRpc({ select: vi.fn(async () => "   ") }));
-		expect(answersOf(r).cancelled).toBe(true);
 	});
 
 	it("cancelling the 'Type something.' input returns to the options instead of cancelling (#142)", async () => {

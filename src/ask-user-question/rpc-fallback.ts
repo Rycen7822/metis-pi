@@ -109,7 +109,7 @@ export async function runRpcQuestionnaire(ui: DialogUI, params: QuestionParams, 
  * place of picking (T3 Code's "Type your own answer" box) and return that text
  * (#299). A reply is therefore read as: an offered line → that option; a bare
  * number → that option (hosts that return an index); a reply equal to an option
- * label → that option; any other non-empty text → the user's own answer, verbatim
+ * label → that option; any other text → the user's own answer, preserving whitespace
  * — never a dismissal, and never "option N plus discarded text". Cancelling the
  * "Type something." follow-up returns to the options instead of cancelling the
  * whole questionnaire (#142), and that input repeats the option list so the user
@@ -128,9 +128,8 @@ async function askSingleSelect(
 		const chosen = await ui.select(title, options);
 		if (chosen == null) return undefined;
 		const reply = chosen.trim();
-		if (reply.length === 0) return undefined;
 		const idx = resolveSingleSelectReply(chosen, reply, options, q);
-		if (idx === undefined) return { questionIndex, question: q.question, kind: "custom", answer: reply };
+		if (idx === undefined) return { questionIndex, question: q.question, kind: "custom", answer: chosen || null };
 		if (idx < q.options.length) {
 			const o = q.options[idx];
 			return {
@@ -204,5 +203,5 @@ async function askMultiSelect(
 		};
 	}
 	// Preserve unparseable input verbatim as custom text rather than dropping it.
-	return { questionIndex, question: q.question, kind: "multi", answer: trimmed, selected: [] };
+	return { questionIndex, question: q.question, kind: "multi", answer: value, selected: [] };
 }
