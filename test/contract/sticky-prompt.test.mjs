@@ -8,13 +8,14 @@ import { sgr } from "../helpers.mjs";
 
 initTheme("dark", false);
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
+const PROMPT_BG = "\x1b[48;2;41;41;41m";
 const host = {
   ...Tui, UserMessageComponent, SkillInvocationMessageComponent,
   promptRow(summary, width) {
     const row = Tui.truncateToWidth(`↑ ${summary}`, width);
     return row + " ".repeat(Math.max(0, width - Tui.visibleWidth(row)));
   },
-  promptTheme: () => ({ fg: (_key, row) => row, bg: (_key, row) => `\x1b[48;2;41;41;41m${row}\x1b[49m` }),
+  promptTheme: () => ({ fg: (_key, row) => row, bg: (_key, row) => `${PROMPT_BG}${row}\x1b[49m` }),
 };
 const body = (name, count = 100) => new Tui.Text(Array.from({ length: count }, (_, i) => `${name}_${i}`).join("\n"), 0, 0);
 function scrollBox(root, scroll) {
@@ -50,9 +51,19 @@ function setup(t, children, { width = 60, rows = 24, margin = 2, prepareScroll =
   return { source, scroll, tui, terminal, layout, root, box, render, lines, pin, clickPin };
 }
 
+function assertPromptBackground(view) {
+  // The fixture emits one background color; resets end each painted span.
+  // Sum all spans so resetting and then reapplying the background is valid too.
+  const paintedWidth = view.tui.previousScreen[0].split(PROMPT_BG).slice(1)
+    .reduce((width, span) => width + Tui.visibleWidth(span.split(/\x1b\[(?:0|49)m/, 1)[0]), 0);
+  assert.equal(paintedWidth, view.box().rect.width,
+    "every pin cell, including the ellipsis and right padding, keeps its background");
+}
+
 test("first committed frame pins the offscreen user input; clicking goes to the original without moving the dock", t => {
   const view = setup(t, [new UserMessageComponent("ORIGINAL_PROMPT"), body("REPLY")]);
   assert.match(view.pin(), /ORIGINAL_PROMPT/);
+  assertPromptBackground(view);
   assert.equal(view.tui.getPrimaryScrollView(), view.scroll);
   assert.equal(view.tui.hasOverlay(), false, "chrome must not disable native selection/scrollbars as an overlay would");
   assert.ok(view.lines().every(line => !line.includes("↑")), "pin is outside transcript/copy rows");
@@ -117,12 +128,13 @@ test("native visible prompt content respects Markdown transforms and column-safe
   const view = setup(t, [prompt, body("OUTPUT")]);
   assert.match(view.pin(), /VISIBLE_漢字🙂/);
   assert.doesNotMatch(view.pin(), /PRIVATE_TOKEN/);
-  for (const width of [30, 72]) {
+  for (const width of [30, 31, 72, 73]) {
     view.terminal.columns = width; view.render();
     const pin = view.pin();
     assert.match(pin, /VISIBLE_漢字🙂/);
     assert.ok(Tui.visibleWidth(pin) <= width);
-    assert.ok(view.tui.previousScreen[0].includes("\x1b[48;2;41;41;41m"));
+    assert.match(pin, /\.\.\.$/);
+    assertPromptBackground(view);
   }
   view.clickPin();
   assert.ok(screenLines(view.tui).some(line => line.includes("VISIBLE_漢字🙂")));

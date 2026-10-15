@@ -370,7 +370,8 @@ export class HistoryWindow {
   }
 
   #paintPrompt(summary: string): string {
-    const row = this.promptHost!.promptRow!(summary, this.#promptWidth);
+    // Truncation adds ANSI resets around the ellipsis; theme only plain text.
+    const row = safeText(this.promptHost!.promptRow!(summary, this.#promptWidth));
     try {
       const theme = this.promptHost!.promptTheme?.();
       return theme ? theme.bg("userMessageBg", theme.fg("userMessageText", row)) : row;
