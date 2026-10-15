@@ -323,18 +323,35 @@ try {
     assert.match(idle, /ctx 0\/1\.0M · 0%/, "footer: context usage");
     assert.match(idle, /Ask anything\.\.\./, "composer placeholder on the gray surface");
     assert.match(idle, /(^|\n)\s*> /, "`> ` prompt prefix on the first input row");
-    const orderedFooter = idle.slice(idle.indexOf("pcx-mock-model"));
-    assert.ok(orderedFooter.indexOf("(main)") > orderedFooter.indexOf("pcx-mock-model"), "path/branch follows model/provider below editor");
-    assert.ok(orderedFooter.indexOf("ctx 0/1.0M") > orderedFooter.indexOf("(main)"), "context follows path");
+    const idleRows = visibleRows(idle);
+    const primaryRow = idleRows.findIndex(line => line.includes("pcx-mock-model · high · pcx-mock"));
+    assert.ok(primaryRow >= 0, "primary footer is visible");
+    const orderedFooter = idleRows.slice(primaryRow).join("\n");
+    assert.doesNotMatch(orderedFooter, /\(main\)/, "location starts folded");
+    assert.ok(orderedFooter.indexOf("ctx 0/1.0M") > orderedFooter.indexOf("pcx-mock-model"), "context follows model/provider");
+    assert.match(idleRows[primaryRow], /▶$/, "location has a disclosure control");
     assert.ok(idle.indexOf("Ask anything...") < idle.lastIndexOf("pcx-mock-model"),
       `footer lives below the editor: ${JSON.stringify(idle.slice(-550))}`);
     // Git parser and HEAD transitions have focused tests; this proves footer wiring.
-    await waitFor(/\(main\) \+4 -0/, 15_000, "existing work appears in the footer");
+    await waitForVisible(/\+4 -0 ▶/, 15_000, "existing work stays visible with location folded");
     fs.writeFileSync(path.join(WORKSPACE, "tracked.txt"), "one\ntwo\n");
-    await waitForVisible(/\(main\) \+4 -1/, 15_000, "running Git poll updates the footer");
+    await waitForVisible(/\+4 -1 ▶/, 15_000, "running Git poll updates the compact footer");
     const coloredFooter = capture(true);
-    assert.match(coloredFooter, /\x1b\[32m \+4/, "added lines use diff green");
-    assert.match(coloredFooter, /\x1b\[31m -1/, "removed lines use diff red");
+    assert.match(coloredFooter, /\x1b\[32m ?\+4/, "added lines use diff green");
+    assert.match(coloredFooter, /\x1b\[31m ?-1/, "removed lines use diff red");
+    const toggleLocation = (glyph) => {
+      const rows = visibleRows(capture());
+      const row = rows.findIndex(line => line.includes("pcx-mock-model · high · pcx-mock") && line.includes(glyph));
+      assert.ok(row >= 0, `visible footer has ${glyph}`);
+      clickRow(row, cellOf(rows[row], glyph));
+    };
+    toggleLocation("▶");
+    const expandedRows = visibleRows(await waitForVisible(/\(main\)/, 10_000, "location disclosed by native mouse"));
+    assert.ok(expandedRows.findIndex(line => line.includes("(main)"))
+      > expandedRows.findIndex(line => line.includes("pcx-mock-model · high · pcx-mock")), "location is below metrics");
+    toggleLocation("▼");
+    await waitGone(/\(main\)/, 10_000, "location folded again");
+    assert.match(visibleText(), /\+4 -1 ▶/, "folding location does not hide change counts");
 
   }
   if (selected.has("E2")) {
