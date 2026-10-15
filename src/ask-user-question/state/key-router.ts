@@ -13,7 +13,6 @@ const KEYBIND_CLEAR = "tui.editor.deleteToLineStart";
 const KEYBIND_EXTERNAL_EDITOR = "app.editor.external";
 
 const NOTES_ACTIVATE_KEY = "n";
-const SPACE_KEY = " ";
 
 export interface QuestionnaireKeybindings {
 	matches(data: string, name: string): boolean;
@@ -136,8 +135,8 @@ function routeSubmitTab(
 	// it (cancel, tab switch, submit-nav, confirm): a literal `n` byte matches none of them
 	// under default bindings, and a user who deliberately binds one of those actions to
 	// `n` keeps that mapping because the earlier branch still wins (Enter still submits).
-	if (data === NOTES_ACTIVATE_KEY) {
-		return { kind: "notes_enter" };
+	if (matchesKey(data, NOTES_ACTIVATE_KEY)) {
+		return { kind: isKeyRelease(data) || isKeyRepeat(data) ? "ignore" : "notes_enter" };
 	}
 	return { kind: "ignore" };
 }
@@ -149,7 +148,11 @@ function routeMultiSelectTab(
 	runtime: QuestionnaireRuntime,
 ): QuestionnaireAction {
 	const kind = runtime.currentItem?.kind;
-	if (data === SPACE_KEY) return kind === "option" ? { kind: "toggle", index: state.optionIndex } : { kind: "ignore" };
+	if (matchesKey(data, Key.space)) {
+		return kind === "option" && !isKeyRelease(data) && !isKeyRepeat(data)
+			? { kind: "toggle", index: state.optionIndex }
+			: { kind: "ignore" };
+	}
 	if (isConfirm(kb, data)) {
 		if (kind === "other") return { kind: "ignore" };
 		if (kind === "next") return { kind: "confirm", value: runtime.inputBuffer };
@@ -208,8 +211,8 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 	// "Type something.") is irrelevant: the gate sits ABOVE the multi-select
 	// toggle block and the Next sentinel never activates inputMode, so `n` is
 	// neither swallowed earlier nor blocked by the focused row.
-	if (data === NOTES_ACTIVATE_KEY) {
-		return { kind: "notes_enter" };
+	if (matchesKey(data, NOTES_ACTIVATE_KEY)) {
+		return { kind: isKeyRelease(data) || isKeyRepeat(data) ? "ignore" : "notes_enter" };
 	}
 
 	if (kb.matches(data, KEYBIND_UP)) {

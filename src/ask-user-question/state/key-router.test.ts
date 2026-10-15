@@ -175,10 +175,13 @@ describe("routeKey — multiSelect", () => {
 		],
 	});
 
-	it("Space emits toggle for the current optionIndex", () => {
+	it.each([
+		[BYTE_SPACE, true], ["\x1b[32u", true], ["\x1b[32;1:1u", true],
+		["\x1b[32;1:2u", false], ["\x1b[32;1:3u", false],
+	] as const)("Space %j toggles only on a press (%s)", (data, pressed) => {
 		expect(
 			routeKey(
-				BYTE_SPACE,
+				data,
 				makeState({ optionIndex: 1 }),
 				makeRuntime({
 					questions: [multiQ],
@@ -191,7 +194,7 @@ describe("routeKey — multiSelect", () => {
 					currentItem: { kind: "option", label: "BE" },
 				}),
 			),
-		).toEqual({ kind: "toggle", index: 1 });
+		).toEqual(pressed ? { kind: "toggle", index: 1 } : { kind: "ignore" });
 	});
 
 	// Spec: Enter on a REGULAR option row toggles that row's checkbox (matches Space). Committing
@@ -395,10 +398,15 @@ describe("routeKey — cancel + submit", () => {
 });
 
 describe("routeKey — notes", () => {
-	it("'n' emits notes_enter regardless of preview (universal gate)", () => {
-		expect(routeKey("n", makeState(), makeRuntime())).toEqual({
-			kind: "notes_enter",
-		});
+	it.each([
+		["n", true], ["\x1b[110u", true], ["\x1b[110;1:1u", true],
+		["\x1b[110;1:2u", false], ["\x1b[110;1:3u", false],
+	] as const)("notes shortcut %j opens question and global notes only on a press (%s)", (data, pressed) => {
+		for (const currentTab of [0, 2]) {
+			expect(routeKey(data, makeState({ currentTab }), makeRuntime())).toEqual({
+				kind: pressed ? "notes_enter" : "ignore",
+			});
+		}
 	});
 
 	it("'n' emits notes_enter on multiSelect questions even with preview (universal gate)", () => {

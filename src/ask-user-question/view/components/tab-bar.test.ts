@@ -101,21 +101,20 @@ describe("TabBar.render", () => {
 		expect(line).toContain("Q2");
 	});
 
-	it("truncates rather than overflowing when 4 long headers exceed width", () => {
-		const tb = makeBar(
-			buildProps({
-				questions: [
-					{ header: "VeryLongHeaderOne", question: "" },
-					{ header: "VeryLongHeaderTwo", question: "" },
-					{ header: "VeryLongHeaderThree", question: "" },
-					{ header: "VeryLongHeaderFour", question: "" },
-				],
-				totalTabs: 5,
-			}),
-		);
-		for (const w of [40, 60, 80, 120]) {
-			const lines = tb.render(w);
-			expect(visibleWidth(lines[0])).toBeLessThanOrEqual(w);
+	it.each([0, 1, 2, 3, 4])("keeps active tab %i visible when long headers exceed width", (activeTabIndex) => {
+		const headers = ["VeryLongHeader01", "宽字符页签显示测试", "VeryLongHeader03", "VeryLongHeader04"];
+		const tb = makeBar(buildProps({
+			questions: headers.map(header => ({ header, question: "" })),
+			activeTabIndex,
+		}));
+		for (const width of [30, 40, 60, 80, 120]) {
+			const line = tb.render(width)[0];
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(line).toContain(activeTabIndex === 4 ? "✓ Submit" : `□ ${headers[activeTabIndex]}`);
+			if (width === 120) {
+				for (const header of headers) expect(line).toContain(header);
+				expect(line).toContain("Submit");
+			}
 		}
 	});
 

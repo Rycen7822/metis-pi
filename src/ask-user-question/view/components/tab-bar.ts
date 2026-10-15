@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { StatefulView } from "../stateful-view.ts";
 
 /**
@@ -31,7 +31,7 @@ export class TabBar implements StatefulView<TabBarProps> {
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		const pieces: string[] = [" ← "];
+		const pieces: string[] = [];
 
 		for (const tab of this.props.tabs) {
 			const box = tab.answered ? "■" : "□";
@@ -40,7 +40,6 @@ export class TabBar implements StatefulView<TabBarProps> {
 				? this.theme.bg("selectedBg", this.theme.fg("text", rawSeg))
 				: this.theme.fg(tab.answered ? "success" : "muted", rawSeg);
 			pieces.push(styled);
-			pieces.push(" ");
 		}
 
 		const submitText = " ✓ Submit ";
@@ -48,9 +47,18 @@ export class TabBar implements StatefulView<TabBarProps> {
 			? this.theme.bg("selectedBg", this.theme.fg("text", submitText))
 			: this.theme.fg(this.props.submit.allAnswered ? "success" : "dim", submitText);
 		pieces.push(submitStyled);
-		pieces.push(" →");
 
-		const tabLine = truncateToWidth(pieces.join(""), width, "");
+		const active = this.props.submit.active
+			? pieces.length - 1
+			: Math.max(0, this.props.tabs.findIndex(tab => tab.active));
+		let start = 0;
+		let end = pieces.length;
+		// Drop the farthest tab first, retaining the active tab and its nearest neighbors.
+		while (end - start > 1 && visibleWidth(pieces.slice(start, end).join(" ")) + 5 > width) {
+			if (active - start > end - 1 - active) start++;
+			else end--;
+		}
+		const tabLine = truncateToWidth(` ← ${pieces.slice(start, end).join(" ")} →`, width, "");
 		return [tabLine, ""];
 	}
 }
