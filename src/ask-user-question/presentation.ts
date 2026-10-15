@@ -62,12 +62,6 @@ export const inlineRowBudget: RowBudget = (terminalRows) =>
 export interface Presentation {
 	/** True → focused overlay (`ctx.ui.custom` overlay options); false → Pi's editor slot. */
 	overlay: boolean;
-	/**
-	 * Overlay only: collapse may fully hide it (`OverlayHandle.setHidden`, reopened by the
-	 * raw collapse listener). False when stacked over another overlay — see
-	 * `STACKED_OVERLAY_PRESENTATION`.
-	 */
-	hideOnCollapse?: boolean;
 	rowBudget: RowBudget;
 	/** Frees the inline slot; present only when this presentation claimed it. Call once, on teardown. */
 	release?: () => void;
@@ -93,22 +87,6 @@ function claimInlineSlot(): (() => void) | undefined {
 export const OVERLAY_PRESENTATION: Presentation = Object.freeze({
 	overlay: true,
 	rowBudget: fullRowBudget,
-	hideOnCollapse: true,
-});
-
-/**
- * The overlay a question stacks as when another overlay (e.g. `/btw`) is already open.
- * Collapse keeps it visible as the one-row hint instead of hiding it: Pi closes an
- * overlay-mode `ui.custom` with `hideOverlay()`, which pops the TOPMOST overlay — a
- * hidden questionnaire above `/btw` would be popped when `/btw` closes, stranding `/btw`
- * on screen and leaving the questionnaire's promise unsettled (the agent hangs). The
- * visible row keeps focus, so the overlay below stays readable but is closed after the
- * question.
- */
-export const STACKED_OVERLAY_PRESENTATION: Presentation = Object.freeze({
-	overlay: true,
-	rowBudget: fullRowBudget,
-	hideOnCollapse: false,
 });
 
 /**

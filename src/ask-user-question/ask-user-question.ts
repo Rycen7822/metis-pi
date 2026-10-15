@@ -17,10 +17,10 @@ import {
 // none of the ~560ms TUI render graph that QuestionnaireSession lazy-loads.
 import {
 	mustYieldInlineSlot,
+	OVERLAY_PRESENTATION,
 	type Presentation,
 	resolvePresentation,
 	rowBudgetForHost,
-	STACKED_OVERLAY_PRESENTATION,
 	YIELD_TO_OVERLAY,
 } from "./presentation.ts";
 import { type DialogUI, hasDialogUI, runRpcQuestionnaire } from "./rpc-fallback.ts";
@@ -160,6 +160,8 @@ export async function loadQuestionnaireSession(): Promise<SessionLoad> {
 	return { ok: true, module: mod };
 }
 
+const collapseOwners = new WeakMap<TUI, Array<(data: string) => boolean>>();
+
 /**
  * Register the raw terminal listener that toggles collapse while the overlay is hidden.
  * Returns the remover, or undefined when the key is off / the host has no raw input hook —
@@ -167,6 +169,7 @@ export async function loadQuestionnaireSession(): Promise<SessionLoad> {
  */
 function registerCollapseKeyListener(
 	ctx: ExtensionContext,
+	tui: TUI,
 	collapseKey: string,
 	sessionRef: SessionRef,
 	overlayHandleRef: OverlayHandleRef,
@@ -174,19 +177,28 @@ function registerCollapseKeyListener(
 ): (() => void) | undefined {
 	if (collapseKey === COLLAPSE_KEY_OFF || typeof ctx.ui.onTerminalInput !== "function") return undefined;
 	let hasAnnouncedHide = false;
-	return ctx.ui.onTerminalInput((data) => {
+	const owners = collapseOwners.get(tui) ?? [];
+	const canHandle = (data: string) => {
 		const handle = overlayHandleRef.current;
-		if (!handle) return undefined;
+		if (!handle) return false;
 		// Only act while the questionnaire is hidden (its handleInput is
 		// unreachable) or actually focused. When some other overlay is on
 		// top (e.g. `/btw`), leave the keystroke to that overlay instead of
 		// toggling the questionnaire from underneath it.
-		if (!handle.isHidden() && !handle.isFocused()) return undefined;
+		if (!handle.isHidden() && !handle.isFocused()) return false;
 		if (
 			keybindings.matches(data, "tui.select.cancel") || keybindings.matches(data, "tui.select.confirm") ||
 			keybindings.matches(data, "tui.input.submit")
-		) return undefined;
-		if (!matchesKey(data, collapseKey as Parameters<typeof matchesKey>[1])) return undefined;
+		) return false;
+		return matchesKey(data, collapseKey as Parameters<typeof matchesKey>[1]);
+	};
+	const removeListener = ctx.ui.onTerminalInput((data) => {
+		// Pi dispatches raw listeners oldest first; the newest eligible question owns
+		// this shortcut, including reopening it above a focused lower question.
+		let owner;
+		for (const candidate of owners) if (candidate(data)) owner = candidate;
+		if (owner !== canHandle) return undefined;
+		const handle = overlayHandleRef.current!;
 		// Kitty-protocol terminals report press, repeat, and release separately.
 		// Toggle only on the initial press so a tap does not immediately reopen
 		// the overlay and a held key does not toggle it repeatedly.
@@ -198,6 +210,16 @@ function registerCollapseKeyListener(
 		}
 		return { consume: true };
 	});
+	if (typeof removeListener !== "function") return undefined;
+	owners.push(canHandle);
+	collapseOwners.set(tui, owners);
+	return () => {
+		const index = owners.indexOf(canHandle);
+		if (index < 0) return;
+		owners.splice(index, 1);
+		if (owners.length === 0) collapseOwners.delete(tui);
+		removeListener();
+	};
 }
 
 /**
@@ -309,13 +331,11 @@ async function mountQuestionnaire(config: {
 				config.signal?.addEventListener("abort", abort, { once: true });
 				removeAbortListener = () => config.signal?.removeEventListener("abort", abort);
 				if (config.signal?.aborted) { abort(); return INERT_COMPONENT; }
-				const mountedPresentation = presentation.overlay && mustYieldInlineSlot(tui)
-					? STACKED_OVERLAY_PRESENTATION : presentation;
-				if (mountedPresentation.hideOnCollapse) {
-					removeOverlayInputListener = registerCollapseKeyListener(ctx, collapseKey, sessionRef, overlayHandleRef, keys);
+				if (presentation.overlay) {
+					removeOverlayInputListener = registerCollapseKeyListener(ctx, tui, collapseKey, sessionRef, overlayHandleRef, keys);
 				}
 				const factory = makeSessionFactory({
-					...config, presentation: mountedPresentation, sessionRef,
+					...config, sessionRef,
 					canReopenWhileHidden: removeOverlayInputListener !== undefined,
 				});
 				return factory(tui, theme, keys, finish);
@@ -489,7 +509,7 @@ export function registerAskUserQuestionTool(
 				if (result === YIELD_TO_OVERLAY) {
 					// Another overlay was on screen: stack on top of it instead (see mustYieldInlineSlot).
 					presentation.release?.();
-					presentation = STACKED_OVERLAY_PRESENTATION;
+					presentation = OVERLAY_PRESENTATION;
 					result = await mount(presentation);
 				}
 

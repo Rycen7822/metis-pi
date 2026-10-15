@@ -100,6 +100,7 @@ export function registerWebSearchCommand(pi: ExtensionAPI, buildSearchReturn: (o
 						searchProvider: toCuratorProvider(currentSearchProvider) ?? "auto",
 						summaryModels: summaryModelChoices.summaryModels,
 						defaultSummaryModel: summaryModelChoices.defaultSummaryModel,
+						summaryModelError: summaryModelChoices.summaryModelError,
 					},
 					{
 						async onSummarize(selectedQueryIndices, summarizeSignal, model, feedback) {

@@ -55,7 +55,7 @@ function parseModelSelector(value: string): AnswerModelSelector {
 
 function resolveModel(ctx: ExtensionContext, override?: string, configured?: AnswerModelSelector): Model<Api> {
 	const selector = override ? parseModelSelector(override) : configured;
-	const model = selector ? findModelWithProviderRouting(ctx.modelRegistry, selector.provider, selector.id) : ctx.model;
+	const model = selector ? findModelWithProviderRouting(ctx.modelRegistry, selector.provider, selector.id, ctx.scopedModels) : ctx.model;
 	if (!model) {
 		if (override) throw new Error(`Answer model not found: ${override}`);
 		if (configured) {

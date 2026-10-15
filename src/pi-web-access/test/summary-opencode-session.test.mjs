@@ -42,7 +42,7 @@ function openCodeModel() {
 		provider: "opencode-go",
 		id: "deepseek-v4-flash",
 		api: "openai-completions",
-		baseUrl: "https://opencode.ai/zen/go/v1",
+		baseUrl: "https://opencode.ai/inference/go/v1",
 	};
 }
 

@@ -2,8 +2,31 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Script } from "node:vm";
 import { startCuratorServer } from "../curator-server.ts";
+import { AmbiguousModelError } from "../summary-model-scope.ts";
 
 const TEST_TIMEOUT_MS = 8000;
+
+test("summary ambiguity keeps the curator usable and carries a typed selection error", async () => {
+	const callbacks = baseCallbacks(() => {});
+	callbacks.onSummarize = async () => { throw new AmbiguousModelError("Ambiguous model; choose provider/model"); };
+	const handle = await startCuratorServer(baseOptions(30), callbacks);
+	handle.pushResult(0, { answer: "Evidence", provider: "exa", results: [] });
+	try {
+		const summarize = model => fetch(new URL("/summarize", handle.url), {
+			method: "POST", headers: { "content-type": "application/json" },
+			body: JSON.stringify({ token: "test-token", selected: [0], model }),
+		});
+		const failure = await summarize();
+		assert.equal(failure.status, 500);
+		assert.equal((await failure.json()).code, "ambiguous_model");
+		callbacks.onSummarize = async (_selected, _signal, model) => ({
+			summary: `Selected ${model}`, meta: { model, durationMs: 1, tokenEstimate: 1, fallbackUsed: false },
+		});
+		const success = await summarize("router/model");
+		assert.equal(success.status, 200);
+		assert.equal((await success.json()).summary, "Selected router/model");
+	} finally { handle.close(); }
+});
 
 function baseOptions(timeout = 1) {
 	return {

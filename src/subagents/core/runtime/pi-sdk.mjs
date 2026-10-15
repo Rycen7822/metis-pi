@@ -269,6 +269,7 @@ const resolved = sdk.resolveCliModel({
   cliProvider: provider,
   cliModel: modelName,
   cliThinking: args.thinking,
+  inlineApiKey: Boolean(args.apiKey),
   modelRuntime: services.modelRuntime,
 });
 const modelError = resolved.error || (modelName && !resolved.model ? "Requested model not found" : undefined);

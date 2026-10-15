@@ -35,9 +35,10 @@ export function generateCuratorPage(
 	searchProvider: string,
 	summaryModels: Array<{ value: string; label: string }>,
 	defaultSummaryModel: string | null,
+	summaryModelError?: string,
 ): string {
 	const providerButtonsHtml = buildProviderButtons(availableProviders, defaultProvider, queries.length > 0);
-	const inlineData = safeInlineJSON({ queries, sessionToken, timeout, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, availableProviders, providers: SEARCH_PROVIDERS, providerLabels: SEARCH_PROVIDER_LABELS });
+	const inlineData = safeInlineJSON({ queries, sessionToken, timeout, defaultProvider, searchProvider, summaryModels, defaultSummaryModel, summaryModelError, availableProviders, providers: SEARCH_PROVIDERS, providerLabels: SEARCH_PROVIDER_LABELS });
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -1450,6 +1451,7 @@ const SCRIPT = `(function() {
   var initialSearchProvider = typeof DATA.searchProvider === "string" ? DATA.searchProvider.toLowerCase() : initialDefaultProvider;
   if (initialSearchProvider !== "auto" && providers.indexOf(initialSearchProvider) === -1) initialSearchProvider = initialDefaultProvider;
 
+  var summaryModelError = typeof DATA.summaryModelError === "string" ? DATA.summaryModelError : "";
   var summaryModels = Array.isArray(DATA.summaryModels)
     ? DATA.summaryModels.filter(function(model) {
       return model && typeof model === "object" && typeof model.value === "string";
@@ -1539,6 +1541,8 @@ const SCRIPT = `(function() {
   var summaryProviders = [];
   var currentSummaryProvider = "";
   var currentSummaryModel = "";
+  var explicitSummaryModel = false;
+  var previewModelExplicit = false;
   var summaryPendingModel = "";
   var summaryGeneratingStartedAt = 0;
   var summaryGeneratingPhase = -1;
@@ -1624,7 +1628,9 @@ const SCRIPT = `(function() {
         }
 
         if (!res.ok) {
-          throw new Error(extractServerError(data) || ("HTTP " + res.status));
+          var failure = new Error(extractServerError(data) || ("HTTP " + res.status));
+          failure.code = data && data.code;
+          throw failure;
         }
 
         return data;
@@ -1735,7 +1741,7 @@ const SCRIPT = `(function() {
 
     var autoOption = document.createElement("option");
     autoOption.value = "";
-    autoOption.textContent = "Auto";
+    autoOption.textContent = summaryModelError ? "Select a model" : "Auto";
     summaryModelSelect.appendChild(autoOption);
 
     var models = summaryModelsByProvider[provider] || [];
@@ -1761,7 +1767,7 @@ const SCRIPT = `(function() {
 
     if (hasPreferred) {
       summaryModelSelect.value = preferredModel;
-    } else if (models.length > 0) {
+    } else if (models.length > 0 && !summaryModelError) {
       summaryModelSelect.value = models[0].value;
     } else {
       summaryModelSelect.value = "";
@@ -1805,6 +1811,7 @@ const SCRIPT = `(function() {
     }
 
     setSummaryProvider(summaryProviders[0], "");
+    if (summaryModelError) setError(summaryModelError);
   }
 
   function getSelectedSummaryModel() {
@@ -2979,14 +2986,6 @@ const SCRIPT = `(function() {
     };
   }
 
-  function isSummaryModelSelectionError(message) {
-    if (typeof message !== "string") return false;
-    return message.indexOf("Invalid summary model") !== -1
-      || message.indexOf("Summary model not found") !== -1
-      || message.indexOf("No API key available for summary model") !== -1
-      || message.indexOf("Invalid provider") !== -1;
-  }
-
   function resetSummaryGeneratingState() {
     summaryPendingModel = "";
     summaryGeneratingStartedAt = 0;
@@ -3041,7 +3040,13 @@ const SCRIPT = `(function() {
     clearError();
     var previousStage = stage;
     var wasRegenerating = isRegenerating;
-    var selectedSummaryModel = getSelectedSummaryModel();
+    var selectedSummaryModel = explicitSummaryModel ? getSelectedSummaryModel() : "";
+    if (summaryModelError && !selectedSummaryModel) {
+      setError(summaryModelError);
+      stage = "summary-review";
+      updateStageUI();
+      return;
+    }
     summaryPendingModel = selectedSummaryModel;
     summaryGeneratingStartedAt = Date.now();
     summaryGeneratingPhase = -1;
@@ -3062,34 +3067,11 @@ const SCRIPT = `(function() {
       .then(function(data) {
         if (requestId !== summaryRequestSeq) return data;
         if (!data || data.ok === false) {
-          throw new Error(extractServerError(data) || "summary request rejected");
+          var failure = new Error(extractServerError(data) || "summary request rejected");
+          failure.code = data && data.code;
+          throw failure;
         }
         return data;
-      })
-      .catch(function(err) {
-        if (requestId !== summaryRequestSeq) throw err;
-
-        var firstMessage = err instanceof Error ? err.message : String(err);
-        if (selectedSummaryModel.length === 0 || !isSummaryModelSelectionError(firstMessage)) {
-          throw err;
-        }
-
-        summaryPendingModel = "";
-        updateStageUI();
-
-        var retryPayload = { selected: indices };
-        if (feedbackText.length > 0) {
-          retryPayload.feedback = feedbackText;
-        }
-        return postJson("/summarize", retryPayload).then(function(retryData) {
-          if (!retryData || retryData.ok === false) {
-            throw new Error(extractServerError(retryData) || "summary request rejected");
-          }
-          return retryData;
-        }).catch(function(retryErr) {
-          var retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          throw new Error(firstMessage + " (auto retry failed: " + (retryMessage || "unknown error") + ")");
-        });
       })
       .then(function(data) {
         if (requestId !== summaryRequestSeq) return;
@@ -3118,7 +3100,13 @@ const SCRIPT = `(function() {
         setError("Failed to generate summary — " + (message || "unknown error"));
         resetSummaryGeneratingState();
         isRegenerating = false;
-        if (wasRegenerating && getSummaryDraftText().length > 0) {
+        if (err && err.code === "ambiguous_model") {
+          summaryModelError = message;
+          explicitSummaryModel = false;
+          currentSummaryModel = "";
+          if (summaryModelSelect) summaryModelSelect.value = "";
+          stage = "summary-review";
+        } else if (wasRegenerating && getSummaryDraftText().length > 0) {
           stage = "summary-review";
         } else {
           stage = previousStage === "summary-review" ? "summary-review" : "results";
@@ -3252,6 +3240,7 @@ const SCRIPT = `(function() {
   }
 
   function openPreviewModal() {
+    previewModelExplicit = explicitSummaryModel;
     var draft = getSummaryDraftText();
     if (!draft || !previewModal || !previewModalBody) return;
     var rendered = typeof marked !== "undefined" && marked.parse
@@ -3325,8 +3314,14 @@ const SCRIPT = `(function() {
         summaryModelSelect.value = selectedModel;
         currentSummaryModel = selectedModel;
       }
+      explicitSummaryModel = previewModelExplicit;
       requestSummary(getSelectedIndices(), getFeedbackText());
       resetTimer();
+    });
+  }
+  if (previewModalModel) {
+    previewModalModel.addEventListener("change", function() {
+      previewModelExplicit = previewModalModel.value.trim().length > 0;
     });
   }
   if (previewModalApprove) {
@@ -3369,6 +3364,7 @@ const SCRIPT = `(function() {
         summaryModelSelect.value = selectedModel;
         currentSummaryModel = selectedModel;
       }
+      explicitSummaryModel = previewModelExplicit;
       requestSummary(getSelectedIndices(), feedback);
       resetTimer();
     });
@@ -3438,6 +3434,7 @@ const SCRIPT = `(function() {
       var provider = typeof summaryProviderSelect.value === "string" ? summaryProviderSelect.value : "";
       if (!provider || provider === currentSummaryProvider) return;
       setSummaryProvider(provider, "");
+      explicitSummaryModel = true;
       clearError();
       updateStageUI();
       resetTimer();
@@ -3449,6 +3446,7 @@ const SCRIPT = `(function() {
       currentSummaryModel = typeof summaryModelSelect.value === "string"
         ? summaryModelSelect.value.trim()
         : "";
+      explicitSummaryModel = currentSummaryModel.length > 0;
       clearError();
       resetTimer();
     });

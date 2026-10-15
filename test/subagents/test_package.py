@@ -187,15 +187,20 @@ class SdkTransport(unittest.TestCase):
 
     def test_stock_pi_command_resolves_only_to_plugin_files(self):
         from subagent_pi.worker import managed_command
+        node = shutil.which('node')
+        self.assertIsNotNone(node)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'dist/bundle').mkdir(parents=True)
-            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.2.0"}')
-            cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli')
+            manifest=root/'package.json'; manifest.write_text('{"name":"@earendil-works/pi-coding-agent","version":"1.3.0"}')
+            cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli'); cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
-            with patch('shutil.which',return_value='/usr/bin/node'):
-                argv=managed_command([str(cli),'--mode','rpc'])
-            self.assertEqual(argv[1:],[str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--mode','rpc'])
+            with patch('shutil.which',return_value=node):
+                for sdk_path in (None, str(sdk)):
+                    with self.subTest(sdk_path=sdk_path):
+                        command = [str(cli),'--mode','rpc'] if sdk_path is None else [node,str(cli),'--mode','rpc']
+                        argv=managed_command(command,sdk_path=sdk_path)
+                        self.assertEqual(argv[1:],[str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--mode','rpc'])
             self.assertEqual({p:p.read_bytes() for p in before},before)
 
     def test_stock_pi_command_rejects_old_and_unknown_sdks(self):
@@ -206,7 +211,7 @@ class SdkTransport(unittest.TestCase):
             cli=root/'dist/bundle/cli.js'; cli.write_text('unchanged cli')
             cli.chmod(0o755)
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
-            for version in (None, 'unknown', '1.0.0', '1.0.4', '1.1.0', '1.1.9'):
+            for version in (None, 'unknown', '1.0.0', '1.0.4', '1.1.0', '1.1.9', '1.2.0', '1.2.9'):
                 manifest.write_text(json.dumps({'name':'@earendil-works/pi-coding-agent','version':version}))
                 for sdk_path in (None, str(sdk)):
                     with self.subTest(version=version, sdk_path=sdk_path):

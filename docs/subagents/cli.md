@@ -135,7 +135,7 @@ thoughts. Choices survive refresh.
 Reasoning is displayed only in the overlay, never added to parent tool results.
 Token-by-token streaming and images are not displayed.
 
-Linux/WSL, Python 3.11+, Node 22.19+ and Pi 1.2.0+ are required. Children use the
+Linux/WSL, Python 3.11+, Node 22.19+ and Pi 1.3.0+ are required. Children use the
 parent's Pi SDK and agent directory. Their default model is the parent's model
 identity; provider definitions existing only in parent memory are unavailable to
 an independent child. A task must contain its own instructions and context.

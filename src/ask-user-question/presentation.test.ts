@@ -28,7 +28,7 @@ describe("resolvePresentation", () => {
 		const first = resolvePresentation();
 		expect(first).toMatchObject({ overlay: false, rowBudget: inlineRowBudget });
 		const second = resolvePresentation();
-		expect(second).toMatchObject({ overlay: true, rowBudget: fullRowBudget, hideOnCollapse: true });
+		expect(second).toMatchObject({ overlay: true, rowBudget: fullRowBudget });
 		expect(second.release).toBeUndefined();
 
 		first.release?.();

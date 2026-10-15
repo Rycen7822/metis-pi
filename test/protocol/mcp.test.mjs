@@ -85,7 +85,7 @@ test("tools register before failing resources, with resources and MIME filtering
   t.after(async () => { await owner.shutdown(); await fixture.close(); rmSync(dir, { recursive: true, force: true }); });
   await owner.discover();
   assert.equal(owner.state, "connected");
-  assert.equal(fixture.state.clientInfo.version, "1.2.0");
+  assert.equal(fixture.state.clientInfo.version, "1.3.0");
   assert.deepEqual(owner.catalog.tools.map(tool => tool.name), ["echo"]);
   assert.equal(owner.catalog.hasResources, true);
   assert.deepEqual(owner.catalog.resources, []);

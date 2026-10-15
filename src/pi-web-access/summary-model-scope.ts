@@ -12,6 +12,10 @@ export interface ModelRegistryLike<T extends ModelLike = ModelLike> {
 	getAvailable(): readonly T[];
 }
 
+export class AmbiguousModelError extends Error {
+	name = "AmbiguousModelError";
+}
+
 /**
  * Resolve a model through its native provider or a provider that routes that model ID.
  *
@@ -23,17 +27,19 @@ export function findModelWithProviderRouting<T extends ModelLike>(
 	registry: ModelRegistryLike<T>,
 	provider: string,
 	id: string,
+	scopedModels: ReadonlyArray<{ model: ModelLike }> = [],
 ): T | undefined {
-	const available = registry.getAvailable();
+	const available = registry.getAvailable().filter(model => isModelInScope(model, scopedModels));
 	const direct = available.find(model => model.provider === provider && model.id === id);
 	if (direct) return direct;
 
 	const routedId = `${provider}/${id}`;
-	// If multiple routers expose the same model ID, Pi's available-model ordering
-	// determines which route is selected. An explicit provider/model selector can
-	// select a specific route when that distinction matters.
-	const routed = available.find(model => model.id === routedId);
-	return routed ?? registry.find(provider, id);
+	const routed = available.filter(model => model.id === routedId);
+	if (routed.length > 1) {
+		const choices = routed.map(model => `${model.provider}/${model.id}`).sort();
+		throw new AmbiguousModelError(`Ambiguous model ${routedId}. Specify an explicit provider/model: ${choices.join(", ")}.`);
+	}
+	return routed[0] ?? registry.find(provider, id);
 }
 
 /**

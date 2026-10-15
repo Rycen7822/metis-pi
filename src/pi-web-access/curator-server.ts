@@ -2,6 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { generateCuratorPage } from "./curator-page.ts";
 import { SEARCH_PROVIDERS, type ProviderAvailability, type SearchProvider } from "./search-providers.ts";
 import type { SummaryMeta } from "./summary-review.ts";
+import { AmbiguousModelError } from "./summary-model-scope.ts";
 import { resolveCuratorNetworkConfig } from "./curator-network.ts";
 
 const STALE_THRESHOLD_MS = 30000;
@@ -26,6 +27,7 @@ export interface CuratorServerOptions {
 	searchProvider: string;
 	summaryModels: Array<{ value: string; label: string }>;
 	defaultSummaryModel: string | null;
+	summaryModelError?: string;
 }
 
 export interface CuratorSearchEntry {
@@ -204,6 +206,7 @@ export function startCuratorServer(
 		searchProvider,
 		summaryModels,
 		defaultSummaryModel,
+		summaryModelError,
 	} = options;
 	let browserConnected = false;
 	let lastHeartbeatAt = Date.now();
@@ -322,6 +325,7 @@ export function startCuratorServer(
 		searchProvider,
 		summaryModels,
 		defaultSummaryModel,
+		summaryModelError,
 	);
 
 	const server = http.createServer(async (req, res) => {
@@ -535,7 +539,10 @@ export function startCuratorServer(
 				} catch (err) {
 					const message = err instanceof Error ? err.message : "Summary generation failed";
 					const status = controller.signal.aborted ? 409 : 500;
-					sendJson(res, status, { ok: false, error: message });
+					sendJson(res, status, {
+						ok: false, error: message,
+						...(err instanceof AmbiguousModelError ? { code: "ambiguous_model" } : {}),
+					});
 				} finally {
 					if (summarizeAbortController === controller) {
 						summarizeAbortController = null;

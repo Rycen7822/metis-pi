@@ -207,6 +207,7 @@ interface PendingCurate {
 	searchProvider: SearchProviderSelection;
 	summaryModels: Array<{ value: string; label: string }>;
 	defaultSummaryModel: string | null;
+	summaryModelError?: string;
 	timeoutSeconds: number;
 	proxy?: string;
 	curatorUrl?: string;
@@ -580,6 +581,7 @@ export default function (pi: ExtensionAPI, options: {
 					searchProvider: toCuratorProvider(pc.searchProvider) ?? "auto",
 					summaryModels: pc.summaryModels,
 					defaultSummaryModel: pc.defaultSummaryModel,
+					summaryModelError: pc.summaryModelError,
 				},
 				{
 					async onSummarize(selectedQueryIndices, summarizeSignal, model, feedback) {
@@ -917,6 +919,7 @@ export default function (pi: ExtensionAPI, options: {
 					searchProvider,
 					summaryModels: summaryModelChoices.summaryModels,
 					defaultSummaryModel: summaryModelChoices.defaultSummaryModel,
+					summaryModelError: summaryModelChoices.summaryModelError,
 					timeoutSeconds: curatorTimeoutSeconds,
 					proxy: typeof params.proxy === "string" ? params.proxy : undefined,
 					onUpdate: onUpdate as PendingCurate["onUpdate"],
@@ -1078,11 +1081,18 @@ export default function (pi: ExtensionAPI, options: {
 						scopedModels: ctx.scopedModels,
 					};
 					const summaryModelChoices = await loadSummaryModelChoices(summaryContext);
+					if (summaryModelChoices.summaryModelError) {
+						return {
+							content: [{ type: "text", text: `Error: ${summaryModelChoices.summaryModelError}` }],
+							details: { error: summaryModelChoices.summaryModelError },
+							isError: true,
+						};
+					}
 					const generated = await generateSummaryDraft(
 						searchResults,
 						summaryContext,
 						signal,
-						summaryModelChoices.defaultSummaryModel ?? undefined,
+						undefined,
 						undefined,
 						undefined,
 						getSummaryGenerationDeadlineMs(),

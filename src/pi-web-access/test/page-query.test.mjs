@@ -145,7 +145,7 @@ test("answerFromPage gives a per-call model precedence over valid and partial co
 test("answerFromPage passes the session id to the model call", async () => {
 	const openCodeModel = pageModel("gpt-5.6-luna");
 	openCodeModel.provider = "opencode-go";
-	openCodeModel.baseUrl = "https://opencode.ai/zen/go/v1";
+	openCodeModel.baseUrl = "https://opencode.ai/inference/go/v1";
 	await rm(configPath, { force: true });
 	const { ctx, getRequest } = contextFor([openCodeModel], {
 		sessionModel: openCodeModel,

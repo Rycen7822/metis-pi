@@ -8,7 +8,7 @@ function resolveFirstAvailableModel(
 ): Model<Api> {
 	const available = ctx.modelRegistry.getAvailable();
 	for (const { provider, id } of candidates) {
-		const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id);
+		const model = findModelWithProviderRouting(ctx.modelRegistry, provider, id, ctx.scopedModels);
 		if (!model || !isModelInScope(model, ctx.scopedModels)) continue;
 		if (available.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return model;
 	}
