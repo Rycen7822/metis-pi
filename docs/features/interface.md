@@ -42,12 +42,14 @@ Footer 依次显示模型、推理等级、provider、cwd/分支/改动、上下
 | 字段 | 来源 |
 | --- | --- |
 | context | 实时 `getContextUsage()`。 |
-| `Σ` I/O | 当前分支的标准 assistant、compaction、branch summary 用量；不重复计算摘要 custom entry。 |
+| `Σ` I/O | 当前 session 文件的标准 assistant、compaction、branch summary 用量（包含其他分支已产生的用量）；工具自报的模型用量、condense 和摘要 custom entry 不混入。 |
 | cache | 最近已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；诊断另报 session 加权值。 |
 | input | 不把 cacheRead 重复算为新输入。 |
-| tok/s | 输出 token / 首尾 delta 时间，排除 TTFT；无 delta 时回退消息时间，窗口不足 300 ms 或无效则隐藏。 |
+| `avg … tok/s` | 最近已完成响应的完整 `usage.output / (durationMs / 1000)`；使用 SDK 在提供端流上测得的耗时，包含等待/TTFT、推理与传输处理，不是后端纯解码速度。生成中不显示实时估值或借用上一条速度。 |
 
-condense 的额外摘要用量单列，不能与上述统计互换。上下文归一化缓存按生命周期失效，不每帧扫描历史。
+速度的输出 token 包含隐藏推理及模型生成的工具参数，但不包含工具执行结果；不从可见字符数、delta 到达间隔或扩展回调时钟猜测用量/耗时，也不因 300 ms 阈值切换口径。缺少有效正数耗时/完整输出、失败、取消或尚未完成的 deferred 响应不显示速度；完整计数的 token 上限截断响应仍可显示。开始新轮次、切换模型/推理等级或上下文后清除旧速度。SDK 耗时可能包含网络及进程处理开销，不能据此拆出服务端生成时间。
+
+实时累计 I/O、最近请求 cache 和本轮摘要只接收主 assistant 用量，与 session 重建保持同一角色范围；工具的活动/错误仍正常显示，历史已持久化摘要不重写。condense 的额外摘要用量单列，不能与上述统计互换。上下文归一化缓存按生命周期失效，不每帧扫描历史。
 
 Git `+A -D` 合并比较工作树/index 相对 HEAD，再加未忽略的未跟踪文本；不是累计编辑次数或单一净值。未跟踪扫描最多 200 文件、每个 256 KiB，二进制跳过；已跟踪文件不受此扫描上限限制。
 

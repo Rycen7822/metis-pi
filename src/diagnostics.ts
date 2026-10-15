@@ -111,10 +111,10 @@ const cacheLine = (deps: DiagnosticsDeps): string => {
 const speedLine = (deps: DiagnosticsDeps): string => {
   const speed = deps.outputSpeed.snapshot();
   const speedText = formatSpeed(speed?.tokensPerSecond);
-  const detail = speedText
-    ? `${speedText} (output=${speed!.outputTokens} tokens, window=${(speed!.windowMs / 1000).toFixed(1)}s, scope=${speed!.scope})`
-    : "— (no measured response yet)";
-  return `  output speed: ${detail} — confirmed usage.output ÷ observed output window; live only when the provider streams cumulative usage`;
+  const detail = speed && speedText
+    ? `${speedText} (output=${speed.outputTokens} tokens, duration=${speed.windowMs}ms, scope=final)`
+    : "— (no completed response with usable producer timing)";
+  return `  output speed: ${detail} — completed usage.output ÷ SDK durationMs; response average includes waiting/TTFT and reasoning`;
 };
 
 const interactionLine = (snap: ReturnType<UiMetrics["snapshot"]>): string =>

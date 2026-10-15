@@ -34,7 +34,7 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `working.animation` | `true` | 真彩终端的工作动画。 |
 | `working.animationIntervalMs` | `32` | 帧间隔毫秒，32–1000；越界钳制。 |
 | `footer.enabled` / `details` | 均 `true` | Footer、累计 I/O/cache 明细。 |
-| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、tok/s。 |
+| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、已完成响应均速 `avg … tok/s`（含等待/TTFT 与推理；生成中隐藏）。 |
 | `summary.enabled` / `persist` | 均 `true` | 结束摘要、会话持久化；关闭 persist 时仅临时显示。 |
 | `selectionCopy.enabled` / `ctrlC` | 均 `true` | fullscreen 精确复制、Ctrl+C 复制选区；无选区保留原行为。 |
 | `fullscreen.marginX` | `2` | 水平留白，0–8；0 关闭，非法值回退。 |

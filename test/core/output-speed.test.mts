@@ -1,66 +1,65 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  OutputSpeedTracker,
-  computeSpeed,
-} from "../../src/output-speed.ts";
+import { OutputSpeedTracker, computeSpeed, formatSpeed, formatSpeedValue } from "../../src/output-speed.ts";
 
-// Times are absolute milliseconds since requestStart; expected windows are independent literals.
-for (const scenario of [
-  { name: "delta window excludes TTFT and the trailing finish delay", deltaAt: [900, 3_000], finishAt: 3_100, tokens: 42,
-    expected: { scope: "final", outputTokens: 42, windowMs: 2_100, tokensPerSecond: 20 } },
-  { name: "no deltas falls back to the request window", deltaAt: [], finishAt: 3_000, tokens: 30,
-    expected: { scope: "final", outputTokens: 30, windowMs: 3_000, tokensPerSecond: 10 } },
-  { name: "a 50ms burst falls back to the request window", deltaAt: [2_000, 2_050], finishAt: 2_050, tokens: 20,
-    expected: { scope: "final", outputTokens: 20, windowMs: 2_050, tokensPerSecond: 20 / 2.05 } },
-  { name: "no confirmed output never fabricates a zero sample", deltaAt: [4_000], finishAt: 5_000, tokens: 0,
-    expected: undefined },
-]) {
-  test(scenario.name, () => {
-    let now = 0;
-    const tracker = new OutputSpeedTracker({ now: () => now });
-    tracker.requestStart();
-    for (const at of scenario.deltaAt) {
-      now = at;
-      tracker.delta();
-    }
-    now = scenario.finishAt;
-    tracker.finish(scenario.tokens);
-    assert.deepEqual(tracker.snapshot(), scenario.expected);
+test("a completed response pairs full usage with producer duration, never callback timing", () => {
+  const tracker = new OutputSpeedTracker();
+  assert.equal(tracker.snapshot(), undefined);
+  tracker.requestStart();
+  assert.equal(tracker.snapshot(), undefined, "no live estimate from incomplete usage");
+  tracker.finish(1050, 10500, "stop");
+  assert.deepEqual(tracker.snapshot(), { outputTokens: 1050, windowMs: 10500, tokensPerSecond: 100 });
+  tracker.finish(9999, 1000, "stop");
+  assert.equal(tracker.snapshot()!.tokensPerSecond, 100, "duplicate completion cannot replace a closed response");
+  tracker.requestStart();
+  assert.equal(tracker.snapshot(), undefined, "a pending response never borrows an old rate");
+  tracker.finish(0, 10500, "stop");
+  assert.equal(tracker.snapshot(), undefined, "missing output does not restore the previous sample");
+});
+
+test("selection/context reset cancels a pending response and late completions cannot resurrect it", () => {
+  const tracker = new OutputSpeedTracker();
+  tracker.requestStart(); tracker.finish(40, 2000, "toolUse");
+  tracker.reset();
+  assert.equal(tracker.snapshot(), undefined);
+  tracker.requestStart(); tracker.reset(); tracker.clearSample(); tracker.finish(40, 2000, "stop");
+  assert.equal(tracker.snapshot(), undefined);
+  tracker.requestStart(); tracker.finish(40, 2000, "length");
+  assert.equal(tracker.snapshot()!.tokensPerSecond, 20, "a complete count for a length-limited response remains measurable");
+});
+
+for (const [tokens, duration, reason] of [
+  [100, undefined, "stop"], [100, null, "stop"], [100, "1000", "stop"],
+  [undefined, 1000, "stop"], ["100", 1000, "stop"], [100, 0, "stop"],
+  [100, 1000, "error"], [100, 1000, "aborted"], [100, 1000, "deferred"],
+  [100, 1000, "pending"], [100, 1000, undefined],
+] as const) {
+  test(`unconfirmed response has no speed: ${tokens}/${duration}, ${reason}`, () => {
+    const tracker = new OutputSpeedTracker();
+    tracker.requestStart(); tracker.finish(50, 1000, "stop");
+    tracker.requestStart(); tracker.finish(tokens, duration, reason);
+    assert.equal(tracker.snapshot(), undefined, "neither an estimate nor an old sample is displayed");
+    tracker.finish(100, 1000, "stop");
+    assert.equal(tracker.snapshot(), undefined, "an invalid terminal event still closes its response");
   });
 }
 
-test("live rate finalizes once and remains visible across a later response without usage", () => {
-  let now = 0;
-  const tracker = new OutputSpeedTracker({ now: () => now });
-  tracker.requestStart();
-  now = 400;
-  tracker.delta();
-  now = 1_400;
-  assert.equal(tracker.preview(20), true, "cumulative count advanced");
-  assert.deepEqual(tracker.snapshot(), { scope: "live", outputTokens: 20, windowMs: 1_000, tokensPerSecond: 20 });
-  assert.equal(tracker.preview(20), false);
-  assert.equal(tracker.preview(10), false, "counts never go backwards");
-  now = 2_400;
-  tracker.delta();
-  tracker.finish(40);
-  const final = tracker.snapshot();
-  assert.deepEqual(final, { scope: "final", outputTokens: 40, windowMs: 2_000, tokensPerSecond: 20 });
-  tracker.requestStart();
-  now = 7_400;
-  tracker.delta();
-  now = 7_900;
-  tracker.finish(0);
-  assert.deepEqual(tracker.snapshot(), final, "missing usage preserves the entire last measured sample");
-});
-
 for (const [tokens, ms, expected] of [
-  [0, 10_000, undefined], [10, Number.NaN, undefined],
-  [1, 60_000, undefined], [2, 4_000, 0.5], [Number.MAX_SAFE_INTEGER, 1_000, undefined],
-  [3, 299, undefined], [3, 300, 10], [3, 301, 3 / 0.301],
-  [4_999, 1_000, 4_999], [5_000, 1_000, 5_000], [5_001, 1_000, undefined],
+  [0, 10000, undefined], [-1, 1000, undefined], [1.5, 1000, undefined], [NaN, 1000, undefined],
+  [Number.MAX_SAFE_INTEGER + 1, 1000, undefined], [10, NaN, undefined], [10, Infinity, undefined],
+  [10, -1, undefined], [10, 0, undefined], [10, Number.MIN_VALUE, undefined],
+  [1, 60000, 1 / 60], [2, 4000, 0.5],
+  [3, 299, 3 / 0.299], [3, 300, 10], [3, 301, 3 / 0.301], [5001, 1000, 5001],
 ] as const) {
-  test(`computeSpeed boundary: ${tokens} tokens in ${ms}ms`, () => {
+  test(`response-average arithmetic: ${tokens} tokens in ${ms}ms`, () => {
     assert.equal(computeSpeed(tokens, ms), expected);
   });
 }
+
+test("formatting identifies the response average and does not round a slow measured rate to zero", () => {
+  assert.equal(formatSpeed(38.54), "avg 38.5 tok/s");
+  assert.equal(formatSpeed(123.4), "avg 123 tok/s");
+  assert.equal(formatSpeed(1 / 60), "avg 0.017 tok/s");
+  assert.equal(formatSpeedValue(1e-9), "1e-9");
+  for (const rate of [undefined, NaN, Infinity, -1, 0]) assert.equal(formatSpeed(rate), "");
+});
