@@ -187,12 +187,13 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 function routeKeyAction(data: string, state: QuestionnaireState, runtime: QuestionnaireRuntime): QuestionnaireAction {
 	const kb = runtime.keybindings;
 
-	// Collapse has priority in every mode. A raw terminal listener handles reopening
+	// Cancellation retains each mode's behavior before collapse. A raw listener reopens
 	// a hidden overlay; hosts without that listener retain a visible collapsed row.
 	// Invalid/off shortcuts must not reach pi-tui's key parser.
 	if (
 		typeof runtime.collapseKey === "string" &&
 		runtime.collapseKey !== "off" &&
+		!kb.matches(data, KEYBIND_CANCEL) &&
 		matchesKey(data, runtime.collapseKey as Parameters<typeof matchesKey>[1])
 	) {
 		return { kind: "toggle_collapsed" };

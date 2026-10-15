@@ -104,7 +104,7 @@ export class MultiSelectView implements StatefulView<MultiSelectViewProps> {
 		const contentWidth = Math.max(1, width - this.prefixVisibleWidth());
 		const numberWidth = String(Math.max(1, this.question.options.length + 1)).length;
 
-		this.appendOptionRows(build, width, contentWidth, numberWidth);
+		this.appendOptionRows(build, contentWidth, numberWidth);
 
 		const otherStart = build.lines.length;
 		const otherLines = this.renderOtherRow(width, numberWidth);
@@ -121,7 +121,7 @@ export class MultiSelectView implements StatefulView<MultiSelectViewProps> {
 		return value;
 	}
 
-	private appendOptionRows(build: MultiSelectBuild, width: number, contentWidth: number, numberWidth: number): void {
+	private appendOptionRows(build: MultiSelectBuild, contentWidth: number, numberWidth: number): void {
 		for (let i = 0; i < this.question.options.length; i++) {
 			const opt = this.question.options[i];
 			const row = this.props.rows[i];
@@ -130,12 +130,13 @@ export class MultiSelectView implements StatefulView<MultiSelectViewProps> {
 			const pointer = row.active ? this.theme.fg("accent", ACTIVE_POINTER) : INACTIVE_POINTER;
 			// Checked and active rows share the accent hue, matching the dialog's selection rhythm.
 			const box = row.checked ? this.theme.fg("accent", CHECKED) : this.theme.fg("muted", UNCHECKED);
-			const label = truncateToWidth(opt.label, contentWidth, "…");
-			const styledLabel = row.active ? this.theme.fg("accent", this.theme.bold(label)) : label;
 			const number = String(i + 1).padStart(numberWidth, " ");
-			build.lines.push(
-				truncateToWidth(`${pointer}${number}${NUMBER_SEPARATOR}${box}${BOX_LABEL_GAP}${styledLabel}`, width, ""),
-			);
+			const prefix = `${pointer}${number}${NUMBER_SEPARATOR}${box}${BOX_LABEL_GAP}`;
+			for (const [line, text] of opt.label.split("\n").entries()) {
+				const label = truncateToWidth(text, contentWidth, "…");
+				const styledLabel = row.active ? this.theme.fg("accent", this.theme.bold(label)) : label;
+				build.lines.push((line === 0 ? prefix : CONTINUATION_INDENT) + styledLabel);
+			}
 			if (opt.description) {
 				for (const segment of wrapTextWithAnsi(opt.description, contentWidth)) {
 					build.lines.push(CONTINUATION_INDENT + this.theme.fg("muted", segment));

@@ -16,9 +16,11 @@ const opts = (buffer: string, cursorOffset: number | undefined, contentWidth: nu
 });
 
 describe("renderInlineInputRow", () => {
-	it("renders the cursor on a grapheme without splitting it", () => {
-		const lines = renderInlineInputRow(opts("hi😀bye", 2, 40));
-		expect(lines[0]).toContain(`hi${cursorOn("😀")}bye`);
+	it.each([
+		["😀", 0], ["😀", 1], ["👨‍👩‍👧‍👦", 2], ["e\u0301", 1],
+	])("keeps the complete grapheme %s under the cursor at offset %i", (grapheme, within) => {
+		const lines = renderInlineInputRow(opts(`hi${grapheme}bye`, 2 + within, 40));
+		expect(lines[0]).toContain(`hi${cursorOn(grapheme)}bye`);
 	});
 
 	it("uses a visible cursor cell at end-of-buffer", () => {

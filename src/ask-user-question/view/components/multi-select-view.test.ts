@@ -30,6 +30,18 @@ function question(over: Partial<QuestionData> = {}): QuestionData {
 }
 
 describe("MultiSelectView.render", () => {
+	it("counts multiline option labels as separate focusable terminal rows", () => {
+		const q = question({ options: [{ label: "First\nsecond", description: "detail" }, { label: "Other", description: "" }] });
+		const view = makeView(q, makeProps(q));
+		const lines = view.render(40);
+		expect(lines.every(line => !/[\r\n]/.test(line))).toBe(true);
+		expect(lines[0]).toContain("First");
+		expect(lines[1]).toContain("second");
+		expect(lines[2]).toContain("detail");
+		expect(view.focusedItemRowRange(40)).toEqual([0, 3]);
+		expect(view.naturalHeight(40)).toBe(lines.length);
+	});
+
 	it("renders one row per option + a 'Type something.' row + a trailing Next sentinel", () => {
 		const q = question();
 		const m = makeView(q, makeProps(q));

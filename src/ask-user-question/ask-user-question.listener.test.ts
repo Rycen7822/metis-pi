@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
+import type { QuestionnaireSessionConfig } from "./state/questionnaire-session.ts";
 
 import { type Presentation, resolvePresentation } from "./presentation.ts";
 
@@ -77,7 +78,11 @@ function register() {
  * the raw listener, `custom` runs the real factory then hands out the overlay
  * handle via `onHandle`, and `script` drives the interaction before resolving.
  */
-function driveWithListener(handle: FakeHandle, script: (done: (v: unknown) => void) => void) {
+function driveWithListener(
+	handle: FakeHandle,
+	script: (done: (v: unknown) => void) => void,
+	keybindings: QuestionnaireSessionConfig["keybindings"] = { matches: () => false },
+) {
 	const notify = vi.fn();
 	const removeListener = vi.fn();
 	const listenerRef: { current: RawListener | undefined } = { current: undefined };
@@ -91,7 +96,7 @@ function driveWithListener(handle: FakeHandle, script: (done: (v: unknown) => vo
 			factory: (
 				tui: { requestRender: () => void; terminal: { columns: number; rows: number } },
 				theme: typeof identityTheme,
-				kb: undefined,
+				kb: QuestionnaireSessionConfig["keybindings"],
 				done: (v: unknown) => void,
 			) => unknown,
 			options?: { onHandle?: (handle: FakeHandle) => void },
@@ -100,7 +105,7 @@ function driveWithListener(handle: FakeHandle, script: (done: (v: unknown) => vo
 				componentRef.current = factory(
 					{ requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } },
 					identityTheme,
-					undefined,
+					keybindings,
 					resolve,
 				) as SessionComponent;
 				options?.onHandle?.(handle);
@@ -133,6 +138,19 @@ afterEach(() => {
 });
 
 describe("ask_user_question — raw terminal collapse listener", () => {
+	it.each([["escape", "\x1b"], ["ctrl+]", CTRL_RBRACKET]])("leaves cancellation reachable when collapse is %s", async (collapseKey, data) => {
+		writeCollapseKeyConfig(collapseKey);
+		const handle = makeHandle();
+		const tool = register();
+		const { ctx, listenerRef, componentRef } = driveWithListener(handle, () => {
+			expect(listenerRef.current?.(data)).toBeUndefined();
+			expect(handle.isHidden()).toBe(false);
+			componentRef.current?.handleInput(data);
+		}, { matches: (key, action) => action === "tui.select.cancel" && key === data });
+		const result = await tool.execute("tc", params as never, undefined, undefined, ctx);
+		expect(result.details).toMatchObject({ cancelled: true });
+	});
+
 	it("hides via OverlayHandle.setHidden, notifies once, and unhides on the second press", async () => {
 		const tool = register();
 		const handle = makeHandle();
@@ -216,7 +234,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 				factory: (
 					tui: { requestRender: () => void; terminal: { columns: number; rows: number } },
 					theme: typeof identityTheme,
-					kb: undefined,
+					kb: QuestionnaireSessionConfig["keybindings"],
 					done: (v: unknown) => void,
 				) => unknown,
 				options?: { onHandle?: (handle: FakeHandle) => void },
@@ -225,7 +243,7 @@ describe("ask_user_question — raw terminal collapse listener", () => {
 					componentRef.current = factory(
 						{ requestRender: vi.fn(), terminal: { columns: 120, rows: 24 } },
 						identityTheme,
-						undefined,
+						{ matches: () => false },
 						resolve,
 					) as SessionComponent;
 					options?.onHandle?.(handle);

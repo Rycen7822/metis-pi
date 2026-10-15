@@ -40,9 +40,10 @@ function resolveCursorOffset(buffer: string, requested: number | undefined): num
  * is preserved.
  */
 function buildCursorRaw(buffer: string, offset: number): string {
+	const grapheme = graphemeSegmenter.segment(buffer).containing(offset);
+	if (grapheme) offset = grapheme.index;
 	const before = buffer.slice(0, offset);
-	const [firstGrapheme] = graphemeSegmenter.segment(buffer.slice(offset));
-	const rawAt = firstGrapheme ? firstGrapheme.segment : "";
+	const rawAt = grapheme?.segment ?? "";
 	// A logical newline has no visible cell. Draw the cursor on an NBSP immediately
 	// before it and leave the newline unconsumed so the next logical line still renders.
 	const cursorAtLineEnd = rawAt === "\n";

@@ -170,6 +170,7 @@ function registerCollapseKeyListener(
 	collapseKey: string,
 	sessionRef: SessionRef,
 	overlayHandleRef: OverlayHandleRef,
+	keybindings: import("./state/questionnaire-session.ts").QuestionnaireSessionConfig["keybindings"],
 ): (() => void) | undefined {
 	if (collapseKey === COLLAPSE_KEY_OFF || typeof ctx.ui.onTerminalInput !== "function") return undefined;
 	let hasAnnouncedHide = false;
@@ -181,6 +182,7 @@ function registerCollapseKeyListener(
 		// top (e.g. `/btw`), leave the keystroke to that overlay instead of
 		// toggling the questionnaire from underneath it.
 		if (!handle.isHidden() && !handle.isFocused()) return undefined;
+		if (keybindings.matches(data, "tui.select.cancel")) return undefined;
 		if (!matchesKey(data, collapseKey as Parameters<typeof matchesKey>[1])) return undefined;
 		// Kitty-protocol terminals report press, repeat, and release separately.
 		// Toggle only on the initial press so a tap does not immediately reopen
@@ -307,7 +309,7 @@ async function mountQuestionnaire(config: {
 				const mountedPresentation = presentation.overlay && mustYieldInlineSlot(tui)
 					? STACKED_OVERLAY_PRESENTATION : presentation;
 				if (mountedPresentation.hideOnCollapse) {
-					removeOverlayInputListener = registerCollapseKeyListener(ctx, collapseKey, sessionRef, overlayHandleRef);
+					removeOverlayInputListener = registerCollapseKeyListener(ctx, collapseKey, sessionRef, overlayHandleRef, keys);
 				}
 				const factory = makeSessionFactory({
 					...config, presentation: mountedPresentation, sessionRef,
