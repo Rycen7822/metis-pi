@@ -263,12 +263,31 @@ test("queued TUI details retain reclaim metrics without notices; RPC keeps notif
     assert.equal(f.notices.some(([message]) => /turns? queued/.test(message)), mode !== "tui");
     await f.emit("agent_end");
     assert.equal(f.statuses.get("context-prune"), status, "agent_end must not discard the latest detail");
+    for (const trigger of ["on-demand", "agent-message"]) {
+      await f.commands.get("pruner").handler(`prune-on ${trigger}`, f.ctx);
+      const refreshed = f.statuses.get("context-prune");
+      assert.equal(refreshed.split("\n")[0], summary, "changing the trigger preserves reclaim and usage");
+      assert.ok(refreshed.endsWith(trigger === "on-demand" ? "/pruner now" : "agent's next final text response"),
+        "queued instructions follow the current trigger, not the mode at capture time");
+      await f.emit("agent_end");
+      assert.equal(f.statuses.get("context-prune"), refreshed);
+    }
     await f.commands.get("pruner").handler("status", f.ctx);
     await f.commands.get("pruner").handler("thinking invalid", f.ctx);
     assert.ok(f.notices.some(([message]) => /^pruner status:/.test(message)), "explicit command replies remain visible");
     assert.ok(f.notices.some(([message, type]) => /Invalid summarizer thinking/.test(message) && type === "warning"));
     assert.equal(f.calls.length, 1, "disclosure never initiates model work");
   });
+});
+
+test("recovered queue instructions follow the current prune trigger", async t => {
+  const f = await fixture(t, { mode: "tui", showPruneStatusLine: true, pruneOn: "on-demand" });
+  f.add("semantic source ".repeat(2000), "unknown-command", "reload-pending");
+  await f.emit("session_tree");
+  assert.match(f.statuses.get("context-prune"), /pending batch\(es\) recovered.*\/pruner now$/);
+  await f.commands.get("pruner").handler("prune-on agent-message", f.ctx);
+  assert.match(f.statuses.get("context-prune"), /pending batch\(es\) recovered.*agent's next final text response$/);
+  assert.equal(f.calls.length, 0, "changing trigger instructions does not initiate model work");
 });
 
 test("persistence failures with embedded stale wording stay write failures and can retry", async t => {
@@ -1097,7 +1116,7 @@ test("parallel summaries commit in order within a three-record window and reject
   for (const change of ["none", "append", "content", "details"])
     await t.test(change === "none" ? "out of order" : `source changed (${change})`, async (t) => {
       const changed = change !== "none";
-      const f = await fixture(t, { defer: true });
+      const f = await fixture(t, { defer: true, mode: "tui", showPruneStatusLine: true });
       for (let i = 0; i < 5; i++) {
         f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: 100 + i });
         f.add(`source-${i}\n` + "界".repeat(6000), `cat source-${i}.txt`, `parallel-${i}`);
@@ -1105,6 +1124,7 @@ test("parallel summaries commit in order within a three-record window and reject
       const pending = f.finish();
       for (let i = 0; i < 600 && f.calls.length < 3; i++) await new Promise((resolve) => setTimeout(resolve, 5));
       assert.equal(f.calls.length, 3, "requests overlap before any provider is released");
+      assert.match(f.statuses.get("context-prune"), /\nSummarizing 1\/5/, "stale-source cases start with visible progress");
       f.release(2);
       f.release(1);
       await new Promise((resolve) => setImmediate(resolve));
@@ -1140,6 +1160,21 @@ test("parallel summaries commit in order within a three-record window and reject
           f.sm.getBranch().findLast((e) => e.customType === "context-prune-flush-metrics").data.reason,
           "stale-context",
         );
+        const status = f.statuses.get("context-prune");
+        assert.doesNotMatch(status, /Summarizing/, "stopped work must not retain in-flight progress");
+        assert.match(status, /raw evidence retained/i);
+        await f.emit("agent_end");
+        assert.equal(f.statuses.get("context-prune"), status, "agent_end preserves the stopped-work explanation");
+        const retry = f.commands.get("pruner").handler("now", f.ctx);
+        let retried = false;
+        retry.finally(() => { retried = true; });
+        for (let i = 0; i < 600 && !retried; i++) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          f.releaseAll();
+        }
+        assert.ok(retried, "restored queue finishes on retry");
+        await retry;
+        assert.ok(f.calls.length > 3, "restored work retries after a same-lifecycle source change");
       } else assert.equal(f.calls.length, 5);
     });
 });

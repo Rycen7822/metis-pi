@@ -266,10 +266,15 @@ const waitForVisible = (pattern, timeoutMs, label) =>
   waitUntil((frame) => pattern.test(visibleRows(frame).join("\n")) ? frame : undefined,
     timeoutMs, `${label} (visible rows only)`);
 
-/** Start a fresh TUI for each journey using one isolated tmux session. */
+/** Start a fresh TUI for each journey on the same isolated tmux server. */
+let journeyStarted = false;
 const bootPi = () => {
-  try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { }
+  if (journeyStarted) tmux(["kill-session", "-t", SESSION], { stdio: "pipe" });
   tmux(["new-session", "-d", "-s", SESSION, "-x", "120", "-y", "35", "-c", WORKSPACE]);
+  // Killing the last session otherwise starts asynchronous server shutdown;
+  // the next new-session can connect to that dying server on the same socket.
+  tmux(["set-option", "-s", "exit-empty", "off"]);
+  journeyStarted = true;
   tmux(["set-option", "-g", "mouse", "on"]);
   tmux(["set-option", "-g", "extended-keys", "on"]);
   tmux(["set-option", "-g", "set-clipboard", "off"]);
@@ -562,7 +567,7 @@ try {
   console.log(`PASS: ${[...selected].join(", ")}`);
   if (selected.has("E4")) console.log(`  clipboard: isolated sink received ${copiedChars} exact characters`);
 } finally {
-  try { tmux(["kill-session", "-t", SESSION], { stdio: "pipe" }); } catch { }
+  try { tmux(["kill-server"], { stdio: "pipe" }); } catch { }
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });
 }

@@ -129,13 +129,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
   const diagnostics = new DiagnosticSink((type, data) => pi.appendEntry(type, data));
   // Display-only, branch-scoped disclosure: never persist it or replace the
   // reclaim/usage metric with transient queue or summarizer progress text.
-  let latestPruneDetail = "No pending turns";
-  const updatePruneStatus = (ctx: ExtensionContext, detail?: string) => {
-    if (detail !== undefined) latestPruneDetail = detail;
-    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts(), statsAccum.getSessionTokens(), latestPruneDetail);
+  let latestPruneDetail = () => "No pending turns";
+  const updatePruneStatus = (ctx: ExtensionContext, detail?: string | (() => string)) => {
+    // Queue instructions follow config changes; progress/error text stays fixed.
+    if (detail !== undefined) latestPruneDetail = typeof detail === "function" ? detail : () => detail;
+    setPruneStatusWidget(ctx, currentConfig.value, statsAccum.getLiveReclaim(), diagnostics.counts(), statsAccum.getSessionTokens(), latestPruneDetail());
   };
-  const queuedDetail = (count: number) =>
-    `${count} turn${count === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${
+  const queuedDetail = (count: number, prefix = "") => () =>
+    `${prefix}${count} turn${count === 1 ? "" : "s"} queued — will evaluate packing and summary budget on ${
       currentConfig.value.pruneOn === "agent-message" ? "agent's next final text response" : "/pruner now"
     }`;
 
@@ -1356,6 +1357,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         return { ok: false, reason: "aborted", batchCount: processedCount };
       }
       if (isStaleContextError(err)) {
+        const count = pendingBatches.length;
+        const detail = "Source changed — raw evidence retained";
+        updatePruneStatus(ctx, count ? queuedDetail(count, `${detail}; `) : detail);
         return { ok: false, reason: "stale-context", error: errorMessage(err), batchCount: processedCount };
       }
       updatePruneStatus(ctx, `Summarization failed — ${errorMessage(err)}; raw evidence retained`);
@@ -1390,14 +1394,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     pendingBatches.length = 0;
     previousFraction = null;
     rearmedPending = false;
-    latestPruneDetail = "No pending turns";
+    latestPruneDetail = () => "No pending turns";
     if (currentConfig.value.enabled) {
       try {
         const count = capturePendingBatches(ctx, { rethrow: true }).length;
         rearmedPending = count > 0;
-        if (rearmedPending) latestPruneDetail = `${count} pending batch(es) recovered from current branch — ${queuedDetail(count)}`;
+        if (rearmedPending) latestPruneDetail = queuedDetail(count, `${count} pending batch(es) recovered from current branch — `);
       } catch (err) {
-        latestPruneDetail = "Pending-turn inspection unavailable";
+        latestPruneDetail = () => "Pending-turn inspection unavailable";
         console.error("pi-condense: reload rearm probe failed", err);
       }
     }
@@ -1583,7 +1587,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         const detail = queuedDetail(pendingBatches.length);
         updatePruneStatus(ctx, detail);
         if (currentConfig.value.showPruneStatusLine && ctx.mode !== "tui") {
-          safeNotify(ctx, `pruner: ${detail}`, "info");
+          safeNotify(ctx, `pruner: ${detail()}`, "info");
         }
       }
     }
@@ -2182,7 +2186,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     saveConfig,
     (ctx) => occ.refreshStatus(ctx),
     () => statsAccum.getSessionTokens(),
-    () => latestPruneDetail,
+    () => latestPruneDetail(),
   );
   return {
     start, tree,
@@ -2196,7 +2200,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       activeSessionId = undefined;
       projectionContext = undefined;
       pendingBatches.length = 0;
-      latestPruneDetail = "No pending turns";
+      latestPruneDetail = () => "No pending turns";
       queuedSummaryKeys.clear();
       unsubscribeProjection();
       unsubscribeMaintenance();
