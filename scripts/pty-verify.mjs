@@ -1,7 +1,7 @@
 // Real Pi/tmux terminal journeys against a local mock provider and clipboard sink.
 // Requires pi on PATH (or PI_BIN), tmux, and Git for E1. Every selected journey is required.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

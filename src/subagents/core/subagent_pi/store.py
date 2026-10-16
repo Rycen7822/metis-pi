@@ -221,7 +221,7 @@ class Store:
             raise
 
     def attention(self, rid, kind, ui_id=None):
-        row = self.one("SELECT r.scope,s.parent FROM runs r JOIN scopes s ON s.id=r.scope WHERE r.id=?", (rid,))
+        row = self.one("SELECT scope FROM runs WHERE id=?", (rid,))
         if not row:
             return
         key = hashlib.sha256(dumps([rid, kind, ui_id]).encode()).hexdigest()

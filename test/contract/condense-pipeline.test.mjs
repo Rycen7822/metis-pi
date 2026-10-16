@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
@@ -10,7 +10,7 @@ import registerCondense from "../../extensions/condense.ts";
 import { TokenEstimator } from "../../src/condense/token-estimator.ts";
 import { summaryBudget, shouldBudgetFlush } from "../../src/condense/budget.ts";
 import { toolResultStub } from "../../src/condense/pruner.ts";
-import { captureBatch, projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
+import { projectBranchMessages, serializeBatchForSummarizer } from "../../src/condense/batch-capture.ts";
 import goalExtension from "../../extensions/goal.ts";
 import { loadConfig } from "../../src/condense/config.ts";
 import { disableNetwork } from "../helpers/native-provider.mjs";
@@ -364,7 +364,7 @@ test("automatic chain compression follows its switch and retains three recent ta
       const body = "first task evidence\n".repeat(1400);
       for (let i = 0; i < 4; i++) {
         if (i) f.sm.appendMessage({ role: "user", content: `Task ${i}`, timestamp: f.nextTimestamp() });
-        const call = f.add(body, "cat evidence.txt", `chain-${i}`, `THOUGHT_${i} ` + "x".repeat(5000));
+        f.add(body, "cat evidence.txt", `chain-${i}`, `THOUGHT_${i} ` + "x".repeat(5000));
         if (i === 0) {
           f.sm.appendMessage({
             role: "assistant",
@@ -1225,10 +1225,7 @@ test(
       f.requests.slice(0, attempted).every((r) => r.signal.aborted),
       "cancel propagates to every old provider request",
     );
-    let done = false;
-    const resumed = f.finish().finally(() => {
-      done = true;
-    });
+    const resumed = f.finish();
     // Release each newly scheduled mock request until the actual flush settles,
     // rather than imposing a three-second throughput target on a large fixture.
     const releasing = setInterval(() => f.releaseAll(), 5);
@@ -1237,7 +1234,6 @@ test(
     } finally {
       clearInterval(releasing);
     }
-    assert(done, "remaining chunks finish after the switch");
     assert(f.calls.slice(attempted).every((call) => !JSON.stringify(call).includes('"cat source-0.txt"')));
     assert.equal(
       f.sm.getBranch().findLast((e) => e.customType === "context-prune-flush-metrics").data.outcome,

@@ -4,7 +4,6 @@ import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { checkGhAvailable, showGhHint } from "./github-api.ts";
 import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig } from "./ssrf-protection.ts";
 
-const CONFIG_PATH = getWebAccessConfigPath();
 const GH_TIMEOUT_MS = 10_000;
 const GH_TOTAL_TIMEOUT_MS = 20_000;
 const MAX_DOC_CHARS = 150_000;
@@ -53,7 +52,6 @@ interface GhResult {
 	ok: boolean;
 	stdout: string;
 	stderr: string;
-	code: number | null;
 	error?: string;
 }
 
@@ -151,7 +149,6 @@ function runGh(args: string[], timeoutMs = GH_TIMEOUT_MS, signal?: AbortSignal):
 				ok: !err,
 				stdout,
 				stderr,
-				code: typeof nodeErr?.code === "number" ? nodeErr.code : null,
 				...(err ? { error: nodeErr?.message ?? String(err) } : {}),
 			});
 		});

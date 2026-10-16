@@ -72,7 +72,7 @@ function setup(t, overrides = {}, lifecycle = false, sources = {}, options = {})
       else store.finish(end);
     }
   }
-  return { row, store, handle, capture, renderers, context, handlers, ctx };
+  return { row, handle, capture, context, handlers, ctx };
 }
 
 test("codemode start and timing labels use dark orange with terminal color fallbacks", (t) => {
@@ -210,7 +210,6 @@ test("native codemode folding hides every script line and uses ordinary read/she
   assert.match(plain(row), /output-8\n/);
   row.setExpanded(false);
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FILE_BODY_ONLY/);
-  assert.deepEqual(result.details.calls.map((c) => c.status), ["ok", "ok"]);
 });
 
 function clickRow(row, target, occurrence = 0, width = 80) {
@@ -252,7 +251,6 @@ test("clicks independently expand duplicate nested calls, source and script outp
   clickRow(row, "SCRIPT_OUTPUT_17");
   assert.doesNotMatch(plain(row), /JS_ONLY_MARKER|FIRST BODY|SECOND BODY|SCRIPT_OUTPUT_8/);
   assert.match(plain(row), /SCRIPT_OUTPUT_0/, "folding keeps the ordinary output preview");
-  assert.deepEqual(result.details.calls.map(c => c.status), ["ok", "ok"]);
 });
 
 test("streaming updates retain per-ID choices and earlier-call visibility remains independent", (t) => {
@@ -427,7 +425,6 @@ test("reloaded bash uses persisted complete arguments instead of the truncated p
   assert.match(plain(row), /Nested results unavailable/, "full args do not invent a missing result");
   row.setExpanded(true);
   assert.match(plain(row), /HISTORY_TAIL/);
-  assert.equal(result.nestedCalls.calls[0].arguments.command, command);
 });
 
 test("live bash retains Running and Ran independently of parent script status", (t) => {

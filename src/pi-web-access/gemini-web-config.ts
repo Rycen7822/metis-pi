@@ -1,10 +1,7 @@
 import { loadWebAccessConfig, getWebAccessConfigPath } from "./utils.ts";
 
-const CONFIG_PATH = getWebAccessConfigPath();
-
 interface GeminiWebConfig {
 	browserCookies?: BrowserCookieSelection;
-	allowBrowserCookies?: boolean;
 }
 
 const BROWSER_COOKIE_PRESETS = ["helium", "chrome", "brave", "arc", "chromium", "edge"] as const;
@@ -61,7 +58,6 @@ function loadConfig(): GeminiWebConfig {
 	}
 	cachedConfig = {
 		browserCookies: parseBrowserCookies(raw.browserCookies),
-		allowBrowserCookies: raw.allowBrowserCookies === true,
 	};
 	return cachedConfig;
 }

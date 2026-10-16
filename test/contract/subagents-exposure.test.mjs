@@ -59,7 +59,7 @@ async function fixture(t, { coder = true, coderPath = "builtin:codemode", coderA
     await emit("before_agent_start", event);
     return event;
   };
-  return { pi, ctx, definitions, warnings, commands, before };
+  return { pi, definitions, warnings, commands, before };
 }
 
 test("native subagents register deferred namespace without changing schemas or other tool choices", async t => {

@@ -31,8 +31,8 @@ export function projectBranchMessages(branch: any[]): any[] {
  */
 export function deriveLiveTurnIndex(branch: SessionEntry[]): number {
   let count = 0;
-  for (const msg of projectBranchMessages(branch)) {
-    if (msg.role === "assistant") count++;
+  for (const entry of branch) {
+    if (entry.type === "message" && entry.message?.role === "assistant") count++;
   }
   return count - 1;
 }

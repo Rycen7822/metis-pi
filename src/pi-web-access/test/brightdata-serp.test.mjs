@@ -769,12 +769,9 @@ test("no prefix of the credential survives into a message, however the body is s
 	assert.equal(messages.length, 4);
 	for (const [index, message] of messages.entries()) {
 		assert.equal(typeof message, "string", `body ${index} did not throw`);
-		// Four characters is already enough to be worth withholding, and testing every
-		// length from there up means a future change cannot leak a longer prefix quietly.
-		for (let length = 4; length <= token.length; length++) {
-			assert.doesNotMatch(message, new RegExp(token.slice(0, length).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-				`body ${index} leaked a ${length}-character prefix: ${message}`);
-		}
+		// Every longer prefix includes this shortest withheld prefix.
+		assert.doesNotMatch(message, new RegExp(token.slice(0, 4).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+			`body ${index} leaked a 4-character prefix: ${message}`);
 	}
 });
 

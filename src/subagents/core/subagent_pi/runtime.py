@@ -204,7 +204,7 @@ class Runtime:
         await self.ensure_capacity(a)
         spec=json.loads(a['launch'])
         if spec.get('access')=='write': await self.admit_writer(aid,a['cwd'])
-        directory,session,argv=worker.session_argv(self.home,a,spec)
+        directory,argv=worker.session_argv(self.home,a,spec)
         generation=a['generation']+1
         plan=self.bindings.inheritance_plan(a,spec,generation)
         worker.write_launch(directory,spec,[*argv,*plan['argv']],generation)
@@ -943,7 +943,7 @@ class Runtime:
 
     async def mutate(self, op, p, source=None):
         if op == "spawn":
-            return await self.spawn_agent(p, source)
+            return await self.spawn_agent(p)
         aid = self.store.resolve_agent(p["scope"], label(p.get("agent_id"), "agent_id"))["id"]
         async with self.agent_locks[aid]:
             a = self.store.agent(p["scope"], aid)
@@ -970,7 +970,7 @@ class Runtime:
         ):
             self.store.agent_update(a["id"], name=f"{name[:64]} [startup failed {a['id']}]")
 
-    async def spawn_agent(self, p, source=None):
+    async def spawn_agent(self, p):
         sid = p["scope"]
         aid = new_id("pi_")
         rid = None
@@ -1241,11 +1241,6 @@ class Runtime:
             "state": self.store.run(sid, rid)["state"],
             "queue_owner": "daemon",
         }
-
-    async def idle_loop(self):
-        while not self.closing:
-            await asyncio.sleep(0.5)
-            await self.check_idle()
 
     async def park_expired(self):
         for _, aid, w, a in self.evictable():

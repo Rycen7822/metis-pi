@@ -73,15 +73,12 @@ function parseWriteStdinParams(params: unknown): WriteStdinParams {
   return { session_id: params.session_id, chars, yield_time_ms, max_output_tokens };
 }
 
-export function createWriteStdinTool(
-  sessions: ExecSessionManager,
-  options: { promptSnippet?: boolean | undefined; showOutputWhenCollapsed?: boolean | undefined } = {},
-) {
+export function createWriteStdinTool(sessions: ExecSessionManager) {
   const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
     name: "write_stdin",
     label: "write_stdin",
     description: "Write/poll exec session",
-    ...(options.promptSnippet === false ? {} : { promptSnippet: "Write to exec session" }),
+    promptSnippet: "Write to exec session",
     parameters: WRITE_STDIN_PARAMETERS,
     outputSchema: EXEC_OUTPUT_SCHEMA,
     async execute(_toolCallId, params, signal, onUpdate) {
@@ -110,7 +107,7 @@ export function createWriteStdinTool(
     renderResult(result, { expanded, isPartial }, theme) {
       const state = getResultState(result);
       if (!expanded) {
-        if (!isPartial || !options.showOutputWhenCollapsed) return new Container();
+        if (!isPartial) return new Container();
         const output = renderTerminalOutput(state.output).trimEnd();
         const tail = output.slice(-8_000).split("\n").slice(-5).join("\n");
         const status = state.sessionId === undefined ? "" : `Session ${state.sessionId} still running`;

@@ -578,7 +578,7 @@ export function registerCommands(
             // records this attempt (outcome "empty") — the incident's exact
             // undiagnosable "nothing pending" report is precisely what this log
             // exists to make diagnosable on recurrence.
-            await flushPending(ctx, { previewedBatches: batches, trigger: "manual" });
+            await flushPending(ctx, { preparedBatches: batches, trigger: "manual" });
             break;
           }
 
@@ -586,7 +586,7 @@ export function registerCommands(
 
           const result = await flushPending(ctx, {
             trigger: "manual",
-            previewedBatches: batches,
+            preparedBatches: batches,
             onProgress: (index, _total, _batch, stage) => {
               if (stage === "start") {
                 updateRow(index, "running", 0);

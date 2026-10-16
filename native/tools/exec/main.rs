@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
             Request::Shutdown { request_id } => {
                 backend.shutdown().await;
                 print_response(request_id, Ok(json!({ "shutdown": true })));
-                break;
+                return Ok(());
             }
         }
     }

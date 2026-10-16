@@ -50,8 +50,8 @@ export function createExecBridgeClient(binaryPath: () => string | undefined = ()
 	const pendingBridgeRequests = new Map<number, { resolve: (value: BridgeResponse) => void; reject: (error: Error) => void }>();
 	let bridgeLineBuffer = "";
 	let bridgeStderr = "";
-	let bridgeStdoutDecoder = new StringDecoder("utf8");
-	let bridgeStderrDecoder = new StringDecoder("utf8");
+	let bridgeStdoutDecoder: StringDecoder;
+	let bridgeStderrDecoder: StringDecoder;
 	let bridgeClosing = false;
 	let bridgeResponded = false;
 	let bridgeShutdownPromise: Promise<void> | undefined;

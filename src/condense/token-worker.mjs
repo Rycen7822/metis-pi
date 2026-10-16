@@ -27,7 +27,7 @@ function difference(before, after, used) {
 parentPort.on("message", ({ id, before, after, absolute }) => {
   try {
     const used = new Set();
-    const result = { id, delta: difference(before, after, used) };
+    const result = { id };
     if (absolute) {
       const count = messages => messages.reduce((sum, message) => {
         const text = JSON.stringify(message);
@@ -38,7 +38,8 @@ parentPort.on("message", ({ id, before, after, absolute }) => {
         return sum + tokens;
       }, 0);
       result.before = count(before); result.after = count(after);
-    }
+      result.delta = result.before - result.after;
+    } else result.delta = difference(before, after, used);
     for (const key of cache.keys()) if (!used.has(key)) cache.delete(key);
     parentPort.postMessage(result);
   }

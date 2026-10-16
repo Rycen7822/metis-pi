@@ -6,14 +6,14 @@ import { registerProduct, publishRows, releaseCopyCache, type CopyRow } from "..
 
 /** Host updates create new tool regions. One cache owns both displayed rows
  * and copy provenance; invalidation releases them together. */
-function cachedRowsComponent(componentId: string, renderRows: (width: number, copyOut: CopyRow[]) => string[]): Component & { invalidate(): void } {
+function cachedRowsComponent(renderRows: (width: number, copyOut: CopyRow[]) => string[]): Component & { invalidate(): void } {
   let cache: { width: number; rows: string[] } | undefined;
   return {
     render(width) {
       if (!cache || cache.width !== width) {
         const copyOut: CopyRow[] = [];
         const rows = renderRows(width, copyOut);
-        if (copyOut.length === rows.length) registerProduct(rows, { componentId, width, rows: copyOut });
+        if (copyOut.length === rows.length) registerProduct(rows, { width, rows: copyOut });
         cache = { width, rows };
       }
       publishRows(this, cache.rows);
@@ -24,7 +24,7 @@ function cachedRowsComponent(componentId: string, renderRows: (width: number, co
 }
 
 export function createDiffComponent(input: DiffComponentInput, layout: LayoutOps): Component {
-  return cachedRowsComponent("diff", (width, copyOut) => renderCodexDiffComponent(input, width, layout, copyOut));
+  return cachedRowsComponent((width, copyOut) => renderCodexDiffComponent(input, width, layout, copyOut));
 }
 
 export function createShellFactories(layout: LayoutOps): ShellFactories {
@@ -32,7 +32,7 @@ export function createShellFactories(layout: LayoutOps): ShellFactories {
     /** Call region: bullet + bold title + highlighted command with "  │ "
      * continuation. Never renders output — the result region owns that. */
     makeShellCall(input) {
-      return cachedRowsComponent("shell-call", (width, copyOut) => renderShellCall({
+      return cachedRowsComponent((width, copyOut) => renderShellCall({
         row: {
           title: input.title,
           isError: false,
@@ -59,7 +59,7 @@ export function createShellFactories(layout: LayoutOps): ShellFactories {
     makeShellResult(input) {
       const isError = input.context.isError === true;
       const bullet = input.theme.fg(input.context.isError ? "error" : input.options.isPartial ? "dim" : "success", "•");
-      return cachedRowsComponent("shell-result", (width, copyOut) => {
+      return cachedRowsComponent((width, copyOut) => {
         const result = input.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
         const output = Array.isArray(result?.content)
           ? result.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")

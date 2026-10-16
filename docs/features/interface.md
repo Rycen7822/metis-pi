@@ -53,7 +53,7 @@ pruneExpanded = false    # prune 详情
 | --- | --- |
 | context | 实时 `getContextUsage()`。 |
 | `Σ` I/O | 当前 session 文件的标准 assistant、compaction、branch summary 用量（包含其他分支已产生的用量）；工具自报的模型用量、condense 和摘要 custom entry 不混入。 |
-| cache | 最近已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；诊断另报 session 加权值。 |
+| cache | 最近已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；诊断同样报告最近已确认请求值。 |
 | input | 不把 cacheRead 重复算为新输入。 |
 | `… tok/s` | 最近已完成响应的完整 `usage.output / (durationMs / 1000)`；使用 SDK 在提供端流上测得的耗时，包含等待/TTFT、推理与传输处理，不是后端纯解码速度。等待、生成和工具执行期间保留最近一次有效结果，不显示实时估值。 |
 

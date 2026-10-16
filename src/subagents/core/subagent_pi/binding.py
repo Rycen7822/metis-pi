@@ -136,12 +136,12 @@ class ScopeBindings:
         The persisted launch argv is never touched; secrets resolve into the pipe
         payload only, diagnostics carry names, never values."""
         inh = self.config['inheritance']
-        empty = {'argv': [], 'payload': None, 'diagnostics': [], 'bridge': False, 'servers': [], 'skills': []}
+        empty = {'argv': [], 'payload': None, 'diagnostics': [], 'servers': [], 'skills': []}
         if not inh.get('enabled'):
-            return {**empty, 'reason': 'inheritance disabled by config'}
+            return empty
         scope = self.store.scope(a['scope'])
         if not scope['inheritance']:
-            return {**empty, 'reason': 'inheritance disabled for this scope'}
+            return empty
         source_env = self.scope_env.get(a['scope'])
         if scope['codex_home']:
             codex_home, mode = Path(scope['codex_home']), scope['codex_source'] or 'scope_env'
@@ -156,7 +156,7 @@ class ScopeBindings:
             codex_home, mode = resolve_codex_home(self.config['inheritance'], source_env)
         if codex_home is None:
             diag = Diagnostic('source', 'codex_home', 'no codex source directory found').as_dict()
-            return {**empty, 'diagnostics': [diag], 'reason': 'no source'}
+            return {**empty, 'diagnostics': [diag]}
         raw = read_codex_config(codex_home)
         existing_skills = [spec['argv'][i + 1] for i, flag in enumerate(spec['argv']) if flag == '--skill']
         skill_paths, skill_diag = [], []
@@ -190,7 +190,7 @@ class ScopeBindings:
                        'source': source,
                        'mcp': {'servers': [{k: v for k, v in s.items() if k not in internal} for s in usable]}}
         return {'argv': argv, 'payload': payload, 'diagnostics': diagnostics,
-                'bridge': load_bridge, 'servers': [s['name'] for s in usable], 'source': source,
+                'servers': [s['name'] for s in usable], 'source': source,
                 'skills': inherited_skills}
 
     def doctor(self):

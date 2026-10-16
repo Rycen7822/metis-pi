@@ -1,13 +1,5 @@
 const MAX_DECLARED_LINKS = 20;
 const MAX_DECLARED_URL_LENGTH = 4096;
-const DECLARATION_RELATIONS = new Set([
-	"api-catalog",
-	"describedby",
-	"service-desc",
-	"service-doc",
-	"service-meta",
-]);
-
 const RELATION_LABELS: Record<string, string> = {
 	"api-catalog": "API catalog",
 	"describedby": "Description",
@@ -15,6 +7,7 @@ const RELATION_LABELS: Record<string, string> = {
 	"service-doc": "Service documentation",
 	"service-meta": "Service metadata",
 };
+const DECLARATION_RELATIONS = new Set(Object.keys(RELATION_LABELS));
 
 export interface DeclaredWebLink {
 	url: string;

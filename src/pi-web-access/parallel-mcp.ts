@@ -169,24 +169,25 @@ export async function searchWithParallelMcp(query: string, options: ParallelMcpS
 		const maxResults = Math.max(1, Math.min(Math.floor(options.numResults ?? 5), 20));
 		const results = filterResults(getResults(payload), options.domainFilter).slice(0, maxResults);
 		activityMonitor.logComplete(activityId, 200);
-		const response: SearchResponse = {
-			answer: results.flatMap((result, index) => {
-				const content = excerpts(result).join(" ").trim();
-				return content ? [`${content}\nSource: ${result.title || `Source ${index + 1}`} (${result.url})`] : [];
-			}).join("\n\n"),
-			results: results.map((result, index) => ({
-				title: result.title || `Source ${index + 1}`,
+		const response: SearchResponse = { answer: "", results: [] };
+		const parts: string[] = [];
+		for (const [index, result] of results.entries()) {
+			const texts = excerpts(result);
+			const title = result.title || `Source ${index + 1}`;
+			const content = texts.join(" ").trim();
+			if (content) parts.push(`${content}\nSource: ${title} (${result.url})`);
+			response.results.push({
+				title,
 				url: result.url,
-				snippet: excerpts(result)[0]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? "",
-			})),
-		};
-		if (options.includeContent) {
-			const inlineContent = results.flatMap(result => {
-				const content = excerpts(result).join("\n\n");
-				return content ? [{ url: result.url, title: result.title || "", content, error: null }] : [];
+				snippet: texts[0]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? "",
 			});
-			if (inlineContent.length) response.inlineContent = inlineContent;
+			if (options.includeContent && texts.length > 0) {
+				(response.inlineContent ??= []).push({
+					url: result.url, title: result.title || "", content: texts.join("\n\n"), error: null,
+				});
+			}
 		}
+		response.answer = parts.join("\n\n");
 		return response;
 	} catch (err) {
 		const message = errorMessage(err);
@@ -209,7 +210,8 @@ export async function extractWithParallelMcp(
 			...(objective ? { objective: objective.slice(0, 200) } : {}),
 			full_content: true,
 		}, signal);
-		const result = getResults(payload).find(item => item.url === url) as ParallelMcpExtractResult | undefined ?? getResults(payload)[0] as ParallelMcpExtractResult | undefined;
+		const results = getResults(payload) as ParallelMcpExtractResult[];
+		const result = results.find(item => item.url === url) ?? results[0];
 		if (!result) {
 			activityMonitor.logComplete(activityId, 200);
 			return null;

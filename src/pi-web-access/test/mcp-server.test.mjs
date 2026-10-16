@@ -20,7 +20,7 @@ const TOOL_NAMES = ["fetch_content", "get_search_content", "source_check", "web_
 function fakeCore(overrides = {}) {
 	const calls = [];
 	const record = (method) => async (params, signal) => {
-		calls.push({ method, params, signal });
+		calls.push({ method, params });
 		if (overrides[method]) return overrides[method](params, signal);
 		return { content: [{ type: "text", text: `${method} ok` }], details: { method } };
 	};

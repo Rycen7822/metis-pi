@@ -31,7 +31,6 @@ export function explorationVerb(name: string): ExplorationVerb {
  * running, vivid success green once done — Codex's #13a10e state dot). */
 export function renderExplorationHeader(
   render: { running: boolean; isError: boolean },
-  _colorLevel: ColorLevel,
   theme: { bold(text: string): string; fg(key: string, text: string): string },
 ): string {
   const title = render.isError ? "Exploration failed" : render.running ? "Exploring" : "Explored";
@@ -40,7 +39,7 @@ export function renderExplorationHeader(
 }
 
 /** One member row: "  └ " (first) or "    " (later) + cyan verb + target. */
-export function renderExplorationMember(row: ExplorationRow, options: { first: boolean; isError?: boolean }, colorLevel: ColorLevel): string {
+export function renderExplorationMember(row: ExplorationRow, options: { first: boolean }, colorLevel: ColorLevel): string {
   const cyan = foregroundAnsi(EXPLORATION_CYAN, colorLevel);
   const dim = foregroundAnsi(DIM_GRAY, colorLevel);
   const gutter = options.first ? "  └ " : "    ";
@@ -64,7 +63,7 @@ export function renderExplorationLines(
   colorLevel: ColorLevel,
   theme: { bold(text: string): string; fg(key: string, text: string): string },
 ): string[] {
-  const lines = [renderExplorationHeader(render, colorLevel, theme)];
+  const lines = [renderExplorationHeader(render, theme)];
   for (const [index, row] of render.rows.entries()) {
     lines.push(renderExplorationMember(row, { first: index === 0 }, colorLevel));
   }

@@ -73,7 +73,7 @@ function wrapFields(fields: FooterField[], width: number): Segment[][] {
       rows.push(row);
       row = [];
     }
-    row = row.length ? [...row, separator, ...segments] : truncateSegments(segments, width);
+    row = row.length ? next : truncateSegments(segments, width);
   }
   if (row.length) rows.push(row);
   return rows;

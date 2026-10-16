@@ -17,9 +17,6 @@ vi.mock("@earendil-works/pi-tui", async (orig) => {
 			return [`MD[${width}]:${this.text.slice(0, Math.max(0, width - 4))}`];
 		}
 		invalidate(): void {}
-		setText(t: string): void {
-			this.text = t;
-		}
 	}
 	return { ...actual, Markdown: FakeMarkdown };
 });
@@ -664,16 +661,6 @@ describe("PreviewPane — adaptive left column width", () => {
 		expect(leftW).toBeLessThanOrEqual(82 - PREVIEW_COLUMN_GAP - MIN_PREVIEW_WIDTH);
 	});
 
-	it("cross-tab max keeps width stable — same getter produces same leftWidth for different items", () => {
-		const shortItems: QuestionRow[] = [{ kind: "option", label: "A" }];
-		const longItems: QuestionRow[] = [{ kind: "option", label: "A very long label indeed" }];
-		const shortW = adaptiveLeftWidth(shortItems, 2, 120);
-		const longW = adaptiveLeftWidth(longItems, 2, 120);
-		const globalMax = Math.max(shortW, longW);
-		expect(globalMax).toBe(longW);
-		const getter = (w: number) => Math.max(adaptiveLeftWidth(shortItems, 2, w), adaptiveLeftWidth(longItems, 2, w));
-		expect(getter(120)).toBe(globalMax);
-	});
 
 	it("naturalHeight(w) === render(w).length still holds with adaptive width", () => {
 		const { pane, optionListView } = makePane(question, () => 120);

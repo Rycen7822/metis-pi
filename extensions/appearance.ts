@@ -81,8 +81,7 @@ export default function codexAppearance(pi: AppearanceAPI): void {
     makeText: (text) => new Tui.Text(text, 0, 0),
     makeDiff: (input) => createDiffComponent({
       rows: input.rows, filePath: input.filePath, paint: highlight,
-      colorLevel, expanded: input.options.expanded === true,
-      expandHint: input.expandHint ?? "",
+      colorLevel,
     }, layoutOps()),
     makeShell: createShellFactories(layoutOps()),
     expandHint: () => Pi.keyHint("app.tools.expand", "to expand"),

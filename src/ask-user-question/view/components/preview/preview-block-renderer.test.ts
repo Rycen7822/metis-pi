@@ -14,9 +14,6 @@ vi.mock("@earendil-works/pi-tui", async (orig) => {
 			return [`MD[${width}]:${this.text.slice(0, Math.max(0, width - 4))}`];
 		}
 		invalidate(): void {}
-		setText(t: string): void {
-			this.text = t;
-		}
 	}
 	return { ...actual, Markdown: FakeMarkdown };
 });
@@ -76,11 +73,6 @@ describe("PreviewBlockRenderer — preview gating", () => {
 		expect(r.hasAnyPreview()).toBe(false);
 	});
 
-	it("has(i) is true for preview-bearing option, false for option without preview", () => {
-		const r = new PreviewBlockRenderer({ question: previewQuestion, theme, markdownTheme });
-		expect(r.has(0)).toBe(true);
-		expect(r.has(2)).toBe(false);
-	});
 });
 
 describe("PreviewBlockRenderer.renderBlock", () => {

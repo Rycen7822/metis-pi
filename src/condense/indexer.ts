@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type {
   CapturedBatch,
   ChainCompressionEntry,
@@ -63,8 +63,7 @@ export class ToolCallIndexer {
     this.seenSummaryEntries.clear();
     this.chainRegistry.clear();
 
-    // Two passes so dedup aliases land AFTER the original short refs they
-    // need to reuse, regardless of the underlying append order.
+    // Read originals before legacy aliases so recovery can find their source bodies.
     const branch = ctx.sessionManager.getBranch();
     const dedupAliasEntries: DedupAliasEntryData[] = [];
 
@@ -125,7 +124,7 @@ export class ToolCallIndexer {
       const own = sources.get(key) ?? (original && this.unknownLegacyOccurrence(key, original));
       if (own) this.indexRecord(own);
     }
-    this.syncSummaryEntries(ctx);
+    this.syncSummaryBranch(branch);
   }
 
   /**
@@ -143,10 +142,7 @@ export class ToolCallIndexer {
   }
 
   /**
-   * Returns true if the given occurrence key has been pruned - either
-   * because its full record is in the index, or because it has been
-   * registered as an alias of an already-indexed original via the
-   * content-hash dedup pass.
+   * True when the addressed occurrence owns an index record with pruning active.
    *
    * STRICT lookup: no bare-id uniquification happens here, unlike
    * `resolveToolCallId`/`getRecord`/`getRecordsForId`. A bare-id fallback
@@ -157,8 +153,7 @@ export class ToolCallIndexer {
    * `getRecordsForId` (all occurrences).
    *
    * `pruneMessages` uses this to decide whether to stub-replace a
-   * ToolResultMessage; both index and dedup-alias hits need the same
-   * treatment.
+   * ToolResultMessage, including duplicates with their own index records.
    */
   isSummarized(occurrenceKey: string): boolean {
     const record = this.index.get(occurrenceKey);
@@ -189,21 +184,20 @@ export class ToolCallIndexer {
   }
 
   /**
-   * Resolve a short alias, a duplicate's occurrence key, or a full occurrence
-   * key (or legacy bare id) to the canonical occurrence key backing it.
+   * Resolve a short ref, full occurrence key, or unique legacy bare ID
+   * to the addressed occurrence's own key.
    *
    * Order:
    *   1. Direct hit in `this.index` (canonical occurrence key).
-   *   2. Dedup alias → underlying original occurrence key.
-   *   3. Short-ref (`t3`) → underlying occurrence key.
-   *   4. Bare id with exactly ONE occurrence → that occurrence's key.
+   *   2. Short-ref (`t3`) → underlying occurrence key.
+   *   3. Bare id with exactly ONE occurrence → that occurrence's key.
    *
    * A bare id with several occurrences resolves to undefined here — that
    * ambiguity is fail-closed by design; callers that must handle collisions
    * use `getRecordsForId`.
    *
    * Used by `getRecord`/`lookupToolCalls` so `context_tree_query` returns
-   * the original record for both short refs and dedup'd ids.
+   * the addressed own record for both short refs and occurrence IDs.
    */
   resolveToolCallId(input: string): string | undefined {
     if (this.index.has(input)) return input;
@@ -347,7 +341,11 @@ export class ToolCallIndexer {
    * can serve chain summaries without re-scanning session entries.
    */
   syncSummaryEntries(ctx: ExtensionContext): void {
-    for (const entry of ctx.sessionManager.getBranch()) {
+    this.syncSummaryBranch(ctx.sessionManager.getBranch());
+  }
+
+  private syncSummaryBranch(branch: readonly SessionEntry[]): void {
+    for (const entry of branch) {
       if (entry.type !== "custom_message" || entry.customType !== CUSTOM_TYPE_SUMMARY || this.seenSummaryEntries.has(entry.id)) continue;
       const refs = normalizeSummaryToolCallRefs(entry.details);
       this.registerSummaryRefs(refs);

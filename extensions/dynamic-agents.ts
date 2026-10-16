@@ -43,7 +43,7 @@ export default function dynamicAgents(pi: ExtensionAPI): void {
         delete policy.file; delete policy.group;
       }
       if (!policy.file && globalError) policy.error = [policy.error, globalError].filter(Boolean).join("; ");
-      managed = configured() || sources.size > globalPaths(getAgentDir()).length;
+      managed = Boolean(policy.file) || configured() || sources.size > globalPaths(getAgentDir()).length;
       snapshot = { model: identity(ctx.model), policy, replacement: policy.file ?? nativeGlobal };
       if (policy.file) sources.add(policy.file.path);
       dirty = false;

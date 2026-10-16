@@ -3,9 +3,8 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
+#[cfg(windows)]
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use tokio::io::AsyncRead;
@@ -221,16 +220,16 @@ async fn spawn_process_with_stdin_mode(
     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(128);
     let writer_handle = if let Some(stdin) = stdin {
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let mut writer = stdin;
             while let Some(bytes) = writer_rx.recv().await {
                 let _ = writer.write_all(&bytes).await;
                 let _ = writer.flush().await;
             }
-        })
+        }))
     } else {
         drop(writer_rx);
-        tokio::spawn(async {})
+        None
     };
 
     let stdout_handle = stdout.map(|stdout| {
@@ -262,10 +261,6 @@ async fn spawn_process_with_stdin_mode(
     });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
-    let wait_exit_code = Arc::clone(&exit_code);
     #[cfg(windows)]
     let wait_job = match &windows_terminator {
         WindowsChildTerminator::Job(job) => Some(Arc::clone(job)),
@@ -286,10 +281,6 @@ async fn spawn_process_with_stdin_mode(
             }
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
         let _ = exit_tx.send(code);
     });
 
@@ -305,10 +296,7 @@ async fn spawn_process_with_stdin_mode(
         reader_abort_handles,
         writer_handle,
         wait_handle,
-        exit_status,
-        exit_code,
         /*pty_handles*/ None,
-        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {

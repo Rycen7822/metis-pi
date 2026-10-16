@@ -18,7 +18,7 @@ export function renderExecCommandCall(
 ): string | { render(width: number): string[] } {
   const summary = summarizeShellCommand(command);
   return summary.maskAsExplored
-    ? renderExplorationText([summary.actions], state, theme, expanded ? [command] : undefined)
+    ? renderExplorationText(summary.actions, state, theme, expanded ? command : undefined)
     : (theme.renderCommandCall?.(command, state, expanded) ?? renderCommandText(command, state, theme, expanded));
 }
 
@@ -42,16 +42,16 @@ export function renderWriteStdinCall(
 	return text;
 }
 
-function renderExplorationText(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme, commands?: string[]): string {
+function renderExplorationText(actions: ShellAction[], state: ExecCommandStatus, theme: RenderTheme, command?: string): string {
 	const header = state === "running" ? "Exploring" : "Explored";
 	let text = `${theme.fg("dim", "•")} ${theme.fg("toolTitle", theme.bold(header))}`;
 
-	for (const [index, line] of coalesceReadGroups(actionGroups).map(formatActionLine).entries()) {
+	for (const [index, line] of coalesceReads(actions).map(formatActionLine).entries()) {
 		const prefix = index === 0 ? "  └ " : "    ";
 		text += `\n${theme.fg("dim", prefix)}${theme.fg("accent", line.title)} ${theme.fg("muted", line.body)}`;
 	}
 
-	for (const command of commands ?? []) {
+	if (command !== undefined) {
 		const lines = formatCommandLines(command, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
 		const painted = theme.highlightCommandLines?.(lines) ?? lines.map((line) => theme.fg("muted", line));
 		for (const line of painted) {
@@ -95,17 +95,11 @@ function shortenLine(line: string, max = 100): string {
 	return `${trimmed.slice(0, max - 3)}...`;
 }
 
-function shortenCommand(command: string, max = 100): string {
-	const trimmed = command.replace(/\s+/g, " ").trim();
-	if (trimmed.length <= max) return trimmed;
-	return `${trimmed.slice(0, max - 3)}...`;
-}
-
 function formatCommandPreview(command: string | undefined): string | undefined {
 	if (!command) return undefined;
 	const singleLine = command.replace(/\s+/g, " ").trim();
 	if (singleLine.length === 0) return undefined;
-	return shortenCommand(singleLine, 80);
+	return shortenLine(singleLine, 80);
 }
 
 function formatActionLine(action: ShellAction): { title: string; body: string } {
@@ -139,60 +133,24 @@ function skillNameFromSkillPath(path: string): string | undefined {
 	return skillDir && skillDir !== ".system" ? skillDir : undefined;
 }
 
-function coalesceReadGroups(actionGroups: ShellAction[][]): ShellAction[] {
-	const flattened: ShellAction[] = [];
-
-	for (let index = 0; index < actionGroups.length; index += 1) {
-		const actions = actionGroups[index]!;
-		if (actions.every((action) => action.kind === "read")) {
-			const reads: Extract<ShellAction, { kind: "read" }>[] = [];
-			const seenPaths = new Set<string>();
-			let lastRead: Extract<ShellAction, { kind: "read" }> | undefined;
-
-			for (let readIndex = index; readIndex < actionGroups.length; readIndex += 1) {
-				const readActions = actionGroups[readIndex]!;
-				if (!readActions.every((action) => action.kind === "read")) {
-					break;
-				}
-
-				for (const action of readActions) {
-					if (action.kind !== "read") continue;
-					lastRead = action;
-					if (seenPaths.has(action.path)) continue;
-					seenPaths.add(action.path);
-					reads.push(action);
-				}
-
-				index = readIndex;
-			}
-
-			if (lastRead) {
-				const duplicateLabels = new Set<string>();
-				const seenLabels = new Set<string>();
-				for (const read of reads) {
-					const label = formatReadLabel(read);
-					if (seenLabels.has(label)) {
-						duplicateLabels.add(label);
-						continue;
-					}
-					seenLabels.add(label);
-				}
-				const labels = reads.map((read) => {
-					const label = formatReadLabel(read);
-					return duplicateLabels.has(label) ? read.path : label;
-				});
-				flattened.push({
-					kind: "read",
-					command: labels.join(" && "),
-					name: labels.join(", "),
-					path: "",
-				});
-			}
-			continue;
-		}
-
-		flattened.push(...actions);
+function coalesceReads(actions: ShellAction[]): ShellAction[] {
+	if (actions.length === 0 || !actions.every((action) => action.kind === "read")) return actions;
+	const seenPaths = new Set<string>();
+	const reads = actions.filter((action) => {
+		if (seenPaths.has(action.path)) return false;
+		seenPaths.add(action.path);
+		return true;
+	});
+	const seenLabels = new Set<string>();
+	const duplicateLabels = new Set<string>();
+	for (const read of reads) {
+		const label = formatReadLabel(read);
+		if (seenLabels.has(label)) duplicateLabels.add(label);
+		seenLabels.add(label);
 	}
-
-	return flattened;
+	const labels = reads.map((read) => {
+		const label = formatReadLabel(read);
+		return duplicateLabels.has(label) ? read.path : label;
+	});
+	return [{ kind: "read", command: labels.join(" && "), name: labels.join(", "), path: "" }];
 }

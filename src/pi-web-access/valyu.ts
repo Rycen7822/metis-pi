@@ -54,8 +54,8 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function mapDomainFilter(domainFilter: string[] | undefined): { included_sources?: string[]; excluded_sources?: string[] } {
-	const { include: included_sources, exclude: excluded_sources } = normalizeDomainFilters(domainFilter);
+function mapDomainFilter(domains: ReturnType<typeof normalizeDomainFilters>): { included_sources?: string[]; excluded_sources?: string[] } {
+	const { include: included_sources, exclude: excluded_sources } = domains;
 	return {
 		...(included_sources.length > 0 ? { included_sources } : {}),
 		...(excluded_sources.length > 0 ? { excluded_sources } : {}),
@@ -99,7 +99,7 @@ export async function searchWithValyu(query: string, options: SearchOptions & { 
 		response = await fetchWithCredentialRedirects(VALYU_SEARCH_URL, {
 			method: "POST",
 			headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-			body: JSON.stringify({ query, max_num_results: numResults, ...mapDomainFilter(options.domainFilter), ...(startDate ? { start_date: startDate } : {}) }),
+			body: JSON.stringify({ query, max_num_results: numResults, ...mapDomainFilter(domains), ...(startDate ? { start_date: startDate } : {}) }),
 			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
 		}, ["x-api-key"]);
 	} catch (err) {

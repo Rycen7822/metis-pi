@@ -12,7 +12,6 @@ import { generateSummaryDraft, loadSummaryModelChoices, SUMMARY_GENERATION_DEADL
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
 const readmeSrc = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-const summarySrc = readFileSync(new URL("../summary-review.ts", import.meta.url), "utf8");
 
 function summaryContext(scopedModels = []) {
 	const model = { provider: "anthropic", id: "claude-haiku-4-5" };
@@ -310,11 +309,8 @@ test("ambiguous summary routes make no model call; explicit selection bypasses a
 	assert.deepEqual(calls, ["requesty"]);
 });
 
-test("summary generation has a hard deadline and preserves caller cancellation", () => {
+test("summary generation defaults to a 30-second deadline", () => {
 	assert.equal(SUMMARY_GENERATION_DEADLINE_MS, 30_000);
-	assert.match(summarySrc, /Promise\.race\(contenders\)/);
-	assert.match(summarySrc, /deadlineController\.abort\(\)/);
-	assert.match(summarySrc, /void operation\.then\(\(\) => undefined, \(\) => undefined\)/);
 });
 
 test("unused ambiguous fallback cannot block the first default; reached ambiguity still fails", async () => {

@@ -6,7 +6,6 @@ import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getPiConfiguredShellPath } from "../runtime-shell.ts";
 import { renderExecCommandCall } from "../ui/rendering.ts";
-import { getExperimentalToolSampling } from "../tool-sampling.ts";
 import { renderTerminalOutput } from "./output.ts";
 import type { ExecCommandInput, ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { MAX_EXEC_YIELD_TIME_MS } from "./shell.ts";
@@ -33,8 +32,6 @@ interface ExecCommandParams {
 
 interface ExecCommandToolOptions {
 	customRendering?: boolean | undefined;
-	promptSnippet?: boolean | undefined;
-	showOutputWhenCollapsed?: boolean | undefined;
 }
 
 interface ExecCommandRenderContextLike {
@@ -144,14 +141,13 @@ function renderResult(
   result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown | undefined },
   renderOptions: { expanded: boolean; isPartial: boolean },
   theme: { fg(role: string, text: string): string },
-  options: ExecCommandToolOptions,
 ) {
   const details = isUnifiedExecResult(result.details) ? result.details : undefined;
   const textContent = result.content.find((item) => item.type === "text");
   const plainText = textContent?.text ?? "";
   if (!renderOptions.expanded) {
     const collapsed = details ?? (plainText ? { output: plainText } : undefined);
-    return options.showOutputWhenCollapsed && collapsed ? renderCollapsedOutput(collapsed, theme) : new Container();
+    return collapsed ? renderCollapsedOutput(collapsed, theme) : new Container();
   }
   let text = theme.fg("dim", renderTerminalOutput(details?.output ?? plainText) || "(no output)");
   if (details?.session_id !== undefined)
@@ -161,15 +157,16 @@ function renderResult(
 }
 
 export function createExecCommandTool(sessions: ExecSessionManager, options: ExecCommandToolOptions = {}) {
-  const constrainedSampling = getExperimentalToolSampling("exec_command");
   const tool: Parameters<ExtensionAPI["registerTool"]>[0] = {
     name: "exec_command",
     label: "exec_command",
     description: "Run shell commands; may return session_id",
-    ...(options.promptSnippet === false ? {} : { promptSnippet: "Run command" }),
+    promptSnippet: "Run command",
     parameters: EXEC_COMMAND_PARAMETERS,
     outputSchema: EXEC_OUTPUT_SCHEMA,
-    ...(constrainedSampling ? { constrainedSampling } : {}),
+    ...(process.env["PI_EXPERIMENTAL"] === "1"
+      ? { constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const } }
+      : {}),
     prepareArguments: prepareExecCommandArguments,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       if (signal?.aborted) throw new Error("exec_command aborted");
@@ -205,7 +202,7 @@ export function createExecCommandTool(sessions: ExecSessionManager, options: Exe
             result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown },
             renderOptions: { expanded: boolean; isPartial: boolean },
             theme: { fg(role: string, text: string): string },
-          ) => renderResult(result, renderOptions, theme, options)) as never,
+          ) => renderResult(result, renderOptions, theme)) as never,
         }),
   };
   return tool;

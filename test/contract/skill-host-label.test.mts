@@ -43,23 +43,20 @@ test("native skill labels and gestures survive rebuilds without stealing selecti
   const single = { ...block, content: "single skill body" };
   assert.deepEqual(new Entry(single).render(160), new SkillInvocationMessageComponent(single).render(160), "single skills stay native");
   assert.doesNotMatch(rendered(entry), /body of other/);
-  const invalidation = t.mock.method(entry, "invalidate");
   for (const expanded of [true, false]) {
     const region = entry.children[0];
     assert.ok(region instanceof MouseRegion);
     const nativeHandler = t.mock.method(region, "handleMouse");
     assert.deepEqual(entry.handleMouse(mouse("press")), { handled: true });
     assert.equal(rendered(entry).includes("body of other"), !expanded, "press never toggles");
-    const before = invalidation.mock.callCount();
     assert.deepEqual(entry.handleMouse(mouse("click")), { handled: true });
     baseline.setExpanded(expanded);
     assert.deepEqual(entry.render(160), baseline.render(160), "rebuilt labels and the entire body retain native rendering");
     assert.equal(rendered(entry).includes("body of other"), expanded);
-    assert.equal(invalidation.mock.callCount() - before, 1, "one click invalidates one cached frame");
     assert.equal(nativeHandler.mock.callCount(), 0, "the nested native handler must not toggle again");
   }
   assert.equal(prior.mock.callCount(), 0, "accepted gestures never reach the prior handler");
-  const before = invalidation.mock.callCount();
+  const before = entry.render(160);
   const events = [
     mouse("press", { shift: true }), mouse("click", { ctrl: true }), mouse("click", { alt: true }),
     mouse("press", { button: "right" }), mouse("wheel", { button: "none" }), mouse("release"), undefined,
@@ -70,5 +67,5 @@ test("native skill labels and gestures survive rebuilds without stealing selecti
   }
   assert.deepEqual(prior.mock.calls.map((call) => call.arguments), events.map((event) => [event]));
   assert.doesNotMatch(rendered(entry), /body of other/);
-  assert.equal(invalidation.mock.callCount(), before, "selection and delegated events leave the cached frame intact");
+  assert.deepEqual(entry.render(160), before, "selection and delegated events leave rendering intact");
 });

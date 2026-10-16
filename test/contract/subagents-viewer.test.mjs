@@ -60,7 +60,7 @@ function popup(t, options = {}) {
     assert.ok(index >= 0, `visible mouse target ${label}`);
     return mouse(width, visibleWidth(rendered[y].slice(0, index)), y, event);
   };
-  return { viewer, tui, calls, closes, rows, mouse, clickText };
+  return { viewer, calls, closes, rows, mouse, clickText };
 }
 
 function deferred() {

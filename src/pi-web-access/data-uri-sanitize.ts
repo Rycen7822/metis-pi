@@ -28,7 +28,6 @@ export interface DataUriOmission {
 
 
 interface SanitizationState {
-	nextOrdinal: number;
 	omissions: DataUriOmission[];
 }
 
@@ -356,7 +355,7 @@ function sanitizeTextInternal(text: string, sourcePath: string, state: Sanitizat
 		}
 
 		const omission: DataUriOmission = {
-			ordinal: state.nextOrdinal++,
+			ordinal: state.omissions.length + 1,
 			sourcePath: safeMarkerSource(sourcePath),
 			mimeType,
 			encoding,
@@ -386,7 +385,7 @@ export function sanitizeInlineDataUris(
 	text: string,
 	sourcePath: string,
 ): { text: string; omissions: DataUriOmission[] } {
-	const state: SanitizationState = { nextOrdinal: 1, omissions: [] };
+	const state: SanitizationState = { omissions: [] };
 	const sanitized = sanitizeTextInternal(text, sourcePath, state);
 	return {
 		text: sanitized,

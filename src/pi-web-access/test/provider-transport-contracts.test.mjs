@@ -20,7 +20,8 @@ for (const [operation, delayBody] of [["search", false], ["ask", true]]) {
 			const packets = [], calls = [], deadlines = [];
 			const server = createServer(async (req, res) => {
 				let body = ""; for await (const part of req) body += part;
-				packets.push({ method: req.method, url: req.url, headers: req.headers, body: JSON.parse(body) });
+				JSON.parse(body);
+				packets.push({ method: req.method, headers: req.headers });
 				${delayBody ? 'res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders();' : ""}
 				setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ results: [], choices: [{ message: { content: "late answer" } }] })); }, 250);
 			});
@@ -29,7 +30,7 @@ for (const [operation, delayBody] of [["search", false], ["ask", true]]) {
 			const nativeFetch = globalThis.fetch, nativeTimeout = AbortSignal.timeout;
 			AbortSignal.timeout = ms => { deadlines.push(ms); return nativeTimeout(100); };
 			globalThis.fetch = (url, init) => {
-				calls.push({ url: String(url), hasSignal: !!init.signal });
+				calls.push({ hasSignal: !!init.signal });
 				return nativeFetch(origin + new URL(url).pathname, init);
 			};
 			const { searchWithPerplexity, askPerplexity } = await import(${JSON.stringify(modules)} + "perplexity.ts");
@@ -59,7 +60,8 @@ test("Perplexity caller cancellation stays an abort and closes its activity", ()
 		process.env.PERPLEXITY_API_KEY = "synthetic-perplexity-key";
 		const calls = [], controller = new AbortController();
 		globalThis.fetch = async (url, init) => {
-			calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body), signalIsCaller: init.signal === controller.signal });
+			JSON.parse(init.body);
+			calls.push({ headers: Object.fromEntries(new Headers(init.headers)) });
 			return await new Promise((resolve, reject) => {
 				init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
 				controller.abort(new DOMException("caller cancelled", "AbortError"));
@@ -97,7 +99,7 @@ for (const provider of providers) {
 			const output = run(`
 				const { createServer } = await import("node:http");
 				${provider.env ? `process.env[${JSON.stringify(provider.env)}] = "synthetic-redirect-key";` : ""}
-				const packets = [], calls = [];
+				const packets = [];
 				let originA, originB;
 				const handler = async (req, res) => {
 					let body = ""; for await (const part of req) body += part;
@@ -115,7 +117,6 @@ for (const provider of providers) {
 				globalThis.fetch = (url, init) => {
 					const target = new URL(url);
 					const mapped = target.hostname === "127.0.0.1" ? target.href : originA + target.pathname + target.search;
-					calls.push({ url: String(url), mapped, method: init.method ?? "GET", redirect: init.redirect, headers: Object.fromEntries(new Headers(init.headers)), body: init.body });
 					return nativeFetch(mapped, init);
 				};
 				const leaf = await import(${JSON.stringify(modules)} + ${JSON.stringify(provider.file + ".ts")});
@@ -123,7 +124,7 @@ for (const provider of providers) {
 				const result = await leaf[${JSON.stringify(provider.method)}]("redirect docs", { numResults: 1 }, ctx);
 				a.closeAllConnections(); b.closeAllConnections();
 				await Promise.all([new Promise(resolve => a.close(resolve)), new Promise(resolve => b.close(resolve))]);
-				console.log(JSON.stringify({ packets, calls, result, portA: a.address()?.port, portB: b.address()?.port }));
+				console.log(JSON.stringify({ packets, result }));
 			`);
 			assert.equal(output.packets.length, 2);
 			const first = output.packets[0], second = output.packets[1];
@@ -246,7 +247,7 @@ for (const [status, foreign] of [[302, false], [303, false], [307, true]]) {
 			originA = "http://127.0.0.1:" + a.address().port; originB = "http://127.0.0.1:" + b.address().port;
 			process.env.BRIGHTDATA_API_KEY = "synthetic-unlocker-key"; process.env.BRIGHTDATA_UNLOCKER_ZONE = "synthetic_zone";
 			const injectedFetch = (url, init) => {
-				const target = new URL(url); calls.push({ url: String(url), method: init.method, redirect: init.redirect });
+				const target = new URL(url); calls.push({ redirect: init.redirect });
 				return nativeFetch(target.hostname === "127.0.0.1" ? url : originA + target.pathname, init);
 			};
 			const { extractWithBrightDataUnlocker } = await import(${JSON.stringify(modules)} + "brightdata-unlocker.ts");

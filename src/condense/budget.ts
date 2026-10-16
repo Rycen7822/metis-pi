@@ -15,7 +15,6 @@ export interface SummaryBudgetPolicy {
 /** Defaults; runtime paths explicitly pass the validated current policy. */
 const bundledDefaults = defaultMetisConfig().contextPrune;
 export const SUMMARY_POLICY = (isMetisConfigTable(bundledDefaults) ? bundledDefaults.summaryBudget : undefined) as SummaryBudgetPolicy;
-export const MAX_BUDGET_WINDOW = SUMMARY_POLICY.maxBudgetWindowTokens;
 
 export function summaryBudget(before: number, fixed: number, calls: number, policy = SUMMARY_POLICY) {
   const minimumGain = Math.max(policy.minGainTokens, Math.ceil(policy.minGainFraction * before));

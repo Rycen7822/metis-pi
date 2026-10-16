@@ -1,6 +1,5 @@
 import {
 	loadWebAccessConfig,
-	getWebAccessConfigPath,
 } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { formatSeconds, readExecError, isTimeoutError, trimErrorText, mapFfmpegError } from "./media-errors.ts";

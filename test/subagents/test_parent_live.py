@@ -10,7 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 
-from paths import ROOT, TEST_ROOT
+from paths import TEST_ROOT
 from test_transport import McpHarness
 
 

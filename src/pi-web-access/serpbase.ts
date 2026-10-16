@@ -1,7 +1,7 @@
 import { SearchHttpError } from "./search-types.ts";
-import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { GOOGLE_RECENCY_TBS, loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -10,12 +10,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 const SERPBASE_API_URL = "https://api.serpbase.dev/google/search";
 const CONFIG_PATH = getWebSearchConfigPath();
 const SEARCH_TIMEOUT_MS = 60_000;
-const RECENCY_TBS: Record<string, string> = {
-	day: "qdr:d",
-	week: "qdr:w",
-	month: "qdr:m",
-	year: "qdr:y",
-};
+
 
 interface WebSearchConfig {
 	serpbaseApiKey?: unknown;
@@ -66,14 +61,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function buildQuery(query: string, filters: DomainFilters): string {
-	const parts = [query];
-	if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-	if (filters.include.length > 1) parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
-	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-	return parts.join(" ");
-}
-
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -82,7 +69,7 @@ function invalidResponse(message: string): Error {
 	return new Error(`SerpBase API returned invalid response: ${message}`);
 }
 
-function parseResponse(value: unknown): SerpBaseResponse {
+function parseResponse(value: unknown): SerpBaseOrganicResult[] {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("expected an object envelope");
 	const envelope = value as SerpBaseResponse;
 	if (typeof envelope.error === "string" && envelope.error.trim()) {
@@ -91,7 +78,7 @@ function parseResponse(value: unknown): SerpBaseResponse {
 	}
 	const organic = envelope.organic_results ?? envelope.organic ?? envelope.results;
 	if (!Array.isArray(organic)) throw invalidResponse("expected organic_results array");
-	return { ...envelope, organic_results: organic };
+	return organic;
 }
 
 export function isSerpBaseAvailable(): boolean {
@@ -103,11 +90,11 @@ export async function searchWithSerpBase(query: string, options: SearchOptions =
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const filters = normalizeDomainFilters(options.domainFilter);
 	const url = new URL(SERPBASE_API_URL);
-	url.searchParams.set("q", buildQuery(query, filters));
+	url.searchParams.set("q", buildSiteFilteredQuery(query, filters));
 	// SerpBase's Google Search endpoint authenticates with an `api_key` query parameter.
 	url.searchParams.set("api_key", apiKey);
 	url.searchParams.set("num", String(numResults));
-	if (options.recencyFilter && RECENCY_TBS[options.recencyFilter]) url.searchParams.set("tbs", RECENCY_TBS[options.recencyFilter]);
+	if (options.recencyFilter && GOOGLE_RECENCY_TBS[options.recencyFilter]) url.searchParams.set("tbs", GOOGLE_RECENCY_TBS[options.recencyFilter]);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	try {
@@ -128,7 +115,7 @@ export async function searchWithSerpBase(query: string, options: SearchOptions =
 		}
 		const data = parseResponse(rawData);
 		const results: SearchResponse["results"] = [];
-		for (const item of data.organic_results ?? []) {
+		for (const item of data) {
 			if (!item || typeof item !== "object") continue;
 			const resultUrl = typeof item.link === "string" ? item.link : typeof item.url === "string" ? item.url : "";
 			if (!resultUrl || !matchesDomainFilter(resultUrl, filters)) continue;

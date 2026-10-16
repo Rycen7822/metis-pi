@@ -28,7 +28,7 @@ async function runSearch(t, { config, models, sessionId = "session-1", resolvedB
 			const requests = [];
 			const redirectUrl = ${JSON.stringify(redirectUrl ?? null)};
 			globalThis.fetch = async (url, init) => {
-				requests.push({ url: String(url), method: init.method, headers: Object.fromEntries(new Headers(init.headers)), body: init.body ? JSON.parse(init.body) : undefined });
+				requests.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: init.body ? JSON.parse(init.body) : undefined });
 				if (redirectUrl && requests.length === 1) return new Response(null, { status: ${redirectStatus}, headers: { location: redirectUrl } });
 				return Response.json({ output: [
 					{ type: "web_search_call" },

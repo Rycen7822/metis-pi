@@ -15,7 +15,6 @@ import { PreviewPane } from "./preview-pane.ts";
 
 const theme = makeTheme() as unknown as Theme;
 const selectTheme = {
-	selectedPrefix: (t: string) => t,
 	selectedText: (t: string) => t,
 	description: (t: string) => t,
 	scrollInfo: (t: string) => t,

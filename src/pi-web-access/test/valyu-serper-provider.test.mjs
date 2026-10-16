@@ -167,9 +167,9 @@ test("Valyu and Serper can be configured for routing but provider all never call
 	assert.doesNotMatch(output.allError, /Valyu|Serper/);
 });
 
-for (const [name, moduleUrl, envName, configKey, functionName] of [
-	["Valyu", valyuModuleUrl, "VALYU_API_KEY", "valyuApiKey", "searchWithValyu"],
-	["Serper", serperModuleUrl, "SERPER_API_KEY", "serperApiKey", "searchWithSerper"],
+for (const [name, moduleUrl, configKey, functionName] of [
+	["Valyu", valyuModuleUrl, "valyuApiKey", "searchWithValyu"],
+	["Serper", serperModuleUrl, "serperApiKey", "searchWithSerper"],
 ]) {
 	test(`${name} HTTP errors redact its credential`, async () => {
 		const secret = `${name.toLowerCase()}-secret`;

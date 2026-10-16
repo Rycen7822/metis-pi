@@ -21,10 +21,9 @@ export default function execution(pi: ExtensionAPI): void {
     register(
       createExecCommandTool(runtime.sessions, {
         customRendering: config.ui.toolRenaming,
-        showOutputWhenCollapsed: true,
       }),
     );
-    register(createWriteStdinTool(runtime.sessions, { showOutputWhenCollapsed: true }));
+    register(createWriteStdinTool(runtime.sessions));
   };
   registerCore();
   const reasoning = createAutoReasoning(pi, () => runtime.config.tools.autoReasoning);
@@ -34,12 +33,14 @@ export default function execution(pi: ExtensionAPI): void {
     if (!isExecutionStatusRequest(request)) return;
     request.busy ||= runtime.sessions.listSessions(0).some((session) => session.running);
   });
-  const refresh = (_event: unknown, ctx: ExtensionContext) => {
-    const config = readExecutionConfig(ctx);
-    if (JSON.stringify(config) !== JSON.stringify(runtime.config)) { runtime.config = config; registerCore(); }
+  const refresh = (_event: unknown, ctx: ExtensionContext, forceCore = false) => {
+    const config = readExecutionConfig();
+    const changed = JSON.stringify(config) !== JSON.stringify(runtime.config);
+    runtime.config = config;
+    if (changed || forceCore) registerCore();
     pi.registerTool({ ...reasoning.tool, exposure: config.tools.autoReasoning && ctx.model?.reasoning ? "deferred" : "hidden" });
   };
-  pi.on("session_start", (event, ctx) => { refresh(event, ctx); registerCore(); });
+  pi.on("session_start", (event, ctx) => refresh(event, ctx, true));
   const widget = registerBackgroundShellUi(pi, runtime);
   pi.on("model_select", refresh); pi.on("session_tree", refresh);
   pi.on("before_agent_start", (event, ctx) => { refresh(event, ctx); reasoning.begin(ctx); });
@@ -51,7 +52,7 @@ export default function execution(pi: ExtensionAPI): void {
   pi.registerCommand("execution", { description: "Configure metis execution tools", async handler(args, ctx) {
     if (args.trim()) { ctx.ui.notify("Execution settings are global only. Use /execution without project arguments.", "warning"); return; }
     if (!ctx.hasUI) { ctx.ui.notify("Edit [execution] in metis-pi.toml to configure execution tools", "info"); return; }
-    const draft = structuredClone(readExecutionConfig());
+    const draft = readExecutionConfig();
     const fields = Object.entries(draft).flatMap(([group, values]) => Object.keys(values).map(key => ({ group, key })));
     const selected = await ctx.ui.select("Execution settings", fields.map(({ group, key }) => `${group}.${key}`));
     const field = fields.find(({ group, key }) => `${group}.${key}` === selected);

@@ -44,7 +44,7 @@ const OUTCOME_BY_STOP: Record<string, { outcome: Exclude<InteractionOutcome, "un
 
 export class InteractionOutcomeTracker {
   #attempt = 0;
-  #terminals = new Map<number, { outcome: Exclude<InteractionOutcome, "unknown">; evidence: TerminalEvidence }>();
+  #lastTerminal: { attempt: number; outcome: Exclude<InteractionOutcome, "unknown">; evidence: TerminalEvidence } | undefined;
   #toolErrors = 0;
   #frozen: OutcomeVerdict | undefined;
 
@@ -53,7 +53,7 @@ export class InteractionOutcomeTracker {
    * messages must not inflate the sequence. */
   messageStart(role: string): void {
     if (role !== "assistant") return;
-    if (this.#attempt === 0 || this.#terminals.has(this.#attempt)) {
+    if (this.#attempt === 0 || this.#lastTerminal?.attempt === this.#attempt) {
       this.#attempt += 1;
     }
   }
@@ -66,7 +66,7 @@ export class InteractionOutcomeTracker {
     const mapped = OUTCOME_BY_STOP[stopReason];
     if (!mapped) return;
     if (this.#attempt === 0) this.#attempt = 1;
-    this.#terminals.set(this.#attempt, mapped);
+    this.#lastTerminal = { attempt: this.#attempt, ...mapped };
   }
 
   /** tool_execution_end isError — diagnostic count ONLY. */
@@ -78,12 +78,9 @@ export class InteractionOutcomeTracker {
   freeze(): OutcomeVerdict {
     if (this.#frozen) return this.#frozen;
     let verdict: OutcomeVerdict;
-    let lastTerminalAttempt = 0;
-    for (const seq of this.#terminals.keys()) {
-      if (seq > lastTerminalAttempt) lastTerminalAttempt = seq;
-    }
+    const lastTerminalAttempt = this.#lastTerminal?.attempt ?? 0;
     if (lastTerminalAttempt > 0 && lastTerminalAttempt === this.#attempt) {
-      const terminal = this.#terminals.get(lastTerminalAttempt)!;
+      const terminal = this.#lastTerminal!;
       verdict = {
         outcome: terminal.outcome,
         evidence: terminal.evidence,
@@ -133,7 +130,7 @@ export class InteractionOutcomeTracker {
   /** New interaction / session boundary: no sticky state may leak across. */
   reset(): void {
     this.#attempt = 0;
-    this.#terminals.clear();
+    this.#lastTerminal = undefined;
     this.#toolErrors = 0;
     this.#frozen = undefined;
   }

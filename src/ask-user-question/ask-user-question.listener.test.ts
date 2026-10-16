@@ -40,20 +40,14 @@ const params = {
 } satisfies QuestionParams;
 
 interface FakeHandle {
-	hide(): void;
 	setHidden(hidden: boolean): void;
 	isHidden(): boolean;
-	focus(): void;
-	unfocus(): void;
 	isFocused(): boolean;
 }
 
 function makeHandle(over: { isFocused?: () => boolean } = {}): FakeHandle {
 	let hidden = false;
 	return {
-		hide: () => {},
-		focus: () => {},
-		unfocus: () => {},
 		setHidden: (h: boolean) => {
 			hidden = h;
 		},

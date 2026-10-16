@@ -91,7 +91,7 @@ for (const [owner, names, builtin] of [
   ],
 ]) {
   test(`${owner}: both native renderers remain unchanged`, (t) => {
-    const { Host, handle } = setup(
+    const { Host } = setup(
       t,
       names.map((name) => toolInfo(name, builtin)),
     );

@@ -85,14 +85,9 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function mapDomainFilter(domainFilter: string[] | undefined): { includeSites: string[]; excludeSites: string[] } {
-	const { include: includeSites, exclude: excludeSites } = normalizeDomainFilters(domainFilter);
-	return { includeSites, excludeSites };
-}
-
 function buildSearchBody(query: string, options: Search1APISearchOptions): Record<string, unknown> {
 	const numResults = normalizeSearchResultCount(options.numResults);
-	const { includeSites, excludeSites } = mapDomainFilter(options.domainFilter);
+	const { include: includeSites, exclude: excludeSites } = normalizeDomainFilters(options.domainFilter);
 	return {
 		query,
 		max_results: numResults,

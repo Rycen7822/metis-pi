@@ -211,14 +211,6 @@ function simplifyOnce(
 		if (tokens[0] === "echo") return commands.slice(1);
 	}
 
-	const cdIndex = commands.findIndex(
-		(command) =>
-			command.kind === "unknown" && shellSplit(command.command)[0] === "cd",
-	);
-	if (cdIndex !== -1 && commands.length > cdIndex + 1) {
-		return [...commands.slice(0, cdIndex), ...commands.slice(cdIndex + 1)];
-	}
-
 	const trueIndex = commands.findIndex(
 		(command) => command.kind === "unknown" && command.command === "true",
 	);

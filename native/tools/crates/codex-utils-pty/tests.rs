@@ -3,12 +3,9 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
-use crate::ProcessDriver;
-use crate::ProcessSignal;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
 use crate::combine_output_receivers;
-use crate::spawn_from_driver;
 use crate::spawn_pipe_process;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
@@ -176,41 +173,6 @@ async fn wait_for_output_contains(
     );
 }
 
-async fn wait_for_python_repl_ready(
-    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
-    timeout_ms: u64,
-    ready_marker: &str,
-) -> anyhow::Result<Vec<u8>> {
-    let mut collected = Vec::new();
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
-
-    while tokio::time::Instant::now() < deadline {
-        let now = tokio::time::Instant::now();
-        let remaining = deadline.saturating_duration_since(now);
-        match tokio::time::timeout(remaining, output_rx.recv()).await {
-            Ok(Ok(chunk)) => {
-                collected.extend_from_slice(&chunk);
-                if String::from_utf8_lossy(&collected).contains(ready_marker) {
-                    return Ok(collected);
-                }
-            }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                anyhow::bail!(
-                    "PTY output closed while waiting for Python REPL readiness: {:?}",
-                    String::from_utf8_lossy(&collected)
-                );
-            }
-            Err(_) => break,
-        }
-    }
-
-    anyhow::bail!(
-        "timed out waiting for Python REPL readiness marker {ready_marker:?} in PTY: {:?}",
-        String::from_utf8_lossy(&collected)
-    );
-}
-
 #[cfg(unix)]
 async fn wait_for_python_repl_ready_via_probe(
     writer: &tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -221,7 +183,7 @@ async fn wait_for_python_repl_ready_via_probe(
     let mut collected = Vec::new();
     let marker = "__codex_pty_ready__";
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
-    let probe_window = tokio::time::Duration::from_millis(if cfg!(windows) { 750 } else { 250 });
+    let probe_window = tokio::time::Duration::from_millis(250);
 
     while tokio::time::Instant::now() < deadline {
         writer
@@ -370,7 +332,7 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     let newline = if cfg!(windows) { "\r\n" } else { "\n" };
     let startup_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let mut output =
-        wait_for_python_repl_ready(&mut output_rx, startup_timeout_ms, ready_marker).await?;
+        wait_for_output_contains(&mut output_rx, ready_marker, startup_timeout_ms).await?;
     writer
         .send(format!("print('hello from ' + 'pty'){newline}").into_bytes())
         .await?;
@@ -601,196 +563,6 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn driver_backed_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()> {
-    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-    let (stdout_tx, stdout_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
-    let (stderr_tx, stderr_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
-    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
-
-    let spawned = spawn_from_driver(ProcessDriver {
-        writer_tx,
-        stdout_rx: stdout_driver_rx,
-        stderr_rx: Some(stderr_driver_rx),
-        exit_rx,
-        terminator: None,
-        writer_handle: None,
-        resizer: None,
-        #[cfg(windows)]
-        tty: false,
-    });
-    let error = spawned
-        .session
-        .signal(ProcessSignal::Interrupt)
-        .expect_err("interrupting a driver without a terminator should remain unsupported");
-    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
-
-    let SpawnedProcess {
-        session: _session,
-        stdout_rx,
-        stderr_rx,
-        exit_rx,
-    } = spawned;
-    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
-    let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
-
-    stdout_tx.send(b"driver-out".to_vec())?;
-    stderr_tx.send(b"driver-err".to_vec())?;
-    drop(stdout_tx);
-    drop(stderr_tx);
-    exit_tx.send(0).expect("send exit code");
-
-    let timeout = tokio::time::Duration::from_secs(2);
-    let code = tokio::time::timeout(timeout, exit_rx)
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting for driver exit"))?
-        .unwrap_or(-1);
-    let stdout = tokio::time::timeout(timeout, stdout_task)
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting to drain driver stdout"))??;
-    let stderr = tokio::time::timeout(timeout, stderr_task)
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting to drain driver stderr"))??;
-
-    assert_eq!(stdout, b"driver-out".to_vec());
-    assert_eq!(stderr, b"driver-err".to_vec());
-    assert_eq!(code, 0);
-
-    Ok(())
-}
-
-#[cfg(windows)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn driver_backed_interrupt_terminates_once() {
-    let terminations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let callback_terminations = std::sync::Arc::clone(&terminations);
-    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-    let (_stdout_tx, stdout_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(1);
-    let (_exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
-    let spawned = spawn_from_driver(ProcessDriver {
-        writer_tx,
-        stdout_rx,
-        stderr_rx: None,
-        exit_rx,
-        terminator: Some(Box::new(move || {
-            callback_terminations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        })),
-        writer_handle: None,
-        resizer: None,
-        #[cfg(windows)]
-        tty: false,
-    });
-
-    spawned
-        .session
-        .signal(ProcessSignal::Interrupt)
-        .expect("interrupt should terminate the driver-backed process");
-    drop(spawned.session);
-
-    assert_eq!(terminations.load(std::sync::atomic::Ordering::SeqCst), 1);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<()> {
-    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-    let (_stdout_tx, stdout_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
-    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
-    let (size_tx, size_rx) = tokio::sync::oneshot::channel::<TerminalSize>();
-
-    let size_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(size_tx)));
-    let spawned = spawn_from_driver(ProcessDriver {
-        writer_tx,
-        stdout_rx: stdout_driver_rx,
-        stderr_rx: None,
-        exit_rx,
-        terminator: Some(Box::new(|| {})),
-        writer_handle: None,
-        resizer: Some(Box::new(move |size| {
-            if let Ok(mut guard) = size_tx.lock()
-                && let Some(size_tx) = guard.take()
-            {
-                let _ = size_tx.send(size);
-            }
-            Ok(())
-        })),
-        #[cfg(windows)]
-        tty: true,
-    });
-
-    let error = spawned
-        .session
-        .signal(ProcessSignal::Interrupt)
-        .expect_err("interrupting a PTY-backed driver should remain unsupported");
-    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
-
-    spawned.session.resize(TerminalSize {
-        rows: 40,
-        cols: 120,
-    })?;
-    exit_tx.send(0).expect("send exit code");
-
-    let resized = tokio::time::timeout(tokio::time::Duration::from_secs(2), size_rx)
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting for resize"))?
-        .expect("receive resized terminal size");
-    assert_eq!(
-        resized,
-        TerminalSize {
-            rows: 40,
-            cols: 120
-        }
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn driver_backed_process_drains_output_that_arrives_after_exit_signal() -> anyhow::Result<()>
-{
-    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-    let (stdout_tx, stdout_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
-    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
-
-    let spawned = spawn_from_driver(ProcessDriver {
-        writer_tx,
-        stdout_rx: stdout_driver_rx,
-        stderr_rx: None,
-        exit_rx,
-        terminator: None,
-        writer_handle: None,
-        resizer: None,
-        #[cfg(windows)]
-        tty: false,
-    });
-
-    let SpawnedProcess {
-        session: _session,
-        stdout_rx,
-        stderr_rx: _stderr_rx,
-        exit_rx,
-    } = spawned;
-    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
-
-    exit_tx.send(0).expect("send exit code");
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    stdout_tx.send(b"tail".to_vec())?;
-    drop(stdout_tx);
-
-    let timeout = tokio::time::Duration::from_secs(2);
-    let code = tokio::time::timeout(timeout, exit_rx)
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting for driver exit"))?
-        .unwrap_or(-1);
-    let stdout = tokio::time::timeout(timeout, stdout_task)
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting to drain driver stdout"))??;
-
-    assert_eq!(stdout, b"tail".to_vec());
-    assert_eq!(code, 0);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_terminate_aborts_detached_readers() -> anyhow::Result<()> {
     if !setsid_available() {
         eprintln!("setsid not available; skipping pipe_terminate_aborts_detached_readers");
@@ -964,7 +736,7 @@ async fn pty_preserving_inherited_fds_keeps_python_repl_running() -> anyhow::Res
     let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
     let writer = session.writer_sender();
     let newline = "\n";
-    let mut output = wait_for_python_repl_ready_via_probe(
+    wait_for_python_repl_ready_via_probe(
         &writer,
         &mut output_rx,
         /*timeout_ms*/ 5_000,
@@ -989,9 +761,8 @@ async fn pty_preserving_inherited_fds_keeps_python_repl_running() -> anyhow::Res
     );
 
     writer.send(format!("exit(){newline}").into_bytes()).await?;
-    let (remaining_output, code) =
+    let (_, code) =
         collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 5_000).await;
-    output.extend_from_slice(&remaining_output);
 
     assert_eq!(code, 0, "expected python to exit cleanly");
 

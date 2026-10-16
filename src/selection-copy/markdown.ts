@@ -541,7 +541,7 @@ function buildMarkdownProduct(
 ): CopyProduct | undefined {
   const fns = deps.fns;
   if (hostRows.length === 0) {
-    return { componentId: "markdown", width, rows: [] };
+    return { width, rows: [] };
   }
   const contentWidth = Math.max(1, width - instance.paddingX * 2);
   const text = transformText(instance, contentWidth);
@@ -578,7 +578,7 @@ function buildMarkdownProduct(
   for (let i = 0; i < padY; i++) rows.push(decorationRow(width));
   for (const row of output.copyRows) rows.push(marginRow(row, padX, width, contentWidth));
   for (let i = 0; i < padY; i++) rows.push(decorationRow(width));
-  return { componentId: "markdown", width, rows };
+  return { width, rows };
 }
 
 function transformText(instance: MarkdownInstance, contentWidth: number): string | undefined {
@@ -632,7 +632,7 @@ function buildTextProduct(
 ): CopyProduct | undefined {
   const fns = deps.fns;
   if (hostRows.length === 0) {
-    return { componentId: "text", width, rows: [] };
+    return { width, rows: [] };
   }
   if (!instance.text || !instance.text.trim()) {
     return undefined;
@@ -662,5 +662,5 @@ function buildTextProduct(
   for (let i = 0; i < instance.paddingY; i++) rows.push(decorationRow(width));
   for (const row of output.copyRows) rows.push(marginRow(row, paddingX, width, contentWidth));
   for (let i = 0; i < instance.paddingY; i++) rows.push(decorationRow(width));
-  return { componentId: "text", width, rows };
+  return { width, rows };
 }

@@ -88,7 +88,8 @@ export default function lsp(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       try {
         const { adapters } = loadRuntime();
-        ctx.ui.notify(buildStatusMessage(adapters, ctx.cwd), statusLevel(adapters, ctx.cwd));
+        const status = buildStatus(adapters, ctx.cwd);
+        ctx.ui.notify(status.message, status.level);
       } catch (error) {
         ctx.ui.notify(`LSP config invalid: ${formatError(error)}`, "warning");
       }
@@ -119,13 +120,14 @@ function formatError(error: unknown) {
 function textFromResult(result: { content?: Array<{ type?: string; text?: string }> }) {
   return result.content?.find(item => item.type === "text")?.text ?? "";
 }
-function buildStatusMessage(adapters: ReturnType<typeof loadRuntime>["adapters"], cwd: string) {
-  return adapters.flatMap(adapter => {
+function buildStatus(adapters: ReturnType<typeof loadRuntime>["adapters"], cwd: string) {
+  let allReady = true;
+  const message = adapters.flatMap(adapter => {
     const command = adapter.defaultCommand;
+    const ready = commandExists(command.command, cwd, commandPathValue(adapter.env));
+    allReady = allReady && ready;
     return [`${adapter.name} LSP command: ${command.command} ${command.args.join(" ")}`.trim(),
-      `${adapter.name} status: ${commandExists(command.command, cwd, commandPathValue(adapter.env)) ? "ready" : "command missing"}`];
+      `${adapter.name} status: ${ready ? "ready" : "command missing"}`];
   }).join("\n");
-}
-function statusLevel(adapters: ReturnType<typeof loadRuntime>["adapters"], cwd: string) {
-  return adapters.every(adapter => commandExists(adapter.defaultCommand.command, cwd, commandPathValue(adapter.env))) ? "info" : "warning";
+  return { message, level: allReady ? "info" : "warning" } as const;
 }

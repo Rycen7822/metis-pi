@@ -70,7 +70,7 @@ function firstString(...values: unknown[]): string | null {
 	return null;
 }
 
-function appendSearchItems(value: unknown, results: SearchResponse["results"], inlineContent: ExtractedContent[]): void {
+function appendSearchItems(value: unknown, results: SearchResponse["results"], inlineContent?: ExtractedContent[]): void {
 	if (Array.isArray(value)) {
 		for (const item of value) appendSearchItems(item, results, inlineContent);
 		return;
@@ -82,8 +82,10 @@ function appendSearchItems(value: unknown, results: SearchResponse["results"], i
 	const title = firstString(item.title, item.name) ?? url;
 	const snippet = firstString(item.snippet, item.description, item.summary, item.content, item.markdown, item.text) ?? "";
 	results.push({ title, url, snippet });
-	const content = firstString(item.markdown, item.content, item.text);
-	if (content) inlineContent.push({ url, title, content, error: null });
+	if (inlineContent) {
+		const content = firstString(item.markdown, item.content, item.text);
+		if (content) inlineContent.push({ url, title, content, error: null });
+	}
 }
 
 function parseErrors(value: unknown): string | null {
@@ -99,7 +101,10 @@ function parseErrors(value: unknown): string | null {
 	return messages.length > 0 ? messages.join("; ") : null;
 }
 
-function parseSearchResponse(value: unknown): { results: SearchResponse["results"]; inlineContent: ExtractedContent[] } {
+function parseSearchResponse(
+	value: unknown,
+	includeContent?: boolean,
+): { results: SearchResponse["results"]; inlineContent: ExtractedContent[] } {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("expected an object envelope");
 	const message = parseErrors(value);
 	if (message) throw invalidResponse(message);
@@ -110,7 +115,7 @@ function parseSearchResponse(value: unknown): { results: SearchResponse["results
 	const items = (typeof data === "object" && data !== null && !Array.isArray(data))
 		? (data as Record<string, unknown>).search
 		: data;
-	appendSearchItems(items, results, inlineContent);
+	appendSearchItems(items, results, includeContent ? inlineContent : undefined);
 	return { results, inlineContent };
 }
 
@@ -173,7 +178,7 @@ export async function searchWithKagi(query: string, options: KagiSearchOptions =
 			if (options.signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))) throw err;
 			throw new Error("Kagi API returned invalid JSON");
 		}
-		const parsed = parseSearchResponse(rawData);
+		const parsed = parseSearchResponse(rawData, options.includeContent);
 		const results = parsed.results.filter(result => matchesDomainFilter(result.url, domains)).slice(0, numResults);
 		const mapped: SearchResponse = { answer: formatSearchResultsAsAnswer(results), results };
 		if (options.includeContent) {

@@ -98,8 +98,6 @@ export interface DiffRenderInput {
   /** Extension → language for body highlighting (Pi grammar). */
   readonly language?: string;
   readonly paint?: (text: string, language: string) => string;
-  readonly expanded: boolean;
-  readonly expandHint: string;
   /** Selection-copy provenance: one CopyRow per emitted visual row. */
   readonly copyOut?: CopyRow[];
 }
@@ -267,13 +265,12 @@ export function renderDiffLines(input: DiffRenderInput): string[] {
       content = `${DIM_ON}${content}${INTENSITY_RESET}`;
     }
     const chunks = wrapStyledContent(content, contentWidth);
-    const physical = chunks.length ? chunks : [""];
 
-    for (let i = 0; i < physical.length; i++) {
+    for (let i = 0; i < chunks.length; i++) {
       const head = i === 0
         ? `${gutter}${style.signFg ? `${style.signFg}${sign}\x1b[39m` : sign}`
         : `${" ".repeat(DIFF_LEFT_INSET)}${" ".repeat(numberWidth)}  `;
-      const body = physical[i]!;
+      const body = chunks[i]!;
       if (style.lineBg) {
         // Padding BEFORE the background reset: the surface reaches the right
         // edge (Codex line-level bg). Layout: bg on, gutter+sign, content,

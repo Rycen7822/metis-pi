@@ -18,7 +18,7 @@ const BUILTINS = new Set([
   "typeset", "ulimit", "umask", "unalias", "unset", "wait",
 ]);
 
-const OPERATOR_STARTS = ["&&", "||", ";;", ";&", "<<-", "|&"] as const;
+const OPERATOR_STARTS = ["&&", "||", ";;", ";&", "|&"] as const;
 const OPERATOR_CHARS = new Set(["|", "&", ";", "<", ">", "(", ")"]);
 
 function isWhitespace(char: string): boolean {
@@ -144,7 +144,7 @@ export function tokenizeBashLine(line: string): BashSpan[] {
       continue;
     }
     const two = line.slice(index, index + 2);
-    if ((OPERATOR_STARTS as readonly string[]).includes(two) && !(two === "<<" && line[index + 3] === "<")) {
+    if ((OPERATOR_STARTS as readonly string[]).includes(two)) {
       endWord();
       push(two, "operator");
       afterControl = true;
@@ -174,13 +174,14 @@ export function tokenizeBashLine(line: string): BashSpan[] {
 /** Highlight one line to an ANSI string with the Mocha palette. Plain spans
  * carry the Mocha base foreground so the palette stays consistent. */
 export function highlightBashLine(line: string, level: ColorLevel): string {
+  if (level.kind === "none") return line;
   // Every line start is a command position; there is no script-start state.
   return tokenizeBashLine(line)
     .map((span) => {
       if (span.token === "plain") {
-        return level.kind === "none" ? span.text : `${foregroundAnsi(MOCHA.base, level)}${span.text}\x1b[39m`;
+        return `${foregroundAnsi(MOCHA.base, level)}${span.text}\x1b[39m`;
       }
-      return level.kind === "none" ? span.text : `${foregroundAnsi(MOCHA[span.token], level)}${span.text}\x1b[39m`;
+      return `${foregroundAnsi(MOCHA[span.token], level)}${span.text}\x1b[39m`;
     })
     .join("");
 }
@@ -191,6 +192,7 @@ export function highlightBashLine(line: string, level: ColorLevel): string {
  * Every non-heredoc line starts at a command position (newline = separator).
  */
 export function highlightBashScript(lines: readonly string[], level: ColorLevel): string[] {
+  if (level.kind === "none") return [...lines];
   const out: string[] = [];
   let heredocDelimiter: string | null = null;
   let heredocIndent = false;
@@ -202,7 +204,7 @@ export function highlightBashScript(lines: readonly string[], level: ColorLevel)
         heredocDelimiter = null;
         out.push(line);
       } else {
-        out.push(level.kind === "none" ? line : `${foregroundAnsi(MOCHA.string, level)}${line}\x1b[39m`);
+        out.push(`${foregroundAnsi(MOCHA.string, level)}${line}\x1b[39m`);
       }
       continue;
     }

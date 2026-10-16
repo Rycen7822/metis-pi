@@ -98,7 +98,7 @@ def read_bootstrap():
             except OSError: pass
     return payload
 
-BRIDGE=read_bootstrap()
+read_bootstrap()
 
 def skill_entry(skill_md: Path):
     """Pi's rule (dist/core/skills.js): frontmatter `name`, else the parent dir
@@ -429,7 +429,6 @@ async def main():
                         else {}
                     ),
                 },
-                "path_probe": None if "PI_TEST_PROBE_CMD" not in os.environ else {"rc": 0},
             }
             if not a.no_managed_protocol:
                 state["subagentProtocol"] = 1

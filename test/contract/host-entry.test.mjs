@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import * as Core from "@earendil-works/pi-coding-agent";
@@ -60,7 +60,7 @@ function entry(t) {
     return new Core.ToolExecutionComponent(name, id, args, { showImages: false }, owner.getRegisteredToolDefinition(name), ui, cwd);
   };
   const fire = (event, ctx = { cwd: process.cwd() }) => handlers.get(event.type)(event, ctx);
-  return { handlers, commands, definitions, nativeCall, row, fire, ctx };
+  return { handlers, commands, definitions, row, fire, ctx };
 }
 
 test("npm FFF direct calls join read exploration and retain native execution", (t) => {
@@ -304,7 +304,7 @@ test("built exec_command delegates its real Pi row to the shell display", async 
   const { createExecCommandTool } = await import("../../src/execution/exec/command-tool.ts");
   const { highlightBashScript } = await import("../../src/bash-lexer.ts");
   const { detectColorLevel } = await import("../../src/palette.ts");
-  const tool = createExecCommandTool({}, { showOutputWhenCollapsed: true });
+  const tool = createExecCommandTool({});
   h.definitions.push({ name: "exec_command", sourceInfo: {
     source: "local", path: resolve(import.meta.dirname, "../../extensions/execution.ts"),
   } });

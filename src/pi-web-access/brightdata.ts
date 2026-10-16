@@ -1,7 +1,7 @@
-import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { GOOGLE_RECENCY_TBS, getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery, type DomainFilters } from "./domain-filter-normalization.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
@@ -22,12 +22,7 @@ const ZONE_PATTERN = /^[A-Za-z0-9_-]+$/;
 // Google's own time filter, passed straight through in the proxied URL. Unlike a
 // query-text hint this is an engine-side filter, so results outside the window
 // are not returned at all.
-const RECENCY_TBS: Record<string, string> = {
-	day: "qdr:d",
-	week: "qdr:w",
-	month: "qdr:m",
-	year: "qdr:y",
-};
+
 
 interface WebSearchConfig {
 	brightdataApiKey?: unknown;
@@ -38,10 +33,6 @@ interface BrightDataOrganicResult {
 	link?: unknown;
 	title?: unknown;
 	description?: unknown;
-}
-
-interface BrightDataSerpResponse {
-	organic?: BrightDataOrganicResult[];
 }
 
 interface BrightDataSearchOptions extends SearchOptions {
@@ -149,29 +140,12 @@ function requireSerpZone(): string {
 	);
 }
 
-// Bright Data has no domain parameter, but the engine behind it is Google, so the
-// filter is expressed the way Google expresses it: as `site:` operators inside
-// the query. That asks the engine for the right pages instead of discarding the
-// wrong ones locally — the difference SERPdive documents as a limitation.
-function buildSearchQuery(query: string, filters: DomainFilters): string {
-	const parts = [query];
-	if (filters.include.length === 1) {
-		parts.push(`site:${filters.include[0]}`);
-	} else if (filters.include.length > 1) {
-		parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-	}
-	for (const domain of filters.exclude) {
-		parts.push(`-site:${domain}`);
-	}
-	return parts.join(" ");
-}
-
 function buildSerpUrl(searchQuery: string, numResults: number, recencyFilter: SearchOptions["recencyFilter"]): string {
 	const params = new URLSearchParams({ q: searchQuery });
 	// One SERP request is billed once whatever `num` says, so asking for a little
 	// headroom is free and leaves something to keep after local re-filtering.
 	params.set("num", String(Math.min(numResults + 5, 20)));
-	const tbs = recencyFilter ? RECENCY_TBS[recencyFilter] : undefined;
+	const tbs = recencyFilter ? GOOGLE_RECENCY_TBS[recencyFilter] : undefined;
 	if (tbs) params.set("tbs", tbs);
 	// `brd_json=1` is what makes Bright Data return the SERP as JSON instead of
 	// Google's HTML. Without it `data_format: "parsed_light"` has nothing to read.
@@ -298,7 +272,7 @@ function envelopeError(envelope: Record<string, unknown>, apiKey: string | null)
 // Individual organic entries are the one deliberate exception: a real SERP mixes
 // in entries with no link, and one of those must not throw away a page of results
 // that was already paid for.
-function parseSerpResponse(value: unknown, zone: string, apiKey: string | null): BrightDataSerpResponse {
+function parseSerpResponse(value: unknown, zone: string, apiKey: string | null): BrightDataOrganicResult[] {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw invalidResponse(zone, "expected an object envelope");
 	}
@@ -315,22 +289,19 @@ function parseSerpResponse(value: unknown, zone: string, apiKey: string | null):
 		);
 	}
 	if (!Array.isArray(envelope.organic)) throw invalidResponse(zone, "expected organic array");
-	const organic: BrightDataOrganicResult[] = [];
 	for (const [index, entry] of envelope.organic.entries()) {
 		if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
 			throw invalidResponse(zone, `expected organic[${index}] object`);
 		}
-		organic.push(entry as BrightDataOrganicResult);
 	}
-	return { organic };
+	return envelope.organic as BrightDataOrganicResult[];
 }
 
 function mapResults(
-	organic: BrightDataOrganicResult[] | undefined,
+	organic: BrightDataOrganicResult[],
 	numResults: number,
 	filters: DomainFilters,
 ): SearchResponse["results"] {
-	if (!Array.isArray(organic)) return [];
 	const mapped: SearchResponse["results"] = [];
 	for (const item of organic) {
 		const url = typeof item.link === "string" ? item.link.trim() : "";
@@ -380,7 +351,8 @@ export async function searchWithBrightData(query: string, options: BrightDataSea
 	const apiKey = await requireApiKey(options.signal);
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const filters = normalizeDomainFilters(options.domainFilter);
-	const searchQuery = buildSearchQuery(query, filters);
+	// Bright Data SERP accepts domain filters as Google site operators.
+	const searchQuery = buildSiteFilteredQuery(query, filters);
 	const body: Record<string, unknown> = {
 		url: buildSerpUrl(searchQuery, numResults, options.recencyFilter),
 		zone,
@@ -451,7 +423,7 @@ export async function searchWithBrightData(query: string, options: BrightDataSea
 		throw new Error(`Bright Data API returned invalid JSON for zone ${zone}: ${body}`);
 	}
 
-	let data: BrightDataSerpResponse;
+	let data: BrightDataOrganicResult[];
 	try {
 		data = parseSerpResponse(rawData, zone, apiKey);
 	} catch (err) {
@@ -460,6 +432,6 @@ export async function searchWithBrightData(query: string, options: BrightDataSea
 	}
 
 	activityMonitor.logComplete(activityId, response.status);
-	const results = mapResults(data.organic, numResults, filters);
+	const results = mapResults(data, numResults, filters);
 	return { answer: formatSearchResultsAsAnswer(results), results };
 }

@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_utils_pty::{ExecCommandSession, TerminalSize};
+use codex_utils_pty::{ProcessHandle, TerminalSize};
 use tokio::sync::{Mutex, Notify};
 
 use crate::protocol::{
@@ -17,7 +17,6 @@ const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_secs(30);
 
-#[derive(Clone)]
 struct RetainedOutputChunk {
     seq: u64,
     stream: ExecOutputStream,
@@ -25,7 +24,7 @@ struct RetainedOutputChunk {
 }
 
 struct RunningProcess {
-    session: ExecCommandSession,
+    session: ProcessHandle,
     tty: bool,
     pipe_stdin: bool,
     output: VecDeque<RetainedOutputChunk>,
@@ -72,9 +71,7 @@ impl LocalProcess {
                 })
                 .collect::<Vec<_>>()
         };
-        for process in remaining {
-            process.session.terminate();
-        }
+        drop(remaining);
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
@@ -93,13 +90,12 @@ impl LocalProcess {
             process_map.insert(process_id.clone(), ProcessEntry::Starting);
         }
 
-        let env = params.env.clone();
         let spawned_result = if params.tty {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
                 params.cwd.as_path(),
-                &env,
+                &params.env,
                 &params.arg0,
                 TerminalSize::default(),
                 /*inherited_fds*/ &[],
@@ -110,7 +106,7 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &env,
+                &params.env,
                 &params.arg0,
                 /*inherited_fds*/ &[],
             )
@@ -120,7 +116,7 @@ impl LocalProcess {
                 program,
                 args,
                 params.cwd.as_path(),
-                &env,
+                &params.env,
                 &params.arg0,
                 /*inherited_fds*/ &[],
             )
@@ -152,7 +148,7 @@ impl LocalProcess {
                     next_seq: 1,
                     exit_code: None,
                     output_notify: Arc::clone(&output_notify),
-                    open_streams: 2,
+                    open_streams: if params.tty { 1 } else { 2 },
                     closed: false,
                 })),
             );
@@ -169,17 +165,17 @@ impl LocalProcess {
             Arc::clone(&self.inner),
             Arc::clone(&output_notify),
         ));
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stderr
-            },
-            spawned.stderr_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
+        if !params.tty {
+            tokio::spawn(stream_output(
+                process_id.clone(),
+                ExecOutputStream::Stderr,
+                spawned.stderr_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            ));
+        } else {
+            drop(spawned.stderr_rx);
+        }
         tokio::spawn(watch_exit(
             process_id.clone(),
             spawned.exit_rx,
@@ -355,7 +351,7 @@ async fn watch_exit(
         }
     }
     output_notify.notify_waiters();
-    maybe_emit_closed(process_id, Arc::clone(&inner)).await;
+    maybe_emit_closed(process_id, inner).await;
 }
 
 async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
@@ -385,12 +381,10 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         Arc::clone(&process.output_notify)
     };
     output_notify.notify_waiters();
-    let cleanup_process_id = process_id.clone();
-    let cleanup_inner = Arc::clone(&inner);
     tokio::spawn(async move {
         tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
-        let mut processes = cleanup_inner.processes.lock().await;
-        match processes.entry(cleanup_process_id) {
+        let mut processes = inner.processes.lock().await;
+        match processes.entry(process_id) {
             Entry::Occupied(entry) => {
                 if matches!(entry.get(), ProcessEntry::Running(process) if process.closed) {
                     entry.remove();

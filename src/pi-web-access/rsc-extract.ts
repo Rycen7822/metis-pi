@@ -81,6 +81,9 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
   type Node = unknown;
   const visitedRefs = new Set<string>();
 
+  const skipTags = ["script", "style", "svg", "path", "circle", "link", "meta",
+                    "template", "button", "input", "nav", "footer", "aside"];
+
   function extractNode(node: Node, ctx = { inTable: false, inCode: false }): string {
     if (node === null || node === undefined) return "";
 
@@ -111,8 +114,7 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
       const props = (node[3] || {}) as Record<string, unknown>;
 
       // Skip non-content
-      const skipTags = ["script", "style", "svg", "path", "circle", "link", "meta",
-                        "template", "button", "input", "nav", "footer", "aside"];
+
       if (skipTags.includes(tag)) return "";
 
       // Component ref like $L25
@@ -138,7 +140,7 @@ export function extractRSCContent(html: string): RSCExtractResult | null {
       }
 
       const children = props.children;
-      const content = children ? extractNode(children as Node, ctx) : "";
+      const content = children && tag !== "code" && tag !== "pre" && tag !== "table" ? extractNode(children as Node, ctx) : "";
 
       switch (tag) {
         case "h1": return `# ${content.trim()}\n\n`;

@@ -10,7 +10,6 @@ import {
   normalizeMinEmptyWriteYieldTime,
   normalizeMinNonInteractiveExecYieldTime,
   resolveExecution,
-  resolveShell,
   resolveWorkdir,
 } from "./shell.ts";
 import { registerAbortHandler, waitForExitOrInactivity } from "./wait.ts";
@@ -95,7 +94,6 @@ export interface ExecSessionManager {
 	listSessions(maxOutputChars?: number): ExecSessionSnapshot[];
 	terminateSession(sessionId: number): boolean;
 	onSessionChange(listener: (reason: ExecSessionChangeReason) => void): () => void;
-	onSessionExit(listener: (sessionId: number, command: string) => void): () => void;
 	shutdown(): Promise<void>;
 }
 
@@ -124,7 +122,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
   const commandHistory = new Map<number, string>();
   const completedResults = new Map<number, UnifiedExecResult>();
   const changeListeners = new Set<(reason: ExecSessionChangeReason) => void>();
-  const exitListeners = new Set<(sessionId: number, command: string) => void>();
   const bridgeSessions = createBridgeSessionRuntime(options.bridgeBinaryPath);
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
@@ -172,24 +169,35 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
 
   function finishResult(session: ExecSession, waitMs: number, maxOutputTokens?: number): UnifiedExecResult {
     const completed = session.exitCode !== undefined;
-    const replaySnapshot = completed
-      ? makeSnapshotResult(session, waitMs, MAX_COMPLETED_SESSION_OUTPUT_TOKENS, true)
-      : undefined;
-    const result = makeExecResult(session, waitMs, maxOutputTokens);
-    if (!replaySnapshot) {
+    const originalChars = session.buffer.endOffset - session.emittedOffset;
+    const result = makeExecResult(session, waitMs, completed
+      ? Math.max(maxOutputTokens ?? 0, MAX_COMPLETED_SESSION_OUTPUT_TOKENS)
+      : maxOutputTokens);
+    if (!completed) {
       exposeSession(session);
-    } else if (session.emittedOffset === session.buffer.endOffset) {
+      return result;
+    }
+    const replaySnapshot = {
+      ...result,
+      ...truncateOutput(result.output, MAX_COMPLETED_SESSION_OUTPUT_TOKENS, originalChars),
+    };
+    const delivery = truncateOutput(result.output, maxOutputTokens, originalChars);
+    if (delivery.output.length < result.output.length) {
+      delivery.output = Buffer.from(delivery.output, "utf16le").toString("utf16le");
+    }
+    Object.assign(result, delivery);
+    // Keep the bounded replay independent of a possibly much larger delivery string.
+    replaySnapshot.output = Buffer.from(replaySnapshot.output, "utf16le").toString("utf16le");
+    if (result.output.length < originalChars || replaySnapshot.output.length < originalChars) {
+      session.buffer.archive?.preserve();
+    }
+    if (session.emittedOffset === session.buffer.endOffset) {
       // Release only after successful consumption; publish replay last.
       deleteSession(session);
-      // The narrower delivery may have created an archive after the replay snapshot.
       const archive = session.buffer.archive?.info();
       Object.assign(result, archive);
       Object.assign(replaySnapshot, archive);
-      rememberCompletedResult(session.id, {
-        ...replaySnapshot,
-        chunk_id: result.chunk_id,
-        wall_time_seconds: result.wall_time_seconds,
-      });
+      rememberCompletedResult(session.id, replaySnapshot);
     }
     return result;
   }
@@ -217,9 +225,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
     if (session.finalized) return;
     if (session.outputError) session.buffer.archive?.markIncomplete(session.outputError);
     session.finalized = true;
-    for (const listener of exitListeners) {
-      listener(session.id, session.command);
-    }
     notify(session, reason);
   }
 
@@ -243,9 +248,8 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
     exec: async (input, cwd, signal, onUpdate) => {
       if (shuttingDown) throw new Error("exec manager is shut down");
       const requestedShell = input.shell ?? input.defaultShell;
-      const shell = resolveShell(requestedShell);
-      const workdir = resolveWorkdir(cwd, input.workdir);
       const execution = resolveExecution(requestedShell, input.cmd, input.env, baseEnv);
+      const workdir = resolveWorkdir(cwd, input.workdir);
       const id = nextSessionId++;
       const startedAt = Date.now();
       const buffer = new ExecOutputBuffer(
@@ -267,7 +271,7 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
           ...(input.login === undefined ? {} : { login: input.login }),
         },
         workdir,
-        shell,
+        shell: execution.shell,
         ...(signal ? { signal } : {}),
         hooks: {
           isOwned: () => !shuttingDown && sessions.get(id)?.process === processHandle,
@@ -399,13 +403,13 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
     hasSession: (sessionId) => sessions.has(sessionId),
     getSessionCommand: (sessionId) => sessions.get(sessionId)?.command ?? commandHistory.get(sessionId),
     listSessions: (maxOutputChars) => {
-      const snapshotsById = new Map<number, ExecSessionSnapshot>();
+      const snapshots: ExecSessionSnapshot[] = [];
       for (const session of sessions.values()) {
         if (!session.exposed) continue;
         if (session.exitCode !== undefined) continue;
-        snapshotsById.set(session.id, snapshotSession(session, maxOutputChars));
+        snapshots.push(snapshotSession(session, maxOutputChars));
       }
-      return Array.from(snapshotsById.values()).sort((a, b) => a.id - b.id);
+      return snapshots;
     },
     terminateSession: (sessionId) => {
       const session = sessions.get(sessionId);
@@ -422,10 +426,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
     onSessionChange: (listener) => {
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
-    },
-    onSessionExit: (listener) => {
-      exitListeners.add(listener);
-      return () => exitListeners.delete(listener);
     },
     shutdown: () =>
       (shutdownPromise ??= (async () => {
@@ -449,7 +449,6 @@ export function createExecSessionManager(options: ExecSessionManagerOptions = {}
         commandHistory.clear();
         completedResults.clear();
         changeListeners.clear();
-        exitListeners.clear();
         if (failures.length > 0) throw new AggregateError(failures, "Exec session shutdown failed");
       })()),
   };

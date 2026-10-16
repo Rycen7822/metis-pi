@@ -133,7 +133,7 @@ if _reject:
         'inband32601': (200, _err(-32601)),            # in-band legacy-style method-not-found
     }.get(_reject) or (int(_reject), None)
 
-STATE = {'session_counter': 0, 'expire_counter': 0, 'redirect_idx': 0, 'gets': 0}
+STATE = {'session_counter': 0, 'expire_counter': 0, 'redirect_idx': 0}
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'

@@ -34,7 +34,7 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `working.animation` | `true` | 真彩终端的工作动画。 |
 | `working.animationIntervalMs` | `32` | 帧间隔毫秒，32–1000；越界钳制。 |
 | `footer.enabled` / `details` | 均 `true` | Footer、累计 I/O/cache 明细。 |
-| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、已完成响应均速 `… tok/s`（含等待/TTFT 与推理；生成中隐藏）。 |
+| `footer.showCache` / `showChanges` / `showSpeed` | 均 `true` | 缓存命中率、Git 改动、已完成响应均速 `… tok/s`（含等待/TTFT 与推理；生成中保留上次完成样本）。 |
 | `footer.locationExpanded` / `pruneExpanded` | 均 `false` | 目录/分支、prune 详情的默认展开状态；重载/重启后生效，界面点击不写回 TOML。 |
 | `summary.enabled` / `persist` | 均 `true` | 结束摘要、会话持久化；关闭 persist 时仅临时显示。 |
 | `selectionCopy.enabled` / `ctrlC` | 均 `true` | fullscreen 精确复制、Ctrl+C 复制选区；无选区保留原行为。 |
@@ -74,7 +74,7 @@ TOML **没有 null**。`autoBudgetThreshold`、`budgetTurnDelta`、`frontierGapT
 | `collapseKey` | `"ctrl+]"` | 折叠／展开问卷的 Pi 键位；`"off"` 禁用，非法键位回退默认值。 |
 | `guidance.description` / `promptSnippet` / `promptGuidelines` | 内置说明 | 非空字段完整替换，guidelines 为非空字符串数组。 |
 
-只读取全局 TOML，不读取项目或旧 rpiv JSON；已有快捷键/说明须手动复制。工具所有权与发现行为见 [结构化提问](docs/features/ask-user-question.md)。
+只读取全局 TOML，不读取项目或旧 rpiv JSON；已有快捷键/说明须手动复制。工具所有权与发现行为见 [结构化提问](https://github.com/Rycen7822/metis-pi/blob/main/docs/features/ask-user-question.md)。
 
 ## `[lsp]`
 
@@ -183,7 +183,7 @@ exclude = []
 
 ### `[contextPrune.chainCompression]`
 
-`enabled=true` 开启旧闭合任务链整理；`rollingWindow=3` 保留最近 3 条，0 不保留最近链；`stripFinalAssistantThinking=true` 去除保留最终回复的 thinking；`fuseRangeSummary=true` 允许 **手动 compact** 额外付费融合，自动维护不请求二次融合。融合失败/预算不足复用机械拼接，缺口不跨 frontier。
+`enabled=true` 开启旧闭合任务链整理；`rollingWindow=3` 保留最近 3 条，0 不保留最近链；`stripFinalAssistantThinking=true` 去除保留最终回复的 thinking；`fuseRangeSummary=true` 允许 **手动 now / compact** 额外付费融合，自动维护不请求二次融合。融合失败/预算不足复用机械拼接，缺口不跨 frontier。
 
 ### `[contextPrune.purgeErrors]`
 

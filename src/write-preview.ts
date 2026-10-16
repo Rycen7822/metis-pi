@@ -18,7 +18,6 @@ export type WriteStage =
 export interface WriteStageContext {
   argsComplete?: boolean;
   executionStarted?: boolean;
-  isPartial?: boolean;
   isError?: boolean;
   hasResult?: boolean;
   aborted?: boolean;
@@ -33,19 +32,19 @@ export function resolveWriteStage(context: WriteStageContext): WriteStage {
 
 export const WRITE_PREVIEW_MAX_ROWS = 12;
 
-/** Stage label + colors: neutral for in-flight stages (never success green). */
-export function stageLabel(stage: WriteStage, theme: Palette, aborted?: boolean): { label: string; painter: (s: string) => string } {
+/** Status text for the write stage. */
+export function stageLabel(stage: WriteStage, aborted?: boolean): { label: string } {
   switch (stage) {
     case "receiving-arguments":
-      return { label: "Receiving content · preview, not yet committed", painter: (s) => theme.fg("dim", s) };
+      return { label: "Receiving content · preview, not yet committed" };
     case "arguments-ready":
-      return { label: "Content ready · preview, not yet committed", painter: (s) => theme.fg("dim", s) };
+      return { label: "Content ready · preview, not yet committed" };
     case "executing":
-      return { label: "Writing file…", painter: (s) => theme.fg("dim", s) };
+      return { label: "Writing file…" };
     case "succeeded":
-      return { label: "Written", painter: (s) => theme.fg("success", s) };
+      return { label: "Written" };
     case "failed-or-aborted":
-      return { label: aborted ? "Aborted" : "Failed", painter: (s) => theme.fg("error", s) };
+      return { label: aborted ? "Aborted" : "Failed" };
   }
 }
 
@@ -62,7 +61,6 @@ export function safePrefix(text: string): string {
  * not logical lines). Lines wrap FIRST (gutter + line-number column deducted
  * from body width), then the newest physical rows are kept — an early long
  * logical line cannot freeze the tail and the newest character stays visible.
- * `complete` reflects a real trailing newline, independent of truncation.
  */
 export function renderWritePreview(
   contentPrefix: string,
@@ -103,7 +101,7 @@ export function renderWritePreview(
   const numberWidth = Math.min(maxNumber, Math.max(1, String(Math.max(1, totalLogicalLines)).length));
   const bodyWidth = Math.max(1, width - gutterWidth - numberWidth - 1);
 
-  const stageInfo = stageLabel(stage, theme);
+  const stageInfo = stageLabel(stage);
   const dim = colorLevel.kind === "none" ? "" : "\x1b[2m";
   const dimOff = colorLevel.kind === "none" ? "" : "\x1b[22m";
   const stageText = normalized
@@ -126,13 +124,13 @@ export function renderWritePreview(
     return wrapped.length ? wrapped : [""];
   };
 
-  interface RenderedLogical { number: number; segments: string[]; complete: boolean }
+  interface RenderedLogical { number: number; segments: string[] }
   const rendered: RenderedLogical[] = [];
   let used = 0;
   const startIndex = Math.max(0, allLines.length - bodyBudget * 4); // sane upper bound for the backward walk
   for (let i = allLines.length - 1; i >= startIndex && used < bodyBudget; i--) {
     const segments = wrapOne(allLines[i]!);
-    rendered.unshift({ number: i + 1, segments, complete: i < allLines.length - 1 || raw.endsWith("\n") });
+    rendered.unshift({ number: i + 1, segments });
     used += segments.length;
   }
   const truncated = startIndex > 0 || allLines.length > bodyBudget;

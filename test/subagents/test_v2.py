@@ -7,11 +7,10 @@ import os
 import sys
 import time
 import unittest
-from unittest import mock
 from runtime_harness import RuntimeHarness
 from test_transport import McpHarness, ROOT
 from subagent_pi.common import AgentError
-from subagent_pi.schema import BY_NAME, validate
+from subagent_pi.schema import BY_NAME
 from schema_oracle import validate_contract
 from jsonschema.exceptions import ValidationError
 

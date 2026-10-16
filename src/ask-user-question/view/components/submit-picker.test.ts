@@ -20,11 +20,6 @@ function makePicker(initial: SubmitPickerProps): SubmitPicker {
 }
 
 describe("SubmitPicker", () => {
-	it("naturalHeight is 2 regardless of width and props", () => {
-		const p = makePicker(props());
-		expect(p.naturalHeight(80)).toBe(2);
-		expect(p.naturalHeight(40)).toBe(2);
-	});
 
 	it("renders both rows with numbers", () => {
 		const p = makePicker(props());
@@ -34,6 +29,7 @@ describe("SubmitPicker", () => {
 		expect(lines[0]).toContain(SUBMIT_LABEL);
 		expect(lines[1]).toContain("2");
 		expect(lines[1]).toContain(CANCEL_LABEL);
+		expect(p.render(40)).toHaveLength(2);
 	});
 
 	it("active pointer follows props.rows[i].active", () => {

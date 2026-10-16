@@ -502,14 +502,13 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         if (oldest !== undefined) session.writeChanges.delete(oldest);
       }
     }
-    const images = countImageBlocks(event.result);
     if (!event.parentToolCallId)
       transcript.apply({
         type: "tool_execution_end",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         isError: event.isError === true,
-        imageCount: images,
+        imageCount: countImageBlocks(event.result),
       });
     if (chromeEnabled) metrics.toolEnd(event.toolCallId);
   });

@@ -98,7 +98,7 @@ function parseItems(value: unknown): JinaSearchItem[] {
 	return envelope.data as JinaSearchItem[];
 }
 
-function mapItems(items: JinaSearchItem[], numResults: number, filters: DomainFilters): {
+function mapItems(items: JinaSearchItem[], numResults: number, filters: DomainFilters, includeContent?: boolean): {
 	results: SearchResponse["results"];
 	content: ExtractedContent[];
 } {
@@ -116,7 +116,7 @@ function mapItems(items: JinaSearchItem[], numResults: number, filters: DomainFi
 			? item.description.replace(/\s+/g, " ").trim()
 			: "";
 		results.push({ title, url, snippet });
-		if (typeof item.content === "string" && item.content.trim()) {
+		if (includeContent && typeof item.content === "string" && item.content.trim()) {
 			content.push({ url, title, content: item.content.trim(), error: null });
 		}
 		if (results.length >= numResults) break;
@@ -199,7 +199,7 @@ export async function searchWithJina(query: string, options: JinaSearchOptions =
 
 	let mapped: ReturnType<typeof mapItems>;
 	try {
-		mapped = mapItems(parseItems(raw), numResults, filters);
+		mapped = mapItems(parseItems(raw), numResults, filters, options.includeContent);
 	} catch (err) {
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);

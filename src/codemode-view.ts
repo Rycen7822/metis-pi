@@ -337,7 +337,7 @@ export function makeCodemodeRenderers(input: {
           parts.push(input.makeText(theme.fg("dim", `Full output: ${safeText(details.fullOutputPath)}`)));
       }
       if (timerText) parts.push(input.makeText(label(timerText)));
-      return clickRegion(stackComponents(parts, "codemode", "child-placements"), context);
+      return clickRegion(stackComponents(parts, "child-placements"), context);
     },
   };
 }

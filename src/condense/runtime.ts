@@ -588,7 +588,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     if (!empty) return unavailable("measurement");
     const budget = summaryBudget(counts.before, counts.after, batch.toolCalls.length, currentConfig.value.summaryBudget);
     budget.target = Math.max(budget.target, empty.before + 256);
-    return { before, stubs, replacements, render, budget, counts,
+    return { before, stubs, replacements, render, budget,
       accepts: async (text: string, deterministic = false) => {
         const size = await tokenEstimator.measure([render(text, deterministic)], [], signal);
         if (!size) { onDeferred("measurement"); return false; }
@@ -700,7 +700,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
 
       // Use pre-captured batches if provided (avoids double-capture when the
       // caller previewed the queue before opening the progress overlay).
-      batches = options.previewedBatches ?? capturePendingBatches(ctx);
+      batches = options.preparedBatches ?? options.previewedBatches ?? capturePendingBatches(ctx);
       if (trigger === "message-end") {
         const base = ctx.sessionManager.buildSessionProjection();
         const before = projectContext(base.messages, ctx.model?.api, ctx).messages;
@@ -753,7 +753,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // Keep deterministic and semantic calls in separate ordered runs. A
       // wholly packed run is measured/published without any model request,
       // even when its packed text exceeds the character guard.
-      batches = splitPackingRuns(batches);
+      if (trigger !== "manual" || !options.preparedBatches) batches = splitPackingRuns(batches);
       capturedBatches = batches.length;
 
       if (batches.length === 0) {
@@ -774,10 +774,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // We drain BEFORE the await so concurrent calls (though guarded by isFlushing)
       // or rapid turn-ends don't result in double-summarization.
       pendingBatches.length = 0;
-
-      // Routes alias persistence through whichever delivery is active so the
-      // dedup pre-flush pass writes CUSTOM_TYPE_DEDUP_ALIAS entries via the
-      // same path the rest of the flush uses.
 
       // Reload/rescan can reach the final boundary without a turn_end callback.
       // Recover fused evidence before any summary can replace its visible tail.
@@ -914,8 +910,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       const isFullyDeduped = (record: BatchRecord) => record.deduped.length > 0 && record.batch.toolCalls.length === 0;
       const isTrivial = (record: BatchRecord) =>
         minChars > 0 && record.prepared.candidateChars < minChars && record.batch.toolCalls.length > 0;
-      const packedResult = (record: BatchRecord): ResultSlot =>
-        record.prepared.packedBatch.toolCalls.length ? { summaryText: record.prepared.packedText, deterministic: true } : "trivial";
       for (const [key, originalId, occurrence] of pendingAliases) {
         indexer.registerDuplicate(key, originalId, appendEntry!, occurrence);
         publishedAliasesOrArchives = true;
@@ -1000,7 +994,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           checkSource();
           if (!record.plan) { record.result = "deferred"; continue; }
           if (deterministic) {
-            record.result = await record.plan.accepts(record.prepared.packedText, true) ? packedResult(record) : "deferred";
+            record.result = await record.plan.accepts(record.prepared.packedText, true)
+              ? { summaryText: record.prepared.packedText, deterministic: true } : "deferred";
             continue;
           }
           if (record.plan.budget.limit < record.plan.budget.target) { record.deferredReason = "budget"; record.result = "deferred"; continue; }
@@ -1547,9 +1542,9 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
           if (occ.isCapacityWaiting()) {
             for (const call of capturedBatch.toolCalls) {
               if (!call.outputArchive || indexer.getRecord(occKey(call.toolCallId, call.resultTimestamp))) continue;
-              const archive = { indexer, sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
+              const archive = { sessionDir: ctx.sessionManager.getSessionDir(), sessionId: ctx.sessionManager.getSessionId(),
                 appendEntry: appendArchive };
-              await archiveToolOutput(call, capturedBatch, archive);
+              await archiveToolOutput(call, archive);
               indexer.addBatch({ ...capturedBatch, toolCalls: [call] }, archive.appendEntry, true);
             }
           }
@@ -1744,9 +1739,11 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return matches.length === 1 ? matches[0]!.sourceEntry.id : undefined;
   }
 
-  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext): SingleChainCompressionEntry[] {
-    const grace = inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns);
-    const chains = detectChains(raw, protectionPredicate);
+  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext, analysis = {
+    grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns),
+    chains: detectChains(raw, protectionPredicate),
+  }): SingleChainCompressionEntry[] {
+    const { grace, chains } = analysis;
     const edited = readSourceEdits(ctx).changedToolIds;
     const anchors = ctx.sessionManager.buildSessionProjection().entries;
     return chainMembers(entry).filter((view, i) => {
@@ -1846,7 +1843,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const before = projectContext(messages, ctx.model?.api, ctx, singles, true).messages;
     return singles.concat(
       shared.flatMap((entry) => {
-        const views = sharedCandidates(entry, raw, ctx);
+        const views = sharedCandidates(entry, raw, ctx, { chains, grace });
         return views.length && sharedApprovals.get(entry.blockId) === sharedShape(before, views) ? views : [];
       }),
     );
@@ -2040,17 +2037,6 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       )
         return;
       appendEntry(CUSTOM_TYPE_CHAIN, entry);
-      if (
-        !manager
-          .getBranch()
-          .some(
-            (item) =>
-              item.type === "custom" &&
-              item.customType === CUSTOM_TYPE_CHAIN &&
-              JSON.stringify(item.data) === JSON.stringify(entry),
-          )
-      )
-        return;
       indexer.registerChain(entry);
       const plain = projectContext(raw, ctx.model?.api, ctx, singles, true, floor).messages;
       sharedApprovals.set(entry.blockId, sharedShape(plain, views));

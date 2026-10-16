@@ -35,7 +35,6 @@ test("summary generation preserves registered provider behavior", async () => {
 			modelRegistry: {
 				find: () => model,
 				getAvailable: () => [model],
-				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
 				complete: async (_model, _context, options) => {
 					assert.equal(options.apiKey, undefined);
 					assert.equal(options.headers, undefined);

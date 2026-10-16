@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { startCuratorServer, type CuratorServerHandle, type IndexedCuratorSearchEntry } from "./curator-server.ts";
 import { search } from "./search-router.ts";
-import type { SearchProvider, SearchProviderSelection } from "./search-providers.ts";
+import type { SearchProviderSelection } from "./search-providers.ts";
 import type { QueryResultData } from "./search-types.ts";
 import { getAllResults, deleteHeldResult } from "./storage.ts";
 import { loadWebAccessConfig, saveWebAccessConfig } from "./utils.ts";

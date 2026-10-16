@@ -236,7 +236,6 @@ function tokenize(
   let graphemes: TaggedGrapheme[] = [];
   let styled = "";
   let group: TokenGroup | null = null;
-  let kind: SpanKind | null = null;
   let pendingAnsi = "";
   const flush = () => {
     if (graphemes.length === 0) return;
@@ -249,7 +248,6 @@ function tokenize(
     graphemes = [];
     styled = "";
     group = null;
-    kind = null;
   };
   for (const segment of segments) {
     let i = 0;
@@ -267,13 +265,12 @@ function tokenize(
         for (let k = 0; k < run.length; k++) {
           const ch = run[k]!;
           const nextGroup: TokenGroup = ch === " " ? "space" : "word";
-          if (graphemes.length > 0 && (group !== nextGroup || kind !== segment.kind)) flush();
+          if (graphemes.length > 0 && group !== nextGroup) flush();
           if (pendingAnsi) {
             styled += pendingAnsi;
             pendingAnsi = "";
           }
           group = nextGroup;
-          kind = segment.kind;
           styled += ch;
           graphemes.push({ text: ch, cells: 1, kind: segment.kind });
         }
@@ -284,23 +281,23 @@ function tokenize(
         const isSpace = grapheme === " ";
         if (!isSpace && CJK_BREAK.test(grapheme)) {
           flush();
+          const cells = visibleWidth(grapheme);
           tokens.push({
             styled: pendingAnsi + grapheme,
-            graphemes: [{ text: grapheme, cells: visibleWidth(grapheme), kind: segment.kind }],
-            width: visibleWidth(grapheme),
+            graphemes: [{ text: grapheme, cells, kind: segment.kind }],
+            width: cells,
             whitespace: false,
           });
           pendingAnsi = "";
           continue;
         }
         const nextGroup: TokenGroup = isSpace ? "space" : "word";
-        if (graphemes.length > 0 && (group !== nextGroup || kind !== segment.kind)) flush();
+        if (graphemes.length > 0 && group !== nextGroup) flush();
         if (pendingAnsi) {
           styled += pendingAnsi;
           pendingAnsi = "";
         }
         group = nextGroup;
-        kind = segment.kind;
         styled += grapheme;
         graphemes.push({ text: grapheme, cells: visibleWidth(grapheme), kind: segment.kind });
       }
@@ -310,15 +307,12 @@ function tokenize(
     flush();
   }
   if (pendingAnsi) {
-    if (graphemes.length > 0) {
-      styled += pendingAnsi;
-    } else if (tokens.length > 0) {
+    if (tokens.length > 0) {
       tokens[tokens.length - 1]!.styled += pendingAnsi;
     } else {
       tokens.push({ styled: pendingAnsi, graphemes: [], width: 0, whitespace: false });
     }
   }
-  flush();
   return tokens;
 }
 
@@ -348,9 +342,8 @@ function styledFor(graphemes: TaggedGrapheme[]): string {
   return graphemes.map((g) => g.text).join("");
 }
 
-/** Drop up to `plainChars` trailing visible chars; returns kept graphemes and
- * the plain text actually dropped. */
-function dropTrailingPlain(graphemes: TaggedGrapheme[], plainChars: number): { kept: TaggedGrapheme[]; dropped: string } {
+/** Drop up to `plainChars` trailing visible chars and return kept graphemes. */
+function dropTrailingPlain(graphemes: TaggedGrapheme[], plainChars: number): { kept: TaggedGrapheme[] } {
   let remaining = plainChars;
   let end = graphemes.length;
   while (remaining > 0 && end > 0) {
@@ -359,7 +352,7 @@ function dropTrailingPlain(graphemes: TaggedGrapheme[], plainChars: number): { k
     remaining -= g.text.length;
     end--;
   }
-  return { kept: graphemes.slice(0, end), dropped: graphemes.slice(end).map((g) => g.text).join("") };
+  return { kept: graphemes.slice(0, end) };
 }
 
 interface RawRow {
@@ -569,6 +562,6 @@ export function wrapWithProvenance(
       });
     }
   }
-  return rows.length > 0 ? rows : [{ styled: "", spans: [], bridge: "", hard: true }];
+  return rows;
 }
 

@@ -626,7 +626,10 @@ async function queryCookieRows(dbPath: string, hosts: string[], names: Iterable<
 	const expiresExpr = columns.columns.has("expires_utc") ? chromeExpiryMillisExpr() : "0";
 	const expiryFilter = filterExpired && columns.columns.has("expires_utc") ? ` AND (${expiresExpr} = 0 OR ${expiresExpr} > ${chromeExpiryNowMillis()})` : "";
 	const partitionFilter = filterExpired ? unpartitionedCookieFilter(columns.columns) : "";
-	return runSqliteQuery(dbPath, `SELECT name, value, host_key, ${pathExpr}, ${expiresExpr} AS expires_utc, hex(encrypted_value) AS encrypted_value_hex FROM cookies WHERE ${buildCookieWhere(hosts, names ?? undefined)}${expiryFilter}${partitionFilter} ORDER BY length(path) DESC, ${expiresExpr} ASC`);
+	return runSqliteQuery(dbPath,
+		`SELECT name, value, ${pathExpr}, ${expiresExpr} AS expires_utc, hex(encrypted_value) AS encrypted_value_hex ` +
+		`FROM cookies WHERE ${buildCookieWhere(hosts, names ?? undefined)}${expiryFilter}${partitionFilter} ` +
+		`ORDER BY length(path) DESC, ${expiresExpr} ASC`);
 }
 
 async function readCookieColumns(dbPath: string): Promise<{ status: "success"; columns: Set<string> } | { status: "failure"; failure: SqliteFailure }> {

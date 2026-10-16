@@ -68,7 +68,7 @@ function run({ messages = [], hook = "" } = {}) {
 			for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start", reason: "startup" }, ctx);
 			await new Promise(resolve => setTimeout(resolve, 0));
 			console.warn = originalWarn;
-			console.log(JSON.stringify({ active, warnings, registered: [...tools.keys()] }));
+			console.log(JSON.stringify({ active, warnings }));
 		`,
 		encoding: "utf8",
 		env: {

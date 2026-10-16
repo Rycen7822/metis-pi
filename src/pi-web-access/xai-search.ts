@@ -1,3 +1,4 @@
+import { extractAnswer, extractSnippetAround } from "./search-answer-formatting.ts";
 import { getWebAccessConfigPath, loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
@@ -231,29 +232,6 @@ function addSource(results: SearchResult[], seen: Set<string>, source: unknown):
 function addSources(results: SearchResult[], seen: Set<string>, sources: unknown): void {
 	if (!Array.isArray(sources)) return;
 	for (const source of sources) addSource(results, seen, source);
-}
-
-function extractSnippetAround(text: string, start: unknown, end: unknown): string {
-	if (typeof start !== "number" || typeof end !== "number" || !text) return "";
-	const before = Math.max(0, start - 100);
-	const after = Math.min(text.length, end + 100);
-	const snippet = text.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
-	return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
-}
-
-function extractAnswer(output: unknown[]): string {
-	const parts: string[] = [];
-	for (const item of output) {
-		if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
-		const content = (item as { content?: unknown }).content;
-		if (!Array.isArray(content)) continue;
-		for (const part of content) {
-			if (!part || typeof part !== "object") continue;
-			const text = (part as { text?: unknown }).text;
-			if (typeof text === "string" && text.trim().length > 0) parts.push(text);
-		}
-	}
-	return parts.join("\n").trim();
 }
 
 /**

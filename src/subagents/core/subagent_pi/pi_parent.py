@@ -102,16 +102,13 @@ class PiNotifications:
         receipts = []
         for rid, kind, ui_id in events:
             row = self.store.one(
-                "SELECT id,state,handled FROM parent_notifications WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?",
+                "SELECT id,state,handled,pi_receipt,pi_owner FROM parent_notifications WHERE scope=? AND run_id=? AND kind=? AND ui_id IS ?",
                 (sid, rid, kind, ui_id),
             )
             if row and not row["handled"] and row["state"] != "pi_claimed":
-                previous = self.store.one(
-                    "SELECT pi_receipt,pi_owner FROM parent_notifications WHERE id=?", (row["id"],)
-                )
                 receipt = (
-                    previous["pi_receipt"]
-                    if row["state"] == "pi_waiting" and previous["pi_owner"] == lease
+                    row["pi_receipt"]
+                    if row["state"] == "pi_waiting" and row["pi_owner"] == lease
                     else new_id("delivery_")
                 )
                 self.store.execute(

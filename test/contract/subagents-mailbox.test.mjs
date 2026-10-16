@@ -65,9 +65,7 @@ async function fixture(t, kind = "thinking", toolFirst = false) {
   };
   const requests = [],
     operations = [],
-    notifications = [],
-    messages = [],
-    events = [];
+    notifications = [];
   let owner,
     ctx,
     replyWatch,
@@ -236,7 +234,6 @@ async function fixture(t, kind = "thinking", toolFirst = false) {
     session.dispose();
     rmSync(dir, { recursive: true, force: true });
   });
-  session.subscribe((e) => events.push(e));
   await session.bindExtensions({
     mode: "rpc",
     uiContext: { notify: (text, level) => notifications.push({ text, level }), setStatus() {}, setWidget() {} },
@@ -257,7 +254,6 @@ async function fixture(t, kind = "thinking", toolFirst = false) {
     requests,
     notifications,
     operations,
-    events,
     deliver,
     ctx: () => ctx,
     tools: () => tools,
@@ -270,11 +266,7 @@ async function fixture(t, kind = "thinking", toolFirst = false) {
     failClaim: (error) => {
       claimFailure = error;
     },
-    start: () => {
-      const task = session.prompt("main");
-      messages.push(task);
-      return task;
-    },
+    start: () => session.prompt("main"),
   };
 }
 

@@ -1,6 +1,6 @@
 import { SearchHttpError } from "./search-types.ts";
-import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
+import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
+import { GOOGLE_RECENCY_TBS, loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -10,12 +10,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 const SERPLY_SEARCH_URL = "https://api.serply.io/v1/search";
 const CONFIG_PATH = getWebSearchConfigPath();
 const SEARCH_TIMEOUT_MS = 60_000;
-const RECENCY_TBS: Record<NonNullable<SearchOptions["recencyFilter"]>, string> = {
-	day: "qdr:d",
-	week: "qdr:w",
-	month: "qdr:m",
-	year: "qdr:y",
-};
+
 
 interface WebSearchConfig {
 	serplyApiKey?: unknown;
@@ -55,14 +50,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function buildQuery(query: string, filters: DomainFilters): string {
-	const parts = [query];
-	if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-	if (filters.include.length > 1) parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
-	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-	return parts.join(" ");
-}
-
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -89,9 +76,9 @@ export async function searchWithSerply(query: string, options: SearchOptions = {
 	const filters = normalizeDomainFilters(options.domainFilter);
 	const requestCount = options.domainFilter?.length ? Math.min(20, numResults + 5) : numResults;
 	const url = new URL(SERPLY_SEARCH_URL);
-	url.searchParams.set("q", buildQuery(query, filters));
+	url.searchParams.set("q", buildSiteFilteredQuery(query, filters));
 	url.searchParams.set("num", String(requestCount));
-	if (options.recencyFilter) url.searchParams.set("tbs", RECENCY_TBS[options.recencyFilter]);
+	if (options.recencyFilter) url.searchParams.set("tbs", GOOGLE_RECENCY_TBS[options.recencyFilter]);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	let response: Response;

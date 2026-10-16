@@ -1,3 +1,4 @@
+import { extractAnswer, extractSnippetAround } from "./search-answer-formatting.ts";
 import { getWebAccessConfigPath, loadWebAccessConfig, fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -521,7 +522,7 @@ async function parseOpenAIResponse(response: Response): Promise<ParsedOpenAIResp
 		const payload = output.length > 0 ? completedResponse : { ...completedResponse, output: outputItems };
 		return { payload, webSearchCallSeen: webSearchCallSeen || output.some(isWebSearchCall) };
 	}
-	if (outputItems.length > 0) return { payload: { output: outputItems }, webSearchCallSeen: webSearchCallSeen || outputItems.some(isWebSearchCall) };
+	if (outputItems.length > 0) return { payload: { output: outputItems }, webSearchCallSeen };
 	throw new Error("OpenAI API returned no parseable response output");
 }
 
@@ -533,14 +534,6 @@ function cleanSourceUrl(rawUrl: string): string {
 	} catch {
 		return rawUrl.replace(/[?&]utm_source=openai$/, "");
 	}
-}
-
-function extractSnippetAround(text: string, start: unknown, end: unknown): string {
-	if (typeof start !== "number" || typeof end !== "number" || !text) return "";
-	const before = Math.max(0, start - 100);
-	const after = Math.min(text.length, end + 100);
-	const snippet = text.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
-	return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
 }
 
 function addResult(results: SearchResult[], seen: Set<string>, url: unknown, title: unknown, snippet = ""): void {
@@ -605,21 +598,6 @@ function extractSearchResults(output: unknown[], numResults: number | undefined,
 		return filtered.slice(0, Math.min(Math.floor(numResults), 20));
 	}
 	return filtered;
-}
-
-function extractAnswer(output: unknown[]): string {
-	const parts: string[] = [];
-	for (const item of output) {
-		if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
-		const content = (item as { content?: unknown }).content;
-		if (!Array.isArray(content)) continue;
-		for (const part of content) {
-			if (!part || typeof part !== "object") continue;
-			const text = (part as { text?: unknown }).text;
-			if (typeof text === "string" && text.trim().length > 0) parts.push(text);
-		}
-	}
-	return parts.join("\n").trim();
 }
 
 function isAlphaSearchEnabled(): boolean {

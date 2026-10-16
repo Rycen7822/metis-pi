@@ -180,16 +180,13 @@ function buildDeterministicSummaryLines(results: QueryResultData[]): string[] {
 
 export function buildDeterministicSummary(results: QueryResultData[]): { summary: string; meta: SummaryMeta } {
 	const summary = buildDeterministicSummaryLines(results).join("\n").trim();
-	const nonEmptySummary = summary.length > 0
-		? summary
-		: "No completed search results were available when the curator session finished.\n\nSources\n- None";
 
 	return {
-		summary: nonEmptySummary,
+		summary,
 		meta: {
 			model: null,
 			durationMs: 0,
-			tokenEstimate: estimateTokens(nonEmptySummary),
+			tokenEstimate: estimateTokens(summary),
 			fallbackUsed: true,
 			fallbackReason: "deterministic-submit-fallback",
 			phase: "deterministic-fallback",

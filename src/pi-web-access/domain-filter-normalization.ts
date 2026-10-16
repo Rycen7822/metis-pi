@@ -29,6 +29,15 @@ export function normalizeDomainFilters(domainFilter?: readonly string[]): Domain
 	return filters;
 }
 
+export function buildSiteFilteredQuery(query: string, filters: DomainFilters): string {
+	const parts = [query];
+	if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
+	// Group alternatives so the query terms apply to every included site.
+	if (filters.include.length > 1) parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
+	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
+	return parts.join(" ");
+}
+
 // URL/protocol validation remains the adapter's responsibility. This is only
 // the shared include/exclude policy, so an empty filter accepts every result.
 export function matchesDomainFilter(url: string | URL, filters: DomainFilters): boolean {

@@ -18,7 +18,7 @@ async function origin(t, address, port = 0, respond = (_request, response) => re
 	const server = createServer(async (request, response) => {
 		const chunks = [];
 		for await (const chunk of request) chunks.push(chunk);
-		calls.push({ path: request.url, host: request.headers.host, headers: request.headers, method: request.method, body: Buffer.concat(chunks) });
+		calls.push({ host: request.headers.host, headers: request.headers, method: request.method, body: Buffer.concat(chunks) });
 		respond(request, response);
 	});
 	await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, address, resolve); });

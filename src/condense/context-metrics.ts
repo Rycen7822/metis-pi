@@ -6,10 +6,6 @@ function charsOf(msg: any): number {
   return JSON.stringify(msg).length;
 }
 
-function tokensOf(msg: any): number {
-  return Math.round(charsOf(msg) / 4);
-}
-
 function isTextOnlyAssistant(msg: any): boolean {
   if (msg.role !== "assistant") return false;
   if (!Array.isArray(msg.content)) return true;
@@ -145,7 +141,7 @@ export function computeContextMetrics(
     if (isSummarized(key)) continue;
     const args = findArgsForToolCallId(branch, i, m.toolCallId);
     if (isProtected(m.toolName, args)) continue;
-    frontierGapTokens += tokensOf(m);
+    frontierGapTokens += Math.round(branchChars[i] / 4);
   }
 
   return { openCycleThinkingTokens, largestChainSharePct, frontierGapTokens };

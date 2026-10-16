@@ -142,8 +142,7 @@ export function limitFromStartRows(
     return [{ text: hiddenHint, sourceLineIndex: -1, continuation: false }];
   }
   const hidden = rows.length - keep;
-  const hiddenLogical = countLogicalLines(rows.slice(keep));
-  const n = Math.max(hiddenLogical, hidden, 1);
+  const n = Math.max(hidden, 1);
   const plural = n === 1 ? "" : "s";
   const maxBodyWidth = maxWidth - COMMAND_CONTINUATION_PREFIX.length - 1;
   const ellipsis = truncateToWidth(

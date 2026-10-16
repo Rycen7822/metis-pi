@@ -129,7 +129,7 @@ export class CodexWriteCallComponent implements Component {
     });
     for (const line of body) out.push(line);
     if (copyOut.length === out.length) {
-      registerProduct(out, { componentId: "write-call", width, rows: copyOut });
+      registerProduct(out, { width, rows: copyOut });
     }
     this.#cache = out;
     this.#lastWidth = width;
@@ -186,7 +186,7 @@ export class CodexThinkingRailComponent implements Component {
     const childProduct = productFor(childLines);
     if (childProduct) {
       registerProduct(this.#cache, {
-        componentId: "thinking-rail",
+
         width,
         rows: [],
         children: this.#cache.map((_, i) => childProduct.children
@@ -282,7 +282,7 @@ export class CodexThinkingPeekComponent implements Component {
     const childProduct = productFor(lines);
     if (childProduct) {
       registerProduct(rows, {
-        componentId: "thinking-peek",
+
         width,
         rows: [],
         children: rows.map((_, index) => {

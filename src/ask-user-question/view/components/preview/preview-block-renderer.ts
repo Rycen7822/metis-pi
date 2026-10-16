@@ -95,10 +95,6 @@ export class PreviewBlockRenderer {
 		return this.cache.hasAnyPreview();
 	}
 
-	has(optionIndex: number): boolean {
-		return this.cache.has(optionIndex);
-	}
-
 	invalidate(): void {
 		this.cache.invalidate();
 	}

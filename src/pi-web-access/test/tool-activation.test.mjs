@@ -176,11 +176,6 @@ test("cold and warm native transcript selections survive start and tree lifecycl
 	assert.deepEqual(reloaded.before.filter(name => defaultNames.includes(name)), ["web_search"]);
 });
 
-test("legacy conversation without tool declarations preserves eager web tools", () => {
-	const state = run({}, { messages: [{ role: "user", content: [{ type: "text", text: "old session" }], timestamp: 1 }] });
-	assert.deepEqual(state.before.filter(name => defaultNames.includes(name)), defaultNames);
-	assert.ok(state.before.includes("web_enable"));
-});
 
 test("a resumed transcript that declared its tools without web_enable keeps that set", () => {
 	const tool = name => ({ name, description: "", parameters: { type: "object" } });

@@ -28,13 +28,6 @@ interface AnySearchSearchOptions extends SearchOptions {
 	includeContent?: boolean;
 }
 
-interface AnySearchResponse {
-	code: 0;
-	data: {
-		results: AnySearchResult[];
-		metadata: Record<string, unknown>;
-	};
-}
 
 let cachedConfig: WebSearchConfig | null = null;
 
@@ -55,7 +48,7 @@ function invalidResponse(message: string): Error {
 	return new Error(`AnySearch API returned invalid response: ${message}`);
 }
 
-function parseResponse(value: unknown): AnySearchResponse {
+function parseResponse(value: unknown): AnySearchResult[] {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw invalidResponse("expected an object envelope");
 	}
@@ -87,7 +80,7 @@ function parseResponse(value: unknown): AnySearchResponse {
 		results.push({ title, url, snippet, content: typeof content === "string" ? content : "" });
 	}
 
-	return { code: 0, data: { results, metadata: data.metadata as Record<string, unknown> } };
+	return results;
 }
 
 export function isAnySearchAvailable(): boolean {
@@ -138,7 +131,7 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 		throw new Error("AnySearch API returned invalid JSON");
 	}
 
-	let data: AnySearchResponse;
+	let data: AnySearchResult[];
 	try {
 		data = parseResponse(rawData);
 	} catch (err) {
@@ -147,7 +140,7 @@ export async function searchWithAnySearch(query: string, options: AnySearchSearc
 	}
 
 	activityMonitor.logComplete(activityId, response.status);
-	const retained = data.data.results.filter(result => matchesDomainFilter(result.url, filters)).slice(0, numResults);
+	const retained = data.filter(result => matchesDomainFilter(result.url, filters)).slice(0, numResults);
 	const results = retained.map((result) => ({
 		title: result.title,
 		url: result.url,

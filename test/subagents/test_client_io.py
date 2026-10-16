@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import ROOT
 from subagent_pi.client import request
 from subagent_pi.common import AgentError, dumps, read_frame, socket_path
 

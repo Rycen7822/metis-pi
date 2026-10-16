@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,7 +111,6 @@ test("Jina Search resolves command credentials only when a request starts", asyn
 		ranAfter: true,
 		authorization: "Bearer synthetic-jina-command-key",
 	});
-	assert.equal(existsSync(marker), true);
 });
 
 test("explicit Jina search maps filters, full content, unique results, and truthful headers", async () => {
@@ -230,10 +228,10 @@ test("configured routing treats Jina's own timeout as transient rather than call
 	const child = runChild(`
 		const originalTimeout = AbortSignal.timeout;
 		AbortSignal.timeout = () => AbortSignal.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-		const calls = [];
+		let callCount = 0;
 		globalThis.fetch = async (url, init = {}) => {
 			const target = String(url);
-			calls.push(target);
+			callCount++;
 			if (target.startsWith("https://s.jina.ai/")) {
 				AbortSignal.timeout = originalTimeout;
 				throw init.signal.reason;
@@ -245,7 +243,7 @@ test("configured routing treats Jina's own timeout as transient rather than call
 		};
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
 		const result = await search("timeout route", { provider: "auto" });
-		console.log(JSON.stringify({ provider: result.provider, calls }));
+		console.log(JSON.stringify({ provider: result.provider, callCount }));
 	`, {
 		HOME: home,
 		USERPROFILE: home,
@@ -257,7 +255,7 @@ test("configured routing treats Jina's own timeout as transient rather than call
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.provider, "tavily");
-	assert.equal(output.calls.length, 2);
+	assert.equal(output.callCount, 2);
 });
 
 test("configured routing treats a Jina response-body timeout as transient", async () => {
@@ -267,10 +265,10 @@ test("configured routing treats a Jina response-body timeout as transient", asyn
 	const child = runChild(`
 		const originalTimeout = AbortSignal.timeout;
 		AbortSignal.timeout = () => AbortSignal.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-		const calls = [];
+		let callCount = 0;
 		globalThis.fetch = async (url, init = {}) => {
 			const target = String(url);
-			calls.push(target);
+			callCount++;
 			if (target.startsWith("https://s.jina.ai/")) {
 				return {
 					ok: true,
@@ -288,7 +286,7 @@ test("configured routing treats a Jina response-body timeout as transient", asyn
 		};
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
 		const result = await search("body timeout route", { provider: "auto" });
-		console.log(JSON.stringify({ provider: result.provider, calls }));
+		console.log(JSON.stringify({ provider: result.provider, callCount }));
 	`, {
 		HOME: home,
 		USERPROFILE: home,
@@ -300,7 +298,7 @@ test("configured routing treats a Jina response-body timeout as transient", asyn
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.provider, "tavily");
-	assert.equal(output.calls.length, 2);
+	assert.equal(output.callCount, 2);
 });
 
 test("Jina envelope failures are recorded as activity errors", async () => {
@@ -335,10 +333,10 @@ test("configured routing preserves Jina envelope status codes", async () => {
 		searchRouting: { providers: ["jina", "tavily"], fallbackOn: ["quota"] },
 	});
 	const child = runChild(`
-		const calls = [];
+		let callCount = 0;
 		globalThis.fetch = async (url) => {
 			const target = String(url);
-			calls.push(target);
+			callCount++;
 			if (target.startsWith("https://s.jina.ai/")) {
 				return new Response(JSON.stringify({ code: 429, status: 42901, data: [] }), { status: 200 });
 			}
@@ -349,7 +347,7 @@ test("configured routing preserves Jina envelope status codes", async () => {
 		};
 		const { search } = await import(${JSON.stringify(searchModuleUrl)});
 		const result = await search("quota route", { provider: "auto" });
-		console.log(JSON.stringify({ provider: result.provider, calls }));
+		console.log(JSON.stringify({ provider: result.provider, callCount }));
 	`, {
 		HOME: home,
 		USERPROFILE: home,
@@ -361,7 +359,7 @@ test("configured routing preserves Jina envelope status codes", async () => {
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.provider, "tavily");
-	assert.equal(output.calls.length, 2);
+	assert.equal(output.callCount, 2);
 });
 
 test("configured searchRouting can select Jina Search", async () => {

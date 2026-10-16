@@ -79,8 +79,8 @@ export class ViewerContent {
     this.theme = theme; this.tui = tui; this.config = config; this.changed = changed;
     const layout = { wrap: wrapTextWithAnsi, visibleWidth }, paint = (text: string, language: string) => highlightCode(text, language).join("\n");
     this.renderers = makeRenderers(text => new Text(text, 0, 0), () => keyHint("app.tools.expand", "to expand"), paint,
-      input => createDiffComponent({ rows: input.rows, filePath: input.filePath, paint, colorLevel: colorLevel(),
-        expanded: input.options.expanded === true, expandHint: input.expandHint ?? "" }, layout), createShellFactories(layout), undefined,
+      input => createDiffComponent({ rows: input.rows, filePath: input.filePath, paint, colorLevel: colorLevel() }, layout),
+      createShellFactories(layout), undefined,
       { colorLevel: colorLevel(), writeChanges: new Map() }, layout);
   }
   private add(entry: Entry) { this.entries.push(entry); }

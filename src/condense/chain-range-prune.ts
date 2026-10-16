@@ -169,12 +169,12 @@ export function applyChainCompressions(
 
   for (const { entry, startIndex, endIndex } of accepted) {
     const protectedIds = new Set(entry.protectedToolCallIds ?? []);
-    const inRangeBareIds: string[] = [];
+    const actual = new Set<string>();
     for (let i = startIndex + 1; i < endIndex; i++) {
       const msg = messages[i];
       dropIndices.add(i);
       if (msg.role === "toolResult") {
-        inRangeBareIds.push(msg.toolCallId);
+        actual.add(msg.toolCallId);
         droppedBareIds.add(msg.toolCallId);
         droppedOccKeys.add(occKey(msg.toolCallId, resultTimestampOf(msg.timestamp)));
         if (protectedIds.has(msg.toolCallId) || isSubagentControl(msg.toolName)) {
@@ -185,7 +185,7 @@ export function applyChainCompressions(
       } else if (msg.role === "assistant") {
         for (const block of msg.content ?? []) {
           if (block.type === "toolCall") {
-            inRangeBareIds.push(block.id);
+            actual.add(block.id);
             droppedBareIds.add(block.id);
           }
         }
@@ -193,7 +193,6 @@ export function applyChainCompressions(
     }
     // Diagnostic-only cross-check: the range always wins.
     const recorded = new Set((entry.droppedToolCallIds ?? []).map(bareToolCallId));
-    const actual = new Set(inRangeBareIds);
     if (recorded.size !== actual.size || [...recorded].some((id) => !actual.has(id))) {
       diagnostics?.report(
         "range-id-mismatch",

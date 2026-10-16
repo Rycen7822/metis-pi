@@ -30,7 +30,6 @@
   },
   "include": [
     "src/execution/**/*.ts",
-    "src/changelog.ts",
     "extensions/execution.ts"
   ]
 }

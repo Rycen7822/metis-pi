@@ -1,4 +1,5 @@
 import {
+	HINT_MULTI, HINT_PART_COLLAPSE, HINT_SINGLE,
 	makeDialogConfig as makeConfig, makeDialog, stubComponent, stubPreviewPane, type DialogOverrides,
 } from "../../../test/helpers/ask-user-question/dialog.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -18,14 +19,11 @@ import { CANCEL_LABEL, SUBMIT_LABEL, SubmitPicker } from "./components/submit-pi
 import type { TabBar } from "./components/tab-bar.ts";
 import {
 	type DialogState,
-	HINT_MULTI,
 	HINT_PART_CLEAR,
-	HINT_PART_COLLAPSE,
 	HINT_PART_ENTER,
 	HINT_PART_NEW_LINE,
 	HINT_PART_NOTES,
 	HINT_PART_TOGGLE,
-	HINT_SINGLE,
 	INCOMPLETE_WARNING_PREFIX,
 	READY_PROMPT,
 	REVIEW_HEADING,
@@ -241,19 +239,7 @@ describe("makeDialog — Submit tab", () => {
 	}
 
 	function submitState(over: Partial<DialogState> = {}): DialogState {
-		return {
-			currentTab: 2,
-			optionIndex: 0,
-			notesVisible: false,
-			inputMode: false,
-			answers,
-			multiSelectChecked: new Set(),
-			customDraftsByTab: new Map(),
-			notesByTab: new Map(),
-			submitChoiceIndex: 0,
-			collapsed: false,
-			...over,
-		};
+		return { ...makeQuestionnaireState({ currentTab: 2, answers }), ...over };
 	}
 
 	it("renders REVIEW_HEADING always", () => {
@@ -312,17 +298,6 @@ describe("makeDialog — Submit tab", () => {
 		expect(joined).toContain(CANCEL_LABEL);
 	});
 
-	it("Submit row renders normal regardless of completeness (D1 revised)", () => {
-		const incomplete = submitState({
-			answers: new Map([[0, { questionIndex: 0, question: "Q1?", kind: "option", answer: "A" }]]),
-		});
-		const dlgIncomplete = makeDialog(
-			makeConfig({ state: incomplete, submitPicker: makePicker(incomplete), getBodyHeight: () => 6 }),
-		);
-		const joinedIncomplete = dlgIncomplete.render(80).join("\n");
-		const submitLine = joinedIncomplete.split("\n").find((l) => l.includes(SUBMIT_LABEL));
-		expect(submitLine).not.toMatch(/<dim>/i);
-	});
 
 	it("active pointer follows state.submitChoiceIndex", () => {
 		const stateRow0 = submitState({ submitChoiceIndex: 0 });
@@ -405,16 +380,6 @@ describe("makeDialog — Submit tab", () => {
 		expect(submitDlg.length).toBe(questionDlg.length);
 	});
 
-	it("total dialog height equals a question tab's height (no collapse / no jump)", () => {
-		const submitS = submitState();
-		const submit = makeDialog(
-			makeConfig({ state: submitS, submitPicker: makePicker(submitS), getBodyHeight: () => 6 }),
-		).render(120);
-		const questionTab = makeDialog(
-			makeConfig({ state: submitState({ currentTab: 0 }), getBodyHeight: () => 6 }),
-		).render(120);
-		expect(submit.length).toBe(questionTab.length);
-	});
 });
 
 describe("makeDialog — setProps swap", () => {

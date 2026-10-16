@@ -194,9 +194,10 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
       if (component === "arguments" && !params.toolCallIds && !params.parentToolCallId)
         throw new Error("Arguments requires toolCallIds or parentToolCallId.");
+      const sourceBranch = params.sourceEntryIds ? ctx.sessionManager.getBranch() : undefined;
       const selected: Selection[] = params.sourceEntryIds
         ? params.sourceEntryIds.map((ref): Selection => {
-            const entry = ctx.sessionManager.getBranch().find((entry) => entry.id === ref);
+            const entry = sourceBranch!.find((entry) => entry.id === ref);
             const allowed =
               entry &&
               (entry.type === "message" ||

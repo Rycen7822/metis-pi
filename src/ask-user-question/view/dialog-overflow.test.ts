@@ -1,4 +1,5 @@
 import {
+	HINT_MULTI, HINT_SINGLE,
 	makeDialogConfig, makeDialog, stubComponent, stubPreviewPane, type DialogOverrides as MakeConfigOverrides,
 } from "../../../test/helpers/ask-user-question/dialog.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -15,12 +16,10 @@ import { SUBMIT_LABEL, SubmitPicker } from "./components/submit-picker.ts";
 import {
 	type DialogState,
 	DialogView,
-	HINT_MULTI,
 	HINT_PART_CANCEL,
 	HINT_PART_ENTER,
 	HINT_PART_NEW_LINE,
 	HINT_PART_NOTES,
-	HINT_SINGLE,
 	READY_PROMPT,
 	REVIEW_HEADING,
 } from "./dialog-builder.ts";
@@ -33,7 +32,6 @@ function stubMultiSelect(lines: string[], rowRange?: (w: number) => [number, num
 	return {
 		...stubComponent(lines),
 		focusedItemRowRange: rowRange ?? ((_w: number) => [0, 0] as [number, number]),
-		naturalHeight: (_w: number) => lines.length,
 	} as unknown as MultiSelectView;
 }
 
@@ -81,24 +79,8 @@ describe("Dialog overflow — output never exceeds terminal.rows", () => {
 	});
 });
 
-describe("Dialog overflow — 3-region partition", () => {
-	it("sticky top preserved: first row is border", () => {
-		const dlg = makeDialog(
-			makeConfig({ getTerminalRows: () => 14, getBodyHeight: () => 20, getCurrentBodyHeight: () => 10 }),
-		);
-		const lines = dlg.render(80);
-		// First row should be a horizontal border (─────)
-		expect(lines[0]).toMatch(/─/);
-	});
+describe("Dialog layout — fitting chrome", () => {
 
-	it("sticky bottom preserved: footer hint at end", () => {
-		const dlg = makeDialog(
-			makeConfig({ getTerminalRows: () => 14, getBodyHeight: () => 20, getCurrentBodyHeight: () => 10 }),
-		);
-		const lines = dlg.render(80);
-		const joined = lines.join("\n");
-		expect(joined).toContain(HINT_PART_NOTES);
-	});
 
 	it("single-question mode: no tab bar in output", () => {
 		const dlg = makeDialog(
@@ -129,13 +111,6 @@ describe("Dialog overflow — overflow indicators", () => {
 		expect(lines.some((l) => stripAnsi(l) === "↓")).toBe(false);
 	});
 
-	it("renders within terminal bounds under heavy overflow with focus at index 0", () => {
-		const dlg = makeDialog(
-			makeConfig({ getTerminalRows: () => 14, getBodyHeight: () => 20, getCurrentBodyHeight: () => 10 }),
-		);
-		const lines = dlg.render(80);
-		expect(lines.length).toBeLessThanOrEqual(14);
-	});
 });
 
 describe("Dialog overflow — minimum terminal", () => {
@@ -168,19 +143,7 @@ describe("Dialog overflow — submit tab", () => {
 	]);
 
 	function submitState(over: Partial<DialogState> = {}): DialogState {
-		return {
-			currentTab: 2,
-			optionIndex: 0,
-			notesVisible: false,
-			inputMode: false,
-			answers,
-			multiSelectChecked: new Set(),
-			customDraftsByTab: new Map(),
-			notesByTab: new Map(),
-			submitChoiceIndex: 0,
-			collapsed: false,
-			...over,
-		};
+		return { ...makeQuestionnaireState({ currentTab: 2, answers }), ...over };
 	}
 
 	it("output fits terminal on submit tab", () => {
@@ -416,19 +379,7 @@ describe("Dialog overflow — notes open on the Submit tab (NFR-2)", () => {
 	]);
 
 	function submitState(over: Partial<DialogState> = {}): DialogState {
-		return {
-			currentTab: 2,
-			optionIndex: 0,
-			notesVisible: false,
-			inputMode: false,
-			answers,
-			multiSelectChecked: new Set(),
-			customDraftsByTab: new Map(),
-			notesByTab: new Map(),
-			submitChoiceIndex: 0,
-			collapsed: false,
-			...over,
-		};
+		return { ...makeQuestionnaireState({ currentTab: 2, answers }), ...over };
 	}
 
 	function makeSubmitDialog(state: DialogState, over: MakeConfigOverrides = {}): DialogView {
@@ -610,6 +561,8 @@ describe("Dialog overflow — row accounting regressions (#260, #261)", () => {
 		expect(lines.filter(isBorder)).toHaveLength(2);
 		expect(lines.filter((l) => stripAnsi(l).startsWith(HINT_PART_ENTER))).toHaveLength(1);
 		expect(lines.some((l) => ["↑", "↓", "↕"].includes(stripAnsi(l)))).toBe(false);
+		expect(lines[0]).toMatch(/─/);
+		expect(lines.join("\n")).toContain(HINT_PART_NOTES);
 	});
 
 	it("keeps the Submit tab's incomplete-answers warning on one row so the bottom border survives (#261)", () => {

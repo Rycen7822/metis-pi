@@ -2,14 +2,12 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
-import { createInterface } from "node:readline";
 import { isAbsolute, relative, join } from "node:path";
 import type { CapturedBatch, CapturedToolCall, ToolCallRecord } from "./types.ts";
 
 import type { ToolCallIndexer } from "./indexer.ts";
 import { hashToolResult } from "./content-hash.ts";
 import { occKey } from "./occurrence-key.ts";
-import { captureFusionResult } from "./fusion.ts";
 import { packToolResult } from "./packing.ts";
 
 /** Import the execution layer's full output, not its truncated display text. */
@@ -19,26 +17,23 @@ export async function importOutputArchive(call: CapturedToolCall, sessionDir: st
   const info = await stat(source.path);
   if (!info.isFile()) return false;
   const bytes = source.bytes ?? info.size;
-  const offset = source.offsetBytes ?? 0;
   if (
     !Number.isSafeInteger(bytes) ||
     bytes < 0 ||
-    !Number.isSafeInteger(offset) ||
-    offset < 0 ||
-    offset + bytes > info.size
+    bytes > info.size
   )
     throw new Error("Incomplete output archive snapshot");
   const directory = blobDirFor(sessionDir, sessionId);
   // Owned exec logs are append-only, already durable, and can be shared by
   // successive polls. Each record pins its visible byte length independently.
   const local = relative(directory, source.path);
-  const appendOnly = offset === 0 && source.appendOnly === true && /^exec-[a-f0-9-]+\.log$/.test(local);
+  const appendOnly = source.appendOnly === true && /^exec-[a-f0-9-]+\.log$/.test(local);
   const target = appendOnly ? source.path : blobPathFor(sessionDir, sessionId, `output-${call.toolCallId}@${call.resultTimestamp}`);
   if (!appendOnly) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     try {
       if (bytes === 0) await writeFile(target, "", { mode: 0o600 });
-      else await pipeline(createReadStream(source.path, { start: offset, end: offset + bytes - 1 }), createWriteStream(target, { mode: 0o600 }));
+      else await pipeline(createReadStream(source.path, { start: 0, end: bytes - 1 }), createWriteStream(target, { mode: 0o600 }));
       if ((await stat(target)).size !== bytes) throw new Error("Output archive changed during capture");
     } catch (error) {
       await unlink(target).catch(() => {});
@@ -50,7 +45,6 @@ export async function importOutputArchive(call: CapturedToolCall, sessionDir: st
   call.resultPreview = call.fusionCommand
     ? packToolResult(call) ?? `${call.resultPrefix ?? ""}\n${headPreview(call.fusionCommand.output, 2048)}`
     : headPreview(call.resultText, 2048);
-  if (source.source === "fusion-journal") call.resultPrefix = call.resultText;
   call.resultText = "";
   call.archiveSource = source.source ?? "command-output";
   call.archiveComplete = source.complete;
@@ -62,76 +56,12 @@ export async function importOutputArchive(call: CapturedToolCall, sessionDir: st
   return true;
 }
 
-/** Index every persisted nested result, including entries evicted from UI traces. */
-async function importFusionJournal(
-  call: CapturedToolCall,
-  batch: CapturedBatch,
-  args: {
-    indexer: ToolCallIndexer;
-    sessionDir: string;
-    sessionId: string;
-    appendEntry: (customType: string, data?: unknown) => void;
-    archiveOnly?: boolean;
-  },
-): Promise<void> {
-  const source = call.outputArchive;
-  if (source?.source !== "fusion-journal" || !isAbsolute(source.path)) return;
-  const offset = source.offsetBytes ?? 0,
-    bytes = source.bytes ?? 0;
-  const info = await stat(source.path);
-  if (
-    !info.isFile() ||
-    !Number.isSafeInteger(offset) ||
-    offset < 0 ||
-    !Number.isSafeInteger(bytes) ||
-    bytes < 1 ||
-    offset + bytes > info.size
-  )
-    throw new Error("Incomplete fusion journal snapshot");
-  const stream = createReadStream(source.path, { start: offset, end: offset + bytes - 1 });
-  const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of lines) {
-      const entry = JSON.parse(line);
-      if (
-        entry.version !== 1 ||
-        typeof entry.id !== "string" ||
-        typeof entry.toolName !== "string" ||
-        !Number.isSafeInteger(entry.timestamp)
-      )
-        throw new Error("Invalid fusion journal record");
-      if (args.indexer.getRecordsForId(entry.id).some((record) => record.resultTimestamp === entry.timestamp)) continue;
-      const fusion = captureFusionResult(entry.result);
-      if (!fusion.fusionCommand) throw new Error("Invalid fusion receipt");
-      const child: CapturedToolCall = {
-        toolCallId: entry.id,
-        toolName: entry.toolName,
-        args: entry.input && typeof entry.input === "object" ? entry.input : { input: entry.input },
-        resultText: entry.result.content
-          .filter((block: any) => block.type === "text")
-          .map((block: any) => block.text)
-          .join("\n"),
-        resultTimestamp: entry.timestamp,
-        isError: false,
-        ...fusion,
-      };
-      if (child.outputArchive) await importOutputArchive(child, args.sessionDir, args.sessionId);
-      args.indexer.addBatch({ ...batch, toolCalls: [child] }, args.appendEntry, args.archiveOnly);
-    }
-  } finally {
-    lines.close();
-    stream.destroy();
-  }
-}
-
-/** OCC archive preparation retains nested fusion receipts without publishing pruning. */
-export async function archiveToolOutput(call: CapturedToolCall, batch: CapturedBatch, args: {
-  indexer: ToolCallIndexer; sessionDir: string; sessionId: string;
-  appendEntry: (customType: string, data?: unknown) => void;
+/** Prepare execution output archives without publishing pruning. */
+export async function archiveToolOutput(call: CapturedToolCall, args: {
+  sessionDir: string; sessionId: string;
 }): Promise<void> {
   if (call.outputArchive?.complete === false || call.archiveComplete === false) throw new Error("Incomplete execution archive");
   if (!call.outputArchive) return;
-  await importFusionJournal(call, batch, { ...args, archiveOnly: true });
   if (!await importOutputArchive(call, args.sessionDir, args.sessionId)) throw new Error("Execution archive unavailable");
 }
 
@@ -143,7 +73,7 @@ export async function archiveBatches(batches: readonly CapturedBatch[], args: {
 }) {
   const records: ToolCallRecord[] = [];
   for (const batch of batches) for (const call of batch.toolCalls) {
-    await archiveToolOutput(call, batch, args);
+    await archiveToolOutput(call, args);
     records.push({ ...call, turnIndex: batch.turnIndex, timestamp: batch.timestamp, archiveOnly: true,
       contentHash: call.contentHash ?? hashToolResult(call.toolName, call.resultText) });
   }
@@ -225,7 +155,6 @@ export async function spillOversizedBatch(args: {
   for (const tc of batch.toolCalls) {
     if (tc.outputArchive) {
       try {
-        await importFusionJournal(tc, batch, { indexer, sessionDir, sessionId, appendEntry });
         if (await importOutputArchive(tc, sessionDir, sessionId)) {
           toIndex.push(tc);
           handled.add(tc.toolCallId);

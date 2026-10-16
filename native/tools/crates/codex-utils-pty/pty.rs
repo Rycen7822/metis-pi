@@ -15,9 +15,6 @@ use std::path::Path;
 use std::process::Command as StdCommand;
 #[cfg(unix)]
 use std::process::Stdio;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -200,38 +197,25 @@ async fn spawn_process_portable(
         }
     });
 
-    let writer = pair.master.take_writer()?;
-    let writer = Arc::new(tokio::sync::Mutex::new(writer));
-    let writer_handle: JoinHandle<()> = tokio::spawn({
-        let writer = Arc::clone(&writer);
-        async move {
+    let mut writer = pair.master.take_writer()?;
+    let writer_handle: JoinHandle<()> = tokio::spawn(async move {
+        #[cfg(windows)]
+        let mut windows_input = crate::WindowsTtyInputNormalizer::default();
+        while let Some(bytes) = writer_rx.recv().await {
             #[cfg(windows)]
-            let mut windows_input = crate::WindowsTtyInputNormalizer::default();
-            while let Some(bytes) = writer_rx.recv().await {
-                #[cfg(windows)]
-                let bytes = windows_input.normalize(&bytes);
-                let mut guard = writer.lock().await;
-                use std::io::Write;
-                let _ = guard.write_all(&bytes);
-                let _ = guard.flush();
-            }
+            let bytes = windows_input.normalize(&bytes);
+            use std::io::Write;
+            let _ = writer.write_all(&bytes);
+            let _ = writer.flush();
         }
     });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
-    let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
         let _ = exit_tx.send(code);
     });
 
@@ -253,12 +237,9 @@ async fn spawn_process_portable(
         }),
         reader_handle,
         Vec::new(),
-        writer_handle,
+        Some(writer_handle),
         wait_handle,
-        exit_status,
-        exit_code,
         Some(handles),
-        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {
@@ -364,33 +345,21 @@ async fn spawn_process_preserving_fds(
         }
     });
 
-    let writer = Arc::new(tokio::sync::Mutex::new(master.try_clone()?));
-    let writer_handle: JoinHandle<()> = tokio::spawn({
-        let writer = Arc::clone(&writer);
-        async move {
-            while let Some(bytes) = writer_rx.recv().await {
-                let mut guard = writer.lock().await;
-                use std::io::Write;
-                let _ = guard.write_all(&bytes);
-                let _ = guard.flush();
-            }
+    let mut writer = master.try_clone()?;
+    let writer_handle: JoinHandle<()> = tokio::spawn(async move {
+        while let Some(bytes) = writer_rx.recv().await {
+            use std::io::Write;
+            let _ = writer.write_all(&bytes);
+            let _ = writer.flush();
         }
     });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let exit_code = Arc::new(StdMutex::new(None));
-    let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => exit_code_from_status(status),
             Err(_) => -1,
         };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Ok(mut guard) = wait_exit_code.lock() {
-            *guard = Some(code);
-        }
         let _ = exit_tx.send(code);
     });
 
@@ -407,12 +376,9 @@ async fn spawn_process_preserving_fds(
         Box::new(RawPidTerminator { process_group_id }),
         reader_handle,
         Vec::new(),
-        writer_handle,
+        Some(writer_handle),
         wait_handle,
-        exit_status,
-        exit_code,
         Some(handles),
-        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {

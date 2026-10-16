@@ -50,6 +50,7 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
 		const { document } = parseHTML(await response.text());
 		const filters = normalizeDomainFilters(options.domainFilter);
 		const results: SearchResult[] = [];
+		const numResults = normalizeSearchResultCount(options.numResults);
 		let parseableResults = 0;
 		for (const container of document.querySelectorAll(".result")) {
 			if (container.classList.contains("result--ad")) continue;
@@ -62,7 +63,7 @@ export async function searchWithDuckDuckGo(query: string, options: SearchOptions
 			if (!matchesDomainFilter(resultUrl, filters)) continue;
 			const snippet = container.querySelector(".result__snippet")?.textContent?.trim() ?? "";
 			results.push({ title, url: resultUrl, snippet });
-			if (results.length >= normalizeSearchResultCount(options.numResults)) break;
+			if (results.length >= numResults) break;
 		}
 		if (parseableResults === 0) {
 			throw new Error("DuckDuckGo returned no parseable results (invalid response)");
