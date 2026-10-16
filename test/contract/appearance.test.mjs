@@ -459,12 +459,12 @@ test("one interaction wires usage previews, completed response averages, Working
   handlers.get("message_start")({ message: toolResult }); handlers.get("message_end")({ message: toolResult });
 
   handlers.get("turn_start")({});
-  assert.doesNotMatch(frame(), /tok\/s/, "waiting for a response does not show the previous rate");
+  assert.equal(speed(frame()), 23.5, "waiting for a response preserves the completed average");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
   now += 400;
   update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.doesNotMatch(frame(), /tok\/s/, "cumulative previews still do not publish a rate");
+  assert.equal(speed(frame()), 23.5, "streaming previews do not replace the completed average");
   handlers.get("message_end")({ message: message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400) });
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
@@ -485,6 +485,16 @@ test("one interaction wires usage previews, completed response averages, Working
   assert.equal(appended[0].data.toolErrorsObserved, 1, "tool errors stay diagnostic");
   assert.equal(slots.widgetCalls.at(-1).content, undefined);
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persisted summary stays in CustomEntry");
+  handlers.get("agent_start")({}, {});
+  assert.equal(speed(frame()), 110, "a new interaction retains the completed average");
+  handlers.get("turn_start")({});
+  assert.equal(speed(frame()), 110, "the first request of a new interaction retains it too");
+  const next = message("third", { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }, 1000);
+  handlers.get("message_start")({ message: next });
+  handlers.get("message_end")({ message: next });
+  handlers.get("agent_end")({}, {});
+  handlers.get("agent_settled")({}, {});
+  assert.equal(speed(frame()), 20, "a new valid completion replaces the prior interaction's average");
 });
 
 test("queued SDK deltas and pre-request compaction cannot distort or discard the response average", async t => {

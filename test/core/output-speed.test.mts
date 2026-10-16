@@ -11,10 +11,11 @@ test("a completed response pairs full usage with producer duration, never callba
   assert.deepEqual(tracker.snapshot(), { outputTokens: 1050, windowMs: 10500, tokensPerSecond: 100 });
   tracker.finish(9999, 1000, "stop");
   assert.equal(tracker.snapshot()!.tokensPerSecond, 100, "duplicate completion cannot replace a closed response");
+  const previous = tracker.snapshot();
   tracker.requestStart();
-  assert.equal(tracker.snapshot(), undefined, "a pending response never borrows an old rate");
+  assert.equal(tracker.snapshot(), previous, "a pending response retains the latest completed average");
   tracker.finish(0, 10500, "stop");
-  assert.equal(tracker.snapshot(), undefined, "missing output does not restore the previous sample");
+  assert.equal(tracker.snapshot(), previous, "missing output does not erase the previous valid sample");
 });
 
 test("selection/context reset cancels a pending response and late completions cannot resurrect it", () => {
@@ -34,13 +35,14 @@ for (const [tokens, duration, reason] of [
   [100, 1000, "error"], [100, 1000, "aborted"], [100, 1000, "deferred"],
   [100, 1000, "pending"], [100, 1000, undefined],
 ] as const) {
-  test(`unconfirmed response has no speed: ${tokens}/${duration}, ${reason}`, () => {
+  test(`unconfirmed response preserves the last valid speed: ${tokens}/${duration}, ${reason}`, () => {
     const tracker = new OutputSpeedTracker();
     tracker.requestStart(); tracker.finish(50, 1000, "stop");
+    const previous = tracker.snapshot();
     tracker.requestStart(); tracker.finish(tokens, duration, reason);
-    assert.equal(tracker.snapshot(), undefined, "neither an estimate nor an old sample is displayed");
+    assert.equal(tracker.snapshot(), previous, "incomplete or invalid measurements cannot replace the completed average");
     tracker.finish(100, 1000, "stop");
-    assert.equal(tracker.snapshot(), undefined, "an invalid terminal event still closes its response");
+    assert.equal(tracker.snapshot(), previous, "an invalid terminal event still closes its response");
   });
 }
 

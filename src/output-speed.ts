@@ -38,10 +38,9 @@ export class OutputSpeedTracker {
   #pending = false;
   #sample: OutputSpeedSample | undefined;
 
-  /** turn_start, before waiting for headers or deltas. */
+  /** Open the next response slot while retaining the last completed average. */
   requestStart(): void {
     this.#pending = true;
-    this.#sample = undefined;
   }
 
   finish(outputTokens: unknown, durationMs: unknown, stopReason: unknown): void {

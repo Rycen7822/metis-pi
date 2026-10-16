@@ -410,7 +410,6 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("agent_start", () => {
     hostData.bump();
     if (!chromeEnabled) return;
-    outputSpeed.reset();
     if (selectionCopy && serializerHost) selectionCopy.installOnTui(serializerHost);
     if (serializerHost) fullscreenLayout?.installOnTui(serializerHost);
     if (!metrics.active) {
