@@ -19,15 +19,25 @@ function providerEvent(handlers, message, type, delta = "") {
   let streams = producers.get(handlers);
   if (!streams) producers.set(handlers, streams = new Map());
   if (type === "response.created") {
-    const partial = { ...message, content: [{ type: "text", text: "" }] };
+    const partial = { ...message, content: [] };
     const stream = new AssistantMessageEventStream();
-    streams.set(message.responseId, { stream, partial });
+    streams.set(message.responseId, { stream, partial, argumentsJson: "" });
     stream.push({ type: "start", partial });
   } else {
-    const { stream, partial } = streams.get(message.responseId);
-    partial.content[0].text += delta;
-    stream.push({ type: type === "response.output_text.delta" ? "text_delta" : "toolcall_delta",
-      contentIndex: 0, delta, partial });
+    const producer = streams.get(message.responseId);
+    const { stream, partial } = producer;
+    const tool = type === "response.function_call_arguments.delta";
+    if (!partial.content.length) {
+      const original = message.content.find(block => block.type === "toolCall");
+      partial.content.push(tool ? { type: "toolCall", id: original?.id ?? "t1", name: original?.name ?? "bash", arguments: {} }
+        : { type: "text", text: "" });
+      if (tool) stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+    }
+    if (tool) {
+      producer.argumentsJson += delta;
+      try { partial.content[0].arguments = JSON.parse(producer.argumentsJson); } catch { /* Partial JSON. */ }
+    } else partial.content[0].text += delta;
+    stream.push({ type: tool ? "toolcall_delta" : "text_delta", contentIndex: 0, delta, partial });
   }
 }
 function finishResponse(handlers, message, ctx) {
@@ -466,18 +476,18 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   assert.doesNotMatch(frame(), /tok\/s/, "no rate before a completed response");
   providerEvent(handlers, message("first"), "response.created");
   now += 3000; // initial waiting/reasoning must not dilute generation speed
-  update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, "first delta");
+  update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, '{"command":');
   now += 400;
-  update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, "second delta");
+  update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, '"echo ready"}');
   assert.doesNotMatch(frame(), /tok\/s/, "partial cumulative usage is not a live speed measurement");
   const confirmed = { ...message("first", { input: 100, output: 80, cacheRead: 900, cacheWrite: 0, reasoning: 60 }, 3400),
-    stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }] };
+    stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo ready" } }] };
   finishResponse(handlers, confirmed);
   finishResponse(handlers, confirmed);
   const final = frame();
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
-  assert.doesNotMatch(final, /tok\/s/, "tool arguments cannot be paired with a text-only token count");
+  assert.equal(speed(final), 47.5, "the tool response updates speed before tool execution or interaction completion");
   handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
   const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
   assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
@@ -486,18 +496,26 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   handlers.get("message_start")({ message: toolResult }); handlers.get("message_end")({ message: toolResult });
 
   handlers.get("turn_start")({});
-  assert.doesNotMatch(frame(), /tok\/s/, "no previous text-generation sample exists yet");
+  const failed = { ...message("connection-error", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+    stopReason: "error", errorMessage: "Connection error." };
+  handlers.get("message_start")({ message: failed });
+  handlers.get("message_end")({ message: failed });
+  handlers.get("agent_end")({});
+  assert.equal(speed(frame()), 47.5, "connection failure retains the previous tool response rate");
+  handlers.get("agent_start")({}); handlers.get("turn_start")({});
+  assert.equal(speed(frame()), 47.5, "retry does not erase the previous valid sample");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   providerEvent(handlers, message("second"), "response.created");
   update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
   now += 400;
   update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.doesNotMatch(frame(), /tok\/s/, "incomplete usage is not a live speed estimate");
+  assert.equal(speed(frame()), 47.5, "incomplete usage retains the previous sample, without inventing a live estimate");
   finishResponse(handlers, message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400));
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 108, "the formatted final generation rate remains visible after settle");
+  assert.equal(speed(frame()), 77.5, "(19 + 43) / (0.4 + 0.4) stays visible after settle");
+  assert.match(frame(), /gen\(avg2\)/);
   assert.equal(appended.length, 1, "duplicate settled events append one summary");
   assert.equal(appended[0].type, "metis-pi:interaction-summary:v1");
   const { data } = appended[0];
@@ -514,9 +532,9 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   assert.equal(slots.widgetCalls.at(-1).content, undefined);
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persisted summary stays in CustomEntry");
   handlers.get("agent_start")({}, {});
-  assert.equal(speed(frame()), 108, "a new interaction retains the completed generation rate");
+  assert.equal(speed(frame()), 77.5, "a new interaction retains the completed generation rate");
   handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 108, "the first request of a new interaction retains it too");
+  assert.equal(speed(frame()), 77.5, "the first request of a new interaction retains it too");
   const next = message("third", { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }, 1000);
   handlers.get("message_start")({ message: next });
   providerEvent(handlers, next, "response.created");
@@ -525,7 +543,8 @@ test("one interaction wires usage previews, generation rates, Working and the pe
   finishResponse(handlers, next);
   handlers.get("agent_end")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 47.5, "a new valid generation sample replaces the previous one");
+  assert.equal(speed(frame()), 67.5, "(19 + 43 + 19) / (0.4 + 0.4 + 0.4) smooths the short response without counting errors");
+  assert.match(frame(), /gen\(avg3\)/, "the weighted history is disclosed rather than called the last raw rate");
 });
 
 test("SDK producer timing survives queued deltas and pre-request compaction", async t => {
@@ -604,7 +623,7 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   finishResponse(handlers, first, ctx);
   const beforeTool = frame();
   assert.match(beforeTool, /↑100 ↓100.*cache 90%/);
-  assert.doesNotMatch(beforeTool, /tok\/s/, "tool-call output is not a text-generation sample");
+  assert.match(beforeTool, /100 tok\/s/, "the main model's completed tool call is a generation sample");
   handlers.get("tool_execution_start")({ toolCallId: "tool", toolName: "codemode", args: {} }, ctx);
   now = 4000;
   const tool = { role: "toolResult", toolCallId: "tool", toolName: "codemode", timestamp: 4000, isError: false,
@@ -650,7 +669,7 @@ test("selection changes cancel generation sampling, including late producer even
     assert.match(frame(), /40 tok\/s/);
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
-    assert.match(report, /gen\(last\) 40 tok\/s \(output=2 tokens, reasoning excluded=0, window=25ms, events=2, scope=last completed\)/);
+    assert.match(report, /gen\(last\) 40 tok\/s \(output=2 tokens, reasoning excluded=0, window=25ms, events=2, samples=1, scope=last completed\)/);
     assert.match(report, /excludes initial wait\/TTFT, reasoning and completion callbacks/);
     handlers.get(event)({}, ctx);
     assert.doesNotMatch(frame(), /tok\/s/);

@@ -15,14 +15,28 @@ function fixture(t: TestContext) {
       timestamp: Date.now(), stopReason: "stop", usage: { output, reasoning },
       content: [{ type: "text", text: "" }], durationMs: 100_000 } as unknown as AssistantMessage;
     const stream = createAssistantMessageEventStream(); stream.push({ type: "start", partial: message });
+    const argumentsByIndex = new Map<number, string>();
     return { message, stream,
       text(ms: number, delta: string) {
         now = started + ms; (message.content[0] as { text: string }).text += delta;
         stream.push({ type: "text_delta", contentIndex: 0, delta, partial: message });
       },
+      tool(ms: number, delta: string, index = 0, name = "bash") {
+        now = started + ms;
+        if (message.content[index]?.type !== "toolCall") {
+          message.content[index] = { type: "toolCall", id: `tool-${index}`, name, arguments: {} };
+          stream.push({ type: "toolcall_start", contentIndex: index, partial: message });
+        }
+        const block = message.content[index] as Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+        const json = (argumentsByIndex.get(index) ?? "") + delta;
+        argumentsByIndex.set(index, json);
+        try { block.arguments = JSON.parse(json); } catch { /* Incomplete JSON is normal mid-stream. */ }
+        message.stopReason = "toolUse";
+        stream.push({ type: "toolcall_delta", contentIndex: index, delta, partial: message });
+      },
       done(endOnly = false) {
         if (endOnly) stream.end(message);
-        else { stream.push({ type: "done", reason: "stop", message }); stream.end(); }
+        else { stream.push({ type: "done", reason: message.stopReason as "stop" | "length" | "toolUse", message }); stream.end(); }
         return message;
       },
     };
@@ -33,12 +47,141 @@ function fixture(t: TestContext) {
 test("generation rate excludes initial wait and late completion callbacks", t => {
   const { tracker, producer, tick } = fixture(t);
   for (const wait of [0, 10_000]) {
-    tracker.requestStart(); const p = producer();
+    tracker.reset(); tracker.requestStart(); const p = producer();
     p.text(wait, "first"); p.text(wait + 400, "last"); p.done();
     tick(wait + 5000); tracker.finish(p.message as unknown as Record<string, unknown>);
     assert.deepEqual(tracker.snapshot(), { outputTokens: 41, windowMs: 400, tokensPerSecond: 100,
-      reasoningTokens: 0, contentEvents: 2 });
+      reasoningTokens: 0, contentEvents: 2, sampleCount: 1 });
   }
+});
+
+test("tool and mixed responses update per completion and recover after connection errors", t => {
+  const { tracker, producer, tick } = fixture(t);
+  tracker.requestStart();
+  const first = producer(1041, 1000);
+  first.tool(10_000, '{ "command":');
+  first.tool(10_400, '"echo ready" }');
+  first.done(); tick(5000); tracker.finish(first.message as any);
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 100, "tool arguments use their own generation window, not whole-request duration");
+  const previous = tracker.snapshot();
+  tracker.requestStart();
+  const failed = producer(0);
+  failed.message.stopReason = "error"; failed.message.content = [];
+  failed.stream.push({ type: "error", reason: "error", error: failed.message }); failed.stream.end();
+  tracker.finish(failed.message as any);
+  assert.equal(tracker.snapshot(), previous, "connection errors do not remove the previous tool response rate");
+  tracker.requestStart();
+  const retry = producer(161);
+  retry.text(5000, "prefix");
+  retry.tool(5400, '{"command":', 1);
+  retry.tool(5800, '"echo retry"}', 1);
+  retry.done(); tracker.finish(retry.message as any);
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 200, "mixed text and tool arguments update before the overall task settles");
+  assert.notEqual(tracker.snapshot(), previous);
+});
+
+test("parallel tool arguments tolerate empty text slots and reject incomplete backfills", t => {
+  const { tracker, producer } = fixture(t);
+  tracker.requestStart(); const first = producer(41);
+  first.tool(1000, '{"a":', 1); first.tool(1100, '{"b":', 2);
+  first.tool(1300, '1}', 1); first.tool(1400, '2}', 2);
+  first.done(); tracker.finish(first.message as any);
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 100);
+  const previous = tracker.snapshot();
+  for (const variant of ["backfill", "invalid JSON", "omitted block"]) {
+    tracker.requestStart(); const p = producer();
+    p.tool(2000, '{"a":'); p.tool(2400, variant === "invalid JSON" ? "bad}" : "1}");
+    const block = p.message.content[0] as any;
+    if (variant === "backfill") block.arguments = { a: 1, unstreamed: true };
+    if (variant === "omitted block") p.message.content = [];
+    p.done(); tracker.finish(p.message as any);
+    assert.equal(tracker.snapshot(), previous, variant);
+  }
+});
+
+test("short responses pool the current and prior two valid windows, without averaging prior averages", t => {
+  const { tracker, producer } = fixture(t);
+  const complete = (output: number, ms: number, reasoning = 0) => {
+    tracker.requestStart(); const p = producer(output, reasoning);
+    p.text(5000, "first"); p.text(5000 + ms, "last"); p.done(); tracker.finish(p.message as any);
+    return tracker.snapshot()!;
+  };
+  for (const ms of [10, 1000]) {
+    tracker.reset();
+    complete(1001, 10_000); complete(501, 5000); // Both have 100 tok/s generation rates.
+    const previous = tracker.snapshot();
+    tracker.requestStart(); const failed = producer(0);
+    failed.message.stopReason = "error";
+    failed.stream.push({ type: "error", reason: "error", error: failed.message }); failed.stream.end();
+    tracker.finish(failed.message as any);
+    assert.equal(tracker.snapshot(), previous);
+    const short = complete(1005, ms, 1000); // Only five non-reasoning output tokens.
+    assert.equal(short.tokensPerSecond, 1504 / (15 + ms / 1000));
+    assert.equal(short.sampleCount, 3, "a failed response does not displace valid history");
+    assert.equal(short.outputTokens, 1507);
+    assert.equal(short.windowMs, 15_000 + ms);
+    assert.equal(short.reasoningTokens, 1000);
+    const next = complete(5, 400);
+    assert.equal(next.tokensPerSecond, 508 / (5 + ms / 1000 + 0.4), "evict the oldest raw sample, not feed the prior average back in");
+    assert.equal(next.sampleCount, 3);
+  }
+});
+
+test("only outputs up to 64 non-reasoning tokens use history; longer responses remain current", t => {
+  const { tracker, producer } = fixture(t);
+  for (const tokens of [64, 65]) {
+    tracker.reset();
+    for (const [output, ms, reasoning] of [[1001, 10_000, 0], [501, 5000, 0], [1000 + tokens, 100, 1000]] as const) {
+      tracker.requestStart(); const p = producer(output, reasoning);
+      p.text(5000, "first"); p.text(5000 + ms, "last"); p.done(); tracker.finish(p.message as any);
+    }
+    assert.equal(tracker.snapshot()?.tokensPerSecond, tokens === 64 ? 1563 / 15.1 : 640);
+    assert.equal(tracker.snapshot()?.sampleCount, tokens === 64 ? 3 : 1);
+  }
+});
+
+test("implicit model, provider or effort changes cannot reuse another cohort's history", t => {
+  const { tracker, producer } = fixture(t);
+  for (const field of ["provider", "api", "model", "reportedModel", "thinkingLevel", "missing model"]) {
+    tracker.reset(); tracker.requestStart();
+    const previous = producer(1001); previous.text(1000, "first"); previous.text(11_000, "last"); previous.done(); tracker.finish(previous.message as any);
+    tracker.requestStart(); const current = producer(5);
+    if (field === "missing model") delete (current.message as any).model;
+    else (current.message as any)[field] = field === "thinkingLevel" ? "high" : field === "api" ? "openai-completions" : "other";
+    current.text(1000, "first"); current.text(1010, "last"); current.done(); tracker.finish(current.message as any);
+    assert.equal(tracker.snapshot()?.tokensPerSecond, 400, field);
+    assert.equal(tracker.snapshot()?.sampleCount, 1, field);
+  }
+});
+
+test("unsafe pooled counter sums fall back to the current valid response", t => {
+  const { tracker, producer } = fixture(t);
+  for (const tokens of [Number.MAX_SAFE_INTEGER, 21]) {
+    tracker.requestStart(); const p = producer(tokens);
+    p.text(1000, "first"); p.text(1400, "last"); p.done(); tracker.finish(p.message as any);
+  }
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 50);
+  assert.equal(tracker.snapshot()?.sampleCount, 1);
+});
+
+test("clearing history preserves the pending request; reset also drops all smoothing history", t => {
+  const { tracker, producer } = fixture(t);
+  const complete = (tokens: number, ms: number) => {
+    const p = producer(tokens); p.text(1000, "first"); p.text(1000 + ms, "last");
+    p.done(); tracker.finish(p.message as any);
+  };
+  tracker.requestStart(); complete(41, 400);
+  tracker.requestStart(); complete(21, 400);
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 75);
+  assert.equal(tracker.snapshot()?.sampleCount, 2);
+  tracker.requestStart(); tracker.clearSample();
+  assert.equal(tracker.snapshot(), undefined);
+  complete(11, 500);
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 20);
+  assert.equal(tracker.snapshot()?.sampleCount, 1);
+  tracker.reset(); tracker.requestStart(); complete(21, 400);
+  assert.equal(tracker.snapshot()?.tokensPerSecond, 50);
+  assert.equal(tracker.snapshot()?.sampleCount, 1);
 });
 
 test("hidden reasoning is excluded; missing breakdown is not zero", t => {
@@ -59,7 +202,7 @@ test("hidden reasoning is excluded; missing breakdown is not zero", t => {
   }
 });
 
-test("single/buffered chunks, backfills, tool output and invalid completions preserve the previous valid rate", t => {
+test("single/buffered chunks, backfills, unstreamed tools and invalid completions preserve the previous valid rate", t => {
   const { tracker, producer } = fixture(t);
   tracker.requestStart(); const previous = producer(); previous.text(10, "a"); previous.text(410, "b"); previous.done(); tracker.finish(previous.message as any);
   const sample = tracker.snapshot(); assert.ok(sample);
@@ -138,6 +281,8 @@ for (const [tokens, ms, expected] of [
 test("formatting identifies generation scope and never rounds a measured slow rate to zero", () => {
   assert.equal(formatSpeed(38.54), "gen(last) 38.5 tok/s");
   assert.equal(formatSpeed(123.4), "gen(last) 123 tok/s");
+  assert.equal(formatSpeed(38.54, 2), "gen(avg2) 38.5 tok/s");
+  assert.equal(formatSpeed(123.4, 3), "gen(avg3) 123 tok/s");
   assert.equal(formatSpeed(1 / 60), "gen(last) 0.017 tok/s");
   assert.equal(formatSpeedValue(1e-9), "1e-9");
   for (const rate of [undefined, NaN, Infinity, -1, 0]) assert.equal(formatSpeed(rate), "");

@@ -76,7 +76,7 @@ test("footer disclosures are independent native mouse targets and preserve focus
     model: { id: "gpt-6.1-sol", provider: "openai", contextWindow: 500_000 },
     thinkingLevel: "xhigh", contextUsage: { tokens: 157_500, contextWindow: 500_000, percent: 31.5 },
     cwd: "/home/xu/project/harness/metis-pi", session: { input: 13_800_000, output: 1_000_000 },
-    cacheLastPct: 96.6, speed: { tokensPerSecond: 103, outputTokens: 1031, windowMs: 10000, reasoningTokens: 0, contentEvents: 2 },
+    cacheLastPct: 96.6, speed: { tokensPerSecond: 103, outputTokens: 1031, windowMs: 10000, reasoningTokens: 0, contentEvents: 2, sampleCount: 1 },
     changes: { additions: 99, deletions: 10 }, revision: 1,
   };
   const summary = "│ prune: ON · 743.1k->292.7k (-61%) · usage: 0 tokens";
@@ -119,6 +119,9 @@ test("footer disclosures are independent native mouse targets and preserve focus
     return frame();
   };
   assert.doesNotMatch(frame(), /project\/harness|output-speed-accounting|turns queued/);
+  Object.assign(snapshot.speed, { outputTokens: 1033, contentEvents: 6, sampleCount: 3 });
+  snapshot.revision++;
+  assert.match(frame(), /gen\(avg3\) 103 tok\/s/, "a pooled rate is never mislabeled as the latest raw response");
   const initialViewport = scroll.viewportHeight;
   assert.ok(initialViewport > 0, "exercise the native flexible transcript viewport");
   for (const [index, detail] of [[0, /project\/harness\/metis-pi/], [1, /turns queued/]]) {
