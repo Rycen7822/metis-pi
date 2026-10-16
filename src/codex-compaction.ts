@@ -13,6 +13,7 @@ import {
 import {
   METIS_EVENTS, isCodexCompactionOwnerRequest,
   type CodexCompactionOwnerRequest, type BeforeRemoteCompactRequest, type CondenseProjectRequest,
+  type GoalProjectRequest,
 } from "./collaboration.ts";
 
 const KEY = "metisCodexRemoteCompaction";
@@ -21,12 +22,17 @@ const TIMEOUT = 300_000;
 const MAX_BYTES = 8 * 1024 * 1024;
 const OAUTH_IDENTITY = "metisCodexCheckpointIdentity";
 const OAUTH_LEGACY = "metisCodexCheckpointLegacyBindings";
+const PORTABLE = "metisCodexPortableSummary";
+const MAX_SUMMARY_BYTES = 64 * 1024;
+const isPortableSummary = (value: unknown): value is string => typeof value === "string"
+  && value.trim().length > 0 && !value.trimStart().startsWith(MARKER) && Buffer.byteLength(value) <= MAX_SUMMARY_BYTES;
 type Item = Record<string, any>;
 interface BindingScope { route: string; account?: string; credential?: "oauth" | "api_key" }
 interface LegacyBinding extends BindingScope { binding: string }
 interface Checkpoint {
   version: 1; marker: string; binding: string; history: Item[];
   scope?: BindingScope; protocol?: "responses"; codexBinding?: string;
+  model?: { provider: string; modelId: string };
 }
 interface GrantIdentity { identity: string; legacy: LegacyBinding[] }
 type RequestAuth = Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
@@ -66,9 +72,10 @@ const bindingScope = (model: Model<Api>, url: string, account: unknown, header?:
   route: hash(route(model, url.replace(/\/+$/, ""))),
   ...(account !== undefined || header !== undefined ? { account: hash([account, header]) } : {}),
 });
+const isMarker = (value: unknown): value is string => typeof value === "string"
+  && value.startsWith(MARKER) && /^[\da-f-]{36}\]$/.test(value.slice(MARKER.length));
 const ours = (entry: SessionEntry): entry is CompactionEntry => entry.type === "compaction"
-  && (entry.fromHook === true || Object.hasOwn(record(entry.details), KEY))
-  && entry.summary.startsWith(MARKER) && /^[\da-f-]{36}\]$/.test(entry.summary.slice(MARKER.length));
+  && (Object.hasOwn(record(entry.details), KEY) || entry.fromHook === true && isMarker(entry.summary));
 
 function isRemoteModel(model: ExtensionContext["model"]): model is Model<Api>;
 function isRemoteModel(model: CodexCompactionOwnerRequest["model"]): boolean;
@@ -86,7 +93,9 @@ function responsesHistory(value: unknown): value is Item[] {
 
 function checkpoint(entry: CompactionEntry): Checkpoint | undefined {
   const data = record(record(entry.details)[KEY]);
-  if (data.version !== 1 || data.marker !== entry.summary || typeof data.binding !== "string" || !Array.isArray(data.history)) return;
+  if (!isMarker(entry.summary) || data.version !== 1 || data.marker !== entry.summary
+    || typeof data.binding !== "string" || !Array.isArray(data.history)) return;
+  if (data.model !== undefined && (typeof record(data.model).provider !== "string" || typeof record(data.model).modelId !== "string")) return;
   if (data.scope && (!digest(data.scope.route)
     || data.scope.account !== undefined && !digest(data.scope.account)
     || data.scope.credential !== undefined && !["oauth", "api_key"].includes(data.scope.credential))) return;
@@ -365,7 +374,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       }
     }
   };
-  const restorationError = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext, outputReserve = ctx.model?.maxTokens ?? 0) => {
+  const restorationError = (messages: Parameters<typeof convertToLlm>[0], ctx: ExtensionContext,
+    outputReserve = ctx.model?.maxTokens ?? 0, subject = "Restored history") => {
     const system = getCurrentSystemMessage(messages);
     const overhead = system ? 0 : Math.ceil((ctx.getSystemPrompt().length
       + JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name))).length) / 4);
@@ -373,7 +383,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
     const window = ctx.model?.contextWindow;
     const budget = outputReserve ? "including output reserve" : "for compaction input";
     return window && tokens > window
-      ? `Restored history needs approximately ${tokens} tokens ${budget}; context window is ${window}`
+      ? `${subject} needs approximately ${tokens} tokens ${budget}; context window is ${window}`
       : undefined;
   };
   let generation = 0;
@@ -382,8 +392,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
   let preparedSession: string | undefined;
   let preparedGeneration = 0;
   let preparedMarker: string | undefined;
+  let preparedPortable: string | undefined;
   let preparedSource: string | undefined;
-  let restored = false;
   let requestCancelled = false;
   let unsubscribeOwner: (() => void) | undefined;
   const subscribeOwner = () => {
@@ -431,15 +441,80 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       ...(Array.isArray(body.contents) ? { contents: [] } : {}) };
   };
 
-  // A checkpoint is model/account bound, not a portable textual summary. Restore
-  // the original canonical history for other routes, damaged metadata or edits.
+  const portableHash = (current: NonNullable<ReturnType<typeof active>>) => hash([
+    current.entry.id, current.entry.firstKeptEntryId, current.data,
+  ]);
+  const savedPortable = (current: NonNullable<ReturnType<typeof active>>, ctx: ExtensionContext): string | undefined => {
+    if (!current.data) return;
+    const fingerprint = portableHash(current);
+    const entry = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === PORTABLE
+      && record(entry.data).checkpoint === current.entry.id && record(entry.data).fingerprint === fingerprint);
+    const summary = entry?.type === "custom" ? record(entry.data).summary : undefined;
+    return isPortableSummary(summary) ? summary : undefined;
+  };
+  const portableProjection = async (
+    current: NonNullable<ReturnType<typeof active>>, ctx: ExtensionContext, operationSignal = ctx.signal,
+  ) => {
+    const data = current.data;
+    if (!data) throw new Error("Remote checkpoint was edited or its metadata is invalid. Use /compact to rebuild it");
+    let summary = savedPortable(current, ctx);
+    if (!summary) {
+      const version = generation, session = ctx.sessionManager.getSessionId(), source = sourceHash(ctx.sessionManager.getBranch());
+      const sourceUnchanged = () => version === generation && session === ctx.sessionManager.getSessionId()
+        && source === sourceHash(ctx.sessionManager.getBranch());
+      const origin = data.model ?? current.origin;
+      const model = origin && ctx.modelRegistry.find(origin.provider, origin.modelId);
+      if (!model || !isRemoteModel(model)) throw new Error("Original checkpoint model is unavailable; restore its provider before retrying");
+      const request = await requestBinding(ctx, model, accounts);
+      if (bindingState(data, request, current.origin) !== "valid")
+        throw new Error("Original checkpoint identity could not be verified; restore its authentication before retrying");
+      if (!sourceUnchanged())
+        throw new Error("Portable summary source changed; retry with the current session");
+      const controller = new AbortController();
+      pending?.abort(); pending = controller;
+      const signal = AbortSignal.any([controller.signal, ...(operationSignal ? [operationSignal] : []), AbortSignal.timeout(TIMEOUT)]);
+      try {
+        const result = await request.provider.streamSimple(request.model, normalizeContext({
+          systemPrompt: "Write a portable context checkpoint for another model to continue this conversation. "
+            + "Summarize the supplied checkpoint, do not execute its tasks. Preserve the user's goal, constraints, "
+            + "decisions, completed work, files, unresolved issues and next steps. Return only a concise, self-contained text summary.",
+          messages: convertToLlm([
+            { role: "compactionSummary", summary: current.entry.summary, tokensBefore: 0, timestamp: 0 },
+            { role: "user", content: "Produce the portable context summary now.", timestamp: 0 },
+          ]),
+        }), {
+          apiKey: request.auth.apiKey, headers: request.auth.headers, env: request.auth.env,
+          signal, transport: "sse", maxRetries: 2, cacheRetention: "short",
+          maxTokens: Math.min(8192, model.maxTokens), reasoning: "low", sessionId: session,
+          onPayload: payload => replaceMarker(payload, data),
+        }).result();
+        if (signal.aborted || result.stopReason !== "stop")
+          throw new Error(result.errorMessage ? safeError(result.errorMessage, [request.auth.apiKey!]) : "Portable summary did not complete");
+        summary = result.content.filter(part => part.type === "text").map(part => part.text).join("\n").trim();
+        if (!isPortableSummary(summary))
+          throw new Error("Portable summary is empty or invalid");
+        const final = await requestBinding(ctx, model, accounts);
+        if (signal.aborted || !sourceUnchanged() || request.identity !== final.identity || !sameProvider(request, final))
+          throw new Error("Portable summary source changed; retry with the current session");
+        pi.appendEntry(PORTABLE, { checkpoint: current.entry.id, fingerprint: portableHash(current), summary, usage: result.usage });
+      } finally {
+        if (pending === controller) pending = undefined;
+      }
+    }
+    const branch = ctx.sessionManager.getBranch().map(entry => entry.id === current.entry.id && entry.type === "compaction"
+      ? { ...entry, summary } : entry);
+    return { summary, projection: buildSessionProjection(branch) };
+  };
+
+  // Keep opaque checkpoints on their original route. Other models use a durable
+  // text summary of that same boundary, never the uncompressed source ledger.
   pi.on("context", async (_event, ctx) => {
     trackOAuth(ctx);
     preparedModel = ctx.model ? { ...ctx.model } : undefined;
     preparedSession = ctx.sessionManager.getSessionId();
     preparedGeneration = generation;
     preparedMarker = undefined;
-    restored = false;
+    preparedPortable = undefined;
     requestCancelled = false;
     // Native history/boundaries/edits determine checkpoint recovery. Extension
     // journals and summary messages are projected by their own context hooks,
@@ -454,42 +529,74 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
           preparedMarker = current.entry.summary;
           return;
         }
-        if (state === "unverified") {
+        if (state === "unverified" && !savedPortable(current, ctx)) {
           cancelRequest(ctx, "Remote checkpoint identity could not be verified. Check authentication and retry, "
             + "or use /compact to rebuild it. Checkpoint and history were preserved.");
           return { messages: [] };
         }
       } catch (error) {
-        cancelRequest(ctx, `Remote checkpoint verification unavailable: ${safeError(error)}. `
-          + "Checkpoint and history were preserved; retry after authentication recovers.");
-        return { messages: [] };
+        if (!savedPortable(current, ctx)) {
+          cancelRequest(ctx, `Remote checkpoint verification unavailable: ${safeError(error)}. `
+            + "Checkpoint and history were preserved; retry after authentication recovers.");
+          return { messages: [] };
+        }
       }
     }
-    const messages = buildSessionProjection(rawBranch(ctx.sessionManager.getBranch())).messages;
-    restored = true;
-    return { messages: messages.filter(m => m.role !== "system") };
+    try {
+      const portable = await portableProjection(current, ctx);
+      preparedPortable = portable.summary;
+      return { messages: portable.projection.messages.filter(m => m.role !== "system") };
+    } catch (error) {
+      cancelRequest(ctx, `Cannot prepare portable checkpoint: ${safeError(error)}. `
+        + "Checkpoint and history were preserved; no history was expanded.");
+      return { messages: [] };
+    }
   });
   pi.on("context_with_system", (event, ctx) => {
-    if (restored && !requestCancelled) {
-      const reason = restorationError(event.messages, ctx);
-      if (reason) cancelRequest(ctx, `${reason}. Request cancelled; history was preserved. `
-        + "Use /compact to rebuild, or /tree to resume before the oversized input.");
+    let messages = event.messages;
+    const summary = preparedPortable;
+    if (summary && !requestCancelled) {
+      const current = active(ctx);
+      const summaries = messages.filter(message => message.role === "compactionSummary");
+      if (!current || summaries.length !== 1
+        || summaries[0].summary !== summary && summaries[0].summary !== current.entry.summary) {
+        cancelRequest(ctx, "Portable checkpoint summary changed during context projection; retry with the current context. History was preserved.");
+      } else {
+        if (summaries[0].summary !== summary)
+          messages = messages.map(message => message.role === "compactionSummary" ? { ...message, summary } : message);
+        const reason = restorationError(messages, ctx, undefined, "Portable checkpoint context");
+        if (reason) cancelRequest(ctx, `${reason}. Request cancelled; history was preserved. `
+          + "Use /compact to rebuild, or /tree to resume before the oversized input.");
+      }
     }
-    if (requestCancelled) return { messages: event.messages.filter(message => message.role === "system") };
+    if (requestCancelled) return { messages: messages.filter(message => message.role === "system") };
+    if (messages !== event.messages) return { messages };
   });
   pi.on("before_provider_request", async (event, ctx) => {
     if (requestCancelled) { ctx.abort(); return emptyPayload(event.payload); }
+    if (preparedPortable) {
+      const current = active(ctx);
+      if (preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation
+        || hash(preparedModel) !== hash(ctx.model) || preparedSource !== sourceHash(ctx.sessionManager.getBranch())
+        || !current || savedPortable(current, ctx) !== preparedPortable) {
+        cancelRequest(ctx); return emptyPayload(event.payload);
+      }
+      return;
+    }
     // Only an exact carrier prepared from a real checkpoint is ours. Ordinary
     // source code, user text and tool output can contain the same marker literal.
     if (!preparedMarker) return;
-    const expected = summaryText(preparedMarker);
-    const input = record(event.payload).input;
-    if (!Array.isArray(input) || !input.some(item => matchesMarker(record(item), expected))) return;
     const requestModel = preparedModel ?? ctx.model;
     if (!isRemoteModel(requestModel)
       || preparedSession !== ctx.sessionManager.getSessionId() || preparedGeneration !== generation
-      || preparedSource !== sourceHash(ctx.sessionManager.getBranch())) {
+      || hash(requestModel) !== hash(ctx.model) || preparedSource !== sourceHash(ctx.sessionManager.getBranch())) {
       cancelRequest(ctx); return emptyPayload(event.payload);
+    }
+    const expected = summaryText(preparedMarker);
+    const input = record(event.payload).input;
+    if (!Array.isArray(input) || !input.some(item => matchesMarker(record(item), expected))) {
+      cancelRequest(ctx, "Remote checkpoint carrier changed. Retry with the current context; history was preserved.");
+      return emptyPayload(event.payload);
     }
     const source = sourceHash(ctx.sessionManager.getBranch());
     const current = active(ctx);
@@ -534,14 +641,34 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       diagnostic.compactorApi = compactor?.model.api;
       const reusable = previous?.data && request && bindingState(previous.data, request, previous.origin) === "valid"
         && (!hybrid || previous.data.codexBinding === compactor?.identity);
-      if (previous?.data && request && bindingState(previous.data, request, previous.origin) === "unverified" && event.reason !== "manual")
+      if (previous?.data && request && bindingState(previous.data, request, previous.origin) === "unverified"
+        && !savedPortable(previous, ctx) && event.reason !== "manual")
         throw new Error("Remote checkpoint identity could not be verified; checkpoint was preserved. "
           + "Use /compact to rebuild it after checking authentication.");
-      const projected = buildSessionProjection(reusable || !previous ? branch : rawBranch(branch));
+      let projected: ReturnType<typeof buildSessionProjection>;
+      let rebuilding = false;
+      if (reusable || !previous) projected = buildSessionProjection(branch);
+      else {
+        try { projected = (await portableProjection(previous, ctx, event.signal)).projection; }
+        catch (error) {
+          const metadata = record(record(previous.entry.details)[KEY]);
+          const origin = previous.origin ?? metadata.model;
+          const scope = record(metadata.scope);
+          const repairable = event.reason === "manual" && request && origin?.provider === model?.provider
+            && origin?.modelId === model?.id && (!digest(scope.route) || scope.route === request.scope.route)
+            && (!previous.data || bindingState(previous.data, request, previous.origin) !== "valid");
+          if (event.signal.aborted || !repairable) throw error;
+          rebuilding = true;
+          projected = buildSessionProjection(rawBranch(branch));
+        }
+      }
       const cut = projected.entries.findIndex(e => e.sourceEntry.id === event.preparation.firstKeptEntryId);
       if (cut < 0) throw new Error("Compaction boundary is no longer visible");
       let prefix = projected.entries.slice(0, cut).flatMap(e => e.messages);
       if (previous && !reusable) {
+        const goal: GoalProjectRequest = { messages: prefix };
+        pi.events.emit(METIS_EVENTS.goalProject, goal);
+        prefix = goal.messages as typeof prefix;
         const projection: CondenseProjectRequest = { sessionId: session, api: model?.api,
           messages: prefix, maintenance: true, includeSummaries: true };
         pi.events.emit(METIS_EVENTS.condenseProject, projection);
@@ -549,8 +676,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         prefix = projection.messages as typeof prefix;
         // Compaction has an input window, not ordinary generation's maxTokens
         // reserve. Its provider owns checkpoint output limits and validation.
-        const reason = restorationError(prefix, ctx, remote ? 0 : undefined);
-        if (reason) throw new Error(`${reason}. Use /model with a larger context window and retry /compact, `
+        const reason = restorationError(prefix, ctx, remote ? 0 : undefined, rebuilding ? "Restored history" : "Portable checkpoint context");
+        if (reason) throw new Error(`${reason}. Use the original model with a sufficient context window and retry /compact, `
           + "or /tree to resume before the oversized input; the original branch remains available");
       }
       const files = record(previous?.entry.details);
@@ -559,8 +686,8 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
       for (const path of Array.isArray(files.modifiedFiles) ? files.modifiedFiles : [])
         if (typeof path === "string") event.preparation.fileOps.edited.add(path);
       if (!remote) {
-        // Pi will run its unchanged native summarizer, but over recoverable raw
-        // history, not the opaque fallback marker from the Codex session.
+        // Pi's native summarizer receives the portable context rather than
+        // the opaque marker from the Codex session.
         event.preparation.previousSummary = prefix.find(m => m.role === "compactionSummary")?.summary;
         event.preparation.messagesToSummarize = prefix.filter(m => m.role !== "system" && m.role !== "compactionSummary");
         event.preparation.turnPrefixMessages = [];
@@ -681,6 +808,7 @@ export function registerCodexCompaction(pi: ExtensionAPI) {
         tokensBefore: event.preparation.tokensBefore, usage: result.usage,
         details: { readFiles, modifiedFiles, [KEY]: {
           version: 1, marker, binding: identity, scope: request.scope, history, ...(responses ? { protocol: "responses" as const } : {}),
+          model: { provider: model.provider, modelId: model.id },
           ...(hybrid ? { codexBinding: compactor.identity } : {}),
         } satisfies Checkpoint } } };
     } catch (error) {

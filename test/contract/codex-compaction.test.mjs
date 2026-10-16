@@ -100,10 +100,14 @@ async function host(t, {
   }
   if (contextJournal) {
     const entry = join(dir, "context-journal.ts");
+    const projection = contextJournal === "raw"
+      ? 'ctx.sessionManager.getBranch().filter(entry => entry.type === "message").map(entry => entry.message)'
+      : contextJournal === "drop-summary" ? 'event.messages.filter(message => message.role !== "compactionSummary")'
+        : "ctx.sessionManager.buildSessionProjection().messages";
     writeFileSync(entry, `export default function(pi) { pi.on("context", (event, ctx) => {
       ctx.sessionManager.appendCustomEntry("projection-stats", { requests: 1 });
       ctx.sessionManager.appendCustomMessageEntry("projection-summary", "PROJECTED DURABLE SUMMARY", false);
-      return { messages: ctx.sessionManager.buildSessionProjection().messages };
+      return { messages: ${projection} };
     }); }`);
     paths.push(entry);
   }
@@ -140,7 +144,7 @@ async function host(t, {
         { type: "compaction", id: `cmp-${count}`, encrypted_content: `opaque-${count}` },
       ], usage: { input_tokens: 100, output_tokens: 2, total_tokens: 102 } });
     }
-    if (body.input.at(-1)?.type !== "compaction_trigger") return normalResponse ? normalResponse({ body }) : answer();
+    if (body.input.at(-1)?.type !== "compaction_trigger") return normalResponse ? normalResponse({ body, signal: options.signal }) : answer();
     count++;
     return response ? await response({ body, sm, session, count }) : sse(checkpointEvents(count));
   });
@@ -298,7 +302,8 @@ test("hybrid checkpoints survive reload and recompact without replaying another 
   await next.session.compact();
   const rebuilt = next.bodies.at(-1);
   assert.equal(rebuilt.input.some(item => item.type === "compaction"), false);
-  assert.match(JSON.stringify(rebuilt.input), /ORIGINAL USER/);
+  assert.match(JSON.stringify(rebuilt.input), /OK/);
+  assert.doesNotMatch(JSON.stringify(rebuilt.input), /old work/);
   rmSync(join(next.codexDir, "auth.json"));
   await next.session.prompt("CONTINUE WITHOUT PRODUCER LOGIN");
   assert.equal(next.urls.at(-1), "https://api.openai.com/v1/responses");
@@ -466,20 +471,37 @@ test("cancelled checkpoint requests clear payload even when abort is ineffective
   });
 });
 
-test("legacy checkpoint uses recorded model changes to prove incompatibility", async t => {
+test("a missing native checkpoint carrier cancels instead of losing compressed context", async t => {
+  const h = await host(t);
+  await h.session.compact();
+  const provider = h.runtime.getProvider(model.provider), stream = provider.streamSimple.bind(provider);
+  t.mock.method(provider, "streamSimple", (m, context, options) => stream(m, context, {
+    ...options, onPayload: payload => options.onPayload({ ...payload, input: [] }),
+  }));
+  const calls = h.bodies.length;
+  await h.session.prompt("CARRIER MUST REMAIN PRESENT");
+  assert.equal(h.bodies.length, calls);
+  assert.match(h.notices.join("\n"), /carrier changed/);
+  assert.equal(compactions(h).length, 1);
+});
+
+test("legacy checkpoint materializes a portable summary on a proven model change", async t => {
   const h = await host(t, { routeModel: responsesModel, oauth: true });
   h.sm.appendModelChange(responsesModel.provider, responsesModel.id);
   await h.session.compact();
   delete compactions(h).at(-1).details[key].scope;
+  delete compactions(h).at(-1).details[key].model;
   await h.session.setModel({ ...responsesModel, id: "gpt-6-sol" });
   const calls = h.bodies.length;
   await h.session.prompt("RESTORE ON PROVEN MODEL CHANGE");
-  assert.equal(h.bodies.length, calls + 1);
-  assert.match(JSON.stringify(h.bodies.at(-1)), /ORIGINAL USER/);
+  assert.equal(h.bodies.length, calls + 2);
+  assert.equal(h.bodies.at(-2).model, responsesModel.id);
+  assert.equal(h.bodies.at(-2).input.filter(item => item.type === "compaction").length, 1);
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /ORIGINAL USER|old work/);
   assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
 });
 
-test("credential kind changes restore history instead of locking checkpoint replay", async t => {
+test("credential kind changes pause ordinary replay without expanding history", async t => {
   for (const mode of ["api-to-oauth", "oauth-to-api", "same-token-oauth-to-api"]) await t.test(mode, async t => {
     const oauth = mode !== "api-to-oauth";
     const h = await host(t, { routeModel: responsesModel, oauth });
@@ -492,8 +514,8 @@ test("credential kind changes restore history instead of locking checkpoint repl
     await h.runtime.refresh({ allowNetwork: false });
     const calls = h.bodies.length;
     await h.session.prompt("RECOVER UNDER NEW CREDENTIAL KIND");
-    assert.equal(h.bodies.length, calls + 1);
-    assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+    assert.equal(h.bodies.length, calls);
+    assert.match(h.notices.join("\n"), /identity.*verified/);
     await h.session.compact();
     assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false,
       "recompaction rebuilds instead of reusing the old credential kind's checkpoint");
@@ -511,14 +533,14 @@ test("credential kind changes during compaction prevent publication even with th
   assert.match(h.notices.join("\n"), /source changed/);
 });
 
-test("API key rotation is a known binding change", async t => {
+test("API key rotation pauses replay instead of expanding the checkpoint", async t => {
   const h = await host(t, { routeModel: responsesModel, oauth: false });
   await h.session.compact();
   writeFileSync(join(h.dir, "auth.json"), JSON.stringify({ openai: { type: "api_key", key: "sk-offline-rotated" } }));
   const calls = h.bodies.length;
   await h.session.prompt("AFTER API KEY ROTATION");
-  assert.equal(h.bodies.length, calls + 1);
-  assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+  assert.equal(h.bodies.length, calls);
+  assert.match(h.notices.join("\n"), /identity.*verified/);
 });
 
 test("unverified oversized checkpoints provide a usable recovery branch without losing source", async t => {
@@ -702,7 +724,7 @@ async function publishRecoverySummary(h, source) {
   await h.session.reload();
 }
 
-test("restoration capacity is checked after real Condense projection", async t => {
+test("portable context retains real Condense summaries without restoring source", async t => {
   const h = await host(t, { condense: true });
   const source = appendRecoverableResult(h);
   await h.session.compact();
@@ -710,7 +732,7 @@ test("restoration capacity is checked after real Condense projection", async t =
   await h.session.setModel({ ...modelNamed("gpt-6-sol"), contextWindow: 12000, maxTokens: 1024 });
   const before = h.bodies.length;
   await h.session.prompt("RECOVER THROUGH CONDENSE");
-  assert.equal(h.bodies.length, before + 1);
+  assert.equal(h.bodies.length, before + 2);
   const body = JSON.stringify(h.bodies.at(-1));
   assert.doesNotMatch(body, /RECOVERABLE_TOOL_OUTPUT_/);
   assert.match(body, /DURABLE RECOVERY SUMMARY/);
@@ -763,18 +785,18 @@ test("an unproven OAuth replacement preserves the checkpoint and stops replay de
   assert.match(h.notices.join("\n"), /identity.*verif/i);
 });
 
-test("oversized restored history is rejected before inference and before recompaction", async t => {
+test("oversized source stays compressed across model switches and recompaction", async t => {
   const h = await host(t, { routeModel: responsesModel, oauth: true });
   h.sm.appendContextEdit(h.sm.getBranch().find(e => e.type === "message").id, { content: "RAW HISTORY ".repeat(8000) });
   await h.session.compact();
   await h.session.setModel({ ...responsesModel, id: "gpt-6-sol", contextWindow: 8000, maxTokens: 1024 });
   const calls = h.bodies.length;
   await h.session.prompt("RESTORE TOO MUCH HISTORY");
-  assert.equal(h.bodies.length, calls, "no oversized ordinary request reaches fetch");
-  assert.match(h.notices.join("\n"), /restored history.*context window/i);
-  await assert.rejects(h.session.compact(), /cancel/i);
-  assert.equal(h.bodies.length, calls, "no oversized restored compaction request reaches fetch");
-  assert.equal(compactions(h).length, 1);
+  assert.equal(h.bodies.length, calls + 2, "summarize the checkpoint once, then send compact text");
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /RAW HISTORY|Metis Codex remote checkpoint/);
+  await h.session.compact();
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /RAW HISTORY|Metis Codex remote checkpoint/);
+  assert.equal(compactions(h).length, 2);
   assert.ok(h.sm.getBranch().some(e => e.type === "context_edit" && e.replacement.content.startsWith("RAW HISTORY")));
 });
 
@@ -1022,12 +1044,16 @@ test("invalid or stale remote results explicitly cancel without default summariz
   });
 });
 
-test("editing covered source invalidates opaque state and restores the edited canonical history", async t => {
+test("editing covered source requires explicit repair without expanding ordinary requests", async t => {
   const h = await host(t);
   const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
   await h.session.compact();
   h.sm.appendContextEdit(source.id, { content: "CORRECTED ORIGINAL" });
+  const calls = h.bodies.length;
   await h.session.prompt("CONTINUE AFTER EDIT");
+  assert.equal(h.bodies.length, calls);
+  assert.match(h.notices.join("\n"), /edited|invalid/);
+  await h.session.compact();
   const body = h.bodies.at(-1);
   assert.ok(JSON.stringify(body.input).includes("CORRECTED ORIGINAL"));
   assert.equal(JSON.stringify(body.input).includes("ORIGINAL USER"), false);
@@ -1035,14 +1061,299 @@ test("editing covered source invalidates opaque state and restores the edited ca
   assert.equal(JSON.stringify(body.input).includes("Metis Codex remote checkpoint"), false);
 });
 
-test("changing the model recovers the original history instead of replaying an incompatible checkpoint", async t => {
+test("model changes persist portable summaries and switching back preserves encrypted replay", async t => {
+  for (const [name, routeModel, oauth] of [["Codex", model, true], ["OAuth Responses", responsesModel, true],
+    ["API Responses", responsesModel, false]]) await t.test(name, async t => {
+    const h = await host(t, { routeModel, oauth });
+    await h.session.compact();
+    await h.session.setModel({ ...routeModel, id: "gpt-6-sol" });
+    const calls = h.bodies.length;
+    await h.session.prompt("CHANGED MODEL");
+    assert.equal(h.bodies.length, calls + 2, "one original-model summary and one target-model inference");
+    assert.equal(h.bodies.at(-2).model, routeModel.id);
+    assert.equal(h.bodies.at(-2).input.filter(item => item.type === "compaction").length, 1);
+    const body = h.bodies.at(-1);
+    assert.equal(body.input.some(i => i.type === "compaction"), false);
+    assert.match(JSON.stringify(body), /OK/);
+    assert.doesNotMatch(JSON.stringify(body), /old work|Metis Codex remote checkpoint/);
+    assert.equal(h.sm.getBranch().filter(e => e.type === "custom" && e.customType === "metisCodexPortableSummary").length, 1);
+    await h.session.setModel(routeModel);
+    await h.session.prompt("ORIGINAL MODEL AGAIN");
+    assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+    await h.session.setModel({ ...routeModel, id: "gpt-6-sol" });
+    const after = h.bodies.length;
+    await h.session.prompt("REUSE PORTABLE SUMMARY");
+    assert.equal(h.bodies.length, after + 1);
+    assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+  });
+});
+
+test("portable summaries survive reload and branch navigation without resurrecting source", async t => {
+  const h = await host(t);
+  await h.session.compact();
+  const checkpoint = compactions(h).at(-1);
+  await h.session.setModel(modelNamed("gpt-6-sol"));
+  await h.session.prompt("CREATE PORTABLE SUMMARY");
+  const path = h.sm.getSessionFile();
+  const restored = await host(t, { existing: path, routeModel: modelNamed("gpt-6-sol") });
+  await restored.session.prompt("CONTINUE AFTER RELOAD");
+  assert.equal(restored.bodies.length, 1, "reloading reuses the persisted portable summary");
+  assert.doesNotMatch(JSON.stringify(restored.bodies[0]), /old work|Metis Codex remote checkpoint/);
+  await restored.session.navigateTree(checkpoint.id, { summarize: false });
+  const calls = restored.bodies.length;
+  await restored.session.prompt("FORK BEFORE PORTABLE SUMMARY");
+  assert.equal(restored.bodies.length, calls + 2, "another branch materializes its own summary");
+  assert.doesNotMatch(JSON.stringify(restored.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+});
+
+test("later context projections cannot replace portable text with the native marker", async t => {
+  const h = await host(t, { contextJournal: true });
+  await h.session.compact();
+  await h.session.setModel(modelNamed("gpt-6-sol"));
+  await h.session.prompt("PORTABLE TEXT MUST SURVIVE OTHER PROJECTORS");
+  const body = JSON.stringify(h.bodies.at(-1));
+  assert.match(body, /PROJECTED DURABLE SUMMARY/);
+  assert.match(body, /OK/);
+  assert.doesNotMatch(body, /old work|Metis Codex remote checkpoint/);
+});
+
+test("later projections cannot silently drop the summary or resurrect raw source", async t => {
+  for (const contextJournal of ["raw", "drop-summary"]) await t.test(contextJournal, async t => {
+    const h = await host(t, { contextJournal });
+    await h.session.compact();
+    await h.session.setModel(modelNamed("gpt-6-sol"));
+    const calls = h.bodies.length;
+    await h.session.prompt("NO RAW OR MISSING HISTORY");
+    assert.equal(h.bodies.length, calls + 1, "only encrypted-to-text materialization is allowed");
+    assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+    assert.match(h.notices.join("\n"), /summary changed during context projection/);
+    await h.session.prompt("RETRY STILL HAS THE UNSAFE PROJECTOR");
+    assert.equal(h.bodies.length, calls + 1);
+  });
+});
+
+test("same-model API and endpoint changes use portable context on the new route", async t => {
+  for (const apiChange of [false, true]) await t.test(apiChange ? "API" : "endpoint", async t => {
+    const h = await host(t);
+    await h.session.compact();
+    await h.session.setModel({ ...model, baseUrl: "https://changed-route.invalid/v1",
+      ...(apiChange ? { api: "openai-responses" } : {}) });
+    const calls = h.bodies.length;
+    await h.session.prompt("CHANGED ROUTE");
+    assert.equal(h.bodies.length, calls + 2);
+    assert.match(h.urls.at(-2), /chatgpt\.com/);
+    assert.equal(new URL(h.urls.at(-1)).origin, "https://changed-route.invalid");
+    assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+    assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+  });
+});
+
+test("an unavailable original model pauses or reuses existing portable text without expansion", async t => {
+  for (const cached of [false, true]) await t.test(cached ? "cached" : "uncached", async t => {
+    const h = await host(t);
+    await h.session.compact();
+    await h.session.setModel(modelNamed("gpt-6-sol"));
+    if (cached) await h.session.prompt("SAVE PORTABLE TEXT");
+    const find = h.runtime.getModel.bind(h.runtime);
+    t.mock.method(h.runtime, "getModel", (p, id) => p === model.provider && id === model.id ? undefined : find(p, id));
+    const calls = h.bodies.length;
+    await h.session.prompt("ORIGINAL MODEL REMOVED");
+    assert.equal(h.bodies.length, calls + Number(cached));
+    if (cached) assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+    else assert.match(h.notices.join("\n"), /Original checkpoint model is unavailable/);
+  });
+});
+
+test("portable summary failures preserve the checkpoint and never send raw inference", async t => {
+  for (const failure of ["http", "empty", "truncated", "model-change", "tail-change"]) await t.test(failure, async t => {
+    let failing = true;
+    const h = await host(t, { normalResponse: async () => {
+      if (!failing) return answer();
+      if (failure === "http") return Response.json({ error: { message: "PORTABLE FAILURE", type: "invalid_request_error" } }, { status: 400 });
+      if (failure === "empty") return sse([completed([])]);
+      if (failure === "truncated") return sse([{ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } }]);
+      if (failure === "model-change") await h.session.setModel(modelNamed("gpt-6-luna"));
+      if (failure === "tail-change") h.sm.appendMessage(user("APPENDED WHILE SUMMARIZING"));
+      return answer();
+    } });
+    await h.session.compact();
+    const checkpoint = compactions(h).at(-1), calls = h.bodies.length;
+    await h.session.setModel(modelNamed("gpt-6-sol"));
+    await h.session.prompt("FAILED PORTABLE MIGRATION");
+    assert.ok(h.bodies.length > calls);
+    for (const body of h.bodies.slice(calls)) {
+      assert.equal(body.model, model.id, "only the original-model summary may retry");
+      assert.equal(body.input.filter(item => item.type === "compaction").length, 1);
+    }
+    assert.equal(h.sm.getBranch().some(e => e.type === "custom" && e.customType === "metisCodexPortableSummary"), false);
+    assert.equal(compactions(h).at(-1), checkpoint);
+    assert.match(h.notices.join("\n"), /no history was expanded/);
+    failing = false;
+    await h.session.prompt("RETRY PORTABLE MIGRATION");
+    assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+    assert.equal(h.bodies.at(-1).input.some(item => item.type === "compaction"), false);
+  });
+});
+
+test("user cancellation aborts portable generation in ordinary requests and manual compaction", async t => {
+  for (const manual of [false, true]) await t.test(manual ? "manual" : "inference", { timeout: 5000 }, async t => {
+    let started;
+    const waiting = new Promise(resolve => { started = resolve; });
+    const h = await host(t, { other: true, normalResponse: ({ signal }) => {
+      started();
+      return new Promise((_, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    } });
+    await h.session.compact();
+    const { ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+    await h.session.setModel(new ModelRegistry(h.runtime).find("other-codex", "other"));
+    h.sm.appendMessage(user("KEPT CANCELLATION TAIL"));
+    const calls = h.bodies.length;
+    const task = (manual ? h.session.compact() : h.session.prompt("CANCEL PORTABLE GENERATION"))
+      .then(() => undefined, error => error);
+    await waiting;
+    if (manual) h.session.abortCompaction();
+    else await h.session.abort();
+    const error = await task;
+    if (manual) assert.match(error?.message ?? "", /cancel|abort/i);
+    assert.equal(h.bodies.length, calls + 1);
+    assert.equal(h.sm.getBranch().some(e => e.type === "custom" && e.customType === "metisCodexPortableSummary"), false);
+    assert.equal(compactions(h).length, 1);
+  });
+});
+
+test("portable summaries tolerate tail edits but never hide edits to covered source", async t => {
+  const h = await host(t);
+  const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
+  const tail = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "KEPT TAIL");
+  await h.session.compact();
+  await h.session.setModel(modelNamed("gpt-6-sol"));
+  await h.session.prompt("MIGRATE");
+  h.sm.appendContextEdit(tail.id, { content: "CORRECTED TAIL" });
+  let calls = h.bodies.length;
+  await h.session.prompt("AFTER TAIL EDIT");
+  assert.equal(h.bodies.length, calls + 1);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /CORRECTED TAIL/);
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work/);
+  h.sm.appendContextEdit(source.id, { content: "EDITED COVERED SOURCE" });
+  calls = h.bodies.length;
+  await h.session.prompt("AFTER COVERED EDIT");
+  assert.equal(h.bodies.length, calls);
+  assert.match(h.notices.join("\n"), /edited|invalid/);
+});
+
+test("a saved portable summary survives loss of original credentials without exposing ciphertext", async t => {
+  const h = await host(t, { other: true });
+  await h.session.compact();
+  await h.session.setModel(modelNamed("gpt-6-sol"));
+  await h.session.prompt("MIGRATE WHILE AUTHENTICATED");
+  await h.runtime.removeRuntimeApiKey("openai-codex");
+  writeFileSync(join(h.dir, "auth.json"), "{}");
+  const { ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+  await h.session.setModel(new ModelRegistry(h.runtime).find("other-codex", "other"));
+  const calls = h.bodies.length;
+  await h.session.prompt("CACHED CROSS PROVIDER");
+  assert.equal(h.bodies.length, calls + 1);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /OK/);
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|opaque-1|Metis Codex remote checkpoint/);
+});
+
+test("automatic compaction after a model switch migrates the checkpoint without raw history", async t => {
+  const h = await host(t);
+  h.sm.appendMessage(user("HUGE HISTORICAL INPUT ".repeat(5000)));
+  h.sm.appendMessage(assistant("archived work"));
+  h.sm.appendMessage(user("RECENT TAIL"));
+  await h.session.compact();
+  h.sm.appendMessage({ ...assistant("pressure", model.contextWindow * 2), model: "gpt-6-sol", timestamp: Date.now() + 1 });
+  h.sm.appendMessage(user("RECENT AFTER PRESSURE"));
+  const next = await host(t, { existing: h.sm.getSessionFile(), routeModel: {
+    ...modelNamed("gpt-6-sol"), contextWindow: 12000, maxTokens: 1024,
+  } });
+  await next.session.prompt("AUTO COMPACT AND CONTINUE");
+  assert.equal(compactions(next).length, 2);
+  assert.equal(next.bodies.length, 3, "portable summary, target compaction, then target inference");
+  assert.equal(next.bodies[0].model, model.id);
+  assert.equal(next.bodies[1].input.at(-1).type, "compaction_trigger");
+  assert.doesNotMatch(JSON.stringify(next.bodies.slice(1)), /HUGE HISTORICAL INPUT/);
+});
+
+test("automatic compaction can use saved portable text after an unproven OAuth replacement", async t => {
+  const h = await host(t, { routeModel: responsesModel, oauth: true });
+  await h.session.compact();
+  await h.session.setModel({ ...responsesModel, id: "gpt-6-sol" });
+  await h.session.prompt("SAVE PORTABLE TEXT");
+  h.sm.appendMessage({ ...assistant("pressure", responsesModel.contextWindow * 2), api: responsesModel.api,
+    provider: responsesModel.provider, model: responsesModel.id, timestamp: Date.now() + 1 });
+  h.sm.appendMessage(user("KEPT AUTH RECOVERY TAIL"));
+  const next = await host(t, { existing: h.sm.getSessionFile(), routeModel: responsesModel, oauth: true,
+    credential: { type: "oauth", access: `${newOAuthKey}untracked`, refresh: "offline-refresh", expires: Date.now() + 3600000 } });
+  await next.session.prompt("AUTOMATIC RECOMPACTION AFTER RELOGIN");
+  assert.equal(compactions(next).length, 2);
+  assert.equal(next.bodies.length, 2, "cached text needs only compaction and normal inference");
+  assert.equal(next.bodies[0].input.some(item => item.type === "compaction"), false);
+  assert.match(JSON.stringify(next.bodies[0]), /OK/);
+  assert.doesNotMatch(JSON.stringify(next.bodies[0]), /old work/);
+  assert.equal(next.bodies[1].input.filter(item => item.type === "compaction").length, 1);
+});
+
+test("invalid portable cache entries are regenerated without restoring source", async t => {
+  for (const damage of ["empty", "oversized", "fingerprint", "marker", "non-text"]) await t.test(damage, async t => {
+    const h = await host(t);
+    await h.session.compact();
+    await h.session.setModel(modelNamed("gpt-6-sol"));
+    await h.session.prompt("CREATE CACHED TEXT");
+    const cached = h.sm.getBranch().find(e => e.type === "custom" && e.customType === "metisCodexPortableSummary");
+    if (damage === "empty") cached.data.summary = "";
+    if (damage === "oversized") cached.data.summary = "x".repeat(65537);
+    if (damage === "fingerprint") cached.data.fingerprint = "invalid";
+    if (damage === "marker") cached.data.summary = compactions(h).at(-1).summary;
+    if (damage === "non-text") cached.data.summary = {};
+    const calls = h.bodies.length;
+    await h.session.prompt("REGENERATE CACHED TEXT");
+    assert.equal(h.bodies.length, calls + 2);
+    assert.equal(h.bodies.at(-2).input.filter(item => item.type === "compaction").length, 1);
+    assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
+  });
+});
+
+test("damaged checkpoint metadata cannot expand ordinary requests", async t => {
+  for (const damage of ["missing", "invalid", "invalid-model", "marker", "covered-edit"]) await t.test(damage, async t => {
+    const h = await host(t);
+    await h.session.compact();
+    const checkpoint = compactions(h).at(-1), calls = h.bodies.length;
+    if (damage === "missing") delete checkpoint.details[key];
+    if (damage === "invalid") checkpoint.details[key].history = [{ type: "compaction", encrypted_content: "" }];
+    if (damage === "invalid-model") checkpoint.details[key].model = 42;
+    if (damage === "marker") checkpoint.summary = "DAMAGED CHECKPOINT MARKER";
+    if (damage === "covered-edit") h.sm.appendContextEdit(h.sm.getBranch().find(e => e.type === "message").id, { content: "CHANGED COVERED SOURCE" });
+    await h.session.setModel(modelNamed("gpt-6-sol"));
+    await h.session.prompt("NO IMPLICIT RESTORATION");
+    assert.equal(h.bodies.length, calls);
+    assert.match(h.notices.join("\n"), /edited|invalid/);
+  });
+});
+
+test("portable payloads cancel when their prepared history becomes stale", async t => {
   const h = await host(t);
   await h.session.compact();
   await h.session.setModel(modelNamed("gpt-6-sol"));
-  await h.session.prompt("CHANGED MODEL");
-  assert.equal(h.bodies.at(-1).input.some(i => i.type === "compaction"), false);
-  assert.ok(JSON.stringify(h.bodies.at(-1).input).includes("old work"));
-  assert.equal(JSON.stringify(h.bodies.at(-1)).includes("Metis Codex remote checkpoint"), false);
+  await h.session.prompt("CACHE PORTABLE SUMMARY");
+  const getAuth = h.runtime.getAuth.bind(h.runtime);
+  let changed = false;
+  t.mock.method(h.runtime, "getAuth", async (m, options) => {
+    const result = await getAuth(m, options);
+    if (options?.signal && !changed) { changed = true; h.sm.appendMessage(user("NEW CANONICAL TAIL")); }
+    return result;
+  });
+  const calls = h.bodies.length;
+  await h.session.prompt("STALE PORTABLE REQUEST");
+  assert.equal(h.bodies.length, calls);
+  await h.session.prompt("RETRY WITH PORTABLE SUMMARY");
+  assert.equal(h.bodies.length, calls + 1);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /NEW CANONICAL TAIL/);
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work|Metis Codex remote checkpoint/);
 });
 
 test("a prompted session with a stored system checkpoint replays native history and retains only authored users", async t => {
@@ -1070,18 +1381,22 @@ test("an explicit compaction abort never falls back to plaintext or aborts the a
   assert.ok(JSON.stringify(h.bodies.at(-1)).includes("STILL USABLE"));
 });
 
-test("an account change restores originals and never sends another account's checkpoint", async t => {
+test("an account change pauses instead of sending another account's checkpoint or raw history", async t => {
   const h = await host(t);
   await h.session.compact();
   const access = "x." + Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "second-offline-account" } })).toString("base64url") + ".x";
   writeFileSync(join(h.dir, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access, refresh: "offline-refresh", expires: Date.now() + 3_600_000 } }));
+  const calls = h.bodies.length;
   await h.session.prompt("NEW ACCOUNT");
+  assert.equal(h.bodies.length, calls);
+  assert.match(h.notices.join("\n"), /identity.*verified/);
+  await h.session.compact();
   assert.equal(h.headers.at(-1).get("chatgpt-account-id"), "second-offline-account");
   assert.equal(h.bodies.at(-1).input.some(i => i.type === "compaction"), false);
   assert.ok(JSON.stringify(h.bodies.at(-1)).includes("old work"));
 });
 
-test("a different provider keeps native compaction and recovers raw Codex history before summarizing", async t => {
+test("a different provider compacts a portable summary without recovering raw Codex history", async t => {
   const h = await host(t, { other: true });
   await h.session.compact();
   const { ModelRegistry } = await import("@earendil-works/pi-coding-agent");
@@ -1089,11 +1404,27 @@ test("a different provider keeps native compaction and recovers raw Codex histor
   h.sm.appendMessage(user("OTHER TAIL"));
   const start = h.bodies.length;
   const result = await h.session.compact();
-  assert.equal(h.bodies.length, start + 1);
+  assert.equal(h.bodies.length, start + 2);
   assert.equal(h.bodies.at(-1).input.some(i => i.type === "compaction_trigger" || i.type === "compaction"), false);
-  assert.ok(JSON.stringify(h.bodies.at(-1)).includes("old work"));
+  assert.doesNotMatch(JSON.stringify(h.bodies.at(-1)), /old work/);
+  assert.match(JSON.stringify(h.bodies.at(-1)), /OK/);
   assert.equal(result.summary, "OK");
   assert.equal(compactions(h).at(-1).details?.[key], undefined);
+});
+
+test("manual compaction on another provider cannot turn summary failure into raw recovery", async t => {
+  const h = await host(t, { other: true, normalResponse: () => sse([completed([])]) });
+  await h.session.compact();
+  const { ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+  await h.session.setModel(new ModelRegistry(h.runtime).find("other-codex", "other"));
+  h.sm.appendMessage(user("KEPT OTHER PROVIDER TAIL"));
+  const calls = h.bodies.length;
+  await assert.rejects(h.session.compact(), /cancel/i);
+  assert.equal(compactions(h).length, 1);
+  assert.equal(h.bodies.length, calls + 1, "only the original model attempts to create portable text");
+  assert.equal(h.bodies.at(-1).model, model.id);
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.match(h.notices.join("\n"), /empty or invalid/);
 });
 
 test("system deltas retain the original prompt and the effective tool loadout", async t => {
@@ -1109,7 +1440,7 @@ test("system deltas retain the original prompt and the effective tool loadout", 
   assert.equal(body.tools.some(tool => tool.name === "write"), false);
 });
 
-for (const routeModel of [model, responsesModel]) test(`${routeModel.api}: a late covered edit cancels; user retry applies every context projection`, async t => {
+for (const routeModel of [model, responsesModel]) test(`${routeModel.api}: a late covered edit cancels until explicit repair`, async t => {
   const h = await host(t, { goal: true, routeModel });
   const source = h.sm.getBranch().find(e => e.type === "message" && e.message.content === "ORIGINAL USER");
   await h.session.compact();
@@ -1133,13 +1464,17 @@ for (const routeModel of [model, responsesModel]) test(`${routeModel.api}: a lat
   assert.equal(currentGoal().status, "active");
   assert.ok(h.notices.some(message => /cancelled.*Retry/.test(message)));
   await h.session.prompt("RETRY WITH CURRENT CONTEXT");
+  assert.equal(h.bodies.length, before, "retry must not unfold edited source");
+  await h.session.compact();
   const body = h.bodies.at(-1);
   assert.ok(JSON.stringify(body.input).includes("EDITED WHILE AUTHENTICATING"));
   assert.equal(JSON.stringify(body.input).includes("HIDDEN GOAL UI"), false);
   assert.equal(JSON.stringify(body.input).includes("STALE GOAL CONTINUATION"), false);
   assert.equal(body.input.some(item => item.type === "compaction"), false);
   assert.equal(JSON.stringify(body).includes("Metis Codex remote checkpoint"), false);
-  assert.equal(currentGoal().status, "budgetLimited", "the explicit retry is accounted normally");
+  await h.session.prompt("CONTINUE AFTER EXPLICIT REPAIR");
+  assert.equal(h.bodies.at(-1).input.filter(item => item.type === "compaction").length, 1);
+  assert.equal(currentGoal().status, "budgetLimited", "the successful explicit retry is accounted normally");
 });
 
 test("a history tail appended after context preparation cancels before the payload hook can accept it", async t => {
@@ -1242,9 +1577,12 @@ test("a late edit evicts only the active native session's cached Codex WebSocket
   assert.equal(unrelatedSocket.readyState, 1, "scoped cleanup must retain the other session's cache");
   assert.equal(h.session.messages.at(-1).stopReason, "aborted");
   await h.session.prompt("RETRY THE WS REQUEST");
+  assert.equal(sockets.reduce((n, socket) => n + socket.sent.length, 0), before, "retry cannot unfold edited source either");
+  await h.session.compact();
+  assert.match(JSON.stringify(h.bodies.at(-1)), /EDITED AFTER WS CACHE/);
+  await h.session.prompt("CONTINUE AFTER REPAIR");
   const sent = sockets.flatMap(socket => socket.sent).at(-1);
-  assert.ok(JSON.stringify(sent.input).includes("EDITED AFTER WS CACHE"));
-  assert.equal(sent.input.some(item => item.type === "compaction"), false);
+  assert.equal(sent.input.filter(item => item.type === "compaction").length, 1);
 });
 
 test("a safety rejection hands off the real abort signal instead of cancelling owed continuation", async t => {

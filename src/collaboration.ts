@@ -3,6 +3,7 @@ import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-
 export const METIS_EVENTS = {
   executionStatus: "metis:execution-status",
   goalSnapshot: "metis:goal-snapshot",
+  goalProject: "metis:goal-project",
   occStatus: "metis:occ-status",
   occFinished: "metis:occ-finished",
   checkpointRequestCancelled: "metis:checkpoint-request-cancelled",
@@ -16,6 +17,7 @@ export const METIS_EVENTS = {
 // before emit returns. Inputs are readonly; response fields remain mutable.
 export interface ExecutionStatusRequest { busy: boolean }
 export interface GoalSnapshotRequest { snapshot: unknown }
+export interface GoalProjectRequest { messages: unknown[] }
 export interface OccStatusRequest { deferGoal: boolean; running?: boolean }
 export interface OccFinished { readonly cancelled: boolean }
 export interface BeforeRemoteCompactRequest {
@@ -51,6 +53,9 @@ export function isExecutionStatusRequest(value: unknown): value is ExecutionStat
 }
 export function isGoalSnapshotRequest(value: unknown): value is GoalSnapshotRequest {
   return record(value) && Object.hasOwn(value, "snapshot");
+}
+export function isGoalProjectRequest(value: unknown): value is GoalProjectRequest {
+  return record(value) && Array.isArray(value["messages"]);
 }
 export function isOccStatusRequest(value: unknown): value is OccStatusRequest {
   return record(value) && typeof value["deferGoal"] === "boolean" && optionalBoolean(value["running"]);

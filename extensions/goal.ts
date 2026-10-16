@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { METIS_EVENTS, isGoalSnapshotRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
+import { METIS_EVENTS, isGoalSnapshotRequest, isGoalProjectRequest, isOccFinished, type OccStatusRequest } from "../src/collaboration.ts";
 import { GoalState, validateObjective, type Goal, type GoalStatus } from "../src/goal-state.ts";
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -464,6 +464,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     clearOwed();
     pendingError = undefined;
     stopGoalSnapshot();
+    stopGoalProjection();
     stopOccFinished();
     stopCheckpointCancellation();
   });
@@ -577,30 +578,23 @@ export default function goalExtension(pi: ExtensionAPI) {
     updateStatus(ctx);
   });
 
-  pi.on("context", async (event) => {
-    let lastContinuationIndex = -1;
-    for (let i = 0; i < event.messages.length; i++) {
-      const msg = event.messages[i] as { customType?: string; details?: { goalId?: string } };
-      if (msg.customType === CONTINUATION_MESSAGE_TYPE && msg.details?.goalId === state.current?.id) {
-        lastContinuationIndex = i;
-      }
-    }
-
-    return {
-      messages: event.messages.filter((message, index) => {
-        const msg = message as { customType?: string; details?: { goalId?: string } };
-        if (msg.customType === UI_MESSAGE_TYPE) return false;
-        if (msg.customType === CONTINUATION_MESSAGE_TYPE) {
-          return (
-            state.current?.status === "active" &&
-            msg.details?.goalId === state.current.id &&
-            index === lastContinuationIndex
-          );
-        }
-        return true;
-      }),
-    };
+  const projectMessages = <T>(messages: T[]): T[] => {
+    const goal = state.current;
+    const lastContinuationIndex = messages.findLastIndex(message => {
+      const msg = message as { customType?: string; details?: { goalId?: string } };
+      return msg.customType === CONTINUATION_MESSAGE_TYPE && msg.details?.goalId === goal?.id;
+    });
+    return messages.filter((message, index) => {
+      const msg = message as { customType?: string; details?: { goalId?: string } };
+      if (msg.customType === UI_MESSAGE_TYPE) return false;
+      return msg.customType !== CONTINUATION_MESSAGE_TYPE
+        || goal?.status === "active" && msg.details?.goalId === goal.id && index === lastContinuationIndex;
+    });
+  };
+  const stopGoalProjection = pi.events.on(METIS_EVENTS.goalProject, request => {
+    if (isGoalProjectRequest(request)) request.messages = projectMessages(request.messages);
   });
+  pi.on("context", async event => ({ messages: projectMessages(event.messages) }));
 
   pi.registerCommand("goal", {
     description: "Set or view the goal for a long-running task",
