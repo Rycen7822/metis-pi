@@ -1573,8 +1573,8 @@ test("measurement deferral respects TUI disclosure and quiet while retaining raw
       const status = f.statuses.get("context-prune");
       assert.equal(status.split("\n")[0], "│ prune: ON · usage: 0 tokens");
       assert.equal(/\n.*retained pending — token measurement unavailable/.test(status), !quietOversizedSkips);
-      assert.equal(/\n.*skipped pruning turn .*5 raw chars retained/.test(status), !quietOversizedSkips,
-        "verbose disclosure keeps both no-op explanations unless explicitly quieted");
+      assert.equal(/\n.*1 small batch skipped.*5 total raw chars retained/.test(status), !quietOversizedSkips,
+        "disclosure summarizes small batches unless explicitly quieted");
       assert.equal(f.notices.some(([message]) => /retained pending/.test(message)), mode !== "tui" && !quietOversizedSkips);
       assert.equal(f.notices.some(([message]) => /skipped pruning turn/.test(message)), mode !== "tui" && !quietOversizedSkips);
       assert.ok(!f.notices.some(([message]) => /pressure\/budget|summarization failed/.test(message)));
@@ -1648,8 +1648,11 @@ test("trivial aggregate sizes are retention totals, not a comparison against one
   assert.ok(!f.notices.some(([message]) => /6500 raw chars below/.test(message)));
   assert.ok(!f.notices.some(([message]) => /skipped pruning turn/.test(message)), "routine skips stay out of TUI chat");
   const status = f.statuses.get("context-prune");
-  assert.match(status, /\n.*3200 raw chars retained/);
-  assert.match(status, /\n.*3300 raw chars retained/, "manual command refresh preserves every skip detail");
+  assert.match(status, /\n.*2 small batches skipped.*6500 total raw chars retained/);
+  assert.equal(status.split("\n").length, 3, "the footer keeps one aggregate rather than a notice per batch");
+  assert.doesNotMatch(status, /skipped pruning turn/);
+  await f.emit("agent_end");
+  assert.equal(f.statuses.get("context-prune"), status, "task completion retains only the compact current result");
   await changeSetting(f, "showPruneStatusLine");
   assert.equal(f.statuses.get("context-prune"), undefined);
   await changeSetting(f, "showPruneStatusLine");

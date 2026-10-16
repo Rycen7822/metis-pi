@@ -1190,35 +1190,23 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // separate confirmed-action reporting; warnings and errors stay visible.
       // Build these before the all-deferred return so its retained evidence is
       // explained too, not left showing an obsolete "Summarizing" detail.
-      const skipMessages = Object.entries(deferredReasons).map(([reason, count]) =>
-        `pruner: ${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}; frontier did not advance over them`,
+      const deferredMessages = Object.entries(deferredReasons).map(([reason, count]) =>
+        `${count} batch(es) retained pending — ${DEFERRED_REASON_LABELS[reason as DeferredReason]}`,
       );
-      for (const record of trivialBatches) {
-        const batch = record.batch;
-        skipMessages.push(
-          "pruner: skipped pruning turn " +
-            `${batch.turnIndex}` +
-            " (" +
-            `${batch.toolCalls.length}` +
-            " tool call" +
-            `${batch.toolCalls.length === 1 ? "" : "s"}` +
-            ") — summary candidate " +
-            `${record.prepared.candidateChars}` +
-            " chars (< minBatchChars=" +
-            `${minChars}` +
-            "); " +
-            `${record.rawChars}` +
-            " raw chars retained; no LLM call made; " +
-            `${record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"}`,
-        );
-      }
       const completionDetail = () => {
         const state = deliveryPending ? "Summary queued — raw results retained until delivery"
           : firstFailureIndex >= 0 || pendingBatches.length > 0
             ? `${processedCount}/${records.length} complete; remaining pending${failureMessage ? ` — ${failureMessage}` : ""}`
             : "No pending turns";
-        return [state, ...(!currentConfig.value.quietOversizedSkips
-          ? skipMessages.map(message => message.replace(/^pruner: /, "")) : [])].join("\n");
+        if (currentConfig.value.quietOversizedSkips) return state;
+        const details = [state];
+        if (deferredMessages.length) details.push(deferredMessages.join("; "));
+        if (trivialBatches.length) {
+          const chars = trivialBatches.reduce((total, record) => total + record.rawChars, 0);
+          details.push(`${trivialBatches.length} small batch${trivialBatches.length === 1 ? "" : "es"} skipped: `
+            + `${chars} total raw chars retained; each candidate < ${minChars} chars; no LLM call`);
+        }
+        return details.join("\n");
       };
 
       if (processedBatches.length === 0) {
@@ -1287,7 +1275,17 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       // actions are aggregated in finally, and manual commands reply themselves.
       if (!currentConfig.value.quietOversizedSkips && ctx.mode !== "tui") {
         const notify = (message: string) => safeNotify(ctx, message, "info");
-        for (const message of skipMessages) notify(message);
+        for (const message of deferredMessages) notify(`pruner: ${message}; frontier did not advance over them`);
+        for (const record of trivialBatches) {
+          const batch = record.batch;
+          notify(
+            `pruner: skipped pruning turn ${batch.turnIndex} `
+              + `(${batch.toolCalls.length} tool call${batch.toolCalls.length === 1 ? "" : "s"}) — `
+              + `summary candidate ${record.prepared.candidateChars} chars (< minBatchChars=${minChars}); `
+              + `${record.rawChars} raw chars retained; no LLM call made; `
+              + (record.frontierAdvanced ? "frontier advanced past this range" : "frontier retained behind a pending gap"),
+          );
+        }
         for (const record of dedupedBatches) {
           const batch = record.batch;
           const n = record.deduped.length;
