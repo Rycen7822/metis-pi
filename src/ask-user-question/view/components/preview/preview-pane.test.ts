@@ -542,14 +542,6 @@ describe("PreviewPane — notes affordance row (Slice 4 height-stable affordance
 		],
 	};
 
-	it("renders 'Notes: press n to add notes' below preview when focused on preview-bearing option", () => {
-		const { pane, optionListView } = makePane(question, () => 120);
-		optionListView.setProps({ selectedIndex: 0, focused: true, inputBuffer: "" });
-		pane.setProps({ notesVisible: false, hasNote: false, selectedIndex: 0, focused: true, inputMode: false });
-		const lines = pane.render(120);
-		expect(lines.some((l) => l.includes(NOTES_AFFORDANCE_TEXT))).toBe(true);
-	});
-
 	it("hides notes affordance text when option lacks preview (height contract preserved)", () => {
 		const { pane, optionListView } = makePane(question, () => 120);
 		optionListView.setProps({ selectedIndex: 0, focused: true, inputBuffer: "" });

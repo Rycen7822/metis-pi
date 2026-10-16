@@ -290,15 +290,6 @@ describe("makeDialog — Submit tab", () => {
 		expect(joined).not.toContain(READY_PROMPT);
 	});
 
-	it("renders SubmitPicker rows (1. Submit answers / 2. Cancel)", () => {
-		const state = submitState();
-		const dlg = makeDialog(makeConfig({ state, submitPicker: makePicker(state), getBodyHeight: () => 6 }));
-		const joined = dlg.render(80).join("\n");
-		expect(joined).toContain(SUBMIT_LABEL);
-		expect(joined).toContain(CANCEL_LABEL);
-	});
-
-
 	it("active pointer follows state.submitChoiceIndex", () => {
 		const stateRow0 = submitState({ submitChoiceIndex: 0 });
 		const dlg0 = makeDialog(

@@ -27,12 +27,15 @@ const BASE_PARAMS = {
 } satisfies QuestionParams;
 
 describe("ask_user_question.execute — early returns", () => {
-	it("returns cancelled result + ERROR_NO_UI when !hasUI", async () => {
-		const tool = register();
+	it("returns no_ui without emitting a prompt when UI is unavailable", async () => {
+		const { pi, captured } = createMockPi();
+		registerAskUserQuestionTool(pi);
+		const tool = captured.tools.get("ask_user_question")!;
 		const ctx = createMockCtx({ hasUI: false });
 		const r = await tool.execute("tc", BASE_PARAMS as never, undefined, undefined, ctx as never);
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "no_ui" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("UI not available") });
+		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(false);
 	});
 
 	it("returns cancelled result when any question has empty options", async () => {
@@ -48,8 +51,10 @@ describe("ask_user_question.execute — early returns", () => {
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("at least 2 options") });
 	});
 
-	it("returns ERROR_NO_QUESTIONS text when questions array is empty", async () => {
-		const tool = register();
+	it("returns no_questions without emitting a prompt when questions are empty", async () => {
+		const { pi, captured } = createMockPi();
+		registerAskUserQuestionTool(pi);
+		const tool = captured.tools.get("ask_user_question")!;
 		const ctx = ctxWithCustom(null);
 		const r = await tool.execute("tc",
 			{ questions: [] } as never,
@@ -59,6 +64,7 @@ describe("ask_user_question.execute — early returns", () => {
 		);
 		expect(r?.details).toMatchObject({ answers: [], cancelled: true, error: "no_questions" });
 		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("At least one question") });
+		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(false);
 	});
 
 	it("returns error: too_many_questions when questions exceed MAX_QUESTIONS", async () => {
@@ -379,29 +385,6 @@ describe("ask_user_question.execute — event emission", () => {
 			["rpiv:ask-user:blocked", { active: true }],
 			["rpiv:ask-user:blocked", { active: false }],
 		]);
-	});
-
-	it("does NOT emit event when UI is unavailable", async () => {
-		const { pi, captured } = createMockPi();
-		registerAskUserQuestionTool(pi);
-		const tool = captured.tools.get("ask_user_question")!;
-
-		// Use valid params so only !hasUI causes the early return
-		const ctx = createMockCtx({ hasUI: false });
-		await tool.execute("tc", validParams() as never, undefined, undefined, ctx as never);
-
-		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(false);
-	});
-
-	it("does NOT emit event when validation fails", async () => {
-		const { pi, captured } = createMockPi();
-		registerAskUserQuestionTool(pi);
-		const tool = captured.tools.get("ask_user_question")!;
-
-		const ctx = createMockCtx({ hasUI: true, ui: { custom: vi.fn() } as never });
-		await tool.execute("tc", { questions: [] } as never, undefined, undefined, ctx as never);
-
-		expect(captured.eventsEmitted.has("rpiv:ask-user:prompt")).toBe(false);
 	});
 
 	it("emits payload with all questions in order when multiple questions", async () => {

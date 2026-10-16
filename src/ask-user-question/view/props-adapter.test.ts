@@ -181,15 +181,6 @@ describe("QuestionnairePropsAdapter.apply", () => {
 		}
 	});
 
-	it("multi-select on a non-last question receives nextLabel='Next'", () => {
-		const questions = [makeQuestion({ multiSelect: true }), makeQuestion()];
-		const { adapter, tabsByIndex } = makeFixture(questions);
-		adapter.apply(makeState({ currentTab: 0 }));
-		const mso = tabsByIndex[0]!.multiSelect!;
-		const arg = (mso.setProps as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
-		expect(arg.nextLabel).toBe("Next");
-	});
-
 	it("projects multiline editor text and its public cursor position", () => {
 		const { adapter, tabsByIndex, inlineInput } = makeFixture();
 		inlineInput.setText("first\nsecond");

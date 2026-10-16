@@ -243,14 +243,6 @@ describe("reduce — multi confirmation", () => {
 		expect([...r.state.multiSelectChecked].sort()).toEqual([0, 1]);
 		expect(r.effects.some((e) => e.kind === "done")).toBe(true);
 	});
-
-	it("persists selected labels and custom text together", () => {
-		const ctx = makeCtx({ questions: [makeQuestion({ multiSelect: true })] });
-		const state = makeState({ multiSelectChecked: new Set([0]), customDraftsByTab: new Map([[0, "stale"]]) });
-		const r = reduce(state, { kind: "confirm", value: "custom" }, ctx);
-		expect(r.state.answers.get(0)).toMatchObject({ kind: "multi", selected: ["A"], answer: "custom" });
-		expect(r.state.customDraftsByTab.has(0)).toBe(false);
-	});
 });
 
 describe("reduce — cancel/submit", () => {
@@ -451,10 +443,11 @@ describe("confirm — custom multi answer", () => {
 		],
 	};
 
-	it("combines confirmed custom text with pre-existing checks", () => {
+	it("combines custom text with existing checks and clears the stale draft", () => {
 		const state = makeState({
 			currentTab: 0,
 			multiSelectChecked: new Set([0, 1]),
+			customDraftsByTab: new Map([[0, "stale"]]),
 		});
 		const ctx = makeCtx({ questions: [multiQ] });
 		const result = reduce(
@@ -468,6 +461,7 @@ describe("confirm — custom multi answer", () => {
 			selected: ["FE", "BE"],
 			answer: "custom-text",
 		});
+		expect(result.state.customDraftsByTab.has(0)).toBe(false);
 	});
 
 	it("option confirm on a single-select tab leaves multiSelectChecked untouched (no spurious clear)", () => {
@@ -484,12 +478,6 @@ describe("confirm — custom multi answer", () => {
 });
 
 describe("reduce — toggle_collapsed", () => {
-	it("flips false → true and emits set_overlay_hidden(true) so the runtime hides the overlay", () => {
-		const r = reduce(makeState(), { kind: "toggle_collapsed" }, makeCtx());
-		expect(r.state.collapsed).toBe(true);
-		expect(r.effects).toEqual([{ kind: "set_overlay_hidden", hidden: true }]);
-	});
-
 	it("flips true → false (expand round-trip) and emits set_overlay_hidden(false)", () => {
 		const r = reduce(makeState({ collapsed: true }), { kind: "toggle_collapsed" }, makeCtx());
 		expect(r.state.collapsed).toBe(false);

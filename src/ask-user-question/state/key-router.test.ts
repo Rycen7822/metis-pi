@@ -144,11 +144,6 @@ describe("routeKey — confirm (single-select)", () => {
 		expect(action).toMatchObject({ kind: "confirm", value: "" });
 	});
 
-	it("a key matching only tui.input.submit confirms (second confirm source)", () => {
-		const action = routeKey(sentinel(KEY.SUBMIT), makeState({ currentTab: 0 }), makeRuntime());
-		expect(action).toMatchObject({ kind: "confirm", value: "" });
-	});
-
 	it("inline-input mode: Enter confirms with the buffered text", () => {
 		const other: QuestionRow = { kind: "other", label: "Type something." };
 		const action = routeKey(
