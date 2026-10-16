@@ -9,7 +9,7 @@ import { WriteDiffTracker, type WriteDiff } from "./write-tracker.ts";
 import { resolveNativeMutationPath } from "./native-tool-path.ts";
 import { detectColorLevel, type ColorLevel } from "./palette.ts";
 import { UiMetrics, formatDuration } from "./ui-metrics.ts";
-import { OutputSpeedTracker } from "./output-speed.ts";
+import { OutputSpeedTracker, observeOutputTiming, type OutputTimingObserver } from "./output-speed.ts";
 import { TurnSummary, formatSummaryLine } from "./turn-summary.ts";
 import { formatBeijingTime, installUserTimestamps } from "./message-timestamp.ts";
 import { loadConfig, type AppearanceConfig } from "./config.ts";
@@ -113,7 +113,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   const hostData = new HostData();
   const ledger = new UsageLedger();
   const outcome = new InteractionOutcomeTracker();
-  const outputSpeed = new OutputSpeedTracker();
+  let outputTiming: OutputTimingObserver | undefined;
+  const outputSpeed = new OutputSpeedTracker(message => outputTiming?.read(message));
   let config: AppearanceConfig = loadConfig(bindings.getAgentDir?.(), bindings.readFile).config;
 
   // Chrome install state + lifecycle (src/chrome/install.ts). `chrome.state`
@@ -273,6 +274,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     // Chrome/metrics/summary side effects only in the REAL TUI process and
     // only while enabled — print/json/rpc never get timers or ANSI.
     chromeEnabled = hostData.isTui && enabled;
+    outputTiming?.dispose();
+    outputTiming = chromeEnabled ? observeOutputTiming() : undefined;
     if (enabled && !userTimestamps && bindings.interactivePrototype) {
       userTimestamps = installUserTimestamps(bindings.interactivePrototype, () => enabled);
     }
@@ -612,9 +615,9 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
         ledger.confirm(key, usage);
       }
       metrics.clearPreviewUsage(outcome.attemptCount);
-      // Use the SDK's already measured producer duration, not these callback
-      // times. Missing or incomplete timing has no fallback.
-      outputSpeed.finish(usage?.output, record.durationMs, stateMessage.stopReason);
+      // Match the SDK producer's completed object, never queued callback times
+      // or another stream (cache warming/nested work can overlap).
+      outputSpeed.finish(record);
       requestRender();
     }
   });
@@ -641,6 +644,8 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
     metrics.reset();
     outcome.reset();
     outputSpeed.reset();
+    outputTiming?.dispose();
+    outputTiming = undefined;
     ledger.reset();
     turnSummary.forgetSession();
     replyEndedAt = undefined;

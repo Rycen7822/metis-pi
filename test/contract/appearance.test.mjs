@@ -13,6 +13,32 @@ import { stringify } from "smol-toml";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 const appearanceFile = config => path => path.endsWith("metis-pi.toml") ? stringify({ appearance: config }) : undefined;
+// SDK producers enqueue independently of the extension/UI callback clock.
+const producers = new WeakMap();
+function providerEvent(handlers, message, type, delta = "") {
+  let streams = producers.get(handlers);
+  if (!streams) producers.set(handlers, streams = new Map());
+  if (type === "response.created") {
+    const partial = { ...message, content: [{ type: "text", text: "" }] };
+    const stream = new AssistantMessageEventStream();
+    streams.set(message.responseId, { stream, partial });
+    stream.push({ type: "start", partial });
+  } else {
+    const { stream, partial } = streams.get(message.responseId);
+    partial.content[0].text += delta;
+    stream.push({ type: type === "response.output_text.delta" ? "text_delta" : "toolcall_delta",
+      contentIndex: 0, delta, partial });
+  }
+}
+function finishResponse(handlers, message, ctx) {
+  const producer = producers.get(handlers)?.get(message.responseId);
+  if (producer) {
+    if (!message.content.length) message.content = producer.partial.content;
+    producer.stream.push({ type: "done", reason: message.stopReason, message });
+    producer.stream.end();
+  }
+  handlers.get("message_end")({ message }, ctx);
+}
 
 initTheme("dark", false);
 
@@ -397,7 +423,7 @@ test("static configuration gates Git polling before a footer can start it", asyn
   }
 });
 
-test("one interaction wires usage previews, completed response averages, Working and the persisted summary", async (t) => {
+test("one interaction wires usage previews, generation rates, Working and the persisted summary", async (t) => {
   let now = 1_000;
   t.mock.method(performance, "now", () => now);
   t.mock.method(Date, "now", () => 1_700_000_000_000 + now - 1_000);
@@ -419,14 +445,16 @@ test("one interaction wires usage previews, completed response averages, Working
     content: [],
     stopReason: "stop",
     responseId: id,
-    provider: "test-provider",
+    provider: "test-provider", api: "openai-responses", model: "m",
     timestamp: 1,
-    usage, durationMs,
+    usage: { reasoning: 0, ...usage }, durationMs,
   });
-  const update = (id, usage, delta) => handlers.get("message_update")({
-    message: message(id, usage),
-    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { content: [] } },
-  });
+  const update = (id, usage, delta) => {
+    const m = message(id, usage);
+    providerEvent(handlers, m, id === "first" ? "response.function_call_arguments.delta" : "response.output_text.delta", delta);
+    handlers.get("message_update")({ message: m,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: { content: [] } } });
+  };
 
   assert.equal(slots.workingVisible.at(-1), false, "native loader hidden after widget install");
   handlers.get("agent_start")({}, {});
@@ -436,21 +464,20 @@ test("one interaction wires usage previews, completed response averages, Working
   handlers.get("turn_start")({});
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
   assert.doesNotMatch(frame(), /tok\/s/, "no rate before a completed response");
-  now += 3000; // hidden reasoning belongs to the complete producer duration
+  providerEvent(handlers, message("first"), "response.created");
+  now += 3000; // initial waiting/reasoning must not dilute generation speed
   update("first", { input: 800, output: 10, cacheRead: 100, cacheWrite: 0 }, "first delta");
   now += 400;
   update("first", { input: 900, output: 40, cacheRead: 200, cacheWrite: 0 }, "second delta");
   assert.doesNotMatch(frame(), /tok\/s/, "partial cumulative usage is not a live speed measurement");
   const confirmed = { ...message("first", { input: 100, output: 80, cacheRead: 900, cacheWrite: 0, reasoning: 60 }, 3400),
     stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash", arguments: {} }] };
-  handlers.get("message_end")({ message: confirmed });
-  handlers.get("message_end")({ message: confirmed });
+  finishResponse(handlers, confirmed);
+  finishResponse(handlers, confirmed);
   const final = frame();
   assert.match(final, /↑100 ↓80(?:\s|$)/, "one confirmed record replaces both previews and survives duplicate completion");
   assert.match(final, /cache 90%/, "final cache usage replaces the streaming preview");
-  assert.equal(speed(final), 23.5, "80 output tokens use the whole 3400ms response, not the visible 400ms tail");
-  assert.match(final, /23\.5 tok\/s/, "compact display retains the completed response average");
-  assert.ok(final.indexOf("tok/s") > final.indexOf("↑"), "rate follows input/output");
+  assert.doesNotMatch(final, /tok\/s/, "tool arguments cannot be paired with a text-only token count");
   handlers.get("tool_execution_start")({ toolCallId: "t1", toolName: "bash", args: {} }, { cwd: "/tmp" });
   const active = plain(working.content({ requestRender() {} }, theme).render(100).join("\n"));
   assert.match(active, /• Working \(\d+s · esc to interrupt\) · bash$/, "tool event reaches the above-editor widget");
@@ -459,17 +486,18 @@ test("one interaction wires usage previews, completed response averages, Working
   handlers.get("message_start")({ message: toolResult }); handlers.get("message_end")({ message: toolResult });
 
   handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 23.5, "waiting for a response preserves the completed average");
+  assert.doesNotMatch(frame(), /tok\/s/, "no previous text-generation sample exists yet");
   handlers.get("message_start")({ message: { role: "assistant", content: [] } });
+  providerEvent(handlers, message("second"), "response.created");
   update("second", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "next response");
   now += 400;
   update("second", { input: 0, output: 40, cacheRead: 0, cacheWrite: 0 }, "next delta");
-  assert.equal(speed(frame()), 23.5, "streaming previews do not replace the completed average");
-  handlers.get("message_end")({ message: message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400) });
+  assert.doesNotMatch(frame(), /tok\/s/, "incomplete usage is not a live speed estimate");
+  finishResponse(handlers, message("second", { input: 0, output: 44, cacheRead: 0, cacheWrite: 0 }, 400));
   now += 2_000; // background maintenance finishes after the final reply
   handlers.get("agent_settled")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 110, "the final rate remains visible after settle");
+  assert.equal(speed(frame()), 108, "the formatted final generation rate remains visible after settle");
   assert.equal(appended.length, 1, "duplicate settled events append one summary");
   assert.equal(appended[0].type, "metis-pi:interaction-summary:v1");
   const { data } = appended[0];
@@ -486,18 +514,21 @@ test("one interaction wires usage previews, completed response averages, Working
   assert.equal(slots.widgetCalls.at(-1).content, undefined);
   assert.equal(slots.statuses.get("metis-pi:summary"), undefined, "persisted summary stays in CustomEntry");
   handlers.get("agent_start")({}, {});
-  assert.equal(speed(frame()), 110, "a new interaction retains the completed average");
+  assert.equal(speed(frame()), 108, "a new interaction retains the completed generation rate");
   handlers.get("turn_start")({});
-  assert.equal(speed(frame()), 110, "the first request of a new interaction retains it too");
+  assert.equal(speed(frame()), 108, "the first request of a new interaction retains it too");
   const next = message("third", { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }, 1000);
   handlers.get("message_start")({ message: next });
-  handlers.get("message_end")({ message: next });
+  providerEvent(handlers, next, "response.created");
+  update("third", { output: 0 }, "a"); now += 400;
+  update("third", { output: 20 }, "b");
+  finishResponse(handlers, next);
   handlers.get("agent_end")({}, {});
   handlers.get("agent_settled")({}, {});
-  assert.equal(speed(frame()), 20, "a new valid completion replaces the prior interaction's average");
+  assert.equal(speed(frame()), 47.5, "a new valid generation sample replaces the previous one");
 });
 
-test("queued SDK deltas and pre-request compaction cannot distort or discard the response average", async t => {
+test("SDK producer timing survives queued deltas and pre-request compaction", async t => {
   let now = 1000;
   t.mock.method(performance, "now", () => now);
   const { handlers, footer: makeFooter, ctx } = await session(t, { readFile: appearanceFile({ summary: { enabled: false } }) });
@@ -509,7 +540,7 @@ test("queued SDK deltas and pre-request compaction cannot distort or discard the
   let stream, output;
   const agent = new Agent({ initialState: { model, tools: [] }, streamFn() {
     stream = new AssistantMessageEventStream();
-    output = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+    output = { role: "assistant", api: model.api, provider: model.provider, model: model.id, responseId: "producer", timestamp: Date.now(),
       content: [], stopReason: "pending", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     stream.push({ type: "start", partial: output });
@@ -550,7 +581,7 @@ test("queued SDK deltas and pre-request compaction cannot distort or discard the
   handlers.get("agent_settled")({}, ctx);
   assert.deepEqual(receivedCounts, [1050, 1050], "fixture reaches the shared-partial queue hazard");
   assert.equal(output.durationMs, 10500, "native producer clock excludes the later consumer delays");
-  assert.match(frame(), /100 tok\/s/, "both hidden reasoning and its time are included, despite delayed callbacks");
+  assert.match(frame(), /gen\(last\) 98 tok\/s/, "(1050−1000−1)/0.5 uses producer times, not TTFT or queued callbacks");
 });
 
 test("tool-model usage cannot alter main-model totals, cache or persisted summaries before or after reconstruction", async t => {
@@ -562,14 +593,18 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   } }, { sessionManager: { getEntries: () => entries } });
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
-  const usage = (input, output, cacheRead) => ({ input, output, cacheRead, cacheWrite: 0 });
-  const first = { role: "assistant", provider: "p", responseId: "a", timestamp: 1000, stopReason: "toolUse", durationMs: 1000,
+  const usage = (input, output, cacheRead) => ({ input, output, cacheRead, cacheWrite: 0, reasoning: 0 });
+  const first = { role: "assistant", provider: "p", api: "openai-responses", model: "m", responseId: "a", timestamp: 1000, stopReason: "toolUse", durationMs: 1000,
     content: [{ type: "toolCall", id: "tool", name: "codemode", arguments: {} }], usage: usage(100, 100, 900) };
   handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
   handlers.get("message_start")({ message: first }, ctx);
-  now = 2000; handlers.get("message_end")({ message: first }, ctx);
+  providerEvent(handlers, first, "response.created");
+  now = 1010; providerEvent(handlers, first, "response.function_call_arguments.delta", "{");
+  now = 2000; providerEvent(handlers, first, "response.function_call_arguments.delta", "}");
+  finishResponse(handlers, first, ctx);
   const beforeTool = frame();
-  assert.match(beforeTool, /↑100 ↓100.*cache 90%.*100 tok\/s/);
+  assert.match(beforeTool, /↑100 ↓100.*cache 90%/);
+  assert.doesNotMatch(beforeTool, /tok\/s/, "tool-call output is not a text-generation sample");
   handlers.get("tool_execution_start")({ toolCallId: "tool", toolName: "codemode", args: {} }, ctx);
   now = 4000;
   const tool = { role: "toolResult", toolCallId: "tool", toolName: "codemode", timestamp: 4000, isError: false,
@@ -591,28 +626,37 @@ test("tool-model usage cannot alter main-model totals, cache or persisted summar
   assert.doesNotMatch(frame(), /tok\/s/, "a new context does not keep a former response's rate");
 });
 
-test("selection changes clear averages and a response already awaiting headers cannot restore the old rate", async t => {
+test("selection changes cancel generation sampling, including late producer events", async t => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
   const commands = new Map();
   const { handlers, footer: makeFooter, ctx } = await session(t, { api: {
     registerCommand: (name, options) => commands.set(name, options),
   } });
   const footer = makeFooter();
   const frame = () => plain(footer.render(140).join("\n"));
-  const message = { role: "assistant", provider: "p", timestamp: 1, content: [], stopReason: "stop", durationMs: 25, usage: { output: 1 } };
+  let message = { role: "assistant", provider: "p", api: "openai-responses", model: "m", responseId: "r",
+    timestamp: 1, content: [], stopReason: "stop", durationMs: 10_025, usage: { output: 2, reasoning: 0 } };
+  const produce = () => {
+    providerEvent(handlers, message, "response.created");
+    now += 10_000; providerEvent(handlers, message, "response.output_text.delta", "a");
+    now += 25; providerEvent(handlers, message, "response.output_text.delta", "b");
+  };
   for (const event of ["model_select", "thinking_level_select"]) {
+    message = { ...message, content: [] }; // each SDK request owns a new completed object
     handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
-    handlers.get("message_start")({ message }, ctx); handlers.get("message_end")({ message }, ctx);
+    handlers.get("message_start")({ message }, ctx); produce(); finishResponse(handlers, message, ctx);
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
     assert.match(frame(), /40 tok\/s/);
     let report;
     commands.get("codex-ui").handler("", { ui: { notify: text => { report = text; } } });
-    assert.match(report, /avg 40 tok\/s \(output=1 tokens, duration=25ms, scope=final\)/, "short valid responses do not appear as a zero-second diagnostic window");
-    assert.match(report, /SDK durationMs; response average includes waiting\/TTFT and reasoning/);
+    assert.match(report, /gen\(last\) 40 tok\/s \(output=2 tokens, reasoning excluded=0, window=25ms, events=2, scope=last completed\)/);
+    assert.match(report, /excludes initial wait\/TTFT, reasoning and completion callbacks/);
     handlers.get(event)({}, ctx);
     assert.doesNotMatch(frame(), /tok\/s/);
     handlers.get("agent_start")({}, ctx); handlers.get("turn_start")({}, ctx);
     handlers.get(event)({}, ctx); // change selection while response headers are pending
-    handlers.get("message_start")({ message }, ctx); handlers.get("message_end")({ message }, ctx);
+    handlers.get("message_start")({ message }, ctx); produce(); finishResponse(handlers, message, ctx);
     assert.doesNotMatch(frame(), /tok\/s/, "late old-selection headers must not reopen the invalidated response slot");
     handlers.get("agent_end")({}, ctx); handlers.get("agent_settled")({}, ctx);
   }

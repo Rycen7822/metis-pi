@@ -1,7 +1,7 @@
 // Product status footer below the editor. Metrics stay visible; location and
 // ordinary prune messages have independent, component-local disclosures.
 // Snapshot scopes: session cumulative I/O, latest confirmed cache rate,
-// completed response average speed, and work-tree changes against HEAD.
+// last completed generation speed, and work-tree changes against HEAD.
 // Narrow widths wrap whole fields; painting happens after plain-text layout.
 
 import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -9,7 +9,7 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { UsageRecord } from "../usage-ledger.ts";
 import type { GitChangeStat } from "../git-changes.ts";
 import type { ModelSnapshot, ContextUsageSnapshot } from "../host-data.ts";
-import { formatSpeedValue, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
+import { formatSpeedValue, SPEED_LABEL, SPEED_UNIT, type OutputSpeedSample } from "../output-speed.ts";
 import { STATUS_WIDGET_ID } from "../condense/types.ts";
 import { safeText } from "../tool-names.ts";
 import {
@@ -26,7 +26,7 @@ export interface FooterSnapshot {
   session: UsageRecord | undefined;
   /** cache(last) hit rate %, null when unknown. */
   cacheLastPct: number | null;
-  /** Completed response average including waiting/TTFT and reasoning. */
+  /** Last measurable text-generation rate, excluding reasoning and initial wait. */
   speed: OutputSpeedSample | undefined;
   /** Working-tree change counts vs HEAD; undefined = not a repo / unreadable. */
   changes: GitChangeStat | undefined;
@@ -110,7 +110,7 @@ export function layoutFooter(snapshot: FooterSnapshot, show: FooterShow, width: 
   }
   if (show.showSpeed) {
     const value = formatSpeedValue(snapshot.speed?.tokensPerSecond);
-    if (value) add([{ text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" }]);
+    if (value) add([{ text: `${SPEED_LABEL} `, tone: "dim" }, { text: value, tone: "normal" }, { text: ` ${SPEED_UNIT}`, tone: "dim" }]);
   }
   const changes = snapshot.changes;
   if (show.showChanges && changes && (changes.additions > 0 || changes.deletions > 0)) {
