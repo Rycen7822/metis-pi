@@ -37,6 +37,7 @@ export function computeContextMetrics(
   frontier: PruneFrontier | null,
   isSummarized: (occurrenceKey: string) => boolean,
   isProtected: (toolName: string, args: unknown) => boolean,
+  measureChars: (value: any) => number = charsOf,
 ): ContextMetricsSnapshot {
   if (branch.length === 0) {
     return { openCycleThinkingTokens: 0, largestChainSharePct: 0, frontierGapTokens: 0 };
@@ -53,12 +54,12 @@ export function computeContextMetrics(
     const m = branch[i];
     if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
     for (const block of m.content) {
-      if (block.type === "thinking") thinkingChars += JSON.stringify(block).length;
+      if (block.type === "thinking") thinkingChars += measureChars(block);
     }
   }
   const openCycleThinkingTokens = Math.round(thinkingChars / 4);
 
-  const branchChars = branch.map(charsOf);
+  const branchChars = branch.map(message => measureChars(message));
   const sumChars = (start: number, end: number): number => {
     let sum = 0;
     for (let i = start; i <= end; i++) sum += branchChars[i];

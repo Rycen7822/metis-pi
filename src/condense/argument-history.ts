@@ -69,15 +69,23 @@ export function argumentCandidates(entries: Array<{ sourceEntry: any; messages: 
 }
 
 /** Stable projection: source mutation or newly protected paths restore original messages. */
-export function projectArguments(messages: any[], groups: ArgumentHistory[], protection: ProtectionConfig): any[] {
+export function projectArguments(messages: any[], groups: ArgumentHistory[], protection: ProtectionConfig,
+  fingerprints = new WeakMap<object, string>()): any[] {
   if (groups.length === 0) return messages;
+  // Share only within one synchronous, immutable snapshot. A later call must
+  // revalidate source edits rather than reusing hashes by object identity.
+  const hashOf = (message: any) => {
+    let hash = fingerprints.get(message);
+    if (hash === undefined) { hash = fingerprint(message); fingerprints.set(message, hash); }
+    return hash;
+  };
   const byFirst = new Map(groups.map(group => [group.fingerprints[0], group]));
   const output: any[] = [];
   let changed = false;
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
-    const group = callsOf(message).length ? byFirst.get(fingerprint(message)) : undefined;
-    if (!group || group.fingerprints.some((hash, offset) => !messages[i + offset] || fingerprint(messages[i + offset]) !== hash)
+    const group = callsOf(message).length ? byFirst.get(hashOf(message)) : undefined;
+    if (!group || group.fingerprints.some((hash, offset) => !messages[i + offset] || hashOf(messages[i + offset]) !== hash)
       || callsOf(message).some(call => isProtected(call.name, call.input ?? call.args ?? call.arguments ?? {}, protection))) {
       output.push(message); continue;
     }

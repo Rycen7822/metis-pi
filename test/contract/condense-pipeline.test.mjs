@@ -240,6 +240,97 @@ async function fixture(
     release: (index = releases.length - 1) => releases[index]?.(), releaseAll: () => releases.forEach(finish => finish()) };
 }
 
+test("TUI context gives pending UI work a turn before reading its projection", async t => {
+  const f = await fixture(t, { mode: "tui" });
+  const steps = [];
+  const project = f.sm.buildSessionProjection.bind(f.sm);
+  t.mock.method(f.sm, "buildSessionProjection", (...args) => { steps.push("projected"); return project(...args); });
+  const pending = f.emit("context", { messages: [{ role: "user", content: "Next", timestamp: 2 }] });
+  queueMicrotask(() => steps.push("ui checkpoint"));
+  await pending;
+  assert.equal(steps[0], "ui checkpoint");
+  assert.ok(steps.includes("projected"), "the projection still completes");
+});
+
+test("TUI boundary maintenance is deferred, coalesced and remains awaitable", async t => {
+  const f = await fixture(t, { mode: "tui" });
+  const project = f.sm.buildSessionProjection.bind(f.sm);
+  let reads = 0;
+  t.mock.method(f.sm, "buildSessionProjection", (...args) => { reads++; return project(...args); });
+  await f.emit("turn_end", { toolResults: [] });
+  await f.emit("agent_settled", { aborted: false });
+  assert.equal(reads, 0, "boundary callbacks must not run heavy maintenance inline");
+  const status = {};
+  f.events.emit("metis:condense-maintenance", status);
+  assert.ok(status.pending instanceof Promise, "OCC/shutdown must see scheduled work too");
+  await f.waitMaintenance();
+  assert.ok(reads > 0, "work is drained, not silently discarded");
+});
+
+test("foreground TUI projection preempts older queued maintenance", async t => {
+  const f = await fixture(t, { mode: "tui" });
+  await f.emit("agent_settled", { aborted: false });
+  const queued = {};
+  f.events.emit("metis:condense-maintenance", queued);
+  assert.ok(queued.pending instanceof Promise);
+  const project = f.sm.buildSessionProjection.bind(f.sm);
+  let readWhileMaintenancePending = false, reads = 0;
+  t.mock.method(f.sm, "buildSessionProjection", (...args) => {
+    reads++;
+    const status = {};
+    f.events.emit("metis:condense-maintenance", status);
+    readWhileMaintenancePending ||= Boolean(status.pending);
+    return project(...args);
+  });
+  const messages = [{ role: "user", content: "Next", timestamp: 2 }];
+  const result = await f.emit("context", { messages });
+  assert.deepEqual(result?.messages ?? messages, messages);
+  assert.ok(reads > 0, "foreground projection still runs after cancelling queued work");
+  assert.equal(readWhileMaintenancePending, false, "old background work must not steal the foreground frame");
+  await queued.pending;
+  await f.waitMaintenance();
+});
+
+for (const boundary of ["session_tree", "session_start"])
+  test(`TUI ${boundary} waits for handed-off shared-chain validation`, async t => {
+    const f = await fixture(t, { mode: "tui", pruneOn: "on-demand",
+      chainCompression: { enabled: true, rollingWindow: 0, fuseRangeSummary: true } });
+    addClosedChains(f);
+    await f.emit("agent_settled");
+    await f.waitMaintenance();
+    const raw = () => f.sm.buildSessionProjection().messages;
+    const initial = (await f.emit("context", { messages: raw() }))?.messages ?? raw();
+    assert.ok(initial.some(message => message.metisDerived?.kind === "condense-chain"));
+    const restoreLeaf = f.sm.getLeafId();
+    if (boundary === "session_tree") f.sm.appendCustomEntry("test-navigation", {});
+    await f.emit("agent_settled");
+    const queued = {};
+    f.events.emit("metis:condense-maintenance", queued);
+    assert.ok(queued.pending instanceof Promise, "the previous boundary must still own a queued pass");
+    // A real leaf transition retains the published chain but drops only
+    // display-neutral metadata, so the expected source projection is unchanged.
+    if (boundary === "session_tree") f.sm.branch(restoreLeaf);
+    await f.emit(boundary);
+    const restored = (await f.emit("context", { messages: raw() }))?.messages ?? raw();
+    assert.ok(restored.some(message => message.metisDerived?.kind === "condense-chain"),
+      "completed restoration must retain its published shared projection, not cancel its still-pending handoff");
+    assert.deepEqual(restored, initial);
+  });
+
+test("shutdown cancels TUI maintenance before its deferred source read", async t => {
+  const f = await fixture(t, { mode: "tui" });
+  let reads = 0;
+  const project = f.sm.buildSessionProjection.bind(f.sm);
+  t.mock.method(f.sm, "buildSessionProjection", (...args) => { reads++; return project(...args); });
+  await f.emit("agent_settled", { aborted: false });
+  const status = {};
+  f.events.emit("metis:condense-maintenance", status);
+  assert.ok(status.pending instanceof Promise);
+  await f.emit("session_shutdown");
+  await status.pending;
+  assert.equal(reads, 0, "cancelled background work must not touch the old session");
+});
+
 test("queued TUI details retain reclaim metrics without notices; RPC keeps notifications", async t => {
   for (const mode of ["tui", "rpc"]) await t.test(mode, async t => {
     const f = await fixture(t, { mode, showPruneStatusLine: true });
