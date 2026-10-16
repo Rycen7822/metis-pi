@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createCipheriv, createHash, pbkdf2Sync } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 
@@ -120,7 +120,7 @@ function googleLinuxRows(password, one = "one", two = "two") {
 	];
 }
 
-function runCookies(home, env, options = "{ requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }", platformOverride) {
+function runCookies( env, options = "{ requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }", platformOverride) {
 	return runCookieScript(env, `const r = await m.getGoogleCookies(${options}); console.log(JSON.stringify(r));`, platformOverride);
 }
 
@@ -148,7 +148,7 @@ test("cookie extraction remains opt-in even when a browser database exists", (t)
 	createFixture(home, "Default", [["__Secure-1PSID", "one", ".google.com", null, 1]]);
 	const env = makeEnvironment(home, bin);
 	delete env.PI_ALLOW_BROWSER_COOKIES;
-	const result = runCookies(home, env);
+	const result = runCookies( env);
 	assert.equal(result.ok, false);
 	assert.match(result.diagnostic.message, /disabled/);
 	rmSync(home, { recursive: true, force: true });
@@ -165,7 +165,7 @@ test("auto-discovery finds a non-default Chromium profile", (t) => {
 	]);
 	const env = makeEnvironment(home, bin);
 	Object.assign(env, writePasswordCommand(bin, join(home, "password-count")));
-	const result = runCookies(home, env);
+	const result = runCookies( env);
 	assert.equal(result.ok, true);
 	assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
 	rmSync(home, { recursive: true, force: true });
@@ -192,7 +192,7 @@ for (const scenario of [
 			...writeKWalletCommand(bin, kwalletCount, kwalletArgs),
 		});
 		const options = `{ browser: '${scenario.id}', profile: 'Default', requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }`;
-		const result = runCookies(home, env, options, "linux");
+		const result = runCookies( env, options, "linux");
 		assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
 		assert.equal(readFileSync(secretCount, "utf8"), "1");
 		assert.equal(readFileSync(kwalletCount, "utf8"), "1");
@@ -217,7 +217,7 @@ test("KDE keeps Secret Service ahead of KWallet", (t) => {
 		...writePasswordCommand(bin, join(home, "secret-count"), "linux"),
 		...writeKWalletCommand(bin, kwalletCount, join(home, "kwallet-args")),
 	});
-	const result = runCookies(home, env, undefined, "linux");
+	const result = runCookies( env, undefined, "linux");
 	assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
 	assert.equal(existsSync(kwalletCount), false);
 	rmSync(home, { recursive: true, force: true });
@@ -302,7 +302,7 @@ test("auto-discovery finds a Brave profile on macOS", (t) => {
 	const env = makeEnvironment(home, bin);
 	const argsPath = join(home, "password-args");
 	Object.assign(env, writePasswordCommand(bin, join(home, "password-count"), "darwin", argsPath));
-	const result = runCookies(home, env, undefined, "darwin");
+	const result = runCookies( env, undefined, "darwin");
 	assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
 	assert.deepEqual(readFileSync(argsPath, "utf8").trim().split("\n"), [
 		"find-generic-password", "-w", "-a", "Brave", "-s", "Brave Safe Storage",
@@ -326,7 +326,7 @@ test("browser selection checks only the requested preset", (t) => {
 	const env = makeEnvironment(home, bin);
 	const argsPath = join(home, "password-args");
 	Object.assign(env, writePasswordCommand(bin, join(home, "password-count"), "darwin", argsPath));
-	const result = runCookies(home, env, "{ browser: 'helium', profile: 'Profile 1', requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }", "darwin");
+	const result = runCookies( env, "{ browser: 'helium', profile: 'Profile 1', requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }", "darwin");
 	assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "helium-two", "__Secure-1PSID": "helium-one" });
 	assert.deepEqual(readFileSync(argsPath, "utf8").trim().split("\n"), [
 		"find-generic-password", "-w", "-a", "Helium", "-s", "Helium Storage Key",
@@ -347,7 +347,7 @@ test("Windows Chrome profiles decrypt v10 cookies with DPAPI keys", (t) => {
 	], { targetPlatform: "win32", windowsKey: key });
 	const protectedValue = Buffer.from("protected").toString("base64");
 	const env = makeEnvironment(home, bin, { LOCALAPPDATA: join(home, "AppData", "Local"), DPAPI_KEY: key.toString("base64"), DPAPI_PROTECTED: protectedValue, TEMP: tmpdir(), TMP: tmpdir(), ...writeWindowsDpapiCommand(bin, argsPath) });
-	const result = runCookies(home, env, undefined, "win32");
+	const result = runCookies( env, undefined, "win32");
 	assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
 	const args = readFileSync(argsPath, "utf8").trim().split("\n");
 	assert.equal(args.includes("-EncodedCommand"), true);
@@ -403,7 +403,7 @@ test("Windows Edge uses the USERPROFILE AppData fallback and reports unsupported
 	const env = makeEnvironment(home, bin, { DPAPI_KEY: key.toString("base64"), DPAPI_PROTECTED: Buffer.from("protected").toString("base64"), TEMP: tmpdir(), TMP: tmpdir() });
 	delete env.LOCALAPPDATA;
 	writeWindowsDpapiCommand(bin);
-	const result = runCookies(home, env, undefined, "win32");
+	const result = runCookies( env, undefined, "win32");
 	assert.equal(result.ok, false);
 	assert.match(result.diagnostic.message, /v20 app-bound cookies are not supported/);
 	rmSync(home, { recursive: true, force: true });
@@ -419,7 +419,7 @@ test("required-cookie preflight avoids password invocation for unrelated profile
 	const kwalletCount = join(home, "kwallet-count");
 	const env = makeEnvironment(home, bin, { XDG_CURRENT_DESKTOP: "KDE", ...writeKWalletCommand(bin, kwalletCount, join(home, "kwallet-args")) });
 	Object.assign(env, writePasswordCommand(bin, countPath, "linux"));
-	const result = runCookies(home, env, undefined, "linux");
+	const result = runCookies( env, undefined, "linux");
 	assert.equal(result.ok, false);
 	assert.equal(result.diagnostic.message.includes("required Gemini cookies"), true);
 	assert.equal(result.diagnostic.attempts.some((attempt) => attempt.browser === "Chrome" && attempt.profile === "Profile 1" && attempt.status === "missing-required-cookies"), true);
@@ -439,7 +439,7 @@ test("diagnostics report browser profile when password-store access fails", (t) 
 	], { browser: "Helium", targetPlatform: "darwin" });
 	const env = makeEnvironment(home, bin);
 	Object.assign(env, writeFailPasswordCommand(bin, join(home, "password-count"), "darwin"));
-	const result = runCookies(home, env, undefined, "darwin");
+	const result = runCookies( env, undefined, "darwin");
 	assert.equal(result.ok, false);
 	assert.equal(result.diagnostic.message, "Could not read Helium cookie encryption password");
 	assert.deepEqual(result.diagnostic.attempts[0], { browser: "Helium", profile: "Default", status: "password-read-failed" });
@@ -459,7 +459,7 @@ test("diagnostics distinguish required cookie decryption failure", (t) => {
 	]);
 	const env = makeEnvironment(home, bin);
 	Object.assign(env, writePasswordCommand(bin, join(home, "password-count")));
-	const result = runCookies(home, env);
+	const result = runCookies( env);
 	assert.equal(result.ok, false);
 	assert.match(result.diagnostic.message, /could not be decrypted/);
 	assert.equal(result.diagnostic.attempts.some((attempt) => attempt.browser === "Chrome" && attempt.profile === "Profile 2" && attempt.status === "decryption-failed"), true);
@@ -537,7 +537,7 @@ test("configured profile names cannot escape the browser profile root", (t) => {
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-profile-traversal-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	const env = makeEnvironment(home, bin);
-	const result = runCookies(home, env, "{ profile: '../Profile 2', requiredCookies: ['__Secure-1PSID'] }");
+	const result = runCookies( env, "{ profile: '../Profile 2', requiredCookies: ['__Secure-1PSID'] }");
 	assert.equal(result.ok, false);
 	assert.match(result.diagnostic.message, /profile directory name/);
 	rmSync(home, { recursive: true, force: true });
@@ -563,7 +563,7 @@ test("explicit profile symlinks cannot escape the browser profile root", (t) => 
 	symlinkSync(outsideProfile, join(browserRoot, "link"), "dir");
 	const env = makeEnvironment(home, bin);
 	Object.assign(env, writePasswordCommand(bin, join(home, "password-count")));
-	const result = runCookies(home, env, "{ profile: 'link', requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }");
+	const result = runCookies( env, "{ profile: 'link', requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] }");
 	assert.equal(result.ok, false);
 	assert.match(result.diagnostic.message, /inside the browser profile root/);
 	rmSync(home, { recursive: true, force: true });
@@ -581,7 +581,7 @@ test("SQLite fallback reads a copied database when node sqlite is unavailable", 
 	]);
 	const env = makeEnvironment(home, bin, { PI_WEB_ACCESS_DISABLE_NODE_SQLITE: "1" });
 	Object.assign(env, writePasswordCommand(bin, join(home, "password-count")));
-	const result = runCookies(home, env);
+	const result = runCookies( env);
 	assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
 	rmSync(home, { recursive: true, force: true });
 	rmSync(bin, { recursive: true, force: true });
@@ -593,7 +593,7 @@ test("unavailable SQLite backends produce actionable sanitized diagnostics", (t)
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
 	createFixture(home, "Profile 2", [["__Secure-1PSID", "one", ".google.com", null, 1]]);
 	const env = makeEnvironment(home, bin, { PI_WEB_ACCESS_DISABLE_NODE_SQLITE: "1", PATH: bin });
-	const result = runCookies(home, env);
+	const result = runCookies( env);
 	assert.equal(result.ok, false);
 	assert.match(result.diagnostic.message, /SQLite backend unavailable/);
 	assert.equal(result.diagnostic.attempts.some((attempt) => attempt.browser === "Chrome" && attempt.profile === "Profile 2" && attempt.status === "sqlite-unavailable"), true);
@@ -643,7 +643,7 @@ test("successful basic-store reads retain password-store warnings", (t) => {
 			...writeFailPasswordCommand(bin, join(home, "secret-count"), "linux"),
 			...writeKWalletCommand(bin, join(home, "kwallet-count"), undefined, { failFirst: true }),
 		});
-		const result = runCookies(home, env, "{ profile: 'Default', requiredCookies: ['__Secure-1PSID'] }", "linux");
+		const result = runCookies( env, "{ profile: 'Default', requiredCookies: ['__Secure-1PSID'] }", "linux");
 		assert.equal(result.ok, true);
 		assert.equal(result.cookies["__Secure-1PSID"], "synthetic value");
 		assert.deepEqual(result.warnings, ["Could not read Chrome KWallet cookie encryption password"]);

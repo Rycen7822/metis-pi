@@ -1,6 +1,21 @@
 import { fileURLToPath } from "node:url";
 import type { Node, Parser, Tree } from "web-tree-sitter";
 
+const allowedKinds = new Set([
+	"program",
+	"list",
+	"pipeline",
+	"command",
+	"command_name",
+	"word",
+	"string",
+	"string_content",
+	"raw_string",
+	"number",
+	"concatenation",
+]);
+const allowedPunctuation = new Set(["&&", "||", ";", "|", '"', "'"]);
+
 let parser: Parser | undefined;
 let parserPromise: Promise<void> | undefined;
 
@@ -24,25 +39,10 @@ export function tryParseShell(shellLcArg: string): Tree | undefined {
 	return parser?.parse(shellLcArg) ?? undefined;
 }
 
-export function tryParseWordOnlyCommandsSequence(tree: Tree, src: string): string[][] | undefined {
+export function tryParseWordOnlyCommandsSequence(tree: Tree): string[][] | undefined {
 	if (tree.rootNode.hasError) {
 		return undefined;
 	}
-
-	const allowedKinds = new Set([
-		"program",
-		"list",
-		"pipeline",
-		"command",
-		"command_name",
-		"word",
-		"string",
-		"string_content",
-		"raw_string",
-		"number",
-		"concatenation",
-	]);
-	const allowedPunctuation = new Set(["&&", "||", ";", "|", '"', "'"]);
 
 	const commandNodes: Node[] = [];
 	const stack: Node[] = [tree.rootNode];
@@ -53,9 +53,6 @@ export function tryParseWordOnlyCommandsSequence(tree: Tree, src: string): strin
 			if (!allowedKinds.has(node.type)) return undefined;
 			if (node.type === "command") commandNodes.push(node);
 		} else {
-			if ([...node.type].some((char) => "&;|".includes(char)) && !allowedPunctuation.has(node.type)) {
-				return undefined;
-			}
 			if (!allowedPunctuation.has(node.type) && node.type.trim().length > 0) {
 				return undefined;
 			}
@@ -68,7 +65,7 @@ export function tryParseWordOnlyCommandsSequence(tree: Tree, src: string): strin
 	commandNodes.sort((left, right) => left.startIndex - right.startIndex);
 	const commands: string[][] = [];
 	for (const node of commandNodes) {
-		const parsed = parsePlainCommandFromNode(node, src);
+		const parsed = parsePlainCommandFromNode(node);
 		if (!parsed) return undefined;
 		commands.push(parsed);
 	}
@@ -81,7 +78,7 @@ export function parseShellLcPlainCommands(command: string[]): string[][] | undef
 	const [, script] = bash;
 	const tree = tryParseShell(script);
 	if (!tree) return undefined;
-	return tryParseWordOnlyCommandsSequence(tree, script);
+	return tryParseWordOnlyCommandsSequence(tree);
 }
 
 async function createBashParser(): Promise<Parser | undefined> {
@@ -97,7 +94,7 @@ async function createBashParser(): Promise<Parser | undefined> {
 	}
 }
 
-function parsePlainCommandFromNode(command: Node, src: string): string[] | undefined {
+function parsePlainCommandFromNode(command: Node): string[] | undefined {
 	if (command.type !== "command") return undefined;
 
 	const words: string[] = [];
@@ -106,21 +103,21 @@ function parsePlainCommandFromNode(command: Node, src: string): string[] | undef
 			case "command_name": {
 				const wordNode = child.namedChild(0);
 				if (!wordNode || wordNode.type !== "word") return undefined;
-				words.push(textOf(wordNode, src));
+				words.push(wordNode.text);
 				break;
 			}
 			case "word":
 			case "number":
-				words.push(textOf(child, src));
+				words.push(child.text);
 				break;
 			case "string": {
-				const parsed = parseDoubleQuotedString(child, src);
+				const parsed = parseDoubleQuotedString(child);
 				if (parsed === undefined) return undefined;
 				words.push(parsed);
 				break;
 			}
 			case "raw_string": {
-				const parsed = parseRawString(child, src);
+				const parsed = parseRawString(child);
 				if (parsed === undefined) return undefined;
 				words.push(parsed);
 				break;
@@ -131,16 +128,16 @@ function parsePlainCommandFromNode(command: Node, src: string): string[] | undef
 					switch (part.type) {
 						case "word":
 						case "number":
-							concatenated += textOf(part, src);
+							concatenated += part.text;
 							break;
 						case "string": {
-							const parsed = parseDoubleQuotedString(part, src);
+							const parsed = parseDoubleQuotedString(part);
 							if (parsed === undefined) return undefined;
 							concatenated += parsed;
 							break;
 						}
 						case "raw_string": {
-							const parsed = parseRawString(part, src);
+							const parsed = parseRawString(part);
 							if (parsed === undefined) return undefined;
 							concatenated += parsed;
 							break;
@@ -161,23 +158,19 @@ function parsePlainCommandFromNode(command: Node, src: string): string[] | undef
 	return words;
 }
 
-function parseDoubleQuotedString(node: Node, src: string): string | undefined {
+function parseDoubleQuotedString(node: Node): string | undefined {
 	if (node.type !== "string") return undefined;
 	for (const part of node.namedChildren) {
 		if (part.type !== "string_content") return undefined;
 	}
-	const raw = textOf(node, src);
+	const raw = node.text;
 	if (!raw.startsWith('"') || !raw.endsWith('"')) return undefined;
 	return raw.slice(1, -1);
 }
 
-function parseRawString(node: Node, src: string): string | undefined {
+function parseRawString(node: Node): string | undefined {
 	if (node.type !== "raw_string") return undefined;
-	const raw = textOf(node, src);
+	const raw = node.text;
 	if (!raw.startsWith("'") || !raw.endsWith("'")) return undefined;
 	return raw.slice(1, -1);
-}
-
-function textOf(node: Node, _src: string): string {
-	return node.text;
 }

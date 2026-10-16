@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ProcessId;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-pub struct ByteChunk(#[serde(with = "base64_bytes")] pub Vec<u8>);
+pub struct ByteChunk(#[serde(serialize_with = "base64_bytes::serialize")] pub Vec<u8>);
 
 impl ByteChunk { pub fn into_inner(self) -> Vec<u8> { self.0 } }
 impl From<Vec<u8>> for ByteChunk { fn from(value: Vec<u8>) -> Self { Self(value) } }
@@ -44,11 +44,11 @@ pub struct ReadParams {
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream { Stdout, Stderr, Pty }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessOutputChunk { pub seq: u64, pub stream: ExecOutputStream, pub chunk: ByteChunk }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadResponse {
     pub chunks: Vec<ProcessOutputChunk>,
@@ -60,7 +60,7 @@ pub struct ReadResponse {
     pub failure: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteParams { pub process_id: ProcessId, pub chunk: ByteChunk }
 
@@ -85,10 +85,5 @@ mod base64_bytes {
     pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
     where S: serde::Serializer {
         serializer.serialize_str(&BASE64_STANDARD.encode(bytes))
-    }
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where D: serde::Deserializer<'de> {
-        let encoded = String::deserialize(deserializer)?;
-        BASE64_STANDARD.decode(encoded.as_bytes()).map_err(serde::de::Error::custom)
     }
 }

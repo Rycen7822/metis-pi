@@ -190,7 +190,7 @@ export class HttpConnection extends McpConnection {
     // Only side-effect-free discovery may select an era; never retry tools/call.
     this.mode = requested === "legacy_2025_06_18" ? "legacy"
       : requested === "modern_2026_07_28" || await this.probeModern() ? "modern" : "legacy";
-    if (this.mode === "modern") await this.request("tools/list", {}, this.cfg.startup_timeout_sec);
+    if (this.mode === "modern") await this.ensureTools();
     else await this.legacyInitialize();
   }
 

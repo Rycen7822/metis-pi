@@ -133,8 +133,8 @@ test("Parallel extract retries full content when excerpts are too short", async 
 	const child = runChild(
 		`
 		const calls = [];
-		globalThis.fetch = async (url, init) => {
-			calls.push({ url: String(url), body: JSON.parse(init.body) });
+		globalThis.fetch = async (_url, init) => {
+			calls.push({ body: JSON.parse(init.body) });
 			if (calls.length === 1) {
 				return new Response(JSON.stringify({ results: [{ url: "https://example.com", title: "Short", excerpts: ["too short"] }] }), { status: 200 });
 			}

@@ -234,7 +234,7 @@ function prunerCommand({ select = async () => undefined, save = async () => {} }
     (value) => { current.value = value; },
     async () => ({ ok: true, reason: "flushed", batchCount: 0, toolCallCount: 0, rawCharCount: 0, summaryCharCount: 0 }),
     () => [],
-    () => ({ callCount: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, chainsCompressed: 0 }),
+    () => ({ callCount: 0, totalInputTokens: 0, totalOutputTokens: 0, chainsCompressed: 0 }),
     () => undefined,
     async () => ({ compressedEntries: [], skipped: 0 }),
     undefined,

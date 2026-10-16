@@ -17,20 +17,19 @@ export const SKILL_TOKEN_EOL = new RegExp(`^${SKILL_TRIGGER}(\\S+)(\\s+|$)`);
 
 export interface LeadingSkillHeads {
   count: number;
-  names: string[];
   rest: string;
 }
 
 export function splitLeadingSkillHeads(text: string): LeadingSkillHeads {
-  const names: string[] = [];
+  let count = 0;
   let rest = text;
   let match = SKILL_HEAD_TOKEN.exec(rest);
   while (match !== null) {
-    names.push(match[1]!);
+    count++;
     rest = rest.slice(match[0].length);
     match = SKILL_HEAD_TOKEN.exec(rest);
   }
-  return { count: names.length, names, rest };
+  return { count, rest };
 }
 
 /**

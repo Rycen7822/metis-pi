@@ -762,7 +762,7 @@ export class SubagentSession {
   }
   async close() {
     if (this.closed) return;
-    this.closed = true; this.releaseSampling?.(); this.watchAbort.abort(); this.ctx.ui.setStatus("metis-subagents", undefined);
+    this.closed = true; this.releaseSampling?.(); this.watchAbort.abort();
     if (this.widgetTimer) clearInterval(this.widgetTimer);
     this.widgetTimer = undefined; this.widgetRefresh = undefined;
     this.viewerAbort?.abort();

@@ -26,7 +26,7 @@ test("message identity and thinking controls survive finalization, duplicate end
   assert.equal(state.thinkingRunPlan(key, 0)?.thinkingMs, 20);
   assert.equal(state.thinkingViewControl(key, 0, () => { throw new Error("control replaced"); }), control);
   assert.equal(state.registerFinalizedMessage(structuredClone(source), false), key);
-  state.resetSession("next");
+  state.resetSession();
   assert.equal(state.identityOf(source), undefined);
   state.apply({ type: "message_start", message: source }, source);
   const nextKey = state.identityOf(source);

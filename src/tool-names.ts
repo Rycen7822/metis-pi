@@ -54,8 +54,6 @@ export interface DiffComponentInput {
   readonly theme: Palette;
   readonly context: ViewContext;
   readonly options: ViewOptions;
-  /** Pi-bound expand hint for row-budget notices inside the diff body. */
-  readonly expandHint?: string;
 }
 export type DiffFactory = (input: DiffComponentInput) => Component;
 export interface DiffLayoutOps {

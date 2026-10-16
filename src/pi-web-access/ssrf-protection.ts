@@ -14,10 +14,6 @@ type Fetch = typeof fetch;
 
 const WEB_SEARCH_CONFIG_PATH = getWebAccessConfigPath();
 
-function loadConfigRoot(): Record<string, unknown> | null {
-	return loadWebAccessConfig();
-}
-
 export interface SsrfConfig {
 	allowRanges: string[];
 	trustEnvProxy: boolean;
@@ -31,8 +27,7 @@ export interface DomainPolicy {
 const DEFAULT_DOMAIN_POLICY: DomainPolicy = { allow: [], deny: [] };
 
 export function loadFetchContentDomainPolicy(): DomainPolicy {
-	const parsed = loadConfigRoot();
-	if (!parsed) return { ...DEFAULT_DOMAIN_POLICY };
+	const parsed = loadWebAccessConfig();
 	const fetchContent = parsed.fetchContent;
 	if (fetchContent === undefined || fetchContent === null) return { ...DEFAULT_DOMAIN_POLICY };
 	if (typeof fetchContent !== "object" || Array.isArray(fetchContent)) {
@@ -76,8 +71,7 @@ function normalizeDomainEntry(entry: string): string | null {
 }
 
 export function loadSsrfConfig(): SsrfConfig {
-	const parsed = loadConfigRoot();
-	if (!parsed) return { allowRanges: [], trustEnvProxy: false };
+	const parsed = loadWebAccessConfig();
 	const ssrf = parsed.ssrf;
 	if (ssrf === undefined || ssrf === null) return { allowRanges: [], trustEnvProxy: false };
 	if (typeof ssrf !== "object" || Array.isArray(ssrf)) {

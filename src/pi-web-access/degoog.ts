@@ -1,6 +1,6 @@
 import { SearchHttpError } from "./search-types.ts";
-import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
@@ -35,29 +35,12 @@ function loadConfig(): WebSearchConfig {
 	return cachedConfig ??= loadWebAccessConfig() as WebSearchConfig;
 }
 
-function normalizeBaseUrl(value: unknown): string | null {
-	if (typeof value !== "string") return null;
-	const trimmed = value.trim();
-	if (!trimmed) return null;
-	try {
-		const url = new URL(trimmed);
-		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-		if (url.username || url.password) return null;
-		url.pathname = url.pathname.replace(/\/+$/, "");
-		url.search = "";
-		url.hash = "";
-		return url.toString().replace(/\/+$/, "");
-	} catch {
-		return null;
-	}
-}
-
 function getBaseUrl(): string | null {
 	// An explicitly set variable wins, including an empty one that disables the
 	// provider, so a configured base never silently falls back to the public instance.
-	if (process.env.DEGOOG_URL !== undefined) return normalizeBaseUrl(process.env.DEGOOG_URL);
+	if (process.env.DEGOOG_URL !== undefined) return normalizeSearchBaseUrl(process.env.DEGOOG_URL);
 	const configured = loadConfig().degoogBaseUrl;
-	if (configured !== undefined) return normalizeBaseUrl(configured);
+	if (configured !== undefined) return normalizeSearchBaseUrl(configured);
 	return DEFAULT_BASE_URL;
 }
 
@@ -70,31 +53,6 @@ function normalizeEngines(value: unknown): string[] {
 		if (engine && !engines.includes(engine)) engines.push(engine);
 	}
 	return engines;
-}
-
-function isValidHeaderValue(value: string): boolean {
-	try {
-		new Headers({ "x-pi-web-access-validation": value });
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function normalizeHeaders(value: unknown): Record<string, string> {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const headers: Record<string, string> = {};
-	for (const [key, headerValue] of Object.entries(value as Record<string, unknown>)) {
-		if (typeof headerValue !== "string") continue;
-		const name = key.trim();
-		// RFC 7230 token chars only — reject empty or malformed header names.
-		if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
-		if (!isValidHeaderValue(headerValue)) continue;
-		// Fetch strips surrounding whitespace before sending; store the sent form so
-		// redaction matches what an upstream error body can echo back.
-		headers[name] = headerValue.trim();
-	}
-	return headers;
 }
 
 function mergeHeaders(extra: Record<string, string>): Record<string, string> {
@@ -119,18 +77,6 @@ function requireBaseUrl(): string {
 		);
 	}
 	return baseUrl;
-}
-
-function buildQuery(query: string, filters: DomainFilters): string {
-	const parts = [query];
-	if (filters.include.length === 1) {
-		parts.push(`site:${filters.include[0]}`);
-	} else if (filters.include.length > 1) {
-		// Group the alternatives so the query terms apply to every site branch.
-		parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
-	}
-	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-	return parts.join(" ");
 }
 
 function resultText(value: unknown): string {
@@ -166,7 +112,7 @@ export async function searchWithDegoog(query: string, options: SearchOptions = {
 	const baseUrl = requireBaseUrl();
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const filters = normalizeDomainFilters(options.domainFilter);
-	const searchQuery = buildQuery(query, filters);
+	const searchQuery = buildSiteFilteredQuery(query, filters);
 	const engines = normalizeEngines(loadConfig().degoogEngines);
 	const apiKey = await resolveCredential({
 		provider: "degoog",
@@ -174,7 +120,7 @@ export async function searchWithDegoog(query: string, options: SearchOptions = {
 		environmentValue: process.env.DEGOOG_API_KEY,
 		signal: options.signal,
 	});
-	const customHeaders = normalizeHeaders(loadConfig().degoogHeaders);
+	const customHeaders = normalizeSearchHeaders(loadConfig().degoogHeaders);
 	const headers = mergeHeaders(customHeaders);
 	if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 	// Reverse-proxy header values can be credentials, so redact them alongside the API

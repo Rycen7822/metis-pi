@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import initializeExtension from "../index.ts";
-import { getActiveProxy, webFetch as fetch, runWithProxy } from "../proxy-transport.ts";
+import { webFetch as fetch, runWithProxy } from "../proxy-transport.ts";
 
 const originalFetch = globalThis.fetch;
 const originalPath = process.env.PATH;
@@ -89,7 +89,7 @@ function headerValues(args) {
 	return args.options.filter(([name]) => name === "header").map(([, value]) => value);
 }
 
-function registerSourceCheck() {
+function registerTool(name) {
 	const tools = [];
 	initializeExtension({
 		registerTool(tool) { tools.push(tool); },
@@ -98,20 +98,9 @@ function registerSourceCheck() {
 		on() {},
 		appendEntry() {},
 	});
-	return tools.find((tool) => tool.name === "source_check");
+	return tools.find((tool) => tool.name === name);
 }
 
-function registerFetchContent() {
-	const tools = [];
-	initializeExtension({
-		registerTool(tool) { tools.push(tool); },
-		registerCommand() {},
-		registerShortcut() {},
-		on() {},
-		appendEntry() {},
-	});
-	return tools.find((tool) => tool.name === "fetch_content");
-}
 
 function proxyArg(args) {
 	return args.options.find(([name]) => name === "proxy")?.[1];
@@ -455,7 +444,7 @@ test("source_check fetchContent uses the explicit proxy for result pages", async
 		},
 		"https://93.184.216.34/api": { status: 200, statusText: "OK", body: "<html><title>API docs</title><body>The API docs are available.</body></html>" },
 	}, async (logPath) => {
-		const tool = registerSourceCheck();
+		const tool = registerTool("source_check");
 		assert.ok(tool);
 		const response = await tool.execute("call", {
 			claim: "API docs",
@@ -483,7 +472,7 @@ test("fetch_content passes the explicit proxy through queued extraction", async 
 			body: "<html><title>Proxy page</title><body>Fetched through the requested proxy.</body></html>",
 		},
 	}, async (logPath) => {
-		const tool = registerFetchContent();
+		const tool = registerTool("fetch_content");
 		assert.ok(tool);
 		const response = await tool.execute("call", {
 			url: "https://93.184.216.34/page",

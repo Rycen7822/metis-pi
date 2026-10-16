@@ -435,15 +435,14 @@ test("fetch_content prefers configured Firecrawl before hosted fallbacks", async
 test("Firecrawl extraction errors remain visible in fetch_content guidance", async () => {
 	const home = await configHome({ firecrawlBaseUrl: "https://crawl.example.com" });
 	const child = runChild(`
-		let calls = [];
-		globalThis.fetch = async (url) => {
-			calls.push(String(url));
-			if (calls.length === 1) return new Response("blocked", { status: 403 });
+		let attempts = 0;
+		globalThis.fetch = async () => {
+			if (++attempts === 1) return new Response("blocked", { status: 403 });
 			return new Response("gateway", { status: 502 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
-		console.log(JSON.stringify({ calls, error: result.error }));
+		console.log(JSON.stringify({ error: result.error }));
 	`, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());

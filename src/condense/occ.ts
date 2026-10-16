@@ -42,7 +42,6 @@ type Phase = "normal" | "waiting" | "hold";
 interface MaintenanceState {
   phase: Phase;
   work: number;
-  lastWork?: string;
   recentWork?: string[];
   /** Estimated added tokens in recent distinct successful tool-work turns. */
   recentGrowth?: number[];
@@ -438,7 +437,6 @@ export function registerOcc(pi: ExtensionAPI, indexer: ToolCallIndexer, config: 
     if (!calls.length) return;
     const key = hash(calls.map((call) => [call.toolName, call.args, call.resultText, call.exitCode]));
     if (state.recentWork?.includes(key)) return;
-    state.lastWork = key;
     state.recentWork = [...(state.recentWork ?? []), key].slice(-16);
     // A genuine work turn can also contain failed/poll/recall results. They do
     // not earn work, but their retained tokens still consume capacity.

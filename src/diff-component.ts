@@ -10,8 +10,6 @@ export interface DiffComponentInput {
   readonly filePath: string;
   readonly paint?: (text: string, language: string) => string;
   readonly colorLevel: ColorLevel;
-  readonly expanded: boolean;
-  readonly expandHint: string;
 }
 
 export function renderCodexDiffComponent(
@@ -27,8 +25,6 @@ export function renderCodexDiffComponent(
     colorLevel: input.colorLevel,
     language: languageForPath(input.filePath),
     paint: input.paint,
-    expanded: input.expanded,
-    expandHint: input.expandHint,
     copyOut,
   });
   return lines.length ? lines : [""];

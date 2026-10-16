@@ -3,7 +3,7 @@ import type { Component } from "./tool-names.ts";
 import { productFor, publishRows, registerProduct, releaseCopyCache, type CopyRow, type ChildPlacement } from "./selection-copy/model.ts";
 
 /** Native stacking owns mouse geometry; copy provenance remains an explicit caller policy. */
-export function stackComponents(components: Component[], componentId: string, composition: "flat-rows" | "child-placements"): Component {
+export function stackComponents(components: Component[], composition: "flat-rows" | "child-placements"): Component {
   const container = new Container(), snapshots: string[][] = [];
   for (const [index, component] of components.entries()) {
     const region = new MouseRegion(component, () => undefined);
@@ -35,7 +35,7 @@ export function stackComponents(components: Component[], componentId: string, co
             : product ? { product, rowIndex: i, colShift: 0 } : undefined);
         }
       }
-      registerProduct(lines, { componentId, width, rows, ...(composition === "child-placements" ? { children } : {}) });
+      registerProduct(lines, { width, rows, ...(composition === "child-placements" ? { children } : {}) });
       publishRows(this, lines);
       return lines;
     },

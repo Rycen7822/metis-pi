@@ -68,7 +68,6 @@ function buildChildScript(scenario) {
 		const registry = {
 			find: (provider, id) => provider === model.provider && id === model.id ? model : undefined,
 			getAvailable: () => [model],
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
 			complete: globalThis.testComplete,
 		};
 		const controller = new AbortController();

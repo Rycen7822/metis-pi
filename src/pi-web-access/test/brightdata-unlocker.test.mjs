@@ -718,16 +718,17 @@ test("Bright Data Web Unlocker failures stay visible in fetch_content guidance",
 	});
 	const child = runChild(
 		`
-		let calls = [];
+		let callCount = 0;
 		globalThis.fetch = async (url) => {
-			calls.push(String(url));
-			if (calls.length === 1) return new Response("blocked", { status: 403 });
-			if (String(url).startsWith("https://r.jina.ai/")) return new Response("nope", { status: 500 });
+			const target = String(url);
+			callCount++;
+			if (callCount === 1) return new Response("blocked", { status: 403 });
+			if (target.startsWith("https://r.jina.ai/")) return new Response("nope", { status: 500 });
 			return new Response("payment required for token bd-secret", { status: 402 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const result = await extractContent("https://example.com/paywalled", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
-		console.log(JSON.stringify({ calls, error: result.error }));
+		console.log(JSON.stringify({ error: result.error }));
 	`,
 		{ HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home },
 	);

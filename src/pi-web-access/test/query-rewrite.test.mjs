@@ -25,15 +25,16 @@ test("rewriteSearchQuery uses the registered provider runtime", async () => {
 		input: ["text"],
 	};
 	let request;
+	let calls = 0;
 	const signal = new AbortController().signal;
 	const result = await rewriteSearchQuery(
 		"http status codes",
 		{
 			modelRegistry: {
-				find: () => model,
+				find: (provider, id) => provider === model.provider && id === model.id ? model : undefined,
 				getAvailable: () => [model],
-				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
 				complete: async (calledModel, context, options) => {
+					calls++;
 					request = { model: calledModel, context, options };
 					return {
 						stopReason: "stop",
@@ -50,6 +51,7 @@ test("rewriteSearchQuery uses the registered provider runtime", async () => {
 	assert.equal(request.model, model);
 	assert.equal(request.options.signal, signal);
 	assert.match(request.context.messages[0].content[0].text, /Query: http status codes/);
+	assert.equal(calls, 1);
 });
 
 test("rewriteSearchQuery skips models outside the host's resolved scope", async () => {
@@ -62,7 +64,6 @@ test("rewriteSearchQuery skips models outside the host's resolved scope", async 
 			modelRegistry: {
 				find: (provider, id) => [haiku, flash].find(model => model.provider === provider && model.id === id),
 				getAvailable: () => [haiku, flash],
-				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
 				complete: async (calledModel) => {
 					used.push(`${calledModel.provider}/${calledModel.id}`);
 					return { stopReason: "stop", content: [{ type: "text", text: "rewritten" }] };
@@ -97,29 +98,7 @@ test("rewriteSearchQuery skips ambiguous candidates without choosing an arbitrar
 	assert.deepEqual(used, ["google"]);
 });
 
-test("rewriteSearchQuery uses a model whose provider authenticates without an API key", async () => {
-	const haiku = { api: "custom-rewrite-api", provider: "anthropic", id: "claude-haiku-4-5", input: ["text"] };
-	const used = [];
-	const result = await rewriteSearchQuery(
-		"http status codes",
-		{
-			modelRegistry: {
-				find: (provider, id) => (provider === haiku.provider && id === haiku.id ? haiku : undefined),
-				getAvailable: () => [haiku],
-				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-				complete: async (calledModel) => {
-					used.push(`${calledModel.provider}/${calledModel.id}`);
-					return { stopReason: "stop", content: [{ type: "text", text: "rewritten" }] };
-				},
-			},
-			scopedModels: [],
-		},
-		new AbortController().signal,
-	);
 
-	assert.equal(result, "rewritten");
-	assert.deepEqual(used, ["anthropic/claude-haiku-4-5"]);
-});
 
 test("rewriteSearchQuery uses a real Pi runtime with a private routed API and model headers", async () => {
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
@@ -142,7 +121,7 @@ test("rewriteSearchQuery uses a real Pi runtime with a private routed API and mo
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 256,
 					headers: { "X-Model": "private" } }],
 				streamSimple(model, context, options) {
-					calls.push({ model: { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl }, options, prompt: context.messages[0].content[0].text });
+					calls.push({ model: { provider: model.provider, api: model.api }, options, prompt: context.messages[0].content[0].text });
 					const stream = new AssistantMessageEventStream();
 					const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
 						content: [{ type: "text", text: "Private native rewrite" }], stopReason: "stop", timestamp: Date.now(),
@@ -175,7 +154,11 @@ test("rewriteSearchQuery uses a real Pi runtime with a private routed API and mo
 test("rewriteSearchQuery never accepts text from an error response", async () => {
 	const model = { provider: "anthropic", id: "claude-haiku-4-5" };
 	await assert.rejects(rewriteSearchQuery("q", {
-		modelRegistry: { find: () => model, getAvailable: () => [model], getApiKeyAndHeaders: async () => ({ ok: true }), complete: async () => ({ stopReason: "error", errorMessage: "provider rejected the request", content: [{ type: "text", text: "partial query" }] }) },
+		modelRegistry: {
+			find: () => model, getAvailable: () => [model],
+			complete: async () => ({ stopReason: "error", errorMessage: "provider rejected the request",
+				content: [{ type: "text", text: "partial query" }] }),
+		},
 		scopedModels: [],
 	}, new AbortController().signal), /provider rejected the request/);
 });

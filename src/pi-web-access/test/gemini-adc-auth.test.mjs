@@ -65,7 +65,7 @@ test("Gemini search uses Vertex AI + ADC bearer auth when geminiAuth is adc", as
 	const child = runChild(`
 		const requests = [];
 		globalThis.fetch = async (url, init = {}) => {
-			const request = { url: String(url), method: init.method ?? "GET", headers: Object.fromEntries(new Headers(init.headers)) };
+			const request = { url: String(url), headers: Object.fromEntries(new Headers(init.headers)) };
 			requests.push(request);
 			if (String(url).startsWith("https://oauth2.googleapis.com/token")) {
 				return new Response(JSON.stringify({ access_token: "synthetic-adc-token", expires_in: 3599 }), {
@@ -124,7 +124,7 @@ test("Gemini ADC availability requires geminiAuth adc, project, location, and an
 	const child2 = runChild(`
 		const { isGeminiApiAvailable } = await import(${JSON.stringify(geminiApiModuleUrl)});
 		const adc = await import(${JSON.stringify(geminiAdcModuleUrl)});
-		console.log(JSON.stringify({ adcAvail: adc.isGeminiAdcAvailable(), apiAvail: isGeminiApiAvailable(), missingProject: (await import(${JSON.stringify(geminiAdcModuleUrl)})).getAdcProject() }));
+		console.log(JSON.stringify({ adcAvail: adc.isGeminiAdcAvailable(), apiAvail: isGeminiApiAvailable() }));
 	`, { HOME: root, USERPROFILE: root, PI_CODING_AGENT_DIR: root, GOOGLE_APPLICATION_CREDENTIALS: join(root, "adc.json") });
 	assert.equal(child2.status, 0, child2.stderr);
 	const avail = JSON.parse(child2.stdout.trim());

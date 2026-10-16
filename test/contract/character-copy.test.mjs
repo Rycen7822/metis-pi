@@ -90,7 +90,7 @@ test("actual diff rows preserve grapheme boundaries, cell width and plain exact 
     for (const width of [7, 8, 80]) {
       const component = createDiffComponent({ rows: [{ kind: "add", lineNumber: 1, content: source }],
         filePath: "sample.ts", paint: text => `\x1b[31m${text}\x1b[39m`,
-        expanded: true, expandHint: "expand", colorLevel: { kind: "truecolor" } }, layout);
+        colorLevel: { kind: "truecolor" } }, layout);
       const frame = copyFrame(component, width);
       assert.equal(select(frame).text, `+${source}`);
       const boundaries = new Set([...segmenter.segment(source)].map(item => item.index + item.segment.length));

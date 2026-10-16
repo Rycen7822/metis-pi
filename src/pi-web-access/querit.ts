@@ -1,7 +1,7 @@
 import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
 import { webFetch as fetch } from "./proxy-transport.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain, normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
@@ -108,18 +108,6 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function mapDomainFilter(domainFilter: string[] | undefined): { include: string[]; exclude: string[] } {
-	const include: string[] = [];
-	const exclude: string[] = [];
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? exclude : include;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return { include, exclude };
-}
-
 function mapRecencyFilter(value: SearchOptions["recencyFilter"]): string | undefined {
 	if (value === "day") return "d1";
 	if (value === "week") return "w1";
@@ -129,7 +117,7 @@ function mapRecencyFilter(value: SearchOptions["recencyFilter"]): string | undef
 }
 
 function buildSearchBody(query: string, options: QueritSearchOptions): Record<string, unknown> {
-	const { include, exclude } = mapDomainFilter(options.domainFilter);
+	const { include, exclude } = normalizeDomainFilters(options.domainFilter);
 	const date = mapRecencyFilter(options.recencyFilter);
 	const filters: Record<string, unknown> = {};
 	if (include.length > 0 || exclude.length > 0) {
@@ -249,21 +237,24 @@ function mapContentResult(result: QueritContentResult | undefined, requestedUrl:
 	};
 }
 
+type ValidatedContentsResponse = QueritContentsResponse & {
+	results: QueritContentResult[];
+	statuses: QueritContentStatus[];
+};
+
 function findContentResult(
-	data: QueritContentsResponse,
+	data: ValidatedContentsResponse,
 	requestedUrl: string,
 	index: number,
 	requestedCount: number,
 ): QueritContentResult | undefined {
-	if (!Array.isArray(data.results)) return undefined;
 	const exact = data.results.find((item) => item?.url === requestedUrl || item?.extrasMeta?.url === requestedUrl);
 	if (exact) return exact;
 	if (requestedCount === 1) return data.results[0];
 	return data.results.length === requestedCount ? data.results[index] : undefined;
 }
 
-function failedContentStatus(data: QueritContentsResponse, result: QueritContentResult | undefined, index: number): boolean {
-	if (!Array.isArray(data.statuses)) return false;
+function failedContentStatus(data: ValidatedContentsResponse, result: QueritContentResult | undefined, index: number): boolean {
 	const status = result?.id
 		? data.statuses.find((item) => item?.id === result.id)
 		: data.statuses[index];
@@ -275,7 +266,7 @@ async function fetchContentsBatch(
 	apiKey: string,
 	signal?: AbortSignal,
 	options: ExtractOptions = {},
-): Promise<QueritContentsResponse> {
+): Promise<ValidatedContentsResponse> {
 	const data = await queritJsonRequest<QueritContentsResponse>(
 		"Contents",
 		QUERIT_CONTENTS_URL,
@@ -288,7 +279,7 @@ async function fetchContentsBatch(
 	if (!Array.isArray(data.results) || !Array.isArray(data.statuses)) {
 		throw new Error("Querit Contents API returned an unexpected response shape");
 	}
-	return data;
+	return data as ValidatedContentsResponse;
 }
 
 async function fetchInlineContent(urls: string[], apiKey: string, signal?: AbortSignal): Promise<ExtractedContent[]> {

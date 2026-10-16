@@ -224,7 +224,7 @@ class ParentNotifications:
             args = busy_args + list(cursor or ())
             notices = self.store.all(
                 (
-                    "SELECT n.*,s.parent,r.agent_id,r.state AS run_state,"
+                    "SELECT n.*,s.parent,r.agent_id,"
                     f"{priority}"
                     " AS priority FROM parent_notifications n JOIN scopes s ON s.id=n.scope JOIN "
                     "runs r ON r.id=n.run_id AND r.scope=n.scope WHERE s.parent IS NOT NULL AND "
@@ -242,7 +242,7 @@ class ParentNotifications:
                 break
             for notice in notices:
                 cursor = (notice["priority"], notice["created"], notice["id"])
-                run = {"id": notice["run_id"], "agent_id": notice["agent_id"], "state": notice["run_state"]}
+                run = {"id": notice["run_id"], "agent_id": notice["agent_id"]}
                 worker = self.worker_for(run["agent_id"])
                 relevant = not notice["handled"] and (
                     notice["kind"] == "terminal"
@@ -278,7 +278,7 @@ class ParentNotifications:
                     task = self.spawn_task(self.recall(notice, parent))
                 else:
                     self.store.execute("UPDATE parent_notifications SET state='sending' WHERE id=?", (notice["id"],))
-                    task = self.spawn_task(self.deliver(notice, run, parent))
+                    task = self.spawn_task(self.deliver(notice, parent))
                 self.deliveries[key] = task
 
                 def finished(_, key=key):
@@ -300,7 +300,7 @@ class ParentNotifications:
         if deleted is True and not current['handled']: state='pending'
         self.store.execute('UPDATE parent_notifications SET state=?,error=? WHERE id=?',(state,error,notice['id']))
 
-    async def deliver(self, notice, run, parent):
+    async def deliver(self, notice, parent):
         current=self.store.one('SELECT handled FROM parent_notifications WHERE id=?',(notice['id'],))
         run=self.store.run(notice['scope'],notice['run_id'])
         worker=self.worker_for(run['agent_id'])

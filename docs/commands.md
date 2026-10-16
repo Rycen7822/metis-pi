@@ -7,7 +7,7 @@
 | 命令 | 用途 |
 | --- | --- |
 | `/codex-ui` | 查看显示组件、有效配置、统计与复制状态；见 [诊断](diagnostics.md)。 |
-| `/execution [project]` | 修改全局或受信任项目的执行设置。 |
+| `/execution` | 修改全局执行设置。 |
 | `/goal [objective]` | 查看或创建目标；`pause`、`resume`、`edit`、`clear` 管理目标。 |
 | `/pruner` | 历史精简与恢复；常用 `status`、`settings`、`on`、`off`、`now`、`compact`。 |
 | `/dynamic-agents [reload]` | 查看指令状态，或标记下一次 run 刷新。 |
@@ -37,6 +37,6 @@
 | `ctrl+c` | fullscreen 有选区时复制并保留草稿；无选区时交回宿主。 |
 | `ctrl+o` / `ctrl+t` / `esc` | 宿主的展开、思考显示和中断；提示跟随实际键位。 |
 | `alt+w` / `alt+q` / `alt+e` / `alt+r` | 后台 shell 面板展开、上一项、下一项、关闭；可在执行配置中修改。 |
-| 思考块单击 / 双击 / 滚轮 | 折叠、窥视、全展开及窗口滚动，见 [转录显示](features/display.md#思考块)。 |
+| 思考块左键 / 右键 / 滚轮 | 折叠或窥视、切换全展开及窗口滚动，见 [转录显示](features/display.md#思考块)。 |
 | skill 左键 / 工具行左键 | 切换 skill 折叠 / 沿用宿主展开行为。 |
 | fullscreen 正文拖拽 | 应用选区；修饰键点击和终端原生选区见 [复制](features/selection-copy.md)。 |

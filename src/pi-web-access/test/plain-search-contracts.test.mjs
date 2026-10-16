@@ -34,11 +34,8 @@ before(async () => {
 		PI_CODING_AGENT_DIR: agentDir,
 		SEARXNG_BASE_URL: "http://127.0.0.1:8443",
 		BRAVE_BASE_URL: "https://api.search.brave.com/res/v1",
-		BRAVE_API_KEY: syntheticKey,
-		XCRAWL_API_KEY: syntheticKey,
 		KAGI_API_KEY: syntheticKey,
 		SERPBASE_API_KEY: syntheticKey,
-		BOCHA_API_KEY: syntheticKey,
 		TAVILY_BASE_URL: "https://api.tavily.com",
 	});
 	for (const [, , variable] of jsonProviders) process.env[variable] = syntheticKey;

@@ -111,7 +111,7 @@ test("one mixed Pi diff preserves numbers, indentation, Unicode and unnumbered r
 
 test("a 12-cell diff has literal hanging rows and complete add/remove backgrounds", () => {
   const rows = parseDisplayDiff("  124 \n- 125 1234567890\n+ 125 abcdefghij\n+ 126 \n  127 ");
-  const rendered = renderDiffLines({ rows, width: 12, layout, colorLevel: { kind: "truecolor" }, expanded: false, expandHint: "expand" });
+  const rendered = renderDiffLines({ rows, width: 12, layout, colorLevel: { kind: "truecolor" } });
   const strip = (value) => value.replace(/\x1b\[[0-9;]*m/g, "");
   // Three-digit numbers make a seven-cell gutter, leaving five content cells.
   assert.deepEqual(rendered.map(strip), [

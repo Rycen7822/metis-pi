@@ -85,6 +85,19 @@ const mixedParams = {
 	],
 };
 
+const freeTextParams = {
+	questions: [
+		{
+			question: "Name?",
+			header: "Name",
+			options: [
+				{ label: "Default", description: "Default option" },
+				{ label: "Second", description: "Second option" },
+			],
+		},
+	],
+};
+
 describe("ask_user_question — factory driver (real pi-tui keybindings)", () => {
 
 	it("Esc cancels → returns decline envelope with cancelled=true", async () => {
@@ -166,19 +179,6 @@ describe("ask_user_question — single-question navigation", () => {
 });
 
 describe("ask_user_question — 'Type something.' free-text flow", () => {
-	const freeTextParams = {
-		questions: [
-			{
-				question: "Name?",
-				header: "Name",
-				options: [
-					{ label: "Default", description: "Default option" },
-					{ label: "Second", description: "Second option" },
-				],
-			},
-		],
-	};
-
 	it("navigate to Other sentinel, type text, Enter → kind:'custom' with typed text", async () => {
 		const r = await run(freeTextParams, (c) => {
 			// Items: [Default, Second, "Type something."] — DOWN×2 to Type something
@@ -622,19 +622,6 @@ describe("ask_user_question — notes pre-answer (Slice 5 notes UX)", () => {
 });
 
 describe("ask_user_question — bracketed paste + Kitty CSI-u (dictation parity)", () => {
-	const freeTextParams = {
-		questions: [
-			{
-				question: "Name?",
-				header: "Name",
-				options: [
-					{ label: "Default", description: "Default option" },
-					{ label: "Second", description: "Second option" },
-				],
-			},
-		],
-	};
-
 	it("bracketed paste on the inline-Other row commits the pasted text as kind:'custom'", async () => {
 		const r = await run(freeTextParams, (c) => {
 			c.handleInput(KEY.DOWN); // → Second

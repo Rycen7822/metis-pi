@@ -1,6 +1,6 @@
 import { SearchHttpError } from "./search-types.ts";
-import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath } from "./utils.ts";
+import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
+import { loadWebAccessConfig, getWebSearchConfigPath, normalizeSearchBaseUrl, normalizeSearchHeaders } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import { fetchRemoteUrl, loadSsrfConfig } from "./ssrf-protection.ts";
 import type { SearchOptions, SearchResult, SearchResponse } from "./search-types.ts";
@@ -32,55 +32,15 @@ function loadConfig(): WebSearchConfig {
 	return cachedConfig ??= loadWebAccessConfig() as WebSearchConfig;
 }
 
-function normalizeBaseUrl(value: unknown): string | null {
-	if (typeof value !== "string") return null;
-	const trimmed = value.trim();
-	if (!trimmed) return null;
-	try {
-		const url = new URL(trimmed);
-		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-		if (url.username || url.password) return null;
-		url.pathname = url.pathname.replace(/\/+$/, "");
-		url.search = "";
-		url.hash = "";
-		return url.toString().replace(/\/+$/, "");
-	} catch {
-		return null;
-	}
-}
-
 function getBaseUrl(): string | null {
 	const configured = process.env.SEARXNG_BASE_URL;
 	return configured !== undefined
-		? normalizeBaseUrl(configured)
-		: normalizeBaseUrl(loadConfig().searxngBaseUrl);
-}
-
-function isValidHeaderValue(value: string): boolean {
-	try {
-		new Headers({ "x-pi-web-access-validation": value });
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function normalizeHeaders(value: unknown): Record<string, string> {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const headers: Record<string, string> = {};
-	for (const [key, headerValue] of Object.entries(value as Record<string, unknown>)) {
-		if (typeof headerValue !== "string") continue;
-		const name = key.trim();
-		// RFC 7230 token chars only — reject empty or malformed header names.
-		if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
-		if (!isValidHeaderValue(headerValue)) continue;
-		headers[name] = headerValue.trim();
-	}
-	return headers;
+		? normalizeSearchBaseUrl(configured)
+		: normalizeSearchBaseUrl(loadConfig().searxngBaseUrl);
 }
 
 function getConfiguredHeaders(): Record<string, string> {
-	return normalizeHeaders(loadConfig().searxngHeaders);
+	return normalizeSearchHeaders(loadConfig().searxngHeaders);
 }
 
 function mergeDefaultHeaders(configured: Record<string, string>): Record<string, string> {
@@ -106,17 +66,6 @@ function requireBaseUrl(): string {
 	return baseUrl;
 }
 
-function buildSearXNGQuery(query: string, filters: DomainFilters): string {
-	const parts = [query];
-	if (filters.include.length === 1) {
-		parts.push(`site:${filters.include[0]}`);
-	} else if (filters.include.length > 1) {
-		parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
-	}
-	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-	return parts.join(" ");
-}
-
 function mapTimeRange(recencyFilter: SearchOptions["recencyFilter"]): string | null {
 	return recencyFilter === "day" || recencyFilter === "week" || recencyFilter === "month" || recencyFilter === "year"
 		? recencyFilter
@@ -134,7 +83,7 @@ export async function searchWithSearXNG(query: string, options: SearchOptions = 
 	const baseUrl = requireBaseUrl();
 	const numResults = normalizeSearchResultCount(options.numResults);
 	const filters = normalizeDomainFilters(options.domainFilter);
-	const searchQuery = buildSearXNGQuery(query, filters);
+	const searchQuery = buildSiteFilteredQuery(query, filters);
 	const url = new URL(`${baseUrl}/search`);
 	url.searchParams.set("q", searchQuery);
 	url.searchParams.set("format", "json");

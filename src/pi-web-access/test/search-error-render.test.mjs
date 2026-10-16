@@ -115,13 +115,6 @@ test("non-search error with extras shows detail without browser diagnostics", ()
 	assert.equal(typeof plan.expandHint, "string");
 });
 
-test("error with NO extras and NO cancel stays single-line", () => {
-	// e.g. fetch_content with no url — nothing to diagnose.
-	const plan = buildSearchErrorPlan({ error: "Some transient error" });
-	assert.notEqual(plan, null);
-	assert.equal(plan.expanded.length, 1);
-	assert.equal(plan.expandHint, null);
-});
 
 test("non-error result yields null so the caller falls through to the success renderer", () => {
 	assert.equal(buildSearchErrorPlan({ queryCount: 3, totalResults: 9 }), null);

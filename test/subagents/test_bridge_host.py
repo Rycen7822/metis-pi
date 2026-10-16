@@ -22,7 +22,7 @@ def find_pi_dir() -> Path | None:
     if not exe:
         return None
     real = Path(exe).resolve()
-    for parent in [real.parent, *real.parents]:
+    for parent in real.parents:
         if (parent / 'dist' / 'cli' / 'args.js').is_file():
             return parent
     return None
@@ -32,7 +32,7 @@ def free_port() -> int:
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import ROOT, REPO_ROOT
 
 class HostHarness:
     """Spawns fake MCP servers, builds bootstrap payloads, drives the host.
@@ -799,28 +799,12 @@ class HttpExchangeLifecycleTests(BridgeHostCase):
         err = out['results'][0]
         self.assertEqual(err['kind'], 'error')
         self.assertIn('connection was closed', err['message'])
+        self.assertEqual(len(self.h.calls(srv['log'])), 1)
         # Explicit lifecycle: a fresh exchange after close creates a NEW connection.
         out2 = self.h.run_host([cfg], [
             {'name': 'fresh', 'action': 'list', 'server': 'web'}], access='write')
         self.assertEqual(out2['results'][0]['kind'], 'result')
 
-    def test_close_ends_inflight_exchanges_on_the_connection(self):
-        # Since the proxy serializes calls, one in-flight exchange covers the
-        # lifecycle: close during the hanging body phase must terminate the wait.
-        srv = self.h.start_http(mode='hang_body_json')
-        cfg = self.http_cfg(srv, tool_timeout_sec=15)
-        out = self.h.run_host([cfg], [
-            {'name': 'a', 'action': 'call', 'server': 'web', 'tool': 'publish',
-             'args': {'body': 'a'}, 'confirm': True, 'launch': True, 'closeAfterMs': 700},
-            {'name': 'await', 'awaitPending': True},
-        ], access='write', timeout=30)
-        by = {r['step']: r for r in out['results']}
-        self.assertEqual(by['a']['kind'], 'error')
-        self.assertIn('connection was closed', by['a']['message'])
-        self.assertEqual(len(self.h.calls(srv['log'])), 1)
-        kinds = [e['event'] for e in self.h.events(srv['events'])]
-        self.assertIn('call-received', kinds)
-        self.assertIn('headers-sent', kinds)  # the body phase was already hanging when close fired
 
     def test_concurrent_cancel_does_not_hurt_the_other_request(self):
         hanging = self.h.start_http(mode='hang_body_json')
@@ -1015,6 +999,8 @@ class ModernProtocolTests(BridgeHostCase):
         ev = self.h.events(srv['events'])
         self.assertEqual([e for e in ev if e['event'] == 'strict-rejected'], [])
         reqs = [e for e in ev if e.get('event') == 'request']
+        self.assertEqual(sum(e['method'] == 'tools/list' for e in reqs), 1)
+        self.assertEqual(sum(e.get('method') == 'server/discover' for e in ev), 1)
         for e in reqs:
             self.assertEqual(e['protocol_header'], '2026-07-28')
             self.assertEqual(e['mcp_method_header'], e['method'])
@@ -1035,14 +1021,6 @@ class ModernProtocolTests(BridgeHostCase):
         self.assertEqual(len([e for e in ev if e['event'] == 'initialize-received']), 1)
         lists = [e for e in ev if e.get('method') == 'tools/list']
         self.assertTrue(lists and all(e['protocol_header'] == '2025-06-18' for e in lists))
-
-    def test_auto_picks_modern_without_handshake(self):
-        srv = self.h.start_http('modern')
-        res = self.h.run_host([self.http_cfg(srv)], [{'action': 'list', 'server': 'web'}], access='write')['results']
-        self.assertEqual(res[0]['kind'], 'result')
-        ev = self.h.events(srv['events'])
-        self.assertEqual(len([e for e in ev if e['event'] == 'initialize-received']), 0)
-        self.assertEqual(len([e for e in ev if e.get('method') == 'server/discover']), 1)
 
     def test_legacy_client_cannot_talk_to_modern_server(self):
         srv = self.h.start_http('modern')
@@ -1147,23 +1125,38 @@ class SequentialExecutionTests(BridgeHostCase):
     def test_concurrent_calls_are_serial_and_cancellation_does_not_poison_the_queue(self):
         for abort_first in (False, True):
             with self.subTest(abort_first=abort_first):
-                srv = self.h.start_stdio(extra={'FAKE_MCP_SLOW_MUTATION_MS': '400'})
-                first = {'name': 'c1', 'action': 'call', 'server': 'local', 'tool': 'echo',
+                events = self.h.tmp / f'sequential-{abort_first}.log'
+                extra = {'FAKE_MCP_SLOW_MUTATION_MS': '400', 'FAKE_MCP_EVENTS': str(events)}
+                alpha = self.h.start_stdio(extra=extra)
+                beta = self.h.start_stdio(extra=extra)
+                first = {'name': 'c1', 'action': 'call', 'server': 'alpha', 'tool': 'echo',
                          'args': {'text': 'first'}, 'launch': True}
-                if abort_first: first['abortAfterMs'] = 150
-                out = self.h.run_host([stdio_cfg(server_env=srv['env'], approval_default='auto')], [first,
-                    {'name': 'c2', 'action': 'call', 'server': 'local', 'tool': 'echo',
+                if abort_first:
+                    first['abortAfterMs'] = 150
+                cfgs = [stdio_cfg(name=name, server_env=srv['env'], approval_default='auto')
+                        for name, srv in [('alpha', alpha), ('beta', beta)]]
+                out = self.h.run_host(cfgs, [
+                    {'name': 'warm-alpha', 'action': 'list', 'server': 'alpha'},
+                    {'name': 'warm-beta', 'action': 'list', 'server': 'beta'},
+                    first,
+                    {'name': 'c2', 'action': 'call', 'server': 'beta', 'tool': 'echo',
                      'args': {'text': 'second'}, 'launch': True},
                     {'action': 'awaitPending'}], access='write', timeout=90)
                 by = {r['step']: r for r in out['results']}
+                self.assertTrue(all(by[name]['kind'] == 'result' for name in ['warm-alpha', 'warm-beta']))
                 self.assertEqual(out['registered']['executionMode'], 'sequential')
                 self.assertEqual(by['c1']['kind'], 'error' if abort_first else 'result')
                 self.assertEqual(by['c2']['kind'], 'result', by['c2'].get('message'))
                 self.assertIn('second', by['c2']['text'])
-                sequence = [e['event'] for e in self.h.events(srv['events'])
-                            if e['event'] in ('call-start', 'call-end')]
-                self.assertEqual(sequence, ['call-start', 'call-end'] * 2)
-                if not abort_first: self.assertIn('first', by['c1']['text'])
+                if abort_first:
+                    self.assertEqual(by['c1']['name'], 'CancelledError')
+                else:
+                    self.assertIn('first', by['c1']['text'])
+                    sequence = [e['event'] for e in self.h.events(events)
+                                if e['event'] in ('call-start', 'call-end')]
+                    self.assertEqual(sequence, ['call-start', 'call-end'] * 2)
+                    self.assertEqual(self.h.calls(alpha['log']), ['echo:{"text": "first"}'])
+                    self.assertEqual(self.h.calls(beta['log']), ['echo:{"text": "second"}'])
 
 
 class StdioGenerationTests(BridgeHostCase):

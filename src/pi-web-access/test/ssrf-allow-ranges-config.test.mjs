@@ -9,7 +9,7 @@ const extractUrl = new URL("../extract.ts", import.meta.url).href;
 
 // `loadSsrfAllowRanges` reads the config path captured at module load, so each
 // case runs in a child process with PI_CODING_AGENT_DIR pointed at a temp dir.
-function runLoad(env) {
+function runLoad(env, loader = "loadSsrfAllowRanges", key = "ranges") {
 	const childEnv = { ...process.env };
 	delete childEnv.PI_CODING_AGENT_DIR;
 	delete childEnv.XDG_CONFIG_HOME;
@@ -18,9 +18,9 @@ function runLoad(env) {
 		else childEnv[key] = value;
 	}
 	const script = `
-		const { loadSsrfAllowRanges } = await import(${JSON.stringify(extractUrl)});
+		const { [${JSON.stringify(loader)}]: load } = await import(${JSON.stringify(extractUrl)});
 		try {
-			console.log(JSON.stringify({ ok: true, ranges: loadSsrfAllowRanges() }));
+			console.log(JSON.stringify({ ok: true, [${JSON.stringify(key)}]: load() }));
 		} catch (err) {
 			console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
 		}
@@ -35,28 +35,7 @@ function runLoad(env) {
 }
 
 function runLoadConfig(env) {
-	const childEnv = { ...process.env };
-	delete childEnv.PI_CODING_AGENT_DIR;
-	delete childEnv.XDG_CONFIG_HOME;
-	for (const [key, value] of Object.entries(env)) {
-		if (value === undefined) delete childEnv[key];
-		else childEnv[key] = value;
-	}
-	const script = `
-		const { loadSsrfConfig } = await import(${JSON.stringify(extractUrl)});
-		try {
-			console.log(JSON.stringify({ ok: true, config: loadSsrfConfig() }));
-		} catch (err) {
-			console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
-		}
-	`;
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		input: script,
-		encoding: "utf8",
-		env: childEnv,
-	});
-	assert.equal(child.status, 0, child.stderr);
-	return JSON.parse(child.stdout);
+	return runLoad(env, "loadSsrfConfig", "config");
 }
 
 async function makeConfigDir(prefix) {

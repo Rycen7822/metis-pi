@@ -22,15 +22,8 @@ export const CUSTOM_TYPE_STATS = "context-prune-stats";
 /** customType for prune-frontier persistence entries (NOT in LLM context) */
 export const CUSTOM_TYPE_FRONTIER = "context-prune-frontier";
 
-/**
- * customType for content-hash dedup alias entries (NOT in LLM context).
- *
- * One entry per duplicate tool call detected by the pre-flush dedup pass.
- * The new toolCallId is registered as an alias of an already-indexed
- * original toolCallId. The original's record (in CUSTOM_TYPE_INDEX) is
- * the source of truth for the result text. See
- * src/content-hash.ts and src/indexer.ts for the dedup machinery.
- */
+/** Legacy persisted dedup aliases, read during reconstruction. Current duplicate
+ * publication writes the occurrence's own index record and short reference. */
 export const CUSTOM_TYPE_DEDUP_ALIAS = "context-prune-dedup-alias";
 
 /**
@@ -419,10 +412,9 @@ export interface CapturedToolCall {
   outputArchive?: {
     path: string;
     bytes?: number;
-    offsetBytes?: number;
     complete: boolean;
     appendOnly?: boolean;
-    source?: "fused-command-output" | "fusion-journal";
+    source?: "fused-command-output";
   };
   toolCallId: string;
   toolName: string;
@@ -513,21 +505,9 @@ export interface IndexEntryData {
   refs?: SummaryToolCallRef[];
 }
 
-/**
- * Data stored via pi.appendEntry(CUSTOM_TYPE_DEDUP_ALIAS, data).
- *
- * Each entry maps a duplicate toolCallId to the original (already-indexed)
- * toolCallId whose (toolName, exact resultText) hash it matched.
- *
- *  - pruneMessages stub-replaces the duplicate's ToolResultMessage using the
- *    original's short ref (via the indexer's toolCallIdToAlias map).
- *  - context_tree_query resolves the duplicate's id back to the original
- *    record via the indexer's dedup alias map.
- *
- * `hash` is optional and stored only for debugging; reconstruction works
- * without it because the original record is re-hashed when its
- * CUSTOM_TYPE_INDEX entry is replayed.
- */
+/** Legacy duplicate-to-original mapping. Reconstruction recovers the duplicate's
+ * own metadata where available, otherwise marks it unknown. The historical
+ * hash is optional; original index records can be hashed during replay. */
 export interface DedupAliasEntryData {
   newToolCallId: string;
   originalToolCallId: string;
@@ -546,13 +526,6 @@ export interface SummaryToolCallRef {
   toolCallId: string;
   /** ToolResultMessage timestamp; with toolCallId this forms the occurrence key. */
   resultTimestamp?: number;
-}
-
-export interface SummaryMessageDetails {
-  toolCallRefs: SummaryToolCallRef[];
-  toolNames: string[];
-  turnIndex: number;
-  timestamp: number;
 }
 
 /** Snapshot of what the pruner cannot (yet) reclaim. All token values are Math.round(JSON-chars / 4). */
@@ -731,6 +704,8 @@ export interface FlushOptions {
    * opening the progress overlay.
    */
   previewedBatches?: CapturedBatch[];
+  /** Manual preview snapshot already grouped by splitPackingRuns; skips only that preparation. */
+  preparedBatches?: CapturedBatch[];
   /**
    * Abort signal — when fired the in-flight summarization is cancelled and
    * `flushPending` returns `{ ok: false, reason: "aborted" }`. Completed chunks

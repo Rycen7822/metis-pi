@@ -118,15 +118,17 @@ function rawBranch(branch: SessionEntry[]): SessionEntry[] {
 }
 function active(ctx: { sessionManager: CodexCompactionOwnerRequest["sessionManager"] }) {
   const projection = ctx.sessionManager.buildSessionProjection();
-  const entry = projection.entries.find(e => e.sourceEntry.type === "compaction" && e.messages.length)?.sourceEntry;
+  const wrapper = projection.entries.find(e => e.sourceEntry.type === "compaction" && e.messages.length);
+  const entry = wrapper?.sourceEntry;
   if (!entry || !ours(entry)) return;
   const data = checkpoint(entry);
   // A context edit of the summary invalidates its opaque history.
-  const message = projection.entries.find(e => e.sourceEntry.id === entry.id)?.messages.find(m => m.role === "compactionSummary");
+  const message = wrapper.messages.find(m => m.role === "compactionSummary");
   const branch = ctx.sessionManager.getBranch();
   const covered = new Set(branch.slice(0, branch.findIndex(e => e.id === entry.firstKeptEntryId)).map(e => e.id));
-  const edited = branch.slice(branch.findIndex(e => e.id === entry.id) + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
-  const origin = branch.slice(0, branch.findIndex(e => e.id === entry.id)).findLast(e => e.type === "model_change");
+  const entryIndex = branch.findIndex(e => e.id === entry.id);
+  const edited = branch.slice(entryIndex + 1).some(e => e.type === "context_edit" && covered.has(e.targetId));
+  const origin = branch.slice(0, entryIndex).findLast(e => e.type === "model_change");
   return { entry, origin: origin?.type === "model_change" ? origin : undefined,
     data: !edited && message?.role === "compactionSummary" && message.summary === entry.summary ? data : undefined };
 }

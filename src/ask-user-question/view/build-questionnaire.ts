@@ -54,8 +54,7 @@ export function buildQuestionnaire(config: QuestionnaireBuildConfig) {
 		scrollInfo: (text: string) => theme.fg("dim", text),
 	};
 	const markdownTheme = getMarkdownTheme();
-	const descriptors = questions.map((q) => ({ multiSelect: q.multiSelect }));
-	const globalLeftWidth = (width: number) => crossTabLeftWidthWithDonation(descriptors, itemsByTab, questions, width);
+	const globalLeftWidth = (width: number) => crossTabLeftWidthWithDonation(questions, itemsByTab, questions, width);
 	const tabs: TabComponents[] = questions.map((question, index) => {
 		const optionList = new OptionListView({ items: itemsByTab[index] ?? [], theme: selectTheme });
 		const previewBlock = new PreviewBlockRenderer({ question, theme, markdownTheme });

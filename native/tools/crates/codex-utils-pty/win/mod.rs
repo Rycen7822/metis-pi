@@ -22,7 +22,6 @@
 // - Place spawned processes in a Job Object so kill operations terminate the
 //   full process tree, while normal root exit preserves background descendants.
 
-use anyhow::Context as _;
 use filedescriptor::OwnedHandle;
 use portable_pty::Child;
 use portable_pty::ChildKiller;
@@ -30,11 +29,8 @@ use portable_pty::ExitStatus;
 use std::io::Error as IoError;
 use std::io::Result as IoResult;
 use std::os::windows::io::AsRawHandle;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::task::Context;
-use std::task::Poll;
 use winapi::shared::minwindef::DWORD;
 use winapi::um::minwinbase::STILL_ACTIVE;
 use winapi::um::processthreadsapi::*;
@@ -155,27 +151,5 @@ impl Child for WinChild {
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
         let proc = self.proc.lock().unwrap();
         Some(proc.as_raw_handle())
-    }
-}
-
-impl std::future::Future for WinChild {
-    type Output = anyhow::Result<ExitStatus>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<anyhow::Result<ExitStatus>> {
-        match self.is_complete() {
-            Ok(Some(status)) => Poll::Ready(Ok(status)),
-            Err(err) => Poll::Ready(Err(err).context("Failed to retrieve process exit status")),
-            Ok(None) => {
-                let proc = self.proc.lock().unwrap().try_clone()?;
-                let waker = cx.waker().clone();
-                std::thread::spawn(move || {
-                    unsafe {
-                        WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
-                    }
-                    waker.wake();
-                });
-                Poll::Pending
-            }
-        }
     }
 }

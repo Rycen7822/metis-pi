@@ -52,7 +52,7 @@ test("stack copy uses the displayed render pass without rerendering dynamic chil
       render: width => new Tui.Text(`frame ${++renders}`, 0, 0).render(width),
       invalidate() {},
     };
-    const stack = stackComponents([changing, new Tui.Text("following block", 0, 0)], "dynamic-stack", composition);
+    const stack = stackComponents([changing, new Tui.Text("following block", 0, 0)], composition);
     const first = copyFrame(stack, 40);
     assert.equal(select(first).text, "frame 1\nfollowing block", `${composition}: copy matches the displayed frame`);
     assert.equal(renders, 1, "copy alignment consumes published rows from the existing render pass");

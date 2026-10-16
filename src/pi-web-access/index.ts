@@ -30,7 +30,6 @@ import {
 	generateSummaryDraft,
 	loadSummaryModelChoices,
 	type SummaryGenerationContext,
-	type SummaryMeta,
 } from "./summary-review.ts";
 import { randomUUID } from "node:crypto";
 import { parseStringifiedArrays } from "./tool-arguments.ts";
@@ -129,7 +128,6 @@ function renderSearchErrorPlan(plan: SearchErrorPlan, expanded: boolean, theme: 
 	return box;
 }
 
-type CuratorWorkflow = "summary-review";
 export type CuratorProvider = SearchProvider;
 
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -191,7 +189,6 @@ function loadConfigForExtensionInit(): WebSearchConfig {
 
 interface PendingCurate {
 	phase: "searching" | "curating";
-	workflow: CuratorWorkflow;
 	summaryContext: SummaryGenerationContext;
 	searchResults: Map<number, QueryResultData>;
 	resultSlots: Map<number, number>;
@@ -890,8 +887,6 @@ export default function (pi: ExtensionAPI, options: {
 				const defaultProvider = bootstrap.defaultProvider;
 				const searchProvider = requestedProvider;
 				const curatorTimeoutSeconds = bootstrap.timeoutSeconds;
-				const curatorWorkflow: CuratorWorkflow = "summary-review";
-
 				const summaryContext: SummaryGenerationContext = {
 					model: ctx.model,
 					modelRegistry: ctx.modelRegistry,
@@ -903,7 +898,6 @@ export default function (pi: ExtensionAPI, options: {
 
 				const pc: PendingCurate = {
 					phase: "searching",
-					workflow: curatorWorkflow,
 					summaryContext,
 					searchResults,
 					resultSlots,

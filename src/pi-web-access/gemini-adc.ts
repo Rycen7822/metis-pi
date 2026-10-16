@@ -69,9 +69,7 @@ interface AdcFile {
 	refresh_token?: string;
 	client_email?: string;
 	private_key?: string;
-	private_key_id?: string;
 	token_uri?: string;
-	universe_domain?: string;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -99,7 +97,6 @@ function parseAdcFile(raw: string): AdcFile {
 			client_id: requiredString(parsed, "client_id", "Gemini ADC authorized_user file"),
 			client_secret: requiredString(parsed, "client_secret", "Gemini ADC authorized_user file"),
 			refresh_token: requiredString(parsed, "refresh_token", "Gemini ADC authorized_user file"),
-			universe_domain: stringField(parsed, "universe_domain"),
 		};
 	}
 	if (type === "service_account") {
@@ -107,9 +104,7 @@ function parseAdcFile(raw: string): AdcFile {
 			type,
 			client_email: requiredString(parsed, "client_email", "Gemini ADC service_account file"),
 			private_key: requiredString(parsed, "private_key", "Gemini ADC service_account file"),
-			private_key_id: stringField(parsed, "private_key_id"),
 			token_uri: stringField(parsed, "token_uri"),
-			universe_domain: stringField(parsed, "universe_domain"),
 		};
 	}
 	return { type };
@@ -169,7 +164,7 @@ export function clearAdcTokenCache(): void {
  */
 const OAUTH_CREDENTIAL_REJECTION_STATUSES = new Set([400, 401, 403]);
 
-function throwOnTokenExchangeFailure(res: Response, detail: string, status: number): never {
+function throwOnTokenExchangeFailure(detail: string, status: number): never {
 	if (OAUTH_CREDENTIAL_REJECTION_STATUSES.has(status)) {
 		throw new CredentialResolutionError("Gemini ADC", "oauth-credential-rejected");
 	}
@@ -192,7 +187,7 @@ async function exchangeRefreshToken(cfg: AdcFile, signal?: AbortSignal): Promise
 	});
 	const text = await res.text();
 	if (!res.ok) {
-		throwOnTokenExchangeFailure(res, text, res.status);
+		throwOnTokenExchangeFailure(text, res.status);
 	}
 	return parseTokenExchangeResponse(text, "Gemini ADC token exchange");
 }
@@ -232,7 +227,7 @@ async function exchangeServiceAccountJwt(cfg: AdcFile, signal?: AbortSignal): Pr
 	});
 	const text = await res.text();
 	if (!res.ok) {
-		throwOnTokenExchangeFailure(res, text, res.status);
+		throwOnTokenExchangeFailure(text, res.status);
 	}
 	return parseTokenExchangeResponse(text, "Gemini ADC service account token exchange");
 }

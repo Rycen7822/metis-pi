@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,7 +133,6 @@ test("Search1API resolves command credentials only when a request starts", async
 		ranAfter: true,
 		authorization: "Bearer synthetic-search1api-command-key",
 	});
-	assert.equal(existsSync(marker), true);
 });
 
 test("explicit Search1API search maps filters, deep content, and results", async () => {

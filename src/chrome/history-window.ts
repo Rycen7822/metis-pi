@@ -306,7 +306,7 @@ export class HistoryWindow {
       const next = this.#origins.findIndex((origin) => origin?.component === anchor.component && origin.row === anchor.row);
       if (next >= 0) this.#scrollTarget = next;
     }
-    registerProduct(rows, { componentId: "history-window", width, rows: [], children: placements });
+    registerProduct(rows, { width, rows: [], children: placements });
     publishRows(this, rows);
     return rows;
   }

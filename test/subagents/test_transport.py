@@ -18,7 +18,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import ROOT, TEST_ROOT
 from subagent_pi.client import request
 from subagent_pi import PROTOCOL_VERSION
 from subagent_pi.common import AgentError, TERMINAL, group_members, socket_path
@@ -909,7 +909,6 @@ class LivePiLifecycleTests(McpHarness, unittest.IsolatedAsyncioTestCase):
     Uses the plugin-owned SDK child against an unmodified Pi >=1.3.0 installation.
     """
     BIN=os.environ.get('SUBAGENT_PI_LIVE_PI_BIN','pi')
-    BEFORE_SETTLE='PI_MOCK_BEFORE_SETTLE'
     READ_TIMEOUT=45
 
     async def asyncSetUp(self):

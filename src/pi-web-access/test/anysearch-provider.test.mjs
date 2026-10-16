@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,7 +93,7 @@ test("AnySearch sends keyed auth and resolves command credentials lazily", async
 		import { existsSync } from "node:fs";
 		let captured;
 		globalThis.fetch = async (url, init) => { captured = Object.fromEntries(new Headers(init.headers)); return new Response(${JSON.stringify(successBody())}, { status: 200 }); };
-		const { isAnySearchAvailable, searchWithAnySearch } = await import(${JSON.stringify(anysearchModuleUrl)});
+		const { searchWithAnySearch } = await import(${JSON.stringify(anysearchModuleUrl)});
 		const before = existsSync(${JSON.stringify(marker)});
 		await searchWithAnySearch("keyed");
 		console.log(JSON.stringify({ before, after: existsSync(${JSON.stringify(marker)}), captured }));
@@ -120,29 +119,12 @@ test("explicit AnySearch provider routing works and is available anonymously", a
 	assert.deepEqual(JSON.parse(child.stdout.trim()), { provider: "anysearch", calls: ["https://api.anysearch.com/v1/search"] });
 });
 
-test("searchRouting accepts anonymous AnySearch availability and follows quota/transient fallback", async () => {
-	const home = await createHome({ searchRouting: { providers: ["anysearch", "brave"], fallbackOn: ["quota", "transient"] } });
-	const child = runChild(`
-		const calls = [];
-		globalThis.fetch = async (url) => {
-			calls.push(String(url));
-			if (String(url) === "https://api.anysearch.com/v1/search") return new Response("quota", { status: 402 });
-			return new Response(JSON.stringify({ web: { results: [{ title: "Brave", url: "https://example.com/brave", description: "fallback" }] } }), { status: 200 });
-		};
-		const { search } = await import(${JSON.stringify(searchModuleUrl)});
-		const result = await search("route", { provider: "auto" });
-		console.log(JSON.stringify({ provider: result.provider, calls }));
-	`, { PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "brave-key" });
-	assert.equal(child.status, 0, child.stderr);
-	assert.deepEqual(JSON.parse(child.stdout.trim()), {
-		provider: "brave",
-		calls: ["https://api.anysearch.com/v1/search", "https://api.search.brave.com/res/v1/web/search?q=route&count=5"],
-	});
-});
-
 for (const [status, kind] of [[400, "invalid-request"], [401, "auth"], [403, "auth"], [402, "quota"], [429, "quota"], [500, "transient"], [503, "transient"], [504, "transient"]]) {
 	test(`AnySearch HTTP ${status} is classified as ${kind}`, async () => {
-		const home = await createHome({ searchRouting: { providers: ["anysearch", "brave"], fallbackOn: [kind === "auth" || kind === "invalid-request" ? "quota" : kind] } });
+		const home = await createHome({ searchRouting: {
+			providers: ["anysearch", "brave"],
+			fallbackOn: status === 402 ? ["quota", "transient"] : [kind === "auth" || kind === "invalid-request" ? "quota" : kind],
+		} });
 		const child = runChild(`
 			const calls = [];
 			globalThis.fetch = async (url) => {
@@ -164,6 +146,10 @@ for (const [status, kind] of [[400, "invalid-request"], [401, "auth"], [403, "au
 			assert.equal(output.ok, true);
 			assert.equal(output.provider, "brave");
 			assert.equal(output.calls.length, 2);
+			if (status === 402) assert.deepEqual(output.calls, [
+				"https://api.anysearch.com/v1/search",
+				"https://api.search.brave.com/res/v1/web/search?q=classified&count=5",
+			]);
 		}
 	});
 }

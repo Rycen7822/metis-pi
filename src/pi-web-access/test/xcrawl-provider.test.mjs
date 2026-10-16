@@ -308,7 +308,7 @@ test("XCrawl provider timeout is a retriable failure, not caller cancellation", 
 			await searchWithXCrawl("slow");
 			console.log(JSON.stringify({ failed: false }));
 		} catch (err) {
-			console.log(JSON.stringify({ failed: true, message: String(err.message), name: err.name }));
+			console.log(JSON.stringify({ failed: true, message: String(err.message) }));
 		}
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
@@ -333,7 +333,7 @@ test("XCrawl preserves caller cancellation when a timeout rejection races with a
 			await searchWithXCrawl("cancel", { signal: controller.signal });
 			console.log(JSON.stringify({ failed: false }));
 		} catch (error) {
-			console.log(JSON.stringify({ failed: true, message: String(error.message), name: error.name }));
+			console.log(JSON.stringify({ failed: true, message: String(error.message) }));
 		}
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);

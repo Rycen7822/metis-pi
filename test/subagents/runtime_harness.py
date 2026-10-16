@@ -4,11 +4,16 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import TEST_ROOT
 from subagent_pi.runtime import Runtime
 
 
 class RuntimeHarness:
+    async def idle_loop(self):
+        while not self.rt.closing:
+            await asyncio.sleep(0.5)
+            await self.rt.check_idle()
+
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='subagent-pi-test-')
         self.root=Path(self.tmp.name); self.home=self.root/'state'; self.home.mkdir()

@@ -3,7 +3,6 @@
 import assert from "node:assert/strict";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
 
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 
@@ -34,17 +33,6 @@ export function modelNamed(id) {
 	assert.ok(model, `expected builtin openai-codex model ${id}`);
 	return model;
 }
-
-export function captureSession(model, sm) {
-	const context = buildSessionContext(sm.getEntries(), sm.getLeafId());
-	return captureBody(model, normalizeContext({ messages: convertToLlm(context.messages) }));
-}
-
-export const declaredToolNames = (body) => body.tools?.map(({ name }) => name) ?? [];
-export const inPlaceToolItems = (input) => input.filter(({ type }) =>
-	["additional_tools", "tool_search_call", "tool_search_output"].includes(type));
-export const kindsOf = (input) => input.map((item) =>
-	item.role && (!item.type || item.type === "message") ? `message:${item.role}` : item.type);
 
 /** Capture after the adapter's payload hook, before any transport; count even uncaptured attempts. */
 export async function captureRegistration(registered = openaiCodexProvider()) {

@@ -24,6 +24,48 @@ export function saveWebAccessConfig(patch: Record<string, unknown>): void {
 	updateWebAccessConfig(getWebSearchConfigDir(), patch);
 }
 
+export function normalizeSearchBaseUrl(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	try {
+		const url = new URL(trimmed);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		if (url.username || url.password) return null;
+		url.pathname = url.pathname.replace(/\/+$/, "");
+		url.search = "";
+		url.hash = "";
+		return url.toString().replace(/\/+$/, "");
+	} catch {
+		return null;
+	}
+}
+
+function isValidHeaderValue(value: string): boolean {
+	try {
+		new Headers({ "x-pi-web-access-validation": value });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+export function normalizeSearchHeaders(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const headers: Record<string, string> = {};
+	for (const [key, headerValue] of Object.entries(value as Record<string, unknown>)) {
+		if (typeof headerValue !== "string") continue;
+		const name = key.trim();
+		// RFC 7230 token chars only — reject empty or malformed header names.
+		if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
+		if (!isValidHeaderValue(headerValue)) continue;
+		// Fetch strips surrounding whitespace before sending; store the sent form so
+		// redaction matches what an upstream error body can echo back.
+		headers[name] = headerValue.trim();
+	}
+	return headers;
+}
+
 interface ApiBaseUrlOptions {
 	configKey: string;
 	configuredValue: unknown;
@@ -119,3 +161,10 @@ export async function fetchWithCredentialRedirects(
 		current = next;
 	}
 }
+
+export const GOOGLE_RECENCY_TBS: Record<string, string> = {
+	day: "qdr:d",
+	week: "qdr:w",
+	month: "qdr:m",
+	year: "qdr:y",
+};

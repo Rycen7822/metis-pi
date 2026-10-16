@@ -12,6 +12,10 @@ import {
 import type { TabComponents } from "../../../src/ask-user-question/view/tab-components.ts";
 import { makeTheme } from "./theme.ts";
 
+export const HINT_SINGLE = "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel";
+export const HINT_MULTI = "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel";
+export const HINT_PART_COLLAPSE = "Ctrl+] to collapse";
+
 const theme = makeTheme() as unknown as Theme;
 
 export function stubComponent(lines: string[]): Component {

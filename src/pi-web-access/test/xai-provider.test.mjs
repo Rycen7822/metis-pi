@@ -101,6 +101,7 @@ test("xAI posts the verified minimal Responses body and reads citation source sh
 
 	assert.equal(captured.url, "https://api.x.ai/v1/responses");
 	assert.equal(captured.method, "POST");
+	assert.equal(captured.body.model, "grok-4.5");
 	assert.equal(captured.headers.authorization, "Bearer xai-key");
 	// Only these three fields are verified against a live account. Adding
 	// stream/include/tool_choice/parallel_tool_calls risks a 400 that costs the
@@ -178,18 +179,7 @@ test("xaiSearchModel pins the model id on the api-key path", async () => {
 	assert.equal(JSON.parse(child.stdout.trim()).model, "grok-5");
 });
 
-test("xAI defaults to the first candidate model when xaiSearchModel is unset", async () => {
-	const home = await createHome({ xaiApiKey: "xai-key" });
-	const child = runChild(`
-		let captured;
-		globalThis.fetch = async (_url, init) => { captured = JSON.parse(init.body); return new Response(${JSON.stringify(successBody())}, { status: 200 }); };
-		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
-		await searchWithXai("default");
-		console.log(JSON.stringify(captured));
-	`, { PI_CODING_AGENT_DIR: home });
-	assert.equal(child.status, 0, child.stderr);
-	assert.equal(JSON.parse(child.stdout.trim()).model, "grok-4.5");
-});
+
 
 test("a non-string or empty xaiSearchModel is rejected rather than silently ignored", async () => {
 	for (const bad of [42, "   "]) {
@@ -217,8 +207,8 @@ test("xaiSearchTools is validated and may opt into X-only search", async () => {
 		let captured;
 		globalThis.fetch = async (_url, init) => { captured = JSON.parse(init.body); return new Response(${JSON.stringify(xSearchBody())}, { status: 200 }); };
 		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
-		const result = await searchWithXai("x only");
-		console.log(JSON.stringify({ captured, result }));
+		await searchWithXai("x only");
+		console.log(JSON.stringify({ captured }));
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
 	const { captured } = JSON.parse(child.stdout.trim());
@@ -390,7 +380,7 @@ test("xAI registered override authenticates the actual requested model for avail
 			},
 		} };
 		globalThis.fetch = async (url, init) => {
-			requests.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
+			requests.push({ headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
 			return new Response(${JSON.stringify(successBody())}, { status: 200 });
 		};
 		const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});

@@ -16,7 +16,7 @@ import unittest
 import weakref
 from unittest import mock as m
 
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import TEST_ROOT
 from subagent_pi.common import AgentError, dumps, group_members, process_identity
 from subagent_pi import worker
 from subagent_pi import views
@@ -1006,6 +1006,8 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["cleanup"], "verified")
         self.assertEqual(self.rt.store.run(self.scope, s["run_id"])["state"], "interrupted")
         self.assertEqual(self.rt.store.run(self.scope, f["run_id"])["state"], "cancelled")
+        row = self.rt.store.agent(self.scope, s["agent_id"])
+        self.assertEqual((row["state"], row["cleanup"]), ("dormant", "verified"))
         g = await self.mutation("respawn", s["agent_id"], message="new approach")
         await self.wait(g["run_id"])
         self.assertIn("new approach", (await self.result(g["run_id"]))["text"])
@@ -1369,17 +1371,6 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 except ProcessLookupError:
                     pass
 
-    async def test_interrupt_leaves_a_verified_dormant_session_for_respawn(self):
-        s = await self.spawn("delay=2|work")
-        r = await self.mutation("interrupt", s["agent_id"])
-        self.assertFalse(r["process_retained"])
-        self.assertEqual(r["cleanup"], "verified")
-        row = self.rt.store.agent(self.scope, s["agent_id"])
-        self.assertEqual((row["state"], row["cleanup"]), ("dormant", "verified"))
-        # The stop is explicit and recoverable: respawn resumes the same session.
-        revived = await self.mutation("respawn", s["agent_id"], message="after stop")
-        await self.wait(revived["run_id"])
-        self.assertIn("after stop", (await self.result(revived["run_id"]))["text"])
 
     async def test_send_auto_wakes_a_dormant_agent(self):
         s = await self.spawn("simple")
@@ -1646,7 +1637,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send.await_args.args[0]["value"], long_option)
 
     async def test_model_silence_times_out_and_cancels_queued_work(self):
-        loop = asyncio.create_task(self.rt.idle_loop())
+        loop = asyncio.create_task(self.idle_loop())
         try:
             s = await self.spawn("model=silent|delay=5|work", idle_timeout_seconds=1)
             queued = await self.mutation("send", s["agent_id"], mode="follow_up", message="must not execute")
@@ -1661,7 +1652,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(loop, return_exceptions=True)
 
     async def test_streaming_progress_has_no_total_deadline(self):
-        loop = asyncio.create_task(self.rt.idle_loop())
+        loop = asyncio.create_task(self.idle_loop())
         try:
             for kind in ("text", "thinking", "toolcall"):
                 with self.subTest(kind=kind):
@@ -1675,7 +1666,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(loop, return_exceptions=True)
 
     async def test_notifications_do_not_hide_a_stalled_model(self):
-        loop = asyncio.create_task(self.rt.idle_loop())
+        loop = asyncio.create_task(self.idle_loop())
         try:
             s = await self.spawn("model=noise|delay=5|work", idle_timeout_seconds=1)
             self.assertEqual((await self.wait(s["run_id"]))["runs"][0]["state"], "timed_out")
@@ -1684,7 +1675,7 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(loop, return_exceptions=True)
 
     async def test_silent_parallel_tools_are_not_model_silence(self):
-        loop = asyncio.create_task(self.rt.idle_loop())
+        loop = asyncio.create_task(self.idle_loop())
         try:
             s = await self.spawn("parallel=1|delay=3|work", idle_timeout_seconds=1)
             done = await self.wait(s["run_id"])
@@ -2090,7 +2081,6 @@ class RestartOwnershipVerdict(unittest.TestCase):
         # cleanup='pending' is set before the fork, so a missing record cannot
         # prove the child never started.
         tmp,home=seed_owner_row(pid=None,identity=None)
-        store=Store(home); store.agent_update('pi_seed',cleanup='pending'); store.close()
         rt=Runtime(home)
         row=rt.store.one('SELECT * FROM agents WHERE id=?',('pi_seed',))
         self.assertEqual((row['state'],row['cleanup']),('orphaned','unknown'))

@@ -179,7 +179,6 @@ export function backgroundAnsi(rgb: Rgb, level: ColorLevel): string {
 
 export const FG_DEFAULT = "\x1b[39m";
 export const BG_RESET = "\x1b[49m";
-export const ALL_RESET = "\x1b[0m";
 export const DIM_ON = "\x1b[2m";
 export const INTENSITY_RESET = "\x1b[22m";
 

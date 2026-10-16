@@ -69,7 +69,6 @@ async function harness(scenario = "lifecycle-normal") {
   return {
     ...f,
     Client,
-    mock,
     context,
     ctx,
     emit,
@@ -172,11 +171,9 @@ test("session managers sharing one headless UI have independent cancellation sco
     return result;
   });
   const other = createMockContext({ cwd: h.root, ui: h.context.ctx.ui });
-  // The mock helper owns its UI; explicitly reuse exactly the same object.
-  const otherCtx = Object.create(other.ctx, { ui: { value: h.context.ctx.ui } });
   try {
     const first = h.execute("diagnostics");
-    const second = h.execute("diagnostics", otherCtx);
+    const second = h.execute("diagnostics", other.ctx);
     await ready.promise;
     const shutdown = h.emit("session_shutdown");
     gate.resolve();

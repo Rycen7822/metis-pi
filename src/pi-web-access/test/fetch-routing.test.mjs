@@ -96,6 +96,13 @@ test("remote hosted fetch providers are disabled by default", async () => {
 	const output = await runExtract({});
 	assert.deepEqual(output.calls, ["https://example.com/routed"]);
 	assert.match(output.result.error, /HTTP 403/);
+	const hint = output.result.error.split("\n").find(line => line.includes(JINA_HINT));
+	assert.ok(hint, output.result.error);
+	assert.match(hint, /set fetchRouting\.allowRemoteHostedProviders to true in .*metis-pi\.toml/);
+	assert.match(hint, /Jina is already in your fetch provider order/);
+	assert.match(hint, /also allows the other hosted providers/);
+	assert.ok(hint.includes(JINA_PRIVACY), hint);
+	assert.doesNotMatch(hint, /"providers"|add "jina"/);
 });
 
 test("fetchRouting without providers uses the default order when remote hosted providers are allowed", async () => {
@@ -111,16 +118,7 @@ test("fetchRouting without providers uses the default order when remote hosted p
 const JINA_HINT = "Enable the keyless Jina Reader fallback";
 const JINA_PRIVACY = "target URLs are fetched through Jina's infrastructure";
 
-test("blocked-page guidance enables Jina with only the remote-hosted opt-in when Jina is already routed", async () => {
-	const output = await runExtract({});
-	const hint = output.result.error.split("\n").find(line => line.includes(JINA_HINT));
-	assert.ok(hint, output.result.error);
-	assert.match(hint, /set fetchRouting\.allowRemoteHostedProviders to true in .*metis-pi\.toml/);
-	assert.match(hint, /Jina is already in your fetch provider order/);
-	assert.match(hint, /also allows the other hosted providers/);
-	assert.ok(hint.includes(JINA_PRIVACY), hint);
-	assert.doesNotMatch(hint, /"providers"|add "jina"/);
-});
+
 
 test("blocked-page guidance asks to add Jina to a custom provider list without replacing it", async () => {
 	const gated = await runExtract({ fetchRouting: { providers: ["http", "firecrawl"] } });

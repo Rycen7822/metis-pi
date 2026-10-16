@@ -119,7 +119,7 @@ export function explorationTitle(
     ).join("\n");
   }
   const header = plan.isHeaderOwner
-    ? `${renderExplorationHeader({ running: plan.running, isError: ctx.isError === true }, level, theme)}\n`
+    ? `${renderExplorationHeader({ running: plan.running, isError: ctx.isError === true }, theme)}\n`
     : "";
   const memberLine = renderExplorationMember(rows[0]!, { first: plan.isFirstMember }, level);
   // Aggregated image notice lives on the LAST member (once per group).
@@ -386,11 +386,11 @@ export function makeRenderers(
     if (change && (change.kind === "add" || change.kind === "update") && change.rows?.length) {
       const filePath = path(args, ctx);
       if (makeDiff) {
-        return makeDiff({ rows: change.rows, filePath, theme, context: ctx, options, expandHint: hint });
+        return makeDiff({ rows: change.rows, filePath, theme, context: ctx, options });
       }
       const rendered = renderDiffLines({
         rows: change.rows, width: 100, layout, colorLevel: colorFor(ctx),
-        language: languageForPath(filePath), paint, expanded, expandHint: hint,
+        language: languageForPath(filePath), paint,
       });
       return component(rendered.join("\n"), ctx);
     }
@@ -453,7 +453,6 @@ export function makeRenderers(
             const stage = resolveWriteStage({
               argsComplete: merged.argsComplete === true,
               executionStarted: merged.executionStarted === true,
-              isPartial: merged.isPartial === true,
               isError: merged.isError === true,
               hasResult: merged.isPartial === false,
             });
@@ -507,32 +506,17 @@ export function makeRenderers(
         renderResult(result: unknown, options: ViewOptions, theme: Palette, ctx: ViewContext) {
           if (name === "edit") {
             const state = view(ctx);
+            const diff = asRecord(asRecord(result).details).diff;
+            const rows = typeof diff === "string" && (state || ctx.isError !== true) ? parseDisplayDiff(diff) : undefined;
             if (state) {
-              state.stats = diffStats(result);
+              state.stats = rows ? diffStatsFromRows(rows) : undefined;
               state.call?.setText(editCall(ctx.args, theme, ctx, state.stats));
             }
-          }
-          if (name === "edit" && ctx.isError !== true) {
-            const details = asRecord(asRecord(result).details);
-            if (typeof details.diff === "string") {
-              const rows = parseDisplayDiff(details.diff);
+            if (rows && ctx.isError !== true) {
               const filePath = path(asRecord(ctx.args), ctx);
-              if (makeDiff) {
-                return makeDiff({ rows, filePath, theme, context: ctx, options, expandHint: expandHint() });
-              }
+              if (makeDiff) return makeDiff({ rows, filePath, theme, context: ctx, options });
               return component(
-                renderCodexDiffComponent(
-                  {
-                    rows,
-                    filePath,
-                    paint,
-                    colorLevel: colorFor(ctx),
-                    expanded: options.expanded === true,
-                    expandHint: expandHint(),
-                  },
-                  100,
-                  layout,
-                ).join("\n"),
+                renderCodexDiffComponent({ rows, filePath, paint, colorLevel: colorFor(ctx) }, 100, layout).join("\n"),
                 ctx,
               );
             }

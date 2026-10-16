@@ -209,7 +209,7 @@ function openRegularFile(path: string): { fd: number; info: Stats } {
 }
 
 // True once the entry is gone; false when the directory or entry changed underneath us or could not be removed.
-function unlinkCacheFile(dir: string, file: CacheFile): boolean {
+function unlinkCacheFile(dir: string, file: Pick<CacheFile, "name" | "dev" | "ino">): boolean {
 	try {
 		const root = lstatSync(dir);
 		if (root.isSymbolicLink() || !root.isDirectory()) return false;
@@ -302,12 +302,12 @@ function writeFetchCache(data: StoredSearchData & { urls: ExtractedContent[] }):
 	const tmpName = `${key}.${process.pid}.${Date.now()}.${randomBytes(16).toString("hex")}.tmp`;
 	const tmpPath = join(dir, tmpName);
 	let fd: number | null = null;
-	let tmpFile: CacheFile | null = null;
+	let tmpFile: Pick<CacheFile, "dev" | "ino"> | null = null;
 	let renamed = false;
 	try {
 		fd = openSync(tmpPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | O_NOFOLLOW, 0o600);
 		const tmpInfo = fstatSync(fd);
-		tmpFile = { name: tmpName, size: tmpInfo.size, mtimeMs: tmpInfo.mtimeMs, dev: tmpInfo.dev, ino: tmpInfo.ino };
+		tmpFile = { dev: tmpInfo.dev, ino: tmpInfo.ino };
 		enforceMode(fd, 0o600);
 		writeFileSync(fd, serialized, "utf8");
 		fsyncSync(fd);
@@ -447,7 +447,7 @@ export function deleteResult(id: string): boolean {
 			if (dir && path) {
 				const info = lstatSync(path);
 				if (!info.isSymbolicLink() && info.isFile()) {
-					unlinkCacheFile(dir, { name: data.fetchCache.key, size: info.size, mtimeMs: info.mtimeMs, dev: info.dev, ino: info.ino });
+					unlinkCacheFile(dir, { name: data.fetchCache.key, dev: info.dev, ino: info.ino });
 				}
 			}
 		} catch {}

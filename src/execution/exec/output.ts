@@ -60,8 +60,6 @@ export function renderTerminalOutput(text: string): string {
 			cursor = Math.max(0, cursor - 1);
 			continue;
 		}
-		if (cursor > line.length)
-			line.push(...Array.from({ length: cursor - line.length }, () => " "));
 		line[cursor] = char;
 		cursor += 1;
 	}

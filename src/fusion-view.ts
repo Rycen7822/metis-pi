@@ -45,7 +45,7 @@ export function fusionRenderers(mutation: Renderers, shell: Renderers, currentRe
         mutation.renderResult(mutationResult, { ...options, isPartial: false }, theme, mutationCtx),
         shell.renderCall(shellCtx.args, theme, shellCtx),
         shell.renderResult(commandResult, { ...options, isPartial: running }, theme, shellCtx),
-      ], "action-fusion", "flat-rows");
+      ], "flat-rows");
     },
   };
 }

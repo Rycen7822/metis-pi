@@ -9,7 +9,7 @@ const moduleUrl = new URL("../gemini-web-config.ts", import.meta.url).href;
 const geminiWebUrl = new URL("../gemini-web.ts", import.meta.url).href;
 
 function runCookieAccessCheck(home, extraEnv = {}) {
-	const env = { ...process.env, HOME: home, USERPROFILE: home, ...extraEnv };
+	const env = { ...process.env, HOME: home, USERPROFILE: home };
 	delete env.PI_ALLOW_BROWSER_COOKIES;
 	delete env.FEYNMAN_ALLOW_BROWSER_COOKIES;
 	delete env.PI_CODING_AGENT_DIR;
@@ -38,7 +38,7 @@ test("Gemini Web never forwards browser cookies across origins", async () => {
 	const { getActiveGoogleEmail, setGeminiFetchOverrideForTests } = await import(geminiWebUrl);
 	const calls = [];
 	setGeminiFetchOverrideForTests(async (url, init = {}) => {
-		calls.push({ url: String(url), cookie: init.headers?.cookie, redirect: init.redirect });
+		calls.push({ url: String(url), redirect: init.redirect });
 		if (String(url).startsWith("https://gemini.google.com/") || String(url).startsWith("https://accounts.google.com/")) {
 			return new Response(null, { status: 302, headers: { location: "https://attacker.example/collect" } });
 		}

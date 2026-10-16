@@ -68,7 +68,6 @@ async function host(t, {
     ...(hybrid && codexAuth === "pi" ? { "openai-codex": legacyCredential } : {}),
   }));
   if (hybrid && codexAuth === "cli") writeCodexLogin(codexDir);
-  writeFileSync(join(dir, "settings.json"), JSON.stringify({ contextPrune: { enabled: true, opportunisticCompaction: true, chainCompression: { enabled: false }, purgeErrors: { enabled: false } } }));
   if (modelsConfig) writeFileSync(join(dir, "configured-models.json"), JSON.stringify(modelsConfig));
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"),
     modelsPath: modelsConfig ? join(dir, "configured-models.json") : null,
@@ -132,7 +131,7 @@ async function host(t, {
     assert.match(String(url), /\/responses(?:\/compact)?$/);
     urls.push(String(url));
     const h = new Headers(options.headers);
-    let bytes = typeof options.body === "string" ? Buffer.from(options.body) : Buffer.from(options.body);
+    let bytes = Buffer.from(options.body);
     if (h.get("content-encoding") === "zstd") bytes = zstdDecompressSync(bytes);
     if (h.get("content-encoding") === "gzip") bytes = gunzipSync(bytes);
     const body = JSON.parse(bytes.toString()); bodies.push(body); headers.push(h);
@@ -163,7 +162,7 @@ async function host(t, {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-  return { session, sm, dir, codexDir, bodies, headers, urls, notices, errors, runtime, eventBus };
+  return { session, sm, dir, codexDir, bodies, headers, urls, notices, runtime, eventBus };
 }
 const compactions = h => h.sm.getBranch().filter(e => e.type === "compaction");
 const history = h => h.sm.getBranch().filter(e => e.type !== "custom" || e.customType !== "metisCodexCompactionFailure");

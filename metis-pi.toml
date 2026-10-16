@@ -233,7 +233,7 @@ enabled = true
 # 保留最近几条任务链；0 不保留最近链。
 rollingWindow = 3
 stripFinalAssistantThinking = true
-# 仅允许手动 compact 额外融合；失败或预算不足时保留机械拼接。
+# 仅允许手动 now / compact 额外融合；失败或预算不足时保留机械拼接。
 fuseRangeSummary = true
 
 # 失败调用的参数清理；正文和恢复证据另行保护。

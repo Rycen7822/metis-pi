@@ -1,4 +1,4 @@
-import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { defaultMetisConfig, isMetisConfigTable, metisConfigPath, readMetisConfig, updateMetisConfig } from "../metis-config.ts";
 
 export type ExecutionConfig = {
@@ -8,7 +8,7 @@ export type ExecutionConfig = {
 };
 export const EXECUTION_DEFAULTS = defaultMetisConfig()["execution"] as ExecutionConfig;
 export const executionConfigPath = () => metisConfigPath(getAgentDir());
-export function readExecutionConfig(_ctx?: Pick<ExtensionContext, "cwd" | "isProjectTrusted">): ExecutionConfig {
+export function readExecutionConfig(): ExecutionConfig {
   const config = structuredClone(EXECUTION_DEFAULTS), section = readMetisConfig(getAgentDir()).config["execution"];
   for (const group of ["tools", "ui"] as const) for (const key of Object.keys(config[group])) {
     const source = isMetisConfigTable(section) ? section[group] : undefined;

@@ -320,7 +320,7 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
             if (content?.length && product?.width === width && row.selfRenderHeight === content.length
                 && lines[0] === "" && content.every((line, index) => lines[index + 1] === line)) {
               registerProduct(lines, {
-                componentId: "tool-self-shell", width, rows: [decorationRow(width)],
+                width, rows: [decorationRow(width)],
                 children: [undefined, ...content.map((_, rowIndex) => ({ product, rowIndex, colShift: 0 }))],
               });
             }

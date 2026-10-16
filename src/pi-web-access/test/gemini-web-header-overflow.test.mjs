@@ -134,11 +134,19 @@ test("resolveGeminiFetch keeps explicit web transport when undici is not resolva
 	}
 });
 
-test("resolveGeminiFetch surfaces dedicated agent construction errors", () => {
+test("concurrent Gemini initialization shares one transport", async () => {
+	const transports = await Promise.all(Array.from({ length: 4 }, () => resolveGeminiFetch()));
+	assert.ok(transports.every(transport => transport === transports[0]));
+});
+
+test("resolveGeminiFetch surfaces construction errors and retries initialization", () => {
 	const env = { ...process.env, HTTPS_PROXY: "not a url", https_proxy: "not a url" };
 	const script = [
 		`import { resolveGeminiFetch } from ${JSON.stringify(new URL("../gemini-web.ts", import.meta.url).href)};`,
-		"await resolveGeminiFetch();",
+		'import assert from "node:assert/strict";',
+		'await assert.rejects(resolveGeminiFetch(), /Invalid URL/);',
+		'process.env.HTTPS_PROXY = process.env.https_proxy = "http://127.0.0.1:9";',
+		'assert.equal(typeof await resolveGeminiFetch(), "function");',
 	].join("\n");
 	const result = spawnSync(process.execPath, ["--input-type=module"], {
 		input: script,
@@ -146,6 +154,5 @@ test("resolveGeminiFetch surfaces dedicated agent construction errors", () => {
 		env,
 	});
 
-	assert.notEqual(result.status, 0);
-	assert.match(result.stderr, /Invalid URL/);
+	assert.equal(result.status, 0, result.stderr);
 });

@@ -25,7 +25,6 @@ export interface CopyRow {
 }
 
 export interface CopyProduct {
-  componentId: string;
   width: number;
   /** Rows indexed exactly like the annotated render array. */
   rows: readonly CopyRow[];

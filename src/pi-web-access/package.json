@@ -13,10 +13,7 @@
     "test": "node --import ./test/isolate-env.mjs --test",
     "typecheck": "tsc",
     "audit:runtime": "npm audit --omit=dev --omit=peer",
-    "build": "node scripts/build.js",
-    "prepublishOnly": "npm run build && node scripts/pi-extensions-dist.js dist",
-    "postpublish": "node scripts/pi-extensions-dist.js index.ts",
-    "release": "node scripts/publish.js"
+    "build": "node scripts/build.js"
   },
   "keywords": [
     "pi-package",

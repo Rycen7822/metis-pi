@@ -16,9 +16,6 @@ type ViewControl = import("./thinking-view.ts").ThinkingViewControl;
 
 export interface ExplorationMember {
   readonly toolCallId: string;
-  readonly toolName: string;
-  readonly order: number;
-  isError: boolean;
   /** Image content blocks counted from the real tool result (not filenames). */
   images: number;
   done: boolean;
@@ -34,11 +31,8 @@ export interface ExplorationPlan {
   readonly isHeaderOwner: boolean;
   readonly isFirstMember: boolean;
   readonly isLastMember: boolean;
-  readonly memberIndex: number;
   readonly running: boolean;
   readonly groupImages: number;
-  /** Group total for THIS member as of the plan snapshot (per-member rows). */
-  readonly memberImages: number;
 }
 
 /** Stable identity of one logical assistant message in this display stream. */
@@ -259,7 +253,6 @@ export class TranscriptState {
   private identityByObject = new WeakMap<object, MessageViewKey>();
   private readonly observedResponses = new Map<string, MessageViewKey | null>();
   private openMessageKey: MessageViewKey | undefined;
-  private sessionKey = "default";
 
   /** Wall clock is injectable so tests can drive run durations deterministically. */
   private readonly now: () => number;
@@ -267,9 +260,8 @@ export class TranscriptState {
     this.now = now;
   }
 
-  resetSession(sessionKey = "default"): void {
+  resetSession(): void {
     this.generation += 1;
-    this.sessionKey = sessionKey;
     this.groups.clear();
     this.memberOf.clear();
     this.lastNode = "barrier";
@@ -293,7 +285,7 @@ export class TranscriptState {
 
   apply(event: TranscriptEvent, sourceObject?: object): void {
     if (event.generation !== undefined && event.generation !== this.generation) {
-      this.resetSession(this.sessionKey);
+      this.resetSession();
     }
     switch (event.type) {
       case "turn_start":
@@ -361,7 +353,7 @@ export class TranscriptState {
       case "tool_execution_start": {
         if (!event.toolCallId || !event.toolName) break;
         if (isExplorationTool(event.toolName)) {
-          this.joinOrCreateGroup(event.toolCallId, event.toolName);
+          this.joinOrCreateGroup(event.toolCallId);
           this.lastNode = "exploration";
         } else {
           this.closeOpenGroup();
@@ -377,9 +369,8 @@ export class TranscriptState {
           const member = group?.members.find((m) => m.toolCallId === event.toolCallId);
           if (member && group) {
             member.done = true;
-            member.isError = event.isError === true;
             member.images = event.imageCount ?? member.images;
-            if (member.isError) {
+            if (event.isError === true) {
               this.closeOpenGroup();
             }
           }
@@ -429,7 +420,7 @@ export class TranscriptState {
     this.openGroupId = undefined;
   }
 
-  private joinOrCreateGroup(toolCallId: string, toolName: string): void {
+  private joinOrCreateGroup(toolCallId: string): void {
     const existing = this.memberOf.get(toolCallId);
     if (existing !== undefined) return;
     let group = this.openGroupId === undefined ? undefined : this.groups.get(this.openGroupId);
@@ -438,7 +429,7 @@ export class TranscriptState {
       this.groups.set(group.id, group);
       this.openGroupId = group.id;
     }
-    group.members.push({ toolCallId, toolName, order: group.members.length, isError: false, images: 0, done: false });
+    group.members.push({ toolCallId, images: 0, done: false });
     this.memberOf.set(toolCallId, group.id);
   }
 
@@ -450,17 +441,14 @@ export class TranscriptState {
     if (!group) return undefined;
     const index = group.members.findIndex((m) => m.toolCallId === toolCallId);
     if (index < 0) return undefined;
-    const member = group.members[index]!;
     const anyRunning = group.members.some((m) => !m.done);
     return {
       groupId,
       isHeaderOwner: index === 0,
       isFirstMember: index === 0,
       isLastMember: index === group.members.length - 1,
-      memberIndex: index,
       running: anyRunning,
       groupImages: group.members.reduce((sum, m) => sum + m.images, 0),
-      memberImages: member.images,
     };
   }
 

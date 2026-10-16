@@ -23,15 +23,13 @@
 // synthesized click — a swallowed release (some terminals eat right releases)
 // can therefore never toggle by accident. Clicks with a modifier key are left
 // to the host's selection logic, and `click`/`press` default to `render: true`
-// in the dispatcher, so toggling needs no TUI handle: `invalidate()` drops the
-// Box's cached lines and the host repaints.
+// in the dispatcher. setExpanded rebuilds the host children; the dispatcher repaints.
 
 import { patchHostPrototype, type SkillPatchResult } from "./skill-host-patch.ts";
 
 export interface SkillFoldComponent {
   expanded: boolean;
   setExpanded(expanded: boolean): void;
-  invalidate?(): void;
 }
 
 export interface SkillFoldMouseEvent {
@@ -69,8 +67,6 @@ export function installSkillFoldClick(component: unknown): SkillPatchResult {
       }
       if (event?.type === "click" && isToggleGesture(event)) {
         this.setExpanded(!this.expanded);
-        // setExpanded swaps the children; invalidate drops the cached render.
-        this.invalidate?.();
         return { handled: true };
       }
       // Everything else (right/middle press, wheel, move, modified clicks) keeps

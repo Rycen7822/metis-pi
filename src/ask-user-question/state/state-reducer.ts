@@ -171,8 +171,10 @@ function confirmResult(state: QuestionnaireState, value: string, ctx: ApplyConte
 			...(option.preview ? { preview: option.preview } : {}),
 		};
 	}
-	const notes = state.notesByTab.get(state.currentTab);
-	if (notes) answer = { ...answer, notes };
+	if (!q.multiSelect) {
+		const notes = state.notesByTab.get(state.currentTab);
+		if (notes) answer = { ...answer, notes };
+	}
 	const answers = new Map(state.answers);
 	answers.set(state.currentTab, answer);
 	const next = {

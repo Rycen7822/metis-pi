@@ -125,11 +125,9 @@ export function fixture(scenario = "lifecycle-normal") {
   return {
     root,
     file,
-    log,
     adapter,
     controller,
     statuses,
-    ctx,
     start,
     track,
     run,

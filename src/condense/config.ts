@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ContextPruneConfig, PruneOn } from "./types.ts";
 import { BATCHING_MODE_VALUES, PRUNE_ON_VALUES, SUMMARIZER_THINKING_VALUES } from "./types.ts";
@@ -9,7 +8,6 @@ import {
   isMetisConfigTable,
   MetisConfigError,
   metisConfigPath,
-  parseMetisConfig,
   readMetisConfig,
   updateMetisConfig,
 } from "../metis-config.ts";
@@ -20,7 +18,6 @@ export const DEFAULT_CONFIG = decodePruneConfig(isMetisConfigTable(bundledDefaul
 
 export const settingsPath = () => metisConfigPath(getAgentDir());
 export const SETTINGS_KEY = "contextPrune" as const;
-export { MetisConfigError as SettingsReadError };
 const booleanOrDefault = (value: unknown, fallback: boolean) => typeof value === "boolean" ? value : fallback;
 const integerOrDefault = <T extends number | null>(value: unknown, fallback: T, minimum = 0, positive = false): number | T =>
   typeof value === "number" && Number.isFinite(value) && (positive ? value > minimum : value >= minimum) ? Math.floor(value) : fallback;
@@ -209,18 +206,7 @@ export async function loadConfig(): Promise<ContextPruneConfig> {
     throw error;
   }
 }
-export async function saveConfig(config: ContextPruneConfig, read?: typeof readFile): Promise<void> {
-  // Retain the injectable read boundary for failure fixtures; normal writers are synchronous and shared.
-  if (read) {
-    try {
-      parseMetisConfig(await read(settingsPath(), "utf8"), settingsPath());
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-        throw error instanceof MetisConfigError
-          ? error
-          : new MetisConfigError(settingsPath(), (error as NodeJS.ErrnoException).code ?? String(error));
-    }
-  }
+export async function saveConfig(config: ContextPruneConfig): Promise<void> {
   updateMetisConfig(getAgentDir(), { [SETTINGS_KEY]: encodePruneConfig(config) });
 }
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;

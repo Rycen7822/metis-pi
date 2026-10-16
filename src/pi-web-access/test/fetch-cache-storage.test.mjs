@@ -157,7 +157,7 @@ test("loaded cached fetched content expires after the result lifetime", async ()
 });
 
 test("missing cache files return an actionable fetched-content error", async () => {
-	const agentDir = await useTempAgentDir();
+	await useTempAgentDir();
 	const pageContent = "cache-backed content";
 	fetchFixture.setFetch(async () => new Response(pageContent, { status: 200, headers: { "content-type": "text/plain" } }));
 

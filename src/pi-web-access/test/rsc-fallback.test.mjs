@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { extractContent } from "../extract.ts";
+import { extractRSCContent } from "../rsc-extract.ts";
 
-const indexSrc = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
 const originalFetch = globalThis.fetch;
 
@@ -135,9 +134,18 @@ test("short RSC payloads remain incomplete", async (t) => {
 	assert.notEqual(result.error, null);
 });
 
-test("background fetch notification distinguishes full, partial, and failed content", () => {
-	assert.match(indexSrc, /ok === fetched\.length\n\s*\? "Full page content now available\."/);
-	assert.match(indexSrc, /ok > 0\n\s*\? "Partial page content now available\."/);
-	assert.match(indexSrc, /"No page content was fetched\. Stored fetch diagnostics are available\."/);
-	assert.match(indexSrc, /Content fetched for \$\{ok\}\/\$\{fetched\.length\} URLs \[\$\{fetchId\}\]\. \$\{availability\}/);
+test("RSC specialized blocks preserve code, escaped cells, shared refs and cycles", () => {
+	const element = (tag, children) => ["$", tag, null, { children }];
+	const intro = "Introductory article evidence. ".repeat(4);
+	const main = element("article", [element("p", intro), element("p", element("code", "$undefined")),
+		element("pre", element("code", "const alpha = 1;")), element("table", [
+			element("thead", element("tr", [element("th", "Left"), element("th", "Right")])),
+			element("tbody", element("tr", [element("td", "a|b"), element("td", "c\\d")])),
+		]), "$L1", "$L1", "$L2"]);
+	const payload = `23:${JSON.stringify(main)}\n1:${JSON.stringify(element("p", "Shared passage."))}\n` +
+		`2:${JSON.stringify(element("div", "$L2"))}\n`;
+	const html = `<title>Blocks</title><script>self.__next_f.push([1,${JSON.stringify(payload)}])</script>`;
+	assert.deepEqual(extractRSCContent(html), { title: "Blocks", content: intro.trim() +
+		"\n\n`$undefined`\n\n```\nconst alpha = 1;\n```\n\n" +
+		"| Left | Right |\n| --- | --- |\n| a\\|b | c\\\\d |\n\nShared passage.\n\nShared passage." });
 });

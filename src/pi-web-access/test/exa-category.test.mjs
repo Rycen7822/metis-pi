@@ -16,8 +16,8 @@ async function requestBodyFor(args) {
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 				const requests = [];
-				globalThis.fetch = async (url, init) => {
-					requests.push({ url: String(url), body: JSON.parse(init.body) });
+				globalThis.fetch = async (_url, init) => {
+					requests.push({ body: JSON.parse(init.body) });
 					return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } });
 				};
 				const { searchWithExa } = await import(${JSON.stringify(exaModuleUrl)});
@@ -63,7 +63,7 @@ async function keylessMcpRequestsFor(query, options, { advancedMissing = false }
 		const child = spawnSync(process.execPath, ["--input-type=module"], {
 			input: `
 				const requests = [];
-				globalThis.fetch = async (url, init) => {
+				globalThis.fetch = async (_url, init) => {
 					const body = JSON.parse(init.body);
 					requests.push({ tool: body.params.name, arguments: body.params.arguments });
 					if (${advancedMissing} && body.params.name === "web_search_advanced_exa") {

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createMockPi } from "@juicesharp/rpiv-test-utils";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stringify } from "smol-toml";
 import {
 	DEFAULT_PROMPT_GUIDELINES,
@@ -18,10 +18,6 @@ function writeConfig(data: Record<string, unknown>): void {
 	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
 	writeFileSync(CONFIG_PATH, stringify({ askUserQuestion: data }), "utf-8");
 }
-
-beforeEach(() => {
-	// test/setup.ts rmSyncs CONFIG_PATH in shared beforeEach
-});
 
 describe("DEFAULT_PROMPT_GUIDELINES — custom-answer contract", () => {
 	it("describes the Type something row as appended to every question without stale fallback terms", () => {
@@ -47,6 +43,7 @@ describe("registerAskUserQuestionTool — guidance overrides", () => {
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
 		expect((tool.promptGuidelines as string[]).length).toBe(DEFAULT_GUIDELINES_LENGTH);
+		expect(tool.description).toBe(DEFAULT_TOOL_DESCRIPTION);
 	});
 
 	it("uses built-in defaults when config has no guidance field", () => {
@@ -118,12 +115,6 @@ describe("registerAskUserQuestionTool — guidance overrides", () => {
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
 	});
 
-	it("uses the built-in tool description when no config file exists", () => {
-		const { pi, captured } = createMockPi();
-		registerAskUserQuestionTool(pi);
-		const tool = captured.tools.get(TOOL_NAME)!;
-		expect(tool.description).toBe(DEFAULT_TOOL_DESCRIPTION);
-	});
 
 	it("falls back to the built-in tool description on empty description", () => {
 		writeConfig({ guidance: { description: "" } });

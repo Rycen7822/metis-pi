@@ -9,7 +9,7 @@ import unittest
 import uuid
 from unittest import mock
 
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+import paths
 from subagent_pi import parent
 from subagent_pi.client import request
 from subagent_pi.common import AgentError, dumps, group_members
@@ -513,7 +513,7 @@ else:
 class ParentScheduleBounds(unittest.TestCase):
     def test_shutdown_done_callback_does_not_start_another_delivery(self):
         binding={'codex_home':'/tmp/codex','thread_id':str(uuid.uuid4())}
-        notice={'id':'n1','scope':'s','run_id':'r','agent_id':'a','run_state':'completed',
+        notice={'id':'n1','scope':'s','run_id':'r','agent_id':'a',
                 'kind':'terminal','ui_id':None,'parent':dumps(binding),'priority':2,'created':0,'state':'pending','handled':0}
         class StoreStub:
             queries=0
@@ -604,7 +604,7 @@ class ParentDeliveryProcessTests(unittest.IsolatedAsyncioTestCase):
                 notifications=parent.ParentNotifications(store,None,lambda _aid: None)
                 if winner=='wait_reservation': notifications.waits[object()]=('s',frozenset({'r'}),True)
                 with mock.patch.object(parent,'enqueue',new_callable=mock.AsyncMock) as enqueue:
-                    await notifications.deliver(notice,run,{})
+                    await notifications.deliver(notice,{})
                     enqueue.assert_not_awaited()
                 self.assertEqual(store.state,'pending' if winner=='wait_reservation' else 'superseded')
 
@@ -651,7 +651,7 @@ time.sleep(30)
             pgid=None
             try:
                 with mock.patch.object(parent,'QUEUE_TIMEOUT_SECONDS',.3):
-                    await asyncio.wait_for(notifications.deliver(notice,run,bound),5)
+                    await asyncio.wait_for(notifications.deliver(notice,bound),5)
                 child_info=json.loads((codex_home/'child.json').read_text())
                 pgid=child_info['pgid']
                 self.assertEqual(store.saved[0],'unknown')

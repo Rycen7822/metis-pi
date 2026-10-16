@@ -39,7 +39,6 @@ export interface DecorationFeature {
 }
 
 export interface DecorationHandle {
-  readonly installed: boolean;
   readonly features: readonly DecorationFeature[];
   readonly thinkingAutoApplied: () => number;
   dispose(): void;
@@ -139,8 +138,7 @@ export function installTranscriptDecorations(input: TranscriptAdapterInput): Dec
     );
     if (result.installed || result.railInstalled) disposers.push(result.dispose);
   }
-  const installed = features.some((f) => f.installed);
-  return { installed, features, thinkingAutoApplied: () => autoApplied.count, dispose() { for (const d of disposers) d(); } };
+  return { features, thinkingAutoApplied: () => autoApplied.count, dispose() { for (const d of disposers) d(); } };
 }
 
 // Assistant subtree: separator before the first text run, rail on expanded

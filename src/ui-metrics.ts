@@ -264,10 +264,7 @@ export class UiMetrics {
           cacheWrite: this.#usage.cacheWrite + preview.cacheWrite,
         }
       : { ...this.#usage };
-    let first: string | undefined;
-    for (const name of this.#activeTools.values()) {
-      if (first === undefined) first = name;
-    }
+    const first = this.#activeTools.values().next().value;
     return {
       active: this.active,
       phase: this.#phase,

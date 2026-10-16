@@ -189,43 +189,30 @@ function normalizeExcerpts(value: unknown): string[] {
 	return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
-function mapSearchResults(results: V1WebSearchResult[] | undefined): SearchResponse["results"] {
-	if (!Array.isArray(results)) return [];
-	const mapped: SearchResponse["results"] = [];
-	for (let i = 0; i < results.length; i++) {
-		const item = results[i];
-		if (!item?.url) continue;
-		const excerpts = normalizeExcerpts(item.excerpts);
-		mapped.push({
-			title: item.title || `Source ${i + 1}`,
-			url: item.url,
-			snippet: excerpts.length > 0 ? excerpts[0].replace(/\s+/g, " ").trim().slice(0, 200) : "",
-		});
-	}
-	return mapped;
-}
-
-function buildAnswerFromExcerpts(results: V1WebSearchResult[] | undefined): string {
-	if (!Array.isArray(results)) return "";
+function mapSearchResponse(results: V1WebSearchResult[] | undefined, includeContent?: boolean): SearchResponse {
+	const response: SearchResponse = { answer: "", results: [] };
+	if (!Array.isArray(results)) return response;
 	const parts: string[] = [];
 	for (let i = 0; i < results.length; i++) {
 		const item = results[i];
 		if (!item?.url) continue;
 		const excerpts = normalizeExcerpts(item.excerpts);
+		const title = item.title || `Source ${i + 1}`;
+		response.results.push({
+			title,
+			url: item.url,
+			snippet: excerpts.length > 0 ? excerpts[0].replace(/\s+/g, " ").trim().slice(0, 200) : "",
+		});
 		if (excerpts.length === 0) continue;
-		parts.push(`${excerpts.join(" ")}\nSource: ${item.title || `Source ${i + 1}`} (${item.url})`);
+		parts.push(`${excerpts.join(" ")}\nSource: ${title} (${item.url})`);
+		if (includeContent) {
+			(response.inlineContent ??= []).push({
+				url: item.url, title: item.title || "", content: excerpts.join("\n\n"), error: null,
+			});
+		}
 	}
-	return parts.join("\n\n");
-}
-
-function mapInlineContent(results: V1WebSearchResult[] | undefined): ExtractedContent[] {
-	if (!Array.isArray(results)) return [];
-	return results.flatMap((result) => {
-		if (!result?.url) return [];
-		const excerpts = normalizeExcerpts(result.excerpts);
-		if (excerpts.length === 0) return [];
-		return [{ url: result.url, title: result.title || "", content: excerpts.join("\n\n"), error: null }];
-	});
+	response.answer = parts.join("\n\n");
+	return response;
 }
 
 function resolveExtractContent(result: V1ExtractResult): string {
@@ -279,16 +266,7 @@ async function fetchAndMapExtractResult(
 
 export async function searchWithParallel(query: string, options: ParallelSearchOptions = {}): Promise<SearchResponse> {
 	const data = await parallelFetch(PARALLEL_SEARCH_URL, buildSearchRequestBody(query, options), options.signal);
-	const results = data.results as V1WebSearchResult[] | undefined;
-	const response: SearchResponse = {
-		answer: buildAnswerFromExcerpts(results),
-		results: mapSearchResults(results),
-	};
-	if (options.includeContent) {
-		const inlineContent = mapInlineContent(results);
-		if (inlineContent.length > 0) response.inlineContent = inlineContent;
-	}
-	return response;
+	return mapSearchResponse(data.results as V1WebSearchResult[] | undefined, options.includeContent);
 }
 
 export async function extractWithParallel(

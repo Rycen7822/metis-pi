@@ -342,7 +342,7 @@ def session_argv(home, a, spec):
         private_dir(directory/'sessions')
         argv += ['--session-dir',str(directory/'sessions')]
     else: argv += ['--session',str(session)]
-    return directory,session,argv
+    return directory,argv
 
 def write_launch(directory, spec, argv, generation):
     atomic_json(directory/'launch.json',{**spec,'argv':managed_command(argv,spec.get('sdk_path')),'generation':generation})

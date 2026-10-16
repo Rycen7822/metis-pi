@@ -22,5 +22,5 @@ export function queryFixture(records, sessionManager = SessionManager.inMemory("
   let tool;
   registerQueryTool({ registerTool: (value) => { tool = value; } }, indexer);
   const run = (params, signal) => tool.execute("query", params, signal, undefined, ctx);
-  return { run, indexer, ctx, tool, origin };
+  return { run, indexer, ctx, origin };
 }

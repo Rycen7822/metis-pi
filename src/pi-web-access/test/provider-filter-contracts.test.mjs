@@ -25,7 +25,8 @@ for (const provider of ["brave", "searxng", "brightdata"]) {
 			process.env.BRIGHTDATA_SERP_ZONE = "synthetic-serp-zone";
 			const calls = [];
 			globalThis.fetch = async (url, init = {}) => {
-				calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: init.body ? JSON.parse(init.body) : null });
+				new Headers(init.headers);
+				calls.push({ url: String(url), body: init.body ? JSON.parse(init.body) : null });
 				return Response.json(${JSON.stringify(provider === "brave" ? { web: { results: [{ title: "Allowed", url: "https://a.example/docs", description: "docs" }] } } : provider === "searxng" ? { results: [{ title: "Allowed", url: "https://a.example/docs", content: "docs" }] } : { organic: [{ title: "Allowed", link: "https://a.example/docs", description: "docs" }] })});
 			};
 			const leaf = await import(${JSON.stringify(modules)} + ${JSON.stringify(provider + ".ts")});
@@ -51,7 +52,8 @@ for (const provider of ["anysearch", "ollama", "kagi", "valyu"]) {
 			process.env[${JSON.stringify(provider.toUpperCase() + "_API_KEY")}] = "synthetic-provider-key";
 			const calls = [];
 			globalThis.fetch = async (url, init = {}) => {
-				calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
+				JSON.parse(init.body);
+				calls.push({ headers: Object.fromEntries(new Headers(init.headers)) });
 				return Response.json(${JSON.stringify(payload)});
 			};
 			const leaf = await import(${JSON.stringify(modules)} + ${JSON.stringify(provider + ".ts")});
@@ -77,7 +79,8 @@ for (const provider of ["querit", "tinyfish"]) {
 			const calls = [];
 			globalThis.fetch = async (url, init) => {
 				const body = init.body ? JSON.parse(init.body) : null;
-				calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body });
+				new Headers(init.headers);
+			calls.push({ body });
 				if (calls.length === 1) return Response.json(${JSON.stringify(provider === "querit" ? { error_code: 200, results: { result: mixed } } : { results: mixed })});
 				return Response.json(${JSON.stringify(provider === "querit" ? { error_code: 200, results: [{ url: "https://docs.example/one", content: "allowed native body", extrasMeta: { title: "Allowed" } }], statuses: [] } : { results: [{ url: "https://docs.example/one", text: "allowed native body", title: "Allowed" }], errors: [] })});
 			};
@@ -127,7 +130,7 @@ test("Kagi v1 sends its documented date and lens domain filters", () => {
 		process.env.KAGI_API_KEY = "synthetic-kagi-key";
 		Date.now = () => Date.parse("2026-10-12T12:34:56Z");
 		const calls = [];
-		globalThis.fetch = async (url, init) => { calls.push({ url: String(url), body: JSON.parse(init.body) }); return Response.json({ data: { search: [] } }); };
+		globalThis.fetch = async (url, init) => { calls.push({ body: JSON.parse(init.body) }); return Response.json({ data: { search: [] } }); };
 		const { searchWithKagi } = await import(${JSON.stringify(modules)} + "kagi.ts");
 		await searchWithKagi("latest docs", { recencyFilter: "week", domainFilter: ["docs.example", "-private.docs.example"] });
 		console.log(JSON.stringify(calls));
@@ -152,7 +155,8 @@ for (const provider of ["openai", "xai", "mistral"]) {
 			process.env[${JSON.stringify(provider.toUpperCase() + "_API_KEY")}] = "synthetic-model-search-key";
 			const calls = [];
 			globalThis.fetch = async (url, init) => {
-				calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
+				JSON.parse(init.body);
+				calls.push({ headers: Object.fromEntries(new Headers(init.headers)) });
 				return Response.json(${JSON.stringify(payload)});
 			};
 			const leaf = await import(${JSON.stringify(modules)} + ${JSON.stringify(provider + "-search.ts")});
@@ -176,7 +180,8 @@ test("Gemini grounding applies a native paired date window and constrains domain
 		Date.now = () => Date.parse("2026-10-12T12:34:56Z");
 		const calls = [];
 		globalThis.fetch = async (url, init) => {
-			calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
+			new Headers(init.headers);
+			calls.push({ body: JSON.parse(init.body) });
 			return Response.json({ candidates: [{ content: { parts: [{ text: "OFF_DOMAIN_ANSWER" }] }, groundingMetadata: { groundingChunks: [
 				{ web: { title: "Off-domain", uri: "https://other.example/out" } },
 				{ web: { title: "Allowed", uri: "https://docs.example/one" } },
@@ -227,7 +232,8 @@ for (const routing of ["auto", "configured"]) {
 			process.env.BRAVE_API_KEY = "synthetic-brave-key"; process.env.PERPLEXITY_API_KEY = "synthetic-perplexity-key";
 			const calls = [];
 			globalThis.fetch = async (url, init) => {
-				calls.push({ url: String(url), body: init.body ? JSON.parse(init.body) : null });
+				if (init.body) JSON.parse(init.body);
+				calls.push({ url: String(url) });
 				return Response.json({ results: [{ title: "Docs", url: "https://docs.example/", content: "native content" }] });
 			};
 			const { search } = await import(${JSON.stringify(modules)} + "search-router.ts");

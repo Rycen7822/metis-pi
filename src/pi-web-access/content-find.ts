@@ -4,7 +4,6 @@ const CONTEXT_CHARS = 400;
 const MAX_OUTPUT_CHARS = 20_000;
 
 interface Match {
-	query: string;
 	start: number;
 	end: number;
 }
@@ -44,7 +43,7 @@ function literalMatches(text: string, query: string, caseInsensitive: boolean): 
 	const needle = caseInsensitive ? query.toLocaleLowerCase() : query;
 	const matches: Match[] = [];
 	for (let start = haystack.indexOf(needle); start >= 0; start = haystack.indexOf(needle, start + Math.max(needle.length, 1))) {
-		matches.push({ query, start, end: start + query.length });
+		matches.push({ start, end: start + query.length });
 	}
 	return matches;
 }
@@ -58,19 +57,21 @@ function fuzzyMatches(text: string, query: string): Match[] {
 		const paragraphText = paragraph[0];
 		if (paragraphText.trim().length === 0 || paragraph.index === undefined) continue;
 		const tokens = [...paragraphText.matchAll(/[\p{L}\p{N}]+/gu)];
-		const matched = queryTokens.filter(queryToken => tokens.some(token => {
-			const candidate = normalize(token[0]);
+		let matchedCount = 0;
+		let firstTokenIndex = Infinity;
+		for (const queryToken of queryTokens) {
 			const maximum = queryToken.length >= 9 ? 2 : queryToken.length >= 5 ? 1 : 0;
-			return editDistanceWithin(queryToken, candidate, maximum);
-		}));
+			const index = tokens.findIndex(token => editDistanceWithin(queryToken, normalize(token[0]), maximum));
+			if (index >= 0) {
+				matchedCount++;
+				firstTokenIndex = Math.min(firstTokenIndex, index);
+			}
+		}
 		const required = queryTokens.length === 1 ? 1 : Math.ceil(queryTokens.length * 0.6);
-		if (matched.length < required) continue;
-		const first = tokens.find(token => matched.some(queryToken => {
-			const maximum = queryToken.length >= 9 ? 2 : queryToken.length >= 5 ? 1 : 0;
-			return editDistanceWithin(queryToken, normalize(token[0]), maximum);
-		}))!;
+		if (matchedCount < required) continue;
+		const first = tokens[firstTokenIndex]!;
 		const start = paragraph.index + first.index;
-		matches.push({ query, start, end: start + first[0].length });
+		matches.push({ start, end: start + first[0].length });
 	}
 	return matches;
 }
@@ -159,7 +160,7 @@ export function findContent(
 		return matchingQueries.flatMap(result => {
 			const first = lowerBound(result.starts, range.start);
 			const last = upperBound(result.ends, range.end);
-			return last > first ? [{ ...result, count: last - first, firstStart: result.starts[first] }] : [];
+			return last > first ? [{ query: result.query, id: result.id, order: result.order, count: last - first, firstStart: result.starts[first] }] : [];
 		}).sort((left, right) => left.firstStart - right.firstStart || left.order - right.order);
 	}
 	const legend = matchingQueries.length > 0

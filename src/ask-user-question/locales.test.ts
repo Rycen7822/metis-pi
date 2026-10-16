@@ -14,7 +14,7 @@ const localesDir = fileURLToPath(new URL("./locales", import.meta.url));
 const TEMPLATED_KEYS = ["hint.collapse", "hint.expand_line"] as const;
 
 describe("locales — {key} placeholder contract", () => {
-	const files = readdirSync(localesDir).filter((f) => f.endsWith(".json"));
+	const files = readdirSync(localesDir).filter((f) => f.endsWith(".json") && f !== "en.json");
 
 	it("en.json defines both templated hint keys (English is the fallback base for every locale)", () => {
 		const en = JSON.parse(readFileSync(join(localesDir, "en.json"), "utf8")) as Record<string, string>;

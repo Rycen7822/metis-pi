@@ -90,8 +90,11 @@ export function findSuperseded(messages: any[], isProtected: IsProtectedFn): Sup
 
   const out: SupersededCandidate[] = [];
   for (const list of byPath.values()) {
-    for (let i = 0; i < list.length - 1; i++) {
-      if (list.slice(i + 1).some((later) => later.identity === list[i]!.identity)) out.push(list[i]!);
+    const seen = new Set<string>();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const candidate = list[i]!;
+      if (seen.has(candidate.identity)) out.push(candidate);
+      seen.add(candidate.identity);
     }
   }
   out.sort((a, b) => a.resultIndex - b.resultIndex);

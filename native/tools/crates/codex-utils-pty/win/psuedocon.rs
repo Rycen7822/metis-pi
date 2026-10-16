@@ -60,8 +60,6 @@ use winapi::um::winnt::OSVERSIONINFOW;
 pub type HPCON = HANDLE;
 
 pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x2;
-#[allow(dead_code)]
-pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
 
 // https://learn.microsoft.com/en-gb/windows/console/createpseudoconsole
 // https://learn.microsoft.com/en-gb/windows/release-health/release-information
@@ -135,10 +133,6 @@ impl Drop for PsuedoCon {
 }
 
 impl PsuedoCon {
-    pub fn raw_handle(&self) -> HPCON {
-        self.con
-    }
-
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {

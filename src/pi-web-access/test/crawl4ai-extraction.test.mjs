@@ -138,15 +138,15 @@ test("fetch_content tries Firecrawl before Crawl4AI when both are configured", a
 
 test("Crawl4AI extraction errors remain visible in fetch_content guidance", async () => {
 	const child = runChild(`
-		let calls = [];
+		let callCount = 0;
 		globalThis.fetch = async (url) => {
-			calls.push(String(url));
-			if (calls.length === 1) return new Response("blocked", { status: 403 });
+			callCount++;
+			if (callCount === 1) return new Response("blocked", { status: 403 });
 			return new Response("gateway", { status: 502 });
 		};
 		const { extractContent } = await import(${JSON.stringify(extractModuleUrl)});
 		const result = await extractContent("https://example.com/client-rendered", undefined, { fetch: globalThis.fetch, lookup: ${PUBLIC_LOOKUP} });
-		console.log(JSON.stringify({ calls, error: result.error }));
+		console.log(JSON.stringify({ error: result.error }));
 	`, {}, { crawl4aiBaseUrl: "https://crawl.example.com" });
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());

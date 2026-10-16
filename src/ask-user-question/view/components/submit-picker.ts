@@ -27,9 +27,6 @@ export interface SubmitPickerProps {
  * - Both rows render in normal style at all times — D1 (revised) allows partial submission,
  *   so Submit is never dimmed or visually marked as unselectable. The warning header in
  *   `buildSubmitContainer` is the sole signal of incompleteness.
- * - `naturalHeight(width)` is state-INDEPENDENT and returns a constant 2, so the
- *   chrome-mirror layout in `buildSubmitContainer` can subtract a fixed 2 lines without
- *   re-rendering.
  */
 export class SubmitPicker implements StatefulView<SubmitPickerProps> {
 	private props: SubmitPickerProps;
@@ -45,10 +42,6 @@ export class SubmitPicker implements StatefulView<SubmitPickerProps> {
 	handleInput(_data: string): void {}
 
 	invalidate(): void {}
-
-	naturalHeight(_width: number): number {
-		return 2;
-	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];

@@ -28,7 +28,7 @@ const REQUIRED_COOKIES = ["__Secure-1PSID", "__Secure-1PSIDTS"];
 // Google frontend headers exceed the default 16 KiB HTTP/1.1 budget.
 // Direct requests use a larger dedicated dispatcher with its matching fetch.
 // Proxy selection remains with the explicit web transport.
-let geminiFetchImpl: typeof fetch | null = null;
+let geminiFetchImpl: Promise<typeof fetch> | null = null;
 
 // Test-only hook: lets tests inject a simulated transport instead of patching
 // globalThis.fetch. Gemini Web deliberately bypasses the ambient global fetch
@@ -62,18 +62,18 @@ export function createGeminiFetch(undiciImpl: typeof import("undici")): typeof f
 
 export async function resolveGeminiFetch(): Promise<typeof fetch> {
 	if (geminiFetchOverride) return geminiFetchOverride;
-	if (geminiFetchImpl) return geminiFetchImpl;
-
-	let undici: typeof import("undici");
-	try {
-		undici = await import("undici");
-	} catch {
-		geminiFetchImpl = webFetch;
-		return geminiFetchImpl;
-	}
-
-	geminiFetchImpl = createGeminiFetch(undici);
-	return geminiFetchImpl;
+	return geminiFetchImpl ??= (async () => {
+		let undici: typeof import("undici");
+		try {
+			undici = await import("undici");
+		} catch {
+			return webFetch;
+		}
+		return createGeminiFetch(undici);
+	})().catch(error => {
+		geminiFetchImpl = null;
+		throw error;
+	});
 }
 
 export interface GeminiWebOptions {
@@ -167,7 +167,6 @@ export async function queryWithCookies(
 
 interface GeminiWebResult {
 	text: string;
-	errorCode?: number;
 	errorMessage?: string;
 }
 
@@ -221,15 +220,8 @@ async function runGeminiWebOnce(
 	try {
 		return parseStreamGenerateResponse(rawText);
 	} catch (err) {
-		let errorCode: number | undefined;
-		try {
-			const json = JSON.parse(trimJsonEnvelope(rawText));
-			errorCode = extractErrorCode(json);
-		} catch {
-		}
 		return {
 			text: "",
-			errorCode,
 			errorMessage: err instanceof Error ? err.message : String(err),
 		};
 	}
@@ -432,11 +424,6 @@ function trimJsonEnvelope(text: string): string {
 	return text.slice(start, end + 1);
 }
 
-function extractErrorCode(responseJson: unknown): number | undefined {
-	const code = getNestedValue(responseJson, [0, 5, 2, 0, 1, 0]);
-	return typeof code === "number" && code >= 0 ? code : undefined;
-}
-
 function extractCandidateText(candidate: unknown): string {
 	const textRaw = getNestedValue(candidate, [1, 0]);
 	let text = typeof textRaw === "string" ? textRaw : "";
@@ -451,10 +438,8 @@ function extractCandidateText(candidate: unknown): string {
 
 function parseStreamGenerateResponse(rawText: string): GeminiWebResult {
 	const responseJson = JSON.parse(trimJsonEnvelope(rawText));
-	const errorCode = extractErrorCode(responseJson);
 
 	const parts = Array.isArray(responseJson) ? responseJson : [];
-	let firstCandidateSeen: unknown = undefined;
 	let latestNonEmptyText = "";
 
 	for (let i = 0; i < parts.length; i++) {
@@ -466,17 +451,11 @@ function parseStreamGenerateResponse(rawText: string): GeminiWebResult {
 			if (!Array.isArray(candidateList) || candidateList.length === 0) continue;
 
 			const firstCandidate = (candidateList as unknown[])[0];
-			if (firstCandidateSeen === undefined) firstCandidateSeen = firstCandidate;
-
 			const text = extractCandidateText(firstCandidate);
 			if (text.length > 0) latestNonEmptyText = text;
 		} catch {
 		}
 	}
 
-	const text = latestNonEmptyText.length > 0
-		? latestNonEmptyText
-		: extractCandidateText(firstCandidateSeen);
-
-	return { text, errorCode };
+	return { text: latestNonEmptyText };
 }

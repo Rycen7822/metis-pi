@@ -6,7 +6,6 @@ import {
 	MAX_OPTIONS,
 	MAX_QUESTIONS,
 	MIN_OPTIONS,
-	type QuestionAnswer,
 	type QuestionData,
 	QuestionParamsSchema,
 	QuestionsSchema,
@@ -176,59 +175,6 @@ describe("QuestionParamsSchema — top-level shape", () => {
 
 	it("rejects non-array questions field", () => {
 		expect(Value.Check(QuestionParamsSchema, { questions: "not array" })).toBe(false);
-	});
-});
-
-describe("QuestionAnswer — notes + preview field optionality", () => {
-	it("accepts an answer with notes populated", () => {
-		const a: QuestionAnswer = {
-			questionIndex: 0,
-			question: "Q?",
-			kind: "option",
-			answer: "A",
-			notes: "preview looked good",
-		};
-		expect(a.notes).toBe("preview looked good");
-	});
-
-	it("accepts an answer with selected[] (multi-select) and no answer scalar", () => {
-		const a: QuestionAnswer = {
-			questionIndex: 1,
-			question: "Areas?",
-			kind: "multi",
-			answer: null,
-			selected: ["Frontend", "Backend"],
-		};
-		expect(a.selected).toEqual(["Frontend", "Backend"]);
-		expect(a.answer).toBeNull();
-	});
-
-	it("accepts an answer with preview populated (single-select with matched preview-bearing option)", () => {
-		const a: QuestionAnswer = {
-			questionIndex: 0,
-			question: "Q?",
-			kind: "option",
-			answer: "A",
-			preview: "## Heading\n\nbody",
-		};
-		expect(a.preview).toContain("## Heading");
-	});
-});
-
-describe("QuestionAnswer.kind — discriminated union contract", () => {
-	it("supports all three variant kinds", () => {
-		const optionA: QuestionAnswer = { questionIndex: 0, question: "Q?", kind: "option", answer: "A" };
-		const customA: QuestionAnswer = { questionIndex: 0, question: "Q?", kind: "custom", answer: "free text" };
-		const multiA: QuestionAnswer = {
-			questionIndex: 0,
-			question: "Q?",
-			kind: "multi",
-			answer: null,
-			selected: ["A", "B"],
-		};
-		expect(optionA.kind).toBe("option");
-		expect(customA.kind).toBe("custom");
-		expect(multiA.kind).toBe("multi");
 	});
 });
 

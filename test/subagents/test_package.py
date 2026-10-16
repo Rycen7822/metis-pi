@@ -1,7 +1,6 @@
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,7 +8,6 @@ import unittest
 from paths import ROOT, TEST_ROOT, REPO_ROOT
 from subagent_pi.common import AgentError, live_identity, crop
 from subagent_pi.client import call_timeout, boot_budget
-from subagent_pi import __version__
 from unittest.mock import patch
 
 class ClientTimeoutBudget(unittest.TestCase):

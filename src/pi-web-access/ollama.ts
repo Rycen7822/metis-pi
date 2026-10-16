@@ -7,7 +7,7 @@ import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-nor
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type Lookup, type SsrfConfig } from "./ssrf-protection.ts";
+import { fetchRemoteUrl, loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl, type SsrfConfig } from "./ssrf-protection.ts";
 
 const OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
 const OLLAMA_FETCH_URL = "https://ollama.com/api/web_fetch";
@@ -31,7 +31,6 @@ interface OllamaSearchResponse {
 interface OllamaFetchResponse {
 	title: string;
 	content: string;
-	links?: unknown;
 }
 
 interface OllamaSearchOptions extends SearchOptions {
@@ -99,7 +98,7 @@ function parseFetchResponse(value: unknown): OllamaFetchResponse {
 	const envelope = value as Record<string, unknown>;
 	if (typeof envelope.title !== "string") throw invalidResponse("expected title string");
 	if (typeof envelope.content !== "string") throw invalidResponse("expected content string");
-	return { title: envelope.title, content: envelope.content, links: envelope.links };
+	return { title: envelope.title, content: envelope.content };
 }
 
 export function isOllamaAvailable(): boolean {

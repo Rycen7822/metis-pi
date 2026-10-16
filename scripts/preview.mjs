@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 import * as Tui from "@earendil-works/pi-tui";
-import { makeRenderers, safeText, languageForPath } from "../src/renderers.ts";
+import { makeRenderers, languageForPath } from "../src/renderers.ts";
 import { renderDiffLines } from "../src/diff.ts";
 import { detectColorLevel } from "../src/palette.ts";
 import { TranscriptState } from "../src/transcript-state.ts";
@@ -49,7 +49,6 @@ const renderers = makeRenderers(
     render: (width) => renderDiffLines({
       rows: input.rows, width, layout, colorLevel,
       language: languageForPath(input.filePath), paint: undefined,
-      expanded: input.options.expanded === true, expandHint: input.expandHint ?? "ctrl+o to expand",
     }),
   }),
   // Width-aware shell factories — the SAME SGR-DIM output path as the live
@@ -297,7 +296,6 @@ const examples = [
       };
       const call = renderers.write.renderCall(callCtx.args, theme, callCtx);
       const rendered = call ? call.render(112).join("\n") : "";
-      console.error("LIVEFRAME", fi, "len", rendered.length, JSON.stringify(rendered.slice(0, 60)));
       return rendered;
     })
       .filter(Boolean)

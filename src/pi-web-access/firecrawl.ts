@@ -190,13 +190,6 @@ function ssrfOptions(options?: FirecrawlExtractOptions | FirecrawlSearchOptions)
 	};
 }
 
-function firecrawlApiSsrfOptions(
-	options: FirecrawlExtractOptions | FirecrawlSearchOptions | undefined,
-	allowLoopback: boolean,
-): ReturnType<typeof ssrfOptions> & { allowLoopback: boolean } {
-	return { ...ssrfOptions(options), allowLoopback };
-}
-
 async function fetchFirecrawlApi(
 	url: string,
 	init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
@@ -204,7 +197,8 @@ async function fetchFirecrawlApi(
 ): Promise<Response> {
 	const allowLoopback = isLoopbackHostname(new URL(url).hostname);
 	return fetchRemoteUrl(url, init, {
-		...firecrawlApiSsrfOptions(options, allowLoopback),
+		...ssrfOptions(options),
+		allowLoopback,
 		fetch: options?.fetch,
 		onRedirect: ({ from, to, init: next }) => {
 			const headers = new Headers(next.headers);
@@ -239,13 +233,14 @@ function mapRecencyFilter(value: SearchOptions["recencyFilter"]): string | undef
 
 function searchBody(query: string, options: FirecrawlSearchOptions, numResults: number, filters: DomainFilters): Record<string, unknown> {
 	const parserOptions = pdfParserOptions();
+	const tbs = mapRecencyFilter(options.recencyFilter);
 	return {
 		query,
 		limit: numResults,
 		sources: ["web"],
 		...(filters.include.length > 0 ? { includeDomains: filters.include } : {}),
 		...(filters.include.length === 0 && filters.exclude.length > 0 ? { excludeDomains: filters.exclude } : {}),
-		...(mapRecencyFilter(options.recencyFilter) ? { tbs: mapRecencyFilter(options.recencyFilter) } : {}),
+		...(tbs ? { tbs } : {}),
 		...(options.includeContent ? {
 			scrapeOptions: {
 				formats: ["markdown"],
@@ -264,7 +259,7 @@ function firstString(...values: unknown[]): string | null {
 	return null;
 }
 
-function mapSearchResults(data: unknown, numResults: number, filters: DomainFilters): {
+function mapSearchResults(data: unknown, numResults: number, filters: DomainFilters, includeContent?: boolean): {
 	results: SearchResponse["results"];
 	inlineContent: ExtractedContent[];
 } {
@@ -284,8 +279,10 @@ function mapSearchResults(data: unknown, numResults: number, filters: DomainFilt
 		const title = firstString(item.title, item.metadata?.title) ?? url;
 		const snippet = firstString(item.description, item.snippet, item.metadata?.description) ?? "";
 		results.push({ title, url, snippet });
-		const markdown = firstString(item.markdown);
-		if (markdown) inlineContent.push({ url, title, content: withPdfTruncationNotice(markdown, item.metadata), error: null });
+		if (includeContent) {
+			const markdown = firstString(item.markdown);
+			if (markdown) inlineContent.push({ url, title, content: withPdfTruncationNotice(markdown, item.metadata), error: null });
+		}
 		if (results.length >= numResults) break;
 	}
 	return { results, inlineContent };
@@ -365,7 +362,7 @@ export async function searchWithFirecrawl(query: string, options: FirecrawlSearc
 		"search",
 		{ type: "api", query },
 	);
-	const mapped = mapSearchResults(envelope.data, numResults, filters);
+	const mapped = mapSearchResults(envelope.data, numResults, filters, options.includeContent);
 	const response: SearchResponse = { answer: formatSearchResultsAsAnswer(mapped.results), results: mapped.results };
 	if (options.includeContent && mapped.inlineContent.length > 0) response.inlineContent = mapped.inlineContent;
 	return response;

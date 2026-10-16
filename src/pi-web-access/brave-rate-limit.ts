@@ -152,10 +152,7 @@ export class BraveRateLimitCoordinator {
 		await this.waitForAvailability(signal);
 	}
 
-	async waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
-		this.recordRetryDelay(delayMs);
-		await this.waitForRecordedCooldown(signal);
-	}
+
 
 	private blockFor(delayMs: number, addMargin = true): void {
 		const boundedDelay = Math.max(0, delayMs) + (addMargin ? this.safetyMarginMs : 0);

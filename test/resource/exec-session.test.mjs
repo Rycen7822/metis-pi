@@ -319,7 +319,11 @@ createInterface({ input: process.stdin }).on("line", line => {
       { timeout: 15_000 },
       async (t) => {
         const { manager, directories, exec } = nativeExec(t, { maxEmptyWriteYieldTimeMs: 5000 });
-        const exited = new Promise((resolve) => manager.onSessionExit(resolve));
+        const exited = new Promise((resolve) => {
+          const off = manager.onSessionChange(reason => {
+            if (reason === "exit") { off(); resolve(); }
+          });
+        });
         const running = await exec(
           'process.stdout.write("start\\n"); setTimeout(() => ' +
             'process.stdout.write("y".repeat(' +
@@ -434,11 +438,11 @@ createInterface({ input: process.stdin }).on("line", line => {
 
   test("post-exit idle cutoff retires dangling streams without flushing incomplete UTF-8", { timeout: 15000 }, async t => {
     const directory = fs.mkdtempSync(join(tmpdir(), "metis-exec-late-tail-"));
-    const release = join(directory, "release"), emitted = join(directory, "emitted");
+    const release = join(directory, "release"), emitted = join(directory, "emitted"), rootExit = join(directory, "root-exit");
     const prefix = "captured-prefix-".repeat(4000);
     const { manager, exec } = nativeExec(t, { maxSessionBufferChars: 1024 });
     let exits = 0;
-    manager.onSessionExit(() => { exits++; });
+    manager.onSessionChange(reason => { if (reason === "exit") exits++; });
     const child = `
       const fs = require("node:fs");
       process.stdout.on("error", () => {});
@@ -457,9 +461,15 @@ createInterface({ input: process.stdin }).on("line", line => {
       }, 10);
     `;
     const script = `const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(child)}],
-      { stdio: ["ignore", 1, 2, "ipc"] }); child.once("message", () => process.exit(0));`;
+      { stdio: ["ignore", 1, 2, "ipc"] }); child.once("message", () => {
+        setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(rootExit)})) process.exit(0); }, 10);
+      });`;
     try {
-      const result = await exec(script, { yield_time_ms: 1000, max_output_tokens: 16, archiveDirectory: directory });
+      const running = await exec(script, { yield_time_ms: 250, max_output_tokens: 16, archiveDirectory: directory });
+      assert.equal(typeof running.session_id, "number", "observe an exposed session before the root exits");
+      assert.doesNotMatch(running.output, /\uFFFD/, "initial delivery preserves the unfinished character");
+      fs.writeFileSync(rootExit, "exit");
+      const result = await manager.write({ session_id: running.session_id, yield_time_ms: 1000, max_output_tokens: 16 });
       fs.writeFileSync(release, "emit");
       const deadline = Date.now() + 5000;
       while (!fs.existsSync(emitted) && Date.now() < deadline)
@@ -479,6 +489,7 @@ createInterface({ input: process.stdin }).on("line", line => {
       assert.equal(replay.fullOutputPath, result.fullOutputPath);
       assert.equal(fs.readFileSync(replay.fullOutputPath, "utf8"), prefix);
     } finally {
+      fs.writeFileSync(rootExit, "exit");
       fs.writeFileSync(release, "emit");
       const deadline = Date.now() + 5000;
       while (!fs.existsSync(emitted) && Date.now() < deadline)

@@ -15,7 +15,6 @@ const MCP_URLS = {
 } as const;
 const RECENCY = { day: "oneDay", week: "oneWeek", month: "oneMonth", year: "oneYear" } as const;
 const SEARCH_TIMEOUT_MS = 60_000;
-const CONFIG_PATH = getWebAccessConfigPath();
 
 function loadConfig(): Record<string, unknown> {
 	return loadWebAccessConfig();

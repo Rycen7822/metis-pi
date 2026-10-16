@@ -29,9 +29,6 @@ use portable_pty::PtySize;
 use portable_pty::PtySystem;
 use portable_pty::SlavePty;
 use portable_pty::cmdbuilder::CommandBuilder;
-use std::mem::ManuallyDrop;
-use std::os::windows::io::RawHandle;
-use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use winapi::um::wincon::COORD;
@@ -55,43 +52,6 @@ fn create_conpty_handles(
     )?;
 
     Ok((con, stdin.write, stdout.read))
-}
-
-pub struct RawConPty {
-    con: PsuedoCon,
-    input_write: FileDescriptor,
-    output_read: FileDescriptor,
-}
-
-impl RawConPty {
-    pub fn new(cols: i16, rows: i16) -> anyhow::Result<Self> {
-        let (con, input_write, output_read) = create_conpty_handles(PtySize {
-            rows: rows as u16,
-            cols: cols as u16,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        Ok(Self {
-            con,
-            input_write,
-            output_read,
-        })
-    }
-
-    pub fn pseudoconsole_handle(&self) -> RawHandle {
-        self.con.raw_handle()
-    }
-
-    pub fn into_handles(self) -> (PsuedoCon, FileDescriptor, FileDescriptor) {
-        let me = ManuallyDrop::new(self);
-        unsafe {
-            (
-                ptr::read(&me.con),
-                ptr::read(&me.input_write),
-                ptr::read(&me.output_read),
-            )
-        }
-    }
 }
 
 impl PtySystem for ConPtySystem {

@@ -1,6 +1,6 @@
 import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
-import { normalizeDomain, normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
+import { normalizeDomainFilters, matchesDomainFilter } from "./domain-filter-normalization.ts";
 import type { ExtractedContent, ExtractOptions } from "./content.ts";
 import { SearchHttpError, type SearchOptions, type SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -104,18 +104,6 @@ function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): Abor
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function mapDomainFilter(domainFilter: string[] | undefined): { includeDomains: string[]; excludeDomains: string[] } {
-	const includeDomains: string[] = [];
-	const excludeDomains: string[] = [];
-	for (const raw of domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? excludeDomains : includeDomains;
-		if (!target.includes(domain)) target.push(domain);
-	}
-	return { includeDomains, excludeDomains };
-}
-
 function recencyMinutes(filter: SearchOptions["recencyFilter"]): number | undefined {
 	if (!filter) return undefined;
 	const minutes: Record<NonNullable<SearchOptions["recencyFilter"]>, number> = {
@@ -129,7 +117,7 @@ function recencyMinutes(filter: SearchOptions["recencyFilter"]): number | undefi
 
 function buildSearchUrl(query: string, options: SearchOptions, page: number): string {
 	const params = new URLSearchParams({ query });
-	const { includeDomains, excludeDomains } = mapDomainFilter(options.domainFilter);
+	const { include: includeDomains, exclude: excludeDomains } = normalizeDomainFilters(options.domainFilter);
 	if (includeDomains.length > 0) params.set("include_domains", includeDomains.join(","));
 	if (excludeDomains.length > 0) params.set("exclude_domains", excludeDomains.join(","));
 	const recency = recencyMinutes(options.recencyFilter);
@@ -177,8 +165,7 @@ async function tinyFishJsonRequest<T>(
 	}
 }
 
-function mapSearchResults(results: TinyFishSearchResult[] | undefined): SearchResponse["results"] {
-	if (!Array.isArray(results)) return [];
+function mapSearchResults(results: TinyFishSearchResult[]): SearchResponse["results"] {
 	return results.flatMap((item) => {
 		if (!item || typeof item.url !== "string" || item.url.trim().length === 0) return [];
 		const url = item.url.trim();
@@ -270,9 +257,7 @@ async function fetchInlineContent(
 			throw new Error("TinyFish Fetch API returned an unexpected response shape");
 		}
 		for (const url of batch) {
-			const result = Array.isArray(data.results)
-				? data.results.find(item => item?.url === url || item?.final_url === url)
-				: undefined;
+			const result = data.results.find(item => item?.url === url || item?.final_url === url);
 			const mapped = mapFetchResult(result, url);
 			if (mapped) content.push(mapped);
 		}

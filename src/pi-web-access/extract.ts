@@ -1141,94 +1141,38 @@ async function extractViaHttp(
 		const reader = new Readability(document as unknown as Document);
 		const article = reader.parse();
 
-		if (!article) {
-			const rscResult = extractRSCContent(text);
-			if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT) {
-				activityMonitor.logComplete(activityId, response.status);
-				return {
-					url,
-					title: rscResult.title,
-					content: appendDeclaredWebLinks(rscResult.content, declaredLinks),
-					error: null,
-					declaredLinks,
-				};
-			}
-			controller.signal.throwIfAborted();
-			const defuddleResult = await extractWithDefuddle(text, response.url || url);
-			controller.signal.throwIfAborted();
-			if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT) {
-				activityMonitor.logComplete(activityId, response.status);
-				return {
-					url,
-					title: documentTitle || defuddleResult.title,
-					content: appendDeclaredWebLinks(defuddleResult.content, declaredLinks),
-					error: null,
-					declaredLinks,
-				};
-			}
-
+		let markdown = "";
+		if (article) {
+			if (typeof article.content !== "string") throw new Error("Readability returned invalid article content");
+			markdown = (await getTurndown()).turndown(article.content);
 			activityMonitor.logComplete(activityId, response.status);
-			const jsRendered = isLikelyJSRendered(text);
-			const errorMsg = jsRendered
-				? "Page appears to be JavaScript-rendered (content loads dynamically)"
-				: "Could not extract readable content from HTML structure";
-
-			return {
-				url,
-				title: documentTitle,
-				content: appendDeclaredWebLinks("", declaredLinks),
-				error: errorMsg,
-				declaredLinks,
-			};
-		}
-
-		if (typeof article.content !== "string") {
-			throw new Error("Readability returned invalid article content");
-		}
-		const markdown = (await getTurndown()).turndown(article.content);
-		activityMonitor.logComplete(activityId, response.status);
-
-		if (markdown.length < MIN_USEFUL_CONTENT) {
-			const rscResult = extractRSCContent(text);
-			if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT) {
-				return {
-					url,
-					title: rscResult.title,
-					content: appendDeclaredWebLinks(rscResult.content, declaredLinks),
-					error: null,
-					declaredLinks,
-				};
+			if (markdown.length >= MIN_USEFUL_CONTENT) {
+				return { url, title: article.title || documentTitle,
+					content: appendDeclaredWebLinks(markdown, declaredLinks), error: null, declaredLinks };
 			}
-			controller.signal.throwIfAborted();
-			const defuddleResult = await extractWithDefuddle(text, response.url || url);
-			controller.signal.throwIfAborted();
-			if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT) {
-				return {
-					url,
-					title: article.title || documentTitle || defuddleResult.title,
-					content: appendDeclaredWebLinks(defuddleResult.content, declaredLinks),
-					error: null,
-					declaredLinks,
-				};
-			}
-			return {
-				url,
-				title: article.title || documentTitle,
-				content: appendDeclaredWebLinks(markdown, declaredLinks),
-				error: isLikelyJSRendered(text)
-					? "Page appears to be JavaScript-rendered (content loads dynamically)"
-					: "Extracted content appears incomplete",
-				declaredLinks,
-			};
 		}
-
-		return {
-			url,
-			title: article.title || documentTitle,
+		const rscResult = extractRSCContent(text);
+		if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT) {
+			if (!article) activityMonitor.logComplete(activityId, response.status);
+			return { url, title: rscResult.title,
+				content: appendDeclaredWebLinks(rscResult.content, declaredLinks), error: null, declaredLinks };
+		}
+		controller.signal.throwIfAborted();
+		const defuddleResult = await extractWithDefuddle(text, response.url || url);
+		controller.signal.throwIfAborted();
+		if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT) {
+			if (!article) activityMonitor.logComplete(activityId, response.status);
+			return { url, title: article?.title || documentTitle || defuddleResult.title,
+				content: appendDeclaredWebLinks(defuddleResult.content, declaredLinks), error: null, declaredLinks };
+		}
+		if (!article) activityMonitor.logComplete(activityId, response.status);
+		return { url, title: article?.title || documentTitle,
 			content: appendDeclaredWebLinks(markdown, declaredLinks),
-			error: null,
-			declaredLinks,
-		};
+			error: isLikelyJSRendered(text)
+				? "Page appears to be JavaScript-rendered (content loads dynamically)"
+				: article ? "Extracted content appears incomplete" : "Could not extract readable content from HTML structure",
+			declaredLinks };
+
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {

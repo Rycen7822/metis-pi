@@ -203,7 +203,8 @@ test("a rejected long Retry-After remains recorded for the next queued call", as
 		sleep: async () => { slept = true; },
 		maxWaitMs: 30_000,
 	});
-	await assert.rejects(limiter.waitForRetry(60_000), /quota exhausted/i);
+	limiter.recordRetryDelay(60_000);
+	await assert.rejects(limiter.waitForRecordedCooldown(), /quota exhausted/i);
 	await assert.rejects(limiter.run(async () => undefined), /quota exhausted/i);
 	assert.equal(slept, false);
 	now = 60_000;
@@ -215,8 +216,8 @@ test("Brave records cooldown and retries when cancelling the 429 body rejects", 
 	const child = runChild(`
 		const calls = [];
 		let cancelCalls = 0;
-		globalThis.fetch = async url => {
-			calls.push({ url: String(url), at: Date.now() });
+		globalThis.fetch = async () => {
+			calls.push({ at: Date.now() });
 			if (calls.length === 1) {
 				const body = new ReadableStream({ cancel() { cancelCalls++; throw new Error("cancel failed"); } });
 				return new Response(body, { status: 429, headers: { "retry-after": "0.01" } });
@@ -237,11 +238,11 @@ test("Brave records cooldown and retries when cancelling the 429 body rejects", 
 test("Brave cancels a retryable 429 body before retrying", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brave-retry-"));
 	const child = runChild(`
-		const calls = [];
+		let calls = 0;
 		let cancelled = false;
-		globalThis.fetch = async url => {
-			calls.push(String(url));
-			if (calls.length === 1) {
+		globalThis.fetch = async () => {
+			calls++;
+			if (calls === 1) {
 				const body = new ReadableStream({ cancel() { cancelled = true; } });
 				return new Response(body, {
 					status: 429,
@@ -252,7 +253,7 @@ test("Brave cancels a retryable 429 body before retrying", async () => {
 		};
 		const { searchWithBrave } = await import(${JSON.stringify(braveModuleUrl)});
 		const result = await searchWithBrave("retry", { numResults: 1 });
-		console.log(JSON.stringify({ calls: calls.length, cancelled, result }));
+		console.log(JSON.stringify({ calls: calls, cancelled, result }));
 	`, { HOME: home, USERPROFILE: home, BRAVE_API_KEY: "brave-test-key" });
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());

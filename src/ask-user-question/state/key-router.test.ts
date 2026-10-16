@@ -486,9 +486,6 @@ describe("routeKey — global note on the Submit tab", () => {
 	const submitTab = (over: Partial<QuestionnaireState> = {}) =>
 		makeState({ currentTab: 2, notesVisible: false, ...over });
 
-	it("'n' with the editor closed emits notes_enter at the pseudo-index", () => {
-		expect(routeKey("n", submitTab(), makeRuntime())).toEqual({ kind: "notes_enter" });
-	});
 
 	it("while open, the Tab byte forwards to the notes editor — NOT tab_switch", () => {
 		expect(routeKey(BYTE_TAB, submitTab({ notesVisible: true }), makeRuntime())).toEqual({
@@ -505,16 +502,6 @@ describe("routeKey — global note on the Submit tab", () => {
 		expect(routeKey(sentinel(KEY.CONFIRM), submitTab({ notesVisible: true }), makeRuntime())).toEqual({ kind: "notes_exit", value: "" });
 	});
 
-	it("with the editor closed, Enter still submits/cancels per submitChoiceIndex (the n branch shadows nothing)", () => {
-		// D1-revised Enter-submit preserved: the notes branch sits AFTER the confirm branch
-		// inside routeSubmitTab, so Enter keeps its submit/cancel meaning on the Submit tab.
-		expect(routeKey(sentinel(KEY.CONFIRM), submitTab({ submitChoiceIndex: 0 }), makeRuntime())).toEqual({
-			kind: "submit",
-		});
-		expect(routeKey(sentinel(KEY.CONFIRM), submitTab({ submitChoiceIndex: 1 }), makeRuntime())).toEqual({
-			kind: "cancel",
-		});
-	});
 });
 
 describe("routeKey — inputMode (Type something)", () => {

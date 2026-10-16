@@ -1,7 +1,7 @@
 import { redactSearchFailure } from "./search-error-redaction.ts";
 import { SearchHttpError } from "./search-types.ts";
-import { normalizeDomainFilters, matchesDomainFilter, type DomainFilters } from "./domain-filter-normalization.ts";
-import { loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
+import { normalizeDomainFilters, matchesDomainFilter, buildSiteFilteredQuery } from "./domain-filter-normalization.ts";
+import { GOOGLE_RECENCY_TBS, loadWebAccessConfig, getWebSearchConfigPath, fetchWithCredentialRedirects } from "./utils.ts";
 import { activityMonitor } from "./activity.ts";
 import type { SearchOptions, SearchResponse } from "./search-types.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
@@ -11,12 +11,7 @@ import { hasCredentialSource, redactCredential, resolveCredential } from "./cred
 const SERPER_SEARCH_URL = "https://google.serper.dev/search";
 const CONFIG_PATH = getWebSearchConfigPath();
 const SEARCH_TIMEOUT_MS = 60_000;
-const RECENCY_TBS: Record<NonNullable<SearchOptions["recencyFilter"]>, string> = {
-	day: "qdr:d",
-	week: "qdr:w",
-	month: "qdr:m",
-	year: "qdr:y",
-};
+
 
 interface WebSearchConfig {
 	serperApiKey?: unknown;
@@ -56,14 +51,6 @@ async function requireApiKey(signal?: AbortSignal): Promise<string> {
 	return apiKey;
 }
 
-function buildQuery(query: string, filters: DomainFilters): string {
-	const parts = [query];
-	if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-	if (filters.include.length > 1) parts.push(`(${filters.include.map(domain => `site:${domain}`).join(" OR ")})`);
-	for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-	return parts.join(" ");
-}
-
 function invalidResponse(message: string): Error {
 	return new Error(`Serper API returned invalid response: ${message}`);
 }
@@ -90,7 +77,11 @@ export async function searchWithSerper(query: string, options: SearchOptions = {
 		response = await fetchWithCredentialRedirects(SERPER_SEARCH_URL, {
 			method: "POST",
 			headers: { "X-API-KEY": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-			body: JSON.stringify({ q: buildQuery(query, filters), num: requestCount, ...(options.recencyFilter ? { tbs: RECENCY_TBS[options.recencyFilter] } : {}) }),
+			body: JSON.stringify({
+				q: buildSiteFilteredQuery(query, filters),
+				num: requestCount,
+				...(options.recencyFilter ? { tbs: GOOGLE_RECENCY_TBS[options.recencyFilter] } : {}),
+			}),
 			signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS),
 		}, ["X-API-KEY"]);
 	} catch (err) {

@@ -66,8 +66,7 @@ export type QuestionData = Static<typeof QuestionSchema>;
 export type QuestionParams = Static<typeof QuestionParamsSchema>;
 
 /**
- * Answer-intent discriminated union. `kind` is the single discriminator —
- * pre-1.0.3 boolean flags have been removed (see `banned-flags.test.ts`).
+ * Answer intent uses `kind` to identify the selected interaction.
  * Mirrors the row-side `QuestionRow.kind` vocabulary where possible;
  * `multi` is the multi-select variant (no row-side analog).
  *

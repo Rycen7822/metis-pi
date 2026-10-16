@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import ROOT, TEST_ROOT
 from subagent_pi.common import AgentError, dumps, socket_path
 from subagent_pi.config import PI_BUILTIN_TOOLS, load_config, launch_spec
 from subagent_pi.inheritance import capture_scope_env, collect_skills, referenced_env_names, resolve_codex_home
@@ -529,9 +529,8 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
     def snapshot(self,root: Path):
         return {str(p.relative_to(root)):p.stat().st_size for p in root.rglob('*') if p.is_file()}
     async def test_boot_writes_skills_and_marker_without_disk_config(self):
-        before_state=self.snapshot(self.home); before_codex=self.snapshot(self.codex)
+        before_codex=self.snapshot(self.codex)
         s=await self.spawn()
-        w=self.rt.workers[s['agent_id']]
         launch=json.loads((self.home/'agents'/s['agent_id']/'launch.json').read_text())
         argv=launch['argv']
         skill_paths=[argv[i+1] for i,f in enumerate(argv) if f=='--skill']
@@ -541,6 +540,8 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         self.assertIn('--no-context-files',argv)
         self.assertIn(str(ROOT/'extensions/managed-context.ts'),argv)
         # No --tools: that allowlist would drop the tools Pi's own extensions register.
+        self.assertNotIn('--exclude-tools',argv)
+        self.assertIn(str(SURFACE),argv)
         self.assertNotIn('--tools',argv)
         self.assertNotIn('--no-tools',argv)
         self.assertNotIn('--no-extensions',argv)
@@ -599,12 +600,6 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         record=self.events_of(aid,'inheritance_skills')[-1]
         entry=[i for i in record['inherited'] if i['name']=='alpha'][0]
         self.assertEqual(entry['state'],'not_loaded')
-        await self.mutation_close(aid)
-    async def test_launch_argv_leaves_pi_configuration_alone(self):
-        s=await self.spawn(); aid=s['agent_id']
-        argv=json.loads((self.home/'agents'/aid/'launch.json').read_text())['argv']
-        for flag in ('--no-extensions','--no-skills','--tools','--no-tools','--exclude-tools'): self.assertNotIn(flag,argv)
-        self.assertIn(str(SURFACE),argv)
         await self.mutation_close(aid)
     def restricted_profile(self, **env):
         """A reader-shaped profile whose extra env controls the fake Pi's surface
@@ -701,7 +696,6 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         s = await self.spawn()
         aid = s["agent_id"]
         await self.mutation_close(aid)
-        first = json.loads((self.home / "agents" / aid / "launch.json").read_text())["argv"]
         # Existing sessions created before this policy still have their old
         # persisted argv. Boot must add context isolation without mutating it.
         legacy = json.loads(self.rt.store.agent(self.scope, aid)["launch"])
@@ -772,7 +766,7 @@ class RuntimeInheritance(unittest.IsolatedAsyncioTestCase):
         s = await self.spawn()
         report = (await self.rt.dispatch("doctor", {"inheritance": True}))["inheritance"]
         blob = json.dumps(report)
-        self.assertIn("canary" if False else "SECRET_CANARY", blob)  # variable NAME is allowed
+        self.assertIn("SECRET_CANARY", blob)  # variable NAME is allowed
         self.assertNotIn("canary-值-2026", blob)  # value is not
         scope_report = [x for x in report["scopes"] if x["scope"] == self.scope][0]
         self.assertEqual(scope_report["source_mode"], "scope_env")
@@ -1197,7 +1191,7 @@ class RealPiParserProbe(unittest.TestCase):
         exe=shutil.which('pi')
         if not exe: return None
         real=Path(exe).resolve()
-        for parent in [real.parent,*real.parents]:
+        for parent in real.parents:
             guess=parent/'dist'/'cli'/'args.js'
             if guess.is_file(): return guess
         return None

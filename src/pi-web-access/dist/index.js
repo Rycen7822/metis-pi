@@ -418,6 +418,42 @@ function loadWebAccessConfig() {
 function saveWebAccessConfig(patch) {
   updateWebAccessConfig(getWebSearchConfigDir(), patch);
 }
+function normalizeSearchBaseUrl(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.username || url.password) return null;
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+function isValidHeaderValue(value) {
+  try {
+    new Headers({ "x-pi-web-access-validation": value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function normalizeSearchHeaders(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const headers = {};
+  for (const [key, headerValue] of Object.entries(value)) {
+    if (typeof headerValue !== "string") continue;
+    const name = key.trim();
+    if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
+    if (!isValidHeaderValue(headerValue)) continue;
+    headers[name] = headerValue.trim();
+  }
+  return headers;
+}
 function isLoopbackHostname(hostnameValue) {
   const normalized = hostnameValue.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
   return normalized === "localhost" || normalized === "::1" || isIP(normalized) === 4 && normalized.split(".", 1)[0] === "127";
@@ -481,13 +517,19 @@ async function fetchWithCredentialRedirects(url, init, credentialHeaders, creden
     current = next;
   }
 }
-var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS;
+var API_REDIRECT_STATUSES, API_REQUEST_BODY_HEADERS, MAX_API_REDIRECTS, GOOGLE_RECENCY_TBS;
 var init_utils = __esm({
   "utils.ts"() {
     init_proxy_transport();
     API_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
     API_REQUEST_BODY_HEADERS = ["Content-Encoding", "Content-Language", "Content-Location", "Content-Type"];
     MAX_API_REDIRECTS = 5;
+    GOOGLE_RECENCY_TBS = {
+      day: "qdr:d",
+      week: "qdr:w",
+      month: "qdr:m",
+      year: "qdr:y"
+    };
   }
 });
 
@@ -737,7 +779,24 @@ var init_github_api = __esm({
 });
 
 // github-extract.ts
-import { chmodSync, closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
 import { lstat as lstatAsync, open as openAsync, opendir as opendirAsync, readFile as readFileAsync, realpath as realpathAsync, rm as rmAsync } from "node:fs/promises";
 import { execFile as execFile2, spawn as spawn2 } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -806,7 +865,6 @@ function parseGitHubUrl(url) {
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) return null;
   if (owner.includes("--")) return null;
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(repo) || repo === "." || repo === "..") return null;
-  if (NON_CODE_SEGMENTS.has(segments[2]?.toLowerCase())) return null;
   if (segments.length === 2) {
     return { owner, repo, refIsFullSha: false, type: "root" };
   }
@@ -1524,7 +1582,7 @@ function clearCloneCache() {
   cloneRuntime = null;
   cachedConfig = null;
 }
-var BINARY_EXTENSIONS, NOISE_DIRS, MAX_INLINE_FILE_CHARS2, MAX_TREE_ENTRIES2, CLONE_RUNTIME_OWNER_FILENAME, CLONE_RUNTIME_OWNER_VERSION, MAX_CLONE_RUNTIME_OWNER_BYTES, cloneCache, startedCloneRuntimeCleanups, cachedConfig, cloneRuntime, NON_CODE_SEGMENTS, PROCESS_KILL_GRACE_MS;
+var BINARY_EXTENSIONS, NOISE_DIRS, MAX_INLINE_FILE_CHARS2, MAX_TREE_ENTRIES2, CLONE_RUNTIME_OWNER_FILENAME, CLONE_RUNTIME_OWNER_VERSION, MAX_CLONE_RUNTIME_OWNER_BYTES, cloneCache, startedCloneRuntimeCleanups, cachedConfig, cloneRuntime, PROCESS_KILL_GRACE_MS;
 var init_github_extract = __esm({
   "github-extract.ts"() {
     init_utils();
@@ -1619,37 +1677,6 @@ var init_github_extract = __esm({
     startedCloneRuntimeCleanups = /* @__PURE__ */ new Set();
     cachedConfig = null;
     cloneRuntime = null;
-    NON_CODE_SEGMENTS = /* @__PURE__ */ new Set([
-      "issues",
-      "pull",
-      "pulls",
-      "discussions",
-      "releases",
-      "wiki",
-      "actions",
-      "settings",
-      "security",
-      "projects",
-      "graphs",
-      "compare",
-      "commits",
-      "tags",
-      "branches",
-      "stargazers",
-      "watchers",
-      "network",
-      "forks",
-      "milestone",
-      "labels",
-      "packages",
-      "codespaces",
-      "contribute",
-      "community",
-      "sponsors",
-      "invitations",
-      "notifications",
-      "insights"
-    ]);
     PROCESS_KILL_GRACE_MS = 3e3;
   }
 });
@@ -1852,8 +1879,7 @@ function parseAdcFile(raw) {
       type,
       client_id: requiredString(parsed, "client_id", "Gemini ADC authorized_user file"),
       client_secret: requiredString(parsed, "client_secret", "Gemini ADC authorized_user file"),
-      refresh_token: requiredString(parsed, "refresh_token", "Gemini ADC authorized_user file"),
-      universe_domain: stringField(parsed, "universe_domain")
+      refresh_token: requiredString(parsed, "refresh_token", "Gemini ADC authorized_user file")
     };
   }
   if (type === "service_account") {
@@ -1861,9 +1887,7 @@ function parseAdcFile(raw) {
       type,
       client_email: requiredString(parsed, "client_email", "Gemini ADC service_account file"),
       private_key: requiredString(parsed, "private_key", "Gemini ADC service_account file"),
-      private_key_id: stringField(parsed, "private_key_id"),
-      token_uri: stringField(parsed, "token_uri"),
-      universe_domain: stringField(parsed, "universe_domain")
+      token_uri: stringField(parsed, "token_uri")
     };
   }
   return { type };
@@ -1899,7 +1923,7 @@ async function loadAdcFile() {
     throw new Error(`Failed to parse Google Application Default Credentials file at ${path}: ${message}`);
   }
 }
-function throwOnTokenExchangeFailure(res, detail, status) {
+function throwOnTokenExchangeFailure(detail, status) {
   if (OAUTH_CREDENTIAL_REJECTION_STATUSES.has(status)) {
     throw new CredentialResolutionError("Gemini ADC", "oauth-credential-rejected");
   }
@@ -1921,7 +1945,7 @@ async function exchangeRefreshToken(cfg, signal) {
   });
   const text4 = await res.text();
   if (!res.ok) {
-    throwOnTokenExchangeFailure(res, text4, res.status);
+    throwOnTokenExchangeFailure(text4, res.status);
   }
   return parseTokenExchangeResponse(text4, "Gemini ADC token exchange");
 }
@@ -1958,7 +1982,7 @@ async function exchangeServiceAccountJwt(cfg, signal) {
   });
   const text4 = await res.text();
   if (!res.ok) {
-    throwOnTokenExchangeFailure(res, text4, res.status);
+    throwOnTokenExchangeFailure(text4, res.status);
   }
   return parseTokenExchangeResponse(text4, "Gemini ADC service account token exchange");
 }
@@ -2289,8 +2313,7 @@ function loadConfig3() {
     throw new Error(`chromeProfile in ${getWebAccessConfigPath()} is no longer supported; use browserCookies.profile`);
   }
   cachedConfig4 = {
-    browserCookies: parseBrowserCookies(raw.browserCookies),
-    allowBrowserCookies: raw.allowBrowserCookies === true
+    browserCookies: parseBrowserCookies(raw.browserCookies)
   };
   return cachedConfig4;
 }
@@ -2302,11 +2325,10 @@ function isBrowserCookieAccessAllowed() {
   const raw = loadWebAccessConfig();
   return raw.allowBrowserCookies === true;
 }
-var CONFIG_PATH2, BROWSER_COOKIE_PRESETS, cachedConfig4;
+var BROWSER_COOKIE_PRESETS, cachedConfig4;
 var init_gemini_web_config = __esm({
   "gemini-web-config.ts"() {
     init_utils();
-    CONFIG_PATH2 = getWebAccessConfigPath();
     BROWSER_COOKIE_PRESETS = ["helium", "chrome", "brave", "arc", "chromium", "edge"];
     cachedConfig4 = null;
   }
@@ -2799,7 +2821,10 @@ async function queryCookieRows(dbPath, hosts, names, filterExpired) {
   const expiresExpr = columns.columns.has("expires_utc") ? chromeExpiryMillisExpr() : "0";
   const expiryFilter = filterExpired && columns.columns.has("expires_utc") ? ` AND (${expiresExpr} = 0 OR ${expiresExpr} > ${chromeExpiryNowMillis()})` : "";
   const partitionFilter = filterExpired ? unpartitionedCookieFilter(columns.columns) : "";
-  return runSqliteQuery(dbPath, `SELECT name, value, host_key, ${pathExpr}, ${expiresExpr} AS expires_utc, hex(encrypted_value) AS encrypted_value_hex FROM cookies WHERE ${buildCookieWhere(hosts, names ?? void 0)}${expiryFilter}${partitionFilter} ORDER BY length(path) DESC, ${expiresExpr} ASC`);
+  return runSqliteQuery(
+    dbPath,
+    `SELECT name, value, ${pathExpr}, ${expiresExpr} AS expires_utc, hex(encrypted_value) AS encrypted_value_hex FROM cookies WHERE ${buildCookieWhere(hosts, names ?? void 0)}${expiryFilter}${partitionFilter} ORDER BY length(path) DESC, ${expiresExpr} ASC`
+  );
 }
 async function readCookieColumns(dbPath) {
   const result = await runSqliteQuery(dbPath, "PRAGMA table_info(cookies)");
@@ -2923,16 +2948,18 @@ function createGeminiFetch(undiciImpl) {
 }
 async function resolveGeminiFetch() {
   if (geminiFetchOverride) return geminiFetchOverride;
-  if (geminiFetchImpl) return geminiFetchImpl;
-  let undici;
-  try {
-    undici = await import("undici");
-  } catch {
-    geminiFetchImpl = webFetch;
-    return geminiFetchImpl;
-  }
-  geminiFetchImpl = createGeminiFetch(undici);
-  return geminiFetchImpl;
+  return geminiFetchImpl ??= (async () => {
+    let undici;
+    try {
+      undici = await import("undici");
+    } catch {
+      return webFetch;
+    }
+    return createGeminiFetch(undici);
+  })().catch((error) => {
+    geminiFetchImpl = null;
+    throw error;
+  });
 }
 async function getGeminiWebAvailability(chromeProfile) {
   if (!isBrowserCookieAccessAllowed()) return void 0;
@@ -3033,15 +3060,8 @@ async function runGeminiWebOnce(prompt, cookieMap, model, files, timeoutMs, sign
   try {
     return parseStreamGenerateResponse(rawText);
   } catch (err) {
-    let errorCode;
-    try {
-      const json = JSON.parse(trimJsonEnvelope(rawText));
-      errorCode = extractErrorCode(json);
-    } catch {
-    }
     return {
       text: "",
-      errorCode,
       errorMessage: err instanceof Error ? err.message : String(err)
     };
   }
@@ -3200,10 +3220,6 @@ function trimJsonEnvelope(text4) {
   }
   return text4.slice(start, end + 1);
 }
-function extractErrorCode(responseJson) {
-  const code = getNestedValue(responseJson, [0, 5, 2, 0, 1, 0]);
-  return typeof code === "number" && code >= 0 ? code : void 0;
-}
 function extractCandidateText(candidate) {
   const textRaw = getNestedValue(candidate, [1, 0]);
   let text4 = typeof textRaw === "string" ? textRaw : "";
@@ -3215,9 +3231,7 @@ function extractCandidateText(candidate) {
 }
 function parseStreamGenerateResponse(rawText) {
   const responseJson = JSON.parse(trimJsonEnvelope(rawText));
-  const errorCode = extractErrorCode(responseJson);
   const parts = Array.isArray(responseJson) ? responseJson : [];
-  let firstCandidateSeen = void 0;
   let latestNonEmptyText = "";
   for (let i = 0; i < parts.length; i++) {
     const partBody = getNestedValue(parts[i], [2]);
@@ -3227,14 +3241,12 @@ function parseStreamGenerateResponse(rawText) {
       const candidateList = getNestedValue(parsed, [4]);
       if (!Array.isArray(candidateList) || candidateList.length === 0) continue;
       const firstCandidate = candidateList[0];
-      if (firstCandidateSeen === void 0) firstCandidateSeen = firstCandidate;
-      const text5 = extractCandidateText(firstCandidate);
-      if (text5.length > 0) latestNonEmptyText = text5;
+      const text4 = extractCandidateText(firstCandidate);
+      if (text4.length > 0) latestNonEmptyText = text4;
     } catch {
     }
   }
-  const text4 = latestNonEmptyText.length > 0 ? latestNonEmptyText : extractCandidateText(firstCandidateSeen);
-  return { text: text4, errorCode };
+  return { text: latestNonEmptyText };
 }
 var GEMINI_APP_URL, GEMINI_STREAM_GENERATE_URL, GEMINI_UPLOAD_URL, GEMINI_UPLOAD_PUSH_ID, GOOGLE_LIST_ACCOUNTS_URL, USER_AGENT, MODEL_HEADER_NAME, DEFAULT_GEMINI_WEB_MODEL, MODEL_HEADERS, REQUIRED_COOKIES, geminiFetchImpl, geminiFetchOverride, GEMINI_MAX_HEADER_SIZE;
 var init_gemini_web = __esm({
@@ -3308,6 +3320,13 @@ function normalizeDomainFilters(domainFilter) {
   }
   return filters;
 }
+function buildSiteFilteredQuery(query, filters) {
+  const parts = [query];
+  if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
+  if (filters.include.length > 1) parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
+  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
+  return parts.join(" ");
+}
 function matchesDomainFilter(url, filters) {
   if (filters.include.length === 0 && filters.exclude.length === 0) return true;
   let hostname2;
@@ -3326,6 +3345,27 @@ var init_domain_filter_normalization = __esm({
 });
 
 // search-answer-formatting.ts
+function extractSnippetAround(text4, start, end) {
+  if (typeof start !== "number" || typeof end !== "number" || !text4) return "";
+  const before = Math.max(0, start - 100);
+  const after = Math.min(text4.length, end + 100);
+  const snippet = text4.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+  return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
+}
+function extractAnswer(output) {
+  const parts = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object" || item.type !== "message") continue;
+    const content = item.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const text4 = part.text;
+      if (typeof text4 === "string" && text4.trim().length > 0) parts.push(text4);
+    }
+  }
+  return parts.join("\n").trim();
+}
 function formatSearchResultsAsAnswer(results) {
   return results.map((result) => result.snippet ? `${result.snippet}
 Source: ${result.title} (${result.url})` : `Source: ${result.title} (${result.url})`).join("\n\n");
@@ -3359,7 +3399,7 @@ async function getApiKey2(signal) {
   if (!key) {
     throw new Error(
       `Perplexity API key not found. Either:
-  1. Create ${CONFIG_PATH3} with { "perplexityApiKey": "your-key" }
+  1. Create ${CONFIG_PATH2} with { "perplexityApiKey": "your-key" }
   2. Set PERPLEXITY_API_KEY environment variable
 Get a key at https://perplexity.ai/settings/api`
     );
@@ -3476,7 +3516,7 @@ async function askPerplexity(prompt, options = {}) {
   const content = data.choices?.[0]?.message?.content;
   return typeof content === "string" ? content : "";
 }
-var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH3, REQUEST_TIMEOUT_MS, RATE_LIMIT, requestTimestamps, cachedConfig5;
+var PERPLEXITY_SEARCH_URL, PERPLEXITY_CHAT_URL, CONFIG_PATH2, REQUEST_TIMEOUT_MS, RATE_LIMIT, requestTimestamps, cachedConfig5;
 var init_perplexity = __esm({
   "perplexity.ts"() {
     init_utils();
@@ -3488,7 +3528,7 @@ var init_perplexity = __esm({
     init_search_result_count_normalization();
     PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
     PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
-    CONFIG_PATH3 = getWebSearchConfigPath();
+    CONFIG_PATH2 = getWebSearchConfigPath();
     REQUEST_TIMEOUT_MS = 6e4;
     RATE_LIMIT = {
       maxRequests: 10,
@@ -3561,7 +3601,7 @@ async function getApiKey5(signal) {
   if (!key) {
     throw new Error(
       `Parallel API key not found. Either:
-  1. Create ${CONFIG_PATH7} with { "parallelApiKey": "your-key" }
+  1. Create ${CONFIG_PATH6} with { "parallelApiKey": "your-key" }
   2. Set PARALLEL_API_KEY environment variable
 Get a key at https://platform.parallel.ai`
     );
@@ -3627,42 +3667,34 @@ function normalizeExcerpts(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => typeof item === "string" && item.trim().length > 0);
 }
-function mapSearchResults(results) {
-  if (!Array.isArray(results)) return [];
-  const mapped = [];
-  for (let i = 0; i < results.length; i++) {
-    const item = results[i];
-    if (!item?.url) continue;
-    const excerpts2 = normalizeExcerpts(item.excerpts);
-    mapped.push({
-      title: item.title || `Source ${i + 1}`,
-      url: item.url,
-      snippet: excerpts2.length > 0 ? excerpts2[0].replace(/\s+/g, " ").trim().slice(0, 200) : ""
-    });
-  }
-  return mapped;
-}
-function buildAnswerFromExcerpts(results) {
-  if (!Array.isArray(results)) return "";
+function mapSearchResponse(results, includeContent) {
+  const response = { answer: "", results: [] };
+  if (!Array.isArray(results)) return response;
   const parts = [];
   for (let i = 0; i < results.length; i++) {
     const item = results[i];
     if (!item?.url) continue;
     const excerpts2 = normalizeExcerpts(item.excerpts);
+    const title = item.title || `Source ${i + 1}`;
+    response.results.push({
+      title,
+      url: item.url,
+      snippet: excerpts2.length > 0 ? excerpts2[0].replace(/\s+/g, " ").trim().slice(0, 200) : ""
+    });
     if (excerpts2.length === 0) continue;
     parts.push(`${excerpts2.join(" ")}
-Source: ${item.title || `Source ${i + 1}`} (${item.url})`);
+Source: ${title} (${item.url})`);
+    if (includeContent) {
+      (response.inlineContent ??= []).push({
+        url: item.url,
+        title: item.title || "",
+        content: excerpts2.join("\n\n"),
+        error: null
+      });
+    }
   }
-  return parts.join("\n\n");
-}
-function mapInlineContent2(results) {
-  if (!Array.isArray(results)) return [];
-  return results.flatMap((result) => {
-    if (!result?.url) return [];
-    const excerpts2 = normalizeExcerpts(result.excerpts);
-    if (excerpts2.length === 0) return [];
-    return [{ url: result.url, title: result.title || "", content: excerpts2.join("\n\n"), error: null }];
-  });
+  response.answer = parts.join("\n\n");
+  return response;
 }
 function resolveExtractContent(result) {
   const fullContent = typeof result.full_content === "string" ? result.full_content.trim() : "";
@@ -3705,16 +3737,7 @@ async function fetchAndMapExtractResult(url, body, signal) {
 }
 async function searchWithParallel(query, options = {}) {
   const data = await parallelFetch(PARALLEL_SEARCH_URL, buildSearchRequestBody(query, options), options.signal);
-  const results = data.results;
-  const response = {
-    answer: buildAnswerFromExcerpts(results),
-    results: mapSearchResults(results)
-  };
-  if (options.includeContent) {
-    const inlineContent = mapInlineContent2(results);
-    if (inlineContent.length > 0) response.inlineContent = inlineContent;
-  }
-  return response;
+  return mapSearchResponse(data.results, options.includeContent);
 }
 async function extractWithParallel(url, signal, options = {}) {
   const initial = await fetchAndMapExtractResult(url, buildExtractRequestBody(url, options), signal);
@@ -3762,7 +3785,7 @@ async function parallelFetch(url, body, signal) {
     throw new Error("Parallel API returned invalid JSON");
   }
 }
-var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH7, MIN_PARALLEL_API_KEY_LENGTH, MIN_USEFUL_CONTENT, SEARCH_TIMEOUT_MS3, PLACEHOLDER_API_KEY_DENYLIST, cachedConfig9;
+var PARALLEL_SEARCH_URL, PARALLEL_EXTRACT_URL, CONFIG_PATH6, MIN_PARALLEL_API_KEY_LENGTH, MIN_USEFUL_CONTENT, SEARCH_TIMEOUT_MS3, PLACEHOLDER_API_KEY_DENYLIST, cachedConfig9;
 var init_parallel = __esm({
   "parallel.ts"() {
     init_utils();
@@ -3772,7 +3795,7 @@ var init_parallel = __esm({
     init_credential_source();
     PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search";
     PARALLEL_EXTRACT_URL = "https://api.parallel.ai/v1/extract";
-    CONFIG_PATH7 = getWebSearchConfigPath();
+    CONFIG_PATH6 = getWebSearchConfigPath();
     MIN_PARALLEL_API_KEY_LENGTH = 8;
     MIN_USEFUL_CONTENT = 500;
     SEARCH_TIMEOUT_MS3 = 6e4;
@@ -3845,7 +3868,7 @@ async function callParallelMcp(toolName, args, signal) {
   const safeBody = apiKey ? redactCredential(body, apiKey) : body;
   if (!response.ok) {
     if (response.status === 429) {
-      throw new SearchHttpError(response.status, `Parallel MCP rate limit reached (429). Add parallelApiKey to ${CONFIG_PATH8} or set PARALLEL_API_KEY for higher limits: ${safeBody.slice(0, 200)}`);
+      throw new SearchHttpError(response.status, `Parallel MCP rate limit reached (429). Add parallelApiKey to ${CONFIG_PATH7} or set PARALLEL_API_KEY for higher limits: ${safeBody.slice(0, 200)}`);
     }
     throw new SearchHttpError(response.status, `Parallel MCP error ${response.status}: ${safeBody.slice(0, 300)}`);
   }
@@ -3911,25 +3934,29 @@ async function searchWithParallelMcp(query, options = {}) {
     const maxResults = Math.max(1, Math.min(Math.floor(options.numResults ?? 5), 20));
     const results = filterResults(getResults(payload), options.domainFilter).slice(0, maxResults);
     activityMonitor.logComplete(activityId, 200);
-    const response = {
-      answer: results.flatMap((result, index) => {
-        const content = excerpts(result).join(" ").trim();
-        return content ? [`${content}
-Source: ${result.title || `Source ${index + 1}`} (${result.url})`] : [];
-      }).join("\n\n"),
-      results: results.map((result, index) => ({
-        title: result.title || `Source ${index + 1}`,
+    const response = { answer: "", results: [] };
+    const parts = [];
+    for (const [index, result] of results.entries()) {
+      const texts = excerpts(result);
+      const title = result.title || `Source ${index + 1}`;
+      const content = texts.join(" ").trim();
+      if (content) parts.push(`${content}
+Source: ${title} (${result.url})`);
+      response.results.push({
+        title,
         url: result.url,
-        snippet: excerpts(result)[0]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? ""
-      }))
-    };
-    if (options.includeContent) {
-      const inlineContent = results.flatMap((result) => {
-        const content = excerpts(result).join("\n\n");
-        return content ? [{ url: result.url, title: result.title || "", content, error: null }] : [];
+        snippet: texts[0]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? ""
       });
-      if (inlineContent.length) response.inlineContent = inlineContent;
+      if (options.includeContent && texts.length > 0) {
+        (response.inlineContent ??= []).push({
+          url: result.url,
+          title: result.title || "",
+          content: texts.join("\n\n"),
+          error: null
+        });
+      }
     }
+    response.answer = parts.join("\n\n");
     return response;
   } catch (err) {
     const message = errorMessage3(err);
@@ -3947,7 +3974,8 @@ async function extractWithParallelMcp(url, signal, options = {}) {
       ...objective ? { objective: objective.slice(0, 200) } : {},
       full_content: true
     }, signal);
-    const result = getResults(payload).find((item) => item.url === url) ?? getResults(payload)[0];
+    const results = getResults(payload);
+    const result = results.find((item) => item.url === url) ?? results[0];
     if (!result) {
       activityMonitor.logComplete(activityId, 200);
       return null;
@@ -3963,7 +3991,7 @@ async function extractWithParallelMcp(url, signal, options = {}) {
     throw err;
   }
 }
-var PARALLEL_MCP_URL, CONFIG_PATH8, REQUEST_TIMEOUT_MS2;
+var PARALLEL_MCP_URL, CONFIG_PATH7, REQUEST_TIMEOUT_MS2;
 var init_parallel_mcp = __esm({
   "parallel-mcp.ts"() {
     init_activity();
@@ -3974,7 +4002,7 @@ var init_parallel_mcp = __esm({
     init_search_types();
     init_utils();
     PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
-    CONFIG_PATH8 = getWebSearchConfigPath();
+    CONFIG_PATH7 = getWebSearchConfigPath();
     REQUEST_TIMEOUT_MS2 = 6e4;
   }
 });
@@ -3993,7 +4021,7 @@ async function getApiKey6(signal) {
   if (!key) {
     throw new Error(
       `TinyFish API key not found. Either:
-  1. Create ${CONFIG_PATH9} with { "tinyfishApiKey": "your-key" }
+  1. Create ${CONFIG_PATH8} with { "tinyfishApiKey": "your-key" }
   2. Set TINYFISH_API_KEY environment variable
 Get a key at https://agent.tinyfish.ai/api-keys`
     );
@@ -4014,17 +4042,6 @@ function requestSignal4(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function mapDomainFilter3(domainFilter) {
-  const includeDomains = [];
-  const excludeDomains = [];
-  for (const raw of domainFilter ?? []) {
-    const domain = normalizeDomain(raw);
-    if (!domain) continue;
-    const target = raw.trim().startsWith("-") ? excludeDomains : includeDomains;
-    if (!target.includes(domain)) target.push(domain);
-  }
-  return { includeDomains, excludeDomains };
-}
 function recencyMinutes(filter) {
   if (!filter) return void 0;
   const minutes = {
@@ -4037,7 +4054,7 @@ function recencyMinutes(filter) {
 }
 function buildSearchUrl(query, options, page) {
   const params = new URLSearchParams({ query });
-  const { includeDomains, excludeDomains } = mapDomainFilter3(options.domainFilter);
+  const { include: includeDomains, exclude: excludeDomains } = normalizeDomainFilters(options.domainFilter);
   if (includeDomains.length > 0) params.set("include_domains", includeDomains.join(","));
   if (excludeDomains.length > 0) params.set("exclude_domains", excludeDomains.join(","));
   const recency = recencyMinutes(options.recencyFilter);
@@ -4075,8 +4092,7 @@ async function tinyFishJsonRequest(label, url, apiKey, init, timeoutMs, signal) 
     throw new Error(`TinyFish ${label} API returned invalid JSON`);
   }
 }
-function mapSearchResults2(results) {
-  if (!Array.isArray(results)) return [];
+function mapSearchResults(results) {
   return results.flatMap((item) => {
     if (!item || typeof item.url !== "string" || item.url.trim().length === 0) return [];
     const url = item.url.trim();
@@ -4151,7 +4167,7 @@ async function fetchInlineContent(urls, apiKey, signal) {
       throw new Error("TinyFish Fetch API returned an unexpected response shape");
     }
     for (const url of batch) {
-      const result = Array.isArray(data.results) ? data.results.find((item) => item?.url === url || item?.final_url === url) : void 0;
+      const result = data.results.find((item) => item?.url === url || item?.final_url === url);
       const mapped = mapFetchResult(result, url);
       if (mapped) content.push(mapped);
     }
@@ -4175,7 +4191,7 @@ async function searchWithTinyFish(query, options = {}) {
         options.signal
       );
       if (!Array.isArray(data.results)) throw new Error("TinyFish Search API returned an unexpected response shape");
-      combined.push(...mapSearchResults2(data.results));
+      combined.push(...mapSearchResults(data.results));
       if (data.results.length < 10) break;
     }
     const domains = normalizeDomainFilters(options.domainFilter);
@@ -4230,7 +4246,7 @@ async function extractWithTinyFish(url, signal, options = {}) {
     throw redactedError;
   }
 }
-var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH9, SEARCH_TIMEOUT_MS4, FETCH_TIMEOUT_MS, MAX_FETCH_URLS, MAX_FETCH_PER_URL_TIMEOUT_MS, cachedConfig10;
+var TINYFISH_SEARCH_URL, TINYFISH_FETCH_URL, CONFIG_PATH8, SEARCH_TIMEOUT_MS4, FETCH_TIMEOUT_MS, MAX_FETCH_URLS, MAX_FETCH_PER_URL_TIMEOUT_MS, cachedConfig10;
 var init_tinyfish = __esm({
   "tinyfish.ts"() {
     init_utils();
@@ -4242,7 +4258,7 @@ var init_tinyfish = __esm({
     init_credential_source();
     TINYFISH_SEARCH_URL = "https://api.search.tinyfish.ai";
     TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
-    CONFIG_PATH9 = getWebSearchConfigPath();
+    CONFIG_PATH8 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS4 = 6e4;
     FETCH_TIMEOUT_MS = 15e4;
     MAX_FETCH_URLS = 10;
@@ -4265,7 +4281,7 @@ async function getApiKey7(signal) {
   if (!key) {
     throw new Error(
       `Search1API key not found. Either:
-  1. Create ${CONFIG_PATH10} with { "search1apiApiKey": "your-key" }
+  1. Create ${CONFIG_PATH9} with { "search1apiApiKey": "your-key" }
   2. Set SEARCH1API_KEY environment variable
 Create a key at https://dashboard.search1api.com`
     );
@@ -4283,13 +4299,9 @@ function requestSignal5(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function mapDomainFilter4(domainFilter) {
-  const { include: includeSites, exclude: excludeSites } = normalizeDomainFilters(domainFilter);
-  return { includeSites, excludeSites };
-}
 function buildSearchBody(query, options) {
   const numResults = normalizeSearchResultCount(options.numResults);
-  const { includeSites, excludeSites } = mapDomainFilter4(options.domainFilter);
+  const { include: includeSites, exclude: excludeSites } = normalizeDomainFilters(options.domainFilter);
   return {
     query,
     max_results: numResults,
@@ -4324,7 +4336,7 @@ async function search1APIJsonRequest(label, url, apiKey, body, timeoutMs, signal
     throw new Error(`Search1API ${label} API returned invalid JSON`);
   }
 }
-function mapSearchResults3(results) {
+function mapSearchResults2(results) {
   if (!Array.isArray(results)) {
     throw new Error("Search1API Search API returned an unexpected response shape");
   }
@@ -4338,7 +4350,7 @@ function mapSearchResults3(results) {
     }];
   });
 }
-function mapInlineContent3(results) {
+function mapInlineContent2(results) {
   if (!Array.isArray(results)) return [];
   return results.flatMap((item) => {
     if (!item || typeof item.link !== "string" || item.link.trim().length === 0) return [];
@@ -4363,10 +4375,10 @@ async function searchWithSearch1API(query, options = {}) {
       SEARCH_TIMEOUT_MS5,
       options.signal
     );
-    const results = mapSearchResults3(data.results);
+    const results = mapSearchResults2(data.results);
     const response = { answer: formatSearchResultsAsAnswer(results), results };
     if (options.includeContent) {
-      const inlineContent = mapInlineContent3(data.results);
+      const inlineContent = mapInlineContent2(data.results);
       if (inlineContent.length > 0) response.inlineContent = inlineContent;
     }
     activityMonitor.logComplete(activityId, 200);
@@ -4413,7 +4425,7 @@ async function extractWithSearch1API(url, signal, options = {}) {
     throw failure.error;
   }
 }
-var SEARCH1API_SEARCH_URL, SEARCH1API_CRAWL_URL, CONFIG_PATH10, SEARCH_TIMEOUT_MS5, CRAWL_TIMEOUT_MS, cachedConfig11;
+var SEARCH1API_SEARCH_URL, SEARCH1API_CRAWL_URL, CONFIG_PATH9, SEARCH_TIMEOUT_MS5, CRAWL_TIMEOUT_MS, cachedConfig11;
 var init_search1api = __esm({
   "search1api.ts"() {
     init_search_error_redaction();
@@ -4427,7 +4439,7 @@ var init_search1api = __esm({
     init_search_result_count_normalization();
     SEARCH1API_SEARCH_URL = "https://api.search1api.com/search";
     SEARCH1API_CRAWL_URL = "https://api.search1api.com/crawl";
-    CONFIG_PATH10 = getWebSearchConfigPath();
+    CONFIG_PATH9 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS5 = 6e4;
     CRAWL_TIMEOUT_MS = 6e4;
     cachedConfig11 = null;
@@ -4448,7 +4460,7 @@ async function getApiKey9(signal) {
   if (!key) {
     throw new Error(
       `Querit API key not found. Either:
-  1. Create ${CONFIG_PATH12} with { "queritApiKey": "your-key" }
+  1. Create ${CONFIG_PATH11} with { "queritApiKey": "your-key" }
   2. Set QUERIT_API_KEY environment variable
 Create a key at https://www.querit.ai/en/dashboard/api-keys`
     );
@@ -4469,17 +4481,6 @@ function requestSignal7(signal, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
-function mapDomainFilter5(domainFilter) {
-  const include = [];
-  const exclude = [];
-  for (const raw of domainFilter ?? []) {
-    const domain = normalizeDomain(raw);
-    if (!domain) continue;
-    const target = raw.trim().startsWith("-") ? exclude : include;
-    if (!target.includes(domain)) target.push(domain);
-  }
-  return { include, exclude };
-}
 function mapRecencyFilter2(value) {
   if (value === "day") return "d1";
   if (value === "week") return "w1";
@@ -4488,7 +4489,7 @@ function mapRecencyFilter2(value) {
   return void 0;
 }
 function buildSearchBody3(query, options) {
-  const { include, exclude } = mapDomainFilter5(options.domainFilter);
+  const { include, exclude } = normalizeDomainFilters(options.domainFilter);
   const date = mapRecencyFilter2(options.recencyFilter);
   const filters = {};
   if (include.length > 0 || exclude.length > 0) {
@@ -4565,7 +4566,7 @@ function assertApiSuccess(label, data) {
     throw new Error(`Querit ${label} API returned error ${renderedCode}${message}`);
   }
 }
-function mapSearchResults5(data) {
+function mapSearchResults4(data) {
   const items = data.results?.result;
   if (!Array.isArray(items)) {
     throw new Error("Querit Search API returned an unexpected response shape");
@@ -4591,14 +4592,12 @@ function mapContentResult(result, requestedUrl) {
   };
 }
 function findContentResult(data, requestedUrl, index, requestedCount) {
-  if (!Array.isArray(data.results)) return void 0;
   const exact = data.results.find((item) => item?.url === requestedUrl || item?.extrasMeta?.url === requestedUrl);
   if (exact) return exact;
   if (requestedCount === 1) return data.results[0];
   return data.results.length === requestedCount ? data.results[index] : void 0;
 }
 function failedContentStatus(data, result, index) {
-  if (!Array.isArray(data.statuses)) return false;
   const status = result?.id ? data.statuses.find((item) => item?.id === result.id) : data.statuses[index];
   return status?.status === "failed";
 }
@@ -4645,7 +4644,7 @@ async function searchWithQuerit(query, options = {}) {
     );
     assertApiSuccess("Search", data);
     const domains = normalizeDomainFilters(options.domainFilter);
-    const results = mapSearchResults5(data).filter((result) => matchesDomainFilter(result.url, domains)).slice(0, normalizeSearchResultCount(options.numResults));
+    const results = mapSearchResults4(data).filter((result) => matchesDomainFilter(result.url, domains)).slice(0, normalizeSearchResultCount(options.numResults));
     const response = { answer: formatSearchResultsAsAnswer(results), results };
     if (options.includeContent && results.length > 0) {
       const inlineContent = await fetchInlineContent2(results.map((result) => result.url), apiKey, options.signal);
@@ -4691,7 +4690,7 @@ async function extractWithQuerit(url, signal, options = {}) {
     throw redactedError;
   }
 }
-var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH12, SEARCH_TIMEOUT_MS7, CONTENTS_TIMEOUT_MS, MAX_CONTENT_URLS, cachedConfig13;
+var QUERIT_SEARCH_URL, QUERIT_CONTENTS_URL, CONFIG_PATH11, SEARCH_TIMEOUT_MS7, CONTENTS_TIMEOUT_MS, MAX_CONTENT_URLS, cachedConfig13;
 var init_querit = __esm({
   "querit.ts"() {
     init_utils();
@@ -4704,7 +4703,7 @@ var init_querit = __esm({
     init_search_result_count_normalization();
     QUERIT_SEARCH_URL = "https://api.querit.ai/v1/search";
     QUERIT_CONTENTS_URL = "https://api.querit.ai/v1/contents";
-    CONFIG_PATH12 = getWebSearchConfigPath();
+    CONFIG_PATH11 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS7 = 6e4;
     CONTENTS_TIMEOUT_MS = 6e4;
     MAX_CONTENT_URLS = 10;
@@ -4716,12 +4715,8 @@ var init_querit = __esm({
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
-function loadConfigRoot() {
-  return loadWebAccessConfig();
-}
 function loadFetchContentDomainPolicy() {
-  const parsed = loadConfigRoot();
-  if (!parsed) return { ...DEFAULT_DOMAIN_POLICY };
+  const parsed = loadWebAccessConfig();
   const fetchContent = parsed.fetchContent;
   if (fetchContent === void 0 || fetchContent === null) return { ...DEFAULT_DOMAIN_POLICY };
   if (typeof fetchContent !== "object" || Array.isArray(fetchContent)) {
@@ -4762,8 +4757,7 @@ function normalizeDomainEntry(entry) {
   return hostname2;
 }
 function loadSsrfConfig() {
-  const parsed = loadConfigRoot();
-  if (!parsed) return { allowRanges: [], trustEnvProxy: false };
+  const parsed = loadWebAccessConfig();
   const ssrf = parsed.ssrf;
   if (ssrf === void 0 || ssrf === null) return { allowRanges: [], trustEnvProxy: false };
   if (typeof ssrf !== "object" || Array.isArray(ssrf)) {
@@ -5172,13 +5166,11 @@ function ssrfOptions(options) {
     ...options?.lookup ? { lookup: options.lookup } : {}
   };
 }
-function firecrawlApiSsrfOptions(options, allowLoopback) {
-  return { ...ssrfOptions(options), allowLoopback };
-}
 async function fetchFirecrawlApi(url, init, options) {
   const allowLoopback = isLoopbackHostname(new URL(url).hostname);
   return fetchRemoteUrl(url, init, {
-    ...firecrawlApiSsrfOptions(options, allowLoopback),
+    ...ssrfOptions(options),
+    allowLoopback,
     fetch: options?.fetch,
     onRedirect: ({ from, to, init: next }) => {
       const headers = new Headers(next.headers);
@@ -5214,13 +5206,14 @@ function mapRecencyFilter3(value) {
 }
 function searchBody(query, options, numResults, filters) {
   const parserOptions = pdfParserOptions();
+  const tbs = mapRecencyFilter3(options.recencyFilter);
   return {
     query,
     limit: numResults,
     sources: ["web"],
     ...filters.include.length > 0 ? { includeDomains: filters.include } : {},
     ...filters.include.length === 0 && filters.exclude.length > 0 ? { excludeDomains: filters.exclude } : {},
-    ...mapRecencyFilter3(options.recencyFilter) ? { tbs: mapRecencyFilter3(options.recencyFilter) } : {},
+    ...tbs ? { tbs } : {},
     ...options.includeContent ? {
       scrapeOptions: {
         formats: ["markdown"],
@@ -5237,7 +5230,7 @@ function firstString(...values) {
   }
   return null;
 }
-function mapSearchResults6(data, numResults, filters) {
+function mapSearchResults5(data, numResults, filters, includeContent) {
   const web = Array.isArray(data) ? data : data && typeof data === "object" ? data.web : void 0;
   if (!Array.isArray(web)) throw new Error("Firecrawl search returned an unexpected web result shape");
   const results = [];
@@ -5252,8 +5245,10 @@ function mapSearchResults6(data, numResults, filters) {
     const title = firstString(item.title, item.metadata?.title) ?? url;
     const snippet = firstString(item.description, item.snippet, item.metadata?.description) ?? "";
     results.push({ title, url, snippet });
-    const markdown = firstString(item.markdown);
-    if (markdown) inlineContent.push({ url, title, content: withPdfTruncationNotice(markdown, item.metadata), error: null });
+    if (includeContent) {
+      const markdown = firstString(item.markdown);
+      if (markdown) inlineContent.push({ url, title, content: withPdfTruncationNotice(markdown, item.metadata), error: null });
+    }
     if (results.length >= numResults) break;
   }
   return { results, inlineContent };
@@ -5326,7 +5321,7 @@ async function searchWithFirecrawl(query, options = {}) {
     "search",
     { type: "api", query }
   );
-  const mapped = mapSearchResults6(envelope.data, numResults, filters);
+  const mapped = mapSearchResults5(envelope.data, numResults, filters, options.includeContent);
   const response = { answer: formatSearchResultsAsAnswer(mapped.results), results: mapped.results };
   if (options.includeContent && mapped.inlineContent.length > 0) response.inlineContent = mapped.inlineContent;
   return response;
@@ -5349,7 +5344,7 @@ async function extractWithFirecrawl(url, signal, options) {
   const title = typeof metadataTitle === "string" && metadataTitle.trim() ? metadataTitle.trim() : typeof scrape.title === "string" ? scrape.title.trim() : "";
   return { url, title, content: withPdfTruncationNotice(content, scrape.metadata), error: null };
 }
-var CONFIG_PATH15, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, SUPPORTED_API_VERSIONS, cachedConfig16;
+var CONFIG_PATH14, DEFAULT_API_VERSION, EXTRACT_TIMEOUT_MS, SEARCH_TIMEOUT_MS10, SUPPORTED_API_VERSIONS, cachedConfig16;
 var init_firecrawl = __esm({
   "firecrawl.ts"() {
     init_utils();
@@ -5360,7 +5355,7 @@ var init_firecrawl = __esm({
     init_search_answer_formatting();
     init_search_result_count_normalization();
     init_ssrf_protection();
-    CONFIG_PATH15 = getWebSearchConfigPath();
+    CONFIG_PATH14 = getWebSearchConfigPath();
     DEFAULT_API_VERSION = "v2";
     EXTRACT_TIMEOUT_MS = 6e4;
     SEARCH_TIMEOUT_MS10 = 6e4;
@@ -5386,7 +5381,7 @@ async function requireApiKey5(signal) {
   if (!apiKey) {
     throw new Error(
       `Kagi API key not found. Either:
-  1. Create ${CONFIG_PATH18} with { "kagiApiKey": "your-key" }
+  1. Create ${CONFIG_PATH17} with { "kagiApiKey": "your-key" }
   2. Set KAGI_API_KEY environment variable
 Create a key at https://kagi.com/settings?p=api`
     );
@@ -5417,8 +5412,10 @@ function appendSearchItems(value, results, inlineContent) {
   const title = firstString2(item.title, item.name) ?? url;
   const snippet = firstString2(item.snippet, item.description, item.summary, item.content, item.markdown, item.text) ?? "";
   results.push({ title, url, snippet });
-  const content = firstString2(item.markdown, item.content, item.text);
-  if (content) inlineContent.push({ url, title, content, error: null });
+  if (inlineContent) {
+    const content = firstString2(item.markdown, item.content, item.text);
+    if (content) inlineContent.push({ url, title, content, error: null });
+  }
 }
 function parseErrors(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -5432,7 +5429,7 @@ function parseErrors(value) {
   });
   return messages.length > 0 ? messages.join("; ") : null;
 }
-function parseSearchResponse(value) {
+function parseSearchResponse(value, includeContent) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("expected an object envelope");
   const message = parseErrors(value);
   if (message) throw invalidResponse(message);
@@ -5441,7 +5438,7 @@ function parseSearchResponse(value) {
   const inlineContent = [];
   const data = envelope.data;
   const items = typeof data === "object" && data !== null && !Array.isArray(data) ? data.search : data;
-  appendSearchItems(items, results, inlineContent);
+  appendSearchItems(items, results, includeContent ? inlineContent : void 0);
   return { results, inlineContent };
 }
 function parseExtractResponse(value, requestedUrl) {
@@ -5502,7 +5499,7 @@ async function searchWithKagi(query, options = {}) {
       if (options.signal?.aborted || err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) throw err;
       throw new Error("Kagi API returned invalid JSON");
     }
-    const parsed = parseSearchResponse(rawData);
+    const parsed = parseSearchResponse(rawData, options.includeContent);
     const results = parsed.results.filter((result) => matchesDomainFilter(result.url, domains)).slice(0, numResults);
     const mapped = { answer: formatSearchResultsAsAnswer(results), results };
     if (options.includeContent) {
@@ -5580,7 +5577,7 @@ async function extractWithKagi(url, signal, options = {}) {
     throw outgoing;
   }
 }
-var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH18, SEARCH_TIMEOUT_MS13, cachedConfig19;
+var KAGI_SEARCH_URL, KAGI_EXTRACT_URL, CONFIG_PATH17, SEARCH_TIMEOUT_MS13, cachedConfig19;
 var init_kagi = __esm({
   "kagi.ts"() {
     init_search_types();
@@ -5594,7 +5591,7 @@ var init_kagi = __esm({
     init_ssrf_protection();
     KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
     KAGI_EXTRACT_URL = "https://kagi.com/api/v1/extract";
-    CONFIG_PATH18 = getWebSearchConfigPath();
+    CONFIG_PATH17 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS13 = 6e4;
     cachedConfig19 = null;
   }
@@ -5617,7 +5614,7 @@ async function requireApiKey7(signal) {
   if (!apiKey) {
     throw new Error(
       `Ollama API key not found. Either:
-  1. Create ${CONFIG_PATH20} with { "ollamaApiKey": "your-key" }
+  1. Create ${CONFIG_PATH19} with { "ollamaApiKey": "your-key" }
   2. Set OLLAMA_API_KEY environment variable
 Create a key at https://ollama.com/settings/keys`
     );
@@ -5650,7 +5647,7 @@ function parseFetchResponse(value) {
   const envelope = value;
   if (typeof envelope.title !== "string") throw invalidResponse3("expected title string");
   if (typeof envelope.content !== "string") throw invalidResponse3("expected content string");
-  return { title: envelope.title, content: envelope.content, links: envelope.links };
+  return { title: envelope.title, content: envelope.content };
 }
 function isOllamaAvailable() {
   return hasCredentialSource({ provider: "Ollama", configuredValue: loadConfig20().ollamaApiKey, environmentValue: process.env.OLLAMA_API_KEY });
@@ -5771,7 +5768,7 @@ async function extractWithOllama(url, signal, options = {}) {
   if (!content) return null;
   return { url, title: data.title, content, error: null };
 }
-var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH20, SEARCH_TIMEOUT_MS15, cachedConfig21;
+var OLLAMA_SEARCH_URL, OLLAMA_FETCH_URL, CONFIG_PATH19, SEARCH_TIMEOUT_MS15, cachedConfig21;
 var init_ollama = __esm({
   "ollama.ts"() {
     init_utils();
@@ -5785,7 +5782,7 @@ var init_ollama = __esm({
     init_ssrf_protection();
     OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
     OLLAMA_FETCH_URL = "https://ollama.com/api/web_fetch";
-    CONFIG_PATH20 = getWebSearchConfigPath();
+    CONFIG_PATH19 = getWebSearchConfigPath();
     SEARCH_TIMEOUT_MS15 = 6e4;
     cachedConfig21 = null;
   }
@@ -6674,6 +6671,21 @@ function extractRSCContent(html) {
     }
   }
   const visitedRefs = /* @__PURE__ */ new Set();
+  const skipTags = [
+    "script",
+    "style",
+    "svg",
+    "path",
+    "circle",
+    "link",
+    "meta",
+    "template",
+    "button",
+    "input",
+    "nav",
+    "footer",
+    "aside"
+  ];
   function extractNode(node, ctx = { inTable: false, inCode: false }) {
     if (node === null || node === void 0) return "";
     if (typeof node === "string") {
@@ -6696,21 +6708,6 @@ function extractRSCContent(html) {
     if (node[0] === "$" && typeof node[1] === "string") {
       const tag = node[1];
       const props = node[3] || {};
-      const skipTags = [
-        "script",
-        "style",
-        "svg",
-        "path",
-        "circle",
-        "link",
-        "meta",
-        "template",
-        "button",
-        "input",
-        "nav",
-        "footer",
-        "aside"
-      ];
       if (skipTags.includes(tag)) return "";
       if (tag.startsWith("$L")) {
         const refId = tag.slice(2);
@@ -6732,7 +6729,7 @@ function extractRSCContent(html) {
         return result;
       }
       const children = props.children;
-      const content2 = children ? extractNode(children, ctx) : "";
+      const content2 = children && tag !== "code" && tag !== "pre" && tag !== "table" ? extractNode(children, ctx) : "";
       switch (tag) {
         case "h1":
           return `# ${content2.trim()}
@@ -7705,7 +7702,6 @@ function runGh(args, timeoutMs = GH_TIMEOUT_MS, signal) {
         ok: !err,
         stdout,
         stderr,
-        code: typeof nodeErr?.code === "number" ? nodeErr.code : null,
         ...err ? { error: nodeErr?.message ?? String(err) } : {}
       });
     });
@@ -8209,13 +8205,12 @@ async function extractGitHubIssuePr(url, signal, options) {
   if ("data" in fallback) return renderGitHubPrIssue(fallback.data);
   return fallback;
 }
-var CONFIG_PATH35, GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMENT_INLINE_CHARS, MAX_INLINE_COMMENTS, MAX_INLINE_REVIEWS, MAX_INLINE_CHECKS, MAX_INLINE_FILES, MAX_INLINE_COMMITS, MAX_INLINE_REVIEW_THREADS, REST_HEADERS, PR_SUBPATHS, PR_FIELDS, PR_CORE_FIELDS, ISSUE_FIELDS, ISSUE_CORE_FIELDS, cachedConfig38;
+var GH_TIMEOUT_MS, GH_TOTAL_TIMEOUT_MS, MAX_DOC_CHARS, BODY_INLINE_CHARS, COMMENT_INLINE_CHARS, MAX_INLINE_COMMENTS, MAX_INLINE_REVIEWS, MAX_INLINE_CHECKS, MAX_INLINE_FILES, MAX_INLINE_COMMITS, MAX_INLINE_REVIEW_THREADS, REST_HEADERS, PR_SUBPATHS, PR_FIELDS, PR_CORE_FIELDS, ISSUE_FIELDS, ISSUE_CORE_FIELDS, cachedConfig38;
 var init_github_issue_pr = __esm({
   "github-issue-pr.ts"() {
     init_utils();
     init_github_api();
     init_ssrf_protection();
-    CONFIG_PATH35 = getWebAccessConfigPath();
     GH_TIMEOUT_MS = 1e4;
     GH_TOTAL_TIMEOUT_MS = 2e4;
     MAX_DOC_CHARS = 15e4;
@@ -8401,7 +8396,7 @@ URL: `;
 function loadConfig38() {
   return cachedConfig39 ??= loadWebAccessConfig();
 }
-function normalizeBaseUrl5(value) {
+function normalizeBaseUrl3(value) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -8423,7 +8418,7 @@ function normalizeBaseUrl5(value) {
   return parsed.toString().replace(/\/+$/, "");
 }
 function getBaseUrl4() {
-  return normalizeBaseUrl5(process.env.CRAWL4AI_BASE_URL) ?? normalizeBaseUrl5(loadConfig38().crawl4aiBaseUrl);
+  return normalizeBaseUrl3(process.env.CRAWL4AI_BASE_URL) ?? normalizeBaseUrl3(loadConfig38().crawl4aiBaseUrl);
 }
 function requireBaseUrl4() {
   const baseUrl = getBaseUrl4();
@@ -8530,14 +8525,14 @@ async function extractWithCrawl4ai(url, signal, options) {
     throw err;
   }
 }
-var CONFIG_PATH36, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
+var CONFIG_PATH33, EXTRACT_TIMEOUT_MS2, MARKDOWN_FILTER, cachedConfig39;
 var init_crawl4ai = __esm({
   "crawl4ai.ts"() {
     init_utils();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
-    CONFIG_PATH36 = getWebSearchConfigPath();
+    CONFIG_PATH33 = getWebSearchConfigPath();
     EXTRACT_TIMEOUT_MS2 = 6e4;
     MARKDOWN_FILTER = "fit";
     cachedConfig39 = null;
@@ -8593,7 +8588,7 @@ async function getApiKey27(signal) {
   if (!apiKey) {
     throw new Error(
       `Bright Data API key not found. Either:
-  1. Create ${CONFIG_PATH37} with { "brightdataApiKey": "your-key" }
+  1. Create ${CONFIG_PATH34} with { "brightdataApiKey": "your-key" }
   2. Set BRIGHTDATA_API_KEY environment variable
 Get a key at https://brightdata.com/cp/setting/users`
     );
@@ -8691,14 +8686,14 @@ async function extractWithBrightDataUnlocker(url, signal, options) {
   if (!content) return null;
   return { url, title: headingTitle(content), content, error: null };
 }
-var CONFIG_PATH37, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, ZONE_PATTERN2, cachedConfig40;
+var CONFIG_PATH34, BRIGHTDATA_REQUEST_URL, EXTRACT_TIMEOUT_MS3, ZONE_PATTERN2, cachedConfig40;
 var init_brightdata_unlocker = __esm({
   "brightdata-unlocker.ts"() {
     init_utils();
     init_activity();
     init_credential_source();
     init_ssrf_protection();
-    CONFIG_PATH37 = getWebSearchConfigPath();
+    CONFIG_PATH34 = getWebSearchConfigPath();
     BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request";
     EXTRACT_TIMEOUT_MS3 = 6e4;
     ZONE_PATTERN2 = /^[a-z0-9_-]+$/i;
@@ -8836,18 +8831,11 @@ function formatDeclaredLink(link) {
 function inlineCode(value) {
   return `\`${value.replace(/`/g, "'")}\``;
 }
-var MAX_DECLARED_LINKS, MAX_DECLARED_URL_LENGTH, DECLARATION_RELATIONS, RELATION_LABELS;
+var MAX_DECLARED_LINKS, MAX_DECLARED_URL_LENGTH, RELATION_LABELS, DECLARATION_RELATIONS;
 var init_declared_web_links = __esm({
   "declared-web-links.ts"() {
     MAX_DECLARED_LINKS = 20;
     MAX_DECLARED_URL_LENGTH = 4096;
-    DECLARATION_RELATIONS = /* @__PURE__ */ new Set([
-      "api-catalog",
-      "describedby",
-      "service-desc",
-      "service-doc",
-      "service-meta"
-    ]);
     RELATION_LABELS = {
       "api-catalog": "API catalog",
       "describedby": "Description",
@@ -8855,6 +8843,7 @@ var init_declared_web_links = __esm({
       "service-doc": "Service documentation",
       "service-meta": "Service metadata"
     };
+    DECLARATION_RELATIONS = new Set(Object.keys(RELATION_LABELS));
   }
 });
 
@@ -9108,7 +9097,7 @@ function sanitizeTextInternal(text4, sourcePath, state) {
       }
     }
     const omission = {
-      ordinal: state.nextOrdinal++,
+      ordinal: state.omissions.length + 1,
       sourcePath: safeMarkerSource(sourcePath),
       mimeType,
       encoding,
@@ -9131,7 +9120,7 @@ function sanitizeTextInternal(text4, sourcePath, state) {
   return pieces.join("");
 }
 function sanitizeInlineDataUris(text4, sourcePath) {
-  const state = { nextOrdinal: 1, omissions: [] };
+  const state = { omissions: [] };
   const sanitized = sanitizeTextInternal(text4, sourcePath, state);
   return {
     text: sanitized,
@@ -10038,83 +10027,51 @@ Browser retry failed: ${normal.error}` : "")
     const { Readability } = await import("@mozilla/readability");
     const reader = new Readability(document);
     const article = reader.parse();
-    if (!article) {
-      const rscResult = extractRSCContent(text4);
-      if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT2) {
-        activityMonitor.logComplete(activityId, response.status);
-        return {
-          url,
-          title: rscResult.title,
-          content: appendDeclaredWebLinks(rscResult.content, declaredLinks),
-          error: null,
-          declaredLinks
-        };
-      }
-      controller.signal.throwIfAborted();
-      const defuddleResult = await extractWithDefuddle(text4, response.url || url);
-      controller.signal.throwIfAborted();
-      if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT2) {
-        activityMonitor.logComplete(activityId, response.status);
-        return {
-          url,
-          title: documentTitle || defuddleResult.title,
-          content: appendDeclaredWebLinks(defuddleResult.content, declaredLinks),
-          error: null,
-          declaredLinks
-        };
-      }
+    let markdown = "";
+    if (article) {
+      if (typeof article.content !== "string") throw new Error("Readability returned invalid article content");
+      markdown = (await getTurndown()).turndown(article.content);
       activityMonitor.logComplete(activityId, response.status);
-      const jsRendered = isLikelyJSRendered(text4);
-      const errorMsg = jsRendered ? "Page appears to be JavaScript-rendered (content loads dynamically)" : "Could not extract readable content from HTML structure";
-      return {
-        url,
-        title: documentTitle,
-        content: appendDeclaredWebLinks("", declaredLinks),
-        error: errorMsg,
-        declaredLinks
-      };
-    }
-    if (typeof article.content !== "string") {
-      throw new Error("Readability returned invalid article content");
-    }
-    const markdown = (await getTurndown()).turndown(article.content);
-    activityMonitor.logComplete(activityId, response.status);
-    if (markdown.length < MIN_USEFUL_CONTENT2) {
-      const rscResult = extractRSCContent(text4);
-      if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT2) {
+      if (markdown.length >= MIN_USEFUL_CONTENT2) {
         return {
           url,
-          title: rscResult.title,
-          content: appendDeclaredWebLinks(rscResult.content, declaredLinks),
+          title: article.title || documentTitle,
+          content: appendDeclaredWebLinks(markdown, declaredLinks),
           error: null,
           declaredLinks
         };
       }
-      controller.signal.throwIfAborted();
-      const defuddleResult = await extractWithDefuddle(text4, response.url || url);
-      controller.signal.throwIfAborted();
-      if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT2) {
-        return {
-          url,
-          title: article.title || documentTitle || defuddleResult.title,
-          content: appendDeclaredWebLinks(defuddleResult.content, declaredLinks),
-          error: null,
-          declaredLinks
-        };
-      }
+    }
+    const rscResult = extractRSCContent(text4);
+    if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT2) {
+      if (!article) activityMonitor.logComplete(activityId, response.status);
       return {
         url,
-        title: article.title || documentTitle,
-        content: appendDeclaredWebLinks(markdown, declaredLinks),
-        error: isLikelyJSRendered(text4) ? "Page appears to be JavaScript-rendered (content loads dynamically)" : "Extracted content appears incomplete",
+        title: rscResult.title,
+        content: appendDeclaredWebLinks(rscResult.content, declaredLinks),
+        error: null,
         declaredLinks
       };
     }
+    controller.signal.throwIfAborted();
+    const defuddleResult = await extractWithDefuddle(text4, response.url || url);
+    controller.signal.throwIfAborted();
+    if (defuddleResult && defuddleResult.content.length >= MIN_USEFUL_CONTENT2) {
+      if (!article) activityMonitor.logComplete(activityId, response.status);
+      return {
+        url,
+        title: article?.title || documentTitle || defuddleResult.title,
+        content: appendDeclaredWebLinks(defuddleResult.content, declaredLinks),
+        error: null,
+        declaredLinks
+      };
+    }
+    if (!article) activityMonitor.logComplete(activityId, response.status);
     return {
       url,
-      title: article.title || documentTitle,
+      title: article?.title || documentTitle,
       content: appendDeclaredWebLinks(markdown, declaredLinks),
-      error: null,
+      error: isLikelyJSRendered(text4) ? "Page appears to be JavaScript-rendered (content loads dynamically)" : article ? "Extracted content appears incomplete" : "Could not extract readable content from HTML structure",
       declaredLinks
     };
   } catch (err) {
@@ -10727,7 +10684,7 @@ init_search_types();
 init_credential_source();
 var EXA_API_BASE_URL = "https://api.exa.ai";
 var EXA_MCP_URL = "https://mcp.exa.ai/mcp";
-var CONFIG_PATH4 = getWebSearchConfigPath();
+var CONFIG_PATH3 = getWebSearchConfigPath();
 var EXA_MCP_ADVANCED_TOOL = "web_search_advanced_exa";
 var EXA_MCP_BASIC_TOOL = "web_search_exa";
 var cachedConfig6 = null;
@@ -10867,7 +10824,7 @@ async function callExaMcp(toolName, args, signal) {
     if (response.status === 429) {
       throw new SearchHttpError(
         response.status,
-        `Exa MCP rate limit reached (429). Add "exaApiKey" to ${CONFIG_PATH4} for unthrottled Exa search: ${errorText.slice(0, 200)}`
+        `Exa MCP rate limit reached (429). Add "exaApiKey" to ${CONFIG_PATH3} for unthrottled Exa search: ${errorText.slice(0, 200)}`
       );
     }
     throw new SearchHttpError(response.status, `Exa MCP error ${response.status}: ${errorText.slice(0, 300)}`);
@@ -11214,10 +11171,6 @@ var BraveRateLimitCoordinator = class {
   async waitForRecordedCooldown(signal) {
     await this.waitForAvailability(signal);
   }
-  async waitForRetry(delayMs, signal) {
-    this.recordRetryDelay(delayMs);
-    await this.waitForRecordedCooldown(signal);
-  }
   blockFor(delayMs, addMargin = true) {
     const boundedDelay = Math.max(0, delayMs) + (addMargin ? this.safetyMarginMs : 0);
     this.blockedUntil = Math.max(this.blockedUntil, this.now() + boundedDelay);
@@ -11238,7 +11191,7 @@ var BraveRateLimitCoordinator = class {
 init_search_result_count_normalization();
 init_credential_source();
 var BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1";
-var CONFIG_PATH5 = getWebSearchConfigPath();
+var CONFIG_PATH4 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS = 3e4;
 var braveRateLimit = new BraveRateLimitCoordinator();
 var cachedConfig7 = null;
@@ -11287,7 +11240,7 @@ async function searchWithBrave(query, options = {}) {
   if (!apiKey) {
     throw new Error(
       `Brave Search API key not found. Either:
-  1. Create ${CONFIG_PATH5} with { "braveApiKey": "your-key" }
+  1. Create ${CONFIG_PATH4} with { "braveApiKey": "your-key" }
   2. Set BRAVE_API_KEY environment variable
 Get a key at https://brave.com/search/api/`
     );
@@ -11372,6 +11325,7 @@ Get a key at https://brave.com/search/api/`
 }
 
 // openai-search.ts
+init_search_answer_formatting();
 init_utils();
 init_activity();
 init_domain_filter_normalization();
@@ -11380,7 +11334,7 @@ init_search_types();
 init_credential_source();
 var OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 var CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-var CONFIG_PATH6 = getWebSearchConfigPath();
+var CONFIG_PATH5 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS2 = 6e4;
 var EXCLUDED_MODEL_SEGMENTS = /* @__PURE__ */ new Set(["pro", "ultra"]);
 var MODEL_PREFERENCE = [
@@ -11773,7 +11727,7 @@ async function parseOpenAIResponse(response) {
     const payload = output.length > 0 ? completedResponse : { ...completedResponse, output: outputItems };
     return { payload, webSearchCallSeen: webSearchCallSeen || output.some(isWebSearchCall) };
   }
-  if (outputItems.length > 0) return { payload: { output: outputItems }, webSearchCallSeen: webSearchCallSeen || outputItems.some(isWebSearchCall) };
+  if (outputItems.length > 0) return { payload: { output: outputItems }, webSearchCallSeen };
   throw new Error("OpenAI API returned no parseable response output");
 }
 function cleanSourceUrl(rawUrl) {
@@ -11784,13 +11738,6 @@ function cleanSourceUrl(rawUrl) {
   } catch {
     return rawUrl.replace(/[?&]utm_source=openai$/, "");
   }
-}
-function extractSnippetAround(text4, start, end) {
-  if (typeof start !== "number" || typeof end !== "number" || !text4) return "";
-  const before = Math.max(0, start - 100);
-  const after = Math.min(text4.length, end + 100);
-  const snippet = text4.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
-  return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
 }
 function addResult(results, seen, url, title, snippet = "") {
   if (typeof url !== "string" || url.trim().length === 0) return;
@@ -11848,20 +11795,6 @@ function extractSearchResults(output, numResults, domainFilter) {
     return filtered.slice(0, Math.min(Math.floor(numResults), 20));
   }
   return filtered;
-}
-function extractAnswer(output) {
-  const parts = [];
-  for (const item of output) {
-    if (!item || typeof item !== "object" || item.type !== "message") continue;
-    const content = item.content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text4 = part.text;
-      if (typeof text4 === "string" && text4.trim().length > 0) parts.push(text4);
-    }
-  }
-  return parts.join("\n").trim();
 }
 function isAlphaSearchEnabled() {
   const value = loadConfig7().openaiUseAlphaSearch;
@@ -12027,7 +11960,7 @@ async function searchWithOpenAI(query, options = {}, ctx) {
     throw new Error(
       `OpenAI web search unavailable. Either:
   1. Use /login to sign in with a Codex subscription
-  2. Create ${CONFIG_PATH6} with { "openaiApiKey": "your-key" }
+  2. Create ${CONFIG_PATH5} with { "openaiApiKey": "your-key" }
   3. Set OPENAI_API_KEY environment variable`
     );
   }
@@ -12056,7 +11989,7 @@ init_credential_source();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 var SEARCHINFINITY_SEARCH_URL = "https://torchlight.byteintlapi.com/search_api/web_search";
-var CONFIG_PATH11 = getWebSearchConfigPath();
+var CONFIG_PATH10 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS6 = 3e4;
 var cachedConfig12 = null;
 function loadConfig11() {
@@ -12072,7 +12005,7 @@ async function getApiKey8(signal) {
   if (!key) {
     throw new Error(
       `Searchinfinity API key not found. Either:
-  1. Create ${CONFIG_PATH11} with { "searchinfinityApiKey": "your-key" }
+  1. Create ${CONFIG_PATH10} with { "searchinfinityApiKey": "your-key" }
   2. Set SEARCHINFINITY_API_KEY environment variable
 Create a key at https://console.byteplus.com/search-infinity/api-key`
     );
@@ -12156,7 +12089,7 @@ async function searchinfinityJsonRequest(apiKey, body, signal) {
   }
   return data;
 }
-function mapSearchResults4(results) {
+function mapSearchResults3(results) {
   if (!Array.isArray(results)) {
     throw new Error("Searchinfinity Search API returned an unexpected response shape");
   }
@@ -12177,7 +12110,7 @@ async function searchWithSearchinfinity(query, options = {}) {
   const activityId = activityMonitor.logStart({ type: "api", query });
   try {
     const data = await searchinfinityJsonRequest(apiKey, buildSearchBody2(query, options), options.signal);
-    const results = mapSearchResults4(data.Result?.WebResults);
+    const results = mapSearchResults3(data.Result?.WebResults);
     const response = { answer: formatSearchResultsAsAnswer(results), results };
     activityMonitor.logComplete(activityId, 200);
     return response;
@@ -12200,7 +12133,7 @@ init_activity();
 init_search_result_count_normalization();
 init_credential_source();
 var TAVILY_API_BASE_URL = "https://api.tavily.com";
-var CONFIG_PATH13 = getWebSearchConfigPath();
+var CONFIG_PATH12 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS8 = 6e4;
 var cachedConfig14 = null;
 function loadConfig13() {
@@ -12239,14 +12172,14 @@ async function requireApiKey(signal) {
   if (!apiKey) {
     throw new Error(
       `Tavily API key not found. Either:
-  1. Create ${CONFIG_PATH13} with { "tavilyApiKey": "your-key" }
+  1. Create ${CONFIG_PATH12} with { "tavilyApiKey": "your-key" }
   2. Set TAVILY_API_KEY environment variable
 Get a key at https://app.tavily.com/`
     );
   }
   return apiKey;
 }
-function mapDomainFilter6(domainFilter) {
+function mapDomainFilter3(domainFilter) {
   const { include: include_domains, exclude: exclude_domains } = normalizeDomainFilters(domainFilter);
   return {
     ...include_domains.length > 0 ? { include_domains } : {},
@@ -12274,7 +12207,7 @@ function mapResults2(results, numResults) {
   }
   return mapped;
 }
-function mapInlineContent4(results) {
+function mapInlineContent3(results) {
   if (!Array.isArray(results)) return [];
   return results.flatMap((item) => {
     if (!item?.url || typeof item.raw_content !== "string" || item.raw_content.trim().length === 0) return [];
@@ -12303,7 +12236,7 @@ async function searchWithTavily(query, options = {}) {
     include_answer: "basic",
     include_raw_content: options.includeContent ? "markdown" : false,
     ...options.recencyFilter ? { time_range: options.recencyFilter } : {},
-    ...mapDomainFilter6(options.domainFilter)
+    ...mapDomainFilter3(options.domainFilter)
   };
   const signal = requestSignal8(options.signal);
   const activityId = activityMonitor.logStart({ type: "api", query });
@@ -12325,7 +12258,7 @@ async function searchWithTavily(query, options = {}) {
     results: mapResults2(data.results, numResults)
   };
   if (options.includeContent) {
-    const inlineContent = mapInlineContent4(data.results);
+    const inlineContent = mapInlineContent3(data.results);
     if (inlineContent.length > 0) result.inlineContent = inlineContent;
   }
   return result;
@@ -12392,7 +12325,7 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var YOU_SEARCH_URL = "https://ydc-index.io/v1/search";
-var CONFIG_PATH14 = getWebSearchConfigPath();
+var CONFIG_PATH13 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS9 = 6e4;
 var cachedConfig15 = null;
 function loadConfig14() {
@@ -12408,14 +12341,14 @@ async function requireApiKey2(signal) {
   if (!apiKey) {
     throw new Error(
       `You.com API key not found. Either:
-  1. Create ${CONFIG_PATH14} with { "youApiKey": "your-key" }
+  1. Create ${CONFIG_PATH13} with { "youApiKey": "your-key" }
   2. Set YDC_API_KEY environment variable
 Get a key at https://you.com/platform/api-keys`
     );
   }
   return apiKey;
 }
-function mapDomainFilter7(domainFilter) {
+function mapDomainFilter4(domainFilter) {
   const { include: include_domains, exclude: exclude_domains } = normalizeDomainFilters(domainFilter);
   return {
     ...include_domains.length > 0 ? { include_domains } : {},
@@ -12441,7 +12374,7 @@ async function searchWithYou(query, options = {}) {
     query,
     count: numResults,
     ...options.recencyFilter ? { freshness: options.recencyFilter } : {},
-    ...mapDomainFilter7(options.domainFilter)
+    ...mapDomainFilter4(options.domainFilter)
   };
   const activityId = activityMonitor.logStart({ type: "api", query });
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS9);
@@ -12520,7 +12453,7 @@ init_domain_filter_normalization();
 init_search_answer_formatting();
 init_search_result_count_normalization();
 var JINA_SEARCH_BASE_URL = "https://s.jina.ai/";
-var CONFIG_PATH16 = getWebSearchConfigPath();
+var CONFIG_PATH15 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS11 = 6e4;
 var cachedConfig17 = null;
 function loadConfig16() {
@@ -12539,7 +12472,7 @@ async function requireApiKey3(signal) {
   if (!apiKey) {
     throw new Error(
       `Jina Search API key not found. Either:
-  1. Create ${CONFIG_PATH16} with { "jinaApiKey": "your-key" }
+  1. Create ${CONFIG_PATH15} with { "jinaApiKey": "your-key" }
   2. Set JINA_API_KEY environment variable
 Get a key at https://jina.ai/api-dashboard`
     );
@@ -12580,7 +12513,7 @@ function parseItems(value) {
   }
   return envelope.data;
 }
-function mapItems(items, numResults, filters) {
+function mapItems(items, numResults, filters, includeContent) {
   const results = [];
   const content = [];
   const seen = /* @__PURE__ */ new Set();
@@ -12591,7 +12524,7 @@ function mapItems(items, numResults, filters) {
     const title = typeof item.title === "string" && item.title.trim() ? item.title.trim() : `Source ${results.length + 1}`;
     const snippet = typeof item.description === "string" ? item.description.replace(/\s+/g, " ").trim() : "";
     results.push({ title, url, snippet });
-    if (typeof item.content === "string" && item.content.trim()) {
+    if (includeContent && typeof item.content === "string" && item.content.trim()) {
       content.push({ url, title, content: item.content.trim(), error: null });
     }
     if (results.length >= numResults) break;
@@ -12662,7 +12595,7 @@ async function searchWithJina(query, options = {}) {
   }
   let mapped;
   try {
-    mapped = mapItems(parseItems(raw), numResults, filters);
+    mapped = mapItems(parseItems(raw), numResults, filters, options.includeContent);
   } catch (err) {
     const message = errorMessage9(err);
     const redactedMessage = redactCredential(message, apiKey);
@@ -12692,7 +12625,7 @@ init_activity();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPDIVE_API_URL = "https://api.serpdive.com/v1/search";
-var CONFIG_PATH17 = getWebSearchConfigPath();
+var CONFIG_PATH16 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS12 = 6e4;
 var MODELS = ["krill", "mako", "moby"];
 var DEFAULT_MODEL2 = "krill";
@@ -12713,7 +12646,7 @@ async function requireApiKey4(signal) {
   if (!apiKey) {
     throw new Error(
       `SERPdive API key not found. Either:
-  1. Create ${CONFIG_PATH17} with { "serpdiveApiKey": "your-key" }
+  1. Create ${CONFIG_PATH16} with { "serpdiveApiKey": "your-key" }
   2. Set SERPDIVE_API_KEY environment variable
 Get a key at https://serpdive.com/dashboard/keys`
     );
@@ -12755,7 +12688,7 @@ function mapResults3(results, numResults, filters) {
   }
   return mapped;
 }
-function mapInlineContent5(results, filters) {
+function mapInlineContent4(results, filters) {
   if (!Array.isArray(results)) return [];
   return results.flatMap((item) => {
     if (!item?.url || !matchesDomainFilter(item.url, filters)) return [];
@@ -12832,7 +12765,7 @@ async function searchWithSerpdive(query, options = {}) {
     results
   };
   if (options.includeContent) {
-    const inlineContent = mapInlineContent5(data.results, filters);
+    const inlineContent = mapInlineContent4(data.results, filters);
     if (inlineContent.length > 0) result.inlineContent = inlineContent;
   }
   return result;
@@ -12852,7 +12785,7 @@ init_activity();
 init_search_answer_formatting();
 init_credential_source();
 var BOCHA_SEARCH_URL = "https://api.bochaai.com/v1/web-search";
-var CONFIG_PATH19 = getWebSearchConfigPath();
+var CONFIG_PATH18 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS14 = 6e4;
 var cachedConfig20 = null;
 function loadConfig19() {
@@ -12871,7 +12804,7 @@ async function requireApiKey6(signal) {
   if (!apiKey) {
     throw new Error(
       `Bocha API key not found. Either:
-  1. Create ${CONFIG_PATH19} with { "bochaApiKey": "your-key" }
+  1. Create ${CONFIG_PATH18} with { "bochaApiKey": "your-key" }
   2. Set BOCHA_API_KEY environment variable
 Create a key at https://open.bochaai.com/`
     );
@@ -12982,54 +12915,18 @@ init_activity();
 init_ssrf_protection();
 init_search_result_count_normalization();
 init_credential_source();
-var CONFIG_PATH21 = getWebSearchConfigPath();
+var CONFIG_PATH20 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS16 = 3e4;
 var cachedConfig22 = null;
 function loadConfig21() {
   return cachedConfig22 ??= loadWebAccessConfig();
 }
-function normalizeBaseUrl3(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    if (url.username || url.password) return null;
-    url.pathname = url.pathname.replace(/\/+$/, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    return null;
-  }
-}
 function getBaseUrl2() {
   const configured = process.env.SEARXNG_BASE_URL;
-  return configured !== void 0 ? normalizeBaseUrl3(configured) : normalizeBaseUrl3(loadConfig21().searxngBaseUrl);
-}
-function isValidHeaderValue(value) {
-  try {
-    new Headers({ "x-pi-web-access-validation": value });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function normalizeHeaders(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const headers = {};
-  for (const [key, headerValue] of Object.entries(value)) {
-    if (typeof headerValue !== "string") continue;
-    const name = key.trim();
-    if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
-    if (!isValidHeaderValue(headerValue)) continue;
-    headers[name] = headerValue.trim();
-  }
-  return headers;
+  return configured !== void 0 ? normalizeSearchBaseUrl(configured) : normalizeSearchBaseUrl(loadConfig21().searxngBaseUrl);
 }
 function getConfiguredHeaders() {
-  return normalizeHeaders(loadConfig21().searxngHeaders);
+  return normalizeSearchHeaders(loadConfig21().searxngHeaders);
 }
 function mergeDefaultHeaders(configured) {
   const headers = { Accept: "application/json" };
@@ -13046,21 +12943,11 @@ function requireBaseUrl2() {
   if (!baseUrl) {
     throw new Error(
       `SearXNG base URL is invalid or missing. Either:
-  1. Create ${CONFIG_PATH21} with { "searxngBaseUrl": "https://search.example.com" }
+  1. Create ${CONFIG_PATH20} with { "searxngBaseUrl": "https://search.example.com" }
   2. Set SEARXNG_BASE_URL to an HTTP(S) URL`
     );
   }
   return baseUrl;
-}
-function buildSearXNGQuery(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) {
-    parts.push(`site:${filters.include[0]}`);
-  } else if (filters.include.length > 1) {
-    parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  }
-  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-  return parts.join(" ");
 }
 function mapTimeRange(recencyFilter) {
   return recencyFilter === "day" || recencyFilter === "week" || recencyFilter === "month" || recencyFilter === "year" ? recencyFilter : null;
@@ -13075,7 +12962,7 @@ async function searchWithSearXNG(query, options = {}) {
   const baseUrl = requireBaseUrl2();
   const numResults = normalizeSearchResultCount(options.numResults);
   const filters = normalizeDomainFilters(options.domainFilter);
-  const searchQuery = buildSearXNGQuery(query, filters);
+  const searchQuery = buildSiteFilteredQuery(query, filters);
   const url = new URL(`${baseUrl}/search`);
   url.searchParams.set("q", searchQuery);
   url.searchParams.set("format", "json");
@@ -13143,33 +13030,17 @@ init_credential_source();
 init_ssrf_protection();
 init_search_answer_formatting();
 init_search_result_count_normalization();
-var CONFIG_PATH22 = getWebSearchConfigPath();
+var CONFIG_PATH21 = getWebSearchConfigPath();
 var DEFAULT_BASE_URL = "https://degoog.org";
 var SEARCH_TIMEOUT_MS17 = 3e4;
 var cachedConfig23 = null;
 function loadConfig22() {
   return cachedConfig23 ??= loadWebAccessConfig();
 }
-function normalizeBaseUrl4(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    if (url.username || url.password) return null;
-    url.pathname = url.pathname.replace(/\/+$/, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    return null;
-  }
-}
 function getBaseUrl3() {
-  if (process.env.DEGOOG_URL !== void 0) return normalizeBaseUrl4(process.env.DEGOOG_URL);
+  if (process.env.DEGOOG_URL !== void 0) return normalizeSearchBaseUrl(process.env.DEGOOG_URL);
   const configured = loadConfig22().degoogBaseUrl;
-  if (configured !== void 0) return normalizeBaseUrl4(configured);
+  if (configured !== void 0) return normalizeSearchBaseUrl(configured);
   return DEFAULT_BASE_URL;
 }
 function normalizeEngines(value) {
@@ -13181,26 +13052,6 @@ function normalizeEngines(value) {
     if (engine && !engines.includes(engine)) engines.push(engine);
   }
   return engines;
-}
-function isValidHeaderValue2(value) {
-  try {
-    new Headers({ "x-pi-web-access-validation": value });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function normalizeHeaders2(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const headers = {};
-  for (const [key, headerValue] of Object.entries(value)) {
-    if (typeof headerValue !== "string") continue;
-    const name = key.trim();
-    if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
-    if (!isValidHeaderValue2(headerValue)) continue;
-    headers[name] = headerValue.trim();
-  }
-  return headers;
 }
 function mergeHeaders(extra) {
   const headers = { Accept: "application/json", "Content-Type": "application/json" };
@@ -13217,22 +13068,12 @@ function requireBaseUrl3() {
   if (!baseUrl) {
     throw new Error(
       `degoog base URL is invalid or missing. Either:
-  1. Create ${CONFIG_PATH22} with { "degoogBaseUrl": "https://degoog.example.com" }
+  1. Create ${CONFIG_PATH21} with { "degoogBaseUrl": "https://degoog.example.com" }
   2. Set DEGOOG_URL to an HTTP(S) URL
   3. Remove the override to use the public instance at https://degoog.org`
     );
   }
   return baseUrl;
-}
-function buildQuery(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) {
-    parts.push(`site:${filters.include[0]}`);
-  } else if (filters.include.length > 1) {
-    parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  }
-  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-  return parts.join(" ");
 }
 function resultText(value) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
@@ -13261,7 +13102,7 @@ async function searchWithDegoog(query, options = {}) {
   const baseUrl = requireBaseUrl3();
   const numResults = normalizeSearchResultCount(options.numResults);
   const filters = normalizeDomainFilters(options.domainFilter);
-  const searchQuery = buildQuery(query, filters);
+  const searchQuery = buildSiteFilteredQuery(query, filters);
   const engines = normalizeEngines(loadConfig22().degoogEngines);
   const apiKey = await resolveCredential({
     provider: "degoog",
@@ -13269,7 +13110,7 @@ async function searchWithDegoog(query, options = {}) {
     environmentValue: process.env.DEGOOG_API_KEY,
     signal: options.signal
   });
-  const customHeaders = normalizeHeaders2(loadConfig22().degoogHeaders);
+  const customHeaders = normalizeSearchHeaders(loadConfig22().degoogHeaders);
   const headers = mergeHeaders(customHeaders);
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   const secrets = [apiKey, ...Object.values(customHeaders)];
@@ -13299,7 +13140,7 @@ async function searchWithDegoog(query, options = {}) {
       if (response.status === 401) {
         throw new SearchHttpError(
           response.status,
-          `degoog search error 401: this instance protects search routes. Set degoogApiKey in ${CONFIG_PATH22} or DEGOOG_API_KEY. ${errorText.slice(0, 200)}`
+          `degoog search error 401: this instance protects search routes. Set degoogApiKey in ${CONFIG_PATH21} or DEGOOG_API_KEY. ${errorText.slice(0, 200)}`
         );
       }
       throw new SearchHttpError(response.status, `degoog search error ${response.status}: ${errorText}`);
@@ -13400,6 +13241,7 @@ async function searchWithDuckDuckGo(query, options = {}) {
     const { document } = parseHTML(await response.text());
     const filters = normalizeDomainFilters(options.domainFilter);
     const results = [];
+    const numResults = normalizeSearchResultCount(options.numResults);
     let parseableResults = 0;
     for (const container of document.querySelectorAll(".result")) {
       if (container.classList.contains("result--ad")) continue;
@@ -13412,7 +13254,7 @@ async function searchWithDuckDuckGo(query, options = {}) {
       if (!matchesDomainFilter(resultUrl, filters)) continue;
       const snippet = container.querySelector(".result__snippet")?.textContent?.trim() ?? "";
       results.push({ title, url: resultUrl, snippet });
-      if (results.length >= normalizeSearchResultCount(options.numResults)) break;
+      if (results.length >= numResults) break;
     }
     if (parseableResults === 0) {
       throw new Error("DuckDuckGo returned no parseable results (invalid response)");
@@ -13485,7 +13327,7 @@ function parseResponse2(value) {
     if (!url) throw invalidResponse5(`expected data.results[${index}].url to be non-empty`);
     results.push({ title, url, snippet, content: typeof content === "string" ? content : "" });
   }
-  return { code: 0, data: { results, metadata: data.metadata } };
+  return results;
 }
 function isAnySearchAvailable() {
   return true;
@@ -13536,7 +13378,7 @@ async function searchWithAnySearch(query, options = {}) {
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
-  const retained = data.data.results.filter((result) => matchesDomainFilter(result.url, filters)).slice(0, numResults);
+  const retained = data.filter((result) => matchesDomainFilter(result.url, filters)).slice(0, numResults);
   const results = retained.map((result) => ({
     title: result.title,
     url: result.url,
@@ -13560,7 +13402,7 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var XCRAWL_API_URL = "https://run.xcrawl.com/v1/serp";
-var CONFIG_PATH23 = getWebSearchConfigPath();
+var CONFIG_PATH22 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS20 = 6e4;
 var cachedConfig25 = null;
 function loadConfig24() {
@@ -13634,7 +13476,7 @@ async function searchWithXCrawl(query, options = {}) {
   const filters = normalizeDomainFilters(options.domainFilter);
   if (!apiKey) {
     throw new Error(
-      "XCrawl search requires an API key. Set xcrawlApiKey in " + CONFIG_PATH23 + " or export XCRAWL_API_KEY. Get one at https://dash.xcrawl.com/"
+      "XCrawl search requires an API key. Set xcrawlApiKey in " + CONFIG_PATH22 + " or export XCRAWL_API_KEY. Get one at https://dash.xcrawl.com/"
     );
   }
   const body = { engine: "google_search", q: query };
@@ -13698,13 +13540,14 @@ async function searchWithXCrawl(query, options = {}) {
 }
 
 // xai-search.ts
+init_search_answer_formatting();
 init_utils();
 init_activity();
 init_domain_filter_normalization();
 init_search_types();
 init_credential_source();
 var XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
-var CONFIG_PATH24 = getWebSearchConfigPath();
+var CONFIG_PATH23 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS21 = 6e4;
 var WEB_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.5", "grok-4.3", "grok-build-0.1"];
 var X_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.6", ...WEB_SEARCH_AUTH_MODEL_CANDIDATES];
@@ -13858,27 +13701,6 @@ function addSources(results, seen, sources) {
   if (!Array.isArray(sources)) return;
   for (const source of sources) addSource(results, seen, source);
 }
-function extractSnippetAround2(text4, start, end) {
-  if (typeof start !== "number" || typeof end !== "number" || !text4) return "";
-  const before = Math.max(0, start - 100);
-  const after = Math.min(text4.length, end + 100);
-  const snippet = text4.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
-  return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
-}
-function extractAnswer2(output) {
-  const parts = [];
-  for (const item of output) {
-    if (!item || typeof item !== "object" || item.type !== "message") continue;
-    const content = item.content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text4 = part.text;
-      if (typeof text4 === "string" && text4.trim().length > 0) parts.push(text4);
-    }
-  }
-  return parts.join("\n").trim();
-}
 function extractSearchResults2(output, citations, numResults, domainFilter) {
   const results = [];
   const seenUrls = /* @__PURE__ */ new Set();
@@ -13901,7 +13723,7 @@ function extractSearchResults2(output, citations, numResults, domainFilter) {
           seenUrls,
           annotation.url,
           annotation.title,
-          hasDomains ? "" : extractSnippetAround2(text4, annotation.start_index, annotation.end_index)
+          hasDomains ? "" : extractSnippetAround(text4, annotation.start_index, annotation.end_index)
         );
       }
     }
@@ -13928,7 +13750,7 @@ async function searchWithXai(query, options = {}, ctx) {
     throw new Error(
       `xAI search unavailable. Either:
   1. Use /login to sign in with a SuperGrok or X Premium subscription
-  2. Create ${CONFIG_PATH24} with { "xaiApiKey": "your-key" }
+  2. Create ${CONFIG_PATH23} with { "xaiApiKey": "your-key" }
   3. Set XAI_API_KEY environment variable`
     );
   }
@@ -13961,7 +13783,7 @@ async function searchWithXai(query, options = {}, ctx) {
       throw new Error(`xAI API returned invalid JSON: ${message}`);
     }
     const output = Array.isArray(parsed.output) ? parsed.output : [];
-    const answer = extractAnswer2(output);
+    const answer = extractAnswer(output);
     const results = extractSearchResults2(output, parsed.citations, options.numResults, options.domainFilter);
     if (!answer && results.length === 0) {
       throw new Error(`xAI ${tools.join("+")} returned no answer or sources`);
@@ -13993,15 +13815,9 @@ init_search_result_count_normalization();
 init_search_types();
 init_credential_source();
 var BRIGHTDATA_API_URL = "https://api.brightdata.com/request";
-var CONFIG_PATH25 = getWebSearchConfigPath();
+var CONFIG_PATH24 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS22 = 6e4;
 var ZONE_PATTERN = /^[A-Za-z0-9_-]+$/;
-var RECENCY_TBS = {
-  day: "qdr:d",
-  week: "qdr:w",
-  month: "qdr:m",
-  year: "qdr:y"
-};
 var cachedConfig27 = null;
 function loadConfig26() {
   return cachedConfig27 ??= loadWebAccessConfig();
@@ -14019,7 +13835,7 @@ async function requireApiKey8(signal) {
   if (!apiKey) {
     throw new Error(
       `Bright Data API key not found. Either:
-  1. Create ${CONFIG_PATH25} with { "brightdataApiKey": "your-key" }
+  1. Create ${CONFIG_PATH24} with { "brightdataApiKey": "your-key" }
   2. Set BRIGHTDATA_API_KEY environment variable
 Get a key at https://brightdata.com/cp/setting/users`
     );
@@ -14060,28 +13876,16 @@ Create or rename one at https://brightdata.com/cp/zones`
   }
   throw new Error(
     `Bright Data SERP zone is invalid or missing. Either:
-  1. Create ${CONFIG_PATH25} with { "brightdataSerpZone": "your_serp_zone" }
+  1. Create ${CONFIG_PATH24} with { "brightdataSerpZone": "your_serp_zone" }
   2. Set BRIGHTDATA_SERP_ZONE environment variable
 The zone must be of Bright Data type \`serp\`; a Web Unlocker zone is a different product and does not return SERP JSON.
 Create one at https://brightdata.com/cp/zones`
   );
 }
-function buildSearchQuery2(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) {
-    parts.push(`site:${filters.include[0]}`);
-  } else if (filters.include.length > 1) {
-    parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  }
-  for (const domain of filters.exclude) {
-    parts.push(`-site:${domain}`);
-  }
-  return parts.join(" ");
-}
 function buildSerpUrl(searchQuery, numResults, recencyFilter) {
   const params = new URLSearchParams({ q: searchQuery });
   params.set("num", String(Math.min(numResults + 5, 20)));
-  const tbs = recencyFilter ? RECENCY_TBS[recencyFilter] : void 0;
+  const tbs = recencyFilter ? GOOGLE_RECENCY_TBS[recencyFilter] : void 0;
   if (tbs) params.set("tbs", tbs);
   params.set("brd_json", "1");
   return `https://www.google.com/search?${params.toString()}`;
@@ -14132,17 +13936,14 @@ function parseSerpResponse(value, zone, apiKey) {
     );
   }
   if (!Array.isArray(envelope.organic)) throw invalidResponse7(zone, "expected organic array");
-  const organic = [];
   for (const [index, entry] of envelope.organic.entries()) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw invalidResponse7(zone, `expected organic[${index}] object`);
     }
-    organic.push(entry);
   }
-  return { organic };
+  return envelope.organic;
 }
 function mapResults4(organic, numResults, filters) {
-  if (!Array.isArray(organic)) return [];
   const mapped = [];
   for (const item of organic) {
     const url = typeof item.link === "string" ? item.link.trim() : "";
@@ -14174,7 +13975,7 @@ async function searchWithBrightData(query, options = {}) {
   const apiKey = await requireApiKey8(options.signal);
   const numResults = normalizeSearchResultCount(options.numResults);
   const filters = normalizeDomainFilters(options.domainFilter);
-  const searchQuery = buildSearchQuery2(query, filters);
+  const searchQuery = buildSiteFilteredQuery(query, filters);
   const body = {
     url: buildSerpUrl(searchQuery, numResults, options.recencyFilter),
     zone,
@@ -14232,7 +14033,7 @@ async function searchWithBrightData(query, options = {}) {
     throw err;
   }
   activityMonitor.logComplete(activityId, response.status);
-  const results = mapResults4(data.organic, numResults, filters);
+  const results = mapResults4(data, numResults, filters);
   return { answer: formatSearchResultsAsAnswer(results), results };
 }
 
@@ -14245,14 +14046,8 @@ init_activity();
 init_search_answer_formatting();
 init_credential_source();
 var SERPBASE_API_URL = "https://api.serpbase.dev/google/search";
-var CONFIG_PATH26 = getWebSearchConfigPath();
+var CONFIG_PATH25 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS23 = 6e4;
-var RECENCY_TBS2 = {
-  day: "qdr:d",
-  week: "qdr:w",
-  month: "qdr:m",
-  year: "qdr:y"
-};
 var cachedConfig28 = null;
 function loadConfig27() {
   return cachedConfig28 ??= loadWebAccessConfig();
@@ -14270,19 +14065,12 @@ async function requireApiKey9(signal) {
   if (!apiKey) {
     throw new Error(
       `SerpBase API key not found. Either:
-  1. Create ${CONFIG_PATH26} with { "serpbaseApiKey": "your-key" }
+  1. Create ${CONFIG_PATH25} with { "serpbaseApiKey": "your-key" }
   2. Set SERPBASE_API_KEY environment variable
 Get a key at https://serpbase.dev`
     );
   }
   return apiKey;
-}
-function buildQuery2(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-  if (filters.include.length > 1) parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-  return parts.join(" ");
 }
 function errorMessage15(err) {
   return err instanceof Error ? err.message : String(err);
@@ -14299,7 +14087,7 @@ function parseResponse4(value) {
   }
   const organic = envelope.organic_results ?? envelope.organic ?? envelope.results;
   if (!Array.isArray(organic)) throw invalidResponse8("expected organic_results array");
-  return { ...envelope, organic_results: organic };
+  return organic;
 }
 function isSerpBaseAvailable() {
   return hasCredentialSource({ provider: "SerpBase", configuredValue: loadConfig27().serpbaseApiKey, environmentValue: process.env.SERPBASE_API_KEY });
@@ -14309,10 +14097,10 @@ async function searchWithSerpBase(query, options = {}) {
   const numResults = normalizeSearchResultCount(options.numResults);
   const filters = normalizeDomainFilters(options.domainFilter);
   const url = new URL(SERPBASE_API_URL);
-  url.searchParams.set("q", buildQuery2(query, filters));
+  url.searchParams.set("q", buildSiteFilteredQuery(query, filters));
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("num", String(numResults));
-  if (options.recencyFilter && RECENCY_TBS2[options.recencyFilter]) url.searchParams.set("tbs", RECENCY_TBS2[options.recencyFilter]);
+  if (options.recencyFilter && GOOGLE_RECENCY_TBS[options.recencyFilter]) url.searchParams.set("tbs", GOOGLE_RECENCY_TBS[options.recencyFilter]);
   const activityId = activityMonitor.logStart({ type: "api", query });
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS23);
   try {
@@ -14333,7 +14121,7 @@ async function searchWithSerpBase(query, options = {}) {
     }
     const data = parseResponse4(rawData);
     const results = [];
-    for (const item of data.organic_results ?? []) {
+    for (const item of data) {
       if (!item || typeof item !== "object") continue;
       const resultUrl = typeof item.link === "string" ? item.link : typeof item.url === "string" ? item.url : "";
       if (!resultUrl || !matchesDomainFilter(resultUrl, filters)) continue;
@@ -14369,14 +14157,8 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPAPI_SEARCH_URL = "https://serpapi.com/search.json";
-var CONFIG_PATH27 = getWebSearchConfigPath();
+var CONFIG_PATH26 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS24 = 6e4;
-var RECENCY_TBS3 = {
-  day: "qdr:d",
-  week: "qdr:w",
-  month: "qdr:m",
-  year: "qdr:y"
-};
 var cachedConfig29 = null;
 function loadConfig28() {
   return cachedConfig29 ??= loadWebAccessConfig();
@@ -14394,19 +14176,12 @@ async function requireApiKey10(signal) {
   if (!apiKey) {
     throw new Error(
       `SerpApi API key not found. Either:
-  1. Create ${CONFIG_PATH27} with { "serpapiApiKey": "your-key" }
+  1. Create ${CONFIG_PATH26} with { "serpapiApiKey": "your-key" }
   2. Set SERPAPI_KEY environment variable
 Get a key at https://serpapi.com/manage-api-key`
     );
   }
   return apiKey;
-}
-function buildQuery3(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-  if (filters.include.length > 1) parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-  return parts.join(" ");
 }
 function errorMessage16(err) {
   return err instanceof Error ? err.message : String(err);
@@ -14431,10 +14206,10 @@ async function searchWithSerpApi(query, options = {}) {
   const requestCount = options.domainFilter?.length ? Math.min(20, numResults + 5) : numResults;
   const url = new URL(SERPAPI_SEARCH_URL);
   url.searchParams.set("engine", "google");
-  url.searchParams.set("q", buildQuery3(query, filters));
+  url.searchParams.set("q", buildSiteFilteredQuery(query, filters));
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("num", String(requestCount));
-  if (options.recencyFilter) url.searchParams.set("tbs", RECENCY_TBS3[options.recencyFilter]);
+  if (options.recencyFilter) url.searchParams.set("tbs", GOOGLE_RECENCY_TBS[options.recencyFilter]);
   const activityId = activityMonitor.logStart({ type: "api", query });
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS24);
   let response;
@@ -14499,14 +14274,8 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPER_SEARCH_URL = "https://google.serper.dev/search";
-var CONFIG_PATH28 = getWebSearchConfigPath();
+var CONFIG_PATH27 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS25 = 6e4;
-var RECENCY_TBS4 = {
-  day: "qdr:d",
-  week: "qdr:w",
-  month: "qdr:m",
-  year: "qdr:y"
-};
 var cachedConfig30 = null;
 function loadConfig29() {
   return cachedConfig30 ??= loadWebAccessConfig();
@@ -14524,19 +14293,12 @@ async function requireApiKey11(signal) {
   if (!apiKey) {
     throw new Error(
       `Serper API key not found. Either:
-  1. Create ${CONFIG_PATH28} with { "serperApiKey": "your-key" }
+  1. Create ${CONFIG_PATH27} with { "serperApiKey": "your-key" }
   2. Set SERPER_API_KEY environment variable
 Get a key at https://serper.dev`
     );
   }
   return apiKey;
-}
-function buildQuery4(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-  if (filters.include.length > 1) parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-  return parts.join(" ");
 }
 function invalidResponse10(message) {
   return new Error(`Serper API returned invalid response: ${message}`);
@@ -14561,7 +14323,11 @@ async function searchWithSerper(query, options = {}) {
     response = await fetchWithCredentialRedirects(SERPER_SEARCH_URL, {
       method: "POST",
       headers: { "X-API-KEY": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ q: buildQuery4(query, filters), num: requestCount, ...options.recencyFilter ? { tbs: RECENCY_TBS4[options.recencyFilter] } : {} }),
+      body: JSON.stringify({
+        q: buildSiteFilteredQuery(query, filters),
+        num: requestCount,
+        ...options.recencyFilter ? { tbs: GOOGLE_RECENCY_TBS[options.recencyFilter] } : {}
+      }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS25), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS25)
     }, ["X-API-KEY"]);
   } catch (err) {
@@ -14615,14 +14381,8 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var SERPLY_SEARCH_URL = "https://api.serply.io/v1/search";
-var CONFIG_PATH29 = getWebSearchConfigPath();
+var CONFIG_PATH28 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS26 = 6e4;
-var RECENCY_TBS5 = {
-  day: "qdr:d",
-  week: "qdr:w",
-  month: "qdr:m",
-  year: "qdr:y"
-};
 var cachedConfig31 = null;
 function loadConfig30() {
   return cachedConfig31 ??= loadWebAccessConfig();
@@ -14640,19 +14400,12 @@ async function requireApiKey12(signal) {
   if (!apiKey) {
     throw new Error(
       `Serply API key not found. Either:
-  1. Create ${CONFIG_PATH29} with { "serplyApiKey": "your-key" }
+  1. Create ${CONFIG_PATH28} with { "serplyApiKey": "your-key" }
   2. Set SERPLY_API_KEY environment variable
 Get a key at https://serply.io`
     );
   }
   return apiKey;
-}
-function buildQuery5(query, filters) {
-  const parts = [query];
-  if (filters.include.length === 1) parts.push(`site:${filters.include[0]}`);
-  if (filters.include.length > 1) parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
-  for (const domain of filters.exclude) parts.push(`-site:${domain}`);
-  return parts.join(" ");
 }
 function errorMessage17(err) {
   return err instanceof Error ? err.message : String(err);
@@ -14676,9 +14429,9 @@ async function searchWithSerply(query, options = {}) {
   const filters = normalizeDomainFilters(options.domainFilter);
   const requestCount = options.domainFilter?.length ? Math.min(20, numResults + 5) : numResults;
   const url = new URL(SERPLY_SEARCH_URL);
-  url.searchParams.set("q", buildQuery5(query, filters));
+  url.searchParams.set("q", buildSiteFilteredQuery(query, filters));
   url.searchParams.set("num", String(requestCount));
-  if (options.recencyFilter) url.searchParams.set("tbs", RECENCY_TBS5[options.recencyFilter]);
+  if (options.recencyFilter) url.searchParams.set("tbs", GOOGLE_RECENCY_TBS[options.recencyFilter]);
   const activityId = activityMonitor.logStart({ type: "api", query });
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS26);
   let response;
@@ -14860,7 +14613,6 @@ var MCP_URLS = {
 };
 var RECENCY = { day: "oneDay", week: "oneWeek", month: "oneMonth", year: "oneYear" };
 var SEARCH_TIMEOUT_MS28 = 6e4;
-var CONFIG_PATH30 = getWebAccessConfigPath();
 function loadConfig31() {
   return loadWebAccessConfig();
 }
@@ -14994,7 +14746,7 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var VALYU_SEARCH_URL = "https://api.valyu.ai/v1/search";
-var CONFIG_PATH31 = getWebSearchConfigPath();
+var CONFIG_PATH29 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS29 = 6e4;
 var MAX_SNIPPET_CHARS = 2500;
 var MAX_CONTENT_CHARS = 4e3;
@@ -15015,15 +14767,15 @@ async function requireApiKey13(signal) {
   if (!apiKey) {
     throw new Error(
       `Valyu API key not found. Either:
-  1. Create ${CONFIG_PATH31} with { "valyuApiKey": "your-key" }
+  1. Create ${CONFIG_PATH29} with { "valyuApiKey": "your-key" }
   2. Set VALYU_API_KEY environment variable
 Get a key at https://platform.valyu.ai`
     );
   }
   return apiKey;
 }
-function mapDomainFilter8(domainFilter) {
-  const { include: included_sources, exclude: excluded_sources } = normalizeDomainFilters(domainFilter);
+function mapDomainFilter5(domains) {
+  const { include: included_sources, exclude: excluded_sources } = domains;
   return {
     ...included_sources.length > 0 ? { included_sources } : {},
     ...excluded_sources.length > 0 ? { excluded_sources } : {}
@@ -15061,7 +14813,7 @@ async function searchWithValyu(query, options = {}) {
     response = await fetchWithCredentialRedirects(VALYU_SEARCH_URL, {
       method: "POST",
       headers: { "x-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query, max_num_results: numResults, ...mapDomainFilter8(options.domainFilter), ...startDate ? { start_date: startDate } : {} }),
+      body: JSON.stringify({ query, max_num_results: numResults, ...mapDomainFilter5(domains), ...startDate ? { start_date: startDate } : {} }),
       signal: options.signal ? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS29), options.signal]) : AbortSignal.timeout(SEARCH_TIMEOUT_MS29)
     }, ["x-api-key"]);
   } catch (err) {
@@ -15139,7 +14891,7 @@ async function getApiKey25(signal) {
     signal
   });
 }
-function buildQuery6(query, filters, site) {
+function buildQuery(query, filters, site) {
   const parts = [query];
   if (!site && filters.include.length > 1) parts.push(`(${filters.include.map((domain) => `site:${domain}`).join(" OR ")})`);
   for (const domain of filters.exclude) parts.push(`-site:${domain}`);
@@ -15173,7 +14925,7 @@ async function searchWithKeenable(query, options = {}) {
   const site = filters.include.length === 1 ? filters.include[0] : void 0;
   const hasDomainClauses = filters.include.length > 1 || filters.exclude.length > 0;
   const body = {
-    query: buildQuery6(query, filters, site),
+    query: buildQuery(query, filters, site),
     max_results: hasDomainClauses ? Math.min(MAX_REQUEST_RESULTS, numResults + 5) : numResults,
     snippet_max_length: MAX_SNIPPET_CHARS2,
     ...site ? { site } : {},
@@ -15262,7 +15014,7 @@ init_search_answer_formatting();
 init_search_result_count_normalization();
 init_credential_source();
 var CERAMIC_SEARCH_URL = "https://api.ceramic.ai/search";
-var CONFIG_PATH32 = getWebSearchConfigPath();
+var CONFIG_PATH30 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS31 = 3e4;
 var MAX_REQUEST_RESULTS2 = 20;
 var REQUEST_DESCRIPTION_CHARS = 1e3;
@@ -15281,14 +15033,14 @@ async function requireApiKey14(signal) {
   if (!apiKey) {
     throw new Error(
       `Ceramic API key not found. Either:
-  1. Create ${CONFIG_PATH32} with { "ceramicApiKey": "your-key" }
+  1. Create ${CONFIG_PATH30} with { "ceramicApiKey": "your-key" }
   2. Set CERAMIC_API_KEY environment variable
 Get a key at https://platform.ceramic.ai/keys`
     );
   }
   return apiKey;
 }
-function buildQuery7(query, filters) {
+function buildQuery2(query, filters) {
   if (filters.include.length === 0) return query;
   const sites = filters.include.map((domain) => `site:${domain}`);
   return `${query} ${sites.length === 1 ? sites[0] : `(${sites.join(" OR ")})`}`;
@@ -15329,7 +15081,7 @@ async function searchWithCeramic(query, options = {}) {
   const filters = normalizeDomainFilters(options.domainFilter);
   const hasDomainFilters = filters.include.length > 0 || filters.exclude.length > 0;
   const body = {
-    query: buildQuery7(query, filters),
+    query: buildQuery2(query, filters),
     maxResults: hasDomainFilters ? Math.min(MAX_REQUEST_RESULTS2, numResults + 5) : numResults,
     maxDescriptionLength: REQUEST_DESCRIPTION_CHARS
   };
@@ -15559,7 +15311,7 @@ init_search_types();
 init_credential_source();
 init_search_result_count_normalization();
 var MISTRAL_CONVERSATIONS_URL = "https://api.mistral.ai/v1/conversations";
-var CONFIG_PATH33 = getWebSearchConfigPath();
+var CONFIG_PATH31 = getWebSearchConfigPath();
 var SEARCH_TIMEOUT_MS33 = 6e4;
 var DEFAULT_SEARCH_MODEL = "mistral-small-latest";
 var DEFAULT_SEARCH_TOOL = "web_search";
@@ -15670,7 +15422,7 @@ async function getApiKey26(signal) {
   if (!apiKey) {
     throw new Error(
       `Mistral API key not found. Either:
-  1. Create ${CONFIG_PATH33} with { "mistralApiKey": "your-key" }
+  1. Create ${CONFIG_PATH31} with { "mistralApiKey": "your-key" }
   2. Set MISTRAL_API_KEY environment variable
 Get a key at https://console.mistral.ai/api-keys`
     );
@@ -15757,7 +15509,7 @@ var SearchProviderError = class extends Error {
     this.causeError = cause;
   }
 };
-var CONFIG_PATH34 = getWebSearchConfigPath();
+var CONFIG_PATH32 = getWebSearchConfigPath();
 var VALID_ROUTING_KINDS = ["transient", "quota", "network", "invalid-response", "unsupported"];
 var cachedSearchConfig = null;
 function getSearchConfig() {
@@ -15973,7 +15725,7 @@ async function searchWithResolvedProvider(provider, query, options, useCurrentMo
     if (result2) return { ...result2, provider };
     throw new Error(
       `Gemini search unavailable. Either:
-  1. Configure geminiApiKey in ${CONFIG_PATH34} or set GEMINI_API_KEY
+  1. Configure geminiApiKey in ${CONFIG_PATH32} or set GEMINI_API_KEY
   2. Set GOOGLE_GEMINI_BASE_URL + CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing
   3. Set geminiAuth to "adc" in web-search.json with a Google Cloud ADC + project/location
   4. Sign into gemini.google.com in a supported Chromium-based browser`
@@ -16313,7 +16065,7 @@ async function searchWithoutDomainProjection(query, options) {
   throw new Error(
     `No search provider available. Either:
   1. Use /login to sign in with a Codex subscription for OpenAI web search
-  2. Set openaiApiKey, braveApiKey, parallelApiKey, tinyfishApiKey, search1apiApiKey, searchinfinityApiKey, queritApiKey, tavilyApiKey, jinaApiKey, serpdiveApiKey, kagiApiKey, ollamaApiKey, perplexityApiKey, exaApiKey, geminiApiKey, bochaApiKey, or cloudflareApiKey in ${CONFIG_PATH34}
+  2. Set openaiApiKey, braveApiKey, parallelApiKey, tinyfishApiKey, search1apiApiKey, searchinfinityApiKey, queritApiKey, tavilyApiKey, jinaApiKey, serpdiveApiKey, kagiApiKey, ollamaApiKey, perplexityApiKey, exaApiKey, geminiApiKey, bochaApiKey, or cloudflareApiKey in ${CONFIG_PATH32}
   3. Set OPENAI_API_KEY, BRAVE_API_KEY, PARALLEL_API_KEY, TINYFISH_API_KEY, SEARCH1API_KEY, SEARCHINFINITY_API_KEY, QUERIT_API_KEY, TAVILY_API_KEY, FIRECRAWL_BASE_URL, JINA_API_KEY, SERPDIVE_API_KEY, KAGI_API_KEY, BOCHA_API_KEY, OLLAMA_API_KEY, SEARXNG_BASE_URL, EXA_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, or CLOUDFLARE_API_KEY env vars
   4. Set GOOGLE_GEMINI_BASE_URL with CLOUDFLARE_API_KEY for Cloudflare AI Gateway routing
   5. Sign into gemini.google.com in a supported Chromium-based browser
@@ -16331,7 +16083,7 @@ async function search(query, options = {}) {
 
 // storage.ts
 init_utils();
-import { closeSync as closeSync2, constants, fchmodSync, fstatSync as fstatSync2, fsyncSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync5, readdirSync as readdirSync3, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { closeSync as closeSync2, constants, fchmodSync, fstatSync, fsyncSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync5, readdirSync as readdirSync3, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join as join6 } from "node:path";
 var CACHE_TTL_MS = 60 * 60 * 1e3;
@@ -16432,7 +16184,7 @@ function safeFetchCacheDir(create) {
   if (process.platform !== "win32") {
     const fd = openSync2(dir, constants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     try {
-      const opened = fstatSync2(fd);
+      const opened = fstatSync(fd);
       if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino) {
         throw new Error("Fetched content cache directory changed while opening");
       }
@@ -16452,7 +16204,7 @@ function openRegularFile(path) {
   if (before.isSymbolicLink() || !before.isFile()) throw new Error("Fetched content cache entry is not a regular file");
   const fd = openSync2(path, constants.O_RDONLY | O_NOFOLLOW);
   try {
-    const info = fstatSync2(fd);
+    const info = fstatSync(fd);
     if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) {
       throw new Error("Fetched content cache entry changed while opening");
     }
@@ -16553,8 +16305,8 @@ function writeFetchCache(data) {
   let renamed = false;
   try {
     fd = openSync2(tmpPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | O_NOFOLLOW, 384);
-    const tmpInfo = fstatSync2(fd);
-    tmpFile = { name: tmpName, size: tmpInfo.size, mtimeMs: tmpInfo.mtimeMs, dev: tmpInfo.dev, ino: tmpInfo.ino };
+    const tmpInfo = fstatSync(fd);
+    tmpFile = { dev: tmpInfo.dev, ino: tmpInfo.ino };
     enforceMode(fd, 384);
     writeFileSync2(fd, serialized, "utf8");
     fsyncSync(fd);
@@ -16692,7 +16444,7 @@ function deleteResult(id) {
       if (dir && path) {
         const info = lstatSync2(path);
         if (!info.isSymbolicLink() && info.isFile()) {
-          unlinkCacheFile(dir, { name: data.fetchCache.key, size: info.size, mtimeMs: info.mtimeMs, dev: info.dev, ino: info.ino });
+          unlinkCacheFile(dir, { name: data.fetchCache.key, dev: info.dev, ino: info.ino });
         }
       }
     } catch {
@@ -16939,7 +16691,6 @@ var CSS = `
   --btn-primary-fg: #18181e;
   --btn-secondary: #252530;
   --btn-secondary-hover: #2b2b37;
-  --timer-bg: #252530;
   --timer-fg: #909098;
   --timer-warn-bg: rgba(240, 198, 116, 0.15);
   --timer-warn-fg: #f0c674;
@@ -16977,7 +16728,6 @@ var CSS = `
     --btn-primary-fg: #ffffff;
     --btn-secondary: #e4e4e8;
     --btn-secondary-hover: #d4d4d8;
-    --timer-bg: #e4e4e8;
     --timer-fg: #6c6c74;
     --timer-warn-bg: rgba(217, 119, 6, 0.10);
     --timer-warn-fg: #92400e;
@@ -17453,11 +17203,6 @@ main {
   color: #b4befe;
   background: rgba(180, 190, 254, 0.14);
   border-color: rgba(180, 190, 254, 0.3);
-}
-.provider-tag.provider-unknown {
-  color: var(--fg-muted);
-  background: var(--bg-elevated);
-  border-color: var(--border-muted);
 }
 .result-card-meta {
   font-size: 12px;
@@ -18180,7 +17925,6 @@ var SCRIPT = `(function() {
   var providers = DATA.providers;
   var providerLabels = DATA.providerLabels;
   var availProviders = DATA.availableProviders && typeof DATA.availableProviders === "object" ? DATA.availableProviders : {};
-  var workflow = "summary-review";
   var initialDefaultProvider = typeof DATA.defaultProvider === "string" ? DATA.defaultProvider : "exa";
   if (providers.indexOf(initialDefaultProvider) === -1) initialDefaultProvider = "exa";
   var initialSearchProvider = typeof DATA.searchProvider === "string" ? DATA.searchProvider.toLowerCase() : initialDefaultProvider;
@@ -18449,10 +18193,7 @@ var SCRIPT = `(function() {
         summaryProviders.push(provider);
       }
 
-      var label = typeof model.label === "string" && model.label.trim().length > 0
-        ? model.label.trim()
-        : value;
-      summaryModelsByProvider[provider].push({ value: value, label: label });
+      summaryModelsByProvider[provider].push({ value: value });
     }
   }
 
@@ -19493,7 +19234,7 @@ var SCRIPT = `(function() {
     }
   }
 
-  function applyResultEvent(data) {
+  function applyResultEvent(data, response) {
     if (!data) return;
     lastLiveEventAt = Date.now();
     clearLiveUpdateWarning();
@@ -19509,32 +19250,18 @@ var SCRIPT = `(function() {
     } else if (card.dataset.completed === "true") {
       return;
     }
-    applyResponseToCard(card, data, queryText, data.provider, slotId);
+    applyResponseToCard(card, response === undefined ? data : response, queryText, data.provider, slotId);
   }
 
   function applySearchErrorEvent(data) {
     if (!data) return;
-    lastLiveEventAt = Date.now();
-    clearLiveUpdateWarning();
-
-    var queryText = data.query || queries[data.queryIndex] || "";
-    var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
-    if (typeof slotId !== "number") slotId = data.queryIndex;
-    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
-    if (!card) {
-      card = createSearchingCard(queryText, data.provider);
-      card.dataset.qi = data.queryIndex;
-      insertResultCard(card, slotId, null);
-    } else if (card.dataset.completed === "true") {
-      return;
-    }
-    applyResponseToCard(card, {
+    applyResultEvent(data, {
       queryIndex: data.queryIndex,
       answer: "",
       results: [],
       error: data.error || "Search failed",
       provider: data.provider,
-    }, queryText, data.provider, slotId);
+    });
   }
 
   function applyDoneEvent() {
@@ -19855,7 +19582,6 @@ var SCRIPT = `(function() {
   }
 
   function maybeAutoGenerateSummary() {
-    if (workflow !== "summary-review") return;
     if (!searchesDone) return;
     if (stage !== "results") return;
     if (submitted || timerExpired || submitInFlight) return;
@@ -20378,9 +20104,6 @@ function normalizeSelectedIndices(value, options) {
     seen.add(item);
     normalized.push(item);
   }
-  if (!options.allowEmpty && normalized.length === 0) {
-    return { ok: false, error: "Invalid selection" };
-  }
   return { ok: true, indices: normalized };
 }
 function normalizeSummaryMeta(value) {
@@ -20430,7 +20153,6 @@ function startCuratorServer(options, callbacks) {
   let stateChangedAt = Date.now();
   let clientIdleMs = null;
   let clientTimeoutSeconds = timeout;
-  let completed = false;
   let watchdog = null;
   let state = "SEARCHING";
   let sseResponse = null;
@@ -20447,8 +20169,7 @@ function startCuratorServer(options, callbacks) {
     summarizeAbortController = null;
   };
   const markCompleted = () => {
-    if (completed) return false;
-    completed = true;
+    if (state === "COMPLETED") return false;
     state = "COMPLETED";
     stateChangedAt = Date.now();
     if (watchdog) {
@@ -20723,7 +20444,7 @@ data: ${JSON.stringify(data)}
         const requestId = ++summarizeRequestSeq;
         try {
           const result = await callbacks.onSummarize(parsed.indices, controller.signal, model, feedback);
-          if (requestId !== summarizeRequestSeq || completed) {
+          if (requestId !== summarizeRequestSeq || state === "COMPLETED") {
             sendJson(res, 409, { ok: false, error: "Summarize request superseded" });
             return;
           }
@@ -20875,7 +20596,7 @@ data: ${JSON.stringify(data)}
       }
       const url = `http://${networkConfig.host}:${addr.port}/?session=${sessionToken}`;
       watchdog = setInterval(() => {
-        if (completed) return;
+        if (state === "COMPLETED") return;
         if (!browserConnected) {
           const noBrowserTimeoutMs = Math.max(5e3, getEffectiveTimeoutMs());
           if (state !== "RESULT_SELECTION") return;
@@ -20908,21 +20629,21 @@ data: ${JSON.stringify(data)}
           }
         },
         pushResult: (queryIndex, data) => {
-          if (completed) return;
+          if (state === "COMPLETED") return;
           nextQueryIndex = Math.max(nextQueryIndex, queryIndex + 1);
           const eventData = { ...data, queryIndex, query: data.query ?? queries[queryIndex] ?? "" };
           retainStreamedEvent({ event: "result", data: eventData });
           sendSSE("result", eventData);
         },
         pushError: (queryIndex, error, provider, meta) => {
-          if (completed) return;
+          if (state === "COMPLETED") return;
           nextQueryIndex = Math.max(nextQueryIndex, queryIndex + 1);
           const eventData = { queryIndex, query: meta?.query ?? queries[queryIndex] ?? "", error, provider, slotIndex: meta?.slotIndex };
           retainStreamedEvent({ event: "search-error", data: eventData });
           sendSSE("search-error", eventData);
         },
         searchesDone: () => {
-          if (completed) return;
+          if (state === "COMPLETED") return;
           searchStreamDone = true;
           sendSSE("done", {});
           state = "RESULT_SELECTION";
@@ -21074,13 +20795,12 @@ function buildDeterministicSummaryLines(results) {
 }
 function buildDeterministicSummary(results) {
   const summary = buildDeterministicSummaryLines(results).join("\n").trim();
-  const nonEmptySummary = summary.length > 0 ? summary : "No completed search results were available when the curator session finished.\n\nSources\n- None";
   return {
-    summary: nonEmptySummary,
+    summary,
     meta: {
       model: null,
       durationMs: 0,
-      tokenEstimate: estimateTokens(nonEmptySummary),
+      tokenEstimate: estimateTokens(summary),
       fallbackUsed: true,
       fallbackReason: "deterministic-submit-fallback",
       phase: "deterministic-fallback",
@@ -21872,7 +21592,7 @@ function literalMatches(text4, query, caseInsensitive) {
   const needle = caseInsensitive ? query.toLocaleLowerCase() : query;
   const matches = [];
   for (let start = haystack.indexOf(needle); start >= 0; start = haystack.indexOf(needle, start + Math.max(needle.length, 1))) {
-    matches.push({ query, start, end: start + query.length });
+    matches.push({ start, end: start + query.length });
   }
   return matches;
 }
@@ -21885,19 +21605,21 @@ function fuzzyMatches(text4, query) {
     const paragraphText = paragraph[0];
     if (paragraphText.trim().length === 0 || paragraph.index === void 0) continue;
     const tokens = [...paragraphText.matchAll(/[\p{L}\p{N}]+/gu)];
-    const matched = queryTokens.filter((queryToken) => tokens.some((token) => {
-      const candidate = normalize2(token[0]);
+    let matchedCount = 0;
+    let firstTokenIndex = Infinity;
+    for (const queryToken of queryTokens) {
       const maximum = queryToken.length >= 9 ? 2 : queryToken.length >= 5 ? 1 : 0;
-      return editDistanceWithin(queryToken, candidate, maximum);
-    }));
+      const index = tokens.findIndex((token) => editDistanceWithin(queryToken, normalize2(token[0]), maximum));
+      if (index >= 0) {
+        matchedCount++;
+        firstTokenIndex = Math.min(firstTokenIndex, index);
+      }
+    }
     const required = queryTokens.length === 1 ? 1 : Math.ceil(queryTokens.length * 0.6);
-    if (matched.length < required) continue;
-    const first = tokens.find((token) => matched.some((queryToken) => {
-      const maximum = queryToken.length >= 9 ? 2 : queryToken.length >= 5 ? 1 : 0;
-      return editDistanceWithin(queryToken, normalize2(token[0]), maximum);
-    }));
+    if (matchedCount < required) continue;
+    const first = tokens[firstTokenIndex];
     const start = paragraph.index + first.index;
-    matches.push({ query, start, end: start + first[0].length });
+    matches.push({ start, end: start + first[0].length });
   }
   return matches;
 }
@@ -21975,7 +21697,7 @@ function findContent(text4, queries, mode) {
     return matchingQueries.flatMap((result) => {
       const first = lowerBound(result.starts, range.start);
       const last = upperBound(result.ends, range.end);
-      return last > first ? [{ ...result, count: last - first, firstStart: result.starts[first] }] : [];
+      return last > first ? [{ query: result.query, id: result.id, order: result.order, count: last - first, firstStart: result.starts[first] }] : [];
     }).sort((left, right) => left.firstStart - right.firstStart || left.order - right.order);
   }
   const legend = matchingQueries.length > 0 ? `Queries: ${matchingQueries.map((result) => `${result.id} = "${result.query}"`).join(", ")}` : "";
@@ -24386,7 +24108,6 @@ Open manually: ${handle.url}` }],
           const defaultProvider = bootstrap.defaultProvider;
           const searchProvider = requestedProvider;
           const curatorTimeoutSeconds = bootstrap.timeoutSeconds;
-          const curatorWorkflow = "summary-review";
           const summaryContext = {
             model: ctx.model,
             modelRegistry: ctx.modelRegistry,
@@ -24397,7 +24118,6 @@ Open manually: ${handle.url}` }],
           if (generation !== sessionGeneration || signal?.aborted) return buildCurationCancelledReturn("stale");
           const pc = {
             phase: "searching",
-            workflow: curatorWorkflow,
             summaryContext,
             searchResults,
             resultSlots,

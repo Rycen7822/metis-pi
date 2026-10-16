@@ -115,7 +115,6 @@ if MUTATE:
 
 PAGED_FULL = TOOLS
 list_count = 0
-sent_mutate = False
 
 def reply(req, result):
     print(json.dumps({"jsonrpc": "2.0", "id": req.get('id'), "result": result}), flush=True)
@@ -136,8 +135,7 @@ def handle_call(req, name, args):
     log_call(f"{name}:{json.dumps(args, sort_keys=True)}")
     event('call-received', tool=name)
     if SLOW_MUTATION_MS:
-        # server-side execution window: tests prove serialized ordering from
-        # these start/end records, never from client-side await ordering
+        # Per-server work windows let the cross-server test observe proxy ordering.
         event('call-start', tool=name)
         time.sleep(SLOW_MUTATION_MS / 1000)
         event('call-end', tool=name)

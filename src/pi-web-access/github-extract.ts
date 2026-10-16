@@ -1,5 +1,10 @@
 import { loadWebAccessConfig } from "./utils.ts";
-import { chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync, closeSync, constants as fsConstants, existsSync, lstatSync,
+	mkdirSync, mkdtempSync, openSync, readFileSync, readSync,
+	readdirSync, realpathSync, rmSync, statSync, unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { lstat as lstatAsync, open as openAsync, opendir as opendirAsync, readFile as readFileAsync, realpath as realpathAsync, rm as rmAsync, type FileHandle } from "node:fs/promises";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -126,14 +131,7 @@ function loadGitHubConfig(): GitHubCloneConfig {
 	return cachedConfig;
 }
 
-const NON_CODE_SEGMENTS = new Set([
-	"issues", "pull", "pulls", "discussions", "releases", "wiki",
-	"actions", "settings", "security", "projects", "graphs",
-	"compare", "commits", "tags", "branches", "stargazers",
-	"watchers", "network", "forks", "milestone", "labels",
-	"packages", "codespaces", "contribute", "community",
-	"sponsors", "invitations", "notifications", "insights",
-]);
+
 
 export function parseGitHubUrl(url: string): GitHubUrlInfo | null {
 	let parsed: URL;
@@ -162,7 +160,6 @@ export function parseGitHubUrl(url: string): GitHubUrlInfo | null {
 	if (owner.includes("--")) return null;
 	if (!/^[A-Za-z0-9._-]{1,100}$/.test(repo) || repo === "." || repo === "..") return null;
 
-	if (NON_CODE_SEGMENTS.has(segments[2]?.toLowerCase())) return null;
 
 	if (segments.length === 2) {
 		return { owner, repo, refIsFullSha: false, type: "root" };

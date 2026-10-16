@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,9 @@ import { readPDFResponseBuffer } from "../extract.ts";
 const pdfModuleUrl = new URL("../pdf-extract.ts", import.meta.url).href;
 
 test("pdf.enabled defaults to true and accepts false", () => {
-	assert.equal(readConfig(undefined).enabled, true);
+	const defaults = readConfig(undefined);
+	for (const [key, value] of Object.entries({ enabled: true, maxSizeMB: 20, maxPages: 100,
+		provider: "auto", datalabMode: "balanced", datalabTimeoutMs: 120000 })) assert.equal(defaults[key], value);
 	assert.equal(readConfig({ pdf: { enabled: false } }).enabled, false);
 	assert.equal(readConfig({ pdf: { enabled: "false" } }).enabled, true);
 });
@@ -19,7 +21,6 @@ test("pdf config reloads after the config file changes", () => {
 });
 
 test("pdf.maxSizeMB defaults to 20 and accepts values through 50", () => {
-	assert.equal(readConfig(undefined).maxSizeMB, 20);
 	assert.equal(readConfig({ pdf: { maxSizeMB: 30 } }).maxSizeMB, 30);
 	assert.equal(readConfig({ pdf: { maxSizeMB: 50 } }).maxSizeMB, 50);
 });
@@ -32,7 +33,6 @@ test("pdf.maxSizeMB caps values above 50 and rejects invalid values", () => {
 });
 
 test("pdf.maxPages defaults to 100 and accepts positive integer values", () => {
-	assert.equal(readConfig(undefined).maxPages, 100);
 	assert.equal(readConfig({ pdf: { maxPages: 25 } }).maxPages, 25);
 	assert.equal(readConfig({ pdf: { maxPages: 2.8 } }).maxPages, 2);
 	assert.equal(readConfig({ pdf: { maxPages: 0 } }).maxPages, 100);
@@ -41,7 +41,6 @@ test("pdf.maxPages defaults to 100 and accepts positive integer values", () => {
 });
 
 test("pdf.provider defaults to auto and validates explicit providers", () => {
-	assert.equal(readConfig(undefined).provider, "auto");
 	assert.equal(readConfig({ pdf: { provider: "gemini" } }).provider, "gemini");
 	assert.equal(
 		readConfig({ pdf: { provider: "datalab" } }).provider,
@@ -52,7 +51,6 @@ test("pdf.provider defaults to auto and validates explicit providers", () => {
 });
 
 test("pdf.datalabMode defaults to balanced and validates modes", () => {
-	assert.equal(readConfig(undefined).datalabMode, "balanced");
 	assert.equal(
 		readConfig({ pdf: { datalabMode: "fast" } }).datalabMode,
 		"fast",
@@ -68,7 +66,6 @@ test("pdf.datalabMode defaults to balanced and validates modes", () => {
 });
 
 test("pdf.datalabTimeoutMs defaults to 120000 and caps at 300000", () => {
-	assert.equal(readConfig(undefined).datalabTimeoutMs, 120000);
 	assert.equal(
 		readConfig({ pdf: { datalabTimeoutMs: 5000 } }).datalabTimeoutMs,
 		5000,
@@ -124,10 +121,9 @@ function readConfigSequence(configs) {
 				const values = [];
 				for (const config of configs) {
 					if (config !== null) writeFileSync(join(${JSON.stringify(configDir)}, "web-search.json"), JSON.stringify(config));
-					values.push(loadPDFConfig().enabled);
+					values.push(loadPDFConfig());
 				}
-				if (configs.length === 1) console.log(JSON.stringify(loadPDFConfig()));
-				else console.log(JSON.stringify(values));
+				console.log(JSON.stringify(configs.length === 1 ? values[0] : values.map(value => value.enabled)));
 			`,
 			encoding: "utf8",
 			env: { ...process.env, PI_CODING_AGENT_DIR: configDir },

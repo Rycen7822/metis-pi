@@ -203,7 +203,6 @@ const CSS = `
   --btn-primary-fg: #18181e;
   --btn-secondary: #252530;
   --btn-secondary-hover: #2b2b37;
-  --timer-bg: #252530;
   --timer-fg: #909098;
   --timer-warn-bg: rgba(240, 198, 116, 0.15);
   --timer-warn-fg: #f0c674;
@@ -241,7 +240,6 @@ const CSS = `
     --btn-primary-fg: #ffffff;
     --btn-secondary: #e4e4e8;
     --btn-secondary-hover: #d4d4d8;
-    --timer-bg: #e4e4e8;
     --timer-fg: #6c6c74;
     --timer-warn-bg: rgba(217, 119, 6, 0.10);
     --timer-warn-fg: #92400e;
@@ -717,11 +715,6 @@ main {
   color: #b4befe;
   background: rgba(180, 190, 254, 0.14);
   border-color: rgba(180, 190, 254, 0.3);
-}
-.provider-tag.provider-unknown {
-  color: var(--fg-muted);
-  background: var(--bg-elevated);
-  border-color: var(--border-muted);
 }
 .result-card-meta {
   font-size: 12px;
@@ -1445,7 +1438,6 @@ const SCRIPT = `(function() {
   var providers = DATA.providers;
   var providerLabels = DATA.providerLabels;
   var availProviders = DATA.availableProviders && typeof DATA.availableProviders === "object" ? DATA.availableProviders : {};
-  var workflow = "summary-review";
   var initialDefaultProvider = typeof DATA.defaultProvider === "string" ? DATA.defaultProvider : "exa";
   if (providers.indexOf(initialDefaultProvider) === -1) initialDefaultProvider = "exa";
   var initialSearchProvider = typeof DATA.searchProvider === "string" ? DATA.searchProvider.toLowerCase() : initialDefaultProvider;
@@ -1714,10 +1706,7 @@ const SCRIPT = `(function() {
         summaryProviders.push(provider);
       }
 
-      var label = typeof model.label === "string" && model.label.trim().length > 0
-        ? model.label.trim()
-        : value;
-      summaryModelsByProvider[provider].push({ value: value, label: label });
+      summaryModelsByProvider[provider].push({ value: value });
     }
   }
 
@@ -2758,7 +2747,7 @@ const SCRIPT = `(function() {
     }
   }
 
-  function applyResultEvent(data) {
+  function applyResultEvent(data, response) {
     if (!data) return;
     lastLiveEventAt = Date.now();
     clearLiveUpdateWarning();
@@ -2774,32 +2763,18 @@ const SCRIPT = `(function() {
     } else if (card.dataset.completed === "true") {
       return;
     }
-    applyResponseToCard(card, data, queryText, data.provider, slotId);
+    applyResponseToCard(card, response === undefined ? data : response, queryText, data.provider, slotId);
   }
 
   function applySearchErrorEvent(data) {
     if (!data) return;
-    lastLiveEventAt = Date.now();
-    clearLiveUpdateWarning();
-
-    var queryText = data.query || queries[data.queryIndex] || "";
-    var slotId = typeof data.slotIndex === "number" ? data.slotIndex : queryIndexToSlot.get(data.queryIndex);
-    if (typeof slotId !== "number") slotId = data.queryIndex;
-    var card = getResultCards().find(function(existing) { return existing.dataset.qi === String(data.queryIndex); });
-    if (!card) {
-      card = createSearchingCard(queryText, data.provider);
-      card.dataset.qi = data.queryIndex;
-      insertResultCard(card, slotId, null);
-    } else if (card.dataset.completed === "true") {
-      return;
-    }
-    applyResponseToCard(card, {
+    applyResultEvent(data, {
       queryIndex: data.queryIndex,
       answer: "",
       results: [],
       error: data.error || "Search failed",
       provider: data.provider,
-    }, queryText, data.provider, slotId);
+    });
   }
 
   function applyDoneEvent() {
@@ -3120,7 +3095,6 @@ const SCRIPT = `(function() {
   }
 
   function maybeAutoGenerateSummary() {
-    if (workflow !== "summary-review") return;
     if (!searchesDone) return;
     if (stage !== "results") return;
     if (submitted || timerExpired || submitInFlight) return;

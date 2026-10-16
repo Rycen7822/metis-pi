@@ -71,7 +71,6 @@ function childRowsOf(component: unknown, width: number): readonly string[] | und
 function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
   prototype: object,
   key: symbol,
-  componentId: string,
   /** Box: contentWidth = width − 2·paddingX, padY = paddingY, colShift = paddingX.
    * Container: contentWidth = width, padY = 0, colShift = 0. */
   metrics: (self: SELF, width: number) => { contentWidth: number; padY: number; colShift: number },
@@ -119,7 +118,7 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
         }
         row += mouse.children[c]!.height;
       }
-      registerProduct(rows, { componentId, width, rows: [], children: placements });
+      registerProduct(rows, { width, rows: [], children: placements });
     } catch {
       // Provenance must never break rendering.
     }
@@ -134,7 +133,7 @@ function wrapAlignmentPrototype<SELF extends { mouseLayout?: MouseLayout }>(
  * stacked vertically between paddingY bg rows; each child line is prefixed
  * with paddingX cells. */
 export function wrapBoxPrototype(prototype: object): boolean {
-  return wrapAlignmentPrototype<BoxLike>(prototype, BOX_COPY_OWNER, "box",
+  return wrapAlignmentPrototype<BoxLike>(prototype, BOX_COPY_OWNER,
     (self, width) => ({ contentWidth: Math.max(1, width - self.paddingX * 2), padY: self.paddingY, colShift: self.paddingX }));
 }
 
@@ -142,6 +141,6 @@ export function wrapBoxPrototype(prototype: object): boolean {
  * gaps. Each fresh array gets a product using the rows its children just
  * published; unknown component types retain the conservative fallback. */
 export function wrapContainerPrototype(prototype: object): boolean {
-  return wrapAlignmentPrototype<ContainerLike>(prototype, CONTAINER_COPY_OWNER, "container",
+  return wrapAlignmentPrototype<ContainerLike>(prototype, CONTAINER_COPY_OWNER,
     (_self, width) => ({ contentWidth: width, padY: 0, colShift: 0 }));
 }

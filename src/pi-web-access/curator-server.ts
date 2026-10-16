@@ -141,10 +141,6 @@ function normalizeSelectedIndices(
 		normalized.push(item);
 	}
 
-	if (!options.allowEmpty && normalized.length === 0) {
-		return { ok: false, error: "Invalid selection" };
-	}
-
 	return { ok: true, indices: normalized };
 }
 
@@ -213,7 +209,6 @@ export function startCuratorServer(
 	let stateChangedAt = Date.now();
 	let clientIdleMs: number | null = null;
 	let clientTimeoutSeconds = timeout;
-	let completed = false;
 	let watchdog: NodeJS.Timeout | null = null;
 	let state: ServerState = "SEARCHING";
 	let sseResponse: ServerResponse | null = null;
@@ -233,8 +228,7 @@ export function startCuratorServer(
 	};
 
 	const markCompleted = (): boolean => {
-		if (completed) return false;
-		completed = true;
+		if (state === "COMPLETED") return false;
 		state = "COMPLETED";
 		stateChangedAt = Date.now();
 		if (watchdog) {
@@ -527,7 +521,7 @@ export function startCuratorServer(
 
 				try {
 					const result = await callbacks.onSummarize(parsed.indices, controller.signal, model, feedback);
-					if (requestId !== summarizeRequestSeq || completed) {
+					if (requestId !== summarizeRequestSeq || (state as ServerState) === "COMPLETED") {
 						sendJson(res, 409, { ok: false, error: "Summarize request superseded" });
 						return;
 					}
@@ -690,7 +684,7 @@ export function startCuratorServer(
 			const url = `http://${networkConfig.host}:${addr.port}/?session=${sessionToken}`;
 
 			watchdog = setInterval(() => {
-				if (completed) return;
+				if (state === "COMPLETED") return;
 				if (!browserConnected) {
 					const noBrowserTimeoutMs = Math.max(5000, getEffectiveTimeoutMs());
 					if (state !== "RESULT_SELECTION") return;
@@ -721,21 +715,21 @@ export function startCuratorServer(
 					}
 				},
 				pushResult: (queryIndex, data) => {
-					if (completed) return;
+					if (state === "COMPLETED") return;
 					nextQueryIndex = Math.max(nextQueryIndex, queryIndex + 1);
 					const eventData: CuratorResultEventData = { ...data, queryIndex, query: data.query ?? queries[queryIndex] ?? "" };
 					retainStreamedEvent({ event: "result", data: eventData });
 					sendSSE("result", eventData);
 				},
 				pushError: (queryIndex, error, provider, meta) => {
-					if (completed) return;
+					if (state === "COMPLETED") return;
 					nextQueryIndex = Math.max(nextQueryIndex, queryIndex + 1);
 					const eventData: CuratorSearchErrorEventData = { queryIndex, query: meta?.query ?? queries[queryIndex] ?? "", error, provider, slotIndex: meta?.slotIndex };
 					retainStreamedEvent({ event: "search-error", data: eventData });
 					sendSSE("search-error", eventData);
 				},
 				searchesDone: () => {
-					if (completed) return;
+					if (state === "COMPLETED") return;
 					searchStreamDone = true;
 					sendSSE("done", {});
 					state = "RESULT_SELECTION";

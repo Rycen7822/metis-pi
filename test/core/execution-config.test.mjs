@@ -19,10 +19,8 @@ test("execution is global only and section writes preserve other values", t => {
   writeFileSync(global, '[appearance]\nenabled=false\n[future]\nvalue=7\n[execution.tools]\ncustomRustBinariesDir="/global/bin"\nfuture="keep"\n');
   writeFileSync(join(cwd, ".pi", "metis-pi.toml"), '[execution.tools]\ncustomRustBinariesDir="/project/bin"\nautoReasoning=true\n');
   writeFileSync(join(cwd, ".pi", "metis-pi.json"), JSON.stringify({ execution: { tools: { customRustBinariesDir: "/legacy/project/bin" } } }));
-  const context = trusted => ({ cwd, isProjectTrusted: () => trusted });
-  assert.equal(readExecutionConfig(context(false)).tools.customRustBinariesDir, "/global/bin");
-  assert.equal(readExecutionConfig(context(true)).tools.customRustBinariesDir, "/global/bin");
-  assert.equal(readExecutionConfig(context(true)).tools.autoReasoning, false);
+  assert.equal(readExecutionConfig().tools.customRustBinariesDir, "/global/bin");
+  assert.equal(readExecutionConfig().tools.autoReasoning, false);
   writeExecutionConfig({ ui: { toolRenaming: true } });
   const saved = parseMetisConfig(readFileSync(global, "utf8"));
   assert.equal(saved.execution.tools.customRustBinariesDir, "/global/bin");
@@ -30,6 +28,5 @@ test("execution is global only and section writes preserve other values", t => {
   assert.equal(saved.execution.ui.toolRenaming, true);
   assert.equal(saved.appearance.enabled, false); assert.equal(saved.future.value, 7);
   writeExecutionConfig({ tools: { autoReasoning: true } });
-  assert.equal(readExecutionConfig(context(true)).tools.autoReasoning, true);
-  assert.equal(readExecutionConfig(context(false)).tools.autoReasoning, true);
+  assert.equal(readExecutionConfig().tools.autoReasoning, true);
 });
