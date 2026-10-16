@@ -6,6 +6,27 @@ import { findSuperseded } from "../../src/condense/supersede.ts";
 import { modelNamed } from "../helpers/native-provider.mjs";
 import { assistantToolCall, toolResult } from "../helpers/vendor-codex-sessions.mjs";
 
+test("projection-only pruning skips display-size serialization while preserving the same evidence", (t) => {
+  const body = 'raw evidence\\nwith "quotes" and 宽字符 🧪';
+  const f = queryFixture([record("measured", body, 3)]);
+  const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "measured", "read"),
+    toolResult("measured", "read", body)];
+  const stringify = t.mock.method(JSON, "stringify");
+  const projected = pruneMessages(messages, f.indexer, undefined, undefined, undefined, 0,
+    undefined, undefined, undefined, undefined, false);
+  assert.equal(projected.pruned, true);
+  assert.equal(projected.beforeChars, 0);
+  assert.equal(projected.afterChars, 0);
+  assert.equal(stringify.mock.callCount(), 0, "projection does not serialize payloads merely for size accounting");
+  stringify.mock.restore();
+
+  const measured = pruneMessages(messages, f.indexer);
+  assert.deepEqual(projected.messages, measured.messages);
+  assert.equal(measured.beforeChars, JSON.stringify(messages).length);
+  assert.equal(measured.afterChars, JSON.stringify(measured.messages).length);
+  assert.equal(messages[1].content[0].text, body, "immutable source evidence is not replaced");
+});
+
 test("pruning a failed execution retains ERROR and its independent evidence reference", () => {
   const f = queryFixture([record("failed", "failure detail", 3, { isError: true })]);
   const messages = [assistantToolCall(modelNamed("gpt-6-astra"), "failed", "read"),

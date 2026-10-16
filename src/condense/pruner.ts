@@ -71,10 +71,10 @@ export function sizeMessages(messages: any[]): number {
  *     the reconstruction path.
  *   - `beforeChars` / `afterChars` — serialized context size (`sizeMessages`)
  *     before and after pruning when `pruned` is true. When `pruned` is false
- *     both are `0`: a no-op sentinel, not a measurement — the size is never
- *     computed on the no-op path (zero `JSON.stringify` over the array), and
- *     the only consumer (`index.ts` live-reclaim) reads them solely under
- *     `if (result.pruned)`.
+ *     both are `0`: a no-op sentinel, not a measurement. `measureSize: false`
+ *     also leaves both at `0` while still performing every pruning phase.
+ *     Projection/maintenance callers can opt out of display-only serialization;
+ *     callers that need the measurements retain the default eager values.
  *
  * AssistantMessage tool-call blocks (which carry the IDs) are kept
  * unchanged so the model can still reference them by id when calling
@@ -91,6 +91,7 @@ export function pruneMessages(
   supersede?: { state: SupersedeState; isProtected: (toolName: string, args: unknown) => boolean },
   editedToolIds: ReadonlySet<string> = new Set(),
   chainViews?: SingleChainCompressionEntry[],
+  measureSize = true,
 ): { messages: any[]; pruned: boolean; beforeChars: number; afterChars: number } {
   let pruned = false;
   const inGrace = inGraceRecoveryToolCallIds(messages, recoveryGraceTurns);
@@ -199,7 +200,9 @@ export function pruneMessages(
   }
 
   return pruned
-    ? { messages: current, pruned, beforeChars: sizeMessages(messages), afterChars: sizeMessages(current) }
+    ? { messages: current, pruned,
+      beforeChars: measureSize ? sizeMessages(messages) : 0,
+      afterChars: measureSize ? sizeMessages(current) : 0 }
     : { messages, pruned, beforeChars: 0, afterChars: 0 };
 }
 

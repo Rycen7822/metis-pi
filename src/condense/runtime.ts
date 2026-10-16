@@ -11,7 +11,7 @@ import { summarizeBatch, summarizeRange, summarizerInputBudget } from "./summari
 import { FallbackController } from "./summarizer-fallback.ts";
 import { ToolCallIndexer } from "./indexer.ts";
 import { createSourceSnapshotter } from "./source-snapshot.ts";
-import { pruneMessages, toolResultStub } from "./pruner.ts";
+import { pruneMessages, sizeMessages, toolResultStub } from "./pruner.ts";
 import { isProtected, type ProtectionConfig } from "./protected.ts";
 import { registerNestedCapture } from "./nested-capture.ts";
 import { registerQueryTool } from "./query-tool.ts";
@@ -1710,6 +1710,7 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     changed ||= argumentsChanged;
     const supersedeState = probe ? { floor: supersede.floor, activated: new Set(supersede.activated) } : supersede;
     if (chainFloor !== undefined) lowerFloor(supersedeState, chainFloor);
+    const pruneInput = messages;
     const result = pruneMessages(
       messages,
       indexer,
@@ -1721,15 +1722,19 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
       occ.enabled() ? undefined : { state: supersedeState, isProtected: protectionPredicate },
       editedToolIds,
       chainViews ?? currentChainViews(input, ctx),
+      false,
     );
     if (result.pruned) {
       messages = result.messages;
       changed = true;
-
     }
 
-    return { messages, changed, beforeChars: argumentsChanged ? JSON.stringify(input).length : result.beforeChars,
-      afterChars: argumentsChanged ? JSON.stringify(messages).length : result.afterChars };
+    // Most callers only need the projected messages, including repeated chain
+    // probes during turn_end/settlement. Measure only when the real context
+    // consumer requests live-reclaim display data, never for those probes.
+    return { messages, changed, measure: () => argumentsChanged || result.pruned
+      ? { beforeChars: sizeMessages(argumentsChanged ? input : pruneInput), afterChars: sizeMessages(messages) }
+      : { beforeChars: 0, afterChars: 0 } };
   };
 
   function anchorId(ctx: ExtensionContext, role: "start" | "final", timestamp: number,
@@ -1739,13 +1744,18 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     return matches.length === 1 ? matches[0]!.sourceEntry.id : undefined;
   }
 
-  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext, analysis = {
+  function sharedCandidates(entry: SharedChainCompressionEntry, raw: any[], ctx: ExtensionContext, analysis: {
+    grace: ReturnType<typeof inGraceRecoveryToolCallIds>;
+    chains: ReturnType<typeof detectChains>;
+    source?: ReturnType<typeof readSourceEdits>;
+  } = {
     grace: inGraceRecoveryToolCallIds(raw, currentConfig.value.recoveryGraceTurns),
     chains: detectChains(raw, protectionPredicate),
   }): SingleChainCompressionEntry[] {
     const { grace, chains } = analysis;
-    const edited = readSourceEdits(ctx).changedToolIds;
-    const anchors = ctx.sessionManager.buildSessionProjection().entries;
+    const source = analysis.source ?? readSourceEdits(ctx);
+    const edited = source.changedToolIds;
+    const anchors = source.projection.entries;
     return chainMembers(entry).filter((view, i) => {
       const member = entry.members[i]!;
       const range = resolveRange(view, raw);
@@ -1841,9 +1851,12 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const shared = entries.filter(isSharedChain);
     if (!ctx || shared.length === 0) return singles;
     const before = projectContext(messages, ctx.model?.api, ctx, singles, true).messages;
+    // This entire validation is synchronous. Share one source read across its
+    // members, never across an await or a later projection call.
+    const analysis = { chains, grace, source: readSourceEdits(ctx) };
     return singles.concat(
       shared.flatMap((entry) => {
-        const views = sharedCandidates(entry, raw, ctx, { chains, grace });
+        const views = sharedCandidates(entry, raw, ctx, analysis);
         return views.length && sharedApprovals.get(entry.blockId) === sharedShape(before, views) ? views : [];
       }),
     );
@@ -1901,10 +1914,14 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
         .getChainEntries()
         .filter((entry) => !isSharedChain(entry))
         .flatMap(chainMembers);
+      // Every shared entry compares against the same single-chain projection.
+      // Keep this baseline local to this pass; source checks after awaits still
+      // reject any changed session before an approval can be published.
+      let singleBaseline: any[] | undefined;
       for (const entry of indexer.getChainEntries().filter(isSharedChain)) {
         assertValid();
         const views = sharedCandidates(entry, raw, ctx);
-        const before = projectContext(raw, ctx.model?.api, ctx, singles, true).messages;
+        const before = singleBaseline ??= projectContext(raw, ctx.model?.api, ctx, singles, true).messages;
         const shape = sharedShape(before, views);
         if (sharedApprovals.get(entry.blockId) === shape) continue;
         sharedApprovals.delete(entry.blockId);
@@ -2120,7 +2137,8 @@ export function createCondenseRuntime(pi: ExtensionAPI) {
     const result = projectContext(messages, ctx.model?.api, ctx);
     if (messages !== event.messages) result.changed = true;
     occ.observeRequest(result.messages);
-    if (result.beforeChars !== undefined) statsAccum.setLiveReclaim(result.beforeChars, result.afterChars!);
+    const measured = result.measure?.();
+    if (measured) statsAccum.setLiveReclaim(measured.beforeChars, measured.afterChars);
     updatePruneStatus(ctx);
     return result.changed ? { messages: result.messages } : undefined;
   });
