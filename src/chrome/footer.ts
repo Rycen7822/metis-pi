@@ -153,7 +153,10 @@ export function createFooterComponent(
         const y = lines.length - 1;
         const gap = lines[y] ? " " : "";
         const glyph = expanded[section] ? "▼" : "▶";
-        targets.push({ section, x: cellWidth(lines[y]!) + gap.length, y, width: cellWidth(glyph) });
+        const glyphX = cellWidth(lines[y]!) + gap.length;
+        const x = Math.max(0, glyphX - 2);
+        const end = Math.min(width, glyphX + cellWidth(glyph) + 2);
+        targets.push({ section, x, y, width: end - x });
         lines[y] += gap + paint(glyph, "dim");
       };
       if (location) {

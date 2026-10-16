@@ -121,6 +121,19 @@ test("footer disclosures are independent native mouse targets and preserve focus
   assert.doesNotMatch(frame(), /project\/harness|output-speed-accounting|turns queued/);
   const initialViewport = scroll.viewportHeight;
   assert.ok(initialViewport > 0, "exercise the native flexible transcript viewport");
+  for (const [index, detail] of [[0, /project\/harness\/metis-pi/], [1, /turns queued/]]) {
+    for (const offset of [-2, 2]) {
+      const point = arrows()[index];
+      assert.match(click({ x: point.x + offset, y: point.y }), detail, "both edges of the padded target expand");
+      const expandedPoint = arrows()[index];
+      assert.doesNotMatch(click({ x: expandedPoint.x + offset, y: expandedPoint.y }), detail,
+        "the expanded disclosure keeps its padded target");
+    }
+    for (const offset of [-3, 3]) {
+      const point = arrows()[index];
+      assert.doesNotMatch(click({ x: point.x + offset, y: point.y }), detail, "outside the padded target stays inert");
+    }
+  }
   let expanded = click(arrows()[0]);
   assert.match(expanded, /~\/project\/harness\/metis-pi \(fix\/output-speed-accounting\)/);
   assert.doesNotMatch(expanded, /turns queued/);
@@ -148,7 +161,8 @@ test("footer disclosures are independent native mouse targets and preserve focus
   terminal.columns = 48;
   frame();
   assert.ok(tui.previousScreen.every(line => Tui.visibleWidth(line) <= 48));
-  assert.doesNotMatch(click(arrows()[0]), /topic-分支/);
+  const resizedPoint = arrows()[0];
+  assert.doesNotMatch(click({ x: resizedPoint.x - 2, y: resizedPoint.y }), /topic-分支/);
   assert.match(frame(), /8 turns queued/, "folding location leaves prune expanded after resize");
   assert.equal(editor.focused, true);
   assert.ok(renders > 0);
