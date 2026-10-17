@@ -38,20 +38,17 @@ export interface AdapterHandle {
 }
 function skipped(reason: string): AdapterHandle { return { installed: false, reason, dispose() {} }; }
 
-/** History eviction releases owned nested bodies, not the committed row geometry.
- * Reflow can rebuild from the bounded source; no old args/result/lastComponent
- * is retained by this frame after invalidation. Other result owners stay native. */
+/** Keep initialization outside the frame: only its body may retain initial
+ * data, and invalidation releases it. Rebuild from the bounded source while
+ * preserving committed row geometry. Other result owners stay native. */
 function nestedResult(
   resolve: (result: unknown) => Renderers | undefined,
-  initial: Renderers["renderResult"],
-  result: unknown,
+  body: Component | undefined,
   options: ViewOptions,
   theme: Palette,
-  context: ViewContext,
+  snapshot: ViewContext,
+  resultSource: NonNullable<ViewContext["resultSource"]>,
 ): Component {
-  const { args, lastComponent: _previous, resultSource, ...snapshot } = context;
-  if (!resultSource) return initial(result, options, theme, context);
-  let body: Component | undefined = initial(result, options, theme, { ...snapshot, args });
   return {
     render(width) {
       if (!body) {
@@ -293,9 +290,12 @@ export function installAdapter(prototype: object, options: AdapterOptions): Adap
     if (owned && !TOOL_NAMES.includes(name as ToolName)) return owned;
     if (owned) return {
       renderCall: owned.renderCall,
-      renderResult: (value, opts, theme, ctx) => nestedResult(
-        resolveOwned, owned.renderResult, value, opts, theme, ctx,
-      ),
+      renderResult(value, opts, theme, ctx) {
+        const { args, lastComponent: _previous, resultSource, ...snapshot } = ctx;
+        const initial = owned.renderResult;
+        const body = initial(value, opts, theme, resultSource ? { ...snapshot, args } : ctx);
+        return resultSource ? nestedResult(resolveOwned, body, opts, theme, snapshot, resultSource) : body;
+      },
     };
     const { renderCall, renderResult } = asRecord(definition);
     if (typeof renderCall !== "function" || typeof renderResult !== "function") return;
