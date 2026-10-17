@@ -206,7 +206,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   };
 
   type PreviewUpdate = {
-    at: number; messageKey?: MessageViewKey; peeking?: boolean; flushing?: boolean;
+    at: number; messageKey?: MessageViewKey; readyPeek?: boolean; flushing?: boolean;
     args?: unknown[]; timer?: ReturnType<typeof setTimeout>;
   };
   const previews = new WeakMap<object, PreviewUpdate>();
@@ -232,9 +232,9 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       let policy: ThinkingPolicy | undefined;
       try { policy = input.thinkingPolicy?.(); }
       catch { /* Keep the ordinary immediate host/presentation fallback. */ }
-      // Only an actually mounted peek can coalesce. Native/manual rebuilds,
-      // mixed content, foreign displays and completion bypass the cadence.
-      const longPeek = args[1] === true && preview?.peeking === true && !preview.flushing
+      // Only a mounted peek bound to persistent run state can coalesce.
+      // Manual rebuilds, mixed/foreign content and completion stay immediate.
+      const longPeek = args[1] === true && preview?.readyPeek === true && !preview.flushing
         && messageKey !== undefined && preview.messageKey === messageKey && policy?.streaming === "peek"
         && Array.isArray(content) && content.length > 0 && content.every(block => asRecord(block).type === "thinking")
         && content.reduce((sum, block) => sum + String(asRecord(block).thinking ?? "").length, 0) >= 16_384;
@@ -266,7 +266,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
         return;
       }
     }
-    if (preview) { releasePreview(preview); preview.peeking = false; }
+    if (preview) { releasePreview(preview); preview.readyPeek = false; }
     original.apply(this, args);
     // Only a successful native rebuild starts a cadence window. The logical
     // key changes on component reuse/session reset without retaining payloads.
@@ -292,9 +292,9 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       // A policy failure must not break the original message display.
     }
     try {
-      const peeking = coordinateSubtree(input, view, getSpacerProto(), rebuild);
+      const readyPeek = coordinateSubtree(input, view, getSpacerProto(), rebuild);
       const preview = previews.get(this);
-      if (preview) preview.peeking = peeking;
+      if (preview) preview.readyPeek = readyPeek;
     } catch {
       // A presentation failure must not break the original message display.
     }
@@ -424,7 +424,7 @@ function coordinateSubtree(
   const container = asRecord(record.contentContainer);
   const children = container.children;
   if (!Array.isArray(children)) return false;
-  let hasPeek = false;
+  let readyPeek = false;
 
   const textRunPlan = planKey !== undefined ? input.state.textRunPlan(planKey) : undefined;
 
@@ -585,7 +585,10 @@ function coordinateSubtree(
         }
       }
       if (!decorated) continue;
-      hasPeek ||= peeking;
+      // message_start can already carry a large shared partial, before a run
+      // exists. Its transient control must be replaced by the first update;
+      // otherwise gestures on that displayed control cannot survive rebuilds.
+      readyPeek ||= peeking && plan !== undefined;
       // Remember the native node so the unwrap pass (step 1) restores it.
       (node as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
@@ -596,7 +599,7 @@ function coordinateSubtree(
       }
     }
   }
-  return hasPeek;
+  return readyPeek;
 }
 
 /** Apply a user-chosen view: write the host's per-run override (the field the
