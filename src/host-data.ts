@@ -118,6 +118,16 @@ export class HostData {
     this.#contextUsage = undefined;
   }
 
+  /** Native 1.3 getContextUsage() projects the persisted branch, not the
+   * in-flight agent message. Revisit reuse if that host contract changes.
+   * Without a known branch/model and a valid sample, keep retrying as before. */
+  bumpDisplay(): void {
+    this.#revision += 1;
+    const cached = this.#contextUsage;
+    if (!cached?.value || !cached.model || !cached.sessionId || cached.leafId === undefined)
+      this.#contextUsage = undefined;
+  }
+
   get revision(): number {
     return this.#revision;
   }
@@ -172,9 +182,9 @@ export class HostData {
       const sessionId = manager?.getSessionId?.();
       const leafId = manager?.getLeafId?.();
       const cached = this.#contextUsage;
-      // The host rebuilds the entire session projection here. Animation frames
-      // can reuse it until an event bumps the revision or the live branch/model
-      // changes. The leaf check also covers entries appended AFTER our handler
+      // The host rebuilds the entire persisted session projection here. Display
+      // revisions can reuse it until a context-impacting event or live branch/
+      // model change. The leaf check also covers entries appended AFTER our handler
       // (message_end, context edits and other extensions' custom entries).
       if (cached && cached.read === read && cached.sessionId === sessionId && cached.leafId === leafId
         && cached.model?.id === model?.id && cached.model?.provider === model?.provider

@@ -52,11 +52,17 @@ function toolTimerText(context: ViewContext, isPartial: boolean): string | undef
 
 interface NestedView {
   name: string;
+  order: number;
   args: unknown;
   result?: unknown;
   isError: boolean;
   isPartial: boolean;
   bytes: number;
+}
+interface NestedParent {
+  calls: Map<string, NestedView>;
+  nextOrder: number;
+  history?: { value: unknown; bytes: number };
 }
 interface NestedEvent {
   toolCallId: string;
@@ -83,48 +89,105 @@ function sizeOf(value: unknown, seen = new Set<object>(), depth = 0): number {
 }
 
 export class CodemodeViewStore {
-  readonly #parents = new Map<string, Map<string, NestedView>>();
+  readonly #parents = new Map<string, NestedParent>();
   #bytes = 0;
   readonly #maxBytes: number;
   constructor(maxBytes = 4 * 1024 * 1024) { this.#maxBytes = maxBytes; }
 
+  #makeRoom(bytes: number, keep?: NestedView): boolean {
+    if (bytes > this.#maxBytes) return false;
+    if (this.#bytes + bytes <= this.#maxBytes) return true;
+    const evict: { parent: NestedParent; id?: string; bytes: number }[] = [];
+    let freed = 0;
+    parents: for (const parent of this.#parents.values()) {
+      if (parent.history) {
+        evict.push({ parent, bytes: parent.history.bytes });
+        freed += parent.history.bytes;
+        if (this.#bytes + bytes - freed <= this.#maxBytes) break;
+      }
+      for (const [id, view] of parent.calls) {
+        if (view === keep || view.isPartial) continue;
+        evict.push({ parent, id, bytes: view.bytes });
+        freed += view.bytes;
+        if (this.#bytes + bytes - freed <= this.#maxBytes) break parents;
+      }
+    }
+    if (this.#bytes + bytes - freed > this.#maxBytes) return false;
+    for (const entry of evict) {
+      if (entry.id === undefined) entry.parent.history = undefined;
+      else entry.parent.calls.delete(entry.id);
+      this.#bytes -= entry.bytes;
+    }
+    return true;
+  }
+
   start(event: NestedEvent, ownedCodemode = false): void {
     if (!event.parentToolCallId) {
       if (!ownedCodemode) return;
-      if (!this.#parents.has(event.toolCallId)) this.#parents.set(event.toolCallId, new Map());
+      if (!this.#parents.has(event.toolCallId)) this.#parents.set(event.toolCallId, { calls: new Map(), nextOrder: 0 });
       if (this.#parents.size > 64) {
-        const oldest = this.#parents.keys().next().value!;
-        for (const view of this.#parents.get(oldest)!.values()) this.#bytes -= view.bytes;
+        const oldest = this.#parents.keys().next().value!, parent = this.#parents.get(oldest)!;
+        for (const view of parent.calls.values()) this.#bytes -= view.bytes;
+        this.#bytes -= parent.history?.bytes ?? 0;
         this.#parents.delete(oldest);
       }
       return;
     }
-    const calls = this.#parents.get(event.parentToolCallId);
-    if (!calls || calls.size >= 256 || calls.has(event.toolCallId)) return;
+    const parent = this.#parents.get(event.parentToolCallId);
+    if (!parent || parent.calls.has(event.toolCallId)) return;
+    // Count starts even when their payload cannot be admitted. A later live
+    // call must not take an earlier /? slot just because its args were smaller.
+    const order = parent.nextOrder++;
+    if (parent.calls.size >= 256) return;
     const bytes = sizeOf(event.args);
-    if (this.#bytes + bytes > this.#maxBytes) return;
-    calls.set(event.toolCallId, { name: event.toolName, args: event.args, isError: false, isPartial: true, bytes });
+    if (!this.#makeRoom(bytes)) return;
+    parent.calls.set(event.toolCallId, { name: event.toolName, order, args: event.args, isError: false, isPartial: true, bytes });
     this.#bytes += bytes;
   }
 
   finish(event: NestedEvent): void {
-    const view = event.parentToolCallId && this.#parents.get(event.parentToolCallId)?.get(event.toolCallId);
+    const view = event.parentToolCallId && this.#parents.get(event.parentToolCallId)?.calls.get(event.toolCallId);
     if (!view) return;
     const argsBytes = sizeOf(view.args), resultBytes = sizeOf(event.result);
     this.#bytes -= view.bytes;
-    view.result = this.#bytes + argsBytes + resultBytes <= this.#maxBytes ? event.result : undefined;
+    view.result = this.#makeRoom(argsBytes + resultBytes, view) ? event.result : undefined;
     view.bytes = argsBytes + (view.result === undefined ? 0 : resultBytes);
     this.#bytes += view.bytes;
     view.isError = event.isError === true;
     view.isPartial = false;
   }
 
-  get(parent: string, id: string): NestedView | undefined { return this.#parents.get(parent)?.get(id); }
-  entries(parent: string): [string, NestedView][] { return [...(this.#parents.get(parent)?.entries() ?? [])]; }
+  recordMessage(message: unknown): void {
+    const value = asRecord(message);
+    if (value.role !== "toolResult" || value.toolName !== "codemode" || typeof value.toolCallId !== "string") return;
+    const parent = this.#parents.get(value.toolCallId);
+    if (!parent) return;
+    this.#bytes -= parent.history?.bytes ?? 0;
+    parent.history = undefined;
+    // Pi's live row gets execution-end data before the saved argument ledger.
+    // The bridge is an additional strong owner, so budget and evict it too.
+    const history = value.nestedCalls, bytes = sizeOf(history);
+    if (history === undefined || !this.#makeRoom(bytes)) return;
+    parent.history = { value: history, bytes };
+    this.#bytes += bytes;
+  }
+
+  history(parent: string): unknown { return this.#parents.get(parent)?.history?.value; }
+  get(parent: string, id: string): NestedView | undefined { return this.#parents.get(parent)?.calls.get(id); }
+  entries(parent: string): [string, NestedView][] { return [...(this.#parents.get(parent)?.calls.entries() ?? [])]; }
   clear(): void { this.#parents.clear(); this.#bytes = 0; }
 }
 
 export type NestedRendererLookup = (name: string, result: unknown) => Renderers | undefined;
+
+function resultSource(store: CodemodeViewStore, parent: string, id: string): NonNullable<ViewContext["resultSource"]> {
+  return () => {
+    const view = store.get(parent, id);
+    if (view?.result === undefined) return;
+    const result = asRecord(view.result);
+    return { args: view.args, result: { content: result.content, details: result.details } };
+  };
+}
 
 interface NestedSlot {
   state: object;
@@ -142,11 +205,12 @@ interface ExpansionState {
 
 /** Own only codemode clicks; output selection, links and wheel input stay native. */
 function clickRegion(component: Component, context: ViewContext, toggle?: () => void): Component {
+  const invalidate = context.invalidate;
   return new MouseRegion(component, event => {
     if (event.type !== "click" || event.button !== "left") return;
     if (toggle && !event.shift && !event.alt && !event.ctrl) {
       toggle();
-      context.invalidate?.();
+      invalidate?.();
     }
     // Never fall through to the host region that toggles the entire tool row.
     return { handled: true };
@@ -197,26 +261,27 @@ export function makeCodemodeRenderers(input: {
       const timerText = toolTimerText(context, options.isPartial === true);
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
-      const history = asRecord(value.nestedCalls);
+      const history = asRecord(value.nestedCalls ?? input.store.history(context.toolCallId ?? ""));
       const historicalArgs = new Map((Array.isArray(history.calls) ? history.calls.map(asRecord) : []).map((call) => [call.id, call]));
       const live = input.store.entries(context.toolCallId ?? "");
       const byId = new Map(recorded.map((call) => [call.id, call]));
-      const pending = new Map<string, number>();
-      const calls: Readonly<Record<string, unknown>>[] = live.map(([id, view]) => {
-        if (!byId.has(id)) pending.set(view.name, (pending.get(view.name) ?? 0) + 1);
-        return { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" };
-      });
-      const liveIds = new Set(live.map(([id]) => id));
+      const liveCalls = new Map(live.map(([id, view]) =>
+        [id, { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" }] as const));
+      const byOrder = new Map(live.map(([id, view]) => [view.order, liveCalls.get(id)!]));
+      // Recorded positions include previews and evicted summaries. Only tool
+      // calls emit lifecycle starts; models.* records don't consume that order.
+      const calls: Readonly<Record<string, unknown>>[] = [], used = new Set<string>();
+      let order = 0;
       for (const call of recorded) {
-        if (liveIds.has(String(call.id))) continue;
-        // Pi's running preview ids all end in /?. Real lifecycle ids own state.
-        const count = pending.get(String(call.name)) ?? 0;
-        if (String(call.id).endsWith("/?") && count > 0) {
-          pending.set(String(call.name), count - 1);
-          continue;
-        }
-        calls.push(call);
+        const position = String(call.name).startsWith("models.") ? undefined : order++;
+        const current = liveCalls.get(String(call.id))
+          ?? (String(call.id).endsWith("/?") && position !== undefined ? byOrder.get(position) : undefined);
+        if (current && current.name === call.name && !used.has(current.id)) {
+          calls.push({ ...call, ...current });
+          used.add(current.id);
+        } else calls.push(call);
       }
+      for (const [id, call] of liveCalls) if (!used.has(id)) calls.push(call);
       const allCalls = view.allCalls ?? view.expanded;
       // Keep explicitly opened older calls visible while new calls stream in.
       const shown = allCalls ? calls : calls.filter((call, index) => index >= calls.length - 8
@@ -239,8 +304,8 @@ export function makeCodemodeRenderers(input: {
         const expanded = slot.expanded ?? view.expanded;
         const nestedOptions = { ...options, expanded };
         const captured = input.store.get(context.toolCallId ?? "", call.id);
-        if (call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined)
-          missingResults = true;
+        const missingResult = call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined;
+        if (missingResult) missingResults = true;
         const saved = historicalArgs.get(call.id);
         let args = captured?.args;
         if (args === undefined && saved?.name === call.name) args = saved.arguments;
@@ -260,7 +325,7 @@ export function makeCodemodeRenderers(input: {
         const isError = captured?.isError ?? ["error", "cancelled"].includes(String(call.status));
         let callComponent: Component, resultComponent: Component | undefined;
         if (!renderers || args === undefined) {
-          if (renderers === input.shell) {
+          if (renderers?.renderCall === input.shell.renderCall) {
             // The builtin owner/status is known, but a truncated command isn't.
             const { bullet, title } = shellTitle({ isPartial: partial, isError }, theme);
             callComponent = input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`);
@@ -288,6 +353,7 @@ export function makeCodemodeRenderers(input: {
               slot.result = renderers.renderResult(viewResult, { ...nestedOptions, isPartial: partial }, theme, {
                 ...nestedContext,
                 lastComponent: slot.result,
+                resultSource: resultSource(input.store, context.toolCallId ?? "", call.id),
               });
             } else if (call.error) {
               slot.result = input.shell.renderResult(
@@ -306,6 +372,13 @@ export function makeCodemodeRenderers(input: {
         const toggle = preview ? undefined : () => { slot.expanded = !expanded; };
         parts.push(clickRegion(callComponent, context, toggle));
         if (resultComponent) parts.push(clickRegion(resultComponent, context, toggle));
+        if (expanded && !partial && !call.name.startsWith("models.")) {
+          const unavailable = [
+            args === undefined ? "Full arguments unavailable; expand codemode to inspect the script." : "",
+            missingResult ? "Nested output was not retained; no saved diff/output to expand." : "",
+          ].filter(Boolean).join("\n");
+          if (unavailable) parts.push(clickRegion(input.makeText(theme.fg("dim", unavailable)), context, toggle));
+        }
       }
       if (missingResults)
         parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));

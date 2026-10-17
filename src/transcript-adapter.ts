@@ -110,9 +110,12 @@ export interface TranscriptAdapterInput {
    */
   isCollapsedLabel?: (node: unknown) => boolean;
   enabled(): boolean;
+  /** Repaint after a coalesced streaming preview; gestures/finals stay immediate. */
+  requestRender?(): void;
 }
 
 const RAIL_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-rail");
+const PEEK_SYMBOL = Symbol.for("Rycen7822.metis-pi.thinking-peek");
 const SEP_SYMBOL = Symbol.for("Rycen7822.metis-pi.separator");
 
 export function installTranscriptDecorations(input: TranscriptAdapterInput): DecorationHandle {
@@ -202,7 +205,56 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     return spacerProto;
   };
 
+  type PreviewUpdate = { at: number; peeking?: boolean; args?: unknown[]; timer?: ReturnType<typeof setTimeout> };
+  const previews = new WeakMap<object, PreviewUpdate>();
+  const pending = new Set<PreviewUpdate>();
+  const releasePreview = (preview: PreviewUpdate): void => {
+    clearTimeout(preview.timer);
+    preview.args = undefined;
+    preview.timer = undefined;
+    pending.delete(preview);
+  };
   const wrapper = function (this: unknown, ...args: unknown[]): void {
+    let canPreview = false;
+    try { canPreview = active && input.requestRender !== undefined && input.enabled(); }
+    catch { /* Optional cadence must not prevent the native rebuild. */ }
+    if (canPreview && typeof this === "object" && this !== null) {
+      const preview = previews.get(this);
+      const content = asRecord(args[0]).content;
+      let policy: ThinkingPolicy | undefined;
+      try { policy = input.thinkingPolicy?.(); }
+      catch { /* Keep the ordinary immediate host/presentation fallback. */ }
+      // Only an actually mounted peek can coalesce. Native/manual rebuilds,
+      // mixed content, foreign displays and completion bypass the cadence.
+      const longPeek = args[1] === true && preview?.peeking === true && policy?.streaming === "peek"
+        && Array.isArray(content) && content.length > 0 && content.every(block => asRecord(block).type === "thinking")
+        && content.reduce((sum, block) => sum + String(asRecord(block).thinking ?? "").length, 0) >= 16_384;
+      const delay = preview ? Math.min(100, 100 - (Date.now() - preview.at)) : 0;
+      if (longPeek && preview && delay > 0) {
+        preview.args = args;
+        Reflect.set(this, "lastMessage", args[0]);
+        Reflect.set(this, "isStreaming", true);
+        if (!preview.timer) {
+          const target = this, queued = preview;
+          queued.timer = setTimeout(() => {
+            const latest = queued.args;
+            releasePreview(queued);
+            try {
+              if (!latest || !active || !input.enabled() || asRecord(target).lastMessage !== latest[0]) return;
+              queued.at = -Infinity; // Flush even if the system clock moved backwards.
+              const refresh = asRecord(target).updateContent;
+              if (typeof refresh === "function") refresh.apply(target, latest);
+              input.requestRender?.();
+            } catch { /* An optional presentation callback must not escape a timer. */ }
+          }, delay);
+          queued.timer.unref?.();
+          pending.add(queued);
+        }
+        return;
+      }
+      if (preview) releasePreview(preview);
+      previews.set(this, { at: Date.now() });
+    }
     original.apply(this, args);
     if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
     let view: AssistantView | undefined;
@@ -220,7 +272,9 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       // A policy failure must not break the original message display.
     }
     try {
-      coordinateSubtree(input, view, getSpacerProto(), rebuild);
+      const peeking = coordinateSubtree(input, view, getSpacerProto(), rebuild);
+      const preview = previews.get(this);
+      if (preview) preview.peeking = peeking;
     } catch {
       // A presentation failure must not break the original message display.
     }
@@ -245,6 +299,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     railReason: input.makeRail !== undefined ? "thinking rail enabled" : "no rail factory provided",
     dispose() {
       active = false;
+      for (const update of pending) releasePreview(update);
       try {
         if (Object.getOwnPropertyDescriptor(prototype, key)?.value === wrapper) {
           Object.defineProperty(prototype, key, descriptor);
@@ -344,11 +399,12 @@ function coordinateSubtree(
   { component: record, planKey, runs }: AssistantView,
   spacerProto: object | undefined,
   rebuild: (target: object) => void,
-): void {
+): boolean {
   const component = record;
   const container = asRecord(record.contentContainer);
   const children = container.children;
-  if (!Array.isArray(children)) return;
+  if (!Array.isArray(children)) return false;
+  let hasPeek = false;
 
   const textRunPlan = planKey !== undefined ? input.state.textRunPlan(planKey) : undefined;
 
@@ -361,7 +417,8 @@ function coordinateSubtree(
   for (let i = children.length - 1; i >= 0; i--) {
     const child = children[i] as Record<string, unknown> | null;
     if (!child || typeof child !== "object") continue;
-    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL] || (child as Record<symbol, unknown>)[CLICK_SYMBOL]) {
+    if ((child as Record<symbol, unknown>)[RAIL_SYMBOL] || (child as Record<symbol, unknown>)[CLICK_SYMBOL]
+      || (child as Record<symbol, unknown>)[PEEK_SYMBOL]) {
       children.splice(i, 1);
       continue;
     }
@@ -374,7 +431,7 @@ function coordinateSubtree(
     if (
       innerWrapper &&
       typeof innerWrapper === "object" &&
-      (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL])
+      (innerWrapper[RAIL_SYMBOL] || innerWrapper[THOUGHT_LABEL] || innerWrapper[CLICK_SYMBOL] || innerWrapper[PEEK_SYMBOL])
     ) {
       const original = innerWrapper["original"];
       if (original !== undefined) {
@@ -413,7 +470,7 @@ function coordinateSubtree(
   //    own "Thinking..." label — durations exist only for ended runs.
   const policy = input.thinkingPolicy?.();
   const viewFeature = policy !== undefined && (input.makePeek !== undefined || input.makeClickable !== undefined);
-  if (input.makeRail || (input.makeThoughtSummary && input.isCollapsedLabel) || (viewFeature && input.makeClickable)) {
+  if (input.makeRail || (input.makeThoughtSummary && input.isCollapsedLabel) || viewFeature) {
     for (const slot of slots) {
       if (slot.run.kind !== "thinking" || !slot.run.nonEmpty) continue;
       const child = slot.child as Record<string, unknown>;
@@ -426,7 +483,8 @@ function coordinateSubtree(
       const innerRecord = inner !== null && typeof inner === "object" ? (inner as Record<string, unknown>) : undefined;
       if (!inner || ((inner as Record<symbol, unknown>))[RAIL_SYMBOL]
         || ((inner as Record<symbol, unknown>))[THOUGHT_LABEL]
-        || ((inner as Record<symbol, unknown>))[CLICK_SYMBOL]) continue;
+        || ((inner as Record<symbol, unknown>))[CLICK_SYMBOL]
+        || ((inner as Record<symbol, unknown>))[PEEK_SYMBOL]) continue;
 
       const ordinal = slot.run.thinkingRunIndex;
       const isExpandedMarkdown = !!innerRecord && ("theme" in innerRecord || "defaultTextStyle" in innerRecord);
@@ -455,7 +513,7 @@ function coordinateSubtree(
         : "collapsed";
 
       let node: unknown = inner;
-      let decorated = false;
+      let decorated = false, peeking = false;
       if (isExpandedMarkdown) {
         if (view === "peek" && control && input.makePeek && policy) {
           const peeked = input.makePeek({
@@ -464,7 +522,11 @@ function coordinateSubtree(
             windowLines: policy.peekLines,
             onScroll: () => rebuild(component),
           });
-          if (peeked && typeof peeked === "object") node = peeked;
+          if (peeked && typeof peeked === "object") {
+            ((peeked as Record<symbol, unknown>))[PEEK_SYMBOL] = true;
+            node = peeked;
+            decorated = peeking = true;
+          }
         }
         if (input.makeRail) {
           const railed = input.makeRail(node);
@@ -503,6 +565,7 @@ function coordinateSubtree(
         }
       }
       if (!decorated) continue;
+      hasPeek ||= peeking;
       // Remember the native node so the unwrap pass (step 1) restores it.
       (node as Record<symbol | string, unknown>)["original"] = inner;
       if (inner !== child) {
@@ -513,6 +576,7 @@ function coordinateSubtree(
       }
     }
   }
+  return hasPeek;
 }
 
 /** Apply a user-chosen view: write the host's per-run override (the field the

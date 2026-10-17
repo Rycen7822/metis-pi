@@ -32,22 +32,24 @@ export function createShellFactories(layout: LayoutOps): ShellFactories {
     /** Call region: bullet + bold title + highlighted command with "  │ "
      * continuation. Never renders output — the result region owns that. */
     makeShellCall(input) {
+      const { title, options, name, colorLevel, bullet, theme } = input;
+      const command = String(input.args.command ?? "");
       return cachedRowsComponent((width, copyOut) => renderShellCall({
         row: {
-          title: input.title,
+          title,
           isError: false,
-          isPartial: input.options.isPartial === true,
-          command: String(input.args.command ?? ""),
-          language: input.name === "powershell" ? "powershell" : "bash",
+          isPartial: options.isPartial === true,
+          command,
+          language: name === "powershell" ? "powershell" : "bash",
           output: "",
-          expanded: input.options.expanded === true,
+          expanded: options.expanded === true,
           expandHint: "",
         },
         width,
         layout,
-        colorLevel: input.colorLevel,
-        bullet: input.bullet,
-        titlePainter: (title) => input.theme.fg("toolTitle", input.theme.bold(title)),
+        colorLevel,
+        bullet,
+        titlePainter: (title) => theme.fg("toolTitle", theme.bold(title)),
         copyOut,
       }));
     },
@@ -57,10 +59,13 @@ export function createShellFactories(layout: LayoutOps): ShellFactories {
      * budget. Never renders a command head.
      */
     makeShellResult(input) {
+      // A retained component must not capture context.lastComponent: that
+      // otherwise keeps every earlier component and streaming result alive.
+      const { result: value, options, name, colorLevel, expandHint } = input;
       const isError = input.context.isError === true;
-      const bullet = input.theme.fg(input.context.isError ? "error" : input.options.isPartial ? "dim" : "success", "•");
+      const bullet = input.theme.fg(input.context.isError ? "error" : options.isPartial ? "dim" : "success", "•");
       return cachedRowsComponent((width, copyOut) => {
-        const result = input.result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
+        const result = value as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | null;
         const output = Array.isArray(result?.content)
           ? result.content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n")
           : "";
@@ -68,16 +73,16 @@ export function createShellFactories(layout: LayoutOps): ShellFactories {
           row: {
             title: "",
             isError,
-            isPartial: input.options.isPartial === true,
+            isPartial: options.isPartial === true,
             command: "",
-            language: input.name === "powershell" ? "powershell" : "bash",
+            language: name === "powershell" ? "powershell" : "bash",
             output,
-            expanded: input.options.expanded === true,
-            expandHint: input.expandHint,
+            expanded: options.expanded === true,
+            expandHint,
           },
           width,
           layout,
-          colorLevel: input.colorLevel,
+          colorLevel,
           bullet,
           titlePainter: (title) => title,
           copyOut,

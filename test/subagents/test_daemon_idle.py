@@ -6,11 +6,12 @@ import unittest
 from paths import TEST_ROOT
 from test_transport import IpcHarness
 from metis_subagent import PROTOCOL_VERSION
+from metis_subagent.daemon import IDLE_SHUTDOWN_SECONDS
 from metis_subagent.common import AgentError, dumps, socket_path
 
 class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
-    async def parked(self, proc, timeout=15):
-        end=asyncio.get_running_loop().time()+timeout
+    async def parked(self, proc, timeout=None):
+        end=asyncio.get_running_loop().time()+(timeout if timeout is not None else IDLE_SHUTDOWN_SECONDS+10)
         while proc.poll() is None and asyncio.get_running_loop().time()<end:
             await asyncio.sleep(.05)
         self.assertEqual(proc.poll(),0,'owned idle daemon exited normally')
@@ -23,13 +24,18 @@ class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         sid=(await self.request('scope_open',{'cwd':str(self.workspace)},source=source))['scope']
         proc=self.daemons[-1]
         first=await self.request('pi_watch',{'scope':sid},autostart=False,source=source)
-        watching=asyncio.create_task(self.request('pi_watch',{'scope':sid,'after':first['cursor']},timeout=15,autostart=False,source=source))
-        await asyncio.sleep(4)
+        async def watch_until_idle():
+            cursor=first['cursor']
+            while True:
+                update=await self.request('pi_watch',{'scope':sid,'after':cursor},timeout=35,autostart=False,source=source)
+                cursor=update['cursor']  # A long-poll timeout is not daemon parking.
+        watching=asyncio.create_task(watch_until_idle())
+        await asyncio.sleep(IDLE_SHUTDOWN_SECONDS*0.5)
         refreshed=asyncio.get_running_loop().time()
         await self.request('scope_open',{'cwd':str(self.workspace),'scope':sid},source=source,autostart=False)
-        with self.assertRaises(AgentError) as caught: await asyncio.wait_for(watching,15)
+        with self.assertRaises(AgentError) as caught: await asyncio.wait_for(watching,IDLE_SHUTDOWN_SECONDS+10)
         self.assertEqual(caught.exception.code,'daemon_idle')
-        self.assertGreaterEqual(asyncio.get_running_loop().time()-refreshed,4.9,'a short admitted operation starts a fresh full quiet grace')
+        self.assertGreaterEqual(asyncio.get_running_loop().time()-refreshed,IDLE_SHUTDOWN_SECONDS-0.1,'a short admitted operation starts a fresh full quiet grace')
         await self.parked(proc)
         self.assertEqual(len(self.daemons),1,'passive watch did not respawn a daemon')
         restored=await self.request('scope_open',{'scope':sid,'cwd':str(self.workspace)},source=source)
@@ -42,7 +48,7 @@ class DaemonIdleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         run=await self.spawn(sid,f'gate={gate}|durable original')
         # No parent connection exists during this interval, longer than the
         # real production grace. Active work must still own its background.
-        await asyncio.sleep(6)
+        await asyncio.sleep(IDLE_SHUTDOWN_SECONDS+1)
         self.assertIsNone(proc.poll())
         self.assertEqual((await self.request('ping',{},autostart=False))['pid'],proc.pid)
         gate.touch()
@@ -95,7 +101,7 @@ with fixture_launch([sys.executable,str(paths.TEST_ROOT/'fake_pi.py')]):
             writer.write((dumps({'v':PROTOCOL_VERSION,'op':'spawn','params':params,'source':self.source})+'\n').encode()); await writer.drain()
             self.assertEqual(await asyncio.wait_for(proc.stdout.readline(),5),b'SPAWN_ADMITTED\n')
             writer.close(); await writer.wait_closed(); writer=None
-            await asyncio.sleep(6)
+            await asyncio.sleep(IDLE_SHUTDOWN_SECONDS+1)
             self.assertEqual((await self.request('ping',{},autostart=False))['pid'],proc.pid,'admitted detached operation keeps admission open')
             gate.touch()
             # Explicitly retransmit the same key, not an automatic/new mutation.

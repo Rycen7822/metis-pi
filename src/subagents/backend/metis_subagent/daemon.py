@@ -11,7 +11,7 @@ from .runtime import Runtime
 from .schema import validate_op
 from . import PROTOCOL_VERSION
 
-IDLE_SHUTDOWN_SECONDS = 5
+IDLE_SHUTDOWN_SECONDS = 30
 PASSIVE_OPS = frozenset(
     {"ping", "doctor", "pi_watch", "pi_claim", "pi_observe", "pi_release", "pi_uncertain", "pi_detach"}
 )
