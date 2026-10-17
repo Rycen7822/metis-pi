@@ -426,6 +426,8 @@ export class HistoryWindow {
     return true;
   }
 
+  get hasNewer(): boolean { return this.#newer; }
+
   jump(direction: "older" | "newer"): void {
     this.#refreshItems();
     const component = direction === "older" ? this.#items[0] : this.#items.at(-1);
@@ -566,6 +568,20 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       window.jump("newer");
       tui.requestRender?.();
     });
+    const positionDescriptor = Object.getOwnPropertyDescriptor(scroll, "scrollTo");
+    const position = scroll.scrollTo;
+    const positionWrapper: Scroll["scrollTo"] = function (this: Scroll, row, options) {
+      position.call(this, row, options);
+      // Scrollbar drags position directly, bypassing wheel paging. Unsuppressed
+      // end-follow means the real history tail, not just this loaded page.
+      if (this.child === window && !selected() && options?.disableFollow !== true
+          && Number.isFinite(row) && row >= Math.max(0, this.contentHeight - this.viewportHeight)
+          && this.isFollowingEnd && window.hasNewer) {
+        window.jump("newer");
+        tui.requestRender?.();
+      }
+    };
+    scroll.scrollTo = positionWrapper;
     const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
     const updateLayout = scroll.updateLayout;
     const commitLayout: Scroll["updateLayout"] = function (this: Scroll, ...args) {
@@ -589,6 +605,10 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     scroll.child = window as unknown as Component; scroll.children = [scroll.child]; scroll.scrollBy = wrapper;
     installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => {
       restorePrompt(); restoreStart(); restoreEnd();
+      if (scroll.scrollTo === positionWrapper) {
+        if (positionDescriptor) Object.defineProperty(scroll, "scrollTo", positionDescriptor);
+        else Reflect.deleteProperty(scroll, "scrollTo");
+      }
       if (scroll.updateLayout === commitLayout) {
         if (layoutDescriptor) Object.defineProperty(scroll, "updateLayout", layoutDescriptor);
         else Reflect.deleteProperty(scroll, "updateLayout");
