@@ -155,6 +155,15 @@ export class CodemodeViewStore {
 
 export type NestedRendererLookup = (name: string, result: unknown) => Renderers | undefined;
 
+function resultSource(store: CodemodeViewStore, parent: string, id: string): NonNullable<ViewContext["resultSource"]> {
+  return () => {
+    const view = store.get(parent, id);
+    if (view?.result === undefined) return;
+    const result = asRecord(view.result);
+    return { args: view.args, result: { content: result.content, details: result.details } };
+  };
+}
+
 interface NestedSlot {
   state: object;
   call?: Component;
@@ -171,11 +180,12 @@ interface ExpansionState {
 
 /** Own only codemode clicks; output selection, links and wheel input stay native. */
 function clickRegion(component: Component, context: ViewContext, toggle?: () => void): Component {
+  const invalidate = context.invalidate;
   return new MouseRegion(component, event => {
     if (event.type !== "click" || event.button !== "left") return;
     if (toggle && !event.shift && !event.alt && !event.ctrl) {
       toggle();
-      context.invalidate?.();
+      invalidate?.();
     }
     // Never fall through to the host region that toggles the entire tool row.
     return { handled: true };
@@ -292,7 +302,7 @@ export function makeCodemodeRenderers(input: {
         const isError = captured?.isError ?? ["error", "cancelled"].includes(String(call.status));
         let callComponent: Component, resultComponent: Component | undefined;
         if (!renderers || args === undefined) {
-          if (renderers === input.shell) {
+          if (renderers?.renderCall === input.shell.renderCall) {
             // The builtin owner/status is known, but a truncated command isn't.
             const { bullet, title } = shellTitle({ isPartial: partial, isError }, theme);
             callComponent = input.makeText(`${bullet} ${theme.fg("toolTitle", title)} ${theme.fg("dim", "[command unavailable]")}`);
@@ -320,6 +330,7 @@ export function makeCodemodeRenderers(input: {
               slot.result = renderers.renderResult(viewResult, { ...nestedOptions, isPartial: partial }, theme, {
                 ...nestedContext,
                 lastComponent: slot.result,
+                resultSource: resultSource(input.store, context.toolCallId ?? "", call.id),
               });
             } else if (call.error) {
               slot.result = input.shell.renderResult(

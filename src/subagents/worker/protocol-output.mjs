@@ -1,3 +1,18 @@
+/** Managed progress reports liveness, not a reconstructable SDK transcript.
+ * Keep cumulative snapshots in-process; message_end and tool start/end remain
+ * canonical on the wire, including their usage, results and errors. */
+export function projectSdkEvent(event, originRunId) {
+  if (event.type === 'message_update') {
+    return { type: event.type, originRunId, assistantMessageEvent: {
+      type: event.assistantMessageEvent?.type, delta: event.assistantMessageEvent?.delta,
+    } };
+  }
+  if (event.type === 'tool_execution_update') {
+    return { type: event.type, originRunId, toolCallId: event.toolCallId, toolName: event.toolName };
+  }
+  return { ...event, originRunId };
+}
+
 /** Bounded JSONL output for the plugin-owned SDK child. SDK event callbacks
  * cannot await drain; coalesce only adjacent progress while the pipe is full. */
 export function createProtocolOutput(stream, { fail, maxBytes = 8 * 1024 * 1024, timeoutMs = 45_000 } = {}) {

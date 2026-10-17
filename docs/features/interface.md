@@ -22,9 +22,11 @@ Header 显示实际 Pi/metis 版本。Working 从 `agent_start` 到 `agent_settl
 
 时长每秒更新，shimmer 仅 truecolor 使用；settle、关闭与重载清理计时器。交互时长与各 thinking run 时长分别计算。
 
+长思考的纯 thinking 流在实际处于 peek 视图且达到 16 Ki 字符后，按 100 ms 合并预览更新；暂停输入时仍会刷新最后一批。保留完整宿主 Markdown 排版，不截断源码来拼尾部。点击、滚动、切换视图、普通文字/工具调用与最终完成立即处理；卸载取消待刷新的预览。
+
 codemode 工具行运行时显示 `Elapsed`，结束后显示 `Took`，没有嵌套工具调用的脚本也显示。历史记录使用已保存的执行时长；嵌套工具显示自己的时长。
 
-嵌套工具在已有 renderer 支持范围内复用直接调用样式；实时工具行也读取会话保存的完整参数，不把截断摘要当作完整命令。临时参数和结果缓存预算为 4 MiB，空间不足时为新数据淘汰较早已完成的条目，保留运行中参数和原调用顺序；超大单项仍不缓存。命令参数或 diff/输出确实未保留时，展开会说明缺失原因，不从当前文件或脚本猜测历史改动。
+嵌套工具在已有 renderer 支持范围内复用直接调用样式；实时工具行也读取会话保存的完整参数，不把截断摘要当作完整命令。临时参数和结果缓存预算为 4 MiB，空间不足时为新数据淘汰较早已完成的条目，保留运行中参数和原调用顺序；超大单项仍不缓存。Metis 自有的嵌套结果组件随历史窗口失效释放，重新显示时只从仍保留的数据重建；不接管第三方 renderer 的缓存生命周期。命令参数或 diff/输出确实未保留时，会说明缺失原因，不从当前文件或脚本猜测历史改动。
 
 手动 `/compact`、自动阈值压缩及 overflow 恢复时，输入区顶部的原生压缩提示旁显示 `· 12s` / `· 1m 03s`。计时从原生提示出现开始，包含重试等待，不混用 Working 的整轮时长；结束、失败或取消后清除。通过 CustomEditor 的公开状态组件接口渲染，复用宿主 spinner 刷新，不增加事件 hook、prototype patch 或定时器；Esc 和压缩流程由宿主管理。窄窗口裁切显示，其他插件占用 editor 时保留原生界面。
 
@@ -53,7 +55,7 @@ pruneExpanded = false    # prune 详情
 
 | 字段 | 来源 |
 | --- | --- |
-| context | 实时 `getContextUsage()`。 |
+| context | `getContextUsage()` 的已持久化分支用量；流式片段复用有效样本，分支、模型或消息完成等边界刷新。 |
 | `Σ` I/O | 当前 session 文件的标准 assistant、compaction、branch summary 用量（包含其他分支已产生的用量）；工具自报的模型用量、condense 和摘要 custom entry 不混入。 |
 | cache | 最近已确认请求的 `cacheRead / (input + cacheRead + cacheWrite)`；诊断同样报告最近已确认请求值。 |
 | input | 不把 cacheRead 重复算为新输入。 |
