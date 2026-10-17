@@ -68,22 +68,21 @@ test("AnySearch accepts missing or null result content", async () => {
 			{ title: "Full content", url: "https://example.com/full", snippet: "full", content: "page body" },
 		], metadata: {} } }), { status: 200 });
 		const { searchWithAnySearch } = await import(${JSON.stringify(anysearchModuleUrl)});
-		console.log(JSON.stringify(await searchWithAnySearch("partial content", { includeContent: true })));
-	`, { PI_CODING_AGENT_DIR: home });
-	assert.equal(child.status, 0, child.stderr);
-	const output = JSON.parse(child.stdout.trim());
-	assert.deepEqual(output.results.map(result => result.url), ["https://example.com/missing", "https://example.com/null", "https://example.com/full"]);
-	assert.deepEqual(output.inlineContent, [{ url: "https://example.com/full", title: "Full content", content: "page body", error: null }]);
-	const invalidChild = runChild(`
+		const output = await searchWithAnySearch("partial content", { includeContent: true });
 		globalThis.fetch = async () => new Response(JSON.stringify({ code: 0, data: { results: [
 			{ title: "Invalid content", url: "https://example.com/invalid", snippet: "invalid", content: 123 },
 		], metadata: {} } }), { status: 200 });
-		const { searchWithAnySearch } = await import(${JSON.stringify(anysearchModuleUrl)});
-		try { await searchWithAnySearch("invalid content"); console.log(JSON.stringify({ ok: true })); }
-		catch (error) { console.log(JSON.stringify({ ok: false, error: String(error) })); }
+		let invalid;
+		try { await searchWithAnySearch("invalid content"); invalid = { ok: true }; }
+		catch (error) { invalid = { ok: false, error: String(error) }; }
+		console.log(JSON.stringify({ output, invalid }));
 	`, { PI_CODING_AGENT_DIR: home });
-	assert.equal(invalidChild.status, 0, invalidChild.stderr);
-	assert.match(JSON.parse(invalidChild.stdout.trim()).error, /expected data\.results\[0\]\.content string/);
+	assert.equal(child.status, 0, child.stderr);
+	const { output, invalid } = JSON.parse(child.stdout.trim());
+	assert.deepEqual(output.results.map(result => result.url), ["https://example.com/missing", "https://example.com/null", "https://example.com/full"]);
+	assert.deepEqual(output.inlineContent, [{ url: "https://example.com/full", title: "Full content", content: "page body", error: null }]);
+	assert.equal(invalid.ok, false);
+	assert.match(invalid.error, /expected data\.results\[0\]\.content string/);
 });
 
 test("AnySearch sends keyed auth and resolves command credentials lazily", async () => {

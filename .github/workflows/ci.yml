@@ -108,3 +108,26 @@ jobs:
       - run: npm run test:pty:strict
         env:
           PI_BIN: ${{ github.workspace }}/node_modules/.bin/pi
+  retire-feature-push:
+    name: Retire duplicate feature push
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    steps:
+      # Only trusted default-branch code receives actions:write; never PR code.
+      - uses: actions/checkout@v4
+        id: trusted
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Keep PR validation and retire only a confirmed duplicate branch push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_CI_REF: ${{ steps.trusted.outputs.commit }}
+        run: node scripts/ci/cancel-duplicate-push.mjs

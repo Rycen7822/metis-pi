@@ -1544,8 +1544,12 @@ class RuntimeTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.rt.store.agent(self.scope, aid)["cleanup"], "verified")
                 self.assertIsNone(process_identity(child))
                 self.assertEqual(group_members(pgid), [])
-                await self.until(lambda: w.closed and all(t.done() for t in w.tasks), timeout=3)
+                # Task.done() precedes its scheduled done callbacks; wait for
+                # retirement itself, not just the tasks that trigger it.
+                await self.until(lambda: aid not in self.rt.workers, timeout=3)
                 self.assertNotIn(aid, self.rt.workers)
+                self.assertTrue(w.closed)
+                self.assertTrue(all(t.done() for t in w.tasks))
 
     async def test_killed_guard_cannot_claim_verified_cleanup(self):
         s = await self.spawn("SPAWN_DETACHED_CHILD")
