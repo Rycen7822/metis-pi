@@ -98,8 +98,11 @@ export function createFullscreenLayout(host: FullscreenLayoutHost, options: Full
       }
       // Retry capture/mount without stacking another hook, even if a later
       // extension has wrapped ours. Existing roots also receive the layout features.
-      if (marginReady && target.layoutRoot && !innerRoot(target.layoutRoot)) target.setLayoutRoot?.(target.layoutRoot);
-      else history.mount(target, innerRoot(target.layoutRoot) ?? target.layoutRoot);
+      // Replay through the setter even at zero margin: Pi's facade forwards
+      // calls with the real renderer as `this`, but not defineProperty writes.
+      // The native setter is a no-op for an unchanged root.
+      if (target.layoutRoot) target.setLayoutRoot?.(target.layoutRoot);
+      else history.mount(target, undefined);
       reason = "installed";
       return true;
     },

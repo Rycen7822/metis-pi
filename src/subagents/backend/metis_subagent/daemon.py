@@ -141,7 +141,11 @@ async def serve(home: Path):
             while not runtime.closing:
                 await asyncio.sleep(0.5)
                 await runtime.check_idle()
-                if not runtime.can_idle_shutdown() or any(op not in PASSIVE_OPS for op in clients.values()):
+                # Undecoded connections defer admission close below, but do
+                # not turn passive traffic into activity that renews the grace.
+                if not runtime.can_idle_shutdown() or any(
+                    op is not None and op not in PASSIVE_OPS for op in clients.values()
+                ):
                     idle_since = None
                     continue
                 stamp = loop.time()

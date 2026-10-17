@@ -162,6 +162,9 @@ export class CodemodeViewStore {
     if (value.role !== "toolResult" || value.toolName !== "codemode" || typeof value.toolCallId !== "string") return;
     const parent = this.#parents.get(value.toolCallId);
     if (!parent) return;
+    // A replacement supersedes the old ledger even if admission fails: old
+    // arguments may no longer describe this result. An unchanged repeat fits
+    // its released reservation without eviction.
     this.#bytes -= parent.history?.bytes ?? 0;
     parent.history = undefined;
     // Pi's live row gets execution-end data before the saved argument ledger.
@@ -179,6 +182,14 @@ export class CodemodeViewStore {
 }
 
 export type NestedRendererLookup = (name: string, result: unknown) => Renderers | undefined;
+
+// Ordinary extensions may also name tools models.*. Only native helper IDs
+// identify model calls that do not emit nested tool lifecycle starts.
+function isModelCall(call: Readonly<Record<string, unknown>>, parent: string): boolean {
+  if (!parent || typeof call.id !== "string" || typeof call.name !== "string" || !call.name.startsWith("models.")) return false;
+  const prefix = `${parent}/${call.name}/`;
+  return call.id.startsWith(prefix) && /^[1-9]\d*$/.test(call.id.slice(prefix.length));
+}
 
 function resultSource(store: CodemodeViewStore, parent: string, id: string): NonNullable<ViewContext["resultSource"]> {
   return () => {
@@ -261,25 +272,32 @@ export function makeCodemodeRenderers(input: {
       const timerText = toolTimerText(context, options.isPartial === true);
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
-      const history = asRecord(value.nestedCalls ?? input.store.history(context.toolCallId ?? ""));
+      const parent = context.toolCallId ?? "", previewId = `${parent}/?`;
+      const history = asRecord(value.nestedCalls ?? input.store.history(parent));
       const historicalArgs = new Map((Array.isArray(history.calls) ? history.calls.map(asRecord) : []).map((call) => [call.id, call]));
-      const live = input.store.entries(context.toolCallId ?? "");
-      const byId = new Map(recorded.map((call) => [call.id, call]));
+      const live = input.store.entries(parent);
       const liveCalls = new Map(live.map(([id, view]) =>
-        [id, { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" }] as const));
+        [id, { id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" }] as const));
       const byOrder = new Map(live.map(([id, view]) => [view.order, liveCalls.get(id)!]));
-      // Recorded positions include previews and evicted summaries. Only tool
-      // calls emit lifecycle starts; models.* records don't consume that order.
+      const exactIds = new Set(recorded.map(call => call.id).filter(id => id !== previewId));
       const calls: Readonly<Record<string, unknown>>[] = [], used = new Set<string>();
       let order = 0;
       for (const call of recorded) {
-        const position = String(call.name).startsWith("models.") ? undefined : order++;
-        const current = liveCalls.get(String(call.id))
-          ?? (String(call.id).endsWith("/?") && position !== undefined ? byOrder.get(position) : undefined);
-        if (current && current.name === call.name && !used.has(current.id)) {
-          calls.push({ ...call, ...current });
+        const id = String(call.id), preview = id === previewId;
+        if (!preview && used.has(id)) continue;
+        const position = isModelCall(call, parent) ? undefined : order++;
+        const candidate = preview && position !== undefined ? byOrder.get(position) : undefined;
+        // Exact identity wins; positional inference needs matching names and
+        // cannot borrow an execution reserved by a later exact record.
+        const current = liveCalls.get(id)
+          ?? (candidate && candidate.name === call.name && !exactIds.has(candidate.id) ? candidate : undefined);
+        if (current && !used.has(current.id)) {
+          calls.push(current.name === call.name ? { ...call, ...current } : current);
           used.add(current.id);
-        } else calls.push(call);
+        } else {
+          calls.push(call);
+          if (!preview) used.add(id);
+        }
       }
       for (const [id, call] of liveCalls) if (!used.has(id)) calls.push(call);
       const allCalls = view.allCalls ?? view.expanded;
@@ -303,8 +321,8 @@ export function makeCodemodeRenderers(input: {
         }
         const expanded = slot.expanded ?? view.expanded;
         const nestedOptions = { ...options, expanded };
-        const captured = input.store.get(context.toolCallId ?? "", call.id);
-        const missingResult = call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined;
+        const captured = input.store.get(parent, call.id), modelCall = isModelCall(call, parent);
+        const missingResult = call.status !== "running" && !modelCall && captured?.result === undefined;
         if (missingResult) missingResults = true;
         const saved = historicalArgs.get(call.id);
         let args = captured?.args;
@@ -353,7 +371,7 @@ export function makeCodemodeRenderers(input: {
               slot.result = renderers.renderResult(viewResult, { ...nestedOptions, isPartial: partial }, theme, {
                 ...nestedContext,
                 lastComponent: slot.result,
-                resultSource: resultSource(input.store, context.toolCallId ?? "", call.id),
+                resultSource: resultSource(input.store, parent, call.id),
               });
             } else if (call.error) {
               slot.result = input.shell.renderResult(
@@ -372,7 +390,7 @@ export function makeCodemodeRenderers(input: {
         const toggle = preview ? undefined : () => { slot.expanded = !expanded; };
         parts.push(clickRegion(callComponent, context, toggle));
         if (resultComponent) parts.push(clickRegion(resultComponent, context, toggle));
-        if (expanded && !partial && !call.name.startsWith("models.")) {
+        if (expanded && !partial && !modelCall) {
           const unavailable = [
             args === undefined ? "Full arguments unavailable; expand codemode to inspect the script." : "",
             missingResult ? "Nested output was not retained; no saved diff/output to expand." : "",

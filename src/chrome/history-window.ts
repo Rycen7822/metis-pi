@@ -492,8 +492,10 @@ export class HistoryWindow {
 export function createHistoryWindowSystem(host: HistoryWindowHost) {
   let installed:
     | {
+        tui: HistoryWindowTui;
         scroll: Scroll;
         source: Component;
+        scrollbarFollow: { installed: boolean; reason: string };
         window: HistoryWindow;
         wheel: Scroll["scrollBy"];
         wrapper: Scroll["scrollBy"];
@@ -536,7 +538,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       reason = "primary ScrollView unavailable";
       return;
     }
-    if (installed?.scroll === scroll) return;
+    if (installed?.scroll === scroll && installed.tui === tui) return;
     unmount();
     const source = scroll.child;
     if (!(source instanceof (host.Container as any))) {
@@ -583,28 +585,32 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
     // Generic scrollTo also serves prompt/search navigation and stays native.
     // An absent/locked helper disables only this optional enhancement.
     const pointerName = "scrollScrollbarToPointer";
+    const scrollbarFollow = { installed: false, reason: "native scrollbar helper unavailable" };
     let restorePointer = () => {};
     try {
       const descriptor = Object.getOwnPropertyDescriptor(tui, pointerName);
       const pointer: unknown = Reflect.get(tui, pointerName);
+      if (typeof pointer === "function") scrollbarFollow.reason = "native scrollbar helper not writable";
       if (typeof pointer === "function" && Object.isExtensible(tui)
         && (!descriptor || descriptor.configurable && descriptor.writable !== false)) {
         const pointerWrapper = function (this: object, ...args: unknown[]) {
           const result = pointer.apply(this, args);
-          if (navigationActive && args[0] === scroll && Number.isFinite(args[2]) && Number.isFinite(args[3])
+          if (navigationActive && args[0] === scroll
             && scroll.child === window && !selected() && scroll.isFollowingEnd
-            && scroll.scrollTop === Math.max(0, scroll.contentHeight - scroll.viewportHeight)
+            && scroll.scrollTop >= Math.max(0, scroll.contentHeight - scroll.viewportHeight)
             && window.hasNewer && window.jump("newer")) tui.requestRender?.();
           return result;
         };
         Object.defineProperty(tui, pointerName, { value: pointerWrapper, writable: true, configurable: true });
+        scrollbarFollow.installed = true;
+        scrollbarFollow.reason = "installed";
         restorePointer = () => {
           if (Reflect.get(tui, pointerName) !== pointerWrapper) return;
           if (descriptor) Object.defineProperty(tui, pointerName, descriptor);
           else Reflect.deleteProperty(tui, pointerName);
         };
       }
-    } catch { /* Optional private bridge unavailable; wheel/explicit jumps remain native. */ }
+    } catch { scrollbarFollow.reason = "native scrollbar bridge unavailable"; }
     const layoutDescriptor = Object.getOwnPropertyDescriptor(scroll, "updateLayout");
     const updateLayout = scroll.updateLayout;
     const commitLayout: Scroll["updateLayout"] = function (this: Scroll, ...args) {
@@ -626,7 +632,7 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
       return wheel.call(this, delta);
     };
     scroll.child = window as unknown as Component; scroll.children = [scroll.child]; scroll.scrollBy = wrapper;
-    installed = { scroll, source, window, wheel, wrapper, restoreNavigation: () => {
+    installed = { tui, scroll, source, window, scrollbarFollow, wheel, wrapper, restoreNavigation: () => {
       navigationActive = false;
       restorePointer(); restorePrompt(); restoreStart(); restoreEnd();
       if (scroll.updateLayout === commitLayout) {
@@ -637,7 +643,10 @@ export function createHistoryWindowSystem(host: HistoryWindowHost) {
   }
   return {
     mount,
-    status() { return { installed: !!installed, reason, ...installed?.window.status() }; },
+    status() {
+      return { installed: !!installed, reason, ...installed?.window.status(),
+        scrollbarFollow: installed ? { ...installed.scrollbarFollow } : { installed: false, reason: "not installed" } };
+    },
     dispose: unmount,
   };
 }

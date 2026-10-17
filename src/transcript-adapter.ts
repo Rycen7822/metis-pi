@@ -205,7 +205,10 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     return spacerProto;
   };
 
-  type PreviewUpdate = { at: number; peeking?: boolean; args?: unknown[]; timer?: ReturnType<typeof setTimeout> };
+  type PreviewUpdate = {
+    at: number; source?: WeakRef<object>; peeking?: boolean; flushing?: boolean;
+    args?: unknown[]; timer?: ReturnType<typeof setTimeout>;
+  };
   const previews = new WeakMap<object, PreviewUpdate>();
   const pending = new Set<PreviewUpdate>();
   const releasePreview = (preview: PreviewUpdate): void => {
@@ -215,47 +218,60 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     pending.delete(preview);
   };
   const wrapper = function (this: unknown, ...args: unknown[]): void {
+    const target = typeof this === "object" && this !== null ? this : undefined;
+    const preview = target ? previews.get(target) : undefined;
     let canPreview = false;
     try { canPreview = active && input.requestRender !== undefined && input.enabled(); }
     catch { /* Optional cadence must not prevent the native rebuild. */ }
-    if (canPreview && typeof this === "object" && this !== null) {
-      const preview = previews.get(this);
+    if (canPreview && target) {
       const content = asRecord(args[0]).content;
       let policy: ThinkingPolicy | undefined;
       try { policy = input.thinkingPolicy?.(); }
       catch { /* Keep the ordinary immediate host/presentation fallback. */ }
       // Only an actually mounted peek can coalesce. Native/manual rebuilds,
       // mixed content, foreign displays and completion bypass the cadence.
-      const longPeek = args[1] === true && preview?.peeking === true && policy?.streaming === "peek"
+      const longPeek = args[1] === true && preview?.peeking === true && !preview.flushing
+        && preview.source?.deref() === args[0] && policy?.streaming === "peek"
         && Array.isArray(content) && content.length > 0 && content.every(block => asRecord(block).type === "thinking")
         && content.reduce((sum, block) => sum + String(asRecord(block).thinking ?? "").length, 0) >= 16_384;
       const delay = preview ? Math.min(100, 100 - (Date.now() - preview.at)) : 0;
       if (longPeek && preview && delay > 0) {
         preview.args = args;
-        Reflect.set(this, "lastMessage", args[0]);
-        Reflect.set(this, "isStreaming", true);
+        Reflect.set(target, "lastMessage", args[0]);
+        Reflect.set(target, "isStreaming", true);
         if (!preview.timer) {
-          const target = this, queued = preview;
+          const queued = preview;
           queued.timer = setTimeout(() => {
             const latest = queued.args;
             releasePreview(queued);
             try {
+              // A queued old partial must never replace a newer native owner.
               if (!latest || !active || !input.enabled() || asRecord(target).lastMessage !== latest[0]) return;
-              queued.at = -Infinity; // Flush even if the system clock moved backwards.
+              // Visit the current wrapper chain once, bypassing this queue
+              // explicitly rather than encoding flush state in a timestamp.
+              queued.flushing = true;
               const refresh = asRecord(target).updateContent;
               if (typeof refresh === "function") refresh.apply(target, latest);
               input.requestRender?.();
             } catch { /* An optional presentation callback must not escape a timer. */ }
+            finally { queued.flushing = false; }
           }, delay);
           queued.timer.unref?.();
           pending.add(queued);
         }
         return;
       }
-      if (preview) releasePreview(preview);
-      previews.set(this, { at: Date.now() });
     }
+    if (preview) { releasePreview(preview); preview.peeking = false; }
     original.apply(this, args);
+    // Only a successful native rebuild starts a cadence window. Weak identity
+    // prevents a reused component from delaying a different message or pinning it.
+    if (canPreview && target) {
+      const current = preview ?? { at: 0 };
+      current.at = Date.now();
+      current.source = typeof args[0] === "object" && args[0] !== null ? new WeakRef(args[0]) : undefined;
+      previews.set(target, current);
+    }
     if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
     let view: AssistantView | undefined;
     try { view = readAssistantView(input, this); } catch { return; }
