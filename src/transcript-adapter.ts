@@ -206,7 +206,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
   };
 
   type PreviewUpdate = {
-    at: number; source?: WeakRef<object>; peeking?: boolean; flushing?: boolean;
+    at: number; messageKey?: MessageViewKey; peeking?: boolean; flushing?: boolean;
     args?: unknown[]; timer?: ReturnType<typeof setTimeout>;
   };
   const previews = new WeakMap<object, PreviewUpdate>();
@@ -223,6 +223,10 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     let canPreview = false;
     try { canPreview = active && input.requestRender !== undefined && input.enabled(); }
     catch { /* Optional cadence must not prevent the native rebuild. */ }
+    // SDK deltas are fresh shallow copies; event-anchored keys identify the
+    // logical response. Without that evidence, keep the native update immediate.
+    const messageKey = canPreview && target && typeof args[0] === "object" && args[0] !== null
+      ? input.state.identityOf(args[0]) : undefined;
     if (canPreview && target) {
       const content = asRecord(args[0]).content;
       let policy: ThinkingPolicy | undefined;
@@ -231,7 +235,7 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
       // Only an actually mounted peek can coalesce. Native/manual rebuilds,
       // mixed content, foreign displays and completion bypass the cadence.
       const longPeek = args[1] === true && preview?.peeking === true && !preview.flushing
-        && preview.source?.deref() === args[0] && policy?.streaming === "peek"
+        && messageKey !== undefined && preview.messageKey === messageKey && policy?.streaming === "peek"
         && Array.isArray(content) && content.length > 0 && content.every(block => asRecord(block).type === "thinking")
         && content.reduce((sum, block) => sum + String(asRecord(block).thinking ?? "").length, 0) >= 16_384;
       const delay = preview ? Math.min(100, 100 - (Date.now() - preview.at)) : 0;
@@ -264,12 +268,12 @@ function decorateAssistant(input: TranscriptAdapterInput, autoApplied: { count: 
     }
     if (preview) { releasePreview(preview); preview.peeking = false; }
     original.apply(this, args);
-    // Only a successful native rebuild starts a cadence window. Weak identity
-    // prevents a reused component from delaying a different message or pinning it.
+    // Only a successful native rebuild starts a cadence window. The logical
+    // key changes on component reuse/session reset without retaining payloads.
     if (canPreview && target) {
       const current = preview ?? { at: 0 };
       current.at = Date.now();
-      current.source = typeof args[0] === "object" && args[0] !== null ? new WeakRef(args[0]) : undefined;
+      current.messageKey = messageKey;
       previews.set(target, current);
     }
     if (!active || !input.enabled() || typeof this !== "object" || this === null) return;
@@ -617,9 +621,9 @@ function resolveMessagePlan(
 ): MessageViewKey | undefined {
   const known = input.state.identityOf(component) ?? input.state.identityOf(message);
   if (known) return known;
-  // The host passes the SAME message object it handed to the extension
-  // events, and the state anchors it at message_start — so the object lookup
-  // above is the PRIMARY path. The heuristics below only serve components
+  // The host and extension receive the same object for EACH event. State
+  // maps those per-delta copies to one logical plan, making the lookup above
+  // the PRIMARY path. The heuristics below only serve components
   // whose message object was never anchored (history replay, cold start):
   // the state may already hold the OPEN plan for this message; reuse it
   // instead of sealing a second plan whose followsTools flag would be wrong.
