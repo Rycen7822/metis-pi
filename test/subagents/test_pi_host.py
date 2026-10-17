@@ -35,7 +35,7 @@ class PiHostContracts(unittest.IsolatedAsyncioTestCase):
                 writer.close(); await writer.wait_closed()
         def connected(reader,writer): self.jobs.append(asyncio.create_task(handle(reader,writer)))
         self.server=await asyncio.start_unix_server(connected,str(self.sock))
-        self.proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'bin/metis-subagent'),'--home',str(self.home),'pi-host',
+        self.proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'main.py'),'--home',str(self.home),'pi-host',
             stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         self.rid=0
         self.addAsyncCleanup(self.cleanup)

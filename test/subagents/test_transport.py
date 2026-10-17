@@ -17,7 +17,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import ROOT, TEST_ROOT, REPO_ROOT, WORKER_ROOT
 from metis_subagent.client import request as ipc_request
 from metis_subagent import PROTOCOL_VERSION, RUNTIME_REVISION
 from metis_subagent.common import AgentError, TERMINAL, dumps, group_members, read_frame, socket_path
@@ -66,7 +66,7 @@ class IpcHarness:
         self.reqid = 0
         self.daemons = []
         popen = subprocess.Popen
-        expected = [sys.executable, str(ROOT/'bin/metis-subagent'), '--home', str(self.home), 'daemon']
+        expected = [sys.executable, str(ROOT/'main.py'), '--home', str(self.home), 'daemon']
         def owned_daemon(command, *args, **kwargs):
             if command == expected:
                 if self.use_fake:
@@ -176,7 +176,7 @@ class NativeHostOutputTests(unittest.IsolatedAsyncioTestCase):
                 self.peers.discard(writer)
         self.server = await asyncio.start_unix_server(handle, str(socket_path(self.home)))
         env = {**os.environ, 'METIS_PI_CONFIG':str(self.home/'metis-pi.toml')}
-        self.host = await asyncio.create_subprocess_exec(sys.executable, str(ROOT/'bin/metis-subagent'),
+        self.host = await asyncio.create_subprocess_exec(sys.executable, str(ROOT/'main.py'),
             '--home', str(self.home), 'pi-host', stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
             limit=8*1024*1024)
@@ -609,7 +609,7 @@ class TransportTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         # The production pi-host really exits; the daemon and child are separate
         # owned processes and must finish the already-admitted work.
         env = os.environ.copy()
-        host = await asyncio.create_subprocess_exec(sys.executable, str(ROOT/'bin/metis-subagent'),
+        host = await asyncio.create_subprocess_exec(sys.executable, str(ROOT/'main.py'),
             '--home', str(self.home), 'pi-host', stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
         await self.request('ping', {})  # retain the daemon's owned Popen handle
@@ -1276,7 +1276,7 @@ class LivePiLifecycleTests(IpcHarness, unittest.IsolatedAsyncioTestCase):
         # prompt: a real baseline for an extension overriding a builtin name.
         env = {'PATH':os.environ['PATH'],'HOME':str(self.pi_home),'PI_CODING_AGENT_DIR':str(self.pi_agent),
             'METIS_PI_CONFIG':str(self.config_path),'PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1'}
-        proc = subprocess.Popen([self.node,str(ROOT/'runtime/pi-sdk.mjs'),str(self.sdk),
+        proc = subprocess.Popen([self.node,str(WORKER_ROOT/'pi-sdk.mjs'),str(self.sdk),
             '--offline','--provider','pi-mock-offline','--model','mock'], cwd=self.workspace, env=env,
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:

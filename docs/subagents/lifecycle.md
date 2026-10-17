@@ -1,6 +1,6 @@
 # Subagent lifecycle
 
-Metis owns the runtime under `src/subagents/core`. Each parent Pi session has its own scope. Reload reconnects the frontend; closing the parent does not silently kill background tasks. An interrupt stops the current work; close terminates the owned worker; respawn reuses its durable session without replaying old input.
+Metis owns the Python service under `src/subagents/backend` and the child Pi runner under `src/subagents/worker`; parent-session coordination lives in `host`, and presentation in `ui`. Each parent Pi session has its own scope. Reload reconnects the frontend; closing the parent does not silently kill background tasks. An interrupt stops the current work; close terminates the owned worker; respawn reuses its durable session without replaying old input.
 
 After five consecutive seconds without active, queued or input-waiting runs, the shared daemon closes admission and parks its settled workers with verified cleanup, then exits. In-flight requests and notification sends finish first; unknown cleanup or active tools prevent automatic exit. Durable sessions, results and unread attention remain in the ledger. Explicit spawn/follow-up and other requested reads restart the daemon on demand; a passive watch or automatic parent synchronization does not keep an otherwise unused daemon alive or create a restart loop. The native frontend also releases an unused IPC helper without surrendering its logical session lease; reconnect cannot replace a later frontend owner.
 

@@ -26,6 +26,6 @@ docs/transcript.ansi
 docs/transcript.txt
 
 # Subagent package payload and Python interpreter caches
-src/subagents/core/tools.json
+src/subagents/backend/tools.json
 __pycache__/
 *.pyc

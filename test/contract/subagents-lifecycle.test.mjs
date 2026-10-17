@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { subagentTheme } from "../helpers/subagent-theme.mjs";
-import { SubagentSession } from "../../src/subagents/session.ts";
-import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
+import { SubagentSession } from "../../src/subagents/host/session.ts";
+import { RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
+import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 
 const runtime = { root: "/unused-test-runtime", tools: [], baseEnvKeys: [], scopeEnvKeys: [], maxFrame: 8 * 1024 * 1024 };
 const tick = () => new Promise(resolve => setImmediate(resolve));

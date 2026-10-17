@@ -1,25 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { TSchema } from "typebox";
-import { metisConfigPath } from "../metis-config.ts";
-
-export interface SubagentTool {
-  name: string; description: string; inputSchema: TSchema; outputSchema: TSchema;
-  _op: string;
-  annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
-}
-export interface RuntimePackage { root: string; tools: SubagentTool[]; baseEnvKeys: string[]; scopeEnvKeys: string[]; maxFrame: number }
-export function runtimePackage(): RuntimePackage {
-  const root = fileURLToPath(new URL("./core/", import.meta.url));
-  const metadata = JSON.parse(readFileSync(join(root, "tools.json"), "utf8"));
-  if (metadata.hostProtocol !== 1 || !Array.isArray(metadata.scopeEnvKeys))
-    throw new Error("Metis subagent schema needs host protocol 1 with scopeEnvKeys; run npm run prepare:subagents");
-  return { root, ...metadata };
-}
+import { metisConfigPath } from "../../metis-config.ts";
+import type { RuntimePackage } from "./runtime-package.ts";
 export class RuntimeError extends Error {
   readonly code: string;
   readonly agent_id?: string;
@@ -130,7 +115,7 @@ export class SubagentClient {
     if (!this.bridge) {
       const child = spawn(
         "python3",
-        [join(this.runtime.root, "bin/metis-subagent"), "--home", join(this.agentDir, "metis", "subagent"), "pi-host"],
+        [join(this.runtime.root, "main.py"), "--home", join(this.agentDir, "metis", "subagent"), "pi-host"],
         { cwd: this.ctx.cwd, stdio: "pipe", env: { ...process.env, METIS_PI_CONFIG: metisConfigPath(this.agentDir) } },
       );
       const bridge = (this.bridge = { child, buffer: Buffer.alloc(0), stderr: "" });

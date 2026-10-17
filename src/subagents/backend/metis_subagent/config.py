@@ -5,9 +5,10 @@ from copy import deepcopy
 from pathlib import Path
 import tomllib
 from .common import AgentError, text
+from .paths import PACKAGE_DIR, SURFACE_EXTENSION
 
 # The packaged TOML owns defaults AND canonical field names; runtime uses snake_case.
-BUNDLED = tomllib.loads((Path(__file__).resolve().parents[4]/'metis-pi.toml').read_text(encoding='utf-8-sig'))['subagents']
+BUNDLED = tomllib.loads((PACKAGE_DIR/'metis-pi.toml').read_text(encoding='utf-8-sig'))['subagents']
 PROFILE_FIELDS = set(BUNDLED['profiles']['default']) | {'model', 'provider', 'thinking', 'env'}
 
 def snake_key(key):
@@ -38,7 +39,7 @@ def metis_config_path():
     agent_dir = Path(os.environ.get('PI_CODING_AGENT_DIR', str(Path.home()/'.pi/agent'))).expanduser().resolve()
     return agent_dir / 'metis-pi.toml'
 # Pi's built-in tools (dist/core/tools/index.js `allToolNames`). A profile's
-# `tools` is its ALLOWED built-in surface, applied by extensions/managed-surface.ts
+# `tools` is its ALLOWED built-in surface, applied by worker/managed-surface.ts
 # because both CLI filters are wrong for it: --tools is an allowlist over
 # built-in, extension and custom tools, and --exclude-tools filters the same
 # registry BY NAME, so either one would also drop a tool an extension registered
@@ -88,7 +89,7 @@ def load_config(home: Path):
 def surface_extension_path() -> Path:
     """The shipped extension that applies (and reads back) a profile's built-in
     tool surface inside the child."""
-    return Path(__file__).resolve().parent.parent/'extensions'/'managed-surface.ts'
+    return SURFACE_EXTENSION
 
 def launch_spec(config, profile_name, model, cwd, access, thinking=None, host=None):
     if profile_name not in config['profiles']: raise AgentError('profile_not_found',f'Unknown profile: {profile_name}')
@@ -121,6 +122,7 @@ def launch_spec(config, profile_name, model, cwd, access, thinking=None, host=No
     if restrict:
         if not surface.is_file():
             raise AgentError('invalid_config',f'Restricting built-in tools requires {surface}; restore it or allow every built-in tool')
+        # This first extension slot is backend-owned; profile extensions follow.
         argv += ['--extension',str(surface)]
     # --extension and --skill are repeatable and additive, so profile entries and
     # inherited entries can coexist without merging flags.

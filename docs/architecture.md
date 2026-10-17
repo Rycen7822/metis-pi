@@ -14,7 +14,7 @@
 | `action-fusion.ts` | Pi edit/write 的 then_run 增强；`src/execution/action-fusion.ts` 负责路径排队、快照、取消和回执。 |
 | `execution.ts` | deferred PTY 进程工具、执行设置、后台 shell 和资源清理。 |
 | `mcp.ts` | 默认关闭；`src/mcp` 持有目录缓存、连接租约和工具装配，协议/OAuth/CLI/codemode/权限由 Pi 提供。 |
-| `subagents.ts` | `src/subagents` 持有父会话租约、接收票据和轻量交互；`core` 原生持有子代理 Runtime、账本、任务队列和进程管理。 |
+| `subagents.ts` | `src/subagents/host` 持有父会话租约、接收票据和采样协调；`ui` 负责交互；`backend` 持有账本、任务状态和进程管理；`worker` 执行子 Pi。 |
 | `web-access.ts` | `src/pi-web-access` 管理搜索、提取、内容存储和 Curator；聚合工具沿 Pi deferred/codemode 发现与调用。 |
 | `session-recall.ts` | `src/pi-session-recall` 管理会话检索与回读；辅助模型请求使用当前 Pi ModelRuntime。 |
 
@@ -62,7 +62,7 @@ Web 搜索的公共结果归 `search-types.ts`，provider 身份与标签归 `se
 
 网页请求使用显式 transport，不改写进程全局 fetch；代理和 SSRF 校验使用同一实际路由，默认将已验证的 DNS 地址固定到连接。Curator 的资源与 Cookie 诊断归具体实例或操作；页面使用固定版本和完整性校验的 Markdown parser/sanitizer，结果正文不能提供 UI 身份属性，选择操作只读取页面自身创建的卡片与控件。
 
-子代理核心由 Metis 维护并随包交付。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；接收证明校验 session、scope、receipt 和正文 digest。不确定交付保留账本，wait、结果读取和状态检查按已交付票据消费终态通知；列表保留 attention，结果文件支持重复读取。Worker 的进程状态与每次 run 的投影分开，Runtime 仍是任务推进者。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[原生入口](subagents/native.md)。
+子代理由 Metis 维护并随包交付；目录与进程边界见 [子代理模块分层](../src/subagents/README.md)。每个父 Pi session 有独立 scope；前端断开不默认关闭 child。已确认的 wait 接收阻止重复唤醒，未观察事件使用 custom message；接收证明校验 session、scope、receipt 和正文 digest。不确定交付保留账本，wait、结果读取和状态检查按已交付票据消费终态通知；列表保留 attention，结果文件支持重复读取。Worker 的进程状态与每次 run 的投影分开，Runtime 仍是任务推进者。生命周期与运行要求见 [子代理](subagents/lifecycle.md)和[原生入口](subagents/native.md)。
 
 ## 生命周期与交付
 

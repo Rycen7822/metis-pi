@@ -45,7 +45,7 @@ ui = {}
 
 
 def surface_report():
-    """Stand-in for extensions/managed-surface.ts: report the built-in surface the
+    """Stand-in for worker/managed-surface.ts: report the built-in surface the
     child applied, in the same line format (ok/builtins read back from the live
     registry in real Pi)."""
     plan=os.environ.get('PI_AGENTS_CHILD_BUILTINS')

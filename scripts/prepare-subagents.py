@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-root = Path(__file__).resolve().parent.parent / "src/subagents/core"
+root = Path(__file__).resolve().parent.parent / "src/subagents/backend"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(root))
 from metis_subagent.common import BASE_ENV_KEYS, PROXY_ENV_KEYS, MAX_FRAME

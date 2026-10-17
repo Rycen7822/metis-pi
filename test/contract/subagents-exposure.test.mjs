@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import subagents from "../../extensions/subagents.ts";
-import { runtimePackage } from "../../src/subagents/client.ts";
+import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const ownPath = join(root, "extensions/subagents.ts");

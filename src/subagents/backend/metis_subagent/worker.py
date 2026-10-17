@@ -13,6 +13,7 @@ import signal
 import sys
 import time
 
+from .paths import SURFACE_EXTENSION, WORKER_DIR
 from .common import (MAX_FRAME, AgentError, atomic_json, crop, dumps, group_members,
     live_identity, new_id, now, private_dir, read_frame)
 
@@ -81,7 +82,7 @@ class Worker:
         self.events_written = 0
         self.tasks = []
         self.write_lock = asyncio.Lock()
-        self.surface = None          # parsed report from extensions/managed-surface.ts
+        self.surface = None          # parsed report from worker/managed-surface.ts
         self.surface_ready = asyncio.Event()
         self.surface_buf = b''
         # Set when the host starts work no daemon run owns (see Runtime.stop_unowned):
@@ -249,7 +250,7 @@ def managed_command(argv, sdk_path=None):
             raise AgentError('unsupported_pi_version','Native Pi subagents require the host SDK >=1.3.0')
         if not sdk.is_file() or not Path(argv[0]).is_file() or not os.access(argv[0],os.X_OK):
             raise AgentError('sdk_unavailable','Parent SDK and Node executable must still exist')
-        return [argv[0],str(Path(__file__).resolve().parent.parent/'runtime/pi-sdk.mjs'),str(sdk),*argv[2:]]
+        return [argv[0],str(WORKER_DIR/'pi-sdk.mjs'),str(sdk),*argv[2:]]
     return argv
 
 def session_argv(home, a, spec):
@@ -260,6 +261,13 @@ def session_argv(home, a, spec):
     if a['generation'] and (not session.exists() or session.stat().st_size==0):
         raise AgentError('session_unavailable','Previous Pi session is missing or empty; use pi_spawn_agent to create a new agent explicitly')
     argv=list(spec['argv'])
+    if spec.get('surface'):
+        # launch_spec owns the first extension slot. Rebind only that asset when
+        # resuming saved argv after package moves; never rewrite profile paths.
+        try:
+            argv[argv.index('--extension')+1]=str(SURFACE_EXTENSION)
+        except (ValueError, IndexError):
+            raise AgentError('invalid_config','Managed launch is missing its built-in surface extension') from None
     if not a['generation']:
         private_dir(directory/'sessions')
         argv += ['--session-dir',str(directory/'sessions')]

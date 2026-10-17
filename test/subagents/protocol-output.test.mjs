@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PassThrough } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createProtocolOutput } from '../../src/subagents/core/runtime/protocol-output.mjs';
+import { createProtocolOutput } from '../../src/subagents/worker/protocol-output.mjs';
 
 function fixture(options = {}) {
   const stream = new PassThrough({ highWaterMark: 64 });

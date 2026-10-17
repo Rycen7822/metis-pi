@@ -1,13 +1,13 @@
 import { ToolExecutionComponent, getMarkdownTheme, highlightCode, keyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, getCapabilities, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters } from "node:util";
-import { makeRenderers, type ToolName } from "../renderers.ts";
-import { createDiffComponent, createShellFactories } from "../chrome/tool-components.ts";
-import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent } from "../chrome/transcript-components.ts";
-import { createThinkingViewControl, type ThinkingView } from "../thinking-view.ts";
-import { thoughtSummaryText } from "../thinking-summary.ts";
-import { resolveColorContext } from "../palette.ts";
-import type { AppearanceConfig } from "../config.ts";
+import { makeRenderers, type ToolName } from "../../renderers.ts";
+import { createDiffComponent, createShellFactories } from "../../chrome/tool-components.ts";
+import { ThinkingClickableComponent, ThinkingPeekComponent, ThinkingRailComponent } from "../../chrome/transcript-components.ts";
+import { createThinkingViewControl, type ThinkingView } from "../../thinking-view.ts";
+import { thoughtSummaryText } from "../../thinking-summary.ts";
+import { resolveColorContext } from "../../palette.ts";
+import type { AppearanceConfig } from "../../config.ts";
 import { subagentToolRenderers } from "./rendering.ts";
 
 export const cleanViewerText = (text: string) => stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");

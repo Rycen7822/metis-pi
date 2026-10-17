@@ -12,10 +12,11 @@ import {
   type ToolDefinition,
   type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
-import { isDaemonIdle, RuntimeError, SubagentClient, type RuntimePackage } from "./client.ts";
-import { SubagentViewer, type AgentInspection } from "./viewer.ts";
-import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "./widget.ts";
-import { loadConfig } from "../config.ts";
+import { isDaemonIdle, RuntimeError, SubagentClient } from "./client.ts";
+import type { RuntimePackage } from "./runtime-package.ts";
+import { SubagentViewer, type AgentInspection } from "../ui/viewer.ts";
+import { activeAgents, cleanLabel as cleanName, subagentWidget, WIDGET_FRAME_MS, type WidgetAgent } from "../ui/widget.ts";
+import { loadConfig } from "../../config.ts";
 import { installSamplingMailbox } from "./sampling.ts";
 
 const BINDING = "metis-subagent-scope",

@@ -15,8 +15,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
-import { RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
-import { subagentWidget } from "../../src/subagents/widget.ts";
+import { RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
+import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
+import { subagentWidget } from "../../src/subagents/ui/widget.ts";
 import { makeSubagentTheme, subagentTheme } from "../helpers/subagent-theme.mjs";
 import { subagentAdmin } from "../helpers/subagent-admin.mjs";
 
@@ -473,7 +474,7 @@ test(
       try {
         await loaded.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
         loaded.session.dispose();
-        stopDaemon(join(root, "src/subagents/core"), state);
+        stopDaemon(join(root, "src/subagents/backend"), state);
         assert.deepEqual(widgets.at(-1), [], "session shutdown clears the subagent widget");
         assert.equal(popupsClosed, 2, "session shutdown also closes the open viewer");
       } finally {

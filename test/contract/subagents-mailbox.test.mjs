@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { SubagentSession } from "../../src/subagents/session.ts";
-import { SubagentClient } from "../../src/subagents/client.ts";
-import { installSamplingMailbox } from "../../src/subagents/sampling.ts";
+import { SubagentSession } from "../../src/subagents/host/session.ts";
+import { SubagentClient } from "../../src/subagents/host/client.ts";
+import { installSamplingMailbox } from "../../src/subagents/host/sampling.ts";
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(probe) {

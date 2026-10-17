@@ -10,7 +10,7 @@ import { connect } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-const networkUrl = new URL('../../src/subagents/core/runtime/network.mjs', import.meta.url).href;
+const networkUrl = new URL('../../src/subagents/worker/network.mjs', import.meta.url).href;
 const probe = `
   const { configureNetwork } = await import(${JSON.stringify(networkUrl)});
   const dispatcher = configureNetwork(JSON.parse(process.argv[1]));

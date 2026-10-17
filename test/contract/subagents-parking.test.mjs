@@ -5,8 +5,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { isDaemonIdle, RuntimeError, SubagentClient, runtimePackage } from "../../src/subagents/client.ts";
-import { SubagentSession } from "../../src/subagents/session.ts";
+import { isDaemonIdle, RuntimeError, SubagentClient } from "../../src/subagents/host/client.ts";
+import { runtimePackage } from "../../src/subagents/host/runtime-package.ts";
+import { SubagentSession } from "../../src/subagents/host/session.ts";
 import { subagentAdmin } from "../helpers/subagent-admin.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));

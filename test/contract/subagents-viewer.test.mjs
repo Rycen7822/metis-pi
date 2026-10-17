@@ -4,7 +4,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
-import { SubagentViewer } from "../../src/subagents/viewer.ts";
+import { SubagentViewer } from "../../src/subagents/ui/viewer.ts";
 import { sgr, theme } from "../helpers.mjs";
 import { altScreen, container, screenLines } from "../helpers/ui-fixtures.mjs";
 

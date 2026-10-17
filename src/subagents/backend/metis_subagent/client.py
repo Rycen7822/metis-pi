@@ -3,12 +3,12 @@ import asyncio
 import contextlib
 import fcntl
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
 from .common import MAX_FRAME, DEFAULT_WAIT_SECONDS, DELIVERY_OPS, AgentError, dumps, private_dir, read_frame, socket_path, close_writer
 from . import PROTOCOL_VERSION
+from .paths import ENTRYPOINT
 
 BASE_TIMEOUT = 45
 # Booting or reaping a worker can legitimately outlast BASE_TIMEOUT: spawn and
@@ -50,7 +50,7 @@ async def connect_daemon(home,autostart):
         log=home/'daemon.log'
         if log.exists() and log.stat().st_size>512*1024:
             log.replace(home/'daemon.previous.log')
-        entry=Path(__file__).resolve().parent.parent/'bin/metis-subagent'
+        entry=ENTRYPOINT
         env=os.environ.copy(); env['PI_AGENTS_HOME']=str(home)
         until=time.monotonic()+boot_budget(home)
         started=False

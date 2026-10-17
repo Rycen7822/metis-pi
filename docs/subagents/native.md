@@ -28,6 +28,6 @@ State is private to Metis at **`<agentDir>/metis/subagent/`**, normally **`~/.pi
 - `agents/`: sessions, generation-specific ownership records and diagnostic logs.
 - `results/`: immutable paged results.
 
-The ledger requires the Metis native owner marker and current schema. An existing foreign or unsupported database is rejected before schema writes; it is not adopted or automatically upgraded. No other plugin's state directory is discovered or modified. The private `core/bin/metis-subagent` launcher only serves the native host and its daemon.
+The ledger requires the Metis native owner marker and current schema. An existing foreign or unsupported database is rejected before schema writes; it is not adopted or automatically upgraded. No other plugin's state directory is discovered or modified. The private `backend/main.py` launcher only serves the native host and its daemon. Source responsibilities are separated into [host, UI, backend and worker](../../src/subagents/README.md).
 
 Let active work finish and wait for verified idle shutdown before changing an installed runtime or backend policy. Frontend reload reconnects to the same scope; it cannot upgrade a running daemon. Never clear an unknown process owner or replay uncertain work merely to make an upgrade proceed.

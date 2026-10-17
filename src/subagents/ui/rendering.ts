@@ -1,6 +1,6 @@
 import { Container, Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { auxiliaryToolRenderers, displayRecord, inlineToolText } from "../execution/ui/auxiliary-tool.ts";
+import { auxiliaryToolRenderers, displayRecord, inlineToolText } from "../../execution/ui/auxiliary-tool.ts";
 
 const titles: Record<string, [string, string]> = {
   pi_spawn_agent: ["Starting subagent", "Started subagent"],

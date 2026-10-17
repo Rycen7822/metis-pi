@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
-from paths import ROOT
+from paths import ROOT, WORKER_ROOT
 from runtime_harness import RuntimeHarness
 from test_transport import IpcHarness
 from metis_subagent.common import AgentError
@@ -19,7 +19,7 @@ from metis_subagent.config import PI_BUILTIN_TOOLS, load_config, launch_spec
 from metis_subagent.runtime import Runtime
 from metis_subagent.store import Store
 
-SURFACE = ROOT/'extensions/managed-surface.ts'
+SURFACE = WORKER_ROOT/'managed-surface.ts'
 
 class RuntimeSurfaceTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
     def events_of(self, aid, kind):
@@ -28,7 +28,7 @@ class RuntimeSurfaceTests(RuntimeHarness, unittest.IsolatedAsyncioTestCase):
 
     def restricted_profile(self, **env):
         """A reader-shaped profile whose extra env controls the fake Pi's surface
-        report (the fake stands in for extensions/managed-surface.ts)."""
+        report (the fake stands in for worker/managed-surface.ts)."""
         self.rt.config['profiles']['restricted']={'tools':['read','grep','find','ls'],'env':dict(env)}
         return 'restricted'
 

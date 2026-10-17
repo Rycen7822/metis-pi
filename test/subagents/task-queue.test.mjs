@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TaskQueue } from '../../src/subagents/core/runtime/task-queue.mjs';
+import { TaskQueue } from '../../src/subagents/worker/task-queue.mjs';
 const gate = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
 
 test('one owner serializes continuations and completes once after all of them', async () => {

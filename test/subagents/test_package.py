@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from paths import ROOT, TEST_ROOT, REPO_ROOT
+from paths import ROOT, TEST_ROOT, REPO_ROOT, WORKER_ROOT
 from metis_subagent.common import AgentError, live_identity, crop
 from metis_subagent.client import call_timeout, boot_budget
 from unittest.mock import patch
@@ -137,7 +137,7 @@ class SdkTransport(unittest.TestCase):
                 env={'PATH':os.environ['PATH'],'HOME':tmp,'TMPDIR':tmp,'PI_CODING_AGENT_DIR':tmp,
                      'XDG_CACHE_HOME':tmp,'XDG_CONFIG_HOME':tmp,'XDG_DATA_HOME':tmp,
                      'PI_AGENTS_HOST':'pi','PI_OFFLINE':'1','PI_SKIP_VERSION_CHECK':'1'}
-                cmd=['node',str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--offline',
+                cmd=['node',str(WORKER_ROOT/'pi-sdk.mjs'),str(sdk),'--offline',
                      '--no-extensions','--no-skills','--no-context-files','--no-themes','--no-prompt-templates',
                      '--extension',str(TEST_ROOT/'pi_mock_provider.ts'),'--extension',str(extension),
                      '--provider','pi-mock-offline','--model','mock',*flags]
@@ -186,7 +186,7 @@ class SdkTransport(unittest.TestCase):
             sdk=root/'dist/index.js'; sdk.write_text('unchanged sdk')
             before={p:p.read_bytes() for p in (manifest,cli,sdk)}
             argv=managed_command([node,str(cli),'--mode','rpc'],sdk_path=str(sdk))
-            self.assertEqual(argv,[node,str(ROOT/'runtime/pi-sdk.mjs'),str(sdk),'--mode','rpc'])
+            self.assertEqual(argv,[node,str(WORKER_ROOT/'pi-sdk.mjs'),str(sdk),'--mode','rpc'])
             self.assertEqual({p:p.read_bytes() for p in before},before)
 
     def test_native_sdk_command_rejects_old_and_unknown_sdks(self):
