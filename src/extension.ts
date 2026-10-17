@@ -593,6 +593,7 @@ export function activate(pi: AppearanceAPI, bindings: Bindings): { whenReady(): 
   pi.on("message_end", (event) => {
     hostData.bump();
     if (!enabled) return;
+    codemodeViews.recordMessage(event.message);
     const message = event.message as object | undefined;
     const stateMessage = toStateMessage(message);
     transcript.apply({ type: "message_end", message: stateMessage }, message);

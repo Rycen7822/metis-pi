@@ -83,44 +83,73 @@ function sizeOf(value: unknown, seen = new Set<object>(), depth = 0): number {
 }
 
 export class CodemodeViewStore {
-  readonly #parents = new Map<string, Map<string, NestedView>>();
+  readonly #parents = new Map<string, { calls: Map<string, NestedView>; history?: unknown }>();
   #bytes = 0;
   readonly #maxBytes: number;
   constructor(maxBytes = 4 * 1024 * 1024) { this.#maxBytes = maxBytes; }
 
+  #makeRoom(bytes: number, keep?: NestedView): boolean {
+    if (bytes > this.#maxBytes) return false;
+    if (this.#bytes + bytes <= this.#maxBytes) return true;
+    const evict: [Map<string, NestedView>, string, NestedView][] = [];
+    let freed = 0;
+    for (const { calls } of this.#parents.values()) {
+      for (const [id, view] of calls) {
+        if (view === keep || view.isPartial) continue;
+        evict.push([calls, id, view]);
+        freed += view.bytes;
+        if (this.#bytes + bytes - freed <= this.#maxBytes) {
+          for (const [owner, id, view] of evict) { owner.delete(id); this.#bytes -= view.bytes; }
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   start(event: NestedEvent, ownedCodemode = false): void {
     if (!event.parentToolCallId) {
       if (!ownedCodemode) return;
-      if (!this.#parents.has(event.toolCallId)) this.#parents.set(event.toolCallId, new Map());
+      if (!this.#parents.has(event.toolCallId)) this.#parents.set(event.toolCallId, { calls: new Map() });
       if (this.#parents.size > 64) {
         const oldest = this.#parents.keys().next().value!;
-        for (const view of this.#parents.get(oldest)!.values()) this.#bytes -= view.bytes;
+        for (const view of this.#parents.get(oldest)!.calls.values()) this.#bytes -= view.bytes;
         this.#parents.delete(oldest);
       }
       return;
     }
-    const calls = this.#parents.get(event.parentToolCallId);
+    const calls = this.#parents.get(event.parentToolCallId)?.calls;
     if (!calls || calls.size >= 256 || calls.has(event.toolCallId)) return;
     const bytes = sizeOf(event.args);
-    if (this.#bytes + bytes > this.#maxBytes) return;
+    if (!this.#makeRoom(bytes)) return;
     calls.set(event.toolCallId, { name: event.toolName, args: event.args, isError: false, isPartial: true, bytes });
     this.#bytes += bytes;
   }
 
   finish(event: NestedEvent): void {
-    const view = event.parentToolCallId && this.#parents.get(event.parentToolCallId)?.get(event.toolCallId);
+    const view = event.parentToolCallId && this.#parents.get(event.parentToolCallId)?.calls.get(event.toolCallId);
     if (!view) return;
     const argsBytes = sizeOf(view.args), resultBytes = sizeOf(event.result);
     this.#bytes -= view.bytes;
-    view.result = this.#bytes + argsBytes + resultBytes <= this.#maxBytes ? event.result : undefined;
+    view.result = this.#makeRoom(argsBytes + resultBytes, view) ? event.result : undefined;
     view.bytes = argsBytes + (view.result === undefined ? 0 : resultBytes);
     this.#bytes += view.bytes;
     view.isError = event.isError === true;
     view.isPartial = false;
   }
 
-  get(parent: string, id: string): NestedView | undefined { return this.#parents.get(parent)?.get(id); }
-  entries(parent: string): [string, NestedView][] { return [...(this.#parents.get(parent)?.entries() ?? [])]; }
+  recordMessage(message: unknown): void {
+    const value = asRecord(message);
+    if (value.role !== "toolResult" || value.toolName !== "codemode" || typeof value.toolCallId !== "string") return;
+    const parent = this.#parents.get(value.toolCallId);
+    // Pi's live row gets execution-end data before the saved argument ledger.
+    // Reference that session-owned ledger separately from transient nested bodies.
+    if (parent) parent.history = value.nestedCalls;
+  }
+
+  history(parent: string): unknown { return this.#parents.get(parent)?.history; }
+  get(parent: string, id: string): NestedView | undefined { return this.#parents.get(parent)?.calls.get(id); }
+  entries(parent: string): [string, NestedView][] { return [...(this.#parents.get(parent)?.calls.entries() ?? [])]; }
   clear(): void { this.#parents.clear(); this.#bytes = 0; }
 }
 
@@ -197,18 +226,20 @@ export function makeCodemodeRenderers(input: {
       const timerText = toolTimerText(context, options.isPartial === true);
       const value = asRecord(result), details = asRecord(value.details);
       const recorded = Array.isArray(details.calls) ? details.calls.map(asRecord) : [];
-      const history = asRecord(value.nestedCalls);
+      const history = asRecord(value.nestedCalls ?? input.store.history(context.toolCallId ?? ""));
       const historicalArgs = new Map((Array.isArray(history.calls) ? history.calls.map(asRecord) : []).map((call) => [call.id, call]));
       const live = input.store.entries(context.toolCallId ?? "");
       const byId = new Map(recorded.map((call) => [call.id, call]));
       const pending = new Map<string, number>();
-      const calls: Readonly<Record<string, unknown>>[] = live.map(([id, view]) => {
+      const liveCalls = new Map(live.map(([id, view]) => {
         if (!byId.has(id)) pending.set(view.name, (pending.get(view.name) ?? 0) + 1);
-        return { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" };
-      });
-      const liveIds = new Set(live.map(([id]) => id));
+        return [id, { ...byId.get(id), id, name: view.name, status: view.isPartial ? "running" : view.isError ? "error" : "ok" }] as const;
+      }));
+      // Cache eviction must not move older summaries after the latest calls.
+      const calls: Readonly<Record<string, unknown>>[] = [];
       for (const call of recorded) {
-        if (liveIds.has(String(call.id))) continue;
+        const current = liveCalls.get(String(call.id));
+        if (current) { calls.push(current); continue; }
         // Pi's running preview ids all end in /?. Real lifecycle ids own state.
         const count = pending.get(String(call.name)) ?? 0;
         if (String(call.id).endsWith("/?") && count > 0) {
@@ -217,6 +248,7 @@ export function makeCodemodeRenderers(input: {
         }
         calls.push(call);
       }
+      for (const [id, call] of liveCalls) if (!byId.has(id)) calls.push(call);
       const allCalls = view.allCalls ?? view.expanded;
       // Keep explicitly opened older calls visible while new calls stream in.
       const shown = allCalls ? calls : calls.filter((call, index) => index >= calls.length - 8
@@ -239,8 +271,8 @@ export function makeCodemodeRenderers(input: {
         const expanded = slot.expanded ?? view.expanded;
         const nestedOptions = { ...options, expanded };
         const captured = input.store.get(context.toolCallId ?? "", call.id);
-        if (call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined)
-          missingResults = true;
+        const missingResult = call.status !== "running" && !call.name.startsWith("models.") && captured?.result === undefined;
+        if (missingResult) missingResults = true;
         const saved = historicalArgs.get(call.id);
         let args = captured?.args;
         if (args === undefined && saved?.name === call.name) args = saved.arguments;
@@ -306,6 +338,13 @@ export function makeCodemodeRenderers(input: {
         const toggle = preview ? undefined : () => { slot.expanded = !expanded; };
         parts.push(clickRegion(callComponent, context, toggle));
         if (resultComponent) parts.push(clickRegion(resultComponent, context, toggle));
+        if (expanded && !partial && !call.name.startsWith("models.")) {
+          const unavailable = [
+            args === undefined ? "Full arguments unavailable; expand codemode to inspect the script." : "",
+            missingResult ? "Nested output was not retained; no saved diff/output to expand." : "",
+          ].filter(Boolean).join("\n");
+          if (unavailable) parts.push(clickRegion(input.makeText(theme.fg("dim", unavailable)), context, toggle));
+        }
       }
       if (missingResults)
         parts.push(input.makeText(theme.fg("dim", "Nested results unavailable (history or display cache limit)")));
